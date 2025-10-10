@@ -13,9 +13,10 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use eyre::Result;
+use eyre::{bail, Result};
 use futures::future::join_all;
 use itertools::Itertools;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
@@ -49,7 +50,26 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
             .replace_cancellation_token(err_ct.clone())
             .await;
 
-        let (c0, c1) = self.make_connections(self.config.num_connections).await?;
+        let (mut c0, mut c1) = self.make_connections(self.config.num_connections).await?;
+
+        // ensure all peers are connected to each other.
+        async fn send_and_receive<T: NetworkConnection>(conn: &mut T) -> Result<()> {
+            let snd_buf: [u8; 3] = [2, b'o', b'k'];
+            let mut rcv_buf = [0_u8; 3];
+            conn.write_all(&snd_buf).await?;
+            conn.flush().await?;
+            conn.read_exact(&mut rcv_buf).await?;
+            if &rcv_buf != &snd_buf {
+                bail!("ok failed");
+            }
+            Ok(())
+        }
+
+        let all_conns = c0.iter_mut().chain(c1.iter_mut());
+        let _replies = join_all(all_conns.map(send_and_receive))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
 
         // calls multiplexer::run() on each TCP/TLS stream
         let sessions = super::session::make_sessions(
@@ -104,7 +124,6 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
 
         // be sure not to make more than one network handle...
         tokio::spawn(accept_loop(
-            my_id.clone(),
             listener,
             conn_cmd_rx,
             connection_state.shutdown_ct().await,

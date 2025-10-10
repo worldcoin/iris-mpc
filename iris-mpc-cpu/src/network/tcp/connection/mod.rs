@@ -32,9 +32,10 @@ pub async fn connect<T: NetworkConnection + 'static, C: Client<Output = T> + 'st
     client: C,
     conn_cmd_tx: UnboundedSender<ConnectionRequest<T>>,
 ) -> Result<T> {
+    let peer_id = peer.id().clone();
     let connector = Connector {
         connection_id,
-        own_id,
+        own_id: own_id.clone(),
         peer,
         connection_state,
         client,
@@ -46,6 +47,12 @@ pub async fn connect<T: NetworkConnection + 'static, C: Client<Output = T> + 'st
             let _ = rsp_tx.send(c);
         }
     });
+    tracing::debug!(
+        "connection succeeded for {:?} -> {:?}, {:?}",
+        own_id,
+        peer_id,
+        connection_id
+    );
     let r = rsp_rx.await?;
     Ok(r)
 }
@@ -86,23 +93,19 @@ impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
         let mut rng: StdRng =
             StdRng::from_rng(&mut rand::thread_rng()).expect("Failed to seed RNG");
 
-        // backoff when retrying
-        let mut retry_sec = 2;
+        let retry_sec = 2;
 
         sleep(Duration::from_millis(rng.gen_range(0..=3000))).await;
 
         loop {
             match self.connect().await {
                 Ok(stream) => return stream,
-                Err(e) => {
-                    tracing::debug!("connect failed: {e:?}");
+                Err(_e) => {
+                    //tracing::debug!("connect failed: {e:?}");
                 }
             }
 
             sleep(Duration::from_secs(retry_sec)).await;
-            if retry_sec < 32 {
-                retry_sec *= 2;
-            }
         }
     }
 

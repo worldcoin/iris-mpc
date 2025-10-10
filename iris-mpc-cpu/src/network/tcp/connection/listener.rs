@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 use tokio::{
     io::AsyncWriteExt,
     sync::{mpsc::UnboundedReceiver, oneshot},
@@ -27,7 +27,6 @@ impl<T: NetworkConnection> ConnectionRequest<T> {
 }
 
 pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
-    id: Arc<Identity>,
     listener: S,
     mut cmd_ch: UnboundedReceiver<ConnectionRequest<T>>,
     shutdown_ct: CancellationToken,
@@ -53,8 +52,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
             }
         };
         match r {
-            Ok((peer_addr, mut stream)) => {
-                tracing::trace!("{:?} accepted connection from {:?}", id, peer_addr);
+            Ok((_peer_addr, mut stream)) => {
                 let (peer_id, connection_id) = match handshake::inbound(&mut stream).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -71,13 +69,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                             let _ = rsp.send(stream);
                             continue;
                         }
-                    } else {
-                        tracing::debug!(
-                            "no pending request for connection_id {connection_id:?} from peer {peer_id:?}"
-                        );
                     }
-                } else {
-                    tracing::debug!("no pending requests from peer {peer_id:?}");
                 }
                 stream.close().await;
             }
