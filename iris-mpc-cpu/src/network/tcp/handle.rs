@@ -3,13 +3,15 @@ use std::sync::Arc;
 use crate::{
     execution::player::Identity,
     network::{
-        tcp::config::TcpConfig,
         tcp::{
+            config::TcpConfig,
             connection::{accept_loop, ConnectionRequest, ConnectionState},
             data::{ConnectionId, Peer},
             session::TcpSession,
             Client, NetworkConnection, NetworkHandle, Server,
         },
+        value::NetworkValue,
+        Networking,
     },
 };
 use async_trait::async_trait;
@@ -72,7 +74,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
             .collect::<Result<Vec<_>, _>>()?;
 
         // calls multiplexer::run() on each TCP/TLS stream
-        let sessions = super::session::make_sessions(
+        let mut sessions = super::session::make_sessions(
             &self.peers,
             c0,
             c1,
@@ -81,6 +83,23 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
             self.next_session_id,
         )
         .await;
+
+        // make sure all the sessions are working
+        for (idx, session) in sessions.iter_mut().enumerate() {
+            let prf = NetworkValue::PrfKey([idx as u8; 16]);
+            for peer in &self.peers {
+                session.send(prf.clone(), peer.id()).await?;
+            }
+            for peer in &self.peers {
+                let r = session.receive(peer.id()).await?;
+                match r {
+                    NetworkValue::PrfKey(arr) => {
+                        assert_eq!([idx as u8; 16], arr);
+                    }
+                    _ => bail!("invalid msg received in setup"),
+                }
+            }
+        }
 
         let sessions_per_conn = (0..self.config.num_connections)
             .map(|idx| self.config.get_sessions_for_connection(idx))
