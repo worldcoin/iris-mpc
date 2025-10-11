@@ -144,7 +144,10 @@ mod tests {
     async fn test_intra_batch_is_match() -> Result<()> {
         let actors = setup_hawk_actors().await?;
 
-        parallelize(actors.into_iter().map(go_intra_batch)).await?;
+        let result = parallelize(actors.into_iter().map(go_intra_batch)).await?;
+        std::hint::black_box({
+            drop(result);
+        });
 
         Ok(())
     }
