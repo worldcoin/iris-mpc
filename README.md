@@ -220,7 +220,7 @@ If you are using `cargo test` with non-standard library paths, you might need [a
 - note you can change the value of the benchmark data to generate less data (100 is required for local stack) in `iris-mpc-cpu/bin/generate_benchmark_data.rs`
 
 ```bash
-cargo run --bin generate_benchmark_data
+cargo run --bin generate-benchmark-data
 ```
 
 2. Build the hawk genesis binary

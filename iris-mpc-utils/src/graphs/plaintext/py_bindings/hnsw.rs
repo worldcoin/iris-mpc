@@ -1,5 +1,8 @@
-use crate::{misc::limited_iterator, types::IrisCodeBase64};
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
+use crate::misc::limited_iterator;
+use iris_mpc_common::{
+    iris_db::iris::{IrisCode, IrisCodeBase64},
+    vector_id::VectorId,
+};
 use iris_mpc_cpu::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{GraphMem, HnswSearcher},
