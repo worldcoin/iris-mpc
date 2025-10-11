@@ -1,5 +1,5 @@
 use super::{
-    rot::{Rotations, VecRots},
+    rot::{Rotations, VecRotationSupport},
     BothEyes, VecRequests,
 };
 use eyre::{eyre, Result};
@@ -130,7 +130,7 @@ impl Schedule {
     pub fn organize_results<T, ROT: Rotations>(
         &self,
         mut results: HashMap<TaskId, T>,
-    ) -> Result<BothEyes<VecRequests<VecRots<T, ROT>>>> {
+    ) -> Result<BothEyes<VecRequests<VecRotationSupport<T, ROT>>>> {
         let [l, r] = [0, 1].map(|i_eye| {
             (0..self.n_requests)
                 .map(|i_request| {
@@ -147,7 +147,7 @@ impl Schedule {
                                 .ok_or_else(|| eyre!("missing result {:?}", task))
                         })
                         .collect::<Result<Vec<_>>>()
-                        .map(VecRots::from)
+                        .map(VecRotationSupport::from)
                 })
                 .collect::<Result<Vec<_>>>()
         });

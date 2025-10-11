@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use super::{
-    rot::WithoutRot,
+    rot::CenterOnly,
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
@@ -12,12 +12,12 @@ use iris_mpc_common::vector_id::VectorId;
 pub struct ResetRequests {
     pub vector_ids: Vec<VectorId>,
     pub request_ids: SearchIds,
-    pub queries: SearchQueries<WithoutRot>,
+    pub queries: SearchQueries<CenterOnly>,
 }
 
 pub struct ResetPlan {
     pub vector_ids: Vec<VectorId>,
-    pub search_results: SearchResults<WithoutRot>,
+    pub search_results: SearchResults<CenterOnly>,
 }
 
 pub async fn search_to_reset(
@@ -39,7 +39,7 @@ pub async fn search_to_reset(
         do_match: false,
     };
 
-    let search_results = search::search(
+    let search_results = search::search::<CenterOnly>(
         sessions,
         &updates.queries,
         &updates.request_ids,

@@ -1,5 +1,5 @@
 use super::{
-    rot::{Rotations, VecRots, WithRot},
+    rot::{Rotations, VecRotationSupport},
     scheduler::{Batch, Schedule, TaskId},
     BothEyes, HawkInsertPlan, HawkSession, VecRequests, LEFT, RIGHT,
 };
@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<Aby3Query, ROT>>>>;
-pub type SearchResults<ROT = WithRot> = BothEyes<VecRequests<VecRots<HawkInsertPlan, ROT>>>;
+pub type SearchQueries<ROT> = Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROT>>>>;
+pub type SearchResults<ROT> = BothEyes<VecRequests<VecRotationSupport<HawkInsertPlan, ROT>>>;
 
 /// Identifiers of requests
 pub type SearchIds = Arc<VecRequests<String>>;
