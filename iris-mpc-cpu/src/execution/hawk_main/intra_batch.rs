@@ -144,10 +144,7 @@ mod tests {
     async fn test_intra_batch_is_match() -> Result<()> {
         let actors = setup_hawk_actors().await?;
 
-        let result = parallelize(actors.into_iter().map(go_intra_batch)).await?;
-        std::hint::black_box({
-            drop(result);
-        });
+        parallelize(actors.into_iter().map(go_intra_batch)).await?;
 
         Ok(())
     }
@@ -173,6 +170,7 @@ mod tests {
                 }],
             ]
         );
+        actor.sync_peers().await?;
         Ok(actor)
     }
 }

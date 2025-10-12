@@ -54,19 +54,6 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
 
         let (mut c0, mut c1) = self.make_connections(self.config.num_connections).await?;
 
-        // ensure all peers are connected to each other.
-        async fn send_and_receive<T: NetworkConnection>(conn: &mut T) -> Result<()> {
-            let snd_buf: [u8; 3] = [2, b'o', b'k'];
-            let mut rcv_buf = [0_u8; 3];
-            conn.write_all(&snd_buf).await?;
-            conn.flush().await?;
-            conn.read_exact(&mut rcv_buf).await?;
-            if &rcv_buf != &snd_buf {
-                bail!("ok failed");
-            }
-            Ok(())
-        }
-
         let all_conns = c0.iter_mut().chain(c1.iter_mut());
         let _replies = join_all(all_conns.map(send_and_receive))
             .await
@@ -104,9 +91,9 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
         let sessions_per_conn = (0..self.config.num_connections)
             .map(|idx| self.config.get_sessions_for_connection(idx))
             .collect_vec();
-        println!(
-            "made {} sessions over {} connections. totals were: {:?}",
-            self.config.num_sessions, self.config.num_connections, sessions_per_conn
+        tracing::info!(
+            "make_sessions succeeded. sessions per connection: {:?}",
+            sessions_per_conn
         );
 
         self.next_session_id = self.next_session_id.wrapping_add(self.config.num_sessions);
@@ -115,6 +102,18 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
         }
 
         Ok((sessions, err_ct))
+    }
+
+    async fn sync_peers(&mut self) -> Result<()> {
+        let (mut c0, mut c1) = self.make_connections(1).await?;
+
+        let all_conns = c0.iter_mut().chain(c1.iter_mut());
+        let _replies = join_all(all_conns.map(send_and_receive))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(())
     }
 }
 
@@ -191,4 +190,17 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
 
         Ok((c0, c1))
     }
+}
+
+// ensure all peers are connected to each other.
+async fn send_and_receive<T: NetworkConnection>(conn: &mut T) -> Result<()> {
+    let snd_buf: [u8; 3] = [2, b'o', b'k'];
+    let mut rcv_buf = [0_u8; 3];
+    conn.write_all(&snd_buf).await?;
+    conn.flush().await?;
+    conn.read_exact(&mut rcv_buf).await?;
+    if &rcv_buf != &snd_buf {
+        bail!("ok failed");
+    }
+    Ok(())
 }

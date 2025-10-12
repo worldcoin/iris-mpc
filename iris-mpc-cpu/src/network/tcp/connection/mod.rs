@@ -47,13 +47,13 @@ pub async fn connect<T: NetworkConnection + 'static, C: Client<Output = T> + 'st
             let _ = rsp_tx.send(c);
         }
     });
+    let r = rsp_rx.await?;
     tracing::debug!(
         "connection succeeded for {:?} -> {:?}, {:?}",
         own_id,
         peer_id,
         connection_id
     );
-    let r = rsp_rx.await?;
     Ok(r)
 }
 

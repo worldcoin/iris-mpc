@@ -481,6 +481,10 @@ impl HawkActor {
         Ok([l, r])
     }
 
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        self.networking.sync_peers().await
+    }
+
     fn create_session(
         &self,
         store_id: StoreId,

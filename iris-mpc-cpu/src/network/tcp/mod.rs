@@ -26,6 +26,9 @@ use tokio_util::sync::CancellationToken;
 #[async_trait]
 pub trait NetworkHandle: Send + Sync {
     async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)>;
+    async fn sync_peers(&mut self) -> Result<()> {
+        unimplemented!()
+    }
 }
 
 #[async_trait]
