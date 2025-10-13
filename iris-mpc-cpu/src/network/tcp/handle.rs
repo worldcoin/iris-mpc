@@ -200,18 +200,15 @@ mod tests {
     use super::super::testing::*;
 
     use eyre::Result;
-    
-    
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::task::JoinSet;
-    
+
     use tracing_test::traced_test;
 
     use crate::execution::local::generate_local_identities;
-    
+
     use crate::network::tcp::TcpStreamConn;
-    
-    
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
