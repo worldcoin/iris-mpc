@@ -4,7 +4,7 @@ use crate::{
 };
 use eyre::{bail, Result};
 use socket2::{SockRef, TcpKeepalive};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{net::TcpStream, sync::mpsc};
 
@@ -69,30 +69,40 @@ impl From<(Identity, String)> for Peer {
 }
 
 pub struct PeerConnections<T: NetworkConnection + 'static> {
-    p0: Vec<T>,
-    p1: Vec<T>,
+    peers: [Arc<Peer>; 2],
+    c0: Vec<T>,
+    c1: Vec<T>,
 }
 
 impl<T: NetworkConnection + 'static> PeerConnections<T> {
-    pub fn new(p0: Vec<T>, p1: Vec<T>) -> Self {
-        Self { p0, p1 }
+    pub fn new(peers: [Arc<Peer>; 2], c0: Vec<T>, c1: Vec<T>) -> Self {
+        Self { peers, c0, c1 }
     }
+
     pub async fn sync(&mut self) -> Result<()> {
-        let all_conns = self.p0.iter_mut().chain(self.p1.iter_mut());
+        let all_conns = self.c0.iter_mut().chain(self.c1.iter_mut());
         let _replies = futures::future::join_all(all_conns.map(send_and_receive))
             .await
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         Ok(())
     }
+
+    pub fn peer_ids(&self) -> Vec<Identity> {
+        self.peers.iter().map(|peer| peer.id.clone()).collect()
+    }
 }
 
 impl<T: NetworkConnection + 'static> IntoIterator for PeerConnections<T> {
-    type Item = Vec<T>;
-    type IntoIter = std::vec::IntoIter<Vec<T>>;
+    type Item = (Identity, Vec<T>);
+    type IntoIter = std::vec::IntoIter<(Identity, Vec<T>)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        vec![self.p0, self.p1].into_iter()
+        vec![
+            (self.peers[0].id.clone(), self.c0),
+            (self.peers[1].id.clone(), self.c1),
+        ]
+        .into_iter()
     }
 }
 

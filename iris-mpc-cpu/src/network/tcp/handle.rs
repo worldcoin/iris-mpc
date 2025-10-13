@@ -57,7 +57,6 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
 
         // calls multiplexer::run() on each TCP/TLS stream
         let mut sessions = super::session::make_sessions(
-            &self.peers,
             connections,
             self.connection_state.clone(),
             &self.config,
@@ -138,6 +137,8 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         assert_eq!(self.peers.len(), 2);
         let mut connect_futures = Vec::with_capacity(conns_per_peer * self.peers.len());
 
+        // peers[0] will be associated with connections c0
+        // peers[1] will be associated with connections c1
         for peer in self.peers.iter() {
             for idx in 0..conns_per_peer {
                 let connection_id = ConnectionId::new(idx as u32);
@@ -157,12 +158,12 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut p1 = results;
-        let mut p0 = vec![];
-        p0.extend(p1.drain(0..p1.len() / 2));
-        assert_eq!(p1.len(), p0.len());
+        let mut c1 = results;
+        let mut c0 = vec![];
+        c0.extend(c1.drain(0..c1.len() / 2));
+        assert_eq!(c1.len(), c0.len());
 
-        Ok(PeerConnections::new(p0, p1))
+        Ok(PeerConnections::new(self.peers.clone(), c0, c1))
     }
 
     async fn validate_sessions(&self, sessions: &mut [TcpSession]) -> Result<()> {

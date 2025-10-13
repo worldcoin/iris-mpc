@@ -6,7 +6,7 @@ use crate::{
         tcp::{
             config::TcpConfig,
             connection::ConnectionState,
-            data::{ConnectionId, InStream, OutStream, OutboundMsg, Peer, PeerConnections},
+            data::{ConnectionId, InStream, OutStream, OutboundMsg, PeerConnections},
             NetworkConnection,
         },
         value::NetworkValue,
@@ -15,8 +15,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::{eyre, Result};
-use itertools::izip;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 use tokio::{
     sync::mpsc::{self},
     time::timeout,
@@ -94,32 +93,23 @@ pub struct SessionChannels {
 }
 
 pub async fn make_sessions<T: NetworkConnection + 'static>(
-    peers: &[Arc<Peer>],
     connections: PeerConnections<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
     next_session_id: usize,
 ) -> Vec<TcpSession> {
-    let sc = make_channels(peers, config, next_session_id);
-    make_sessions_inner(
-        peers,
-        connections,
-        connection_state,
-        config,
-        next_session_id,
-        sc,
-    )
-    .await
+    let sc = make_channels(connections.peer_ids(), config, next_session_id);
+    make_sessions_inner(connections, connection_state, config, next_session_id, sc).await
 }
 
 fn make_channels(
-    peers: &[Arc<Peer>],
+    peer_ids: Vec<Identity>,
     config: &TcpConfig,
     next_session_id: usize,
 ) -> SessionChannels {
     let mut sc = SessionChannels::default();
 
-    for peer_id in peers.iter().map(|x| x.id()) {
+    for peer_id in peer_ids {
         let mut outbound_tx = HashMap::new();
         let mut outbound_rx = HashMap::new();
         let mut inbound_tx = HashMap::new();
@@ -148,7 +138,6 @@ fn make_channels(
 }
 
 async fn make_sessions_inner<T: NetworkConnection + 'static>(
-    peers: &[Arc<Peer>],
     connections: PeerConnections<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
@@ -158,18 +147,21 @@ async fn make_sessions_inner<T: NetworkConnection + 'static>(
     let num_connections = config.num_connections;
     let num_sessions = config.num_sessions;
 
+    // save a copy of peer_ids for session creation
+    let peer_ids = connections.peer_ids();
+
     // spawn the forwarders
-    for (peer_id, mut conns) in izip!(peers.iter().map(|x| x.id()), connections.into_iter()) {
+    for (peer_id, mut conns) in connections.into_iter() {
         for (idx, connection) in conns.drain(..).enumerate() {
             let connection_id = ConnectionId::from(idx as u32);
             let outbound_rx = sc
                 .outbound_rx
-                .get_mut(peer_id)
+                .get_mut(&peer_id)
                 .unwrap()
                 .remove(&connection_id)
                 .unwrap();
 
-            let inbound_forwarder = sc.inbound_tx.get(peer_id).cloned().unwrap();
+            let inbound_forwarder = sc.inbound_tx.get(&peer_id).cloned().unwrap();
             let cs = connection_state.clone();
 
             tokio::spawn(multiplexer::run(
@@ -192,7 +184,7 @@ async fn make_sessions_inner<T: NetworkConnection + 'static>(
         let mut rx_map = HashMap::new();
         let connection_id = ConnectionId::from((idx % num_connections) as u32);
 
-        for peer_id in peers.iter().map(|x| x.id()) {
+        for peer_id in &peer_ids {
             let outbound_tx = sc
                 .outbound_tx
                 .get(peer_id)
