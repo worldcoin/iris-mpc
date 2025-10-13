@@ -52,7 +52,9 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
             .await;
 
         // wait for all peers to establish all connections
-        let mut connections = self.make_connections(self.config.num_connections).await?;
+        let mut connections = self
+            .make_peer_connections(self.config.num_connections)
+            .await?;
         connections.sync().await?;
 
         // calls multiplexer::run() on each TCP/TLS stream
@@ -84,7 +86,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
     }
 
     async fn sync_peers(&mut self) -> Result<()> {
-        let mut connections = self.make_connections(1).await?;
+        let mut connections = self.make_peer_connections(1).await?;
         connections.sync().await?;
         Ok(())
     }
@@ -131,9 +133,15 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         }
     }
 
+    // associates the connections with an Identity
+    async fn make_peer_connections(&self, conns_per_peer: usize) -> Result<PeerConnections<T>> {
+        let (c0, c1) = self.make_connections(conns_per_peer).await?;
+        Ok(PeerConnections::new(self.peers.clone(), c0, c1))
+    }
+
     // returns the connections for each peer
     // when returned, the handshakes have successfully completed
-    pub async fn make_connections(&self, conns_per_peer: usize) -> Result<PeerConnections<T>> {
+    async fn make_connections(&self, conns_per_peer: usize) -> Result<(Vec<T>, Vec<T>)> {
         assert_eq!(self.peers.len(), 2);
         let mut connect_futures = Vec::with_capacity(conns_per_peer * self.peers.len());
 
@@ -163,7 +171,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         c0.extend(c1.drain(0..c1.len() / 2));
         assert_eq!(c1.len(), c0.len());
 
-        Ok(PeerConnections::new(self.peers.clone(), c0, c1))
+        Ok((c0, c1))
     }
 
     async fn validate_sessions(&self, sessions: &mut [TcpSession]) -> Result<()> {
@@ -183,6 +191,84 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
                 }
             }
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::testing::*;
+
+    use eyre::Result;
+    use rand::Rng;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::task::JoinSet;
+    use tokio::time::sleep;
+    use tracing_test::traced_test;
+
+    use crate::execution::local::generate_local_identities;
+    use crate::execution::player::{Identity, Role};
+    use crate::network::tcp::TcpStreamConn;
+    use crate::network::value::NetworkValue;
+    use crate::network::{tcp::session::TcpSession, Networking};
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_tcp_network_handle() -> Result<()> {
+        const CONNECTIONS_PER_PEER: usize = 2;
+
+        let identities = generate_local_identities();
+        let handles = get_local_tcp_handles(identities, CONNECTIONS_PER_PEER, 1).await?;
+
+        // for each peer, a vec of the connections to other peers
+        let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> = futures::future::join_all(
+            handles
+                .iter()
+                .map(|h| h.make_connections(CONNECTIONS_PER_PEER)),
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let mut jobs = JoinSet::new();
+        let peer_ids: [u8; 3] = [0, 1, 2];
+
+        tracing::debug!("connections created. sending data");
+
+        for (peer_idx, (p0, p1)) in connections.into_iter().enumerate() {
+            let my_peer_ids = peer_ids
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != peer_idx)
+                .map(|(_, id)| *id)
+                .collect::<Vec<_>>();
+
+            for (conn_idx, (mut c0, mut c1)) in p0.into_iter().zip(p1.into_iter()).enumerate() {
+                let p0_data = [my_peer_ids[0], conn_idx as u8];
+                let p1_data = [my_peer_ids[1], conn_idx as u8];
+
+                jobs.spawn(async move {
+                    c0.write_all(&p0_data).await.unwrap();
+                    c0.flush().await.unwrap();
+
+                    let mut recv_data = [0u8; 2];
+                    c0.read_exact(&mut recv_data).await.unwrap();
+                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
+                });
+
+                jobs.spawn(async move {
+                    c1.write_all(&p1_data).await.unwrap();
+                    c1.flush().await.unwrap();
+
+                    let mut recv_data = [0u8; 2];
+                    c1.read_exact(&mut recv_data).await.unwrap();
+                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
+                });
+            }
+        }
+
+        jobs.join_all().await;
         Ok(())
     }
 }

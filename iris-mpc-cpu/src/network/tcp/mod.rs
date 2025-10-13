@@ -25,7 +25,11 @@ use tokio_util::sync::CancellationToken;
 
 #[async_trait]
 pub trait NetworkHandle: Send + Sync {
+    // warning: dropping sessions may close the underlying connection. If other MPC
+    // parties are still working, closing the connection may cause the other party to
+    // raise an error due to the connection being closed.
     async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)>;
+    // allows unit and integration tests to wait for MPC instances to finish working before sessions are dropped.
     async fn sync_peers(&mut self) -> Result<()> {
         unimplemented!()
     }
@@ -497,65 +501,6 @@ mod tests {
 
         jobs.join_all().await;
 
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    #[traced_test]
-    async fn test_tcp_network_handle() -> Result<()> {
-        const CONNECTIONS_PER_PEER: usize = 2;
-
-        let identities = generate_local_identities();
-        let handles = get_local_tcp_handles(identities, CONNECTIONS_PER_PEER, 1).await?;
-
-        // for each peer, a vec of the connections to other peers
-        let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> = futures::future::join_all(
-            handles
-                .iter()
-                .map(|h| h.make_connections(CONNECTIONS_PER_PEER)),
-        )
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
-
-        let mut jobs = JoinSet::new();
-        let peer_ids: [u8; 3] = [0, 1, 2];
-
-        tracing::debug!("connections created. sending data");
-
-        for (peer_idx, (p0, p1)) in connections.into_iter().enumerate() {
-            let my_peer_ids = peer_ids
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| *idx != peer_idx)
-                .map(|(_, id)| *id)
-                .collect::<Vec<_>>();
-
-            for (conn_idx, (mut c0, mut c1)) in p0.into_iter().zip(p1.into_iter()).enumerate() {
-                let p0_data = [my_peer_ids[0], conn_idx as u8];
-                let p1_data = [my_peer_ids[1], conn_idx as u8];
-
-                jobs.spawn(async move {
-                    c0.write_all(&p0_data).await.unwrap();
-                    c0.flush().await.unwrap();
-
-                    let mut recv_data = [0u8; 2];
-                    c0.read_exact(&mut recv_data).await.unwrap();
-                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
-                });
-
-                jobs.spawn(async move {
-                    c1.write_all(&p1_data).await.unwrap();
-                    c1.flush().await.unwrap();
-
-                    let mut recv_data = [0u8; 2];
-                    c1.read_exact(&mut recv_data).await.unwrap();
-                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
-                });
-            }
-        }
-
-        jobs.join_all().await;
         Ok(())
     }
 }

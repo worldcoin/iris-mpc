@@ -113,7 +113,7 @@ async fn send_and_receive<T: NetworkConnection>(conn: &mut T) -> Result<()> {
     conn.write_all(&snd_buf).await?;
     conn.flush().await?;
     conn.read_exact(&mut rcv_buf).await?;
-    if &rcv_buf != &snd_buf {
+    if rcv_buf != snd_buf {
         bail!("ok failed");
     }
     Ok(())
