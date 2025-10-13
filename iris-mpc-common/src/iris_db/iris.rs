@@ -182,11 +182,6 @@ impl Default for IrisCode {
         }
     }
 }
-pub fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
-    let (a, b) = *dist_1; // a/b
-    let (c, d) = *dist_2; // c/d
-    ((a as u32) * (d as u32)) < ((b as u32) * (c as u32))
-}
 
 impl IrisCode {
     pub const IRIS_CODE_SIZE: usize = IrisCodeArray::IRIS_CODE_SIZE;
