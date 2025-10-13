@@ -2057,7 +2057,11 @@ mod tests_db {
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
             party_index: 0,
-            addresses: vec!["0.0.0.0:1234".to_string()],
+            addresses: vec![
+                "0.0.0.0:1234".to_string(),
+                "0.0.0.0:1235".to_string(),
+                "0.0.0.0:1236".to_string(),
+            ],
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
