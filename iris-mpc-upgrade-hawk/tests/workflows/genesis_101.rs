@@ -42,6 +42,8 @@ impl TestRun for Test {
             });
         }
         join_set.join_all().await;
+        // allow time to clean up
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // hack to get around an "address already in use" error, emitted by HawkHandle
         let service_ports = vec!["4003".into(), "4004".into(), "4005".into()];

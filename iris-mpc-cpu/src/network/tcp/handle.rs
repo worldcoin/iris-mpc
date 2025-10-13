@@ -55,6 +55,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
         let mut connections = self
             .make_peer_connections(self.config.num_connections)
             .await?;
+
         connections.sync().await?;
 
         // calls multiplexer::run() on each TCP/TLS stream
