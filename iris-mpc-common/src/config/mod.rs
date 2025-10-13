@@ -650,7 +650,7 @@ pub struct MetricsConfig {
 pub struct TlsConfig {
     // if true, the app will start assuming that the nginx sidecar is running
     // Client will be TLS aware with root certs applied, the server will not be TLS aware
-    #[arg(required = false)]
+    #[arg(long)]
     pub with_nginx_sidecar: bool,
 
     #[arg(required = false)]

@@ -83,6 +83,8 @@ impl TestRun for Test {
             });
         }
         join_set.join_all().await;
+        // allow time to clean up
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // Persist initial modificatgions, and insert additional modifications
         let mut join_set = JoinSet::new();

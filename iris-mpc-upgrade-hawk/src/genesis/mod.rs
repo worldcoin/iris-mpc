@@ -221,6 +221,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     log_info(String::from(
         "Cleared modifications from the HNSW iris store",
     ));
+    shutdown_handler.trigger_manual_shutdown();
 
     Ok(())
 }
