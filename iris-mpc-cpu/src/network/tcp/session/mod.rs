@@ -3,10 +3,10 @@ pub mod multiplexer;
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
-        tcp::config::TcpConfig,
         tcp::{
+            config::TcpConfig,
             connection::ConnectionState,
-            data::{ConnectionId, InStream, OutStream, OutboundMsg, Peer},
+            data::{ConnectionId, InStream, OutStream, OutboundMsg, Peer, PeerConnections},
             NetworkConnection,
         },
         value::NetworkValue,
@@ -95,8 +95,7 @@ pub struct SessionChannels {
 
 pub async fn make_sessions<T: NetworkConnection + 'static>(
     peers: &[Arc<Peer>],
-    conn0: Vec<T>,
-    conn1: Vec<T>,
+    connections: PeerConnections<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
     next_session_id: usize,
@@ -104,8 +103,7 @@ pub async fn make_sessions<T: NetworkConnection + 'static>(
     let sc = make_channels(peers, config, next_session_id);
     make_sessions_inner(
         peers,
-        conn0,
-        conn1,
+        connections,
         connection_state,
         config,
         next_session_id,
@@ -120,11 +118,6 @@ fn make_channels(
     next_session_id: usize,
 ) -> SessionChannels {
     let mut sc = SessionChannels::default();
-    tracing::info!(
-        "creating {} sessions starting from id {}",
-        config.num_sessions,
-        next_session_id
-    );
 
     for peer_id in peers.iter().map(|x| x.id()) {
         let mut outbound_tx = HashMap::new();
@@ -156,8 +149,7 @@ fn make_channels(
 
 async fn make_sessions_inner<T: NetworkConnection + 'static>(
     peers: &[Arc<Peer>],
-    conn0: Vec<T>,
-    conn1: Vec<T>,
+    connections: PeerConnections<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
     next_session_id: usize,
@@ -167,7 +159,7 @@ async fn make_sessions_inner<T: NetworkConnection + 'static>(
     let num_sessions = config.num_sessions;
 
     // spawn the forwarders
-    for (peer_id, mut conns) in izip!(peers.iter().map(|x| x.id()), [conn0, conn1]) {
+    for (peer_id, mut conns) in izip!(peers.iter().map(|x| x.id()), connections.into_iter()) {
         for (idx, connection) in conns.drain(..).enumerate() {
             let connection_id = ConnectionId::from(idx as u32);
             let outbound_rx = sc

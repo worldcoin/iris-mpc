@@ -6,7 +6,7 @@ use crate::{
         tcp::{
             config::TcpConfig,
             connection::{accept_loop, ConnectionRequest, ConnectionState},
-            data::{ConnectionId, Peer},
+            data::{ConnectionId, Peer, PeerConnections},
             session::TcpSession,
             Client, NetworkConnection, NetworkHandle, Server,
         },
@@ -18,7 +18,6 @@ use async_trait::async_trait;
 use eyre::{bail, Result};
 use futures::future::join_all;
 use itertools::Itertools;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
@@ -52,47 +51,28 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
             .replace_cancellation_token(err_ct.clone())
             .await;
 
-        let (mut c0, mut c1) = self.make_connections(self.config.num_connections).await?;
-
-        let all_conns = c0.iter_mut().chain(c1.iter_mut());
-        let _replies = join_all(all_conns.map(send_and_receive))
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
+        // wait for all peers to establish all connections
+        let mut connections = self.make_connections(self.config.num_connections).await?;
+        connections.sync().await?;
 
         // calls multiplexer::run() on each TCP/TLS stream
         let mut sessions = super::session::make_sessions(
             &self.peers,
-            c0,
-            c1,
+            connections,
             self.connection_state.clone(),
             &self.config,
             self.next_session_id,
         )
         .await;
 
-        // make sure all the sessions are working
-        for (idx, session) in sessions.iter_mut().enumerate() {
-            let prf = NetworkValue::PrfKey([idx as u8; 16]);
-            for peer in &self.peers {
-                session.send(prf.clone(), peer.id()).await?;
-            }
-            for peer in &self.peers {
-                let r = session.receive(peer.id()).await?;
-                match r {
-                    NetworkValue::PrfKey(arr) => {
-                        assert_eq!([idx as u8; 16], arr);
-                    }
-                    _ => bail!("invalid msg received in setup"),
-                }
-            }
-        }
+        self.validate_sessions(&mut sessions).await?;
 
         let sessions_per_conn = (0..self.config.num_connections)
             .map(|idx| self.config.get_sessions_for_connection(idx))
             .collect_vec();
         tracing::info!(
-            "make_sessions succeeded. sessions per connection: {:?}",
+            "make_sessions succeeded. starting id: {} sessions per connection: {:?}",
+            self.next_session_id,
             sessions_per_conn
         );
 
@@ -105,14 +85,8 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
     }
 
     async fn sync_peers(&mut self) -> Result<()> {
-        let (mut c0, mut c1) = self.make_connections(1).await?;
-
-        let all_conns = c0.iter_mut().chain(c1.iter_mut());
-        let _replies = join_all(all_conns.map(send_and_receive))
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
-
+        let mut connections = self.make_connections(1).await?;
+        connections.sync().await?;
         Ok(())
     }
 }
@@ -160,7 +134,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
 
     // returns the connections for each peer
     // when returned, the handshakes have successfully completed
-    pub async fn make_connections(&self, conns_per_peer: usize) -> Result<(Vec<T>, Vec<T>)> {
+    pub async fn make_connections(&self, conns_per_peer: usize) -> Result<PeerConnections<T>> {
         assert_eq!(self.peers.len(), 2);
         let mut connect_futures = Vec::with_capacity(conns_per_peer * self.peers.len());
 
@@ -183,24 +157,31 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut c1 = results;
-        let mut c0 = vec![];
-        c0.extend(c1.drain(0..c1.len() / 2));
-        assert_eq!(c1.len(), c0.len());
+        let mut p1 = results;
+        let mut p0 = vec![];
+        p0.extend(p1.drain(0..p1.len() / 2));
+        assert_eq!(p1.len(), p0.len());
 
-        Ok((c0, c1))
+        Ok(PeerConnections::new(p0, p1))
     }
-}
 
-// ensure all peers are connected to each other.
-async fn send_and_receive<T: NetworkConnection>(conn: &mut T) -> Result<()> {
-    let snd_buf: [u8; 3] = [2, b'o', b'k'];
-    let mut rcv_buf = [0_u8; 3];
-    conn.write_all(&snd_buf).await?;
-    conn.flush().await?;
-    conn.read_exact(&mut rcv_buf).await?;
-    if &rcv_buf != &snd_buf {
-        bail!("ok failed");
+    async fn validate_sessions(&self, sessions: &mut [TcpSession]) -> Result<()> {
+        // make sure all the sessions are working
+        for (idx, session) in sessions.iter_mut().enumerate() {
+            let prf = NetworkValue::PrfKey([idx as u8; 16]);
+            for peer in &self.peers {
+                session.send(prf.clone(), peer.id()).await?;
+            }
+            for peer in &self.peers {
+                let r = session.receive(peer.id()).await?;
+                match r {
+                    NetworkValue::PrfKey(arr) => {
+                        assert_eq!([idx as u8; 16], arr);
+                    }
+                    _ => bail!("invalid msg received in validate_sessions()"),
+                }
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
