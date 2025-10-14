@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use clap::ValueEnum;
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use rayon::{
     iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     ThreadPool, ThreadPoolBuilder,
@@ -9,16 +9,50 @@ use rayon::{
 use serde::{Deserialize, Serialize};
 
 use crate::hawkers::plaintext_store::fraction_ordering;
+use serde_json;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
-pub struct KNNResult {
-    pub node: usize,
-    neighbors: Vec<usize>,
+pub struct KNNResult<V> {
+    pub node: V,
+    pub neighbors: Vec<V>,
+}
+
+impl<U> KNNResult<U> {
+    pub fn map<V, F>(self, mut f: F) -> KNNResult<V>
+    where
+        F: FnMut(U) -> V,
+    {
+        KNNResult {
+            node: f(self.node),
+            neighbors: self.neighbors.into_iter().map(f).collect(),
+        }
+    }
+}
+
+/// Reads a Vec<KNNResult<u32>> from a file, skipping the first line (header).
+pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult<u32>>> {
+    let file = File::open(path)?;
+    let mut lines = BufReader::new(file).lines();
+
+    // Skip the header
+    lines.next();
+
+    let mut results = Vec::new();
+    for line in lines {
+        let line = line?;
+        let knn_result: KNNResult<u32> = serde_json::from_str(&line)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        results.push(knn_result);
+    }
+    Ok(results)
 }
 
 pub trait KNNEngine {
     fn init(irises: Vec<IrisCode>, k: usize, next_id: usize, num_threads: usize) -> Self;
-    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult>;
+    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>>;
 }
 
 #[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
@@ -36,20 +70,26 @@ impl Engine {
         which: EngineChoice,
         irises: Vec<IrisCode>,
         k: usize,
-        next_id: usize,
+        next_id: IrisSerialId,
         num_threads: usize,
     ) -> Self {
         match which {
-            EngineChoice::NaiveFHD => {
-                Self::NaiveFHD(NaiveNormalDistKNN::init(irises, k, next_id, num_threads))
-            }
-            EngineChoice::NaiveMinFHD => {
-                Self::NaiveMinFHD(NaiveMinFHDKNN::init(irises, k, next_id, num_threads))
-            }
+            EngineChoice::NaiveFHD => Self::NaiveFHD(NaiveNormalDistKNN::init(
+                irises,
+                k,
+                next_id as usize,
+                num_threads,
+            )),
+            EngineChoice::NaiveMinFHD => Self::NaiveMinFHD(NaiveMinFHDKNN::init(
+                irises,
+                k,
+                next_id as usize,
+                num_threads,
+            )),
         }
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
         match self {
             Self::NaiveFHD(engine) => engine.compute_chunk(chunk_size),
             Self::NaiveMinFHD(engine) => engine.compute_chunk(chunk_size),
@@ -85,7 +125,7 @@ impl KNNEngine for NaiveNormalDistKNN {
         }
     }
 
-    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
+    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
         let start = self.next_id;
         let end = (start + chunk_size).min(self.irises.len() + 1);
         self.next_id = end;
@@ -111,8 +151,14 @@ impl KNNEngine for NaiveNormalDistKNN {
                     let mut neighbors = neighbors.drain(0..self.k).collect::<Vec<_>>();
                     neighbors.shrink_to_fit(); // just to make sure
                     neighbors.sort_by(|lhs, rhs| fraction_ordering(&lhs.1, &rhs.1));
-                    let neighbors = neighbors.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
-                    KNNResult { node: i, neighbors }
+                    let neighbors = neighbors
+                        .into_iter()
+                        .map(|(i, _)| i as IrisSerialId)
+                        .collect::<Vec<_>>();
+                    KNNResult {
+                        node: i as IrisSerialId,
+                        neighbors,
+                    }
                 })
                 .collect::<Vec<_>>()
         })
@@ -148,7 +194,7 @@ impl KNNEngine for NaiveMinFHDKNN {
         }
     }
 
-    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
+    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
         let start = self.next_id;
         let end = (start + chunk_size).min(self.centers.len() + 1);
         self.next_id = end;
@@ -191,8 +237,14 @@ impl KNNEngine for NaiveMinFHDKNN {
                         Ordering::Equal => lhs.0.cmp(&rhs.0),
                         other => other,
                     });
-                    let neighbors = neighbors.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
-                    KNNResult { node: i, neighbors }
+                    let neighbors = neighbors
+                        .into_iter()
+                        .map(|(i, _)| i as IrisSerialId)
+                        .collect::<Vec<_>>();
+                    KNNResult {
+                        node: i as IrisSerialId,
+                        neighbors,
+                    }
                 })
                 .collect::<Vec<_>>()
         })

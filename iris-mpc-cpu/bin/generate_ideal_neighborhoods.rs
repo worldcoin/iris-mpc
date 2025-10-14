@@ -5,9 +5,9 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use iris_mpc_cpu::{
-    hawkers::naive_knn_plaintext::{Engine, EngineChoice, KNNResult},
+    hawkers::ideal_knn_engines::{Engine, EngineChoice, KNNResult},
     py_bindings::plaintext_store::Base64IrisCode,
 };
 use metrics::IntoF64;
@@ -115,10 +115,11 @@ async fn main() {
             }
 
             // 3. Process the rest of the lines as KNN results
-            let results: Result<Vec<KNNResult>, _> = lines
+            let results: Result<Vec<KNNResult<IrisSerialId>>, _> = lines
                 .map(|line_result| {
                     let line = line_result.map_err(|e| e.to_string())?;
-                    serde_json::from_str::<KNNResult>(&line).map_err(|e| e.to_string())
+                    serde_json::from_str::<KNNResult<IrisSerialId>>(&line)
+                        .map_err(|e| e.to_string())
                 })
                 .collect();
 
@@ -136,11 +137,11 @@ async fn main() {
                 }
             };
 
-            let nodes: Vec<usize> = deserialized_results
+            let nodes: Vec<IrisSerialId> = deserialized_results
                 .into_iter()
                 .map(|result| result.node)
                 .collect();
-            (nodes.len(), nodes)
+            (nodes.len() as IrisSerialId, nodes)
         }
         Err(_) => {
             // File doesn't exist, create it and write the header.
@@ -158,7 +159,7 @@ async fn main() {
     };
 
     if num_already_processed > 0 {
-        let expected_nodes: Vec<usize> = (1..num_already_processed + 1).collect();
+        let expected_nodes: Vec<IrisSerialId> = (1..num_already_processed + 1).collect();
         if nodes != expected_nodes {
             eprintln!(
                 "Error: The result nodes in the file are not a contiguous sequence from 1 to N."

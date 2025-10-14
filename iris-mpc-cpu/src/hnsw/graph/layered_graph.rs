@@ -6,14 +6,16 @@
 use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::state_check::SetHash,
+    hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
         searcher::{ConnectPlan, ConnectPlanLayer},
         vector_store::Ref,
     },
 };
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{collections::HashMap, fmt::Display, iter::once, path::PathBuf, str::FromStr, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -153,6 +155,36 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
     }
 }
 
+impl GraphMem<IrisSerialId> {
+    pub fn ideal_from_irises(
+        irises: Vec<IrisCode>,
+        entry_point: Option<(IrisSerialId, usize)>,
+        nodes_for_nonzero_layers: Vec<Vec<IrisSerialId>>,
+        filepath: PathBuf, // File containing KNN results for layer 0
+        k: usize,
+        echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
+        num_threads: usize,
+    ) -> Self {
+        let zero_layer = {
+            let results = read_knn_results_from_file(filepath).unwrap();
+            Layer::from_knn_results(results)
+        };
+
+        let nonzero_layers = nodes_for_nonzero_layers.into_iter().map(|nodes| {
+            let iris_data = nodes
+                .iter()
+                // note 0-indexing of irises (contrast to store usage)
+                .map(|node| (*node, irises[(*node - 1) as usize].clone()))
+                .collect::<Vec<_>>();
+            Layer::ideal_from_irises(iris_data, k, echoice, num_threads)
+        });
+        GraphMem::from_precomputed(
+            entry_point,
+            once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
+        )
+    }
+}
+
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct Layer<V: Ref + Display + FromStr> {
@@ -195,6 +227,36 @@ impl<V: Ref + Display + FromStr> Layer<V> {
 
     pub fn get_links_map(&self) -> &HashMap<V, SortedEdgeIds<V>> {
         &self.links
+    }
+
+    fn from_knn_results(results: Vec<KNNResult<V>>) -> Self {
+        let mut ret = Layer::new();
+        for KNNResult { node, neighbors } in results {
+            ret.set_links(node, SortedEdgeIds(neighbors));
+        }
+        ret
+    }
+
+    /// Constructs a Layer from pairs of (vectorRef, iris) by computing
+    /// the ideal K-nearest neighbors for each such entry.
+    fn ideal_from_irises(
+        iris_data: Vec<(V, IrisCode)>,
+        k: usize,
+        echoice: EngineChoice,
+        num_threads: usize,
+    ) -> Self {
+        let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
+        let n = irises.len();
+        // Initialize the KNN algorithm;
+        let mut engine = Engine::init(echoice, irises, k, 1, num_threads);
+        // Run the entire computation
+        let results = engine
+            .compute_chunk(n)
+            .into_iter()
+            .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
+            .collect::<Vec<_>>();
+
+        Layer::from_knn_results(results)
     }
 }
 
@@ -240,19 +302,29 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, io::BufReader, path::PathBuf, sync::Arc};
 
     use crate::{
-        hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        hawkers::{
+            ideal_knn_engines::EngineChoice,
+            plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        },
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             VectorStore,
         },
+        py_bindings::plaintext_store::Base64IrisCode,
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
+    use iris_mpc_common::{
+        iris_db::{db::IrisDB, iris::IrisCode},
+        vector_id::VectorId,
+        IrisSerialId,
+    };
+    use rand::seq::SliceRandom;
     use rand::{RngCore, SeedableRng};
+    use serde_json::Deserializer;
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
@@ -364,6 +436,49 @@ mod tests {
         });
         assert_ne!(graph_store, different_graph_store);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_something() -> Result<()> {
+        let k = 320;
+        let echoice = EngineChoice::NaiveFHD;
+        let num_threads = 3;
+        let file = std::fs::File::open(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("iris-mpc-cpu/data/store.ndjson"),
+        )?;
+        let reader = BufReader::new(file);
+
+        let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
+        let irises = stream.map(|e| (&e.unwrap()).into()).collect::<Vec<_>>();
+        let n = irises.len();
+        // First layer: 1000 random serial ids from 1 to n
+        let mut rng = rand::thread_rng();
+        let mut first_layer: Vec<IrisSerialId> = (1..=(n as u32)).collect();
+        first_layer.shuffle(&mut rng);
+        let first_layer = first_layer.into_iter().take(1000).collect::<Vec<_>>();
+
+        // Second layer: 100 random samples from the first layer
+        let mut second_layer = first_layer.clone();
+        second_layer.shuffle(&mut rng);
+        let second_layer = second_layer.into_iter().take(100).collect::<Vec<_>>();
+        let entry = second_layer[0];
+
+        let nodes_for_nonzero_layers = vec![first_layer, second_layer];
+        let entry_point = Some((entry, 2));
+        let filepath = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("results.txt");
+
+        let graph = GraphMem::ideal_from_irises(
+            irises,
+            entry_point,
+            nodes_for_nonzero_layers,
+            filepath,
+            k,
+            echoice,
+            num_threads,
+        );
+
+        assert!(graph.layers[0].links.keys().count() == n);
         Ok(())
     }
 

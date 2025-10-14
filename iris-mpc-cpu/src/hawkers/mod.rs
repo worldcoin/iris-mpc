@@ -22,4 +22,4 @@ pub mod shared_irises;
 
 pub mod build_plaintext;
 
-pub mod naive_knn_plaintext;
+pub mod ideal_knn_engines;
