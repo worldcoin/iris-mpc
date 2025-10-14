@@ -55,11 +55,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: "3"
+    cpu: "4"
     memory: 60Gi
 
   requests:
-    cpu: "3"
+    cpu: "4"
     memory: 60Gi
 
 imagePullSecrets:
