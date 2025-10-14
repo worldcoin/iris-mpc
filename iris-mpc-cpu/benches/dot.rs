@@ -543,7 +543,7 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
 
     for &nearest_neighbors in &NEAREST_NEIGHBORS {
         g.bench_function(
-            &format!("rotation_aware_trick_dot_ram_bound_{}", nearest_neighbors),
+            format!("rotation_aware_trick_dot_ram_bound_{}", nearest_neighbors),
             |b| {
                 b.iter_batched(
                     || {
@@ -561,13 +561,11 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
                     },
                     |input| {
                         for (l, set) in input {
-                            black_box({
-                                for v in set {
-                                    for rot in IrisRotation::all() {
-                                        l.code.rotation_aware_trick_dot(&v.code, &rot);
-                                    }
+                            for v in set {
+                                for rot in IrisRotation::all() {
+                                    black_box(l.code.rotation_aware_trick_dot(&v.code, &rot));
                                 }
-                            });
+                            }
                         }
                     },
                     BatchSize::SmallInput,
@@ -576,7 +574,7 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
         );
 
         g.bench_function(
-            &format!(
+            format!(
                 "rotation_aware_trick_dot_padded_ram_bound_{}",
                 nearest_neighbors
             ),
@@ -597,13 +595,15 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
                     },
                     |input| {
                         for (l, set) in input {
-                            black_box({
-                                for v in set {
-                                    for rot in IrisRotation::all() {
-                                        rotation_aware_trick_dot_padded(l, &v.code.coefs, &rot);
-                                    }
+                            for v in set {
+                                for rot in IrisRotation::all() {
+                                    black_box(rotation_aware_trick_dot_padded(
+                                        l,
+                                        &v.code.coefs,
+                                        &rot,
+                                    ));
                                 }
-                            });
+                            }
                         }
                     },
                     BatchSize::SmallInput,
