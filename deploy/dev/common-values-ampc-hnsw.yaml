@@ -57,10 +57,9 @@ resources:
   limits:
     cpu: "3.5"
     memory: 60Gi
-    memory: 60Gi
+
   requests:
     cpu: "3.5"
-    memory: 60Gi
     memory: 60Gi
 
 imagePullSecrets:
