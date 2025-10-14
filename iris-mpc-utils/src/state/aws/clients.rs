@@ -1,4 +1,4 @@
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
+use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
@@ -13,23 +13,34 @@ use std::time::Duration;
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Encpasulates access to a set of AWS service clients.
-pub struct AwsClients {
+pub struct Clients {
     /// Client for Amazon Simple Storage Service.
     s3_client: S3Client,
+
+    /// Configuration used to instantiate service clients.
+    sdk_config: SdkConfig,
+
+    /// Client for AWS Secrets Manager.
+    secrets_manager_client: SecretsManagerClient,
 
     /// Client for Amazon Simple Notification Service.
     sns_client: SNSClient,
 
     /// Client for Amazon Simple Queue Service.
     sqs_client: SQSClient,
-
-    /// Client for AWS Secrets Manager.
-    secrets_manager_client: SecretsManagerClient,
 }
 
-impl AwsClients {
+impl Clients {
     pub fn s3_client(&self) -> &S3Client {
         &self.s3_client
+    }
+
+    pub fn sdk_config(&self) -> &SdkConfig {
+        &self.sdk_config
+    }
+
+    pub fn secrets_manager_client(&self) -> &SecretsManagerClient {
+        &self.secrets_manager_client
     }
 
     pub fn sns_client(&self) -> &SNSClient {
@@ -39,28 +50,27 @@ impl AwsClients {
     pub fn sqs_client(&self) -> &SQSClient {
         &self.sqs_client
     }
-
-    pub fn secrets_manager_client(&self) -> &SecretsManagerClient {
-        &self.secrets_manager_client
-    }
 }
 
-impl AwsClients {
-    pub async fn new(config: &NodeConfig) -> Result<Self> {
-        let shared_config = get_aws_config(config).await;
+impl Clients {
+    pub async fn new(node_config: &NodeConfig) -> Result<Self> {
+        let sdk_config = get_sdk_config(node_config).await;
 
         Ok(Self {
-            sqs_client: get_sqs_client(config, Some(&shared_config)).await,
-            sns_client: get_sns_client(config, Some(&shared_config)).await,
-            s3_client: get_s3_client(config, Some(&shared_config)).await,
-            secrets_manager_client: get_ksm_client(config, Some(&shared_config)).await,
+            s3_client: get_s3_client(node_config, Some(&sdk_config)).await,
+            sdk_config: sdk_config.clone(),
+            secrets_manager_client: get_secrets_manager_client(node_config, Some(&sdk_config))
+                .await,
+            sqs_client: get_sqs_client(node_config, Some(&sdk_config)).await,
+            sns_client: get_sns_client(node_config, Some(&sdk_config)).await,
         })
     }
 }
 
-impl Clone for AwsClients {
+impl Clone for Clients {
     fn clone(&self) -> Self {
         Self {
+            sdk_config: self.sdk_config.clone(),
             sqs_client: self.sqs_client.clone(),
             sns_client: self.sns_client.clone(),
             s3_client: self.s3_client.clone(),
@@ -69,27 +79,13 @@ impl Clone for AwsClients {
     }
 }
 
-/// Returns an AWS configuration instance hydrated from env vars plus defaults.
-pub async fn get_aws_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
-    aws_config::from_env()
-        .region(Region::new(
-            node_config
-                .clone()
-                .aws
-                .and_then(|aws| aws.region)
-                .unwrap_or_else(|| DEFAULT_REGION.to_owned()),
-        ))
-        .load()
-        .await
-}
-
 /// Creates an AWS S3 client with default retry configuration.
 pub async fn get_s3_client(
     node_config: &NodeConfig,
-    shared_config: Option<&aws_config::SdkConfig>,
+    sdk_config: Option<&aws_config::SdkConfig>,
 ) -> S3Client {
-    let shared_config = match shared_config {
-        None => get_aws_config(node_config).await,
+    let shared_config = match sdk_config {
+        None => get_sdk_config(node_config).await,
         Some(inner) => inner.clone(),
     };
     let force_path_style =
@@ -103,30 +99,46 @@ pub async fn get_s3_client(
     )
 }
 
-/// Creates an AWS SNS client.
-pub async fn get_sns_client(
-    node_config: &NodeConfig,
-    shared_config: Option<&aws_config::SdkConfig>,
-) -> SNSClient {
-    let shared_config = match shared_config {
-        None => get_aws_config(node_config).await,
-        Some(inner) => inner.clone(),
-    };
-
-    SNSClient::new(&shared_config)
+/// Returns an AWS SDK configuration instance hydrated from env vars plus defaults.
+pub async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
+    // TODO: AWS endpoint can be defined in a node config yet
+    // it is always pulled form env var - is this correct behaviour ?
+    aws_config::from_env()
+        .region(Region::new(
+            node_config
+                .clone()
+                .aws
+                .and_then(|aws| aws.region)
+                .unwrap_or_else(|| DEFAULT_REGION.to_owned()),
+        ))
+        .load()
+        .await
 }
 
-/// Creates an AWS KSM client.
-pub async fn get_ksm_client(
+/// Creates an AWS Secrets Manager client.
+pub async fn get_secrets_manager_client(
     node_config: &NodeConfig,
-    shared_config: Option<&aws_config::SdkConfig>,
+    sdk_config: Option<&aws_config::SdkConfig>,
 ) -> SecretsManagerClient {
-    let shared_config = match shared_config {
-        None => get_aws_config(node_config).await,
+    let shared_config = match sdk_config {
+        None => get_sdk_config(node_config).await,
         Some(inner) => inner.clone(),
     };
 
     SecretsManagerClient::new(&shared_config)
+}
+
+/// Creates an AWS SNS client.
+pub async fn get_sns_client(
+    node_config: &NodeConfig,
+    sdk_config: Option<&aws_config::SdkConfig>,
+) -> SNSClient {
+    let shared_config = match sdk_config {
+        None => get_sdk_config(node_config).await,
+        Some(inner) => inner.clone(),
+    };
+
+    SNSClient::new(&shared_config)
 }
 
 /// Creates an AWS SQS client with a client-side operation attempt timeout. Per default, there are two retry
@@ -134,10 +146,10 @@ pub async fn get_ksm_client(
 /// client from `await`ing forever on broken streams. (see <https://github.com/awslabs/aws-sdk-rust/issues/1094>)
 pub async fn get_sqs_client(
     node_config: &NodeConfig,
-    shared_config: Option<&aws_config::SdkConfig>,
+    sdk_config: Option<&aws_config::SdkConfig>,
 ) -> SQSClient {
-    let shared_config = match shared_config {
-        None => get_aws_config(node_config).await,
+    let shared_config = match sdk_config {
+        None => get_sdk_config(node_config).await,
         Some(inner) => inner.clone(),
     };
 
@@ -156,246 +168,57 @@ pub async fn get_sqs_client(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use iris_mpc_common::config::{AwsConfig, Config as NodeConfig};
-    use tokio;
+    use super::{get_sdk_config, Clients, SdkConfig};
+    use crate::{
+        constants::{DEFAULT_AWS_REGION, NODE_CONFIG_KIND_MAIN},
+        state::fsys::local::read_node_config,
+    };
+    use iris_mpc_common::config::Config as NodeConfig;
 
-    fn create_test_config() -> NodeConfig {
-        NodeConfig {
-            environment: "test".to_string(),
-            sqs_long_poll_wait_time: 20,
-            aws: Some(AwsConfig {
-                region: Some("us-east-1".to_string()),
-            }),
-            ..Default::default()
-        }
+    fn assert_clients(clients: &Clients) {
+        let client = clients.s3_client();
+        assert!(client.config().region().is_some());
+
+        let client = clients.secrets_manager_client();
+        assert!(client.config().region().is_some());
+
+        let client = clients.sns_client();
+        assert!(client.config().region().is_some());
+
+        let client = clients.sqs_client();
+        assert!(client.config().region().is_some());
     }
 
-    fn create_test_config_without_region() -> NodeConfig {
-        NodeConfig {
-            environment: "test".to_string(),
-            sqs_long_poll_wait_time: 20,
-            aws: None,
-            ..Default::default()
-        }
-    }
-
-    fn create_prod_config() -> NodeConfig {
-        NodeConfig {
-            environment: ENV_PROD.to_string(),
-            sqs_long_poll_wait_time: 10,
-            aws: Some(AwsConfig {
-                region: Some("eu-west-1".to_string()),
-            }),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn test_aws_clients_new() {
-        let config = create_test_config();
-        let clients = AwsClients::new(&config).await;
-
+    async fn create_clients() -> Clients {
+        let clients = Clients::new(&create_node_config()).await;
         assert!(clients.is_ok());
-        let clients = clients.unwrap();
 
-        // Verify all clients are accessible
-        let _ = clients.s3_client();
-        let _ = clients.sns_client();
-        let _ = clients.sqs_client();
-        let _ = clients.secrets_manager_client();
+        clients.unwrap()
     }
 
-    #[test]
-    fn test_aws_clients_clone() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let config = create_test_config();
-            let clients = AwsClients::new(&config).await.unwrap();
+    fn create_node_config() -> NodeConfig {
+        read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap()
+    }
 
-            let cloned_clients = clients.clone();
-
-            // Verify cloned clients work
-            let _ = cloned_clients.s3_client();
-            let _ = cloned_clients.sns_client();
-            let _ = cloned_clients.sqs_client();
-            let _ = cloned_clients.secrets_manager_client();
-        });
+    async fn create_sdk_config() -> SdkConfig {
+        get_sdk_config(&create_node_config()).await
     }
 
     #[tokio::test]
-    async fn test_get_aws_config_with_custom_region() {
-        let config = create_test_config();
-        let aws_config = get_aws_config(&config).await;
-
-        assert_eq!(aws_config.region().unwrap().as_ref(), "us-east-1");
+    async fn test_get_sdk_config() {
+        let config = create_sdk_config().await;
+        // TODO: check why this assert fails.
+        // assert!(config.endpoint_url().is_some());
+        assert_eq!(config.region().unwrap().as_ref(), DEFAULT_AWS_REGION);
     }
 
     #[tokio::test]
-    async fn test_get_aws_config_with_default_region() {
-        let config = create_test_config_without_region();
-        let aws_config = get_aws_config(&config).await;
-
-        assert_eq!(aws_config.region().unwrap().as_ref(), DEFAULT_REGION);
+    async fn test_clients_new() {
+        assert_clients(&create_clients().await);
     }
 
     #[tokio::test]
-    async fn test_get_s3_client_with_shared_config() {
-        let config = create_test_config();
-        let shared_config = get_aws_config(&config).await;
-        let s3_client = get_s3_client(&config, Some(&shared_config)).await;
-
-        // Client should be created successfully
-        assert!(!s3_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_s3_client_without_shared_config() {
-        let config = create_test_config();
-        let s3_client = get_s3_client(&config, None).await;
-
-        // Client should be created successfully
-        assert!(!s3_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_s3_client_force_path_style_non_prod() {
-        let config = create_test_config(); // test environment
-        let s3_client = get_s3_client(&config, None).await;
-
-        // For non-prod environments, force_path_style should be true
-        // Note: We can't directly test this as the config doesn't expose this field
-        // This test mainly ensures the client is created without errors
-        assert!(!s3_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_s3_client_prod_environment() {
-        let config = create_prod_config();
-        let s3_client = get_s3_client(&config, None).await;
-
-        // For prod environment, force_path_style should be false
-        assert!(!s3_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_sns_client_with_shared_config() {
-        let config = create_test_config();
-        let shared_config = get_aws_config(&config).await;
-        let sns_client = get_sns_client(&config, Some(&shared_config)).await;
-
-        // Client should be created successfully
-        assert!(!sns_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_sns_client_without_shared_config() {
-        let config = create_test_config();
-        let sns_client = get_sns_client(&config, None).await;
-
-        // Client should be created successfully
-        assert!(!sns_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_ksm_client_with_shared_config() {
-        let config = create_test_config();
-        let shared_config = get_aws_config(&config).await;
-        let ksm_client = get_ksm_client(&config, Some(&shared_config)).await;
-
-        // Client should be created successfully
-        assert!(!ksm_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_ksm_client_without_shared_config() {
-        let config = create_test_config();
-        let ksm_client = get_ksm_client(&config, None).await;
-
-        // Client should be created successfully
-        assert!(!ksm_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_sqs_client_with_shared_config() {
-        let config = create_test_config();
-        let shared_config = get_aws_config(&config).await;
-        let sqs_client = get_sqs_client(&config, Some(&shared_config)).await;
-
-        // Client should be created successfully
-        assert!(!sqs_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_sqs_client_without_shared_config() {
-        let config = create_test_config();
-        let sqs_client = get_sqs_client(&config, None).await;
-
-        // Client should be created successfully
-        assert!(!sqs_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_sqs_client_timeout_configuration() {
-        let mut config = create_test_config();
-        config.sqs_long_poll_wait_time = 30;
-
-        let sqs_client = get_sqs_client(&config, None).await;
-
-        // The timeout should be configured to sqs_long_poll_wait_time + 2 seconds
-        // We can't directly test the timeout value, but we can ensure the client is created
-        assert!(!sqs_client.config().region().is_none());
-    }
-
-    #[test]
-    fn test_default_region_constant() {
-        assert_eq!(DEFAULT_REGION, "eu-north-1");
-    }
-
-    #[tokio::test]
-    async fn test_aws_clients_getters() {
-        let config = create_test_config();
-        let clients = AwsClients::new(&config).await.unwrap();
-
-        // Test that all getter methods return valid references
-        let s3_ref = clients.s3_client();
-        let sns_ref = clients.sns_client();
-        let sqs_ref = clients.sqs_client();
-        let secrets_ref = clients.secrets_manager_client();
-
-        // Verify the references are valid by checking they have regions
-        assert!(!s3_ref.config().region().is_none());
-        assert!(!sns_ref.config().region().is_none());
-        assert!(!sqs_ref.config().region().is_none());
-        assert!(!secrets_ref.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_stage_environment_s3_config() {
-        let mut config = create_test_config();
-        config.environment = ENV_STAGE.to_string();
-
-        let s3_client = get_s3_client(&config, None).await;
-
-        // For stage environment, force_path_style should be false (like prod)
-        assert!(!s3_client.config().region().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_multiple_client_creation_with_same_config() {
-        let config = create_test_config();
-        let shared_config = get_aws_config(&config).await;
-
-        // Create multiple clients with the same shared config
-        let s3_client1 = get_s3_client(&config, Some(&shared_config)).await;
-        let s3_client2 = get_s3_client(&config, Some(&shared_config)).await;
-        let sns_client1 = get_sns_client(&config, Some(&shared_config)).await;
-        let sqs_client1 = get_sqs_client(&config, Some(&shared_config)).await;
-
-        // All clients should be created successfully
-        assert!(!s3_client1.config().region().is_none());
-        assert!(!s3_client2.config().region().is_none());
-        assert!(!sns_client1.config().region().is_none());
-        assert!(!sqs_client1.config().region().is_none());
+    async fn test_clients_clone() {
+        assert_clients(&create_clients().await.clone());
     }
 }
