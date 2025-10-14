@@ -33,7 +33,7 @@ if [ "$MPCV2_TYPE" == "cpu" ]; then
   CLUSTER_NAME="ampc-hnsw"
   ARGOCD_APP="ampc-hnsw"
   if [ "$ENVIRONMENT_NAME" == "dev" ]; then
-    CLUSTERS=("arn:aws:eks:eu-central-1:004304088310:cluster/$CLUSTER_NAME-0-dev" "arn:aws:eks:eu-central-1:284038850594:cluster/$CLUSTER_NAME-1-dev" "arn:aws:eks:eu-central-1:882222437714:cluster/$CLUSTER_NAME-2-dev")
+    CLUSTERS=("$CLUSTER_NAME-0-dev" "$CLUSTER_NAME-1-dev" "$CLUSTER_NAME-2-dev")
   else
     CLUSTERS=("arn:aws:eks:eu-central-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-central-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-central-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
   fi

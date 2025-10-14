@@ -314,6 +314,12 @@ mod tests {
     async fn test_hnsw_local() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
+        // let database_size: usize = std::env::var("DB_SIZE")
+        //     .ok()
+        //     .and_then(|s| s.parse().ok())
+        //     .unwrap();
+
+        let t0 = std::time::Instant::now(); // start test timer
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut vectors_and_graphs = shared_random_setup(
             &mut rng,
@@ -355,5 +361,6 @@ mod tests {
                 assert!(r, "Failed at index {:?} by party {:?}", i, party_index);
             }
         }
+        eprintln!("TIMING {} = {:?}", database_size, t0.elapsed());
     }
 }
