@@ -20,13 +20,13 @@ pub struct IntraMatch {
 
 /// Matches the search queries against each other within the batch, to find intra-batch matches.
 /// Returns, for each request, the list of other requests in the batch that it matches and how it matched.
-/// Also returns the distances for all matches, grouped by request and eye, for anon stats purposes.
+/// Also returns the distances for all matches, grouped by eye and (request,earlier_request), for anon stats purposes.
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRots<Aby3Query>>>>,
 ) -> Result<(
     VecRequests<Vec<IntraMatch>>,
-    BothEyes<Vec<Vec<DistanceShare<u32>>>>,
+    BothEyes<HashMap<(usize, usize), Vec<DistanceShare<u32>>>>,
 )> {
     let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
@@ -115,7 +115,7 @@ async fn aggregate_results(
     mut rx: UnboundedReceiver<(IsMatch, DistanceShare<u32>)>,
 ) -> Result<(
     VecRequests<Vec<IntraMatch>>,
-    BothEyes<Vec<Vec<DistanceShare<u32>>>>,
+    BothEyes<HashMap<(usize, usize), Vec<DistanceShare<u32>>>>,
 )> {
     rx.close();
     let mut join = HashMap::new();
@@ -145,11 +145,8 @@ async fn aggregate_results(
             });
         }
     }
-    // Group distances by request, we do not care about the order of the keys here, just that the grouping is correct
-    let grouped_distances = match_distances
-        .map(|match_distances_per_eye| match_distances_per_eye.into_values().collect_vec());
 
-    Ok((match_lists, grouped_distances))
+    Ok((match_lists, match_distances))
 }
 
 #[cfg(test)]
