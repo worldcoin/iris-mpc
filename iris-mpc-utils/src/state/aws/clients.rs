@@ -113,12 +113,12 @@ impl ClientsConfig {
 }
 
 impl From<&ClientsConfig> for S3Client {
-    fn from(value: &ClientsConfig) -> Self {
+    fn from(config: &ClientsConfig) -> Self {
         let force_path_style =
-            value.node().environment != ENV_PROD && value.node().environment != ENV_STAGE;
+            config.node().environment != ENV_PROD && config.node().environment != ENV_STAGE;
 
         S3Client::from_conf(
-            S3ConfigBuilder::from(value.sdk())
+            S3ConfigBuilder::from(config.sdk())
                 .force_path_style(force_path_style)
                 .retry_config(RetryConfig::standard().with_max_attempts(5))
                 .build(),
@@ -127,25 +127,25 @@ impl From<&ClientsConfig> for S3Client {
 }
 
 impl From<&ClientsConfig> for SecretsManagerClient {
-    fn from(value: &ClientsConfig) -> Self {
-        SecretsManagerClient::new(value.sdk())
+    fn from(config: &ClientsConfig) -> Self {
+        SecretsManagerClient::new(config.sdk())
     }
 }
 
 impl From<&ClientsConfig> for SNSClient {
-    fn from(value: &ClientsConfig) -> Self {
-        SNSClient::new(value.sdk())
+    fn from(config: &ClientsConfig) -> Self {
+        SNSClient::new(config.sdk())
     }
 }
 
 impl From<&ClientsConfig> for SQSClient {
-    fn from(value: &ClientsConfig) -> Self {
+    fn from(config: &ClientsConfig) -> Self {
         SQSClient::from_conf(
-            Builder::from(value.sdk())
+            Builder::from(config.sdk())
                 .timeout_config(
                     TimeoutConfig::builder()
                         .operation_attempt_timeout(Duration::from_secs(
-                            (value.node().sqs_long_poll_wait_time + 2) as u64,
+                            (config.node().sqs_long_poll_wait_time + 2) as u64,
                         ))
                         .build(),
                 )
