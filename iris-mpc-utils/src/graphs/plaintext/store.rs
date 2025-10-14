@@ -148,6 +148,27 @@ impl VectorStore for PlaintextStore {
         Ok(query.get_distance_fraction(vector_code))
     }
 
+    async fn eval_minimal_rotation_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        debug!(event_type = EvaluateDistance.id());
+        let vector_codes = vectors
+            .iter()
+            .map(|v| {
+                let serial_id = v.serial_id();
+                self.storage.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(vector_codes
+            .into_iter()
+            .map(|v| v.get_min_distance_fraction(query))
+            .collect())
+    }
+
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         Ok(fraction_is_match(distance))
     }
@@ -245,6 +266,28 @@ impl VectorStore for SharedPlaintextStore {
             .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
+    }
+
+    async fn eval_minimal_rotation_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        debug!(event_type = EvaluateDistance.id());
+        let store = self.storage.read().await;
+        let vector_codes = vectors
+            .iter()
+            .map(|v| {
+                let serial_id = v.serial_id();
+                store.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(vector_codes
+            .into_iter()
+            .map(|v| v.get_min_distance_fraction(query))
+            .collect())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
