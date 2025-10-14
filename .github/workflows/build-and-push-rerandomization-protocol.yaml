@@ -1,9 +1,10 @@
-name: Build and push image for reshare-protocol
+name: Build and push image for rerandomization protocol
 
 on:
   push:
     branches:
       - main
+      - "dk/re_randomize_db"
     paths:
       - Dockerfile.shares-re-randomization
       - iris-mpc-upgrade/**
