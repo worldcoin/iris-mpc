@@ -310,7 +310,14 @@ impl HnswSearcher {
         if num_layers == 0 {
             return Ok((SortedNeighborhood::new(), 0));
         }
-        let top_layer = num_layers - 1;
+        // if there is only one layer, just use the entry point initialization
+        if num_layers == 1 {
+            return self
+                .search_init_entrypoint(store, graph, query)
+                .await;
+        }
+        // skip the top layer with entry point
+        let top_layer = num_layers - 2;
 
         let (min_vector, min_distance) =
             Self::linear_search(store, graph, query, top_layer).await?;
