@@ -245,7 +245,7 @@ iris-mpc-1:
 
     - name: SMPC__FIXED_SHARED_SECRETS
       value: "true"
-      
+
     - name: SMPC__NODE_HOSTNAMES
       value: '["iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.$ENV.svc.cluster.local"]'
 
