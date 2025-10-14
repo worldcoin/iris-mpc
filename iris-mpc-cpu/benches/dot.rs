@@ -511,7 +511,7 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
     let rng = &mut thread_rng();
 
     let mut g = c.benchmark_group("trick_dot_comparison_ram_bound");
-    g.sample_size(10);
+    g.sample_size(50);
     g.throughput(Throughput::Elements(batch_size));
 
     // Prepare a large dataset of random iris codes and their shares
@@ -539,67 +539,78 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
 
     // --- RAM-bound (non-cacheable) version ---
 
-    const NEAREST_NEIGHBORS: usize = 32;
+    const NEAREST_NEIGHBORS: [usize; 3] = [32, 64, 128];
 
-    g.bench_function("rotation_aware_trick_dot_ram_bound", |b| {
-        b.iter_batched(
-            || {
-                (0..batch_size)
-                    .map(|_| {
-                        let a = dist.sample(rng);
-                        let mut b = vec![];
-                        for _ in 0..NEAREST_NEIGHBORS {
-                            let idx = dist.sample(rng);
-                            b.push(&iris_codes[idx]);
+    for &nearest_neighbors in &NEAREST_NEIGHBORS {
+        g.bench_function(
+            &format!("rotation_aware_trick_dot_ram_bound_{}", nearest_neighbors),
+            |b| {
+                b.iter_batched(
+                    || {
+                        (0..batch_size)
+                            .map(|_| {
+                                let a = dist.sample(rng);
+                                let mut b = vec![];
+                                for _ in 0..nearest_neighbors {
+                                    let idx = dist.sample(rng);
+                                    b.push(&iris_codes[idx]);
+                                }
+                                (&iris_codes[a], b)
+                            })
+                            .collect::<Vec<_>>()
+                    },
+                    |input| {
+                        for (l, set) in input {
+                            black_box({
+                                for v in set {
+                                    for rot in IrisRotation::all() {
+                                        l.code.rotation_aware_trick_dot(&v.code, &rot);
+                                    }
+                                }
+                            });
                         }
-                        (&iris_codes[a], b)
-                    })
-                    .collect::<Vec<_>>()
+                    },
+                    BatchSize::SmallInput,
+                )
             },
-            |input| {
-                for (l, set) in input {
-                    black_box({
-                        for v in set {
-                            for rot in IrisRotation::all() {
-                                l.code.rotation_aware_trick_dot(&v.code, &rot);
-                            }
-                        }
-                    });
-                }
-            },
-            BatchSize::SmallInput,
-        )
-    });
+        );
 
-    g.bench_function("rotation_aware_trick_dot_padded_ram_bound", |b| {
-        b.iter_batched(
-            || {
-                (0..batch_size)
-                    .map(|_| {
-                        let a = dist.sample(rng);
-                        let mut b = vec![];
-                        for _ in 0..NEAREST_NEIGHBORS {
-                            let idx = dist.sample(rng);
-                            b.push(&iris_codes[idx]);
+        g.bench_function(
+            &format!(
+                "rotation_aware_trick_dot_padded_ram_bound_{}",
+                nearest_neighbors
+            ),
+            |b| {
+                b.iter_batched(
+                    || {
+                        (0..batch_size)
+                            .map(|_| {
+                                let a = dist.sample(rng);
+                                let mut b = vec![];
+                                for _ in 0..nearest_neighbors {
+                                    let idx = dist.sample(rng);
+                                    b.push(&iris_codes[idx]);
+                                }
+                                (&random_arrays[a], b)
+                            })
+                            .collect::<Vec<_>>()
+                    },
+                    |input| {
+                        for (l, set) in input {
+                            black_box({
+                                for v in set {
+                                    for rot in IrisRotation::all() {
+                                        rotation_aware_trick_dot_padded(l, &v.code.coefs, &rot);
+                                    }
+                                }
+                            });
                         }
-                        (&random_arrays[a], b)
-                    })
-                    .collect::<Vec<_>>()
+                    },
+                    BatchSize::SmallInput,
+                )
             },
-            |input| {
-                for (l, set) in input {
-                    black_box({
-                        for v in set {
-                            for rot in IrisRotation::all() {
-                                rotation_aware_trick_dot_padded(l, &v.code.coefs, &rot);
-                            }
-                        }
-                    });
-                }
-            },
-            BatchSize::SmallInput,
-        )
-    });
+        );
+    }
 
     g.finish();
 }
