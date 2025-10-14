@@ -138,7 +138,7 @@ async fn main() {
 
             let nodes: Vec<usize> = deserialized_results
                 .into_iter()
-                .map(|result| result.node)
+                .map(|result| result.node as usize)
                 .collect();
             (nodes.len(), nodes)
         }

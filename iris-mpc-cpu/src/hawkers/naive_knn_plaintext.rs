@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use clap::ValueEnum;
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use rayon::{
     iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator},
     ThreadPool, ThreadPoolBuilder,
@@ -12,8 +12,8 @@ use crate::hawkers::plaintext_store::fraction_ordering;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct KNNResult {
-    pub node: usize,
-    neighbors: Vec<usize>,
+    pub node: IrisSerialId,
+    neighbors: Vec<IrisSerialId>,
 }
 
 pub trait KNNEngine {
@@ -111,8 +111,14 @@ impl KNNEngine for NaiveNormalDistKNN {
                     let mut neighbors = neighbors.drain(0..self.k).collect::<Vec<_>>();
                     neighbors.shrink_to_fit(); // just to make sure
                     neighbors.sort_by(|lhs, rhs| fraction_ordering(&lhs.1, &rhs.1));
-                    let neighbors = neighbors.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
-                    KNNResult { node: i, neighbors }
+                    let neighbors = neighbors
+                        .into_iter()
+                        .map(|(i, _)| i as IrisSerialId)
+                        .collect::<Vec<_>>();
+                    KNNResult {
+                        node: i as IrisSerialId,
+                        neighbors,
+                    }
                 })
                 .collect::<Vec<_>>()
         })
@@ -191,8 +197,14 @@ impl KNNEngine for NaiveMinFHDKNN {
                         Ordering::Equal => lhs.0.cmp(&rhs.0),
                         other => other,
                     });
-                    let neighbors = neighbors.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
-                    KNNResult { node: i, neighbors }
+                    let neighbors = neighbors
+                        .into_iter()
+                        .map(|(i, _)| i as IrisSerialId)
+                        .collect::<Vec<_>>();
+                    KNNResult {
+                        node: i as IrisSerialId,
+                        neighbors,
+                    }
                 })
                 .collect::<Vec<_>>()
         })
