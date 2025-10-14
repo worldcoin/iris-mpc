@@ -2,7 +2,7 @@ use clap::Parser;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
         HnswSearcher,
@@ -370,7 +370,7 @@ async fn main() -> Result<()> {
                 }
                 let query = Arc::new(raw_query.iris_code);
 
-                let inserted_id = IrisVectorId::from_0_index(serial_id);
+                let inserted_id = IrisVectorId::from_serial_id(serial_id);
                 vector_store.insert_with_id(inserted_id, query.clone());
 
                 let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
@@ -435,7 +435,7 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     dbs
 }
 
-fn get_max_serial_id(graph: &GraphMem<PlaintextStore>) -> Option<u32> {
+fn get_max_serial_id(graph: &GraphMem<PlaintextVectorRef>) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
         layer
             .get_links_map()

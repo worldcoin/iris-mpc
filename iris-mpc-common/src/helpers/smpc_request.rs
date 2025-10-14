@@ -103,6 +103,7 @@ where
 
 pub const IDENTITY_DELETION_MESSAGE_TYPE: &str = "identity_deletion";
 pub const ANONYMIZED_STATISTICS_MESSAGE_TYPE: &str = "anonymized_statistics";
+pub const ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE: &str = "anonymized_statistics_2d";
 pub const CIRCUIT_BREAKER_MESSAGE_TYPE: &str = "circuit_breaker";
 pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
 pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
@@ -117,6 +118,8 @@ pub struct UniquenessRequest {
     pub or_rule_serial_ids: Option<Vec<u32>>,
     pub skip_persistence: Option<bool>,
     pub full_face_mirror_attacks_detection_enabled: Option<bool>,
+    // If true, do not collect or compute anonymized statistics for this batch.
+    pub disable_anonymized_stats: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

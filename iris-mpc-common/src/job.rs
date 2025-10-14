@@ -6,7 +6,7 @@ use crate::helpers::batch_sync::{
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
-        statistics::BucketStatistics,
+        statistics::{BucketStatistics, BucketStatistics2D},
         sync::{Modification, ModificationKey},
     },
     ROTATIONS,
@@ -117,6 +117,9 @@ pub struct BatchQuery {
 
     // Boolean value for mirror attack detection enabled
     pub full_face_mirror_attacks_detection_enabled: bool,
+
+    // If true, anonymized statistics (1D, 2D, and mirror-orientation) are disabled for this batch.
+    pub disable_anonymized_stats: bool,
 }
 
 impl BatchQuery {
@@ -407,6 +410,9 @@ pub struct ServerJobResult<A = ()> {
     // See struct definition for more details
     pub anonymized_bucket_statistics_left: BucketStatistics,
     pub anonymized_bucket_statistics_right: BucketStatistics,
+    // 2D anonymized statistics across both eyes (only for matches on both sides)
+    // Only for Normal orientation
+    pub anonymized_bucket_statistics_2d: BucketStatistics2D,
     // Mirror orientation bucket statistics
     pub anonymized_bucket_statistics_left_mirror: BucketStatistics,
     pub anonymized_bucket_statistics_right_mirror: BucketStatistics,

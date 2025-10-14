@@ -1,6 +1,6 @@
 iris-mpc-1:
   fullnameOverride: "iris-mpc-1"
-  image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
+  image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
   environment: $ENV
   replicaCount: 1
@@ -187,6 +187,9 @@ iris-mpc-1:
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
 
+    - name: SMPC__SNS_BUFFER_BUCKET_NAME
+      value: "wf-smpcv2-stage-sns-buffer"
+
     - name: SMPC__CLEAR_DB_BEFORE_INIT
       value: "true"
 
@@ -206,10 +209,10 @@ iris-mpc-1:
       value: "true"
 
     - name: SMPC__ENABLE_REAUTH
-      value: "false"
+      value: "true"
 
     - name: SMPC__ENABLE_RESET
-      value: "false"
+      value: "true"
 
     - name: SMPC__LUC_ENABLED
       value: "true"
@@ -242,12 +245,12 @@ iris-mpc-1:
 
     - name: SMPC__FIXED_SHARED_SECRETS
       value: "true"
-      
+
     - name: SMPC__NODE_HOSTNAMES
       value: '["iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
+      value: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
     - name: SMPC__HEARTBEAT_INITIAL_RETRIES
       value: "1000"
@@ -266,7 +269,7 @@ iris-mpc-1:
 
   initContainer:
     enabled: true
-    image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
+    image: "$IMAGE_REGISTRY_INIT_CONTAINER/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
     name: "iris-mpc-1-copy-cuda-libs"
     env:
       - name: AWS_REGION

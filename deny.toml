@@ -10,6 +10,10 @@ ignore = [
     { id = "RUSTSEC-2024-0402", reason = "waiting for `index-map` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0421", reason = "waiting for `mongodb` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0436", reason = "deep subdependency from several aws and sqlx crates" },
+    # Doing this (see PR: https://github.com/worldcoin/iris-mpc/commit/f209e6e9b4195c766f7accf465f5d69c59e9157f)
+    # caused a 3x slowdown in performance. Needs to be investigated thoroughly, though most likely it is due
+    # to the bump in tokio.
+    { id = "RUSTSEC-2025-0056", reason = "Bumping adler requires bumping backtrace and possibly tokio" },
 ]
 
 [sources]
@@ -40,6 +44,7 @@ allow = [
     "Unicode-DFS-2016",
     "Unlicense",
     "Zlib",
+    "CDDL-1.0"
 ]
 
 # See https://github.com/briansmith/ring/blob/95948b3977013aed16db92ae32e6b8384496a740/deny.toml#L12

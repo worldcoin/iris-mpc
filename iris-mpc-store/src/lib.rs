@@ -7,6 +7,7 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
+use iris_mpc_common::helpers::sync::MOD_STATUS_IN_PROGRESS;
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -14,12 +15,13 @@ use iris_mpc_common::{
         smpc_request::{
             IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
         },
-        sync::{Modification, ModificationStatus},
+        sync::Modification,
     },
     iris_db::iris::IrisCode,
     postgres::PostgresClient,
     vector_id::{SerialId, VectorId},
 };
+use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
@@ -482,10 +484,18 @@ WHERE id = $1;
         .bind(serial_id)
         .bind(request_type)
         .bind(s3_url)
-        .bind(ModificationStatus::InProgress.to_string())
+        .bind(MOD_STATUS_IN_PROGRESS)
         .bind(persisted)
         .fetch_one(&self.pool)
         .await?;
+
+        tracing::info!(
+            "Inserted {} modification: id={:?}, serial_id={:?}, request_type={}",
+            MOD_STATUS_IN_PROGRESS,
+            inserted.id,
+            serial_id,
+            request_type
+        );
 
         Ok(inserted.into())
     }
@@ -607,6 +617,16 @@ WHERE id = $1;
             .iter()
             .map(|m| m.graph_mutation.clone())
             .collect();
+
+        for (id, status, persisted, serial_id) in izip!(&ids, &statuses, &persisted, &serial_ids) {
+            tracing::info!(
+                "Updating modification id={} with status={}, persisted={}, serial_id={:?}",
+                id,
+                status,
+                persisted,
+                serial_id
+            );
+        }
 
         sqlx::query(
             r#"

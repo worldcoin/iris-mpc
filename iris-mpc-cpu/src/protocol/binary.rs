@@ -10,11 +10,18 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Error, Result};
+use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
-use std::ops::SubAssign;
-use tracing::{instrument, trace, trace_span, Instrument};
+use std::{cell::RefCell, ops::SubAssign};
+use tracing::{instrument, trace_span, Instrument};
+
+thread_local! {
+    static ROUNDS_METRICS: RefCell<FastHistogram> = RefCell::new(
+        FastHistogram::new("smpc.rounds")
+    );
+}
 
 /// Splits the components of the given arithmetic share into 3 secret shares as described in Section 5.3 of the ABY3 paper.
 ///
@@ -94,6 +101,35 @@ fn transposed_pack_xor<T: IntRing2k>(x1: &[VecShare<T>], x2: &[VecShare<T>]) -> 
 }
 
 /// Computes and sends a local share of the AND of two vectors of bit-sliced shares.
+async fn and_many_iter_send<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    a: impl Iterator<Item = Share<T>>,
+    b: impl Iterator<Item = Share<T>>,
+    size_hint: usize,
+) -> Result<Vec<RingElement<T>>, Error>
+where
+    Standard: Distribution<T>,
+{
+    // Caller should ensure that size_hint == a.len() == b.len()
+    let mut shares_a = Vec::with_capacity(size_hint);
+    for (a_, b_) in a.zip(b) {
+        let rand = session.prf.gen_binary_zero_share::<T>();
+        let mut c = &a_ & &b_;
+        c ^= rand;
+        shares_a.push(c);
+    }
+
+    let network = &mut session.network_session;
+    let messages = shares_a.clone();
+    let message = if messages.len() == 1 {
+        T::new_network_element(messages[0])
+    } else {
+        T::new_network_vec(messages)
+    };
+    network.send_next(message).await?;
+    Ok(shares_a)
+}
+
 async fn and_many_send<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
@@ -167,23 +203,26 @@ where
     if x1.len() != x2.len() {
         bail!("Inputs have different length {} {}", x1.len(), x2.len());
     }
+    let x1_length = x1.len();
+
     let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
-    let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
-    if chunk_sizes != chunk_sizes2 {
-        bail!("VecShare lengths are not equal");
+    for (chunk_size1, chunk_size2) in izip!(chunk_sizes.iter(), x2.iter().map(VecShare::len)) {
+        if *chunk_size1 != chunk_size2 {
+            bail!("VecShare lengths are not equal");
+        }
     }
 
     let x1 = VecShare::flatten(x1);
     let x2 = VecShare::flatten(x2);
-    let mut shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
+    let mut shares_a = and_many_iter_send(session, x1, x2, x1_length).await?;
     let mut shares_b = and_many_receive(session).await?;
 
     // Unflatten the shares vectors
     let mut res = Vec::with_capacity(chunk_sizes.len());
     for l in chunk_sizes {
-        let a = shares_a.drain(..l).collect();
-        let b = shares_b.drain(..l).collect();
-        res.push(VecShare::from_ab(a, b));
+        let a = shares_a.drain(..l);
+        let b = shares_b.drain(..l);
+        res.push(VecShare::from_iter_ab(a, b));
     }
     Ok(res)
 }
@@ -221,6 +260,7 @@ where
     // c = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) and
     // s = x1 XOR x2 XOR x3
     // Note that x1 + x2 + x3 = 2 * c + s mod 2^k
+
     let mut x2x3 = x2;
     transposed_pack_xor_assign(&mut x2x3, &x3);
     // x1 XOR x2 XOR x3
@@ -300,16 +340,15 @@ where
             wc.push(w0);
         }
     }
-    let next_id = session.next_identity()?;
+
     let network = &mut session.network_session;
-    trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
+
     // Send masks to Receiver
     network.send_next(T::new_network_vec(wc)).await?;
+
+    ROUNDS_METRICS.with_borrow_mut(|rounds_metrics| {
+        rounds_metrics.record(1.0);
+    });
 
     // Receive m0 or m1 from Receiver
     let m0_or_m1 = match network.receive_next().await {
@@ -332,7 +371,6 @@ async fn bit_inject_ot_2round_receiver<T: IntRing2k + NetworkInt>(
 where
     Standard: Distribution<T>,
 {
-    let prev_id = session.prev_identity()?;
     let network = &mut session.network_session;
 
     let (m0, m1, wc) = {
@@ -382,13 +420,11 @@ where
     }
 
     // Send unmasked m to Helper
-    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
     network.send_prev(T::new_network_vec(unmasked_m)).await?;
+
+    ROUNDS_METRICS.with_borrow_mut(|rounds_metrics| {
+        rounds_metrics.record(1.0);
+    });
 
     Ok(shares)
 }
@@ -424,31 +460,32 @@ where
         m1.push(m1_ ^ w1);
     }
 
-    let prev_id = session.prev_identity()?;
     let m0_and_m1: Vec<NetworkValue> = [m0, m1]
         .into_iter()
         .map(T::new_network_vec)
         .collect::<Vec<_>>();
-    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => session.network_session.session_id.0.to_string(),
-    )
-    .increment(1);
+
     // Send m0 and m1 to Receiver
     session
         .network_session
         .send_prev(NetworkValue::vec_to_network(m0_and_m1))
         .await?;
+
+    ROUNDS_METRICS.with_borrow_mut(|rounds_metrics| {
+        rounds_metrics.record(1.0);
+    });
+
     Ok(shares)
 }
 
 /// Conducts a 3 party OT protocol to inject bits into shares of type T.
 /// The specifics of the protocol can be found in the ABY3 paper (Section 5.4.1).
 ///
-/// TODO: this is unbalanced.
 /// Party 2 sends twice more than other parties.
 /// So a real implementation should actually rotate parties around.
+///
+/// The protocol itself is unbalanced, but we balance the assignment of roles
+/// in a round-robin over sessions.
 pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
@@ -456,7 +493,8 @@ pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
 where
     Standard: Distribution<T>,
 {
-    let res = match session.own_role().index() {
+    let role_index = (session.own_role().index() + session.session_id().0 as usize) % 3;
+    let res = match role_index {
         0 => {
             // OT Helper
             bit_inject_ot_2round_helper::<T>(session, input).await?
@@ -716,31 +754,43 @@ where
 
         // Split the vectors into even and odd indexed elements
         // Note that the starting index of temp_p is 1 due to removal of p0 above
-        let (even_p, odd_p): (Vec<_>, Vec<_>) = temp_p
-            .clone()
-            .into_iter()
-            .enumerate()
-            .partition(|(i, _)| i % 2 == 1);
-        let even_p: Vec<_> = even_p.into_iter().map(|(_, x)| x).collect();
-        let odd_p: Vec<_> = odd_p.into_iter().map(|(_, x)| x).collect();
-        let (even_g, odd_g): (Vec<_>, Vec<_>) = temp_g
-            .clone()
-            .into_iter()
-            .enumerate()
-            .partition(|(i, _)| i % 2 == 0);
-        let even_g: Vec<_> = even_g.into_iter().map(|(_, x)| x).collect();
-        let odd_g: Vec<_> = odd_g.into_iter().map(|(_, x)| x).collect();
+        // We anticipate concatenations to allocate vecs with the correct capacity
+        // and minimize cloning/collecting
 
-        // Merge even_p and even_g to multiply them by odd_p at once
+        // To assess correctness of these sizes, note that the encompassing while loop
+        // maintains the invariant `temp_g.len() - 1 = temp_p.len()`
+
+        let mut even_p_with_even_g = Vec::with_capacity(temp_g.len() - 1);
+        let mut odd_p_temp = Vec::with_capacity(temp_p.len() / 2 + 1);
+        let mut odd_g = Vec::with_capacity(temp_g.len() / 2);
+
+        for (i, p) in temp_p.into_iter().enumerate() {
+            if i % 2 == 1 {
+                even_p_with_even_g.push(p);
+            } else {
+                odd_p_temp.push(p);
+            }
+        }
+        let new_p_len = even_p_with_even_g.len();
+
+        for (i, g) in temp_g.into_iter().enumerate() {
+            if i % 2 == 0 {
+                even_p_with_even_g.push(g);
+            } else {
+                odd_g.push(g);
+            }
+        }
+
+        // Now `even_p_with_even_g` contains merged even_p and even_g to multiply
+        // them by odd_p at once
         // This corresponds to computing
         //            (p2 AND p3, p4 AND p5,...) and
         // (g0 AND p1, g2 AND p3, g4 AND p5,...) as above
-        let mut even_p_with_even_g = even_p;
-        let new_p_len = even_p_with_even_g.len();
-        even_p_with_even_g.extend(even_g);
+
+        let mut odd_p_doubled = Vec::with_capacity(odd_p_temp.len() * 2 - 1);
         // Remove p1 to multiply even_p with odd_p
-        let mut odd_p_doubled = odd_p[1..].to_vec();
-        odd_p_doubled.extend(odd_p);
+        odd_p_doubled.extend(odd_p_temp.iter().skip(1).cloned());
+        odd_p_doubled.extend(odd_p_temp);
 
         let mut tmp = transposed_pack_and(session, even_p_with_even_g, odd_p_doubled).await?;
 

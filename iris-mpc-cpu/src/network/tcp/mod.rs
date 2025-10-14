@@ -6,7 +6,7 @@ use crate::{
         networking::{
             client::{TcpClient, TlsClient},
             connection_builder::PeerConnectionBuilder,
-            server::{TcpServer, TlsServer},
+            server::TcpServer,
         },
         session::TcpSession,
     },
@@ -16,10 +16,11 @@ use eyre::Result;
 use itertools::izip;
 use std::sync::Once;
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::sync::CancellationToken;
 
 pub mod config;
 mod data;
@@ -27,6 +28,8 @@ pub mod handle;
 pub mod networking;
 pub mod session;
 
+use crate::network::tcp::networking::client::{BoxTcpClient, BoxTlsClient};
+use crate::network::tcp::networking::server::{BoxTcpServer, TlsServer};
 use data::*;
 
 #[async_trait]
@@ -34,14 +37,14 @@ pub trait NetworkHandle: Send + Sync {
     async fn make_sessions(&mut self) -> Result<Vec<TcpSession>>;
 }
 
-pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> NetworkConnection for T {}
+pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized + Sync> NetworkConnection for T {}
 
 // used to establish an outbound connection
 #[async_trait]
 pub trait Client: Send + Sync + Clone {
     type Output: NetworkConnection;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output>;
+    async fn connect(&self, url: String) -> Result<Self::Output>;
 }
 
 // used for a server to accept an incoming connection
@@ -53,6 +56,7 @@ pub trait Server: Send {
 
 pub async fn build_network_handle(
     args: &HawkArgs,
+    ct: CancellationToken,
     identities: &[Identity],
     sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
@@ -77,64 +81,76 @@ pub async fn build_network_handle(
         args.request_parallelism * sessions_per_request,
     );
 
+    // PeerConnectionBuilder is generic over listener and connector and don't want to use a boxed trait to
+    // reduce code duplication. instead, use a macro which makes use of local variables.
+    macro_rules! build_network_handle {
+        ($listener:expr, $connector:expr) => {{
+            let connection_builder = PeerConnectionBuilder::new(
+                my_identity,
+                tcp_config.clone(),
+                $listener,
+                $connector,
+                ct.clone(),
+            )
+            .await?;
+
+            for (identity, url) in
+                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
+            {
+                connection_builder
+                    .include_peer(identity.clone(), url.clone())
+                    .await?;
+            }
+
+            let (reconnector, connections) = connection_builder.build().await?;
+            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config, ct);
+            Ok(Box::new(networking))
+        }};
+    }
+
     if let Some(tls) = args.tls.as_ref() {
         tracing::info!(
-            "Building NetworkHandle, with TLS, from config: {:?}",
-            tcp_config
+            "Building NetworkHandle, with TLS, from configs: {:?} {:?}",
+            tcp_config,
+            tls,
         );
-        let listener =
-            TlsServer::new(my_addr, &tls.private_key, &tls.leaf_cert, &tls.root_cert).await?;
-        let connector = TlsClient::new(&tls.private_key, &tls.leaf_cert, &tls.root_cert).await?;
-        let connection_builder =
-            PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                .await?;
 
-        // Connect to other players.
-        for (identity, address) in
-            izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-        {
-            let socket_addr = address
-                .clone()
-                .to_socket_addrs()?
-                .next()
-                .ok_or(eyre::eyre!("invalid peer address"))?;
-            connection_builder
-                .include_peer(identity.clone(), socket_addr)
-                .await?;
+        let root_certs = tls.clone().root_certs;
+        if tls.with_nginx_sidecar {
+            tracing::info!("Running in client-only TLS mode.");
+
+            let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
+            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(&root_certs).await?);
+            build_network_handle!(listener, connector)
+        } else {
+            tracing::info!("Running in full app TLS mode.");
+            if tls.private_key.is_none() || tls.leaf_cert.is_none() {
+                return Err(eyre::eyre!(
+                    "TLS configuration is required for this operation"
+                ));
+            }
+            let private_key = tls
+                .private_key
+                .as_ref()
+                .ok_or(eyre::eyre!("Private key is required for TLS"))?;
+
+            let leaf_cert = tls
+                .leaf_cert
+                .as_ref()
+                .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
+
+            let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
+            let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
+            build_network_handle!(listener, connector)
         }
-
-        let (reconnector, connections) = connection_builder.build().await?;
-        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-        Ok(Box::new(networking))
     } else {
         tracing::info!(
             "Building NetworkHandle, without TLS, from config: {:?}",
             tcp_config
         );
-        let listener = TcpServer::new(my_addr).await?;
-        let connector = TcpClient::new();
-        let connection_builder =
-            PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                .await?;
-
-        // Connect to other players.
-        for (identity, address) in
-            izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-        {
-            let socket_addr = address
-                .clone()
-                .to_socket_addrs()?
-                .next()
-                .ok_or(eyre::eyre!("invalid peer address"))?;
-
-            connection_builder
-                .include_peer(identity.clone(), socket_addr)
-                .await?;
-        }
-
-        let (reconnector, connections) = connection_builder.build().await?;
-        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-        Ok(Box::new(networking))
+        let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
+        let connector = BoxTcpClient(TcpClient::default());
+        build_network_handle!(listener, connector)
     }
 }
 
@@ -153,6 +169,7 @@ pub mod testing {
     use itertools::izip;
     use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
     use tokio::{net::TcpStream, sync::Mutex, time::sleep};
+    use tokio_util::sync::CancellationToken;
 
     use crate::{
         execution::player::Identity,
@@ -204,7 +221,8 @@ pub mod testing {
         let addresses = get_free_local_addresses(parties.len()).await?;
         // Create NetworkHandles for each party
         let mut builders = Vec::with_capacity(parties.len());
-        let connector = TcpClient::new();
+        let connector = TcpClient::default();
+        let ct = CancellationToken::new();
         for (party, addr) in izip!(parties.iter(), addresses.iter()) {
             let listener = TcpServer::new(*addr).await?;
             builders.push(
@@ -213,6 +231,7 @@ pub mod testing {
                     config.clone(),
                     listener,
                     connector.clone(),
+                    ct.clone(),
                 )
                 .await?,
             );
@@ -226,7 +245,7 @@ pub mod testing {
             for j in 0..builders.len() {
                 if i != j {
                     builders[i]
-                        .include_peer(parties[j].clone(), addresses[j])
+                        .include_peer(parties[j].clone(), addresses[j].to_string())
                         .await?;
                 }
             }
@@ -241,9 +260,10 @@ pub mod testing {
         }
         tracing::debug!("Players connected to each other");
 
+        let ct = CancellationToken::new();
         let mut handles = vec![];
         for (r, c) in connections {
-            handles.push(TcpNetworkHandle::new(r, c, config.clone()));
+            handles.push(TcpNetworkHandle::new(r, c, config.clone(), ct.clone()));
         }
 
         tracing::debug!("waiting for make_sessions to complete");
@@ -256,7 +276,7 @@ pub mod testing {
     }
 
     /// Interleaves a Vec of Vecs into a single Vec by taking one element from each inner Vec in turn.
-    /// For example, interleaving [[1,2,3],[4,5,6],[7,8,9]] yields [1,4,7,2,5,8,3,6,9].
+    /// For example, interleaving `[[1,2,3],[4,5,6],[7,8,9]]` yields `[1,4,7,2,5,8,3,6,9]`.
     pub fn interleave_vecs<T>(vecs: Vec<Vec<T>>) -> Vec<T> {
         let mut result = Vec::new();
         let mut iters: Vec<_> = vecs.into_iter().map(|v| v.into_iter()).collect();
@@ -375,7 +395,7 @@ mod tests {
                 players.pop();
 
                 let mut bob = players.pop().unwrap();
-                let alice = players.pop().unwrap();
+                let mut alice = players.pop().unwrap();
 
                 // Send a message from the first party to the second party
                 let alice_prf = get_prf();

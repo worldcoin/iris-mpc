@@ -10,11 +10,15 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
-    SortedNeighborhood, VectorStore,
+    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, SortedNeighborhood,
+    VectorStore,
 };
+
+use crate::hnsw::GraphMem;
+
 use aes_prng::AesRng;
 use eyre::{bail, eyre, Result};
+use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
@@ -277,7 +281,7 @@ impl HnswSearcher {
     async fn search_init<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
     ) -> Result<(SortedNeighborhoodV<V>, usize)> {
         if let Some((entry_point, layer)) = graph.get_entry_point().await {
@@ -304,7 +308,7 @@ impl HnswSearcher {
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
         W: &mut SortedNeighborhoodV<V>,
         ef: usize,
@@ -345,7 +349,7 @@ impl HnswSearcher {
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_std<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
         W: &mut SortedNeighborhoodV<V>,
         ef: usize,
@@ -496,13 +500,14 @@ impl HnswSearcher {
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_batched<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
         W: &mut SortedNeighborhoodV<V>,
         ef: usize,
         lc: usize,
     ) -> Result<()> {
         let metrics_labels = [("layer", lc.to_string())];
+        let mut metric_edges = FastHistogram::new(&format!("search_edges_layer{}", lc));
 
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
@@ -554,7 +559,7 @@ impl HnswSearcher {
                 .await?;
             opened.insert(c.clone());
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
-            metrics::histogram!("search_edges", &metrics_labels).record(c_links.len() as f64);
+            metric_edges.record(c_links.len() as f64);
 
             // If W is not filled to size ef, insert neighbors in batches until it is
             if W.len() < ef && !c_links.is_empty() {
@@ -723,7 +728,7 @@ impl HnswSearcher {
     #[instrument(level = "debug", skip(store, graph, q, start))]
     async fn layer_search_greedy<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
         start: &(V::VectorRef, V::DistanceRef),
         lc: usize,
@@ -773,7 +778,7 @@ impl HnswSearcher {
     /// hashset.
     async fn open_node<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         node: &V::VectorRef,
         lc: usize,
         query: &V::QueryRef,
@@ -807,7 +812,7 @@ impl HnswSearcher {
     pub async fn search<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
@@ -829,7 +834,7 @@ impl HnswSearcher {
     pub async fn insert<V: VectorStoreMut>(
         &self,
         store: &mut V,
-        graph: &mut GraphMem<V>,
+        graph: &mut GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<V::VectorRef> {
@@ -866,7 +871,7 @@ impl HnswSearcher {
     pub async fn search_to_insert<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<(Vec<SortedNeighborhoodV<V>>, bool)> {
@@ -916,7 +921,7 @@ impl HnswSearcher {
     pub async fn insert_prepare<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         mut links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
@@ -1043,7 +1048,7 @@ impl HnswSearcher {
     pub async fn insert_from_search_results<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &mut GraphMem<V>,
+        graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,

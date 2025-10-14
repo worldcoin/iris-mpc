@@ -8,10 +8,7 @@ use crate::{
     threshold_ring::protocol::{ChunkShare, ChunkShareView},
 };
 use cudarc::{
-    driver::{
-        result::memset_d8_sync, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
-        DeviceSlice, LaunchAsync,
-    },
+    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync},
     nvrtc::compile_ptx,
 };
 use itertools::Itertools;
@@ -208,6 +205,7 @@ impl DistanceComparator {
         batch_size: usize,
         max_bucket_distances: usize,
         streams: &[CudaStream],
+        disable_anonymized_stats: bool,
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -259,6 +257,7 @@ impl DistanceComparator {
                             batch_id,
                             self.query_length,
                             self.max_db_size as u64,
+                            disable_anonymized_stats as u32,
                         ),
                     )
                     .unwrap();
@@ -277,9 +276,18 @@ impl DistanceComparator {
         real_db_sizes: &[usize],
         total_db_sizes: &[usize],
         ignore_db_results: &[bool],
+        match_distances_buffers_codes: &[ChunkShare<u16>],
+        match_distances_buffers_masks: &[ChunkShare<u16>],
+        match_distances_counters: &[CudaSlice<u32>],
+        match_distances_indices: &[CudaSlice<u64>],
+        batch_id: u64,
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
         batch_size: usize,
+        max_bucket_distances: usize,
         streams: &[CudaStream],
         index_mapping: &[Vec<u32>],
+        disable_anonymized_stats: bool,
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -323,6 +331,21 @@ impl DistanceComparator {
                             &self.partial_results_query_indices[i],
                             &self.partial_results_db_indices[i],
                             &self.partial_results_rotations[i],
+                            &match_distances_buffers_codes[i].a,
+                            &match_distances_buffers_codes[i].b,
+                            &match_distances_buffers_masks[i].a,
+                            &match_distances_buffers_masks[i].b,
+                            &match_distances_counters[i],
+                            &match_distances_indices[i],
+                            &code_dots[i].a,
+                            &code_dots[i].b,
+                            &mask_dots[i].a,
+                            &mask_dots[i].b,
+                            max_bucket_distances,
+                            batch_id,
+                            self.query_length,
+                            self.max_db_size as u64,
+                            disable_anonymized_stats as u32,
                         ),
                     )
                     .unwrap();
@@ -544,12 +567,22 @@ impl DistanceComparator {
     ) -> PartialResultsWithRotations {
         let mut partial_results_with_rotations = HashMap::new();
         for i in 0..self.device_manager.device_count() {
-            let counter = dtoh_on_stream_sync(
+            let partial_match_counter = dtoh_on_stream_sync(
                 &self.partial_match_counter[i],
                 &self.device_manager.device(i),
                 &streams[i],
             )
             .unwrap()[0] as usize;
+
+            let max_matches = ALL_MATCHES_LEN * self.query_length;
+
+            if partial_match_counter > max_matches {
+                tracing::warn!("Partial match counter exceeded allocated buffer size. Some matches may be lost.");
+            }
+
+            // Clamp to the max size of the allocated buffers
+            let counter = min(partial_match_counter, max_matches);
+
             if counter == 0 {
                 continue;
             }
@@ -771,54 +804,5 @@ impl DistanceComparator {
                     .unwrap()
             })
             .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_buffer(&self, max_size: usize) -> Vec<ChunkShare<u16>> {
-        (0..self.device_manager.device_count())
-            .map(|i| {
-                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
-                let b = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
-
-                self.device_manager.device(i).bind_to_thread().unwrap();
-                unsafe {
-                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
-                    memset_d8_sync(*b.device_ptr(), 0xff, b.num_bytes()).unwrap();
-                }
-
-                ChunkShare::new(a, b)
-            })
-            .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_counter(&self) -> Vec<CudaSlice<u32>> {
-        (0..self.device_manager.device_count())
-            .map(|i| self.device_manager.device(i).alloc_zeros(1).unwrap())
-            .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u64>> {
-        (0..self.device_manager.device_count())
-            .map(|i| {
-                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
-                unsafe {
-                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
-                }
-                a
-            })
-            .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_buckets(&self, n_buckets: usize) -> ChunkShare<u32> {
-        let a = self
-            .device_manager
-            .device(0)
-            .alloc_zeros(n_buckets)
-            .unwrap();
-        let b = self
-            .device_manager
-            .device(0)
-            .alloc_zeros(n_buckets)
-            .unwrap();
-        ChunkShare::new(a, b)
     }
 }

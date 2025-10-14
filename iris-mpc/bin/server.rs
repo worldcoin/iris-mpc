@@ -5,6 +5,7 @@ use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
 use axum::{response::IntoResponse, routing::get, Router};
+use chrono::Utc;
 use clap::Parser;
 use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
@@ -37,9 +38,9 @@ use iris_mpc_common::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
             ResetCheckRequest, ResetUpdateRequest, SQSMessage, UniquenessRequest,
-            ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
-            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-            RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+            RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
@@ -47,6 +48,7 @@ use iris_mpc_common::{
             ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
             SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
+        sqs_s3_helper::upload_file_to_s3,
         sync::{Modification, ModificationKey, SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
@@ -63,6 +65,7 @@ use itertools::izip;
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use sodiumoxide::hex;
 use std::process::exit;
 use std::{
     collections::{HashMap, HashSet},
@@ -277,6 +280,18 @@ async fn receive_batch(
                             })?;
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
+
+                        // If any request in the batch asks to disable anonymized statistics,
+                        // apply it for the whole batch.
+                        if let Some(disable) = uniqueness_request.disable_anonymized_stats {
+                            if disable && !batch_query.disable_anonymized_stats {
+                                batch_query.disable_anonymized_stats = true;
+                                tracing::debug!(
+                                    "Disabling anonymized statistics for current batch due to request {}",
+                                    uniqueness_request.signup_id
+                                );
+                            }
+                        }
 
                         client
                             .delete_message()
@@ -839,10 +854,10 @@ async fn server_main(config: Config) -> Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
-    shutdown_handler.wait_for_shutdown_signal().await;
+    shutdown_handler.register_signal_handler().await;
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
-    let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;
+    let max_modification_lookback = config.max_modifications_lookback;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     let schema_name = format!(
@@ -892,6 +907,8 @@ async fn server_main(config: Config) -> Result<()> {
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
+    let anonymized_statistics_2d_attributes =
+        create_message_type_attribute_map(ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
 
@@ -1302,6 +1319,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.max_batch_size,
             config.match_distances_buffer_size,
             config.match_distances_buffer_size_extra_percent,
+            config.match_distances_2d_buffer_size,
             config.n_buckets,
             config.return_partial_results,
             config.disable_persistence,
@@ -1362,6 +1380,7 @@ async fn server_main(config: Config) -> Result<()> {
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
+    let s3_client_bg = aws_clients.s3_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
@@ -1402,6 +1421,7 @@ async fn server_main(config: Config) -> Result<()> {
             mut modifications,
             actor_data: _,
             full_face_mirror_attack_detected,
+            anonymized_bucket_statistics_2d,
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
@@ -1618,8 +1638,8 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reset check result");
 
-                    // Mark the reset check modification as completed. 
-                    // Note that reset_check is only a query and does not persist anything into the database. 
+                    // Mark the reset check modification as completed.
+                    // Note that reset_check is only a query and does not persist anything into the database.
                     // We store modification so that the SNS result can be replayed.
                     modifications
                         .get_mut(&RequestId(reset_id))
@@ -1867,6 +1887,45 @@ async fn server_main(config: Config) -> Result<()> {
                     &config_bg,
                     &anonymized_statistics_attributes,
                     ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            // Send 2D anonymized statistics if present with their own flag
+            if config_bg.enable_sending_anonymized_stats_2d_message
+                && !anonymized_bucket_statistics_2d.buckets.is_empty()
+            {
+                tracing::info!("Sending 2D anonymized stats results");
+                let serialized = serde_json::to_string(&anonymized_bucket_statistics_2d)
+                    .wrap_err("failed to serialize 2D anonymized statistics result")?;
+
+                // offloading 2D anon stats file to s3 to avoid sending large messages to SNS
+                // with 2D stats we were exceeding the SNS message size limit
+                let now_ms = Utc::now().timestamp_millis();
+                let sha = iris_mpc_common::helpers::sha256::sha256_bytes(&serialized);
+                let content_hash =  hex::encode(sha);
+                let s3_key = format!("stats2d/{}_{}.json", now_ms, content_hash);
+
+                upload_file_to_s3(
+                    &config_bg.sns_buffer_bucket_name,
+                    &s3_key,
+                    s3_client_bg.clone(),
+                    serialized.as_bytes(),
+                )
+                .await
+                .wrap_err("failed to upload 2D anonymized statistics to s3")?;
+
+                // Publish only the S3 key to SNS
+                let payload = serde_json::to_string(&serde_json::json!({
+                    "s3_key": s3_key,
+                }))?;
+                send_results_to_sns(
+                    vec![payload],
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_2d_attributes,
+                    ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE,
                 )
                 .await?;
             }

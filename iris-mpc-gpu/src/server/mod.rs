@@ -1,4 +1,6 @@
 pub(crate) mod actor;
+// public for some integration tests
+pub mod anon_stats;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{
@@ -134,6 +136,9 @@ pub struct PreprocessedBatchQuery {
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
+
+    // If true, anonymized statistics (1D, 2D, mirror) are disabled for this batch.
+    pub disable_anonymized_stats: bool,
 }
 
 impl PreprocessedBatchQuery {
@@ -269,6 +274,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             modifications: value.modifications,
             sns_message_ids: value.sns_message_ids,
             skip_persistence: value.skip_persistence,
+            disable_anonymized_stats: value.disable_anonymized_stats,
         }
     }
 }

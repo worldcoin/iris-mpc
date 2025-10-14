@@ -20,6 +20,8 @@ mod e2e_anon_stats_test {
     const N_BUCKETS: usize = 8;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 6;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 5000;
+    const MATCH_DISTANCES_2D_BUFFER_SIZE: usize = 1 << 6;
+    const DISABLE_ANON_STATS_BATCH_PERCENT: f64 = 0.05;
 
     fn install_tracing() {
         tracing_subscriber::registry()
@@ -111,6 +113,7 @@ mod e2e_anon_stats_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,
@@ -145,6 +148,7 @@ mod e2e_anon_stats_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,
@@ -179,6 +183,7 @@ mod e2e_anon_stats_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,
@@ -203,8 +208,13 @@ mod e2e_anon_stats_test {
         let mut handle1 = rx1.await??;
         let mut handle2 = rx2.await??;
 
-        let mut test_case_generator =
-            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS);
+        let mut test_case_generator = SimpleAnonStatsTestGenerator::new(
+            test_db,
+            internal_seed,
+            N_BUCKETS,
+            false,
+            DISABLE_ANON_STATS_BATCH_PERCENT,
+        );
 
         tracing::info!("Setup done, starting tests");
         test_case_generator

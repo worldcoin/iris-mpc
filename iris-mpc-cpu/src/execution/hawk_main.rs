@@ -7,7 +7,9 @@ use crate::{
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
-        aby3::aby3_store::{Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store},
+        aby3::aby3_store::{
+            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef,
+        },
         shared_irises::SharedIrises,
     },
     hnsw::{
@@ -21,14 +23,14 @@ use crate::{
 };
 use clap::Parser;
 use eyre::{eyre, Report, Result};
-use futures::try_join;
+use futures::{future::try_join_all, try_join};
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
     config::TlsConfig,
     helpers::{
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::BucketStatistics,
+        statistics::{BucketStatistics, BucketStatistics2D},
     },
     vector_id::VectorId,
 };
@@ -65,13 +67,14 @@ use tokio::{
     join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
 };
+use tokio_util::sync::CancellationToken;
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-pub(crate) mod insert;
+pub mod insert;
 mod intra_batch;
-pub(crate) mod iris_worker;
+pub mod iris_worker;
 mod is_match_batch;
 mod matching;
 mod reset;
@@ -123,6 +126,9 @@ pub struct HawkArgs {
 
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
+
+    #[clap(long, default_value_t = false)]
+    pub numa: bool,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -249,8 +255,8 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store>>;
 
-type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
-pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
+type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 #[derive(Clone)]
@@ -260,10 +266,7 @@ pub struct HawkSession {
     pub hnsw_prf_key: Arc<[u8; 16]>,
 }
 
-pub type SearchResult = (
-    <Aby3Store as VectorStore>::VectorRef,
-    <Aby3Store as VectorStore>::DistanceRef,
-);
+pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef);
 
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
@@ -290,10 +293,11 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
+            ct,
+            [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
         .await
@@ -301,7 +305,8 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        graph: BothEyes<GraphMem<Aby3Store>>,
+        ct: CancellationToken,
+        graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         let search_params = HnswParams::new(
@@ -324,11 +329,12 @@ impl HawkActor {
         let my_index = args.party_index;
 
         let networking =
-            build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
+            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
+                .await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
-        let workers_handle =
-            [LEFT, RIGHT].map(|side| iris_worker::init_workers(side, iris_store[side].clone()));
+        let workers_handle = [LEFT, RIGHT]
+            .map(|side| iris_worker::init_workers(side, iris_store[side].clone(), args.numa));
 
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
@@ -626,10 +632,7 @@ impl HawkActor {
             IrisLoader {
                 party_id: self.party_id,
                 db_size: &mut self.loader_db_size,
-                irises: [
-                    self.iris_store[0].write().await,
-                    self.iris_store[1].write().await,
-                ],
+                iris_pools: self.workers_handle.clone(),
             },
             GraphLoader([
                 self.graph_store[0].write().await,
@@ -648,10 +651,23 @@ pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: Session
 
 pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
 
+/// Extra space to reserve in the iris store to avoid reallocations during insertion.
+const IRIS_STORE_RESERVE_EXTRA: f64 = 0.2;
+
 pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
-    irises: BothEyes<Aby3SharedIrisesMut<'a>>,
+    iris_pools: BothEyes<IrisPoolHandle>,
+}
+
+impl IrisLoader<'_> {
+    pub async fn wait_completion(self) -> Result<()> {
+        try_join!(
+            self.iris_pools[LEFT].wait_completion(),
+            self.iris_pools[RIGHT].wait_completion(),
+        )?;
+        Ok(())
+    }
 }
 
 #[allow(clippy::needless_lifetimes)]
@@ -665,14 +681,14 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        for (side, code, mask) in izip!(
-            &mut self.irises,
+        for (pool, code, mask) in izip!(
+            &self.iris_pools,
             [left_code, right_code],
             [left_mask, right_mask]
         ) {
             let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
                 .expect("Wrong code or mask size");
-            side.insert(vector_id, iris);
+            pool.insert(vector_id, iris).unwrap();
         }
     }
 
@@ -681,8 +697,9 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
     }
 
     fn reserve(&mut self, additional: usize) {
-        for side in &mut self.irises {
-            side.reserve(additional);
+        let additional = additional + (additional as f64 * IRIS_STORE_RESERVE_EXTRA) as usize;
+        for side in &self.iris_pools {
+            side.reserve(additional).unwrap();
         }
     }
 
@@ -693,9 +710,10 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
     fn fake_db(&mut self, size: usize) {
         *self.db_size = size;
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
-        for side in &mut self.irises {
+        for side in &self.iris_pools {
             for i in 0..size {
-                side.insert(VectorId::from_serial_id(i as u32), iris.clone());
+                side.insert(VectorId::from_serial_id(i as u32), iris.clone())
+                    .unwrap();
             }
         }
     }
@@ -846,6 +864,70 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
+    async fn numa_realloc(self, workers: BothEyes<IrisPoolHandle>) -> Self {
+        // TODO: Result<Self>
+        let start = Instant::now();
+
+        let (queries, queries_mirror) = join!(
+            Self::numa_realloc_orient(self.queries, &workers),
+            Self::numa_realloc_orient(self.queries_mirror, &workers)
+        );
+
+        metrics::histogram!("numa_realloc_duration").record(start.elapsed().as_secs_f64());
+        Self {
+            batch: self.batch,
+            queries,
+            queries_mirror,
+            ids: self.ids,
+        }
+    }
+
+    async fn numa_realloc_orient(
+        queries: SearchQueries,
+        workers: &BothEyes<IrisPoolHandle>,
+    ) -> SearchQueries {
+        let (left, right) = join!(
+            Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
+            Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
+        );
+        Arc::new([left, right])
+    }
+
+    async fn numa_realloc_side(
+        requests: &VecRequests<VecRots<Aby3Query>>,
+        worker: &IrisPoolHandle,
+    ) -> VecRequests<VecRots<Aby3Query>> {
+        // Iterate over all the irises.
+        let all_irises_iter = requests.iter().flat_map(|rots| {
+            rots.iter()
+                .flat_map(|query| [&query.iris, &query.iris_proc])
+        });
+
+        // Go realloc the irises in parallel.
+        let tasks = all_irises_iter.map(|iris| worker.numa_realloc(iris.clone()).unwrap());
+
+        // Iterate over the results in the same order.
+        let mut new_irises_iter = try_join_all(tasks).await.unwrap().into_iter();
+
+        // Rebuild the same structure with the new irises.
+        let new_requests = requests
+            .iter()
+            .map(|rots| {
+                rots.iter()
+                    .map(|_old_query| {
+                        let iris = new_irises_iter.next().unwrap();
+                        let iris_proc = new_irises_iter.next().unwrap();
+                        Aby3Query { iris, iris_proc }
+                    })
+                    .collect_vec()
+                    .into()
+            })
+            .collect_vec();
+
+        assert!(new_irises_iter.next().is_none());
+        new_requests
+    }
+
     fn request_types(
         &self,
         iris_store: &Aby3SharedIrises,
@@ -1165,6 +1247,7 @@ impl HawkResult {
             anonymized_bucket_statistics_right,
             anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
             anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
+            anonymized_bucket_statistics_2d: BucketStatistics2D::default(),        // TODO.
 
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,
@@ -1313,6 +1396,10 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
+        let request = request
+            .numa_realloc(hawk_actor.workers_handle.clone())
+            .await;
+
         // Deletions.
         apply_deletions(hawk_actor, &request).await?;
 
@@ -1405,6 +1492,15 @@ impl HawkHandle {
             mutations,
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
+
+        // if we sent the bucket statistics, clear them.
+        for side in [LEFT, RIGHT] {
+            if !hawk_actor.anonymized_bucket_statistics[side].is_empty() {
+                hawk_actor.anonymized_bucket_statistics[side]
+                    .buckets
+                    .clear();
+            }
+        }
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
@@ -1561,7 +1657,7 @@ impl HawkHandle {
 
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
-    let hawk_actor = HawkActor::from_cli(&args).await?;
+    let hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
     HawkHandle::new(hawk_actor).await
 }
 
@@ -1951,12 +2047,13 @@ mod tests_db {
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
             hnsw_prf_key: None,
+            numa: true,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,
             tls: None,
         };
-        let mut hawk_actor = HawkActor::from_cli(&args).await?;
+        let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
         graph_loader.load_graph_store(&graph_store, 2).await?;
 
