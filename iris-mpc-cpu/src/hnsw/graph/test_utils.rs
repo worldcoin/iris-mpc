@@ -7,6 +7,12 @@ use crate::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
+        graph::graph_diff::{
+            explicit::{ExplicitNeighborhoodDiffer, SortBy},
+            jaccard::DetailedJaccardDiffer,
+            node_equiv::ensure_node_equivalence,
+            run_diff,
+        },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
     },
@@ -16,6 +22,7 @@ use crate::{
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
+use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
@@ -25,6 +32,16 @@ use rand::SeedableRng;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum DiffMethod {
+    /// Use the detailed Jaccard differ.
+    DetailedJaccard,
+    /// Use the explicit neighborhood differ, sorted by node index.
+    ExplicitByIndex,
+    /// Use the explicit neighborhood differ, sorted by Jaccard similarity.
+    ExplicitByJaccard,
+}
 
 /// Number of secret-shared iris code pairs to persist to Postgres per transaction.
 const SECRET_SHARING_PG_TX_SIZE: usize = 100;
@@ -183,7 +200,12 @@ impl DbContext {
     }
 
     /// load a graph from the file and compare it against the database
-    pub async fn compare_to_db(&self, path: &Path, dbg: bool) -> Result<()> {
+    pub async fn compare_to_db(
+        &self,
+        path: &Path,
+        diff_method: DiffMethod,
+        dbg: bool,
+    ) -> Result<()> {
         let db_graph = self.get_both_eyes().await?;
         if dbg {
             println!("graph from database:");
@@ -194,10 +216,41 @@ impl DbContext {
             println!("graph from file:");
             println!("{:#?}", loaded_graph);
         }
-        if db_graph != loaded_graph {
-            eprintln!("the graphs don't match");
-        } else {
-            println!("the graphs match")
+
+        for side in 0..2 {
+            if db_graph[side] == loaded_graph[side] {
+                println!(
+                    "Verdict: Side {} graphs are identical (including ordering of neighborhoods)",
+                    side
+                );
+            } else {
+                let node_equiv_result =
+                    ensure_node_equivalence(&db_graph[side], &loaded_graph[side]);
+                if let Err(err) = node_equiv_result {
+                    eprintln!(
+                        "Verdict: Side {} graphs are not node-equivalent;\n Reason: {:#?}",
+                        side, err
+                    );
+                } else {
+                    match diff_method {
+                        DiffMethod::DetailedJaccard => {
+                            let differ = DetailedJaccardDiffer::new(15);
+                            let result = run_diff(&db_graph[side], &loaded_graph[side], differ);
+                            println!("{result}");
+                        }
+                        DiffMethod::ExplicitByIndex => {
+                            let differ = ExplicitNeighborhoodDiffer::new(SortBy::Index);
+                            let result = run_diff(&db_graph[side], &loaded_graph[side], differ);
+                            println!("{result}");
+                        }
+                        DiffMethod::ExplicitByJaccard => {
+                            let differ = ExplicitNeighborhoodDiffer::new(SortBy::Jaccard);
+                            let result = run_diff(&db_graph[side], &loaded_graph[side], differ);
+                            println!("{result}");
+                        }
+                    };
+                }
+            }
         }
         Ok(())
     }
