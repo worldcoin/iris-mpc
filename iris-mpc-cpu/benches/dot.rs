@@ -433,7 +433,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
     });
 
     // --- RAM-bound (non-cacheable) version ---
-    g.bench_function("trick_dot_ram_bound", |b| {
+    g.bench_function("ram_bound", |b| {
         b.iter_batched(
             || {
                 (0..batch_size)
@@ -510,7 +510,7 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
     let batch_size = 100;
     let rng = &mut thread_rng();
 
-    let mut g = c.benchmark_group("trick_dot_comparison_ram_bound");
+    let mut g = c.benchmark_group("ram_bound");
     g.sample_size(50);
     g.throughput(Throughput::Elements(batch_size));
 
@@ -543,7 +543,7 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
 
     for &nearest_neighbors in &NEAREST_NEIGHBORS {
         g.bench_function(
-            format!("rotation_aware_trick_dot_ram_bound_{}", nearest_neighbors),
+            format!("rotation_aware_trick_dot_{}", nearest_neighbors),
             |b| {
                 b.iter_batched(
                     || {
@@ -574,10 +574,7 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
         );
 
         g.bench_function(
-            format!(
-                "rotation_aware_trick_dot_padded_ram_bound_{}",
-                nearest_neighbors
-            ),
+            format!("rotation_aware_trick_dot_padded_{}", nearest_neighbors),
             |b| {
                 b.iter_batched(
                     || {
