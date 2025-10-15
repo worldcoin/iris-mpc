@@ -655,7 +655,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
             )
         });
 
-        for threads in [4, 8, 16] {
+        for threads in [2, 4, 8, 16, 32] {
             g.bench_function(format!("par_{batch_size}_{threads}"), |b| {
                 b.iter_batched(
                     || {
