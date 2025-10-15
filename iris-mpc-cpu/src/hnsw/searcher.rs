@@ -329,7 +329,7 @@ impl HnswSearcher {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
             }
             _ => {
-                Self::layer_search_batched(store, graph, q, W, ef, lc).await?;
+                Self::layer_search_batched_v2(store, graph, q, W, ef, lc).await?;
             }
         }
         Ok(())
