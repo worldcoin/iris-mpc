@@ -5,6 +5,9 @@ use iris_mpc_common::galois_engine::degree4::{rotation_aware_trick_dot_padded, I
 use iris_mpc_common::{
     iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
 };
+use iris_mpc_cpu::protocol::ops::{
+    rotation_aware_pairwise_distance, rotation_aware_pairwise_distance_par,
+};
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
 };
@@ -612,8 +615,94 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
     g.finish();
 }
 
+pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
+    let batch_size = 100;
+    let rng = &mut thread_rng();
+
+    let mut g = c.benchmark_group("rotation_aware_pairwise_distance_ram_bound");
+    g.sample_size(50);
+    g.throughput(Throughput::Elements(batch_size));
+
+    // Prepare a large dataset of random iris codes and their shares
+    // should be divisible by 3
+    let dataset_size = 99999;
+    let dist = Uniform::new(0, dataset_size);
+    let iris_codes: Vec<_> = (0..dataset_size / 3)
+        .flat_map(|_| {
+            let iris = IrisCode::random_rng(rng);
+            // Mash up the 3 party shares; ok for benchmarking.
+            GaloisRingSharedIris::generate_shares_locally(rng, iris)
+        })
+        .map(|x| Arc::new(x))
+        .collect();
+
+    // --- RAM-bound (non-cacheable) version ---
+
+    const NEAREST_NEIGHBORS: usize = 32;
+
+    g.bench_function(format!("rotation_aware_pairwise_distance"), |b| {
+        b.iter_batched(
+            || {
+                (0..batch_size)
+                    .map(|_| {
+                        let a = dist.sample(rng);
+                        let mut b = vec![];
+                        for _ in 0..NEAREST_NEIGHBORS {
+                            let idx = dist.sample(rng);
+                            b.push(Some(&iris_codes[idx]));
+                        }
+                        (&iris_codes[a], b)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |input| {
+                for (l, set) in input {
+                    black_box(rotation_aware_pairwise_distance(l, set.into_iter()));
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    for threads in [4, 8, 16] {
+        g.bench_function(
+            format!("rotation_aware_pairwise_distance_par_{}", threads),
+            |b| {
+                b.iter_batched(
+                    || {
+                        (0..batch_size)
+                            .map(|_| {
+                                let a = dist.sample(rng);
+                                let mut b = vec![];
+                                for _ in 0..NEAREST_NEIGHBORS {
+                                    let idx = dist.sample(rng);
+                                    b.push(Some(&iris_codes[idx]));
+                                }
+                                (&iris_codes[a], b)
+                            })
+                            .collect::<Vec<_>>()
+                    },
+                    |input| {
+                        for (l, set) in input {
+                            black_box(rotation_aware_pairwise_distance_par(
+                                l,
+                                set.into_iter(),
+                                threads,
+                            ));
+                        }
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+
+    g.finish();
+}
+
 criterion_group!(
     benches,
+    bench_pairwise_distances_parallelized,
     bench_batch_trick_dot,
     bench_trick_dot,
     bench_galois_ring_pairwise_distance,
