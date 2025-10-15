@@ -16,9 +16,9 @@ const DEFAULT_REGION: &str = "eu-north-1";
 const COMPONENT: &str = "State-AWS";
 
 /// Encpasulates access to a set of AWS service clients.
-pub struct Clients {
+pub struct AwsServiceClients {
     /// Associated configuration.
-    config: Config,
+    config: AwsServiceConfig,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -34,7 +34,7 @@ pub struct Clients {
 }
 
 /// Encpasulates AWS service client configuration.
-pub struct Config {
+pub struct AwsServiceConfig {
     /// Associated node configuration.
     node: NodeConfig,
 
@@ -42,8 +42,8 @@ pub struct Config {
     sdk: SdkConfig,
 }
 
-impl Clients {
-    pub fn new(config: Config) -> Self {
+impl AwsServiceClients {
+    pub fn new(config: AwsServiceConfig) -> Self {
         Self {
             config: config.to_owned(),
             s3: S3Client::from(&config),
@@ -54,7 +54,7 @@ impl Clients {
     }
 }
 
-impl Config {
+impl AwsServiceConfig {
     pub async fn new(node_config: &NodeConfig) -> Self {
         Self {
             node: node_config.to_owned(),
@@ -63,7 +63,7 @@ impl Config {
     }
 }
 
-impl Clone for Clients {
+impl Clone for AwsServiceClients {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -75,7 +75,7 @@ impl Clone for Clients {
     }
 }
 
-impl Clone for Config {
+impl Clone for AwsServiceConfig {
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
@@ -84,8 +84,8 @@ impl Clone for Config {
     }
 }
 
-impl Clients {
-    pub fn config(&self) -> &Config {
+impl AwsServiceClients {
+    pub fn config(&self) -> &AwsServiceConfig {
         &self.config
     }
 
@@ -106,7 +106,7 @@ impl Clients {
     }
 }
 
-impl Config {
+impl AwsServiceConfig {
     pub fn environment(&self) -> &String {
         &self.node().environment
     }
@@ -120,7 +120,7 @@ impl Config {
     }
 }
 
-impl Clients {
+impl AwsServiceClients {
     pub(super) fn log_error(&self, msg: &str) {
         log_error(COMPONENT, msg);
     }
@@ -130,8 +130,8 @@ impl Clients {
     }
 }
 
-impl From<&Config> for S3Client {
-    fn from(config: &Config) -> Self {
+impl From<&AwsServiceConfig> for S3Client {
+    fn from(config: &AwsServiceConfig) -> Self {
         let force_path_style =
             config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
 
@@ -144,20 +144,20 @@ impl From<&Config> for S3Client {
     }
 }
 
-impl From<&Config> for SecretsManagerClient {
-    fn from(config: &Config) -> Self {
+impl From<&AwsServiceConfig> for SecretsManagerClient {
+    fn from(config: &AwsServiceConfig) -> Self {
         SecretsManagerClient::new(config.sdk())
     }
 }
 
-impl From<&Config> for SNSClient {
-    fn from(config: &Config) -> Self {
+impl From<&AwsServiceConfig> for SNSClient {
+    fn from(config: &AwsServiceConfig) -> Self {
         SNSClient::new(config.sdk())
     }
 }
 
-impl From<&Config> for SQSClient {
-    fn from(config: &Config) -> Self {
+impl From<&AwsServiceConfig> for SQSClient {
+    fn from(config: &AwsServiceConfig) -> Self {
         SQSClient::from_conf(
             Builder::from(config.sdk())
                 .timeout_config(
@@ -188,13 +188,13 @@ async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{Clients, Config};
+    use super::{AwsServiceClients, AwsServiceConfig};
     use crate::{
         constants::{DEFAULT_AWS_REGION, NODE_CONFIG_KIND_MAIN},
         state::fsys::local::read_node_config,
     };
 
-    fn assert_clients(clients: &Clients) {
+    fn assert_clients(clients: &AwsServiceClients) {
         let client = clients.s3();
         assert!(client.config().region().is_some());
 
@@ -208,16 +208,16 @@ mod tests {
         assert!(client.config().region().is_some());
     }
 
-    async fn create_clients() -> Clients {
+    async fn create_clients() -> AwsServiceClients {
         let config = create_config().await;
 
-        Clients::new(config)
+        AwsServiceClients::new(config)
     }
 
-    async fn create_config() -> Config {
+    async fn create_config() -> AwsServiceConfig {
         let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        Config::new(&node_config).await
+        AwsServiceConfig::new(&node_config).await
     }
 
     #[tokio::test]

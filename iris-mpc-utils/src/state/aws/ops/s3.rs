@@ -1,10 +1,16 @@
-use super::super::clients::Clients as AwsClients;
+use super::super::clients::AwsServiceClients;
+use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream as S3_ByteStream;
 use eyre::{eyre, Result};
 use iris_mpc_common::IrisSerialId;
 use serde::Serialize;
 
-impl AwsClients {
+#[async_trait]
+pub trait AwsS3ServiceOperations {
+    async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()>;
+}
+
+impl AwsServiceClients {
     /// Uploads to an AWS S3 bucket a set of serial identifiers marked as deleted.
     pub async fn s3_upload_iris_deletions(&self, data: &Vec<IrisSerialId>) -> Result<()> {
         // Set key/bucket.

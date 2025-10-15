@@ -16,6 +16,7 @@ pub async fn increment_iris_version(
             "#,
     )
     .bind(serial_id);
+
     query.execute(tx.deref_mut()).await?;
 
     Ok(())
@@ -55,6 +56,7 @@ pub async fn persist_modification(
             "#,
     )
     .bind(modification_id);
+
     query.execute(tx.deref_mut()).await?;
 
     Ok(())
@@ -83,6 +85,7 @@ pub async fn write_modification(
     .bind(m.s3_url.as_ref())
     .bind(m.status.as_str())
     .bind(m.persisted);
+
     query.execute(tx.deref_mut()).await?;
 
     Ok(())
