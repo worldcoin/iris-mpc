@@ -9,7 +9,7 @@ use std::{
 };
 
 /// Returns a message for logging.
-fn get_formatted_message(component: &str, msg: String) -> String {
+fn get_log_message(component: &str, msg: String) -> String {
     format!("HNSW-UTILS :: {} :: {}", component, msg)
 }
 
@@ -26,8 +26,8 @@ where
 
 /// Logs & returns a component error message.
 #[allow(dead_code)]
-pub fn log_error(component: &str, msg: String) -> String {
-    let msg = get_formatted_message(component, msg);
+pub(crate) fn log_error(component: &str, msg: &str) -> String {
+    let msg = get_log_message(component, msg.to_string());
 
     // In testing print to stdout.
     #[cfg(test)]
@@ -41,8 +41,8 @@ pub fn log_error(component: &str, msg: String) -> String {
 
 /// Logs & returns a component information message.
 #[allow(dead_code)]
-pub fn log_info(component: &str, msg: &str) -> String {
-    let msg = get_formatted_message(component, msg.to_string());
+pub(crate) fn log_info(component: &str, msg: &str) -> String {
+    let msg = get_log_message(component, msg.to_string());
 
     // In testing print to stdout.
     #[cfg(test)]
@@ -56,8 +56,8 @@ pub fn log_info(component: &str, msg: &str) -> String {
 
 /// Logs & returns a component warning message.
 #[allow(dead_code)]
-pub fn log_warn(component: &str, msg: String) -> String {
-    let msg = get_formatted_message(component, msg);
+pub(crate) fn log_warn(component: &str, msg: &str) -> String {
+    let msg = get_log_message(component, msg.to_string());
 
     // In testing print to stdout.
     #[cfg(test)]

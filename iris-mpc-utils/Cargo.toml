@@ -10,6 +10,7 @@ aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dra
 async-trait.workspace = true
 aws-config.workspace = true
 aws-sdk-rds.workspace = true
+aws-sdk-sns.workspace = true
 aws-sdk-sqs.workspace = true
 aws-sdk-s3.workspace = true
 aws-sdk-secretsmanager.workspace = true
