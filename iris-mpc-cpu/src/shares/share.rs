@@ -339,6 +339,28 @@ where
     }
 }
 
+impl<T: IntRing2k> Add<&Self> for DistanceShare<T> {
+    type Output = Self;
+
+    fn add(self, rhs: &Self) -> Self::Output {
+        DistanceShare {
+            code_dot: self.code_dot + &rhs.code_dot,
+            mask_dot: self.mask_dot + &rhs.mask_dot,
+        }
+    }
+}
+
+impl<T: IntRing2k> Add<Self> for DistanceShare<T> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        DistanceShare {
+            code_dot: self.code_dot + rhs.code_dot,
+            mask_dot: self.mask_dot + rhs.mask_dot,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::shares::bit::Bit;

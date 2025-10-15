@@ -139,7 +139,7 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         layer.set_links(base, links);
     }
 
-    pub async fn num_layers(&self) -> usize {
+    pub fn num_layers(&self) -> usize {
         self.layers.len()
     }
 
