@@ -899,7 +899,12 @@ impl HnswSearcher {
             .instrument(eval_dist_span.clone())
             .await?;
 
-            debug!(event_type = Operation::OpenNode.id(), increment_amount = new_opened.len(), ef, lc);
+            debug!(
+                event_type = Operation::OpenNode.id(),
+                increment_amount = new_opened.len(),
+                ef,
+                lc
+            );
             opened.extend(new_opened);
 
             // Compare elements against current farthest element of W
@@ -942,8 +947,7 @@ impl HnswSearcher {
             // Update rule: if measured insertion rate is smaller than the harmonic mean of
             // the current estimated insertion rate and the next update to this rate, then
             // apply the update.
-            if (ins_rate_denom + next_ins_rate_denom) * n_insertions
-                < 2 * INS_RATE_NUM * batch_size
+            if (ins_rate_denom + next_ins_rate_denom) * n_insertions < 2 * INS_RATE_NUM * batch_size
                 && next_ins_rate_denom < MAX_INS_RATE_DENOM
             {
                 debug!(
@@ -952,8 +956,7 @@ impl HnswSearcher {
                     "Update insertion rate estimate denominator"
                 );
                 ins_rate_denom = next_ins_rate_denom;
-                next_ins_rate_denom =
-                    (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
+                next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
             }
 
             // Refresh the list of currently unopened nodes in the candidate neighborhood `W`
