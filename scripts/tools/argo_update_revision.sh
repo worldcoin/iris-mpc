@@ -7,7 +7,7 @@
 #   ./scripts/tools/argo_update_revision.sh $(git branch --show-current)
 #   ./scripts/tools/argo_update_revision.sh main
 #   ./scripts/tools/argo_update_revision.sh <another-branch>
-#   ./scripts/tools/argo_update_revision.sh <another-branch> cpu-dev
+#   ./scripts/tools/argo_update_revision.sh <another-branch> cpu dev
 #
 # Pre-requisites:
 # 1. Ensure that you have the ArgoCD CLI installed on your local machine. (brew install argocd)
