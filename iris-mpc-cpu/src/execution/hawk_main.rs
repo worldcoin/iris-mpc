@@ -1669,6 +1669,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
+        utils::constants::N_PARTIES,
     };
     use aes_prng::AesRng;
     use futures::future::JoinAll;
@@ -1703,10 +1704,9 @@ mod tests {
             }
         };
 
-        let n_parties = 3;
-        let addresses = get_free_local_addresses(n_parties).await?;
+        let addresses = get_free_local_addresses(N_PARTIES).await?;
 
-        let handles = (0..n_parties)
+        let handles = (0..N_PARTIES)
             .map(|i| go(addresses.clone(), i))
             .map(tokio::spawn)
             .collect::<JoinAll<_>>()
@@ -1732,7 +1732,7 @@ mod tests {
             .collect_vec();
 
         // Unzip: party -> iris_id -> (share, share_mirrored)
-        let irises = (0..n_parties)
+        let irises = (0..N_PARTIES)
             .map(|party_index| {
                 irises
                     .iter()
@@ -1815,7 +1815,7 @@ mod tests {
         };
 
         let failed_request_i = 1;
-        let all_results = parallelize((0..n_parties).map(|party_i| {
+        let all_results = parallelize((0..N_PARTIES).map(|party_i| {
             // Mess with the shares to make one request fail.
             let mut shares = irises[party_i].clone();
             shares[failed_request_i].0 = GaloisRingSharedIris::dummy_for_party(party_i);
@@ -1836,7 +1836,7 @@ mod tests {
 
         let batch_2 = batch_0;
 
-        let all_results = parallelize((0..n_parties).map(|party_i| {
+        let all_results = parallelize((0..N_PARTIES).map(|party_i| {
             let batch = batch_of_party(&batch_2, &irises[party_i]);
             let mut handle = handles[party_i].clone();
             async move { handle.submit_batch_query(batch).await.await }
