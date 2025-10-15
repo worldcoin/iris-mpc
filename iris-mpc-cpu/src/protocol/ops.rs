@@ -356,6 +356,166 @@ async fn conditionally_select_distance(
         .collect())
 }
 
+// Computes local shares of c * (s1 - s2) for two shares s1 and s2 and a control bit c.
+fn subtract_and_multiply(
+    session: &mut Session,
+    share1: &Share<u32>,
+    share2: &Share<u32>,
+    control_bit: &Share<u32>,
+) -> RingElement<u32> {
+    let diff = share1.clone() - share2.clone();
+    session.prf.gen_zero_share() + control_bit * &diff
+}
+
+// Computes local shares of c * (d1 - d2) for two distance shares d1 and d2 and a control bit c.
+fn subtract_and_multiply_distances(
+    session: &mut Session,
+    distance1: &DistanceShare<u32>,
+    distance2: &DistanceShare<u32>,
+    control_bit: &Share<u32>,
+) -> (RingElement<u32>, RingElement<u32>) {
+    let code_mul_a = subtract_and_multiply(
+        session,
+        &distance1.code_dot,
+        &distance2.code_dot,
+        control_bit,
+    );
+    let mask_mul_a = subtract_and_multiply(
+        session,
+        &distance1.mask_dot,
+        &distance2.mask_dot,
+        control_bit,
+    );
+    (code_mul_a, mask_mul_a)
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+async fn conditionally_select_distance_with_id(
+    session: &mut Session,
+    distances: Vec<(DistanceWithId, DistanceWithId)>,
+    control_bits: Vec<Share<u32>>,
+) -> Result<Vec<DistanceWithId>> {
+    assert!(
+        distances.len() == control_bits.len(),
+        "Number of distances must match number of control bits"
+    );
+    assert!(!distances.is_empty(), "Distances must not be empty");
+
+    let first_pair = &distances[0];
+    let (id1, id2) = (&first_pair.0.id, &first_pair.1.id);
+
+    // Conditional multiplexing:
+    // If control bit is 1, select d1, else select d2.
+    // res = c * d1 + (1 - c) * d2 = d2 + c * (d1 - d2);
+    // We need to do it for both code_dot and mask_dot.
+
+    // We start with c * (d1 - d2).
+    // The same selection is done for secret shared ids.
+    // Plaintext ids are handled at the end.
+    let res_a = match (id1, id2) {
+        (DistanceId::Plain(_), DistanceId::Plain(_)) => Ok(distances
+            .iter()
+            .zip(control_bits.iter())
+            .flat_map(|((d1, d2), c)| {
+                let (code_mul_a, mask_mul_a) =
+                    subtract_and_multiply_distances(session, &d1.distance, &d2.distance, c);
+                [code_mul_a, mask_mul_a]
+            })
+            .collect_vec()),
+        (DistanceId::Shared(_), DistanceId::Shared(_)) => {
+            let mut res = Vec::with_capacity(3 * distances.len());
+
+            for ((d1, d2), c) in distances.iter().zip(control_bits.iter()) {
+                match (&d1.id, &d2.id) {
+                    (DistanceId::Shared(id_inner1), DistanceId::Shared(id_inner2)) => {
+                        let id_mul_a = subtract_and_multiply(session, id_inner1, id_inner2, c);
+                        let (code_mul_a, mask_mul_a) =
+                            subtract_and_multiply_distances(session, &d1.distance, &d2.distance, c);
+                        res.push(id_mul_a);
+                        res.push(code_mul_a);
+                        res.push(mask_mul_a);
+                    }
+                    _ => {
+                        eyre::bail!("All DistanceId must be shared here");
+                    }
+                }
+            }
+            Ok(res)
+        }
+        _ => Err(eyre!("All DistanceId must be of the same variant")),
+    }?;
+
+    let network = &mut session.network_session;
+
+    let message = if res_a.len() == 1 {
+        NetworkValue::RingElement32(res_a[0])
+    } else {
+        NetworkValue::VecRing32(res_a.clone())
+    };
+    network.send_next(message).await?;
+
+    let res_b = match network.receive_prev().await {
+        Ok(NetworkValue::RingElement32(element)) => vec![element],
+        Ok(NetworkValue::VecRing32(elements)) => elements,
+        _ => bail!("Could not deserialize RingElement32"),
+    };
+
+    // Finally, compute the result by adding the d2 shares
+    // If ids are plaintext, we compute them locally here.
+
+    let shares_iterator = izip!(res_a.into_iter(), res_b.into_iter())
+        // Combine a and b part into shares
+        .map(|(a, b)| Share::new(a, b));
+    match (id1, id2) {
+        (DistanceId::Plain(_), DistanceId::Plain(_)) => {
+            let result_distances = shares_iterator
+                .tuples()
+                .map(|(code, mask)| DistanceShare::new(code, mask))
+                // Add the d2 shares
+                .zip(distances.iter())
+                .map(|(res, (_, d2))| res + &d2.distance)
+                .collect_vec();
+
+            // Compute ids locally as they are in plaintext
+            let role = session.own_role();
+            let ids = distances
+                .into_iter()
+                .zip(control_bits.into_iter())
+                .map(|((d1, d2), c)| match (&d1.id, &d2.id) {
+                    (DistanceId::Plain(v1), DistanceId::Plain(v2)) => {
+                        let mut res = c * v1.wrapping_sub(*v2);
+                        res.add_assign_const_role(*v2, role);
+                        Ok(DistanceId::Shared(res))
+                    }
+                    _ => eyre::bail!("All DistanceId must be of the same variant"),
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(ids
+                .into_iter()
+                .zip(result_distances.into_iter())
+                .map(|(id, dist)| DistanceWithId::new(id, dist))
+                .collect_vec())
+        }
+        (DistanceId::Shared(_), DistanceId::Shared(_)) => {
+            shares_iterator
+                .tuples()
+                .map(|(id, code, mask)| (id, DistanceShare::new(code, mask)))
+                // Add the d2 shares
+                .zip(distances.into_iter())
+                .map(|((id, res), (_, d2))| match &d2.id {
+                    DistanceId::Shared(id2_inner) => Ok(DistanceWithId::new(
+                        DistanceId::Shared(id + id2_inner),
+                        res + &d2.distance,
+                    )),
+                    _ => eyre::bail!("All DistanceId must be shared here"),
+                })
+                .collect::<Result<Vec<_>>>()
+        }
+        _ => Err(eyre!("All DistanceId must be of the same variant")),
+    }
+}
+
 /// Conditionally swaps the distance shares based on control bits.
 /// Given the ith pair of indices (i1, i2), the function does the following.
 /// If the control bit is 0, it swaps tuples (32-bit id, distance share) with index i1 and i2,
@@ -590,6 +750,54 @@ pub async fn min_of_pair_batch(
         .inner();
 
     conditionally_select_distance(session, distances, u32_bits.as_slice()).await
+}
+
+#[derive(Clone)]
+pub(crate) enum DistanceId {
+    Plain(u32),
+    Shared(Share<u32>),
+}
+
+impl DistanceId {
+    pub fn get_shared(&self) -> Result<Share<u32>> {
+        match self {
+            DistanceId::Plain(_) => Err(eyre!("Expected plain id, got shared")),
+            DistanceId::Shared(id) => Ok(id.clone()),
+        }
+    }
+}
+
+pub(crate) struct DistanceWithId {
+    pub id: DistanceId,
+    pub distance: DistanceShare<u32>,
+}
+
+impl DistanceWithId {
+    pub fn new(id: DistanceId, distance: DistanceShare<u32>) -> Self {
+        Self { id, distance }
+    }
+}
+
+/// For every pair of distance shares ((id1, d1), (id2, d2)), this computes the bit d2 < d1 uses it to return the lower of the two distances.
+///
+/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
+pub(crate) async fn argmin_of_pair_batch(
+    session: &mut Session,
+    distances: Vec<(DistanceWithId, DistanceWithId)>,
+) -> Result<Vec<DistanceWithId>> {
+    // extract only the distances
+    let distances_without_ids = distances
+        .iter()
+        .map(|(d1, d2)| (d1.distance.clone(), d2.distance.clone()))
+        .collect_vec();
+    // compute the secret-shared bits d1 < d2
+    let bits = oblivious_cross_compare(session, &distances_without_ids).await?;
+    // inject bits to u32 shares
+    let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
+        .await?
+        .inner();
+
+    conditionally_select_distance_with_id(session, distances, u32_bits).await
 }
 
 use std::cell::RefCell;

@@ -312,9 +312,7 @@ impl HnswSearcher {
         }
         // if there is only one layer, just use the entry point initialization
         if num_layers == 1 {
-            return self
-                .search_init_entrypoint(store, graph, query)
-                .await;
+            return self.search_init_entrypoint(store, graph, query).await;
         }
         // skip the top layer with entry point
         let top_layer = num_layers - 2;
