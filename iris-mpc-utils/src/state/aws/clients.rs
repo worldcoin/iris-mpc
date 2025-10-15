@@ -1,3 +1,4 @@
+use crate::misc::log_info;
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -11,10 +12,13 @@ use std::time::Duration;
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
+/// Component name for logging purposes.
+const COMPONENT: &str = "State-AWS";
+
 /// Encpasulates access to a set of AWS service clients.
 pub struct Clients {
     /// Associated configuration.
-    config: ClientsConfig,
+    config: Config,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -30,7 +34,7 @@ pub struct Clients {
 }
 
 /// Encpasulates AWS service client configuration.
-pub struct ClientsConfig {
+pub struct Config {
     /// Associated node configuration.
     node: NodeConfig,
 
@@ -39,7 +43,7 @@ pub struct ClientsConfig {
 }
 
 impl Clients {
-    pub fn new(config: ClientsConfig) -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
             config: config.to_owned(),
             s3: S3Client::from(&config),
@@ -50,7 +54,7 @@ impl Clients {
     }
 }
 
-impl ClientsConfig {
+impl Config {
     pub async fn new(node_config: &NodeConfig) -> Self {
         Self {
             node: node_config.to_owned(),
@@ -71,7 +75,7 @@ impl Clone for Clients {
     }
 }
 
-impl Clone for ClientsConfig {
+impl Clone for Config {
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
@@ -81,7 +85,7 @@ impl Clone for ClientsConfig {
 }
 
 impl Clients {
-    pub fn config(&self) -> &ClientsConfig {
+    pub fn config(&self) -> &Config {
         &self.config
     }
 
@@ -102,7 +106,11 @@ impl Clients {
     }
 }
 
-impl ClientsConfig {
+impl Config {
+    pub fn environment(&self) -> &String {
+        &self.node().environment
+    }
+
     pub fn node(&self) -> &NodeConfig {
         &self.node
     }
@@ -112,10 +120,16 @@ impl ClientsConfig {
     }
 }
 
-impl From<&ClientsConfig> for S3Client {
-    fn from(config: &ClientsConfig) -> Self {
+impl Clients {
+    pub(super) fn log_info(&self, msg: &str) {
+        log_info(COMPONENT, msg);
+    }
+}
+
+impl From<&Config> for S3Client {
+    fn from(config: &Config) -> Self {
         let force_path_style =
-            config.node().environment != ENV_PROD && config.node().environment != ENV_STAGE;
+            config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
 
         S3Client::from_conf(
             S3ConfigBuilder::from(config.sdk())
@@ -126,20 +140,20 @@ impl From<&ClientsConfig> for S3Client {
     }
 }
 
-impl From<&ClientsConfig> for SecretsManagerClient {
-    fn from(config: &ClientsConfig) -> Self {
+impl From<&Config> for SecretsManagerClient {
+    fn from(config: &Config) -> Self {
         SecretsManagerClient::new(config.sdk())
     }
 }
 
-impl From<&ClientsConfig> for SNSClient {
-    fn from(config: &ClientsConfig) -> Self {
+impl From<&Config> for SNSClient {
+    fn from(config: &Config) -> Self {
         SNSClient::new(config.sdk())
     }
 }
 
-impl From<&ClientsConfig> for SQSClient {
-    fn from(config: &ClientsConfig) -> Self {
+impl From<&Config> for SQSClient {
+    fn from(config: &Config) -> Self {
         SQSClient::from_conf(
             Builder::from(config.sdk())
                 .timeout_config(
@@ -170,7 +184,7 @@ async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{Clients, ClientsConfig};
+    use super::{Clients, Config};
     use crate::{
         constants::{DEFAULT_AWS_REGION, NODE_CONFIG_KIND_MAIN},
         state::fsys::local::read_node_config,
@@ -196,10 +210,10 @@ mod tests {
         Clients::new(config)
     }
 
-    async fn create_config() -> ClientsConfig {
+    async fn create_config() -> Config {
         let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        ClientsConfig::new(&node_config).await
+        Config::new(&node_config).await
     }
 
     #[tokio::test]
