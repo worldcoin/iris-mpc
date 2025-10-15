@@ -7,12 +7,14 @@ use serde::Serialize;
 
 #[async_trait]
 pub trait AwsS3ServiceOperations {
+    /// Uploads a set of Iris serial identifiers to be marked as deleted.
     async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()>;
 }
 
-impl AwsServiceClients {
-    /// Uploads to an AWS S3 bucket a set of serial identifiers marked as deleted.
-    pub async fn s3_upload_iris_deletions(&self, data: &Vec<IrisSerialId>) -> Result<()> {
+#[async_trait]
+impl AwsS3ServiceOperations for AwsServiceClients {
+    /// Uploads a set of Iris serial identifiers to be marked as deleted.
+    async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()> {
         // Set key/bucket.
         let bucket = format!("wf-smpcv2-{}-sync-protocol", self.config().environment());
         let key = format!("{}_deleted_serial_ids.json", self.config().environment());
