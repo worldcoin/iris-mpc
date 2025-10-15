@@ -1,4 +1,4 @@
-use crate::misc::log_info;
+use crate::misc::{log_error, log_info};
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -121,6 +121,10 @@ impl Config {
 }
 
 impl Clients {
+    pub(super) fn log_error(&self, msg: &str) {
+        log_error(COMPONENT, msg);
+    }
+
     pub(super) fn log_info(&self, msg: &str) {
         log_info(COMPONENT, msg);
     }
