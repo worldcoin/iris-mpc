@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use eyre::Result;
-use iris_mpc_cpu::hnsw::graph::test_utils::{DbContext, DiffMethod};
+use iris_mpc_cpu::hnsw::graph::test_utils::DbContext;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -34,25 +34,18 @@ enum Command {
     /// (testing only) verify that Load/Store works as expected
     VerifyBackup,
     /// Load a graph from a file and compare it to the graph stored in the database.
-    CompareToDb {
-        /// The diffing method to use for the comparison.
-        #[arg(long, value_enum, default_value_t = DiffMethod::DetailedJaccard)]
-        diff_method: DiffMethod,
-    },
+    CompareToDb,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-
     let Cli {
         db_url,
         schema,
         file,
         dbg,
         command,
-    } = cli;
-
+    } = Cli::parse();
     let db_context = DbContext::new(&db_url, &schema).await;
 
     match command {
@@ -69,12 +62,13 @@ async fn main() -> Result<()> {
             db_context.store_random_graph().await?;
             db_context.write_graph_to_file(&file, dbg).await?;
         }
-        Command::CompareToDb { diff_method } => {
-            db_context.compare_to_db(&file, diff_method, dbg).await?;
+        Command::CompareToDb => {
+            db_context.compare_to_db(&file, dbg).await?;
         }
     }
-    // this command has it own output
-    if !matches!(command, Command::CompareToDb { diff_method: _ }) {
+
+    // N.B. this command has it own output
+    if !matches!(command, Command::CompareToDb) {
         println!("Command succeeded");
     }
 
