@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:5d7376f487e5566cf879e26dee31358a79609a72-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:fcf13c1c811f54586d8c0538a11883609a21f0a6-arm64"
 
 environment: dev
 replicaCount: 1
@@ -69,7 +69,6 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
-  kubernetes.io/arch: arm64
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
   node.kubernetes.io/instance-type: "x8g.xlarge"
