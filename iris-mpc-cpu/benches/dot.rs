@@ -629,7 +629,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
     const NEAREST_NEIGHBORS: usize = 256;
 
     for batch_size in [1, 8, 32] {
-        g.throughput(Throughput::Elements(batch_size));
+        g.throughput(Throughput::Elements(batch_size * NEAREST_NEIGHBORS as u64));
 
         g.bench_function(format!("regular_{batch_size}"), |b| {
             b.iter_batched(

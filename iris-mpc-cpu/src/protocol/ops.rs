@@ -752,7 +752,8 @@ pub fn rotation_aware_pairwise_distance_par<'a>(
     // only parallelizing the outer loop ensures that each thread has adequate work. a single trick_dot()
     // may take 500ns. parallelizing the inner loop wouldn't give each thread enough work.
 
-    let mut results = vec![RingElement(0_u16); count * ROTATIONS * 2];
+    let mut results: Vec<RingElement<u16>> = Vec::with_capacity(count * ROTATIONS * 2);
+    unsafe { results.set_len(count * ROTATIONS * 2) };
     targets
         .par_chunks(batch_size)
         .zip(results.par_chunks_mut(batch_size * ROTATIONS * 2))
