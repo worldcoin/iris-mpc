@@ -99,8 +99,8 @@ pub async fn greater_than_threshold(
         })
         .collect();
 
-    // extract_msb_u32_batch(session, &diffs).await
-    extract_msb_u32_batch_fss(session, &diffs).await
+    extract_msb_u32_batch(session, &diffs).await
+    // extract_msb_u32_batch_fss(session, &diffs).await
 }
 
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
