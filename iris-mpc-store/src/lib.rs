@@ -89,6 +89,24 @@ impl DbStoredIris {
     pub fn id(&self) -> i64 {
         self.id
     }
+    /// Not really intended to be used directly, use StoredIrisRef instead.
+    pub fn new(
+        id: i64,
+        version_id: i16,
+        left_code: Vec<u8>,
+        left_mask: Vec<u8>,
+        right_code: Vec<u8>,
+        right_mask: Vec<u8>,
+    ) -> Self {
+        Self {
+            id,
+            version_id,
+            left_code,
+            left_mask,
+            right_code,
+            right_mask,
+        }
+    }
 }
 
 #[derive(Clone)]

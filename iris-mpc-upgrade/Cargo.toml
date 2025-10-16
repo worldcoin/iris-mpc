@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+ark-bls12-381 = "0.5.0"
+ark-ff = "0.5.0"
+ark-ec = "0.5.0"
+ark-serialize = "0.5.0"
 axum.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
@@ -35,9 +39,17 @@ sha2 = "0.10.8"
 thiserror.workspace = true
 hkdf = "0.12.4"
 rustls = { version = "0.23.16", features = ["ring"] }
+blake3 = "1.8.2"
+rayon.workspace = true
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
+aws-sdk-secretsmanager.workspace = true
+base64.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 float_eq = "1"
+criterion = "0.5"
 
 
 [build-dependencies]
@@ -54,3 +66,11 @@ path = "src/bin/reshare-server.rs"
 [[bin]]
 name = "reshare-client"
 path = "src/bin/reshare-client.rs"
+
+[[bin]]
+name = "rerandomize-db"
+path = "src/bin/rerandomize_db.rs"
+
+[[bench]]
+name = "rerandomize"
+harness = false
