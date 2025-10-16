@@ -1,7 +1,10 @@
 use super::player::Identity;
 use crate::{
     execution::{
-        hawk_main::{insert::InsertPlanV, iris_worker::IrisPoolHandle, search::SearchIds},
+        hawk_main::{
+            insert::InsertPlanV, iris_worker::IrisPoolHandle, matching::BatchStep3,
+            search::SearchIds,
+        },
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -536,13 +539,31 @@ impl HawkActor {
         .await
     }
 
+    #[allow(clippy::type_complexity)]
     async fn update_anon_stats(
         &mut self,
         sessions: &BothEyes<Vec<HawkSession>>,
         search_results: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        intra_batch_distances: BothEyes<HashMap<(usize, usize), Vec<DistanceShare<u32>>>>,
+        match_result: &BatchStep3,
     ) -> Result<()> {
+        let decisions = match_result.decisions();
         for side in [LEFT, RIGHT] {
+            // extend the distance cache with the distances from this search
             self.cache_distances(side, &search_results[side]);
+            // also extend with the intra-batch distances from this search
+            // We also iterate over in sorted request order to not rely on HashMap ordering.
+            for ((_request_id, earlier_request), distances) in intra_batch_distances[side]
+                .iter()
+                .sorted_by_key(|((r, r_e), _)| (*r, *r_e))
+            {
+                // but filter them according to the decisions.
+                // If an element would not be inserted into the DB, all matches with it must be ignored.
+                if decisions[*earlier_request].is_mutation() {
+                    self.distances_cache[side].extend([distances.to_owned()].into_iter());
+                }
+            }
+
             let session = &mut sessions[side][0].aby3_store.write().await.session;
             self.fill_anonymized_statistics_buckets(session, side)
                 .await?;
@@ -1441,7 +1462,7 @@ impl HawkHandle {
             let search_results =
                 search::search(sessions_search, search_queries, search_ids, search_params).await?;
 
-            let match_result = {
+            let (match_result, intra_distances) = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
@@ -1449,26 +1470,40 @@ impl HawkHandle {
                     is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
                         .await?;
 
-                step1.step2(&missing_is_match, intra_results.await??)
+                let (intra_results, intra_distances) = intra_results.await??;
+
+                (
+                    step1.step2(&missing_is_match, intra_results),
+                    intra_distances,
+                )
             };
 
-            Ok((search_results, match_result))
+            Ok((search_results, intra_distances, match_result))
         };
 
-        let (search_results, match_result) = {
+        let (search_results, intra_distances, match_result) = {
             let start = Instant::now();
-            let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
+            let ((search_normal, intra_distances, matches_normal), (_, _, matches_mirror)) = try_join!(
                 do_search(Orientation::Normal),
                 do_search(Orientation::Mirror),
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
-            (search_normal, matches_normal.step3(matches_mirror))
+            (
+                search_normal,
+                intra_distances,
+                matches_normal.step3(matches_mirror),
+            )
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
         hawk_actor
-            .update_anon_stats(sessions_mutations, &search_results)
+            .update_anon_stats(
+                sessions_mutations,
+                &search_results,
+                intra_distances,
+                &match_result,
+            )
             .await?;
         tracing::info!("Updated anonymized statistics.");
 
