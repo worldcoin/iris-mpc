@@ -698,48 +698,33 @@ where
 /// Computes the dot products between a query iris and a batch of iris vectors.
 /// Returns a Vec of RingElement<u16> containing code and mask dot products for each pair.
 /// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
-pub fn rotation_aware_pairwise_distance_par<'a, I>(
+pub fn rotation_aware_pairwise_distance_par<'a>(
     query: &'a ArcIris,
-    targets: I,
+    targets: Vec<&'a ArcIris>,
     threads: usize,
-) -> Vec<RingElement<u16>>
-where
-    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator + Clone,
-{
+) -> Vec<RingElement<u16>> {
     let start = Instant::now();
 
     // Count actual computations for metrics
-    let count = targets.clone().filter(|t| t.is_some()).count();
-    let batch_size = targets.clone().len() / threads;
+    let count = targets.len();
+    let batch_size = count / threads;
 
     if batch_size == 1 {
         let additive_shares: Vec<RingElement<u16>> = targets
-            .collect_vec()
             .into_par_iter()
             .flat_map(|target| {
                 let mut results = Vec::with_capacity(ROTATIONS * 2);
-                match target {
-                    None => {
-                        // Non-existent vectors get the largest relative distance of 100%.
-                        let (a, b) = SHARE_OF_MAX_DISTANCE;
-                        for _ in 0..ROTATIONS {
-                            results.push(RingElement(a));
-                            results.push(RingElement(b));
-                        }
-                    }
-                    Some(y) => {
-                        for rotation in IrisRotation::all() {
-                            let (a, b) = (
-                                query.code.rotation_aware_trick_dot(&y.code, &rotation),
-                                query.mask.rotation_aware_trick_dot(&y.mask, &rotation),
-                            );
-                            let (code_dist, mask_dist) =
-                                (RingElement(a), RingElement(2) * RingElement(b));
-                            results.push(code_dist);
-                            results.push(mask_dist);
-                        }
-                    }
+
+                for rotation in IrisRotation::all() {
+                    let (a, b) = (
+                        query.code.rotation_aware_trick_dot(&target.code, &rotation),
+                        query.mask.rotation_aware_trick_dot(&target.mask, &rotation),
+                    );
+                    let (code_dist, mask_dist) = (RingElement(a), RingElement(2) * RingElement(b));
+                    results.push(code_dist);
+                    results.push(mask_dist);
                 }
+
                 results
             })
             .collect();
@@ -756,12 +741,6 @@ where
         return additive_shares;
     }
 
-    let targets: Vec<Vec<Option<&'a ArcIris>>> = targets
-        .chunks(batch_size)
-        .into_iter()
-        .map(|x| x.into_iter().collect_vec())
-        .collect_vec();
-
     // this loop is parallelized
     // the serial version would have a nested loop.
     //    outer loop: targets
@@ -772,37 +751,25 @@ where
     //
     // only parallelizing the outer loop ensures that each thread has adequate work. a single trick_dot()
     // may take 500ns. parallelizing the inner loop wouldn't give each thread enough work.
-    let additive_shares: Vec<RingElement<u16>> = targets
-        .into_par_iter()
-        .flat_map(|chunk| {
-            let mut results = Vec::with_capacity(ROTATIONS * 2);
-            for target in chunk {
-                match target {
-                    None => {
-                        // Non-existent vectors get the largest relative distance of 100%.
-                        let (a, b) = SHARE_OF_MAX_DISTANCE;
-                        for _ in 0..ROTATIONS {
-                            results.push(RingElement(a));
-                            results.push(RingElement(b));
-                        }
-                    }
-                    Some(y) => {
-                        for rotation in IrisRotation::all() {
-                            let (a, b) = (
-                                query.code.rotation_aware_trick_dot(&y.code, &rotation),
-                                query.mask.rotation_aware_trick_dot(&y.mask, &rotation),
-                            );
-                            let (code_dist, mask_dist) =
-                                (RingElement(a), RingElement(2) * RingElement(b));
-                            results.push(code_dist);
-                            results.push(mask_dist);
-                        }
-                    }
+
+    let mut results = vec![RingElement(0_u16); count * ROTATIONS * 2];
+    targets
+        .par_chunks(batch_size)
+        .zip(results.par_chunks_mut(batch_size * ROTATIONS * 2))
+        .for_each(|(target, result)| {
+            let mut i = result.iter_mut();
+            for item in target {
+                for rotation in IrisRotation::all() {
+                    let (a, b) = (
+                        query.code.rotation_aware_trick_dot(&item.code, &rotation),
+                        query.mask.rotation_aware_trick_dot(&item.mask, &rotation),
+                    );
+                    let (code_dist, mask_dist) = (RingElement(a), RingElement(2) * RingElement(b));
+                    *i.next().unwrap() = code_dist;
+                    *i.next().unwrap() = mask_dist;
                 }
             }
-            results
-        })
-        .collect();
+        });
 
     let batch_size = count as f64;
     let duration = start.elapsed().as_secs_f64() / batch_size;
@@ -811,7 +778,7 @@ where
         metric_per_pair_duration.record(duration);
     });
 
-    additive_shares
+    results
 }
 
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by

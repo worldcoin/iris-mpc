@@ -626,7 +626,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
 
     // --- RAM-bound (non-cacheable) version ---
 
-    const NEAREST_NEIGHBORS: usize = 32;
+    const NEAREST_NEIGHBORS: usize = 256;
 
     for batch_size in [1, 8, 32] {
         g.throughput(Throughput::Elements(batch_size));
@@ -665,7 +665,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
                                 let mut b = vec![];
                                 for _ in 0..NEAREST_NEIGHBORS {
                                     let idx = dist.sample(rng);
-                                    b.push(Some(&iris_codes[idx]));
+                                    b.push(&iris_codes[idx]);
                                 }
                                 (&iris_codes[a], b)
                             })
@@ -673,11 +673,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
                     },
                     |input| {
                         input.into_par_iter().for_each(|(l, set)| {
-                            black_box(rotation_aware_pairwise_distance_par(
-                                l,
-                                set.into_iter(),
-                                threads,
-                            ));
+                            black_box(rotation_aware_pairwise_distance_par(l, set, threads));
                         });
                     },
                     BatchSize::SmallInput,
