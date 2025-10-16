@@ -16,7 +16,43 @@ use crate::hnsw::{
 use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
+use tonic::async_trait;
 use tracing::{debug, instrument};
+
+#[allow(async_fn_in_trait)]
+pub trait NeighborhoodV<V: VectorStore>
+where
+    Self: Clone + Deref<Target = [(V::VectorRef, V::DistanceRef)]>,
+{
+    type EdgeIds;
+
+    fn new() -> Self;
+
+    async fn insert(&mut self, store: &mut V, to: V::VectorRef, dist: V::DistanceRef)
+        -> Result<()>;
+
+    async fn insert_batch(
+        &mut self,
+        store: &mut V,
+        vals: &[(V::VectorRef, V::DistanceRef)],
+    ) -> Result<()>;
+
+    fn edge_ids(&self) -> Self::EdgeIds;
+
+    fn vectors_cloned(&self) -> Vec<V::VectorRef>;
+
+    fn distances_cloned(&self) -> Vec<V::DistanceRef>;
+
+    fn get_nearest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
+
+    fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
+
+    fn pop_furthest(&mut self) -> Option<(V::VectorRef, V::DistanceRef)>;
+
+    fn trim_to_k_nearest(&mut self, k: usize);
+
+    async fn match_count(&self, store: &mut V) -> Result<usize>;
+}
 
 /// A sorted list of edge IDs (without distances).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -77,94 +113,12 @@ pub struct SortedNeighborhood<Vector, Distance> {
 }
 
 impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
-    pub fn new() -> Self {
-        Self {
-            edges: Default::default(),
-        }
-    }
-
     pub fn from_ascending_vec(edges: Vec<(Vector, Distance)>) -> Self {
         SortedNeighborhood { edges }
     }
 
-    /// Insert the element `to` with distance `dist` into the list, maintaining
-    /// the ascending order.
-    ///
-    /// Calls the `VectorStore` to find the insertion index.
-    #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
-    {
-        let mut bin_search = BinarySearch {
-            left: 0,
-            right: self.edges.len(),
-        };
-        while let Some(cmp_idx) = bin_search.next() {
-            let res = store.less_than(&dist, &self.edges[cmp_idx].1).await?;
-            bin_search.update(res);
-        }
-        let index_asc = bin_search
-            .result()
-            .ok_or(eyre!("Failed to find insertion index"))?;
-        self.edges.insert(index_asc, (to, dist));
-        Ok(())
-    }
-
-    /// Insert a collection of `(Vector, Distance)` pairs into the list,
-    /// maintaining the ascending order, using an efficient sorting network on
-    /// input values.
-    pub async fn insert_batch<V>(
-        &mut self,
-        store: &mut V,
-        vals: &[(Vector, Distance)],
-    ) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
-    {
-        debug!(batch_size = vals.len(), "Insert batch into neighborhood");
-
-        if vals.is_empty() {
-            return Ok(());
-        }
-
-        // Note that quicksort insert does not suffer from reduced performance
-        // for small batch sizes, as the functionality gracefully degrades to
-        // the default individual binary insertion procedure as batch size
-        // approaches 1.
-        self.quicksort_insert(store, vals).await
-    }
-
-    pub fn edge_ids(&self) -> SortedEdgeIds<Vector> {
-        SortedEdgeIds(self.vectors_cloned())
-    }
-
-    pub fn vectors_cloned(&self) -> Vec<Vector> {
-        self.edges.iter().map(|(v, _)| v.clone()).collect()
-    }
-
-    pub fn distances_cloned(&self) -> Vec<Distance> {
-        self.edges.iter().map(|(_, d)| d.clone()).collect()
-    }
-
-    pub fn get_nearest(&self) -> Option<&(Vector, Distance)> {
-        self.edges.first()
-    }
-
-    pub fn get_furthest(&self) -> Option<&(Vector, Distance)> {
-        self.edges.last()
-    }
-
-    pub fn pop_furthest(&mut self) -> Option<(Vector, Distance)> {
-        self.edges.pop()
-    }
-
     pub fn get_k_nearest(&self, k: usize) -> &[(Vector, Distance)] {
         &self.edges[..k]
-    }
-
-    pub fn trim_to_k_nearest(&mut self, k: usize) {
-        self.edges.truncate(k);
     }
 
     pub fn as_vec_ref(&self) -> &[(Vector, Distance)] {
@@ -205,13 +159,103 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 
         apply_quicksort(store, &mut self.edges, &mut buffer, sorted_prefix_size).await
     }
+}
+
+#[allow(async_fn_in_trait)]
+impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V>
+where
+    V::VectorRef: Clone,
+    V::DistanceRef: Clone,
+{
+    type EdgeIds = SortedEdgeIds<V::VectorRef>;
+    /// Insert the element `to` with distance `dist` into the list, maintaining
+    /// the ascending order.
+    ///
+    /// Calls the `VectorStore` to find the insertion index.
+
+    fn new() -> Self {
+        Self {
+            edges: Default::default(),
+        }
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    async fn insert(
+        &mut self,
+        store: &mut V,
+        to: V::VectorRef,
+        dist: V::DistanceRef,
+    ) -> Result<()> {
+        {
+            let mut bin_search = BinarySearch {
+                left: 0,
+                right: self.edges.len(),
+            };
+            while let Some(cmp_idx) = bin_search.next() {
+                let res = store.less_than(&dist, &self.edges[cmp_idx].1).await?;
+                bin_search.update(res);
+            }
+            let index_asc = bin_search
+                .result()
+                .ok_or(eyre!("Failed to find insertion index"))?;
+            self.edges.insert(index_asc, (to, dist));
+            Ok(())
+        }
+    }
+
+    /// Insert a collection of `(Vector, Distance)` pairs into the list,
+    /// maintaining the ascending order, using an efficient sorting network on
+    /// input values.
+    async fn insert_batch(
+        &mut self,
+        store: &mut V,
+        vals: &[(V::VectorRef, V::DistanceRef)],
+    ) -> Result<()>
+where {
+        debug!(batch_size = vals.len(), "Insert batch into neighborhood");
+
+        if vals.is_empty() {
+            return Ok(());
+        }
+
+        // Note that quicksort insert does not suffer from reduced performance
+        // for small batch sizes, as the functionality gracefully degrades to
+        // the default individual binary insertion procedure as batch size
+        // approaches 1.
+        self.quicksort_insert(store, vals).await
+    }
+
+    fn edge_ids(&self) -> SortedEdgeIds<V::VectorRef> {
+        SortedEdgeIds(self.edges.iter().map(|(v, _)| v.clone()).collect())
+    }
+
+    fn vectors_cloned(&self) -> Vec<V::VectorRef> {
+        self.edges.iter().map(|(v, _)| v.clone()).collect()
+    }
+
+    fn distances_cloned(&self) -> Vec<V::DistanceRef> {
+        self.edges.iter().map(|(_, d)| d.clone()).collect()
+    }
+
+    fn get_nearest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
+        self.edges.first()
+    }
+
+    fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
+        self.edges.last()
+    }
+
+    fn pop_furthest(&mut self) -> Option<(V::VectorRef, V::DistanceRef)> {
+        self.edges.pop()
+    }
+
+    fn trim_to_k_nearest(&mut self, k: usize) {
+        self.edges.truncate(k);
+    }
 
     /// Count the neighbors that match according to `store.is_match`.
     /// The nearest `count` elements are matches and the rest are non-matches.
-    pub async fn match_count<V>(&self, store: &mut V) -> Result<usize>
-    where
-        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
-    {
+    async fn match_count(&self, store: &mut V) -> Result<usize> {
         let mut left = 0;
         let mut right = self.edges.len();
 
@@ -352,17 +396,8 @@ impl<Vector: Clone, Distance: Clone> UnsortedNeighborhood<Vector, Distance> {
         self.edges.pop()
     }
 
-    // TODO: wrong after inserts
-    pub fn get_k_nearest(&self, k: usize) -> &[(Vector, Distance)] {
-        &self.edges[..k]
-    }
-
     pub fn trim_to_k_nearest(&mut self, k: usize) {
         self.edges.truncate(k);
-    }
-
-    pub fn as_vec_ref(&self) -> &[(Vector, Distance)] {
-        &self.edges
     }
 
     /// Insert the given unsorted list `vals` of new weighted edges into this
@@ -396,33 +431,24 @@ impl<Vector: Clone, Distance: Clone> UnsortedNeighborhood<Vector, Distance> {
     }
 }
 
-impl<V, D> UnsortedNeighborhood<V, D> {
-    pub async fn compactify<S>(&mut self, store: &mut S, k: usize) -> Result<()>
-    where
-        S: VectorStore<VectorRef = V, DistanceRef = D>,
-    {
-        self.edges = run_quickselect_on_vectors(store, &self.edges, k).await?;
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use super::*;
     use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::vector_store::VectorStoreMut};
-    use iris_mpc_common::iris_db::iris::IrisCode;
+    use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 
     #[tokio::test]
     async fn test_neighborhood() -> Result<()> {
         let mut store = PlaintextStore::new();
         let query = Arc::new(IrisCode::default());
-        let vector = store.insert(&query).await;
+        let vector: IrisVectorId = store.insert(&query).await;
         let distance = store.eval_distance(&query, &vector).await?;
 
         // Example usage for SortedNeighborhood
-        let mut nbhd = SortedNeighborhood::new();
+        let mut nbhd =
+            <SortedNeighborhoodV<PlaintextStore> as NeighborhoodV<PlaintextStore>>::new();
         nbhd.insert(&mut store, vector, distance).await?;
         println!("{:?}", nbhd.get_furthest());
         println!("{:?}", nbhd.get_k_nearest(1));
