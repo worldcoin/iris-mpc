@@ -626,46 +626,20 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
 
     // --- RAM-bound (non-cacheable) version ---
 
-    const NEAREST_NEIGHBORS: usize = 256;
+    for nearest_neighbors in [256, 1024, 4096, 16384] {
+        for batch_size in [32] {
+            g.throughput(Throughput::Elements(batch_size * nearest_neighbors as u64));
 
-    for batch_size in [1, 8, 32] {
-        g.throughput(Throughput::Elements(batch_size * NEAREST_NEIGHBORS as u64));
-
-        g.bench_function(format!("regular_{batch_size}"), |b| {
-            b.iter_batched(
-                || {
-                    (0..batch_size)
-                        .map(|_| {
-                            let a = dist.sample(rng);
-                            let mut b = vec![];
-                            for _ in 0..NEAREST_NEIGHBORS {
-                                let idx = dist.sample(rng);
-                                b.push(Some(&iris_codes[idx]));
-                            }
-                            (&iris_codes[a], b)
-                        })
-                        .collect::<Vec<_>>()
-                },
-                |input| {
-                    input.into_par_iter().for_each(|(l, set)| {
-                        black_box(rotation_aware_pairwise_distance(l, set.into_iter()));
-                    });
-                },
-                BatchSize::SmallInput,
-            )
-        });
-
-        for threads in [2, 4, 8, 16, 32] {
-            g.bench_function(format!("par_{batch_size}_{threads}"), |b| {
+            g.bench_function(format!("regular_{batch_size}_{nearest_neighbors}"), |b| {
                 b.iter_batched(
                     || {
                         (0..batch_size)
                             .map(|_| {
                                 let a = dist.sample(rng);
                                 let mut b = vec![];
-                                for _ in 0..NEAREST_NEIGHBORS {
+                                for _ in 0..nearest_neighbors {
                                     let idx = dist.sample(rng);
-                                    b.push(&iris_codes[idx]);
+                                    b.push(Some(&iris_codes[idx]));
                                 }
                                 (&iris_codes[a], b)
                             })
@@ -673,12 +647,43 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
                     },
                     |input| {
                         input.into_par_iter().for_each(|(l, set)| {
-                            black_box(rotation_aware_pairwise_distance_par(l, set, threads));
+                            black_box(rotation_aware_pairwise_distance(l, set.into_iter()));
                         });
                     },
                     BatchSize::SmallInput,
                 )
             });
+
+            for threads in [2, 4, 8, 16, 32] {
+                g.bench_function(
+                    format!("par_{batch_size}_{nearest_neighbors}_{threads}"),
+                    |b| {
+                        b.iter_batched(
+                            || {
+                                (0..batch_size)
+                                    .map(|_| {
+                                        let a = dist.sample(rng);
+                                        let mut b = vec![];
+                                        for _ in 0..nearest_neighbors {
+                                            let idx = dist.sample(rng);
+                                            b.push(&iris_codes[idx]);
+                                        }
+                                        (&iris_codes[a], b)
+                                    })
+                                    .collect::<Vec<_>>()
+                            },
+                            |input| {
+                                input.into_par_iter().for_each(|(l, set)| {
+                                    black_box(rotation_aware_pairwise_distance_par(
+                                        l, set, threads,
+                                    ));
+                                });
+                            },
+                            BatchSize::SmallInput,
+                        )
+                    },
+                );
+            }
         }
     }
 
