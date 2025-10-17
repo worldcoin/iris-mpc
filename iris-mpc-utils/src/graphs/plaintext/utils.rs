@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
-        graph::{graph_store::GraphPg, layered_graph::EntryPoint},
+        graph::{graph_store::GraphPg, layered_graph::EntryPoint, neighborhood::Neighborhood},
         vector_store::{VectorStore, VectorStoreMut},
         GraphMem, SortedNeighborhood,
     },

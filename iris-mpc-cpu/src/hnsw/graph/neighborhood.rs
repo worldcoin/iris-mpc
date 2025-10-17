@@ -5,10 +5,8 @@
 
 use crate::hnsw::{
     sorting::{
-        batcher::partial_batcher_network,
-        binary_search::BinarySearch,
-        quickselect::{run_quickselect_on_data, run_quickselect_on_vectors},
-        quicksort::apply_quicksort,
+        batcher::partial_batcher_network, binary_search::BinarySearch,
+        quickselect::run_quickselect_on_vectors, quicksort::apply_quicksort,
         swap_network::apply_swap_network,
     },
     VectorStore,
@@ -16,42 +14,60 @@ use crate::hnsw::{
 use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
-use tonic::async_trait;
 use tracing::{debug, instrument};
 
-#[allow(async_fn_in_trait)]
-pub trait NeighborhoodV<V: VectorStore>
-where
-    Self: Clone + Deref<Target = [(V::VectorRef, V::DistanceRef)]>,
+pub trait NeighborhoodV<V: VectorStore>:
+    Neighborhood<Vector = V::VectorRef, Distance = V::DistanceRef>
 {
+}
+
+impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V> {}
+
+#[allow(async_fn_in_trait)]
+pub trait Neighborhood
+where
+    Self: Clone,
+{
+    type Vector: Clone;
+    type Distance: Clone;
     type EdgeIds;
 
     fn new() -> Self;
 
-    async fn insert(&mut self, store: &mut V, to: V::VectorRef, dist: V::DistanceRef)
-        -> Result<()>;
+    fn len(&self) -> usize;
 
-    async fn insert_batch(
+    fn iter(&self) -> impl Iterator<Item = &(Self::Vector, Self::Distance)>;
+
+    async fn insert<V>(
         &mut self,
         store: &mut V,
-        vals: &[(V::VectorRef, V::DistanceRef)],
-    ) -> Result<()>;
+        to: Self::Vector,
+        dist: Self::Distance,
+    ) -> Result<()>
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
+
+    async fn insert_batch<V>(
+        &mut self,
+        store: &mut V,
+        vals: &[(Self::Vector, Self::Distance)],
+    ) -> Result<()>
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
+
+    async fn matches<V>(&self, store: &mut V) -> Result<Vec<(Self::Vector, Self::Distance)>>
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
 
     fn edge_ids(&self) -> Self::EdgeIds;
 
-    fn vectors_cloned(&self) -> Vec<V::VectorRef>;
+    fn get_nearest(&self) -> Option<&(Self::Vector, Self::Distance)>;
 
-    fn distances_cloned(&self) -> Vec<V::DistanceRef>;
+    fn get_furthest(&self) -> Option<&(Self::Vector, Self::Distance)>;
 
-    fn get_nearest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
+    fn pop_furthest(&mut self) -> Option<(Self::Vector, Self::Distance)>;
 
-    fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
-
-    fn pop_furthest(&mut self) -> Option<(V::VectorRef, V::DistanceRef)>;
-
-    fn trim_to_k_nearest(&mut self, k: usize);
-
-    async fn match_count(&self, store: &mut V) -> Result<usize>;
+    fn retain_k_nearest(&mut self, k: usize);
 }
 
 /// A sorted list of edge IDs (without distances).
@@ -162,12 +178,14 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 }
 
 #[allow(async_fn_in_trait)]
-impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V>
+impl<Vector, Distance> Neighborhood for SortedNeighborhood<Vector, Distance>
 where
-    V::VectorRef: Clone,
-    V::DistanceRef: Clone,
+    Vector: Clone,
+    Distance: Clone,
 {
-    type EdgeIds = SortedEdgeIds<V::VectorRef>;
+    type Vector = Vector;
+    type Distance = Distance;
+    type EdgeIds = SortedEdgeIds<Vector>;
     /// Insert the element `to` with distance `dist` into the list, maintaining
     /// the ascending order.
     ///
@@ -179,13 +197,24 @@ where
         }
     }
 
+    fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &(Vector, Distance)> {
+        self.edges.iter()
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn insert(
+    async fn insert<V>(
         &mut self,
         store: &mut V,
-        to: V::VectorRef,
-        dist: V::DistanceRef,
-    ) -> Result<()> {
+        to: Self::Vector,
+        dist: Self::Distance,
+    ) -> Result<()>
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
+    {
         {
             let mut bin_search = BinarySearch {
                 left: 0,
@@ -206,12 +235,14 @@ where
     /// Insert a collection of `(Vector, Distance)` pairs into the list,
     /// maintaining the ascending order, using an efficient sorting network on
     /// input values.
-    async fn insert_batch(
+    async fn insert_batch<V>(
         &mut self,
         store: &mut V,
-        vals: &[(V::VectorRef, V::DistanceRef)],
+        vals: &[(Self::Vector, Self::Distance)],
     ) -> Result<()>
-where {
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
+    {
         debug!(batch_size = vals.len(), "Insert batch into neighborhood");
 
         if vals.is_empty() {
@@ -225,37 +256,32 @@ where {
         self.quicksort_insert(store, vals).await
     }
 
-    fn edge_ids(&self) -> SortedEdgeIds<V::VectorRef> {
+    fn edge_ids(&self) -> SortedEdgeIds<Self::Vector> {
         SortedEdgeIds(self.edges.iter().map(|(v, _)| v.clone()).collect())
     }
 
-    fn vectors_cloned(&self) -> Vec<V::VectorRef> {
-        self.edges.iter().map(|(v, _)| v.clone()).collect()
-    }
-
-    fn distances_cloned(&self) -> Vec<V::DistanceRef> {
-        self.edges.iter().map(|(_, d)| d.clone()).collect()
-    }
-
-    fn get_nearest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
+    fn get_nearest(&self) -> Option<&(Self::Vector, Self::Distance)> {
         self.edges.first()
     }
 
-    fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
+    fn get_furthest(&self) -> Option<&(Self::Vector, Self::Distance)> {
         self.edges.last()
     }
 
-    fn pop_furthest(&mut self) -> Option<(V::VectorRef, V::DistanceRef)> {
+    fn pop_furthest(&mut self) -> Option<(Self::Vector, Self::Distance)> {
         self.edges.pop()
     }
 
-    fn trim_to_k_nearest(&mut self, k: usize) {
+    fn retain_k_nearest(&mut self, k: usize) {
         self.edges.truncate(k);
     }
 
     /// Count the neighbors that match according to `store.is_match`.
     /// The nearest `count` elements are matches and the rest are non-matches.
-    async fn match_count(&self, store: &mut V) -> Result<usize> {
+    async fn matches<V>(&self, store: &mut V) -> Result<Vec<(Vector, Distance)>>
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
+    {
         let mut left = 0;
         let mut right = self.edges.len();
 
@@ -268,8 +294,8 @@ where {
                 false => right = mid,
             }
         }
-
-        Ok(left)
+        let matches = self.edges.iter().take(left).cloned().collect::<Vec<_>>();
+        Ok(matches)
     }
 }
 
@@ -447,8 +473,7 @@ mod tests {
         let distance = store.eval_distance(&query, &vector).await?;
 
         // Example usage for SortedNeighborhood
-        let mut nbhd =
-            <SortedNeighborhoodV<PlaintextStore> as NeighborhoodV<PlaintextStore>>::new();
+        let mut nbhd = SortedNeighborhood::new();
         nbhd.insert(&mut store, vector, distance).await?;
         println!("{:?}", nbhd.get_furthest());
         println!("{:?}", nbhd.get_k_nearest(1));

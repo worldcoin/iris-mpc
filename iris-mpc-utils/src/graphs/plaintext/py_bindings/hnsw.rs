@@ -2,7 +2,10 @@ use crate::{misc::limited_iterator, types::IrisCodeBase64};
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use iris_mpc_cpu::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
-    hnsw::{GraphMem, HnswSearcher},
+    hnsw::{
+        graph::neighborhood::{Neighborhood, SortedNeighborhoodV},
+        GraphMem, HnswSearcher,
+    },
 };
 use rand::rngs::ThreadRng;
 use serde_json::{self, Deserializer};
@@ -21,7 +24,10 @@ pub fn search(
 
     rt.block_on(async move {
         let query = Arc::new(query);
-        let neighbors = searcher.search(vector, graph, &query, 1).await.unwrap();
+        let neighbors = searcher
+            .search::<_, SortedNeighborhoodV<PlaintextStore>>(vector, graph, &query, 1)
+            .await
+            .unwrap();
         let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
     })

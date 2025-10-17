@@ -87,8 +87,8 @@ impl Step1 {
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
-                for vector_id in rotation.match_ids() {
-                    full_join.entry(vector_id).or_default()[side] = true;
+                for (vector_id, _) in &rotation.matches {
+                    full_join.entry(vector_id.clone()).or_default()[side] = true;
                 }
             }
         }
@@ -467,6 +467,7 @@ mod tests {
     use super::VectorId;
     use super::*;
     use std::collections::HashMap;
+    use std::iter::repeat;
 
     const FILTER_BOTH: Filter = Filter {
         eyes: Both,
@@ -700,7 +701,7 @@ mod tests {
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
             let insert_plan = HawkInsertPlan {
-                match_count: match_ids.len(),
+                matches: izip!(match_ids.clone(), repeat(distance())).collect::<Vec<_>>(),
                 plan: InsertPlanV {
                     query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
                     links: vec![SortedNeighborhood::from_ascending_vec(
