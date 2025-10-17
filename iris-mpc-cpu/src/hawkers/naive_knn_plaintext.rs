@@ -126,8 +126,7 @@ impl KNNEngine for NaiveNormalDistKNN {
 }
 
 pub struct NaiveMinFHDKNN {
-    irises_with_rotations: Vec<[IrisCode; 31]>,
-    centers: Vec<IrisCode>, // Store centers separately to access them contiguously
+    irises: Vec<IrisCode>,
     k: usize,
     next_id: usize,
     pool: ThreadPool,
@@ -139,15 +138,8 @@ impl KNNEngine for NaiveMinFHDKNN {
             .num_threads(num_threads)
             .build()
             .unwrap();
-        let irises_with_rotations = pool.install(|| {
-            irises
-                .par_iter()
-                .map(|iris| iris.all_rotations().try_into().unwrap())
-                .collect::<Vec<_>>()
-        });
         NaiveMinFHDKNN {
-            irises_with_rotations,
-            centers: irises,
+            irises,
             k,
             next_id,
             pool,
@@ -156,17 +148,24 @@ impl KNNEngine for NaiveMinFHDKNN {
 
     fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
         let start = self.next_id;
-        let end = (start + chunk_size).min(self.centers.len() + 1);
+        let end = (start + chunk_size).min(self.irises.len() + 1);
         self.next_id = end;
+
+        let irises_with_rotations: Vec<[IrisCode; 31]> = self.pool.install(|| {
+            self.irises[(start-1)..(end-1)]
+                .par_iter()
+                .map(|iris| iris.all_rotations().try_into().unwrap())
+                .collect()
+        });
 
         self.pool.install(|| {
             (start..end)
                 .collect::<Vec<_>>()
                 .into_par_iter()
                 .map(|i| {
-                    let current_iris = &self.irises_with_rotations[i - 1];
+                    let current_iris = &irises_with_rotations[i - start];
                     let mut neighbors = self
-                        .centers
+                        .irises
                         .iter()
                         .enumerate()
                         .flat_map(|(j, other_iris)| {
