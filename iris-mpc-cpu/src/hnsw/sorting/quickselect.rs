@@ -54,7 +54,7 @@ impl Quickselect {
     }
 
     /// Processes the results of the comparisons and narrows the search space.
-    pub fn accept_results(&mut self, results: Vec<bool>) {
+    pub fn step(&mut self, results: Vec<bool>) {
         if self.is_done() {
             return;
         }
@@ -89,12 +89,16 @@ impl Quickselect {
         let pivot_new_idx = store_idx;
 
         // --- Update State for Next Iteration ---
-        if self.kth_index == pivot_new_idx {
-            self.result = Some(pivot_val);
-        } else if self.kth_index < pivot_new_idx {
-            self.right = pivot_new_idx;
-        } else {
-            self.left = pivot_new_idx + 1;
+        match self.kth_index.cmp(&pivot_new_idx) {
+            std::cmp::Ordering::Equal => {
+                self.result = Some(pivot_val);
+            }
+            std::cmp::Ordering::Less => {
+                self.right = pivot_new_idx;
+            }
+            std::cmp::Ordering::Greater => {
+                self.left = pivot_new_idx + 1;
+            }
         }
 
         if !self.is_done() && self.right > self.left && self.right - self.left <= 1 {
@@ -102,7 +106,7 @@ impl Quickselect {
         }
     }
 
-    /// Calculates the pivot index without risking integer overflow.
+    /// Calculates the pivot index as the middle of the current interval
     fn get_pivot_index(&self) -> usize {
         self.left + (self.right - self.left) / 2
     }
@@ -115,7 +119,7 @@ impl Quickselect {
 /// 1. A reference to the found k-th element.
 /// 2. The final state of the permutation vector.
 /// 3. The final index of the k-th element within the permutation.
-pub fn run_quickselect_on_data<T: Ord>(data: &[T], k: usize) -> (&T, Vec<usize>, usize) {
+pub fn run_quickselect_on_data<T: Ord>(data: &[T], k: usize) -> (&T, Vec<usize>) {
     let n = data.len();
     let mut qs = Quickselect::new(n, k);
 
@@ -137,21 +141,14 @@ pub fn run_quickselect_on_data<T: Ord>(data: &[T], k: usize) -> (&T, Vec<usize>,
             .collect();
 
         // Feed the results back to the algorithm
-        qs.accept_results(results);
+        qs.step(results);
     }
 
-    // Get the final index and return the corresponding value and state
     let result_index = qs
         .get_result()
         .expect("Algorithm finished but no result was found");
 
-    let final_k_idx = qs
-        .perm
-        .iter()
-        .position(|&p| p == result_index)
-        .expect("Result index not found in final permutation");
-
-    (&data[result_index], qs.perm, final_k_idx)
+    (&data[result_index], qs.perm)
 }
 
 pub async fn run_quickselect_on_vectors<S: VectorStore>(
@@ -181,7 +178,7 @@ pub async fn run_quickselect_on_vectors<S: VectorStore>(
         let results = store.less_than_batch(&distances).await?;
 
         // Feed the results back to the algorithm
-        qs.accept_results(results);
+        qs.step(results);
     }
 
     let mut new_neighborhood = qs.perm.iter().map(|i| data[*i].clone()).collect::<Vec<_>>();
@@ -198,7 +195,6 @@ pub async fn run_quickselect_on_vectors<S: VectorStore>(
 mod tests {
     use super::*;
 
-    /// Helper function to get the expected answer by sorting.
     fn get_expected<T: Ord + Clone>(data: &[T], k: usize) -> T {
         let mut sorted_data = data.to_vec();
         sorted_data.sort();
@@ -208,14 +204,14 @@ mod tests {
     /// A helper to run the tests and perform all checks.
     fn run_and_verify<T: Ord + Clone + std::fmt::Debug>(data: &[T], k: usize) {
         let expected = get_expected(data, k);
-        let (result_val, final_perm, final_k_idx) = run_quickselect_on_data(data, k);
+        let (result_val, final_perm) = run_quickselect_on_data(data, k);
 
         // 1. Check if the k-th value is correct.
         assert_eq!(*result_val, expected);
 
         // 2. Check the partitioning property:
         // All elements before the k-th element in the final permutation must be less than or equal to it.
-        for i in 0..final_k_idx {
+        for i in 0..k {
             let current_val = &data[final_perm[i]];
             assert!(
                 current_val <= result_val,
@@ -227,7 +223,7 @@ mod tests {
         }
 
         // All elements after the k-th element must be greater than or equal to it.
-        for i in (final_k_idx + 1)..final_perm.len() {
+        for i in (k + 1)..final_perm.len() {
             let current_val = &data[final_perm[i]];
             assert!(
                 current_val >= result_val,
@@ -253,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_find_median() {
-        let data = vec![3, 7, 8, 5, 2, 1, 9, 6, 4]; // 9 elements
+        let data = vec![3, 7, 8, 5, 2, 1, 9, 6, 4];
         run_and_verify(&data, 5);
     }
 

@@ -88,7 +88,7 @@ impl Step1 {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
                 for (vector_id, _) in &rotation.matches {
-                    full_join.entry(vector_id.clone()).or_default()[side] = true;
+                    full_join.entry(*vector_id).or_default()[side] = true;
                 }
             }
         }

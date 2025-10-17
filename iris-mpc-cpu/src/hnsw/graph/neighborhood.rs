@@ -36,6 +36,10 @@ where
 
     fn len(&self) -> usize;
 
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn iter(&self) -> impl Iterator<Item = &(Self::Vector, Self::Distance)>;
 
     async fn insert<V>(
@@ -190,7 +194,6 @@ where
     /// the ascending order.
     ///
     /// Calls the `VectorStore` to find the insertion index.
-
     fn new() -> Self {
         Self {
             edges: Default::default(),
@@ -369,7 +372,7 @@ impl<Vector: Clone, Distance: Clone> UnsortedNeighborhood<Vector, Distance> {
     ///
     /// Calls the `VectorStore` to find the insertion index.
     // #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance) -> Result<()>
+    pub async fn insert<V>(&mut self, _store: &mut V, to: Vector, dist: Distance) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
