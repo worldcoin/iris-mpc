@@ -5,13 +5,13 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::naive_knn_plaintext::{naive_knn, KNNResult},
+    hawkers::naive_knn_plaintext::{Engine, EngineChoice, KNNResult},
     py_bindings::plaintext_store::Base64IrisCode,
 };
 use metrics::IntoF64;
-use rayon::ThreadPoolBuilder;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use std::time::Instant;
@@ -57,6 +57,10 @@ struct Args {
     /// Selection of irises to process
     #[arg(long, value_enum, default_value_t = IrisSelection::All)]
     irises_selection: IrisSelection,
+
+    /// Selection of irises to process
+    #[arg(long, value_enum, default_value_t = EngineChoice::NaiveFHD)]
+    engine_choice: EngineChoice,
 }
 #[tokio::main]
 async fn main() {
@@ -132,9 +136,9 @@ async fn main() {
                 }
             };
 
-            let nodes: Vec<IrisSerialId> = deserialized_results
+            let nodes: Vec<usize> = deserialized_results
                 .into_iter()
-                .map(|result| result.node)
+                .map(|result| result.node as usize)
                 .collect();
             (nodes.len(), nodes)
         }
@@ -154,7 +158,7 @@ async fn main() {
     };
 
     if num_already_processed > 0 {
-        let expected_nodes: Vec<IrisSerialId> = (1..(num_already_processed + 1) as u32).collect();
+        let expected_nodes: Vec<usize> = (1..num_already_processed + 1).collect();
         if nodes != expected_nodes {
             eprintln!(
                 "Error: The result nodes in the file are not a contiguous sequence from 1 to N."
@@ -167,21 +171,19 @@ async fn main() {
         }
     }
 
-    let num_irises = args.num_irises;
     let path_to_iris_codes = args.path_to_iris_codes;
-
-    assert!(num_irises > args.k);
+    assert!(args.num_irises > args.k);
 
     let file = File::open(path_to_iris_codes.as_path()).unwrap();
     let reader = BufReader::new(file);
 
     let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-    let mut irises: Vec<IrisCode> = Vec::with_capacity(num_irises);
+    let mut irises: Vec<IrisCode> = Vec::with_capacity(args.num_irises);
 
     let (limit, skip, step) = match args.irises_selection {
-        IrisSelection::All => (num_irises, 0, 1),
-        IrisSelection::Even => (num_irises * 2, 0, 2),
-        IrisSelection::Odd => (num_irises * 2, 1, 2),
+        IrisSelection::All => (args.num_irises, 0, 1),
+        IrisSelection::Even => (args.num_irises * 2, 0, 2),
+        IrisSelection::Odd => (args.num_irises * 2, 1, 2),
     };
 
     let stream_iterator = stream
@@ -189,23 +191,29 @@ async fn main() {
         .skip(skip)
         .step_by(step)
         .map(|json_pt| (&json_pt.unwrap()).into());
+
     irises.extend(stream_iterator);
-    assert!(irises.len() == num_irises);
+    assert!(irises.len() == args.num_irises);
+
+    let num_irises = irises.len();
+    let mut engine = Engine::init(
+        args.engine_choice,
+        irises,
+        args.k,
+        num_already_processed + 1,
+        args.num_threads,
+    );
+
+    let chunk_size = 2000;
+    let mut evaluated_pairs = 0usize;
+    println!("Starting work at serial id: {}", engine.next_id());
 
     let start_t = Instant::now();
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(args.num_threads)
-        .build()
-        .unwrap();
+    while engine.next_id() <= num_irises {
+        let start = engine.next_id();
+        let results = engine.compute_chunk(chunk_size);
+        let end = engine.next_id();
 
-    let mut start = num_already_processed + 1;
-    let chunk_size = 1000;
-    println!("Starting work at serial id: {}", start);
-    let mut evaluated_pairs = 0usize;
-
-    while start < num_irises {
-        let end = (start + chunk_size).min(num_irises);
-        let results = naive_knn(&irises, args.k, start, end, &pool);
         evaluated_pairs += (end - start) * num_irises;
 
         let mut file = OpenOptions::new()
@@ -213,13 +221,11 @@ async fn main() {
             .open(&args.results_file)
             .expect("Unable to open results file for appending");
 
-        println!("Appending iris results from {} to {}", start, end);
+        println!("Appending iris results from {} to {}", start, end - 1);
         for result in &results {
             let json_line = serde_json::to_string(result).expect("Failed to serialize KNNResult");
             writeln!(file, "{}", json_line).expect("Failed to write to results file");
         }
-
-        start = end;
     }
     let duration = start_t.elapsed();
     println!(
