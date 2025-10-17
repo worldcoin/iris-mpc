@@ -22,7 +22,7 @@ use iris_mpc_cpu::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamCounterRef, ParamVertexOpeningsCounter, StaticCounter,
         },
-        GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
+        GraphMem, HnswParams, HnswSearcher,
     },
 };
 use rand::SeedableRng;

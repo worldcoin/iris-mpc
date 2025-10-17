@@ -645,8 +645,9 @@ mod tests {
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
         hnsw::{
-            graph::layered_graph::EntryPoint, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-            SortedNeighborhood,
+            graph::{layered_graph::EntryPoint, neighborhood::Neighborhood},
+            vector_store::VectorStoreMut,
+            GraphMem, HnswSearcher, SortedNeighborhood,
         },
     };
     use aes_prng::AesRng;

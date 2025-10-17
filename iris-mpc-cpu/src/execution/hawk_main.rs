@@ -14,9 +14,7 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::{graph_store, neighborhood::Neighborhood},
-        searcher::ConnectPlanV,
-        GraphMem, HnswParams, HnswSearcher, VectorStore,
+        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
     network::tcp::{build_network_handle, NetworkHandle},
     protocol::{

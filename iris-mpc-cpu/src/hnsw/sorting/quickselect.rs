@@ -89,12 +89,16 @@ impl Quickselect {
         let pivot_new_idx = store_idx;
 
         // --- Update State for Next Iteration ---
-        if self.kth_index == pivot_new_idx {
-            self.result = Some(pivot_val);
-        } else if self.kth_index < pivot_new_idx {
-            self.right = pivot_new_idx;
-        } else {
-            self.left = pivot_new_idx + 1;
+        match self.kth_index.cmp(&pivot_new_idx) {
+            std::cmp::Ordering::Equal => {
+                self.result = Some(pivot_val);
+            }
+            std::cmp::Ordering::Less => {
+                self.right = pivot_new_idx;
+            }
+            std::cmp::Ordering::Greater => {
+                self.left = pivot_new_idx + 1;
+            }
         }
 
         if !self.is_done() && self.right > self.left && self.right - self.left <= 1 {
