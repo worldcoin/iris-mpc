@@ -695,7 +695,7 @@ where
     additive_shares
 }
 
-pub fn rotation_aware_pairwise_distance2<'a>(
+pub fn rotation_aware_pairwise_distance2<'a, I>(
     query: &'a ArcIris,
     targets: I,
     result: &mut [RingElement<u16>],
