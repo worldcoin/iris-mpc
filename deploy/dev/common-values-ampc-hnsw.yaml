@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:69859319e0eeedecbd92b0a66dab513d601d6404"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:f669851f258e7a9e56df8c4e2a37776975cbe4ea-arm64"
 
 environment: dev
 replicaCount: 1
@@ -55,11 +55,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: "3.5"
-    memory: 110Gi
+    cpu: "3"
+    memory: 60Gi
   requests:
-    cpu: "3.5"
-    memory: 110Gi
+    cpu: "3"
+    memory: 60Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -68,9 +68,9 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
-  kubernetes.io/arch: amd64
+  kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "x2iedn.xlarge"
+  node.kubernetes.io/instance-type: "x8g.xlarge"
 
 podSecurityContext:
   runAsUser: 65534
