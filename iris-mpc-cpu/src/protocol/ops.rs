@@ -695,6 +695,45 @@ where
     additive_shares
 }
 
+pub fn rotation_aware_pairwise_distance2<'a>(
+    query: &'a ArcIris,
+    targets: I,
+    result: &mut [RingElement<u16>],
+) where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    let start = Instant::now();
+    let mut count = 0;
+
+    for (target, result) in izip!(targets, result.chunks_exact_mut(ROTATIONS * 2)) {
+        let mut it = result.iter_mut();
+        for rotation in IrisRotation::all() {
+            count += 1;
+            let (code_dist, mask_dist) = if let Some(y) = target {
+                count += 1;
+                let (a, b) = (
+                    query.code.rotation_aware_trick_dot(&y.code, &rotation),
+                    query.mask.rotation_aware_trick_dot(&y.mask, &rotation),
+                );
+                (RingElement(a), RingElement(2) * RingElement(b))
+            } else {
+                // Non-existent vectors get the largest relative distance of 100%.
+                let (a, b) = SHARE_OF_MAX_DISTANCE;
+                (RingElement(a), RingElement(b))
+            };
+            *it.next().unwrap() = code_dist;
+            *it.next().unwrap() = mask_dist;
+        }
+    }
+
+    let batch_size = count as f64;
+    let duration = start.elapsed().as_secs_f64() / batch_size;
+    PAIRWISE_DISTANCE_METRICS.with_borrow_mut(|[metric_batch_size, metric_per_pair_duration]| {
+        metric_batch_size.record(batch_size);
+        metric_per_pair_duration.record(duration);
+    });
+}
+
 /// Computes the dot products between a query iris and a batch of iris vectors.
 /// Returns a Vec of RingElement<u16> containing code and mask dot products for each pair.
 /// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.

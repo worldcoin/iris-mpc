@@ -1,7 +1,7 @@
 use crate::{
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
-        ops::{galois_ring_pairwise_distance, pairwise_distance, rotation_aware_pairwise_distance},
+        ops::{galois_ring_pairwise_distance, pairwise_distance, rotation_aware_pairwise_distance, rotation_aware_pairwise_distance2},
         shared_iris::ArcIris,
     },
     shares::RingElement,
@@ -10,7 +10,7 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId};
+use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId, ROTATIONS};
 use std::{
     cmp,
     sync::{
@@ -50,8 +50,11 @@ enum IrisTask {
     },
     RotationAwareDotProductBatch {
         query: ArcIris,
-        vector_ids: Vec<VectorId>,
-        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+        // the worker task is responsible for forgetting this boxed slice
+        vector_ids: Box<[VectorId]>,
+        // the worker task is responsible for forgetting this boxed slice
+        result: Box<[RingElement<u16>]>,
+        rsp: oneshot::Sender<()>,
     },
     RingPairwiseDistance {
         input: Vec<Option<(ArcIris, ArcIris)>>,
@@ -122,15 +125,57 @@ impl IrisPoolHandle {
     pub async fn rotation_aware_dot_product_batch(
         &mut self,
         query: ArcIris,
-        vector_ids: Vec<VectorId>,
+        mut vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let (tx, rx) = oneshot::channel();
-        let task = IrisTask::RotationAwareDotProductBatch {
-            query,
-            vector_ids,
-            rsp: tx,
-        };
-        self.submit(task, rx).await
+        let start = Instant::now();
+
+        let mut result = Vec::with_capacity(vector_ids.len() * ROTATIONS * 2);
+        unsafe { result.set_len(result.capacity()) };
+
+        let input_len = vector_ids.len();
+        let min_size = 256;
+        let mut num_slices = (input_len + min_size - 1) / min_size;
+
+        // Compute base size and remainder
+        let base_size = input_len / num_slices;
+        let remainder = input_len % num_slices;
+
+        // unsafely divide result and input into boxed slices, which the worker thread calls mem::forget() on.
+        // eliminates the need to allocate and copy the results. benchmarks showed significant speedup from 
+        // structuring rayon code to avoid such allocations. the same applies to the worker pool.
+        let mut result_ptr = result.as_mut();
+        let mut input_ptr = vector_ids.as_mut();
+
+        let mut responses = Vec::with_capacity(num_slices);
+        for i in 0..num_slices {
+            let (tx, rx) = oneshot::channel();
+
+            // Distribute the remainder to the first slices
+            let elements_to_process = base_size + if i < remainder { 1 } else { 0 };
+
+            let input_slice = unsafe { slice::from_raw_parts_mut(input_ptr, elements_to_process) };
+            input_ptr.add(elements_to_process);
+            let input_slice = Box::from_raw(input_slice);
+
+            let result_len = elements_to_process * ROTATIONS * 2;
+            let result_slice = unsafe { slice::from_raw_parts_mut(result_ptr, result_len) };
+            result_ptr.add(result_len);
+            let result_slice = Box::from_raw(result_slice);
+
+            let task = IrisTask::RotationAwareDotProductBatch {
+                query,
+                vector_ids: input_slice,
+                result: result_slice,
+                rsp: tx,
+            };
+            self.get_next_worker().send(task)?;
+            responses.push(rx);
+        }
+
+        let _results = futures::future::join_all(responses).await.into_iter().collect::<Result<Vec<()>, _>>?;
+
+        self.metric_latency.record(start.elapsed().as_secs_f64());
+        Ok(result)
     }
 
     pub async fn galois_ring_pairwise_distances(
@@ -263,12 +308,15 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             IrisTask::RotationAwareDotProductBatch {
                 query,
                 vector_ids,
+                mut result,
                 rsp,
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let r = rotation_aware_pairwise_distance(&query, targets);
-                let _ = rsp.send(r);
+                let r = rotation_aware_pairwise_distance2(&query, targets, &mut result);
+                std::mem::forget(vector_ids);
+                std::mem::forget(result);
+                let _ = rsp.send(());
             }
 
             IrisTask::RingPairwiseDistance { input, rsp } => {
