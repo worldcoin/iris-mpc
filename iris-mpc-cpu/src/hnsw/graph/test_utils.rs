@@ -7,11 +7,14 @@ use crate::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
-        graph::graph_diff::{
-            explicit::{ExplicitNeighborhoodDiffer, SortBy},
-            jaccard::DetailedJaccardDiffer,
-            node_equiv::ensure_node_equivalence,
-            run_diff,
+        graph::{
+            graph_diff::{
+                explicit::{ExplicitNeighborhoodDiffer, SortBy},
+                jaccard::DetailedJaccardDiffer,
+                node_equiv::ensure_node_equivalence,
+                run_diff,
+            },
+            neighborhood::Neighborhood,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
