@@ -152,7 +152,7 @@ impl KNNEngine for NaiveMinFHDKNN {
         self.next_id = end;
 
         let irises_with_rotations: Vec<[IrisCode; 31]> = self.pool.install(|| {
-            self.irises[(start-1)..(end-1)]
+            self.irises[(start - 1)..(end - 1)]
                 .par_iter()
                 .map(|iris| iris.all_rotations().try_into().unwrap())
                 .collect()
