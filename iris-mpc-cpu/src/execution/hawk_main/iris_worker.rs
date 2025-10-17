@@ -1,7 +1,9 @@
 use crate::{
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
-        ops::{galois_ring_pairwise_distance, pairwise_distance, rotation_aware_pairwise_distance, rotation_aware_pairwise_distance2},
+        ops::{
+            galois_ring_pairwise_distance, pairwise_distance, rotation_aware_pairwise_distance2,
+        },
         shared_iris::ArcIris,
     },
     shares::RingElement,
@@ -50,10 +52,11 @@ enum IrisTask {
     },
     RotationAwareDotProductBatch {
         query: ArcIris,
-        // the worker task is responsible for forgetting this boxed slice
-        vector_ids: Box<[VectorId]>,
-        // the worker task is responsible for forgetting this boxed slice
-        result: Box<[RingElement<u16>]>,
+        vector_ids: Arc<Vec<VectorId>>,
+        // the worker threads write to non-overlapping parts of the result
+        result: Arc<Vec<RingElement<u16>>>,
+        input_offset: usize,
+        input_len: usize,
         rsp: oneshot::Sender<()>,
     },
     RingPairwiseDistance {
@@ -125,27 +128,25 @@ impl IrisPoolHandle {
     pub async fn rotation_aware_dot_product_batch(
         &mut self,
         query: ArcIris,
-        mut vector_ids: Vec<VectorId>,
+        vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
         let mut result = Vec::with_capacity(vector_ids.len() * ROTATIONS * 2);
         unsafe { result.set_len(result.capacity()) };
+        let result = Arc::new(result);
+
+        let vector_ids = Arc::new(vector_ids);
 
         let input_len = vector_ids.len();
         let min_size = 256;
-        let mut num_slices = (input_len + min_size - 1) / min_size;
+        let num_slices = (input_len + min_size - 1) / min_size;
 
         // Compute base size and remainder
         let base_size = input_len / num_slices;
         let remainder = input_len % num_slices;
 
-        // unsafely divide result and input into boxed slices, which the worker thread calls mem::forget() on.
-        // eliminates the need to allocate and copy the results. benchmarks showed significant speedup from 
-        // structuring rayon code to avoid such allocations. the same applies to the worker pool.
-        let mut result_ptr = result.as_mut();
-        let mut input_ptr = vector_ids.as_mut();
-
+        let mut input_idx = 0;
         let mut responses = Vec::with_capacity(num_slices);
         for i in 0..num_slices {
             let (tx, rx) = oneshot::channel();
@@ -153,26 +154,27 @@ impl IrisPoolHandle {
             // Distribute the remainder to the first slices
             let elements_to_process = base_size + if i < remainder { 1 } else { 0 };
 
-            let input_slice = unsafe { slice::from_raw_parts_mut(input_ptr, elements_to_process) };
-            input_ptr.add(elements_to_process);
-            let input_slice = Box::from_raw(input_slice);
-
-            let result_len = elements_to_process * ROTATIONS * 2;
-            let result_slice = unsafe { slice::from_raw_parts_mut(result_ptr, result_len) };
-            result_ptr.add(result_len);
-            let result_slice = Box::from_raw(result_slice);
-
             let task = IrisTask::RotationAwareDotProductBatch {
-                query,
-                vector_ids: input_slice,
-                result: result_slice,
+                query: query.clone(),
+                vector_ids: vector_ids.clone(),
+                result: result.clone(),
+                input_offset: input_idx,
+                input_len: elements_to_process,
                 rsp: tx,
             };
             self.get_next_worker().send(task)?;
             responses.push(rx);
+
+            input_idx += elements_to_process;
         }
 
-        let _results = futures::future::join_all(responses).await.into_iter().collect::<Result<Vec<()>, _>>?;
+        let _results = futures::future::join_all(responses)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<()>, _>>()?;
+
+        let result =
+            Arc::try_unwrap(result).expect("Failed to unwrap Arc: other references still exist");
 
         self.metric_latency.record(start.elapsed().as_secs_f64());
         Ok(result)
@@ -308,14 +310,30 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             IrisTask::RotationAwareDotProductBatch {
                 query,
                 vector_ids,
-                mut result,
+                result,
+                input_offset,
+                input_len,
                 rsp,
             } => {
+                let input_slice = &vector_ids[input_offset..input_offset + input_len];
+
+                let p_result = result.as_ptr() as *mut RingElement<u16>;
+                let multiplier = ROTATIONS * 2;
+
+                // safety: the worker threads must write to non-overlapping regions of result
+                // and result must not be used until all the worker threads are finished.
+                let r_slice = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        p_result.add(input_offset * multiplier),
+                        (input_offset + input_len) * multiplier,
+                    )
+                };
+
                 let store = iris_store.data.blocking_read();
-                let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let r = rotation_aware_pairwise_distance2(&query, targets, &mut result);
-                std::mem::forget(vector_ids);
-                std::mem::forget(result);
+                let targets = input_slice.iter().map(|v| store.get_vector(v));
+                rotation_aware_pairwise_distance2(&query, targets, r_slice);
+                drop(vector_ids);
+                drop(result);
                 let _ = rsp.send(());
             }
 
