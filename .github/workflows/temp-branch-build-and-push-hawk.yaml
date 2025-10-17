@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "fss"
+      - "last-working-fss"
     paths-ignore:
       - "deploy/**"
 
