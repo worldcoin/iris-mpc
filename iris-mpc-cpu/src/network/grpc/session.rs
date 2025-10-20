@@ -5,9 +5,13 @@ use crate::{
 };
 use eyre::{eyre, Result};
 use std::collections::HashMap;
+use std::time::Duration;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use tonic::async_trait;
 
+// Hard-coded artificial one-way link latency used in tests.
+const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(1);
 use super::{GrpcConfig, InStream, OutStream};
 
 #[derive(Debug)]
@@ -22,6 +26,7 @@ pub struct GrpcSession {
 #[async_trait]
 impl Networking for GrpcSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
+        sleep(ARTIFICIAL_LINK_DELAY).await;
         let value = value.to_network();
 
         let outgoing_stream = self.out_streams.get(receiver).ok_or(eyre!(
