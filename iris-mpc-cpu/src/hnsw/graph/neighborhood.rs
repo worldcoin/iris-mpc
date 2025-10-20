@@ -6,7 +6,7 @@
 use crate::hnsw::{
     sorting::{
         batcher::partial_batcher_network, binary_search::BinarySearch,
-        quickselect::run_quickselect_on_vectors, quicksort::apply_quicksort,
+        quickselect::run_quickselect_with_store, quicksort::apply_quicksort,
         swap_network::apply_swap_network,
     },
     VectorStore,
@@ -440,7 +440,14 @@ impl<Vector: Clone, Distance: Clone> UnsortedNeighborhood<Vector, Distance> {
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
         self.edges.extend_from_slice(vals);
-        self.edges = run_quickselect_on_vectors(store, &self.edges, self.k).await?;
+        let values = self.edges.iter().map(|e| e.1.clone()).collect::<Vec<_>>();
+        // Get the permutation which describes the partitioned sequence
+        let indices = run_quickselect_with_store(store, &values, self.k).await?;
+        self.edges = indices
+            .into_iter()
+            .take(self.k) // truncate to smallest k
+            .map(|i| self.edges[i].clone())
+            .collect::<Vec<_>>();
         Ok(())
     }
 

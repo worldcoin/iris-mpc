@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
-use crate::hnsw::VectorStore;
 use eyre::Result;
 
+use crate::hnsw::VectorStore;
 /// An implementation of the Quickselect algorithm that works on indices and uses
 /// an external oracle for comparisons.
 pub struct Quickselect {
@@ -48,7 +46,7 @@ impl Quickselect {
         let pivot_val = self.perm[pivot_idx];
 
         (self.left..self.right)
-            .filter(|&i| i != pivot_idx) // Don't compare the pivot with itself
+            .filter(|&i| i != pivot_idx)
             .map(|i| (self.perm[i], pivot_val))
             .collect()
     }
@@ -59,39 +57,49 @@ impl Quickselect {
             return;
         }
 
+        let expected_len = (self.right - self.left).saturating_sub(1);
+        assert_eq!(
+            results.len(),
+            expected_len,
+            "Mismatch between number of elements and results"
+        );
+
         let pivot_idx = self.get_pivot_index();
         let pivot_val = self.perm[pivot_idx];
 
-        // --- In-Place Partitioning ---
-        let values_to_compare: Vec<_> = (self.left..self.right)
+        let elements_with_results: Vec<(usize, bool)> = (self.left..self.right)
             .filter(|&i| i != pivot_idx)
             .map(|i| self.perm[i])
+            .zip(results)
             .collect();
-        assert_eq!(
-            values_to_compare.len(),
-            results.len(),
-            "Mismatch between comparisons and results"
-        );
-        let results_map: HashMap<usize, bool> =
-            values_to_compare.into_iter().zip(results).collect();
 
-        self.perm.swap(pivot_idx, self.right - 1);
+        let mut current_idx = self.left;
 
-        let mut store_idx = self.left;
-        for i in self.left..(self.right - 1) {
-            if *results_map.get(&self.perm[i]).unwrap_or(&false) {
-                self.perm.swap(i, store_idx);
-                store_idx += 1;
+        // Place all elements that are less than the pivot.
+        for &(val, is_less) in &elements_with_results {
+            if is_less {
+                self.perm[current_idx] = val;
+                current_idx += 1;
             }
         }
 
-        self.perm.swap(store_idx, self.right - 1);
-        let pivot_new_idx = store_idx;
+        // The new index for the pivot is right after the "lesser" elements.
+        let pivot_new_idx = current_idx;
+        self.perm[pivot_new_idx] = pivot_val;
+        current_idx += 1;
 
-        // --- Update State for Next Iteration ---
+        // Place all elements that are greater than or equal to the pivot.
+        for &(val, is_less) in &elements_with_results {
+            if !is_less {
+                self.perm[current_idx] = val;
+                current_idx += 1;
+            }
+        }
+
+        // Update state for next iteration
         match self.kth_index.cmp(&pivot_new_idx) {
             std::cmp::Ordering::Equal => {
-                self.result = Some(pivot_val);
+                self.result = Some(self.perm[pivot_new_idx]);
             }
             std::cmp::Ordering::Less => {
                 self.right = pivot_new_idx;
@@ -99,10 +107,6 @@ impl Quickselect {
             std::cmp::Ordering::Greater => {
                 self.left = pivot_new_idx + 1;
             }
-        }
-
-        if !self.is_done() && self.right > self.left && self.right - self.left <= 1 {
-            self.result = Some(self.perm[self.left]);
         }
     }
 
@@ -112,88 +116,67 @@ impl Quickselect {
     }
 }
 
-/// Test harness that simulates an external comparison oracle.
-/// It runs the Quickselect algorithm on a concrete slice of data.
+/// Runs quickselect for `data` using `oracle` to evaluate batches of comparisons.
+/// Returns a permutation `P` which satisfies `(i < k - 1) -> data[P[i]] <= data[P[k - 1]]`
+/// and `i >= k - 1 -> data[P[i] >= data[P[k - 1]]`.
 ///
-/// Returns a tuple containing:
-/// 1. A reference to the found k-th element.
-/// 2. The final state of the permutation vector.
-/// 3. The final index of the k-th element within the permutation.
-pub fn run_quickselect_on_data<T: Ord>(data: &[T], k: usize) -> (&T, Vec<usize>) {
+/// `oracle` should return true for pairs where `lhs < rhs` and false for others.
+pub fn run_quickselect_test<T: Clone + Ord>(data: &[T], k: usize) -> Vec<usize>
+where
+{
     let n = data.len();
     let mut qs = Quickselect::new(n, k);
 
     // Loop until the algorithm finds the result
     while !qs.is_done() {
-        let comparisons = qs.get_next_cmps();
-
-        // If there are no more comparisons to make, the algorithm should be done.
-        // This can happen if the search space is narrowed to a single element.
-        if comparisons.is_empty() {
-            // Force quit and let the result be determined by the final state
-            break;
-        }
-
-        // Simulate the oracle: perform the comparisons on the concrete data
-        let results: Vec<bool> = comparisons
+        let comparisons = qs
+            .get_next_cmps()
             .iter()
-            .map(|&(idx1, idx2)| data[idx1] < data[idx2])
-            .collect();
-
-        // Feed the results back to the algorithm
-        qs.step(results);
-    }
-
-    let result_index = qs
-        .get_result()
-        .expect("Algorithm finished but no result was found");
-
-    (&data[result_index], qs.perm)
-}
-
-pub async fn run_quickselect_on_vectors<S: VectorStore>(
-    store: &mut S,
-    data: &[(S::VectorRef, S::DistanceRef)],
-    k: usize,
-) -> Result<Vec<(S::VectorRef, S::DistanceRef)>> {
-    let n = data.len();
-    let mut qs = Quickselect::new(n, k);
-
-    // Loop until the algorithm finds the result
-    while !qs.is_done() {
-        let comparisons = qs.get_next_cmps();
-
-        // If there are no more comparisons to make, the algorithm should be done.
-        // This can happen if the search space is narrowed to a single element.
-        if comparisons.is_empty() {
-            // Force quit and let the result be determined by the final state
-            break;
-        }
-
-        // Simulate the oracle: perform the comparisons on the concrete data
-        let distances = comparisons
-            .iter()
-            .map(|&(idx1, idx2)| (data[idx1].1.clone(), data[idx2].1.clone()))
+            .map(|&(i, j)| (data[i].clone(), data[j].clone()))
             .collect::<Vec<_>>();
-        let results = store.less_than_batch(&distances).await?;
 
-        // Feed the results back to the algorithm
+        let results = comparisons
+            .iter()
+            .map(|(lhs, rhs)| lhs < rhs)
+            .collect::<Vec<bool>>();
         qs.step(results);
     }
-
-    let mut new_neighborhood = qs.perm.iter().map(|i| data[*i].clone()).collect::<Vec<_>>();
-    new_neighborhood.truncate(k);
-
-    Ok(new_neighborhood)
+    qs.perm
 }
 
-//------------------------------------------------------------------//
-//                          TESTS                                   //
-//------------------------------------------------------------------//
+/// Runs quickselect for `data` using `oracle` to evaluate batches of comparisons.
+/// Returns a permutation `P` which satisfies `(i < k - 1) -> data[P[i]] <= data[P[k - 1]]`
+/// and `i >= k - 1 -> data[P[i] >= data[P[k - 1]]`.
+///
+/// `oracle` should return true for pairs where `lhs < rhs` and false for others.
+pub async fn run_quickselect_with_store<V: VectorStore>(
+    store: &mut V,
+    data: &[V::DistanceRef],
+    k: usize,
+) -> Result<Vec<usize>>
+where
+{
+    let n = data.len();
+    let mut qs = Quickselect::new(n, k);
+
+    // Loop until the algorithm finds the result
+    while !qs.is_done() {
+        let comparisons = qs
+            .get_next_cmps()
+            .iter()
+            .map(|&(i, j)| (data[i].clone(), data[j].clone()))
+            .collect::<Vec<_>>();
+
+        let results = store.less_than_batch(&comparisons).await?;
+        qs.step(results);
+    }
+    Ok(qs.perm)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{thread_rng, Rng};
 
     fn get_expected<T: Ord + Clone>(data: &[T], k: usize) -> T {
         let mut sorted_data = data.to_vec();
@@ -204,82 +187,70 @@ mod tests {
     /// A helper to run the tests and perform all checks.
     fn run_and_verify<T: Ord + Clone + std::fmt::Debug>(data: &[T], k: usize) {
         let expected = get_expected(data, k);
-        let (result_val, final_perm) = run_quickselect_on_data(data, k);
+        let final_perm = run_quickselect_test(data, k);
 
+        let km1th = data[final_perm[k - 1]].clone();
         // 1. Check if the k-th value is correct.
-        assert_eq!(*result_val, expected);
+        assert_eq!(km1th, expected, "The k-th value is incorrect");
 
-        // 2. Check the partitioning property:
-        // All elements before the k-th element in the final permutation must be less than or equal to it.
-        for i in 0..k {
+        // All elements before the result must be less than or equal to it.
+        for i in 0..(k - 1) {
             let current_val = &data[final_perm[i]];
             assert!(
-                current_val <= result_val,
+                current_val <= &km1th,
                 "Partition Fail: Element {:?} at perm index {} should be <= {:?} (k-th element)",
                 current_val,
                 i,
-                result_val
+                km1th
             );
         }
 
-        // All elements after the k-th element must be greater than or equal to it.
-        for i in (k + 1)..final_perm.len() {
+        // All elements after the result must be greater than or equal to it.
+        for i in k..final_perm.len() {
             let current_val = &data[final_perm[i]];
             assert!(
-                current_val >= result_val,
+                current_val >= &km1th,
                 "Partition Fail: Element {:?} at perm index {} should be >= {:?} (k-th element)",
                 current_val,
                 i,
-                result_val
+                km1th
             );
         }
     }
 
     #[test]
-    fn test_find_minimum() {
+    fn test_edge_case_find_minimum() {
         let data = vec![8, 1, 5, 9, 2, 0, 4];
         run_and_verify(&data, 1);
     }
 
     #[test]
-    fn test_find_maximum() {
+    fn test_edge_case_find_maximum() {
         let data = vec![8, 1, 5, 9, 2, 0, 4];
         run_and_verify(&data, data.len());
     }
 
     #[test]
-    fn test_find_median() {
-        let data = vec![3, 7, 8, 5, 2, 1, 9, 6, 4];
-        run_and_verify(&data, 5);
-    }
-
-    #[test]
-    fn test_with_duplicates() {
+    fn test_edge_case_with_duplicates() {
         let data = vec![7, 2, 7, 5, 2, 9, 5, 9, 1];
         run_and_verify(&data, 4);
     }
 
     #[test]
-    fn test_with_sorted_array() {
-        let data = vec![10, 20, 30, 40, 50, 60, 70];
-        run_and_verify(&data, 3);
-    }
-
-    #[test]
-    fn test_with_reverse_sorted_array() {
+    fn test_structured_input_reverse_sorted() {
         let data = vec![70, 60, 50, 40, 30, 20, 10];
         run_and_verify(&data, 6);
     }
 
     #[test]
-    fn test_large_array() {
-        let data: Vec<i32> = (0..1000).rev().collect(); // 999, 998, ..., 0
-        run_and_verify(&data, 251);
-    }
+    fn test_randomized_configurations() {
+        let mut rng = thread_rng();
+        for _ in 0..100 {
+            let n = rng.gen_range(1..=500);
+            let k = rng.gen_range(1..=n);
 
-    #[test]
-    fn test_two_elements() {
-        let data = vec![100, 2];
-        run_and_verify(&data, 1);
+            let data: Vec<i32> = (0..n).map(|_| rng.gen_range(-1000..=1000)).collect();
+            run_and_verify(&data, k);
+        }
     }
 }
