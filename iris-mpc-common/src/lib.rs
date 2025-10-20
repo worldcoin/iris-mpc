@@ -20,6 +20,7 @@ pub const IRIS_CODE_LENGTH: usize = 12_800;
 pub const MASK_CODE_LENGTH: usize = 6_400;
 pub const ROTATIONS: usize = 31;
 
+pub const MIN_DOT_BATCH_SIZE: usize = 256;
 pub const PRE_PROC_ROW_PADDING: usize = 120;
 pub const IRIS_CODE_ROWS: usize = 16;
 // 16 = 12800 / 800 = (IRIS_CODE_LENGTH) / (CODE_COLS * 4)

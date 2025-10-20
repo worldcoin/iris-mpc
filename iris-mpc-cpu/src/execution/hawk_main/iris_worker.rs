@@ -12,7 +12,9 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId, ROTATIONS};
+use iris_mpc_common::{
+    fast_metrics::FastHistogram, vector_id::VectorId, MIN_DOT_BATCH_SIZE, ROTATIONS,
+};
 use std::{
     cmp,
     sync::{
@@ -139,8 +141,7 @@ impl IrisPoolHandle {
         let vector_ids = Arc::new(vector_ids);
 
         let input_len = vector_ids.len();
-        let min_size = 256;
-        let num_slices = (input_len + min_size - 1) / min_size;
+        let num_slices = (input_len + MIN_DOT_BATCH_SIZE - 1) / MIN_DOT_BATCH_SIZE;
 
         // Compute base size and remainder
         let base_size = input_len / num_slices;
