@@ -28,7 +28,7 @@ FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
-ENV RUSTFLAGS="-C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse"
+ENV RUSTFLAGS="-C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse --cfg aes_armv8"
 RUN cargo build --release --target=aarch64-unknown-linux-gnu --bin iris-mpc-hawk
 
 FROM ubuntu:24.04
