@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use eyre::{eyre, Result};
 use std::sync::Arc;
-
+use std::time::Duration;
+use tokio::time::sleep;
+const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(1);
 #[derive(Debug, Clone)]
 struct Value {
     value: Vec<u8>,
@@ -60,6 +62,7 @@ pub struct LocalNetworking {
 #[async_trait]
 impl Networking for LocalNetworking {
     async fn send(&mut self, val: NetworkValue, receiver: &Identity) -> Result<()> {
+        sleep(ARTIFICIAL_LINK_DELAY).await;
         let val = val.to_network();
         let (tx, _) = self
             .p2p_channels
