@@ -134,14 +134,10 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        let mut result = Vec::with_capacity(vector_ids.len() * ROTATIONS * 2);
-        unsafe { result.set_len(result.capacity()) };
-        let result = Arc::new(result);
-
+        let result = Arc::new(vec![RingElement(0_u16); vector_ids.len() * ROTATIONS * 2]);
         let vector_ids = Arc::new(vector_ids);
-
         let input_len = vector_ids.len();
-        let num_slices = (input_len + MIN_DOT_BATCH_SIZE - 1) / MIN_DOT_BATCH_SIZE;
+        let num_slices = input_len.div_ceil(MIN_DOT_BATCH_SIZE);
 
         // Compute base size and remainder
         let base_size = input_len / num_slices;

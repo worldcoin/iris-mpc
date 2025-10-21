@@ -11,6 +11,7 @@ use iris_mpc_cpu::protocol::ops::rotation_aware_pairwise_distance_par;
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
 };
+use iris_mpc_cpu::shares::RingElement;
 use itertools::Itertools;
 use rand::seq::index::sample;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
@@ -606,34 +607,32 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
 }
 
 // determine the following:
-// optimal number of threads per core (1 or 2)
-// optimal chunk size of `target` when doing batches of 32 in parallel for various lengths of `target`
+// optimal chunk size of `target` when doing batches of X in parallel for various lengths of `target`
 pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
-    let mut g = c.benchmark_group("par_trick_dot");
-    g.sample_size(10);
+    // helper
+    fn round_power_of_two(x: usize) -> usize {
+        if x.is_power_of_two() {
+            x
+        } else {
+            x.next_power_of_two() / 2
+        }
+    }
 
     // the thread pool should be for a single numa node
     // assume at most 2 numa nodes
-    let num_cpus = num_cpus::get() / 2;
+    // assume that using half the cores, all cores will be on the same numa node
+    let num_cpus = round_power_of_two(num_cpus::get()) / 2;
+
+    let mut g = c.benchmark_group(format!("par_trick_dot_ncpu_{}", num_cpus));
+    g.sample_size(10);
 
     // one thread per  logical core
     let core_ids = get_core_ids().unwrap();
     let selected_cores = core_ids.into_iter().take(num_cpus).collect::<Vec<_>>();
-    let pool1 = ThreadPoolBuilder::new()
+    let pool = ThreadPoolBuilder::new()
         .num_threads(num_cpus)
         .start_handler(move |idx| {
             core_affinity::set_for_current(selected_cores[idx]);
-        })
-        .build()
-        .unwrap();
-
-    // two threads per logical core
-    let core_ids = get_core_ids().unwrap();
-    let selected_cores = core_ids.into_iter().take(num_cpus).collect::<Vec<_>>();
-    let pool2 = ThreadPoolBuilder::new()
-        .num_threads(num_cpus * 2)
-        .start_handler(move |idx| {
-            core_affinity::set_for_current(selected_cores[idx / 2]);
         })
         .build()
         .unwrap();
@@ -644,7 +643,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
     let dist = Uniform::new(0, dataset_size);
 
     // allocating these on the thread pool should ensure they are allocated to the correct numa node
-    let iris_codes: Vec<_> = pool1.install(|| {
+    let iris_codes: Vec<_> = pool.install(|| {
         (0..dataset_size / 3)
             .into_par_iter()
             .flat_map(|_| {
@@ -652,70 +651,65 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
                 let iris = IrisCode::random_rng(rng);
                 GaloisRingSharedIris::generate_shares_locally(rng, iris)
             })
-            .map(|x| Arc::new(x))
+            .map(Arc::new)
             .collect()
     });
 
     // --- RAM-bound (non-cacheable) version ---
     let rng = &mut thread_rng();
 
-    for batch_size in [32] {
-        for nearest_neighbors in [256, 4096] {
+    // iris-mpc-hawk will use batch_size of 32 but for a list of 4096 and small chunk sizes,
+    // there is more than enough work to saturate the cpus.
+    for batch_size in [1] {
+        for nearest_neighbors in [4096] {
             g.throughput(Throughput::Elements(
                 batch_size * nearest_neighbors as u64 * ROTATIONS as u64,
             ));
 
-            for chunk_size in [32, 256, 1024] {
-                for (pool_idx, &pool) in [&pool1, &pool2].iter().enumerate() {
-                    g.bench_function(
-                        format!(
-                            "tpc_{}_bs_{batch_size}_nn_{nearest_neighbors}_cs_{chunk_size}",
-                            pool_idx + 1
-                        ),
-                        |b| {
-                            b.iter_batched(
-                                || {
-                                    (0..batch_size)
-                                        .map(|_| {
-                                            let a = dist.sample(rng);
-                                            let mut b = vec![];
-                                            for _ in 0..nearest_neighbors {
-                                                let idx = dist.sample(rng);
-                                                b.push(&iris_codes[idx]);
-                                            }
-                                            (&iris_codes[a], b)
-                                        })
-                                        .collect::<Vec<_>>()
-                                },
-                                |input| {
-                                    pool.install(|| {
-                                        input.into_par_iter().for_each(|(l, set)| {
-                                            let mut result =
-                                                Vec::with_capacity(set.len() * ROTATIONS * 2);
-                                            unsafe { result.set_len(result.capacity()) };
-
-                                            set.par_chunks(chunk_size)
-                                                .zip(
-                                                    result
-                                                        .par_chunks_mut(chunk_size * ROTATIONS * 2),
-                                                )
-                                                .for_each(|(targets, result)| {
-                                                    black_box(
-                                                        rotation_aware_pairwise_distance_par(
-                                                            l,
-                                                            targets.iter().map(|x| Some(*x)),
-                                                            result,
-                                                        ),
-                                                    );
-                                                });
-                                        });
-                                    });
-                                },
-                                BatchSize::SmallInput,
-                            )
-                        },
-                    );
+            for chunk_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] {
+                if chunk_size > nearest_neighbors {
+                    continue;
                 }
+
+                g.bench_function(
+                    format!("bs_{batch_size}_nn_{nearest_neighbors}_cs_{chunk_size}",),
+                    |b| {
+                        b.iter_batched(
+                            || {
+                                (0..batch_size)
+                                    .map(|_| {
+                                        let a = dist.sample(rng);
+                                        let mut b = vec![];
+                                        for _ in 0..nearest_neighbors {
+                                            let idx = dist.sample(rng);
+                                            b.push(&iris_codes[idx]);
+                                        }
+                                        (&iris_codes[a], b)
+                                    })
+                                    .collect::<Vec<_>>()
+                            },
+                            |input| {
+                                pool.install(|| {
+                                    input.into_par_iter().for_each(|(l, set)| {
+                                        let mut result =
+                                            vec![RingElement(0_u16); set.len() * ROTATIONS * 2];
+
+                                        set.par_chunks(chunk_size)
+                                            .zip(result.par_chunks_mut(chunk_size * ROTATIONS * 2))
+                                            .for_each(|(targets, result)| {
+                                                rotation_aware_pairwise_distance_par(
+                                                    l,
+                                                    targets.iter().map(|x| Some(*x)),
+                                                    result,
+                                                );
+                                            });
+                                    });
+                                });
+                            },
+                            BatchSize::SmallInput,
+                        )
+                    },
+                );
             }
         }
     }
