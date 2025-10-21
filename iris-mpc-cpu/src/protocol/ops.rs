@@ -648,54 +648,13 @@ where
     additive_shares
 }
 
-/// Computes the dot products between a query iris and a batch of iris vectors.
-/// Returns a Vec of RingElement<u16> containing code and mask dot products for each pair.
+/// Computes the dot products between a query iris and part of a batch of iris vectors.
+///
 /// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
+///
+/// includes the result array so that multiple threads/tasks can
+/// work on a query in parallel
 pub fn rotation_aware_pairwise_distance<'a, I>(
-    query: &'a ArcIris,
-    targets: I,
-) -> Vec<RingElement<u16>>
-where
-    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
-{
-    let start = Instant::now();
-    let mut count = 0;
-    // * 31 for all rotations
-    // * 2 for code and mask distances
-    let mut additive_shares = Vec::with_capacity(31 * 2 * targets.len());
-
-    for target in targets {
-        for rotation in IrisRotation::all() {
-            let (code_dist, mask_dist) = if let Some(y) = target {
-                count += 1;
-                let (a, b) = (
-                    query.code.rotation_aware_trick_dot(&y.code, &rotation),
-                    query.mask.rotation_aware_trick_dot(&y.mask, &rotation),
-                );
-                (RingElement(a), RingElement(2) * RingElement(b))
-            } else {
-                // Non-existent vectors get the largest relative distance of 100%.
-                let (a, b) = SHARE_OF_MAX_DISTANCE;
-                (RingElement(a), RingElement(b))
-            };
-            additive_shares.push(code_dist);
-            additive_shares.push(mask_dist);
-        }
-    }
-
-    let batch_size = count as f64;
-    let duration = start.elapsed().as_secs_f64() / batch_size;
-    PAIRWISE_DISTANCE_METRICS.with_borrow_mut(|[metric_batch_size, metric_per_pair_duration]| {
-        metric_batch_size.record(batch_size);
-        metric_per_pair_duration.record(duration);
-    });
-
-    additive_shares
-}
-
-// includes the result array so that multiple threads/tasks can
-// work on parts of the same problem.
-pub fn rotation_aware_pairwise_distance_par<'a, I>(
     query: &'a ArcIris,
     targets: I,
     result: &mut [RingElement<u16>],

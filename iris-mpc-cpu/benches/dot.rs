@@ -7,7 +7,7 @@ use iris_mpc_common::ROTATIONS;
 use iris_mpc_common::{
     iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
 };
-use iris_mpc_cpu::protocol::ops::rotation_aware_pairwise_distance_par;
+use iris_mpc_cpu::protocol::ops::rotation_aware_pairwise_distance;
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
 };
@@ -697,7 +697,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
                                         set.par_chunks(chunk_size)
                                             .zip(result.par_chunks_mut(chunk_size * ROTATIONS * 2))
                                             .for_each(|(targets, result)| {
-                                                rotation_aware_pairwise_distance_par(
+                                                rotation_aware_pairwise_distance(
                                                     l,
                                                     targets.iter().map(|x| Some(*x)),
                                                     result,

@@ -1,9 +1,7 @@
 use crate::{
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
-        ops::{
-            galois_ring_pairwise_distance, pairwise_distance, rotation_aware_pairwise_distance_par,
-        },
+        ops::{galois_ring_pairwise_distance, pairwise_distance, rotation_aware_pairwise_distance},
         shared_iris::ArcIris,
     },
     shares::RingElement,
@@ -331,7 +329,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
 
                 let store = iris_store.data.blocking_read();
                 let targets = input_slice.iter().map(|v| store.get_vector(v));
-                rotation_aware_pairwise_distance_par(&query, targets, r_slice);
+                rotation_aware_pairwise_distance(&query, targets, r_slice);
                 drop(vector_ids);
                 drop(result);
                 let _ = rsp.send(());
