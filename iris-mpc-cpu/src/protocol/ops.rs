@@ -24,10 +24,8 @@ use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
-    ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use rayon::prelude::*;
 use std::{array, ops::Not, time::Instant};
 use tracing::instrument;
 
@@ -695,7 +693,9 @@ where
     additive_shares
 }
 
-pub fn rotation_aware_pairwise_distance2<'a, I>(
+// includes the result array so that multiple threads/tasks can
+// work on parts of the same problem.
+pub fn rotation_aware_pairwise_distance_par<'a, I>(
     query: &'a ArcIris,
     targets: I,
     result: &mut [RingElement<u16>],
@@ -705,8 +705,8 @@ pub fn rotation_aware_pairwise_distance2<'a, I>(
     let start = Instant::now();
     let mut count = 0;
 
-    for (target, result) in izip!(targets, result.chunks_exact_mut(ROTATIONS * 2)) {
-        let mut it = result.iter_mut();
+    let mut it = result.iter_mut();
+    for target in targets {
         for rotation in IrisRotation::all() {
             count += 1;
             let (code_dist, mask_dist) = if let Some(y) = target {
@@ -732,62 +732,6 @@ pub fn rotation_aware_pairwise_distance2<'a, I>(
         metric_batch_size.record(batch_size);
         metric_per_pair_duration.record(duration);
     });
-}
-
-/// Computes the dot products between a query iris and a batch of iris vectors.
-/// Returns a Vec of RingElement<u16> containing code and mask dot products for each pair.
-/// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
-pub fn rotation_aware_pairwise_distance_par<'a>(
-    query: &'a ArcIris,
-    targets: Vec<&'a ArcIris>,
-    threads: usize,
-) -> Vec<RingElement<u16>> {
-    let start = Instant::now();
-
-    // Count actual computations for metrics
-    let count = targets.len();
-    let batch_size = count / threads;
-
-    // this loop is parallelized
-    // the serial version would have a nested loop.
-    //    outer loop: targets
-    //    inner loop: IrisRotation::all(),
-    // the parallel version parallelizes the outer loop.
-    // to prevent the cache from being overloaded with too many iris codes (one per element of target),
-    // target is chunked and the chunks are completed in parallel.
-    //
-    // only parallelizing the outer loop ensures that each thread has adequate work. a single trick_dot()
-    // may take 500ns. parallelizing the inner loop wouldn't give each thread enough work.
-
-    let mut results: Vec<RingElement<u16>> = Vec::with_capacity(count * ROTATIONS * 2);
-    unsafe { results.set_len(count * ROTATIONS * 2) };
-
-    targets
-        .par_chunks(batch_size)
-        .zip(results.par_chunks_mut(batch_size * ROTATIONS * 2))
-        .for_each(|(target, result)| {
-            let mut i = result.iter_mut();
-            for item in target {
-                for rotation in IrisRotation::all() {
-                    let (a, b) = (
-                        query.code.rotation_aware_trick_dot(&item.code, &rotation),
-                        query.mask.rotation_aware_trick_dot(&item.mask, &rotation),
-                    );
-                    let (code_dist, mask_dist) = (RingElement(a), RingElement(2) * RingElement(b));
-                    *i.next().unwrap() = code_dist;
-                    *i.next().unwrap() = mask_dist;
-                }
-            }
-        });
-
-    let batch_size = count as f64;
-    let duration = start.elapsed().as_secs_f64() / batch_size;
-    PAIRWISE_DISTANCE_METRICS.with_borrow_mut(|[metric_batch_size, metric_per_pair_duration]| {
-        metric_batch_size.record(batch_size);
-        metric_per_pair_duration.record(duration);
-    });
-
-    results
 }
 
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by
