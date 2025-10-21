@@ -33,7 +33,7 @@ elif [ "$CLEANUP_TYPE" == "gpu" ]; then
   SECRET_NAME="stage/iris-mpc/rds-aurora-master-password"
   CLUSTER_NAME="smpcv2"
   NAMESPACE="iris-mpc"
-  echo "Using GPU secret: $SECRET_NAME" 
+  echo "Using GPU secret: $SECRET_NAME"
   echo "Using GPU cluster name: $CLUSTER_NAME"
   echo "Using GPU namespace: $NAMESPACE"
 else
@@ -88,29 +88,29 @@ clean_mpc_database() {
 
   CLUSTER="arn:aws:eks:eu-north-1:$ACCOUNT_ID:cluster/$CLUSTER_NAME-$PARTY_ID-stage"
   echo "Cleaning database for $PARTY_ID with cluster name $CLUSTER${SCHEMA_NAME_SUFFIX:+ and schema name suffix $SCHEMA_NAME_SUFFIX}"
-  
+
   # Switch to the appropriate Kubernetes context
   kubectx $CLUSTER
   kubens $NAMESPACE
-  
+
   # Create and use a temporary pod for database operations
   kubectl apply -f db-cleaner-helper-pod-$NAMESPACE.yaml
   echo "Waiting 10s for db-cleaner pod to be ready..."
   sleep 10
   SCHEMA_NAME="SMPC${SCHEMA_NAME_SUFFIX}_stage_${PARTY_ID}"
   echo "Cleaning Database for URL: $DATABASE_URL with Schema name suffix: $SCHEMA_NAME"
-  
+
   # Execute database cleanup commands
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE irises RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE persistent_state RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE modifications RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_entry RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_links RESTART IDENTITY;'"
-  
+
   # Clean up and restart deployment
   kubectl delete pod --force db-cleaner
   kubectl rollout restart deployment $NAMESPACE -n $NAMESPACE
-  
+
   echo "Cleanup completed for $PARTY_ID"
 }
 

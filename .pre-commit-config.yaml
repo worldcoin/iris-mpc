@@ -1,0 +1,57 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+
+repos:
+  # General pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 2c9f875913ee60ca25ce70243dc24d5b6415598c  # v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(.*\.md|.*\.sage|.*\.sql)$
+      - id: end-of-file-fixer
+        exclude: \.sql$
+      - id: check-yaml
+        args: ['--unsafe']  # Allow custom tags in k8s yaml files
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+      - id: detect-private-key
+
+  # Gitleaks - Secret detection
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 4fb43823ef3d152d239e92d7d5cb04783b548062  # v8.28.0
+    hooks:
+      - id: gitleaks
+
+  # Rust formatting
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Format Rust code with rustfmt
+        entry: cargo fmt
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Lint Rust code with clippy
+        entry: cargo clippy
+        args: ['--all-targets', '--all-features', '--', '-D', 'warnings']
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-doc
+        name: cargo doc
+        description: Check Rust documentation
+        entry: cargo doc
+        args: ['--no-deps', '--document-private-items']
+        language: system
+        types: [rust]
+        pass_filenames: false
