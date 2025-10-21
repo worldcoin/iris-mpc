@@ -628,7 +628,9 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
 
     for nearest_neighbors in [256, 1024, 4096, 16384] {
         for batch_size in [32] {
-            g.throughput(Throughput::Elements(batch_size * nearest_neighbors as u64));
+            g.throughput(Throughput::Elements(
+                batch_size * nearest_neighbors as u64 * 31,
+            ));
 
             g.bench_function(format!("regular_{batch_size}_{nearest_neighbors}"), |b| {
                 b.iter_batched(
@@ -654,7 +656,7 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
                 )
             });
 
-            for threads in [2, 8, 16] {
+            for threads in [1, 2, 8, 16] {
                 g.bench_function(
                     format!("par_{batch_size}_{nearest_neighbors}_{threads}"),
                     |b| {

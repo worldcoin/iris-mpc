@@ -748,38 +748,6 @@ pub fn rotation_aware_pairwise_distance_par<'a>(
     let count = targets.len();
     let batch_size = count / threads;
 
-    if batch_size == 1 {
-        let additive_shares: Vec<RingElement<u16>> = targets
-            .into_par_iter()
-            .flat_map(|target| {
-                let mut results = Vec::with_capacity(ROTATIONS * 2);
-
-                for rotation in IrisRotation::all() {
-                    let (a, b) = (
-                        query.code.rotation_aware_trick_dot(&target.code, &rotation),
-                        query.mask.rotation_aware_trick_dot(&target.mask, &rotation),
-                    );
-                    let (code_dist, mask_dist) = (RingElement(a), RingElement(2) * RingElement(b));
-                    results.push(code_dist);
-                    results.push(mask_dist);
-                }
-
-                results
-            })
-            .collect();
-
-        let batch_size = count as f64;
-        let duration = start.elapsed().as_secs_f64() / batch_size;
-        PAIRWISE_DISTANCE_METRICS.with_borrow_mut(
-            |[metric_batch_size, metric_per_pair_duration]| {
-                metric_batch_size.record(batch_size);
-                metric_per_pair_duration.record(duration);
-            },
-        );
-
-        return additive_shares;
-    }
-
     // this loop is parallelized
     // the serial version would have a nested loop.
     //    outer loop: targets
@@ -793,6 +761,7 @@ pub fn rotation_aware_pairwise_distance_par<'a>(
 
     let mut results: Vec<RingElement<u16>> = Vec::with_capacity(count * ROTATIONS * 2);
     unsafe { results.set_len(count * ROTATIONS * 2) };
+
     targets
         .par_chunks(batch_size)
         .zip(results.par_chunks_mut(batch_size * ROTATIONS * 2))
