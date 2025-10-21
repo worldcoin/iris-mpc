@@ -15,6 +15,7 @@ use iris_mpc_common::{
         iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     },
     vector_id::VectorId,
+    IrisVectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -132,7 +133,7 @@ pub fn fraction_ordering(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> Ordering {
 
 impl VectorStore for PlaintextStore {
     type QueryRef = Arc<IrisCode>;
-    type VectorRef = VectorId;
+    type VectorRef = IrisVectorId;
     type DistanceRef = (u16, u16);
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
