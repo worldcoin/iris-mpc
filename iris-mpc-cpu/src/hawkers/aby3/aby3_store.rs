@@ -4,9 +4,7 @@ use crate::{
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
-            batch_signed_lift_vec, conditionally_swap_distances,
-            conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, min_of_pair_batch, oblivious_cross_compare,
+            batch_signed_lift_vec, conditionally_swap_distances, conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3, lte_threshold_and_open, min_of_pair_batch, min_round_robin_batch, oblivious_cross_compare
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -181,7 +179,7 @@ impl Aby3Store {
             eyre::bail!("Cannot compute minimum of empty list");
         }
         let mut res = distances.to_vec();
-        while res.len() > 1 {
+        while res.len() > 16 {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             // create pairs from the remaining distances
@@ -215,8 +213,9 @@ impl Aby3Store {
                 eyre::bail!("All distance lists must have the same length. List at index {} has length {}, while the first list has length {}", i, d.len(), len);
             }
         }
+        
         let mut res = distances.to_vec();
-        while res.len() > 1 {
+        while res.len() > 16 {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             let mut res1 = vec![];
@@ -239,7 +238,8 @@ impl Aby3Store {
                 res.push(last_distance.clone());
             }
         }
-        Ok(res[0].clone())
+        let flattened_distances = res.iter().cloned().flatten().collect_vec();
+        min_round_robin_batch(&mut self.session, &flattened_distances, distances.len()).await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
