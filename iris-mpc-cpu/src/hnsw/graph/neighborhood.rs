@@ -39,6 +39,10 @@ pub trait Neighborhood: Clone {
 
     fn iter(&self) -> impl Iterator<Item = &(Self::Vector, Self::Distance)>;
 
+    /// Inserts a single element into the neighborhood.
+    /// Generally, `retain_k_nearest` needs to be called after an insert to ensure
+    /// query methods return correct values, but specific implementations may
+    /// offer stronger guarantees.
     async fn insert<V>(
         &mut self,
         store: &mut V,
@@ -48,6 +52,10 @@ pub trait Neighborhood: Clone {
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
 
+    /// Inserts a batch of elements into the neighborhood.
+    /// Generally, `retain_k_nearest` needs to be called after an insert to ensure
+    /// query methods return correct values, but specific implementations may
+    /// offer stronger guarantees.
     async fn insert_batch<V>(
         &mut self,
         store: &mut V,
@@ -56,16 +64,27 @@ pub trait Neighborhood: Clone {
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
 
+    /// Returns matching records in the neighborhood.
+    /// No specific order should be assumed.
     async fn matches<V>(&self, store: &mut V) -> Result<Vec<(Self::Vector, Self::Distance)>>
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
 
+    /// Retains only the vectors of the neighborhood.
+    /// No specific order should be assumed.
     fn edge_ids(&self) -> Self::EdgeIds;
 
+    // Returns a suitable node for opening
     fn get_next_candidate(&self) -> Option<&(Self::Vector, Self::Distance)>;
 
+    /// Returns the node with maximum distance in the neighborhood
+    /// Not guaranteed to function correctly if inserts have taken place
+    /// without a `retain_k_nearest` call for some `k`.
     fn get_furthest(&self) -> Option<&(Self::Vector, Self::Distance)>;
 
+    /// Retains the `k` closest nodes in the neighborhood and eliminates the rest
+    /// Additionally, it is guaranteed that the last element in the collection is
+    /// the furthest one (the `k-1`th distance, assuming 0-indexing)
     async fn retain_k_nearest<V>(&mut self, store: &mut V, k: usize) -> Result<()>
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
@@ -235,6 +254,7 @@ where
     /// Insert a collection of `(Vector, Distance)` pairs into the list,
     /// maintaining the ascending order, using an efficient sorting network on
     /// input values.
+    // TODO: only append values and move quicksort to `retain_k_nearest`?
     async fn insert_batch<V>(
         &mut self,
         store: &mut V,
@@ -392,11 +412,10 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
         self.edges.len()
     }
 
-    /// Insert the element `to` with distance `dist` into the list, maintaining
-    /// the ascending order.
+    /// Insert the element `to` with distance `dist` into the list
     ///
     /// Calls the `VectorStore` to find the insertion index.
-    // #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn insert<V>(&mut self, _store: &mut V, to: Vector, dist: Distance) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
@@ -406,8 +425,7 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
     }
 
     // / Insert a collection of `(Vector, Distance)` pairs into the list,
-    // / maintaining the ascending order, using an efficient sorting network on
-    // / input values.
+
     async fn insert_batch<V>(&mut self, _store: &mut V, vals: &[(Vector, Distance)]) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
