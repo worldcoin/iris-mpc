@@ -43,16 +43,13 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-
     let Cli {
         db_url,
         schema,
         file,
         dbg,
         command,
-    } = cli;
-
+    } = Cli::parse();
     let db_context = DbContext::new(&db_url, &schema).await;
 
     match command {
