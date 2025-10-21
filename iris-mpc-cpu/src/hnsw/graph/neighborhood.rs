@@ -369,6 +369,11 @@ impl<Vector: Clone, Distance: Clone> UnsortedNeighborhood<Vector, Distance> {
     }
 }
 
+pub type UnsortedNeighborhoodV<V> =
+    UnsortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+
+impl<V: VectorStore> NeighborhoodV<V> for UnsortedNeighborhoodV<V> {}
+
 impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vector, Distance> {
     type Vector = Vector;
     type Distance = Distance;
@@ -425,7 +430,6 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
         self.edges.first()
     }
 
-    // TODO: wrong after inserts
     fn get_furthest(&self) -> Option<&(Vector, Distance)> {
         self.edges.last()
     }
@@ -479,20 +483,110 @@ mod tests {
     use super::*;
     use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::vector_store::VectorStoreMut};
     use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+    use rand::thread_rng;
 
-    #[tokio::test]
-    async fn test_neighborhood() -> Result<()> {
-        let mut store = PlaintextStore::new();
-        let query = Arc::new(IrisCode::default());
-        let vector: IrisVectorId = store.insert(&query).await;
+    async fn insert_single_store_and_nbhd<N: NeighborhoodV<PlaintextStore>>(
+        query: Arc<IrisCode>,
+        store: &mut PlaintextStore,
+        nbhd: &mut N,
+        iris: Arc<IrisCode>,
+    ) -> Result<()> {
+        let vector = store.insert(&iris).await;
         let distance = store.eval_distance(&query, &vector).await?;
 
-        // Example usage for SortedNeighborhood
-        let mut nbhd = SortedNeighborhood::new();
-        nbhd.insert(&mut store, vector, distance).await?;
-        println!("{:?}", nbhd.get_furthest());
-        println!("{:?}", nbhd.get_k_nearest(1));
+        nbhd.insert(store, vector, distance).await?;
 
         Ok(())
+    }
+
+    async fn insert_batch_store_and_nbhd<N: NeighborhoodV<PlaintextStore>>(
+        query: Arc<IrisCode>,
+        store: &mut PlaintextStore,
+        nbhd: &mut N,
+        irises: &[Arc<IrisCode>],
+    ) -> Result<()> {
+        let mut pairs = Vec::new();
+        for iris in irises {
+            let vector = store.insert(&iris).await;
+            let distance = store.eval_distance(&query, &vector).await?;
+            pairs.push((vector, distance));
+        }
+
+        nbhd.insert_batch(store, &pairs).await?;
+
+        Ok(())
+    }
+
+    async fn test_neighborhood_generic<N: NeighborhoodV<PlaintextStore>>() {
+        let mut rng = thread_rng();
+        let mut store = PlaintextStore::new();
+        let query = Arc::new(IrisCode::random_rng(&mut rng));
+        let mut nbhd = N::new();
+
+        let randos = (0..3)
+            .map(|_| Arc::new(IrisCode::random_rng(&mut rng)))
+            .collect::<Vec<_>>();
+        insert_batch_store_and_nbhd(query.clone(), &mut store, &mut nbhd, &randos)
+            .await
+            .unwrap();
+
+        assert_eq!(nbhd.len(), 3);
+        // Insert a match
+        insert_single_store_and_nbhd(
+            query.clone(),
+            &mut store,
+            &mut nbhd,
+            Arc::new(query.get_similar_iris(&mut rng, 0.18)),
+        )
+        .await
+        .unwrap();
+
+        nbhd.retain_k_nearest(&mut store, 2).await.unwrap();
+        assert_eq!(nbhd.len(), 2);
+
+        // We should have exactly one match at this point (almost always :))
+        assert_eq!(nbhd.matches(&mut store).await.unwrap().len(), 1);
+
+        // Next candidate is arbitrary in general, but it should not be None
+        _ = nbhd.get_next_candidate().unwrap();
+
+        // Insert an even closer match
+        insert_single_store_and_nbhd(
+            query.clone(),
+            &mut store,
+            &mut nbhd,
+            Arc::new(query.get_similar_iris(&mut rng, 0.05)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(nbhd.len(), 3);
+
+        nbhd.retain_k_nearest(&mut store, 2).await.unwrap();
+        assert_eq!(nbhd.len(), 2);
+
+        // We should have exactly two matches at this point
+        assert_eq!(nbhd.matches(&mut store).await.unwrap().len(), 2);
+
+        // The furthest element should be the earliest inserted match
+        let furthest = nbhd.get_furthest().unwrap();
+        assert_eq!(furthest.0, IrisVectorId::from_serial_id(4));
+
+        // This should clear
+        nbhd.retain_k_nearest(&mut store, 0).await.unwrap();
+
+        assert_eq!(nbhd.len(), 0);
+        assert!(nbhd.is_empty());
+        assert!(matches!(nbhd.get_furthest(), None));
+        assert!(matches!(nbhd.get_next_candidate(), None));
+    }
+
+    #[tokio::test]
+    async fn test_sorted_neighborhood() {
+        test_neighborhood_generic::<SortedNeighborhoodV<PlaintextStore>>().await
+    }
+
+    #[tokio::test]
+    async fn test_unsorted_neighborhood() {
+        test_neighborhood_generic::<UnsortedNeighborhoodV<PlaintextStore>>().await
     }
 }
