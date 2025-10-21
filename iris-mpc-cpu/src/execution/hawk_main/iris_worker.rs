@@ -134,6 +134,9 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
+        // result will be unsafely handled by the worker threads.
+        // would use an UnsafeCell but that is not Send.
+        // getting a slice from result seems better than just sending a raw pointer.
         let result = Arc::new(vec![RingElement(0_u16); vector_ids.len() * ROTATIONS * 2]);
         let vector_ids = Arc::new(vector_ids);
         let input_len = vector_ids.len();
