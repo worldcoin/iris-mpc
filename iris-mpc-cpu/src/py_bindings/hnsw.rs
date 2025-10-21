@@ -28,7 +28,7 @@ pub fn search(
             .search::<_, SortedNeighborhoodV<PlaintextStore>>(vector, graph, &query, 1)
             .await
             .unwrap();
-        let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
+        let (nearest, (dist_num, dist_denom)) = neighbors.get_next_candidate().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
     })
 }

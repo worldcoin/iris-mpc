@@ -319,10 +319,10 @@ impl HnswSearcher {
                 bail!("ef cannot be 0");
             }
             1 => {
-                let start = W.get_nearest().ok_or(eyre!("W cannot be empty"))?;
+                let start = W.get_next_candidate().ok_or(eyre!("W cannot be empty"))?;
                 let nearest = Self::layer_search_greedy(store, graph, q, start, lc).await?;
 
-                W.retain_k_nearest(0);
+                W.retain_k_nearest(store, 0).await?;
                 W.insert(store, nearest.0, nearest.1).await?;
             }
             2..32 => {
@@ -391,25 +391,21 @@ impl HnswSearcher {
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
 
             for (e, eq) in c_links.into_iter() {
-                if W.len() == ef {
-                    // When W is full, we decide whether to replace the furthest element
-                    if store
+                // If W is full and node is not closest than current furthest,
+                // do nothing
+                if W.len() == ef
+                    && !store
                         .less_than(&eq, &fq)
                         .instrument(less_than_span.clone())
                         .await?
-                    {
-                        // Make room for the new better candidate...
-                        W.pop_furthest();
-                    } else {
-                        // ...or ignore the candidate and do not continue on this path.
-                        continue;
-                    }
+                {
+                    continue;
                 }
 
-                // Track the new candidate as a potential k-nearest
                 W.insert(store, e, eq)
                     .instrument(insert_span.clone())
                     .await?;
+                W.retain_k_nearest(store, ef).await?;
 
                 // fq stays the furthest distance in W
                 (_, fq) = W
@@ -458,7 +454,7 @@ impl HnswSearcher {
     /// is around a specific targeted batch insertion size.
     ///
     /// However, during graph traversal, the proportion of inspected nodes which
-    /// ultimately are inserted into `W` decreases as the NeighborhoodV<V> `W`
+    /// ultimately are inserted into `W` decreases as the neighborhood `W`
     /// better approximates the actual nearest neighbors of `q`. As such,
     /// the number of elements that should be inspected to identify a
     /// particular number of insertion elements increases. To estimate an
@@ -517,7 +513,10 @@ impl HnswSearcher {
         let mut opened = HashSet::<V::VectorRef>::new();
 
         // c: the current candidate to be opened, initialized to first entry of W
-        let (mut c, _cq) = W.get_nearest().ok_or(eyre!("W cannot be empty"))?.clone();
+        let (mut c, _cq) = W
+            .get_next_candidate()
+            .ok_or(eyre!("W cannot be empty"))?
+            .clone();
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -640,7 +639,7 @@ impl HnswSearcher {
                     W.insert_batch(store, &batch)
                         .instrument(insert_span.clone())
                         .await?;
-                    W.retain_k_nearest(ef);
+                    W.retain_k_nearest(store, ef).await?;
                 }
             }
 
@@ -651,7 +650,7 @@ impl HnswSearcher {
                 .find(|&c| !opened.contains(c))
                 .cloned();
 
-            // Once we've opened all elements of candidate NeighborhoodV<V> W, process any
+            // Once we've opened all elements of candidate neighborhood W, process any
             // remaining elements in the comparison and insertion queues. If
             // new nodes are added to W that need to be opened and processed,
             // continue the graph traversal. Otherwise, halt.
@@ -697,7 +696,7 @@ impl HnswSearcher {
                     W.insert_batch(store, chunk)
                         .instrument(insert_span.clone())
                         .await?;
-                    W.retain_k_nearest(ef);
+                    W.retain_k_nearest(store, ef).await?;
                 }
                 insertion_queue.clear();
 
@@ -825,7 +824,7 @@ impl HnswSearcher {
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
         }
 
-        W.retain_k_nearest(k);
+        W.retain_k_nearest(store, k).await?;
         Ok(W)
     }
 
@@ -936,7 +935,7 @@ impl HnswSearcher {
         // Truncate search results to size M before insertion
         for (lc, l_links) in links.iter_mut().enumerate() {
             let M = self.params.get_M(lc);
-            l_links.retain_k_nearest(M);
+            l_links.retain_k_nearest(store, M).await?;
         }
 
         struct NeighborUpdate<Query, Vector, Distance> {
@@ -1069,7 +1068,7 @@ impl HnswSearcher {
     ) -> Result<bool> {
         match neighbors
             .first()
-            .and_then(|bottom_layer| bottom_layer.get_nearest())
+            .and_then(|bottom_layer| bottom_layer.get_next_candidate())
         {
             None => Ok(false), // Empty database.
             Some((_, smallest_distance)) => store.is_match(smallest_distance).await,
