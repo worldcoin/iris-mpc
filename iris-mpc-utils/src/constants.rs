@@ -7,7 +7,6 @@ pub const NODE_CONFIG_KIND_GENESIS: &str = "genesis";
 pub const NODE_CONFIG_KIND_MAIN: &str = "main";
 
 /// MPC parties.
-pub const DEFAULT_PARTY_IDX: usize = PARTY_IDX_0;
 pub const N_PARTIES: usize = PARTY_INDICES.len();
 pub const PARTY_INDICES: [usize; 3] = [PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2];
 pub const PARTY_IDX_0: usize = 0;

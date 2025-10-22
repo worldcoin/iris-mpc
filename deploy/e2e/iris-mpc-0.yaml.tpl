@@ -1,6 +1,6 @@
 iris-mpc-0:
   fullnameOverride: "iris-mpc-0"
-  image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
+  image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
   environment: $ENV
   replicaCount: 1
@@ -250,7 +250,7 @@ iris-mpc-0:
       value: '["iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
+      value: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
     - name: SMPC__HEARTBEAT_INITIAL_RETRIES
       value: "1000"
@@ -263,13 +263,13 @@ iris-mpc-0:
 
     - name : SMPC__ENABLE_DEBUG_TIMING
       value: "true"
-    
+
     - name : SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED
       value: "false"
 
   initContainer:
     enabled: true
-    image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
+    image: "$IMAGE_REGISTRY_INIT_CONTAINER/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
     name: "iris-mpc-0-copy-cuda-libs"
     env:
       - name: AWS_REGION
