@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use core_affinity::get_core_ids;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use iris_mpc_common::galois_engine::degree4::{rotation_aware_trick_dot_padded, IrisRotation};
-use iris_mpc_common::ROTATIONS;
 use iris_mpc_common::{
     iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
 };
+use iris_mpc_common::{IrisVectorId, ROTATIONS};
+use iris_mpc_cpu::execution::hawk_main::iris_worker::init_workers;
+use iris_mpc_cpu::hawkers::shared_irises::SharedIrises;
 use iris_mpc_cpu::protocol::ops::rotation_aware_pairwise_distance;
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
@@ -608,7 +611,7 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
 
 // determine the following:
 // optimal chunk size of `target` when doing batches of X in parallel for various lengths of `target`
-pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
+pub fn bench_pairwise_distances_rayon(c: &mut Criterion) {
     // helper
     fn round_power_of_two(x: usize) -> usize {
         if x.is_power_of_two() {
@@ -717,9 +720,106 @@ pub fn bench_pairwise_distances_parallelized(c: &mut Criterion) {
     g.finish();
 }
 
+pub fn bench_pairwise_distances(c: &mut Criterion) {
+    let rng = &mut thread_rng();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let mut g = c.benchmark_group(format!("par_trick_dot{}", num_cpus));
+    g.sample_size(10);
+
+    // Prepare a large dataset of random iris codes and their shares
+    // should be divisible by 3
+    let dataset_size = 99999;
+    let iris_codes: Vec<_> = (0..dataset_size / 3)
+        .into_iter()
+        .flat_map(|_| {
+            let rng = &mut thread_rng();
+            let iris = IrisCode::random_rng(rng);
+            GaloisRingSharedIris::generate_shares_locally(rng, iris)
+        })
+        .map(Arc::new)
+        .collect();
+
+    let num_iris_codes = iris_codes.len();
+    let dist = Uniform::new(0, num_iris_codes);
+
+    let points_map: HashMap<IrisVectorId, Arc<IrisCode>> = iris_codes
+        .into_iter()
+        .enumerate()
+        .map(|(idx, iris)| (IrisVectorId::from_0_index(idx as u32), iris))
+        .collect();
+    let shared_irises = SharedIrises::new(points_map, Default::default()).to_arc();
+    let pool = init_workers(0, shared_irises, true);
+
+    // similar to numa_realloc
+    for (idx, iris) in iris_codes.iter().enumerate() {
+        pool.insert(IrisVectorId::from_0_index(idx as u32), iris.clone());
+    }
+
+    rt.block_on(pool.wait_completion());
+
+    // --- RAM-bound (non-cacheable) version ---
+
+    // iris-mpc-hawk will use batch_size of 32 but for a list of 4096 and small chunk sizes,
+    // there is more than enough work to saturate the cpus.
+    for batch_size in [1] {
+        for nearest_neighbors in [4096] {
+            g.throughput(Throughput::Elements(
+                batch_size * nearest_neighbors as u64 * ROTATIONS as u64,
+            ));
+
+            for chunk_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] {
+                if chunk_size > nearest_neighbors {
+                    continue;
+                }
+
+                g.bench_function(
+                    format!("bs_{batch_size}_nn_{nearest_neighbors}_cs_{chunk_size}",),
+                    |b| {
+                        b.iter_batched(
+                            || {
+                                (0..batch_size)
+                                    .map(|_| {
+                                        let a = dist.sample(rng);
+                                        let mut b = vec![];
+                                        for _ in 0..nearest_neighbors {
+                                            let idx = dist.sample(rng);
+                                            b.push(IrisVectorId::from_0_index(idx as u32));
+                                        }
+                                        (&iris_codes[a], b)
+                                    })
+                                    .collect::<Vec<_>>()
+                            },
+                            |input| {
+                                input.into_par_iter().for_each(|(l, set)| {
+                                    let mut result =
+                                        vec![RingElement(0_u16); set.len() * ROTATIONS * 2];
+
+                                    set.par_chunks(chunk_size)
+                                        .zip(result.par_chunks_mut(chunk_size * ROTATIONS * 2))
+                                        .for_each(|(targets, result)| {
+                                            rotation_aware_pairwise_distance(
+                                                l,
+                                                targets.iter().map(|x| Some(*x)),
+                                                result,
+                                            );
+                                        });
+                                });
+                            },
+                            BatchSize::SmallInput,
+                        )
+                    },
+                );
+            }
+        }
+    }
+
+    g.finish();
+}
+
 criterion_group!(
     benches,
-    bench_pairwise_distances_parallelized,
+    bench_pairwise_distances_rayon,
     bench_batch_trick_dot,
     bench_trick_dot,
     bench_galois_ring_pairwise_distance,

@@ -184,7 +184,21 @@ impl IrisPoolHandle {
         Ok(result)
     }
 
-    pub async fn bench_batch_dot(
+    pub async fn bench_batch_dot_ext(
+        &mut self,
+        per_worker: usize,
+        inputs: Vec<(ArcIris, Vec<VectorId>)>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let mut responses = Vec::with_capacity(inputs.len());
+        for (query, vector_ids) in inputs.into_iter() {
+            responses.push(self.bench_batch_dot(query, vector_ids, per_worker));
+        }
+
+        let results = futures::future::try_join_all(responses).await?;
+        Ok(results.into_iter().flatten().collect())
+    }
+
+    async fn bench_batch_dot(
         &mut self,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
@@ -202,12 +216,8 @@ impl IrisPoolHandle {
             self.get_next_worker().send(task)?;
             responses.push(rx);
         }
-
-        let results = futures::future::join_all(responses)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<Vec<RingElement<u16>>>, _>>()?;
-        Ok(results.into_iter().flat_map(|v| v).collect())
+        let results = futures::future::try_join_all(responses).await?;
+        Ok(results.into_iter().flatten().collect())
     }
 
     pub async fn galois_ring_pairwise_distances(
