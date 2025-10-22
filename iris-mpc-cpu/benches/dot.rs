@@ -610,14 +610,13 @@ pub fn bench_worker_pool(c: &mut Criterion) {
     let rng = &mut thread_rng();
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let mut g = c.benchmark_group(format!("batch_trick_dot_iris_worker",));
+    let mut g = c.benchmark_group("batch_trick_dot_iris_worker");
     g.sample_size(10);
 
     // Prepare a large dataset of random iris codes and their shares
     // should be divisible by 3
     let dataset_size = 99999;
     let iris_codes: Vec<_> = (0..dataset_size / 3)
-        .into_iter()
         .flat_map(|_| {
             let rng = &mut thread_rng();
             let iris = IrisCode::random_rng(rng);

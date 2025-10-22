@@ -138,7 +138,7 @@ impl IrisPoolHandle {
             responses.push(rx);
         }
         let results = futures::future::try_join_all(responses).await?;
-        let results = results.into_iter().flat_map(|x| x).collect();
+        let results = results.into_iter().flatten().collect();
 
         self.metric_latency.record(start.elapsed().as_secs_f64());
         Ok(results)
@@ -163,7 +163,7 @@ impl IrisPoolHandle {
         }
 
         let r = futures::future::try_join_all(responses).await?;
-        let flattened = r.into_iter().flat_map(|x| x).collect();
+        let flattened = r.into_iter().flatten().collect();
 
         Ok(flattened)
     }
