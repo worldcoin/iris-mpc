@@ -174,11 +174,39 @@ pub struct IrisCode {
     pub code: IrisCodeArray,
     pub mask: IrisCodeArray,
 }
+
 impl Default for IrisCode {
     fn default() -> Self {
         Self {
             code: IrisCodeArray::ZERO,
             mask: IrisCodeArray::ONES,
+        }
+    }
+}
+
+/// Iris code representation using base64 encoding compatible with Open IRIS
+#[derive(Serialize, Deserialize)]
+pub struct IrisCodeBase64 {
+    pub iris_codes: String,
+    pub mask_codes: String,
+}
+
+/// Convertor: IrisCode -> IrisCodeBase64.
+impl From<&IrisCode> for IrisCodeBase64 {
+    fn from(value: &IrisCode) -> Self {
+        Self {
+            iris_codes: value.code.to_base64().unwrap(),
+            mask_codes: value.mask.to_base64().unwrap(),
+        }
+    }
+}
+
+/// Convertor: IrisCodeBase64 -> IrisCode.
+impl From<&IrisCodeBase64> for IrisCode {
+    fn from(value: &IrisCodeBase64) -> Self {
+        Self {
+            code: IrisCodeArray::from_base64(&value.iris_codes).unwrap(),
+            mask: IrisCodeArray::from_base64(&value.mask_codes).unwrap(),
         }
     }
 }
@@ -277,6 +305,20 @@ impl IrisCode {
         let code_distance = combined_code.count_ones();
 
         (code_distance as u16, combined_mask_len as u16)
+    }
+
+    /// Return the minimum distance of an iris code against all rotations of another iris code.
+    pub fn get_min_distance_fraction(&self, other: &Self) -> (u16, u16) {
+        let mut min_distance = (u16::MAX, u16::MAX);
+        for rotation in other.all_rotations() {
+            let distance = rotation.get_distance_fraction(self);
+            if distance.0 as u32 * (min_distance.1 as u32)
+                < distance.1 as u32 * min_distance.0 as u32
+            {
+                min_distance = distance;
+            }
+        }
+        min_distance
     }
 
     /// Return the fractional Hamming distance between two iris codes, represented

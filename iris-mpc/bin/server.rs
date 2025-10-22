@@ -1638,8 +1638,8 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reset check result");
 
-                    // Mark the reset check modification as completed. 
-                    // Note that reset_check is only a query and does not persist anything into the database. 
+                    // Mark the reset check modification as completed.
+                    // Note that reset_check is only a query and does not persist anything into the database.
                     // We store modification so that the SNS result can be replayed.
                     modifications
                         .get_mut(&RequestId(reset_id))
