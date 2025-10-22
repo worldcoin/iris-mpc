@@ -70,7 +70,7 @@ podAnnotations:
 nodeSelector:
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "x8g.xlarge"
+  node.kubernetes.io/instance-type: "x8g.2xlarge"
 
 podSecurityContext:
   runAsUser: 65534
