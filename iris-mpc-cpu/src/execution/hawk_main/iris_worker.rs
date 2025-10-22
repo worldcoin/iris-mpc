@@ -133,6 +133,7 @@ impl IrisPoolHandle {
 
     pub async fn rotation_aware_dot_product_batch(
         &mut self,
+        chunk_size: usize,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
@@ -144,7 +145,7 @@ impl IrisPoolHandle {
         let result = Arc::new(vec![RingElement(0_u16); vector_ids.len() * ROTATIONS * 2]);
         let vector_ids = Arc::new(vector_ids);
         let input_len = vector_ids.len();
-        let num_slices = input_len.div_ceil(MIN_DOT_BATCH_SIZE);
+        let num_slices = input_len.div_ceil(chunk_size);
 
         // Compute base size and remainder
         let base_size = input_len / num_slices;
@@ -191,7 +192,6 @@ impl IrisPoolHandle {
     ) -> Result<Vec<Vec<RingElement<u16>>>> {
         let mut responses = Vec::with_capacity(inputs.len());
         for (query, vector_ids) in inputs.into_iter() {
-            let num_tasks = vector_ids.len().div_ceil(per_worker);
             for vector_id_chunk in vector_ids.chunks(per_worker) {
                 let (tx, rx) = oneshot::channel();
                 let task = IrisTask::BenchBatchDot {

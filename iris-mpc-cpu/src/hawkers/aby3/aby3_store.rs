@@ -254,7 +254,7 @@ impl Aby3Store {
 
         let ds_and_ts = self
             .workers
-            .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
+            .rotation_aware_dot_product_batch(1, query.iris_proc.clone(), vectors.to_vec())
             .await?;
 
         let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;

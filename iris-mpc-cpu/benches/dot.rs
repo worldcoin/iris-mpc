@@ -819,9 +819,9 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
                             },
                             |input| {
                                 for (query, vector_ids) in input.into_iter() {
-                                    rt.block_on(
-                                        pool.rotation_aware_dot_product_batch(query, vector_ids),
-                                    );
+                                    rt.block_on(pool.rotation_aware_dot_product_batch(
+                                        chunk_size, query, vector_ids,
+                                    ));
                                 }
                             },
                             BatchSize::SmallInput,
