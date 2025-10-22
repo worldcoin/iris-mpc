@@ -649,11 +649,7 @@ where
     additive_shares
 }
 
-/// Computes the dot products between a query iris and part of a batch of iris vectors.
-///
-/// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
-///
-/// includes the result array to avoid collect()
+/// This is similar to `pairwise_distance`, but performs dot products on all rotations of the query.
 pub fn rotation_aware_pairwise_distance<'a, I>(
     query: &'a ArcIris,
     targets: I,
