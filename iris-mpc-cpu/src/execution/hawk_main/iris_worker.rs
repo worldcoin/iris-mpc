@@ -59,6 +59,12 @@ enum IrisTask {
         input_len: usize,
         rsp: oneshot::Sender<()>,
     },
+    // potential candidate to replace RotationAwareDotProductBatch
+    BenchBatchDot {
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
     RingPairwiseDistance {
         input: Vec<Option<(ArcIris, ArcIris)>>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -176,6 +182,32 @@ impl IrisPoolHandle {
 
         self.metric_latency.record(start.elapsed().as_secs_f64());
         Ok(result)
+    }
+
+    pub async fn bench_batch_dot(
+        &mut self,
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+        per_worker: usize,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let num_tasks = vector_ids.len().div_ceil(per_worker);
+        let mut responses = Vec::with_capacity(num_tasks);
+        for vector_id_chunk in vector_ids.chunks(per_worker).into_iter() {
+            let (tx, rx) = oneshot::channel();
+            let task = IrisTask::BenchBatchDot {
+                query: query.clone(),
+                vector_ids: vector_id_chunk.to_vec(),
+                rsp: tx,
+            };
+            self.get_next_worker().send(task)?;
+            responses.push(rx);
+        }
+
+        let results = futures::future::join_all(responses)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<Vec<RingElement<u16>>>, _>>()?;
+        Ok(results.into_iter().flat_map(|v| v).collect())
     }
 
     pub async fn galois_ring_pairwise_distances(
@@ -333,6 +365,18 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 drop(vector_ids);
                 drop(result);
                 let _ = rsp.send(());
+            }
+
+            IrisTask::BenchBatchDot {
+                query,
+                vector_ids,
+                rsp,
+            } => {
+                let store = iris_store.data.blocking_read();
+                let targets = vector_ids.iter().map(|v| store.get_vector(v));
+                let mut result = vec![RingElement(0); vector_ids.len() * ROTATIONS * 2];
+                rotation_aware_pairwise_distance(&query, targets, &mut result);
+                let _ = rsp.send(result);
             }
 
             IrisTask::RingPairwiseDistance { input, rsp } => {
