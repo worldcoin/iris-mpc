@@ -652,8 +652,7 @@ where
 ///
 /// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
 ///
-/// includes the result array so that multiple threads/tasks can
-/// work on a query in parallel
+/// includes the result array to avoid collect()
 pub fn rotation_aware_pairwise_distance<'a, I>(
     query: &'a ArcIris,
     targets: I,

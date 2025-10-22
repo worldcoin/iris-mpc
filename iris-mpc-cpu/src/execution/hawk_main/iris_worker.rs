@@ -184,40 +184,28 @@ impl IrisPoolHandle {
         Ok(result)
     }
 
-    pub async fn bench_batch_dot_ext(
+    pub async fn bench_batch_dot(
         &mut self,
         per_worker: usize,
         inputs: Vec<(ArcIris, Vec<VectorId>)>,
-    ) -> Result<Vec<RingElement<u16>>> {
+    ) -> Result<Vec<Vec<RingElement<u16>>>> {
         let mut responses = Vec::with_capacity(inputs.len());
         for (query, vector_ids) in inputs.into_iter() {
-            responses.push(self.bench_batch_dot(query, vector_ids, per_worker));
+            let num_tasks = vector_ids.len().div_ceil(per_worker);
+            for vector_id_chunk in vector_ids.chunks(per_worker) {
+                let (tx, rx) = oneshot::channel();
+                let task = IrisTask::BenchBatchDot {
+                    query: query.clone(),
+                    vector_ids: vector_id_chunk.to_vec(),
+                    rsp: tx,
+                };
+                self.get_next_worker().send(task)?;
+                responses.push(rx);
+            }
         }
 
         let results = futures::future::try_join_all(responses).await?;
-        Ok(results.into_iter().flatten().collect())
-    }
-
-    async fn bench_batch_dot(
-        &mut self,
-        query: ArcIris,
-        vector_ids: Vec<VectorId>,
-        per_worker: usize,
-    ) -> Result<Vec<RingElement<u16>>> {
-        let num_tasks = vector_ids.len().div_ceil(per_worker);
-        let mut responses = Vec::with_capacity(num_tasks);
-        for vector_id_chunk in vector_ids.chunks(per_worker).into_iter() {
-            let (tx, rx) = oneshot::channel();
-            let task = IrisTask::BenchBatchDot {
-                query: query.clone(),
-                vector_ids: vector_id_chunk.to_vec(),
-                rsp: tx,
-            };
-            self.get_next_worker().send(task)?;
-            responses.push(rx);
-        }
-        let results = futures::future::try_join_all(responses).await?;
-        Ok(results.into_iter().flatten().collect())
+        Ok(results)
     }
 
     pub async fn galois_ring_pairwise_distances(

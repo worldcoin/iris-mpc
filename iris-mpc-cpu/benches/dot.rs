@@ -724,7 +724,7 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
     let rng = &mut thread_rng();
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let mut g = c.benchmark_group(format!("par_trick_dot{}", num_cpus));
+    let mut g = c.benchmark_group(format!("par_trick_dot",));
     g.sample_size(10);
 
     // Prepare a large dataset of random iris codes and their shares
@@ -743,13 +743,13 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
     let num_iris_codes = iris_codes.len();
     let dist = Uniform::new(0, num_iris_codes);
 
-    let points_map: HashMap<IrisVectorId, Arc<IrisCode>> = iris_codes
-        .into_iter()
-        .enumerate()
-        .map(|(idx, iris)| (IrisVectorId::from_0_index(idx as u32), iris))
-        .collect();
-    let shared_irises = SharedIrises::new(points_map, Default::default()).to_arc();
-    let pool = init_workers(0, shared_irises, true);
+    let points_map: HashMap<IrisVectorId, Arc<GaloisRingSharedIris>> = HashMap::new();
+    let shared_irises = SharedIrises::new(
+        points_map,
+        Arc::new(GaloisRingSharedIris::default_for_party(0)),
+    )
+    .to_arc();
+    let mut pool = init_workers(0, shared_irises, true);
 
     // similar to numa_realloc
     for (idx, iris) in iris_codes.iter().enumerate() {
@@ -786,25 +786,43 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
                                             let idx = dist.sample(rng);
                                             b.push(IrisVectorId::from_0_index(idx as u32));
                                         }
-                                        (&iris_codes[a], b)
+                                        (iris_codes[a].clone(), b)
                                     })
                                     .collect::<Vec<_>>()
                             },
                             |input| {
-                                input.into_par_iter().for_each(|(l, set)| {
-                                    let mut result =
-                                        vec![RingElement(0_u16); set.len() * ROTATIONS * 2];
+                                rt.block_on(pool.bench_batch_dot(chunk_size, input));
+                            },
+                            BatchSize::SmallInput,
+                        )
+                    },
+                );
 
-                                    set.par_chunks(chunk_size)
-                                        .zip(result.par_chunks_mut(chunk_size * ROTATIONS * 2))
-                                        .for_each(|(targets, result)| {
-                                            rotation_aware_pairwise_distance(
-                                                l,
-                                                targets.iter().map(|x| Some(*x)),
-                                                result,
-                                            );
-                                        });
-                                });
+                g.bench_function(
+                    format!(
+                        "unsafe_variant_bs_{batch_size}_nn_{nearest_neighbors}_cs_{chunk_size}",
+                    ),
+                    |b| {
+                        b.iter_batched(
+                            || {
+                                (0..batch_size)
+                                    .map(|_| {
+                                        let a = dist.sample(rng);
+                                        let mut b = vec![];
+                                        for _ in 0..nearest_neighbors {
+                                            let idx = dist.sample(rng);
+                                            b.push(IrisVectorId::from_0_index(idx as u32));
+                                        }
+                                        (iris_codes[a].clone(), b)
+                                    })
+                                    .collect::<Vec<_>>()
+                            },
+                            |input| {
+                                for (query, vector_ids) in input.into_iter() {
+                                    rt.block_on(
+                                        pool.rotation_aware_dot_product_batch(query, vector_ids),
+                                    );
+                                }
                             },
                             BatchSize::SmallInput,
                         )
@@ -819,6 +837,7 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_pairwise_distances,
     bench_pairwise_distances_rayon,
     bench_batch_trick_dot,
     bench_trick_dot,
