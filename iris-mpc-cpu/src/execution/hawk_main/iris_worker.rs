@@ -10,9 +10,7 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::{
-    fast_metrics::FastHistogram, vector_id::VectorId, MIN_DOT_BATCH_SIZE, ROTATIONS,
-};
+use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId, ROTATIONS};
 use std::{
     cmp,
     sync::{
@@ -51,16 +49,6 @@ enum IrisTask {
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
     RotationAwareDotProductBatch {
-        query: ArcIris,
-        vector_ids: Arc<Vec<VectorId>>,
-        // the worker threads write to non-overlapping parts of the result
-        result: Arc<Vec<RingElement<u16>>>,
-        input_offset: usize,
-        input_len: usize,
-        rsp: oneshot::Sender<()>,
-    },
-    // potential candidate to replace RotationAwareDotProductBatch
-    BenchBatchDot {
         query: ArcIris,
         vector_ids: Vec<VectorId>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -133,79 +121,51 @@ impl IrisPoolHandle {
 
     pub async fn rotation_aware_dot_product_batch(
         &mut self,
-        chunk_size: usize,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        // result will be unsafely handled by the worker threads.
-        // would use an UnsafeCell but that is not Send.
-        // getting a slice from result seems better than just sending a raw pointer.
-        let result = Arc::new(vec![RingElement(0_u16); vector_ids.len() * ROTATIONS * 2]);
-        let vector_ids = Arc::new(vector_ids);
-        let input_len = vector_ids.len();
-        let num_slices = input_len.div_ceil(chunk_size);
-
-        // Compute base size and remainder
-        let base_size = input_len / num_slices;
-        let remainder = input_len % num_slices;
-
-        let mut input_idx = 0;
-        let mut responses = Vec::with_capacity(num_slices);
-        for i in 0..num_slices {
+        let mut responses = Vec::with_capacity(vector_ids.len());
+        for id in vector_ids {
             let (tx, rx) = oneshot::channel();
-
-            // Distribute the remainder to the first slices
-            let elements_to_process = base_size + if i < remainder { 1 } else { 0 };
-
             let task = IrisTask::RotationAwareDotProductBatch {
                 query: query.clone(),
-                vector_ids: vector_ids.clone(),
-                result: result.clone(),
-                input_offset: input_idx,
-                input_len: elements_to_process,
+                vector_ids: vec![id],
                 rsp: tx,
             };
             self.get_next_worker().send(task)?;
             responses.push(rx);
-
-            input_idx += elements_to_process;
         }
-
-        let _results = futures::future::join_all(responses)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<()>, _>>()?;
-
-        let result =
-            Arc::try_unwrap(result).expect("Failed to unwrap Arc: other references still exist");
+        let results = futures::future::try_join_all(responses).await?;
+        let results = results.into_iter().flat_map(|x| x).collect();
 
         self.metric_latency.record(start.elapsed().as_secs_f64());
-        Ok(result)
+        Ok(results)
     }
 
     pub async fn bench_batch_dot(
         &mut self,
         per_worker: usize,
-        inputs: Vec<(ArcIris, Vec<VectorId>)>,
-    ) -> Result<Vec<Vec<RingElement<u16>>>> {
-        let mut responses = Vec::with_capacity(inputs.len());
-        for (query, vector_ids) in inputs.into_iter() {
-            for vector_id_chunk in vector_ids.chunks(per_worker) {
-                let (tx, rx) = oneshot::channel();
-                let task = IrisTask::BenchBatchDot {
-                    query: query.clone(),
-                    vector_ids: vector_id_chunk.to_vec(),
-                    rsp: tx,
-                };
-                self.get_next_worker().send(task)?;
-                responses.push(rx);
-            }
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let mut responses = Vec::with_capacity(vector_ids.len() / per_worker);
+        for vector_id_chunk in vector_ids.chunks(per_worker) {
+            let (tx, rx) = oneshot::channel();
+            let task = IrisTask::RotationAwareDotProductBatch {
+                query: query.clone(),
+                vector_ids: vector_id_chunk.to_vec(),
+                rsp: tx,
+            };
+            self.get_next_worker().send(task)?;
+            responses.push(rx);
         }
 
-        let results = futures::future::try_join_all(responses).await?;
-        Ok(results)
+        let r = futures::future::try_join_all(responses).await?;
+        let flattened = r.into_iter().flat_map(|x| x).collect();
+
+        Ok(flattened)
     }
 
     pub async fn galois_ring_pairwise_distances(
@@ -336,36 +296,6 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::RotationAwareDotProductBatch {
-                query,
-                vector_ids,
-                result,
-                input_offset,
-                input_len,
-                rsp,
-            } => {
-                let input_slice = &vector_ids[input_offset..input_offset + input_len];
-
-                let p_result = result.as_ptr() as *mut RingElement<u16>;
-                let multiplier = ROTATIONS * 2;
-
-                // safety: the worker threads must write to non-overlapping regions of result
-                // and result must not be used until all the worker threads are finished.
-                let r_slice = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        p_result.add(input_offset * multiplier),
-                        (input_offset + input_len) * multiplier,
-                    )
-                };
-
-                let store = iris_store.data.blocking_read();
-                let targets = input_slice.iter().map(|v| store.get_vector(v));
-                rotation_aware_pairwise_distance(&query, targets, r_slice);
-                drop(vector_ids);
-                drop(result);
-                let _ = rsp.send(());
-            }
-
-            IrisTask::BenchBatchDot {
                 query,
                 vector_ids,
                 rsp,

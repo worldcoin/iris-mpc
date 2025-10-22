@@ -753,82 +753,46 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
 
     // similar to numa_realloc
     for (idx, iris) in iris_codes.iter().enumerate() {
-        pool.insert(IrisVectorId::from_0_index(idx as u32), iris.clone());
+        pool.insert(IrisVectorId::from_0_index(idx as u32), iris.clone())
+            .unwrap();
     }
 
-    rt.block_on(pool.wait_completion());
+    let _ = rt.block_on(pool.wait_completion());
 
     // --- RAM-bound (non-cacheable) version ---
 
     // iris-mpc-hawk will use batch_size of 32 but for a list of 4096 and small chunk sizes,
     // there is more than enough work to saturate the cpus.
-    for batch_size in [1] {
-        for nearest_neighbors in [4096] {
-            g.throughput(Throughput::Elements(
-                batch_size * nearest_neighbors as u64 * ROTATIONS as u64,
-            ));
 
-            for chunk_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] {
-                if chunk_size > nearest_neighbors {
-                    continue;
-                }
+    for nearest_neighbors in [4096] {
+        g.throughput(Throughput::Elements(
+            nearest_neighbors as u64 * ROTATIONS as u64,
+        ));
 
-                g.bench_function(
-                    format!("bs_{batch_size}_nn_{nearest_neighbors}_cs_{chunk_size}",),
-                    |b| {
-                        b.iter_batched(
-                            || {
-                                (0..batch_size)
-                                    .map(|_| {
-                                        let a = dist.sample(rng);
-                                        let mut b = vec![];
-                                        for _ in 0..nearest_neighbors {
-                                            let idx = dist.sample(rng);
-                                            b.push(IrisVectorId::from_0_index(idx as u32));
-                                        }
-                                        (iris_codes[a].clone(), b)
-                                    })
-                                    .collect::<Vec<_>>()
-                            },
-                            |input| {
-                                rt.block_on(pool.bench_batch_dot(chunk_size, input));
-                            },
-                            BatchSize::SmallInput,
-                        )
-                    },
-                );
-
-                g.bench_function(
-                    format!(
-                        "unsafe_variant_bs_{batch_size}_nn_{nearest_neighbors}_cs_{chunk_size}",
-                    ),
-                    |b| {
-                        b.iter_batched(
-                            || {
-                                (0..batch_size)
-                                    .map(|_| {
-                                        let a = dist.sample(rng);
-                                        let mut b = vec![];
-                                        for _ in 0..nearest_neighbors {
-                                            let idx = dist.sample(rng);
-                                            b.push(IrisVectorId::from_0_index(idx as u32));
-                                        }
-                                        (iris_codes[a].clone(), b)
-                                    })
-                                    .collect::<Vec<_>>()
-                            },
-                            |input| {
-                                for (query, vector_ids) in input.into_iter() {
-                                    rt.block_on(pool.rotation_aware_dot_product_batch(
-                                        chunk_size, query, vector_ids,
-                                    ));
-                                }
-                            },
-                            BatchSize::SmallInput,
-                        )
-                    },
-                );
+        for chunk_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] {
+            if chunk_size > nearest_neighbors {
+                continue;
             }
+
+            g.bench_function(format!("nn_{nearest_neighbors}_cs_{chunk_size}",), |b| {
+                b.iter_batched(
+                    || {
+                        let a = dist.sample(rng);
+                        let mut b = vec![];
+                        for _ in 0..nearest_neighbors {
+                            let idx = dist.sample(rng);
+                            b.push(IrisVectorId::from_0_index(idx as u32));
+                        }
+                        (iris_codes[a].clone(), b)
+                    },
+                    |(query, targets)| {
+                        let _ = std::hint::black_box(
+                            rt.block_on(pool.bench_batch_dot(chunk_size, query, targets)),
+                        );
+                    },
+                    BatchSize::SmallInput,
+                )
+            });
         }
     }
 
