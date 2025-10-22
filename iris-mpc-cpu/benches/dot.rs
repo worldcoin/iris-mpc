@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use core_affinity::get_core_ids;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use iris_mpc_common::galois_engine::degree4::{rotation_aware_trick_dot_padded, IrisRotation};
 use iris_mpc_common::{
@@ -10,11 +9,9 @@ use iris_mpc_common::{
 use iris_mpc_common::{IrisVectorId, ROTATIONS};
 use iris_mpc_cpu::execution::hawk_main::iris_worker::init_workers;
 use iris_mpc_cpu::hawkers::shared_irises::SharedIrises;
-use iris_mpc_cpu::protocol::ops::rotation_aware_pairwise_distance;
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
 };
-use iris_mpc_cpu::shares::RingElement;
 use itertools::Itertools;
 use rand::seq::index::sample;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
@@ -609,122 +606,11 @@ pub fn bench_batch_trick_dot(c: &mut Criterion) {
     g.finish();
 }
 
-// determine the following:
-// optimal chunk size of `target` when doing batches of X in parallel for various lengths of `target`
-pub fn bench_pairwise_distances_rayon(c: &mut Criterion) {
-    // helper
-    fn round_power_of_two(x: usize) -> usize {
-        if x.is_power_of_two() {
-            x
-        } else {
-            x.next_power_of_two() / 2
-        }
-    }
-
-    // the thread pool should be for a single numa node
-    // assume at most 2 numa nodes
-    // assume that using half the cores, all cores will be on the same numa node
-    let num_cpus = round_power_of_two(num_cpus::get()) / 2;
-
-    let mut g = c.benchmark_group(format!("par_trick_dot_ncpu_{}", num_cpus));
-    g.sample_size(10);
-
-    // one thread per  logical core
-    let core_ids = get_core_ids().unwrap();
-    let selected_cores = core_ids.into_iter().take(num_cpus).collect::<Vec<_>>();
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(num_cpus)
-        .start_handler(move |idx| {
-            core_affinity::set_for_current(selected_cores[idx]);
-        })
-        .build()
-        .unwrap();
-
-    // Prepare a large dataset of random iris codes and their shares
-    // should be divisible by 3
-    let dataset_size = 99999;
-    let dist = Uniform::new(0, dataset_size);
-
-    // allocating these on the thread pool should ensure they are allocated to the correct numa node
-    let iris_codes: Vec<_> = pool.install(|| {
-        (0..dataset_size / 3)
-            .into_par_iter()
-            .flat_map(|_| {
-                let rng = &mut thread_rng();
-                let iris = IrisCode::random_rng(rng);
-                GaloisRingSharedIris::generate_shares_locally(rng, iris)
-            })
-            .map(Arc::new)
-            .collect()
-    });
-
-    // --- RAM-bound (non-cacheable) version ---
-    let rng = &mut thread_rng();
-
-    // iris-mpc-hawk will use batch_size of 32 but for a list of 4096 and small chunk sizes,
-    // there is more than enough work to saturate the cpus.
-    for batch_size in [1] {
-        for nearest_neighbors in [4096] {
-            g.throughput(Throughput::Elements(
-                batch_size * nearest_neighbors as u64 * ROTATIONS as u64,
-            ));
-
-            for chunk_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512] {
-                if chunk_size > nearest_neighbors {
-                    continue;
-                }
-
-                g.bench_function(
-                    format!("bs_{batch_size}_nn_{nearest_neighbors}_cs_{chunk_size}",),
-                    |b| {
-                        b.iter_batched(
-                            || {
-                                (0..batch_size)
-                                    .map(|_| {
-                                        let a = dist.sample(rng);
-                                        let mut b = vec![];
-                                        for _ in 0..nearest_neighbors {
-                                            let idx = dist.sample(rng);
-                                            b.push(&iris_codes[idx]);
-                                        }
-                                        (&iris_codes[a], b)
-                                    })
-                                    .collect::<Vec<_>>()
-                            },
-                            |input| {
-                                pool.install(|| {
-                                    input.into_par_iter().for_each(|(l, set)| {
-                                        let mut result =
-                                            vec![RingElement(0_u16); set.len() * ROTATIONS * 2];
-
-                                        set.par_chunks(chunk_size)
-                                            .zip(result.par_chunks_mut(chunk_size * ROTATIONS * 2))
-                                            .for_each(|(targets, result)| {
-                                                rotation_aware_pairwise_distance(
-                                                    l,
-                                                    targets.iter().map(|x| Some(*x)),
-                                                    result,
-                                                );
-                                            });
-                                    });
-                                });
-                            },
-                            BatchSize::SmallInput,
-                        )
-                    },
-                );
-            }
-        }
-    }
-
-    g.finish();
-}
-
-pub fn bench_pairwise_distances(c: &mut Criterion) {
+pub fn bench_worker_pool(c: &mut Criterion) {
     let rng = &mut thread_rng();
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let mut g = c.benchmark_group(format!("par_trick_dot",));
+    let mut g = c.benchmark_group(format!("batch_trick_dot_iris_worker",));
     g.sample_size(10);
 
     // Prepare a large dataset of random iris codes and their shares
@@ -758,11 +644,6 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
     }
 
     let _ = rt.block_on(pool.wait_completion());
-
-    // --- RAM-bound (non-cacheable) version ---
-
-    // iris-mpc-hawk will use batch_size of 32 but for a list of 4096 and small chunk sizes,
-    // there is more than enough work to saturate the cpus.
 
     for nearest_neighbors in [4096] {
         g.throughput(Throughput::Elements(
@@ -801,8 +682,7 @@ pub fn bench_pairwise_distances(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_pairwise_distances,
-    bench_pairwise_distances_rayon,
+    bench_worker_pool,
     bench_batch_trick_dot,
     bench_trick_dot,
     bench_galois_ring_pairwise_distance,
