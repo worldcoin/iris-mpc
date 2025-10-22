@@ -24,6 +24,7 @@ use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
+    ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use std::{array, ops::Not, time::Instant};
@@ -656,14 +657,14 @@ where
 pub fn rotation_aware_pairwise_distance<'a, I>(
     query: &'a ArcIris,
     targets: I,
-    result: &mut [RingElement<u16>],
-) where
+) -> Vec<RingElement<u16>>
+where
     I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
 {
     let start = Instant::now();
     let mut count = 0;
+    let mut additive_shares = Vec::with_capacity(2 * ROTATIONS * targets.len());
 
-    let mut it = result.iter_mut();
     for target in targets {
         for rotation in IrisRotation::all() {
             count += 1;
@@ -679,8 +680,8 @@ pub fn rotation_aware_pairwise_distance<'a, I>(
                 let (a, b) = SHARE_OF_MAX_DISTANCE;
                 (RingElement(a), RingElement(b))
             };
-            *it.next().unwrap() = code_dist;
-            *it.next().unwrap() = mask_dist;
+            additive_shares.push(code_dist);
+            additive_shares.push(mask_dist);
         }
     }
 
@@ -690,6 +691,7 @@ pub fn rotation_aware_pairwise_distance<'a, I>(
         metric_batch_size.record(batch_size);
         metric_per_pair_duration.record(duration);
     });
+    additive_shares
 }
 
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by

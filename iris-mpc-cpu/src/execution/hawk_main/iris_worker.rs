@@ -10,7 +10,7 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId, ROTATIONS};
+use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId};
 use std::{
     cmp,
     sync::{
@@ -302,8 +302,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let mut result = vec![RingElement(0); vector_ids.len() * ROTATIONS * 2];
-                rotation_aware_pairwise_distance(&query, targets, &mut result);
+                let result = rotation_aware_pairwise_distance(&query, targets);
                 let _ = rsp.send(result);
             }
 
