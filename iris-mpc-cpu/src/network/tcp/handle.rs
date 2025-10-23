@@ -135,7 +135,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
             shutdown_ct,
         };
 
-        if let Err(e) = r.sync_peers().await {
+        if let Err(_e) = r.sync_peers().await {
             tracing::warn!("NetworkHandle failed to sync peers on creation");
         }
         r
