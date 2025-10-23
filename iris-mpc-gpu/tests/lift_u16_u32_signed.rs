@@ -159,14 +159,12 @@ mod lift_u16_u32_signed_test {
             .map(|dev| dev.fork_default_stream().unwrap())
             .collect::<Vec<_>>();
 
-        // Import to GPU
-        let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
-        tracing::info!("id = {}, Data is on GPUs!", id);
         tracing::info!("id = {}, Starting tests...", id);
 
         let mut error = false;
         for _ in 0..10 {
-            // Simulate Masks to be zero for this test
+            let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
+            tracing::info!("id = {}, Data is on GPUs!", id);
             let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
             let mut x = to_view(&x_);
             let mut mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
