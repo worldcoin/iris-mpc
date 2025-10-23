@@ -14,6 +14,16 @@
 # 2. Ensure that you have the kubectl and kubectx installed on your local machine.
 # 3. Ensure that your kubeconfig is configured to access the target clusters.
 
+#added functionality to not get stuck on used ports
+set -Eeuo pipefail
+PORT_FORWARD_PID=""
+cleanup() {
+  if [[ -n "${PORT_FORWARD_PID:-}" ]] && ps -p "$PORT_FORWARD_PID" >/dev/null 2>&1; then
+    kill "$PORT_FORWARD_PID" || true
+  fi
+}
+trap cleanup EXIT
+
 
 NEW_BRANCH=$1
 
@@ -67,6 +77,53 @@ GREEN='\033[0;32m'
 # Reset color
 NC='\033[0m'
 
+## Ensure ports are free
+
+ensure_port_free() {
+  local port=$1
+
+  if ! command -v lsof >/dev/null 2>&1; then
+    echo "lsof is required to check port usage. Please install lsof."
+    exit 1
+  fi
+
+  local pids
+  pids=$(lsof -tiTCP:"$port" -sTCP:LISTEN || true)
+  [[ -z "$pids" ]] && return 0
+
+  echo "Port $port is in use."
+  for pid in $pids; do
+    local comm fullcmd
+    comm=$(ps -o comm= -p "$pid" || echo "unknown")
+    fullcmd=$(ps -o command= -p "$pid" || echo "unknown")
+
+    if [[ "$comm" == "kubectl" ]]; then
+      echo " - kubectl (PID $pid) is holding $port; killing..."
+      kill "$pid" 2>/dev/null || true
+      sleep 0.5
+      ps -p "$pid" >/dev/null 2>&1 && kill -9 "$pid" 2>/dev/null || true
+    else
+      echo " - PID $pid ($comm): $fullcmd"
+      read -r -p "   Kill PID $pid to free port $port? [y/N] " ans
+      if [[ "$ans" =~ ^[Yy]$ ]]; then
+        kill "$pid" 2>/dev/null || true
+        sleep 0.5
+        ps -p "$pid" >/dev/null 2>&1 && kill -9 "$pid" 2>/dev/null || true
+      else
+        echo "   Aborting."
+        exit 1
+      fi
+    fi
+  done
+
+  # Verify it's free now
+  pids=$(lsof -tiTCP:"$port" -sTCP:LISTEN || true)
+  [[ -z "$pids" ]] || { echo "Port $port still occupied: $pids"; exit 1; }
+}
+
+
+## ensure ports are free -- end
+	
 # Function to port-forward ArgoCD and retrieve the password
 get_argocd_password() {
     local cluster=$1
@@ -107,7 +164,9 @@ for i in "${!CLUSTERS[@]}"; do
         echo "Failed to switch context to $CLUSTER. Skipping..."
         continue
     fi
-
+    
+    #Call function to ensure port is free
+    ensure_port_free "$PORT"
     kubectl -n argocd port-forward svc/argocd-server $PORT:443 1> /dev/null &
     PORT_FORWARD_PID=$!
     sleep 2
