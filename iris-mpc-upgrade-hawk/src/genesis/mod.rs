@@ -156,15 +156,16 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         hnsw_iris_store,
     ) = exec_setup(&args, &config).await?;
 
+    // if the healthcheck fails enough that shutdown is triggered, genesis will run forever.
     log_info(String::from("Setup complete."));
     log_info(format!(
-        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
-        args.max_indexation_id,
-        args.batch_size,
-        args.batch_size_error_rate,
-        args.perform_snapshot,
-        args.use_backup_as_source,
-    ));
+            "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
+            args.max_indexation_id,
+            args.batch_size,
+            args.batch_size_error_rate,
+            args.perform_snapshot,
+            args.use_backup_as_source,
+        ));
 
     // Phase 1: apply delta.
 
@@ -221,6 +222,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     log_info(String::from(
         "Cleared modifications from the HNSW iris store",
     ));
+
+    // trigger manual shutdown to ensure the health check services terminate
+    shutdown_handler.trigger_manual_shutdown();
 
     Ok(())
 }
@@ -381,7 +385,11 @@ async fn exec_setup(
 
     // Coordinator: await network state = ready.
     coordinator::set_node_ready(is_ready_flag);
-    coordinator::wait_for_others_ready(config).await?;
+    let ct = shutdown_handler.get_cancellation_token();
+    tokio::select! {
+        _ = ct.cancelled() => Err(eyre!("ready check failed")),
+        r = coordinator::wait_for_others_ready(config) => r
+    }?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = READY"));
 
