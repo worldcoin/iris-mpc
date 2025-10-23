@@ -68,7 +68,7 @@ initContainer:
   name: "anon-stats-server-smpcv2-dns-records-updater"
   env:
     - name: PARTY_ID
-      value: "0"
+      value: "1"
     - name: POD_IP
       valueFrom:
         fieldRef:
