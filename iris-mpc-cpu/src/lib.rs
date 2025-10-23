@@ -1,3 +1,4 @@
+pub mod anon_stats;
 pub mod execution;
 pub mod genesis;
 pub mod hawkers;
