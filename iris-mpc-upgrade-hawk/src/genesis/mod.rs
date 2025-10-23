@@ -222,6 +222,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         "Cleared modifications from the HNSW iris store",
     ));
 
+    // trigger manual shutdown to ensure the health check services terminate
+    shutdown_handler.trigger_manual_shutdown();
+
     Ok(())
 }
 
@@ -381,7 +384,11 @@ async fn exec_setup(
 
     // Coordinator: await network state = ready.
     coordinator::set_node_ready(is_ready_flag);
-    coordinator::wait_for_others_ready(config).await?;
+    let ct = shutdown_handler.get_cancellation_token();
+    tokio::select! {
+        _ = ct.cancelled() => Err(eyre!("ready check failed")),
+        r = coordinator::wait_for_others_ready(config) => r
+    }?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = READY"));
 

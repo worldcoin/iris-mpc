@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
-use crate::utils::{
-    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-    modifications::{
-        self, ModificationInput,
-        ModificationType::{Reauth, ResetUpdate},
+use crate::{
+    join_runners,
+    utils::{
+        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+        modifications::{
+            self, ModificationInput,
+            ModificationType::{Reauth, ResetUpdate},
+        },
+        mpc_node::{DbAssertions, MpcNode, MpcNodes},
+        plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
     },
-    mpc_node::{DbAssertions, MpcNode, MpcNodes},
-    plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
@@ -55,26 +58,19 @@ impl TestRun for Test {
                     config,
                 )
                 .await
-                .unwrap()
             });
         }
-        join_set.join_all().await;
+        join_runners!(join_set);
 
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            join_set.spawn(async move {
-                node.apply_modifications(&[], &MODIFICATIONS).await.unwrap();
-            });
+            join_set.spawn(async move { node.apply_modifications(&[], &MODIFICATIONS).await });
         }
-        join_set.join_all().await;
-
-        // hack to get around an "address already in use" error, emitted by HawkHandle
-        let service_ports = vec!["4003".into(), "4004".into(), "4005".into()];
+        join_runners!(join_set);
 
         let mut join_set = JoinSet::new();
-        for mut config in self.configs.iter().cloned() {
+        for config in self.configs.iter().cloned() {
             let genesis_args = DEFAULT_GENESIS_ARGS;
-            config.service_ports = service_ports.clone();
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
@@ -87,10 +83,9 @@ impl TestRun for Test {
                     config,
                 )
                 .await
-                .unwrap()
             });
         }
-        join_set.join_all().await;
+        join_runners!(join_set);
 
         Ok(())
     }

@@ -1,7 +1,12 @@
 use super::player::Identity;
 use crate::{
     execution::{
-        hawk_main::{insert::InsertPlanV, iris_worker::IrisPoolHandle, search::SearchIds},
+        hawk_main::{
+            insert::InsertPlanV,
+            iris_worker::IrisPoolHandle,
+            rot::{AllRotations, VecRotationSupport},
+            search::SearchIds,
+        },
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -86,7 +91,11 @@ pub mod state_check;
 use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
-use rot::VecRots;
+
+/// The master switch to enable search-per-rotation or search-center-only.
+pub type SearchRotations = AllRotations;
+/// Rotation support as configured by SearchRotations.
+pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
 #[derive(Clone, Parser)]
 #[allow(non_snake_case)]
@@ -539,7 +548,7 @@ impl HawkActor {
     async fn update_anon_stats(
         &mut self,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
@@ -558,7 +567,7 @@ impl HawkActor {
             .collect_vec()
     }
 
-    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<HawkInsertPlan>]) {
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRotations<HawkInsertPlan>]) {
         // maps query_id and db_id to a vector of distances.
         let mut distances_with_ids: BTreeMap<(u32, u32), Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
@@ -770,8 +779,8 @@ struct HawkJob {
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
     batch: BatchQuery,
-    queries: SearchQueries,
-    queries_mirror: SearchQueries,
+    queries: SearchQueries<SearchRotations>,
+    queries_mirror: SearchQueries<SearchRotations>,
     ids: SearchIds,
 }
 
@@ -883,9 +892,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_orient(
-        queries: SearchQueries,
+        queries: SearchQueries<SearchRotations>,
         workers: &BothEyes<IrisPoolHandle>,
-    ) -> SearchQueries {
+    ) -> SearchQueries<SearchRotations> {
         let (left, right) = join!(
             Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
             Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
@@ -894,9 +903,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_side(
-        requests: &VecRequests<VecRots<Aby3Query>>,
+        requests: &VecRequests<VecRotations<Aby3Query>>,
         worker: &IrisPoolHandle,
-    ) -> VecRequests<VecRots<Aby3Query>> {
+    ) -> VecRequests<VecRotations<Aby3Query>> {
         // Iterate over all the irises.
         let all_irises_iter = requests.iter().flat_map(|rots| {
             rots.iter()
@@ -968,7 +977,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn queries(&self, orient: Orientation) -> SearchQueries {
+    fn queries(&self, orient: Orientation) -> SearchQueries<SearchRotations> {
         match orient {
             Orientation::Normal => self.queries.clone(),
             Orientation::Mirror => self.queries_mirror.clone(),
@@ -1011,7 +1020,7 @@ impl HawkRequest {
                         }
                     };
                     let query = Aby3Query::new_from_raw(iris);
-                    VecRots::new_center_only(query)
+                    VecRotationSupport::new_center_only(query)
                 })
                 .collect_vec()
         });
@@ -1438,8 +1447,13 @@ impl HawkHandle {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results =
-                search::search(sessions_search, search_queries, search_ids, search_params).await?;
+            let search_results = search::search::<SearchRotations>(
+                sessions_search,
+                search_queries,
+                search_ids,
+                search_params,
+            )
+            .await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
@@ -1514,7 +1528,7 @@ impl HawkHandle {
     async fn handle_mutations(
         hawk_actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        search_results: BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
         request: &HawkRequest,

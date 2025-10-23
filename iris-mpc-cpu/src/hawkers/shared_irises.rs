@@ -284,4 +284,18 @@ impl<I: Clone> SharedIrisesRef<I> {
     pub async fn checksum(&self) -> u64 {
         self.data.read().await.set_hash.checksum()
     }
+
+    /// Attempt to unwrap this shared reference.  Succeeds if there is exactly
+    /// one strong reference remaining to the underlying data, in which case the
+    /// data is unwrapped and returned as an Ok result.  If more than one strong
+    /// reference remains, a SharedIrisesRef with the same underlying data is
+    /// returned as an Err result.
+    pub fn try_unwrap<T>(self) -> Result<SharedIrises<I>, Self> {
+        let SharedIrisesRef { data } = self;
+        let lock_ = Arc::try_unwrap(data);
+        match lock_ {
+            Err(arc) => Err(SharedIrisesRef { data: arc }),
+            Ok(lock) => Ok(lock.into_inner()),
+        }
+    }
 }

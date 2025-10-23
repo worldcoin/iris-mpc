@@ -9,27 +9,29 @@ pub trait Rotations: Send + Sync + 'static {
 }
 
 #[derive(Clone, Debug)]
-pub struct WithRot {}
+pub struct AllRotations {}
 
-impl Rotations for WithRot {
+impl Rotations for AllRotations {
     const N_ROTATIONS: usize = ROTATIONS;
 }
 
 #[derive(Clone, Debug)]
-pub struct WithoutRot {}
+pub struct CenterOnly {}
 
-impl Rotations for WithoutRot {
+impl Rotations for CenterOnly {
     const N_ROTATIONS: usize = 1;
 }
 
-/// VecRots are lists of things for each rotation.
+/// VecRotationSupport is an abstraction for functions that work with or without rotations,
+/// controlled by the generic ROT = AllRotations or CenterOnly.
+/// Under the hood it is a Vec of length either 1 or ROTATIONS.
 #[derive(Clone, Debug)]
-pub struct VecRots<R, ROT = WithRot> {
+pub struct VecRotationSupport<R, ROT> {
     rotations: Vec<R>,
     phantom: PhantomData<ROT>,
 }
 
-impl<R, ROT> Deref for VecRots<R, ROT> {
+impl<R, ROT> Deref for VecRotationSupport<R, ROT> {
     type Target = Vec<R>;
 
     fn deref(&self) -> &Self::Target {
@@ -37,7 +39,7 @@ impl<R, ROT> Deref for VecRots<R, ROT> {
     }
 }
 
-impl<R, ROT: Rotations> From<Vec<R>> for VecRots<R, ROT> {
+impl<R, ROT: Rotations> From<Vec<R>> for VecRotationSupport<R, ROT> {
     fn from(rotations: Vec<R>) -> Self {
         assert_eq!(rotations.len(), ROT::N_ROTATIONS);
         Self {
@@ -47,7 +49,7 @@ impl<R, ROT: Rotations> From<Vec<R>> for VecRots<R, ROT> {
     }
 }
 
-impl<R> VecRots<R, WithoutRot> {
+impl<R> VecRotationSupport<R, CenterOnly> {
     pub fn new_center_only(center: R) -> Self {
         Self {
             rotations: vec![center],
@@ -56,7 +58,11 @@ impl<R> VecRots<R, WithoutRot> {
     }
 }
 
-impl<R, ROT: Rotations> VecRots<R, ROT> {
+impl<R, ROT: Rotations> VecRotationSupport<R, ROT> {
+    pub const fn n_rotations() -> usize {
+        ROT::N_ROTATIONS
+    }
+
     /// Get the item attached to the center rotation.
     pub fn center(&self) -> &R {
         &self.rotations[self.rotations.len() / 2]
@@ -85,7 +91,7 @@ impl<R, ROT: Rotations> VecRots<R, ROT> {
             if rot.is_empty() {
                 break;
             }
-            rots.push(VecRots::from(rot));
+            rots.push(Self::from(rot));
         }
         rots
     }

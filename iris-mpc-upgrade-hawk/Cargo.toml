@@ -46,7 +46,6 @@ async-trait.workspace = true
 [dev-dependencies]
 criterion = "0.5"
 thiserror.workspace = true
-tracing-test = "0.2.5"
 serial_test = "3.2.0"
 
 [features]

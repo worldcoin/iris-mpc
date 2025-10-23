@@ -1,9 +1,16 @@
-use eyre::Result;
+use eyre::{bail, eyre, Result};
 use serial_test::serial;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use utils::{TestRun, TestRunContextInfo};
 
 mod utils;
 mod workflows;
+
+// when a test fails, the unit test hangs forever. this is a attempt to fix that
+static TEST_FAILED: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
+
+const RUST_LOG: &str = "info";
 
 // the #[serial] macro doesn't work with #[tokio::test] but it works with #[test].
 // rather than implement a static mutex, simply use another macro to launch a tokio runtime
@@ -13,10 +20,33 @@ mod workflows;
 // this macro will work.
 macro_rules! run_test {
     ($count:expr, $idx:expr) => {{
+        // Initialize tracing to capture debug logs
+        tracing_subscriber::fmt()
+            .with_env_filter(format!("iris_mpc_cpu={RUST_LOG},iris_mpc_common={RUST_LOG},iris_mpc_upgrade_hawk={RUST_LOG}"))
+            .try_init()
+            .ok(); // ignore error if already initialized
+
+        if TEST_FAILED.load(Ordering::SeqCst) {
+            bail!("A previous test has failed, aborting further tests.");
+        }
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
             let ctx = TestRunContextInfo::new($count, $idx);
-            Test::new().run(ctx).await
+            let mut test = Test::new();
+
+            let shutdown = tokio::signal::ctrl_c();
+            let r = tokio::select! {
+                res = test.run(ctx) => {
+                    res
+                }
+                _ = shutdown => {
+                    Err(eyre!("Test aborted by Ctrl+C"))
+                }
+            };
+            if r.is_err() {
+                TEST_FAILED.store(true, Ordering::SeqCst);
+            }
+            r
         })
     }};
 }

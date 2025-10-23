@@ -35,7 +35,9 @@ impl From<&Base64IrisCode> for IrisCode {
     }
 }
 
-pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<PlaintextStore> {
+/// Read `len` iris codes from the specified file into an in-memory `Vec`, or
+/// all iris codes of `len` is `None`.
+pub fn irises_from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Vec<IrisCode>> {
     let file = File::open(filename)?;
     let reader = BufReader::new(file);
 
@@ -43,26 +45,37 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     let stream = serde_json::Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
     let stream = super::limited_iterator(stream, len);
 
-    // Iterate over each deserialized object
-    let mut vector = PlaintextStore::new();
-    for (idx, json_pt) in stream.into_iter().enumerate() {
-        let json_pt = json_pt?;
-        let iris = (&json_pt).into();
-        let id = IrisVectorId::from_0_index(idx as u32);
-        vector.insert_with_id(id, Arc::new(iris));
-    }
+    // Read iris codes into memory
+    let codes: Vec<_> = stream
+        .into_iter()
+        .map(|json_ptxt| (&json_ptxt.unwrap()).into())
+        .collect();
 
+    // Check that enough codes were present in file
     if let Some(num) = len {
-        if vector.len() != num {
+        if codes.len() != num {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "File {} contains too few entries; number read: {}",
                     filename,
-                    vector.len()
+                    codes.len()
                 ),
             ));
         }
+    }
+
+    Ok(codes)
+}
+
+pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<PlaintextStore> {
+    let codes = irises_from_ndjson_file(filename, len)?;
+
+    // Iterate over each deserialized object
+    let mut vector = PlaintextStore::new();
+    for (idx, iris) in codes.into_iter().enumerate() {
+        let id = IrisVectorId::from_0_index(idx as u32);
+        vector.insert_with_id(id, Arc::new(iris));
     }
 
     Ok(vector)
