@@ -124,7 +124,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         // be sure not to make more than one network handle...
         tokio::spawn(accept_loop(listener, conn_cmd_rx, shutdown_ct.clone()));
 
-        Self {
+        let r = Self {
             my_id,
             peers,
             connector,
@@ -133,7 +133,12 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
             connection_state,
             next_session_id: 0,
             shutdown_ct,
+        };
+
+        if let Err(e) = r.sync_peers().await {
+            tracing::warn!("NetworkHandle failed to sync peers on creation");
         }
+        r
     }
 
     // associates the connections with an Identity
