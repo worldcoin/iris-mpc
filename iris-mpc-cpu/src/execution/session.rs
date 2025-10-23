@@ -43,7 +43,7 @@ pub struct NetworkSession {
 
 impl NetworkSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
-        sleep(ARTIFICIAL_LINK_DELAY).await;
+        // sleep(ARTIFICIAL_LINK_DELAY).await;
         self.networking.send(value, receiver).await
     }
 
