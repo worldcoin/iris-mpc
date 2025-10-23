@@ -2,7 +2,7 @@ use eyre::Result;
 use iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 use iris_mpc_cpu::{
     execution::session::Session,
-    protocol::ops::{batch_lift_vec, translate_threshold_a},
+    protocol::ops::{batch_signed_lift_vec, translate_threshold_a},
     shares::share::DistanceShare,
 };
 use itertools::Itertools;
@@ -29,7 +29,7 @@ pub async fn lift_bundles_1d(
                 .flat_map(|y| [y.code_dot.clone(), y.mask_dot.clone()])
         })
         .collect_vec();
-    let lifted_flattened = batch_lift_vec(session, flattened).await?;
+    let lifted_flattened = batch_signed_lift_vec(session, flattened.clone()).await?;
 
     // reconstruct lifted bundles in original shape
     let mut idx = 0;
@@ -59,7 +59,7 @@ pub mod test_helper {
     use crate::anon_stats::types::DistanceBundle1D;
 
     pub struct TestDistances {
-        pub distances: Vec<Vec<[u16; 2]>>,
+        pub distances: Vec<Vec<[i16; 2]>>,
         pub shares0: Vec<DistanceBundle1D>,
         pub shares1: Vec<DistanceBundle1D>,
         pub shares2: Vec<DistanceBundle1D>,
@@ -78,9 +78,9 @@ pub mod test_helper {
 
             let items = (0..flat_size)
                 .map(|_| {
-                    let mask = rng.gen_range(6000u16..12000);
+                    let mask = rng.gen_range(6000i16..12000);
                     let code = rng.gen_range(-12000i16..12000);
-                    [code as u16, mask]
+                    [code, mask]
                 })
                 .collect_vec();
             let (shares1, shares2, shares3): (Vec<_>, Vec<_>, Vec<_>) = items
@@ -88,10 +88,10 @@ pub mod test_helper {
                 .map(|&x| {
                     let share1: u16 = rng.gen();
                     let share2: u16 = rng.gen();
-                    let share3: u16 = x[0].wrapping_sub(share1).wrapping_sub(share2);
+                    let share3: u16 = (x[0] as u16).wrapping_sub(share1).wrapping_sub(share2);
                     let mshare1: u16 = rng.gen();
                     let mshare2: u16 = rng.gen();
-                    let mshare3: u16 = x[1].wrapping_sub(mshare1).wrapping_sub(mshare2);
+                    let mshare3: u16 = (x[1] as u16).wrapping_sub(mshare1).wrapping_sub(mshare2);
                     (
                         DistanceShare {
                             code_dot: Share {
@@ -212,11 +212,16 @@ pub mod test_helper {
                         .expect("Expected at least one distance in the group")
                 })
                 .fold(vec![0; num_buckets], |mut acc, x| {
-                    let code_dist = x[0] as u32;
-                    let mask_dist = x[1] as u32;
+                    let code_dist = x[0];
+                    let mask_dist = x[1];
                     for (i, &threshold) in translated_thresholds.iter().enumerate() {
-                        let diff = (mask_dist * threshold).wrapping_sub(code_dist * 2u32.pow(16));
-                        acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
+                        let dist = 0.5f64 - (code_dist as f64) / (2f64 * mask_dist as f64);
+                        // let diff = (mask_dist * threshold).wrapping_sub(code_dist * 2u32.pow(16));
+                        acc[i] += if dist < 0.5f64 - threshold as f64 / (2f64 * 65536f64) {
+                            1
+                        } else {
+                            0
+                        };
                     }
                     acc
                 });

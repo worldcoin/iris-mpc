@@ -175,7 +175,7 @@ mod tests {
             .flat_map(|_| {
                 let mask = rng.gen_range(6000u32..12000);
                 let code = rng.gen_range(-12000i16..12000);
-                [code as u16 as u32, mask]
+                [code as u32, mask]
             })
             .collect_vec();
 
@@ -250,7 +250,8 @@ mod tests {
                 let mask_dist = x[1];
                 for (i, &threshold) in thresholds.iter().enumerate() {
                     let threshold_a = translate_threshold_a(threshold);
-                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
+                    let diff = (mask_dist * threshold_a)
+                        .wrapping_sub(code_dist.wrapping_mul(2u32.pow(16)));
                     acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
                 }
                 acc
@@ -275,7 +276,7 @@ mod tests {
             .flat_map(|_| {
                 let mask = rng.gen_range(6000u32..12000);
                 let code = rng.gen_range(-12000i16..12000);
-                [code as u16 as u32, mask]
+                [code as u32, mask]
             })
             .collect_vec();
 
@@ -380,7 +381,9 @@ mod tests {
                     .iter()
                     .reduce(|a, b| {
                         // plain distance formula is (0.5 - code/2*mask), the below is that multiplied by 2
-                        if (1f64 - a.0 as f64 / a.1 as f64) < (1f64 - b.0 as f64 / b.1 as f64) {
+                        if (1f64 - a.0 as i32 as f64 / a.1 as f64)
+                            < (1f64 - b.0 as i32 as f64 / b.1 as f64)
+                        {
                             a
                         } else {
                             b
@@ -393,7 +396,8 @@ mod tests {
                 let mask_dist = x.1;
                 for (i, &threshold) in thresholds.iter().enumerate() {
                     let threshold_a = translate_threshold_a(threshold);
-                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
+                    let diff = (mask_dist * threshold_a)
+                        .wrapping_sub(code_dist.wrapping_mul(2u32.pow(16)));
                     acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
                 }
                 acc
