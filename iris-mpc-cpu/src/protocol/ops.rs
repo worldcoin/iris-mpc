@@ -9,7 +9,9 @@ use crate::{
         NetworkValue::{self},
     },
     protocol::{
-        binary::and_many, prf::{Prf, PrfSeed}, shared_iris::ArcIris
+        binary::and_many,
+        prf::{Prf, PrfSeed},
+        shared_iris::ArcIris,
     },
     shares::{
         bit::Bit,
@@ -749,7 +751,7 @@ pub(crate) async fn oblivious_cross_compare_lifted(
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn min_of_pair_batch(
+pub(crate) async fn min_of_pair_batch(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<DistanceShare<u32>>> {
@@ -759,7 +761,11 @@ pub async fn min_of_pair_batch(
     conditionally_select_distance(session, distances, bits.as_slice()).await
 }
 
-pub async fn min_round_robin_batch(session: &mut Session, distances: &[DistanceShare<u32>], batch_size: usize) -> Result<Vec<DistanceShare<u32>>> {
+pub(crate) async fn min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<u32>>> {
     if distances.is_empty() {
         eyre::bail!("Expected at least one distance share");
     }
@@ -799,9 +805,13 @@ pub async fn min_round_robin_batch(session: &mut Session, distances: &[DistanceS
     // d3 |!b03|!b13|!b23| 1  |
     // Extract this table column-wise to AND them element-wise.
     // Group ith columns together, i.e., return a matrix M, where M[i] contains for the comparison bits between distance i of every batch and all the other distances within the same batch.
-    let mut batch_selection_bits = (0..batch_size).map(|_| Vec::with_capacity(num_batches * batch_size)).collect_vec();
+    let mut batch_selection_bits = (0..batch_size)
+        .map(|_| Vec::with_capacity(num_batches * batch_size))
+        .collect_vec();
     for batch in comparison_bits.chunks(batch_size * (batch_size - 1) / 2) {
-        let mut batch_matrix: Vec<Vec<Share<Bit>>> = (0..batch_size).map(|_| Vec::with_capacity(batch_size)).collect();
+        let mut batch_matrix: Vec<Vec<Share<Bit>>> = (0..batch_size)
+            .map(|_| Vec::with_capacity(batch_size))
+            .collect();
         let mut batch_counter = 0;
         for i in 0..batch_size {
             let row = &batch[batch_counter..batch_counter + (batch_size - i - 1)];
@@ -830,20 +840,32 @@ pub async fn min_round_robin_batch(session: &mut Session, distances: &[DistanceS
             None
         };
         let half_len = batch_selection_bits.len() / 2;
-        let left_bits: VecShare<u64> = VecShare::new_vec(batch_selection_bits.drain(..half_len).flatten().collect_vec()).pack();
-        let right_bits: VecShare<u64> = VecShare::new_vec(batch_selection_bits.drain(..).flatten().collect_vec()).pack();
+        let left_bits: VecShare<u64> = VecShare::new_vec(
+            batch_selection_bits
+                .drain(..half_len)
+                .flatten()
+                .collect_vec(),
+        )
+        .pack();
+        let right_bits: VecShare<u64> =
+            VecShare::new_vec(batch_selection_bits.drain(..).flatten().collect_vec()).pack();
         let and_bits = and_many(session, left_bits.as_slice(), right_bits.as_slice()).await?;
         let mut and_bits = and_bits.convert_to_bits();
         let num_and_bits = half_len * num_batches * batch_size;
         and_bits.truncate(num_and_bits);
-        batch_selection_bits = and_bits.inner()
+        batch_selection_bits = and_bits
+            .inner()
             .chunks(num_batches * batch_size)
             .map(|chunk| chunk.to_vec())
             .collect_vec();
         batch_selection_bits.extend(maybe_last_column);
     }
     // The resulting bits are bit injected into u32.
-    let selection_bits: VecShare<u32> = bit_inject_ot_2round(session, VecShare::new_vec(batch_selection_bits.pop().unwrap())).await?;
+    let selection_bits: VecShare<u32> = bit_inject_ot_2round(
+        session,
+        VecShare::new_vec(batch_selection_bits.pop().unwrap()),
+    )
+    .await?;
     // Multiply distance shares with selection bits to zero out non-minimum distances.
     let selected_distances = {
         let mut shares_a = Vec::with_capacity(2 * distances.len());
@@ -851,8 +873,8 @@ pub async fn min_round_robin_batch(session: &mut Session, distances: &[DistanceS
             for i in 0..batch_size {
                 let distance = &distances[i * num_batches + i_batch];
                 let b = &selection_bits.shares[i_batch * batch_size + i];
-                let code_a = session.prf.gen_zero_share() + distance.code_dot.a * b.a + distance.code_dot.b * b.a + distance.code_dot.a * b.b;
-                let mask_a = session.prf.gen_zero_share() + distance.mask_dot.a * b.a + distance.mask_dot.b * b.a + distance.mask_dot.a * b.b;
+                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
+                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
                 shares_a.push(code_a);
                 shares_a.push(mask_a);
             }
@@ -877,8 +899,17 @@ pub async fn min_round_robin_batch(session: &mut Session, distances: &[DistanceS
             .map(|(code, mask)| DistanceShare::new(code, mask))
             .collect_vec()
     };
-    let res = selected_distances.chunks(batch_size)
-        .map(|chunk| chunk.iter().cloned().reduce(|acc, a| DistanceShare::new(acc.code_dot + a.code_dot, acc.mask_dot + a.mask_dot)).unwrap())
+    let res = selected_distances
+        .chunks(batch_size)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .cloned()
+                .reduce(|acc, a| {
+                    DistanceShare::new(acc.code_dot + a.code_dot, acc.mask_dot + a.mask_dot)
+                })
+                .unwrap()
+        })
         .collect_vec();
     Ok(res)
 }

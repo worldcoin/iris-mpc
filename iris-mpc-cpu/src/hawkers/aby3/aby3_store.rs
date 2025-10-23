@@ -10,9 +10,8 @@ use crate::{
             batch_signed_lift_vec, conditionally_select_distances_with_plain_ids,
             conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
             conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, min_of_pair_batch, oblivious_cross_compare,
-            oblivious_cross_compare_lifted, open_ring,
-            min_round_robin_batch
+            lte_threshold_and_open, min_of_pair_batch, min_round_robin_batch,
+            oblivious_cross_compare, oblivious_cross_compare_lifted, open_ring,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -21,7 +20,7 @@ use crate::{
         share::{DistanceShare, Share},
     },
 };
-use eyre::Result;
+use eyre::{OptionExt, Result};
 use iris_mpc_common::{vector_id::VectorId, ROTATIONS};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
@@ -192,7 +191,7 @@ impl Aby3Store {
             return Ok(distances[0].clone());
         }
         let mut res = distances.to_vec();
-        while res.len() > 16 {
+        while res.len() > 1 {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             // create pairs from the remaining distances
@@ -204,7 +203,7 @@ impl Aby3Store {
                 res.push(last_distance.clone());
             }
         }
-        Ok(res[0].clone())
+        res.pop().ok_or_eyre("Cannot compute minimum of empty list")
     }
 
     /// Obliviously computes the minimum distance and the corresponding vector id of a given array of pairs (id, distance).
@@ -277,7 +276,9 @@ impl Aby3Store {
             }
         }
         // res is guaranteed to have length 1
-        let (shared_id, dist) = res.pop().unwrap();
+        let (shared_id, dist) = res
+            .pop()
+            .ok_or_eyre("Shouldn't be here: results are empty")?;
         // open the id
         let id = open_ring(&mut self.session, &[shared_id]).await?[0];
         let res = (Aby3VectorRef::from_serial_id(id), dist);
@@ -300,7 +301,7 @@ impl Aby3Store {
                 eyre::bail!("All distance lists must have the same length. List at index {} has length {}, while the first list has length {}", i, d.len(), len);
             }
         }
-        
+
         let mut res = distances.to_vec();
         while res.len() > 16 {
             // if the length is odd, we save the last distance to add it back later
@@ -323,8 +324,8 @@ impl Aby3Store {
                 res.push(last_distance.clone());
             }
         }
-        let flattened_distances = res.iter().cloned().flatten().collect_vec();
-        min_round_robin_batch(&mut self.session, &flattened_distances, distances.len()).await
+        let flattened_distances = res.iter().flatten().cloned().collect_vec();
+        min_round_robin_batch(&mut self.session, &flattened_distances, res.len()).await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
