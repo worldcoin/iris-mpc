@@ -16,7 +16,7 @@ def random_template():
   mock_mask_code = np.random.randint(0, 2, (16, 200, 2)).astype(bool)
   # last axis is repeated to mimic the img/real bit of the iris code
   # <https://github.com/worldcoin/open-iris/blob/dbc0a52e41297c690c34939882e0d62ccde5ffe5/src/iris/nodes/encoder/iris_encoder.py#L54>
-  mock_mask_code = np.stack([mock_mask_code, mock_mask_code], axis=-1) 
+  mock_mask_code = np.stack([mock_mask_code, mock_mask_code], axis=-1)
   return IrisTemplate(iris_codes=[mock_iris_code], mask_codes=[mock_mask_code], iris_code_version="v2.1")
 
 def encode_template(template):

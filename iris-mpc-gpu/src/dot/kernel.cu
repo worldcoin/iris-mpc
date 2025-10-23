@@ -94,7 +94,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             }
 
             unsigned int matchCounter = atomicAdd(&partialResultsCounter[0], 1);
-            if (matchCounter < MAX_MATCHES_LEN * queryLength) 
+            if (matchCounter < MAX_MATCHES_LEN * queryLength)
             {
                 partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
                 partialResultsDbIndices[matchCounter] = dbIdx + offset;
@@ -128,7 +128,7 @@ extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *resul
 
             unsigned int dbIdx = indexMapping[chunkDbIdx];
             unsigned int matchCounter = atomicAdd(&partialResultsCounter[0], 1);
-            if (matchCounter < MAX_MATCHES_LEN * queryLength) 
+            if (matchCounter < MAX_MATCHES_LEN * queryLength)
             {
                 partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
                 partialResultsDbIndices[matchCounter] = dbIdx;
@@ -289,7 +289,7 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
             // else => (matchLeft && matchRight).
             bool finalMatch = useOr ? (matchLeft || matchRight)
                                     : (matchLeft && matchRight);
-    
+
             if (finalMatch)
             {
                 atomicMin(&finalResults[queryIdx], dbIdx);

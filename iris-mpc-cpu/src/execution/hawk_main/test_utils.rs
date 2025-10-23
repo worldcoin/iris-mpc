@@ -20,14 +20,13 @@ use crate::{
         searcher::{ConnectPlan, ConnectPlanLayer},
     },
     protocol::shared_iris::GaloisRingSharedIris,
+    utils::constants::N_PARTIES,
 };
 
 use super::{
     scheduler::parallelize, tests::batch_of_party, HawkActor, HawkArgs, HawkRequest, VectorId,
     LEFT, RIGHT,
 };
-
-const N_PARTIES: usize = 3;
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
     let go = |addresses: Vec<String>, index: usize| {

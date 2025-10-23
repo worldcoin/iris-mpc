@@ -35,7 +35,7 @@ initContainer:
 
       # Set up environment variables
       HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".smpcv2.worldcoin.org --query "HostedZones[].Id" --output text)
-      
+
       # Generate the JSON content in memory
       BATCH_JSON=$(cat <<EOF
       {
@@ -56,6 +56,6 @@ initContainer:
       }
       EOF
       )
-      
+
       # Execute AWS CLI command with the generated JSON
       aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"

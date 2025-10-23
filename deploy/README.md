@@ -79,4 +79,3 @@ After updating the image URL in all necessary files, commit the changes and crea
 6. Once the PR is approved, merge it into the main branch.
 
 7. After merging the PR, ArgoCD will automatically detect the configuration updates within 5 minutes, pull the updated configuration, and start the upgrade process. 
-
