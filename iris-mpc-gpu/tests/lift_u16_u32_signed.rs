@@ -1,5 +1,5 @@
 #[cfg(feature = "gpu_dependent")]
-mod lift_u16_u32_test {
+mod lift_u16_u32_signed_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
         nccl::Id,
@@ -28,9 +28,13 @@ mod lift_u16_u32_test {
         res
     }
 
-    fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
+    fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<i16> {
         (0..size)
-            .map(|_| rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16))
+            .map(|_| {
+                rng.gen_range::<i16, _>(
+                    -(IrisCodeArray::IRIS_CODE_SIZE as i16)..=IrisCodeArray::IRIS_CODE_SIZE as i16,
+                )
+            })
             .collect::<Vec<_>>()
     }
 
@@ -42,12 +46,12 @@ mod lift_u16_u32_test {
         (a, b, c)
     }
 
-    fn rep_share_vec<R: Rng>(value: &[u16], rng: &mut R) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
+    fn rep_share_vec<R: Rng>(value: &[i16], rng: &mut R) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
         let mut a = Vec::with_capacity(value.len());
         let mut b = Vec::with_capacity(value.len());
         let mut c = Vec::with_capacity(value.len());
         for v in value.iter() {
-            let (a_, b_, c_) = rep_share(*v, rng);
+            let (a_, b_, c_) = rep_share(*v as u16, rng);
             a.push(a_);
             b.push(b_);
             c.push(c_);
@@ -79,8 +83,8 @@ mod lift_u16_u32_test {
         result
     }
 
-    fn real_result(mask_input: Vec<u16>) -> Vec<u32> {
-        mask_input.into_iter().map(|x| (x as u32)).collect()
+    fn real_result(mask_input: Vec<i16>) -> Vec<i32> {
+        mask_input.into_iter().map(|x| (x as i32)).collect()
     }
 
     fn open(
@@ -145,7 +149,7 @@ mod lift_u16_u32_test {
         mut party: Circuits,
         mask_share_a: Vec<u16>,
         mask_share_b: Vec<u16>,
-        real_result: Vec<u32>,
+        real_result: Vec<i32>,
     ) {
         let id = party.peer_id();
 
@@ -165,11 +169,11 @@ mod lift_u16_u32_test {
             // Simulate Masks to be zero for this test
             let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
             let mut x = to_view(&x_);
-            let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
+            let mut mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
             party.synchronize_streams(&streams);
 
             let now = Instant::now();
-            party.lift_u16_to_u32(&mask_gpu, &mut x, &streams);
+            party.lift_u16_to_u32_signed(&mut mask_gpu, &mut x, &streams);
             tracing::info!("id = {}, compute time: {:?}", id, now.elapsed());
 
             let now = Instant::now();
@@ -182,8 +186,8 @@ mod lift_u16_u32_test {
             );
 
             let mut correct = true;
-            for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
-                if r != r_ {
+            for (i, (&r, &r_)) in izip!(&result, &real_result).enumerate() {
+                if r != r_ as u32 {
                     correct = false;
                     tracing::error!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
                     error = true;

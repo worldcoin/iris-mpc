@@ -154,7 +154,8 @@ struct Kernels {
     pub(crate) conditional_select_pre: CudaFunction,
     pub(crate) conditional_select_post: CudaFunction,
     pub(crate) prelifted_sub_ab: CudaFunction,
-    pub(crate) finalize_lift_u16_u32: CudaFunction,
+    pub(crate) pre_lift_u16_u32_signed: CudaFunction,
+    pub(crate) finalize_lift_u16_u32_signed: CudaFunction,
 }
 
 impl Kernels {
@@ -195,7 +196,8 @@ impl Kernels {
                 "conditional_select_pre",
                 "conditional_select_post",
                 "shared_prelifted_sub_ab",
-                "shared_finalize_lift_u16_u32",
+                "shared_pre_lift_u16_u32_signed",
+                "shared_finalize_lift_u16_u32_signed",
             ],
         )
         .unwrap();
@@ -247,8 +249,11 @@ impl Kernels {
         let prelifted_sub_ab = dev
             .get_func(Self::MOD_NAME, "shared_prelifted_sub_ab")
             .unwrap();
-        let finalize_lift_u16_u32 = dev
-            .get_func(Self::MOD_NAME, "shared_finalize_lift_u16_u32")
+        let finalize_lift_u16_u32_signed = dev
+            .get_func(Self::MOD_NAME, "shared_finalize_lift_u16_u32_signed")
+            .unwrap();
+        let pre_lift_u16_u32_signed = dev
+            .get_func(Self::MOD_NAME, "shared_pre_lift_u16_u32_signed")
             .unwrap();
 
         Kernels {
@@ -282,7 +287,8 @@ impl Kernels {
             conditional_select_pre,
             conditional_select_post,
             prelifted_sub_ab,
-            finalize_lift_u16_u32,
+            pre_lift_u16_u32_signed,
+            finalize_lift_u16_u32_signed,
         }
     }
 }
@@ -1631,6 +1637,34 @@ impl Circuits {
         }
     }
 
+    fn pre_lift_correction_u16_u32_signed(
+        &mut self,
+        inout: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, inout.len());
+
+        for (idx, inp) in izip!(inout).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                inp.len() as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .pre_lift_u16_u32_signed
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (&inp.a, &inp.b, self.peer_id as u32, inp.len()),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     fn transpose_pack_u16_with_len(
         &mut self,
         inp: &[ChunkShareView<u16>],
@@ -1829,7 +1863,7 @@ impl Circuits {
             }
         }
     }
-    fn finalize_lift_u16_u32(
+    fn finalize_lift_u16_u32_signed(
         &mut self,
         lifted: &mut [ChunkShareView<u32>],
         corrections: &[ChunkShareView<u32>],
@@ -1849,12 +1883,12 @@ impl Circuits {
 
             unsafe {
                 self.kernels[idx]
-                    .finalize_lift_u16_u32
+                    .finalize_lift_u16_u32_signed
                     .clone()
                     .launch_on_stream(
                         &streams[idx],
                         cfg,
-                        (&lift.a, &lift.b, &corr.a, &corr.b, len),
+                        (&lift.a, &lift.b, &corr.a, &corr.b, self.peer_id as u32, len),
                     )
                     .unwrap();
             }
@@ -2033,9 +2067,10 @@ impl Circuits {
     }
 
     /// Lifts u16 shares to u32 shares, using the same method as lift_mpc, but also already corrects the output and injects the correction values, and does not multiply with B.
-    pub fn lift_u16_to_u32(
+    /// This lifts the shares in signed representation, so -1000 in u16 = 2^16-1000, becomes -1000 in u32 = 2^32-1000.
+    pub fn lift_u16_to_u32_signed(
         &mut self,
-        shares: &[ChunkShareView<u16>],
+        shares: &mut [ChunkShareView<u16>],
         out: &mut [ChunkShareView<u32>],
         streams: &[CudaStream],
     ) {
@@ -2060,6 +2095,7 @@ impl Circuits {
             c.push(d);
         }
 
+        self.pre_lift_correction_u16_u32_signed(shares, streams);
         self.transpose_pack_u16_with_len(shares, &mut x1, K, streams);
         self.lift_split(shares, out, &mut x1, &mut x2, &mut x3, streams);
         self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
@@ -2085,7 +2121,7 @@ impl Circuits {
         self.bit_inject_arithmetic_xor(&corr2, &mut inj2, streams);
 
         let buf_view = buf.iter().map(|x| x.as_view()).collect_vec();
-        self.finalize_lift_u16_u32(out, &buf_view, streams);
+        self.finalize_lift_u16_u32_signed(out, &buf_view, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, buffer2);
     }
