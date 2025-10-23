@@ -872,7 +872,12 @@ impl HnswSearcher {
         let mut depth = 0;
 
         // The current list of elements of `W` which are unopened
-        let mut cur_unopened = Vec::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+        let mut cur_unopened = Vec::from_iter(
+            W.iter()
+                .map(|(c, _)| c)
+                .filter(|&c| !opened.contains(c))
+                .cloned(),
+        );
 
         // Main graph traversal loop: continue until all graph nodes in the exploration
         // set W have been opened and none of the neighbors are closer to the
@@ -884,7 +889,7 @@ impl HnswSearcher {
             // the desired number of new elements to be inserted into the candidate neighborhood.
             let target_batch_size = insertion_batch_size * ins_rate_denom / INS_RATE_NUM;
 
-            // Open sveral candidate nodes, visit unvisited neighbors, and compute distances
+            // Open several candidate nodes, visit unvisited neighbors, and compute distances
             // between the query and neighbors as a batch. Opens nodes until at least
             // `target_batch_size` neighbors are visited or all nodes are opened.
             let (new_opened, c_links) = HnswSearcher::open_nodes_batch(
@@ -918,16 +923,10 @@ impl HnswSearcher {
                 .map(|(_c, cq)| (cq.clone(), fq.clone()))
                 .collect();
             let batch_size = batch.len();
-
             let results = store
                 .less_than_batch(&batch)
                 .instrument(less_than_span.clone())
                 .await?;
-            let n_insertions: usize = results.iter().map(|r| *r as usize).sum();
-            debug!(
-                batch_size,
-                n_insertions, "Batch distances comparison filter"
-            );
 
             // Filter out elements which are not strictly closer than the current worst candidate
             let filtered_links: Vec<_> = results
@@ -935,6 +934,12 @@ impl HnswSearcher {
                 .zip(c_links)
                 .filter_map(|(res, link)| if res { Some(link) } else { None })
                 .collect();
+
+            let n_insertions = filtered_links.len();
+            debug!(
+                batch_size,
+                n_insertions, "Batch distances comparison filter"
+            );
 
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
             W.insert_batch(store, &filtered_links)
@@ -1068,9 +1073,9 @@ impl HnswSearcher {
         query: &V::QueryRef,
         visited: &mut HashSet<V::VectorRef>,
         limit: Option<usize>,
-    ) -> Result<(HashSet<V::VectorRef>, Vec<(V::VectorRef, V::DistanceRef)>)> {
+    ) -> Result<(Vec<V::VectorRef>, Vec<(V::VectorRef, V::DistanceRef)>)> {
         let mut valid_neighbors = Vec::new();
-        let mut opened_nodes = HashSet::new();
+        let mut opened_nodes = Vec::with_capacity(nodes.len());
 
         for node in nodes {
             let neighbors = graph.get_links(node, lc).await;
@@ -1082,7 +1087,7 @@ impl HnswSearcher {
                 .collect();
 
             valid_neighbors.extend(store.only_valid_vectors(unvisited_neighbors).await);
-            opened_nodes.insert(node.clone());
+            opened_nodes.push(node.clone());
 
             // halt opening once at least limit valid neighbors have been visited, if specified
             if let Some(l) = limit {
