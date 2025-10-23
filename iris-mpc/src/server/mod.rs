@@ -417,9 +417,9 @@ async fn init_hawk_actor(
     };
 
     tracing::info!(
-        "Initializing HawkActor with args: party_index: {}, address: {:?}",
+        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
         hawk_args.party_index,
-        node_addresses,
+        node_addresses
     );
 
     HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await
