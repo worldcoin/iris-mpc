@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - debug-fail-build
   release:
     types:
       - 'published'
