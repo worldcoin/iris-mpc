@@ -43,7 +43,7 @@ services:
       - ./scripts/tools/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
 
   nginx_0:
-    image: nginx:latest
+    image: public.ecr.aws/docker/library/nginx
     ports:
       - "4100:4100"
       - "4101:4101"
