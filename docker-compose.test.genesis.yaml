@@ -45,7 +45,6 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:4000:4000"
-      - "127.0.0.1:4003:4003"
       - "3000:3000"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000/health" ]
@@ -72,7 +71,6 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:4001:4001"
-      - "127.0.0.1:4004:4004"
       - "3001:3001"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3001/health" ]
@@ -99,7 +97,6 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:4002:4002"
-      - "127.0.0.1:4005:4005"
       - "3002:3002"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3002/health" ]

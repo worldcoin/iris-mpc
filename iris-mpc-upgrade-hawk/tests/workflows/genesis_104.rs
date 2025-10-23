@@ -68,13 +68,9 @@ impl TestRun for Test {
         }
         join_runners!(join_set);
 
-        // hack to get around an "address already in use" error, emitted by HawkHandle
-        let service_ports = vec!["4003".into(), "4004".into(), "4005".into()];
-
         let mut join_set = JoinSet::new();
-        for mut config in self.configs.iter().cloned() {
+        for config in self.configs.iter().cloned() {
             let genesis_args = DEFAULT_GENESIS_ARGS;
-            config.service_ports = service_ports.clone();
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
