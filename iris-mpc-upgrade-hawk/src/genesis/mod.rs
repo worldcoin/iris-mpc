@@ -156,16 +156,15 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         hnsw_iris_store,
     ) = exec_setup(&args, &config).await?;
 
-    // if the healthcheck fails enough that shutdown is triggered, genesis will run forever.
     log_info(String::from("Setup complete."));
     log_info(format!(
-            "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
-            args.max_indexation_id,
-            args.batch_size,
-            args.batch_size_error_rate,
-            args.perform_snapshot,
-            args.use_backup_as_source,
-        ));
+        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
+        args.max_indexation_id,
+        args.batch_size,
+        args.batch_size_error_rate,
+        args.perform_snapshot,
+        args.use_backup_as_source,
+    ));
 
     // Phase 1: apply delta.
 
