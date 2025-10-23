@@ -9,6 +9,7 @@ members = [
     "iris-mpc-upgrade",
     "iris-mpc-upgrade-hawk",
     "iris-mpc-utils",
+    "iris-mpc-anon-stats-server",
 ]
 resolver = "2"
 
