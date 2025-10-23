@@ -124,7 +124,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         // be sure not to make more than one network handle...
         tokio::spawn(accept_loop(listener, conn_cmd_rx, shutdown_ct.clone()));
 
-        let r = Self {
+        let mut r = Self {
             my_id,
             peers,
             connector,
