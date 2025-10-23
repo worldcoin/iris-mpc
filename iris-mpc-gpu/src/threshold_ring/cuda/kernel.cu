@@ -450,17 +450,42 @@ shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
   }
 }
 
-// Corrects lifted values by subtracting the correction values
-extern "C" __global__ void shared_finalize_lift_u16_u32(U32 *share_a,
-                                                        U32 *share_b,
-                                                        U32 *corr_a,
-                                                        U32 *corr_b, size_t n) {
+// Corrects to be lifted values by adding the correction values for signed
+// representation
+extern "C" __global__ void
+shared_pre_lift_u16_u32_signed(U16 *share_a, U16 *share_b, int id, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    switch (id) {
+    case 0:
+      share_a[i] += 1 << 15; // Fixes the signed lifting
+      break;
+    case 1:
+      share_b[i] += 1 << 15; // Fixes the signed lifting
+      break;
+    }
+  }
+}
+
+// Corrects lifted values by subtracting the correction values for signed
+// representation
+extern "C" __global__ void
+shared_finalize_lift_u16_u32_signed(U32 *share_a, U32 *share_b, U32 *corr_a,
+                                    U32 *corr_b, int id, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     share_a[i] -= (U32)(corr_a[i]) << 16;
     share_a[i] -= (U32)(corr_a[i + n]) << 17;
     share_b[i] -= (U32)(corr_b[i]) << 16;
     share_b[i] -= (U32)(corr_b[i + n]) << 17;
+    switch (id) {
+    case 0:
+      share_a[i] -= 1 << 15; // Fixes the signed lifting
+      break;
+    case 1:
+      share_b[i] -= 1 << 15; // Fixes the signed lifting
+      break;
+    }
   }
 }
 
