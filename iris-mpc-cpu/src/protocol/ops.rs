@@ -663,7 +663,6 @@ where
 
     for target in targets {
         for rotation in IrisRotation::all() {
-            count += 1;
             let (code_dist, mask_dist) = if let Some(y) = target {
                 count += 1;
                 let (a, b) = (
