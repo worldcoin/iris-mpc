@@ -453,7 +453,7 @@ shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
 // Corrects to be lifted values by adding the correction values for signed
 // representation
 extern "C" __global__ void
-shared_pre_lift_u16_u32_signed(U16 *share_a, U16 *share_b int id, size_t n) {
+shared_pre_lift_u16_u32_signed(U16 *share_a, U16 *share_b, int id, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     switch (id) {
