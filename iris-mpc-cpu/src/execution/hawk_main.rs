@@ -166,6 +166,7 @@ pub struct HawkActor {
 
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
+    error_ct: CancellationToken,
     party_id: usize,
 }
 
@@ -302,10 +303,10 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            ct,
+            shutdown_ct,
             [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
@@ -314,7 +315,7 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        ct: CancellationToken,
+        shutdown_ct: CancellationToken,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
@@ -337,9 +338,13 @@ impl HawkActor {
 
         let my_index = args.party_index;
 
-        let networking =
-            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
-                .await?;
+        let networking = build_network_handle(
+            args,
+            shutdown_ct,
+            &identities,
+            SessionGroups::N_SESSIONS_PER_REQUEST,
+        )
+        .await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -370,6 +375,7 @@ impl HawkActor {
             role_assignments: Arc::new(role_assignments),
             networking,
             party_id: my_index,
+            error_ct: CancellationToken::new(),
             workers_handle,
         })
     }
@@ -444,7 +450,9 @@ impl HawkActor {
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
         let mut network_sessions = vec![];
-        for tcp_session in self.networking.make_sessions().await? {
+        let (tcp_sessions, error_ct) = self.networking.make_sessions().await?;
+        self.error_ct = error_ct;
+        for tcp_session in tcp_sessions {
             network_sessions.push(NetworkSession {
                 session_id: tcp_session.id(),
                 role_assignments: self.role_assignments.clone(),
@@ -480,6 +488,10 @@ impl HawkActor {
         )?;
         tracing::debug!("Created {} MPC sessions.", self.args.request_parallelism);
         Ok([l, r])
+    }
+
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        self.networking.sync_peers().await
     }
 
     fn create_session(
@@ -1373,8 +1385,12 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result =
-                    Self::handle_job(&mut hawk_actor, &mut sessions, job.request).await;
+                // check if there was a networking error
+                let error_ct = hawk_actor.error_ct.clone();
+                let job_result = tokio::select! {
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request) => r,
+                    _ = error_ct.cancelled() => Err(eyre!("networking error")),
+                };
 
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
@@ -1654,6 +1670,7 @@ impl HawkHandle {
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
+            tracing::error!("job failed. recreating sessions");
             // There is some error so the sessions may be somehow invalid. Make new ones.
             *sessions = hawk_actor.new_session_groups().await?;
         }
@@ -2054,7 +2071,11 @@ mod tests_db {
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
             party_index: 0,
-            addresses: vec!["0.0.0.0:1234".to_string()],
+            addresses: vec![
+                "0.0.0.0:1234".to_string(),
+                "0.0.0.0:1235".to_string(),
+                "0.0.0.0:1236".to_string(),
+            ],
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
