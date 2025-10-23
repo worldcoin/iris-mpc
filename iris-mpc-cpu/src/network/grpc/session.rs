@@ -26,7 +26,7 @@ pub struct GrpcSession {
 #[async_trait]
 impl Networking for GrpcSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
-        sleep(ARTIFICIAL_LINK_DELAY).await;
+        // sleep(ARTIFICIAL_LINK_DELAY).await;
         let value = value.to_network();
 
         let outgoing_stream = self.out_streams.get(receiver).ok_or(eyre!(

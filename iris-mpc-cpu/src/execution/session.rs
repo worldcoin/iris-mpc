@@ -5,8 +5,10 @@ use crate::{
 };
 use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
-
+use tokio::time::sleep;
+const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(1);
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionId(pub u32);
 
@@ -41,6 +43,7 @@ pub struct NetworkSession {
 
 impl NetworkSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
+        sleep(ARTIFICIAL_LINK_DELAY).await;
         self.networking.send(value, receiver).await
     }
 
