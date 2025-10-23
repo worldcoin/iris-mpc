@@ -1,6 +1,5 @@
 use super::player::Identity;
 use crate::{
-    anon_stats::protocols::compare_min_threshold_buckets,
     execution::{
         hawk_main::{insert::InsertPlanV, iris_worker::IrisPoolHandle, search::SearchIds},
         local::generate_local_identities,
@@ -18,6 +17,7 @@ use crate::{
     },
     network::tcp::{build_network_handle, NetworkHandle},
     protocol::{
+        anon_stats::compare_min_threshold_buckets,
         ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },

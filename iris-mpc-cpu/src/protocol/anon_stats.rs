@@ -10,7 +10,7 @@ use eyre::{eyre, Result};
 use itertools::Itertools;
 
 /// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
-/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
+/// Use the [translate_threshold_a](crate::protocol::ops::translate_threshold_a) function to compute the A term of the threshold comparison.
 /// The result of the comparisons is then summed up bucket-wise, with each bucket corresponding to a threshold.
 pub async fn compare_threshold_buckets(
     session: &mut Session,
@@ -47,7 +47,7 @@ pub async fn compare_threshold_buckets(
 }
 
 /// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
-/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
+/// Use the [translate_threshold_a](crate::protocol::ops::translate_threshold_a) function to compute the A term of the threshold comparison.
 /// The result of the comparisons is then summed up bucket-wise, with each bucket corresponding to a threshold.
 ///
 /// In comparison to `compare_threshold_buckets`, this function takes grouped distances as input, and for each group
@@ -104,6 +104,7 @@ pub async fn compare_min_threshold_buckets(
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
+    use super::{compare_min_threshold_buckets, compare_threshold_buckets};
     use aes_prng::AesRng;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
@@ -111,7 +112,6 @@ mod tests {
     use tokio::{sync::Mutex, task::JoinSet};
 
     use crate::{
-        anon_stats::protocols::{compare_min_threshold_buckets, compare_threshold_buckets},
         execution::{
             local::{generate_local_identities, LocalRuntime},
             session::{Session, SessionHandles},

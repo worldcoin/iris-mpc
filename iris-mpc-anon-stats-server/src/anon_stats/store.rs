@@ -1,5 +1,5 @@
 use eyre::Result;
-use iris_mpc_common::postgres::PostgresClient;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::anon_stats::types::DistanceBundle1D;
@@ -17,7 +17,13 @@ impl AnonStatsStore {
             postgres_client.schema_name
         );
 
-        postgres_client.migrate().await;
+        if postgres_client.access_mode == AccessMode::ReadOnly {
+            tracing::info!("Not migrating anon-stats-mpc-store DB in read-only mode");
+        } else {
+            sqlx::migrate!("./anon_stats_migrations/")
+                .run(&postgres_client.pool)
+                .await?;
+        }
 
         Ok(AnonStatsStore {
             pool: postgres_client.pool.clone(),
@@ -71,5 +77,56 @@ impl AnonStatsStore {
             .collect::<Result<Vec<_>, eyre::Report>>()?;
 
         Ok(distance_bundles)
+    }
+
+    pub async fn mark_anon_stats_processed(&self, ids: &[i64]) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE anon_stats_1d SET processed = TRUE WHERE id = ANY($1)
+            "#,
+        )
+        .bind(ids)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    const ANON_STATS_1D_INSERT_BATCH_SIZE: usize = 10000;
+
+    pub async fn insert_anon_stats_batch(
+        &self,
+        anon_stats: &[(i64, DistanceBundle1D)],
+    ) -> Result<()> {
+        if anon_stats.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for chunk in anon_stats.chunks(Self::ANON_STATS_1D_INSERT_BATCH_SIZE) {
+            let mapped_chunk = chunk.iter().map(|(id, bundle)| {
+                let bundle_bytes =
+                    bincode::serialize(bundle).expect("Failed to serialize DistanceBundle1D");
+                (id, bundle_bytes)
+            });
+            let mut query = sqlx::QueryBuilder::new(
+                r#"INSERT INTO anon_stats_1d (match_id, bundle, processed)"#,
+            );
+            query.push_values(mapped_chunk, |mut query, (id, bytes)| {
+                query.push_bind(id);
+                query.push_bind(bytes);
+            });
+
+            let res = query.build().execute(&mut *tx).await?;
+            if res.rows_affected() != chunk.len() as u64 {
+                return Err(eyre::eyre!(
+                    "Expected to insert {} rows, but only inserted {} rows",
+                    chunk.len(),
+                    res.rows_affected()
+                ));
+            }
+        }
+        tx.commit().await?;
+
+        Ok(())
     }
 }

@@ -58,9 +58,5 @@ name = "iris-mpc-hawk"
 path = "bin/server/iris_mpc_hawk.rs"
 
 [[bin]]
-name = "iris-mpc-anon-stats"
-path = "bin/server/iris_mpc_anon_stats.rs"
-
-[[bin]]
 name = "client"
 path = "bin/client/client.rs"

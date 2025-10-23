@@ -2503,12 +2503,16 @@ name = "iris-mpc-anon-stats-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bincode",
  "clap",
  "config",
  "dotenvy",
  "eyre",
  "iris-mpc-common",
+ "iris-mpc-cpu",
  "serde",
+ "siphasher",
+ "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",

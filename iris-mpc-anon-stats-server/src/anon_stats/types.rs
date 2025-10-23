@@ -1,5 +1,6 @@
-use crate::shares::share::DistanceShare;
 use std::hash::{Hash, Hasher};
+
+use iris_mpc_cpu::shares::share::DistanceShare;
 
 pub type DistanceBundle1D = Vec<DistanceShare<u16>>;
 pub type LiftedDistanceBundle1D = Vec<DistanceShare<u32>>;

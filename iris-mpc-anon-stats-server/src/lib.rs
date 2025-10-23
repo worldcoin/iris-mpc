@@ -1,3 +1,4 @@
+pub mod anon_stats;
 pub mod config;
 pub mod health;
 
