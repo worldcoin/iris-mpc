@@ -2,7 +2,7 @@ use eyre::Result;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::anon_stats::types::DistanceBundle1D;
+use crate::anon_stats::types::{AnonStatsOrigin, DistanceBundle1D};
 
 #[derive(Clone, Debug)]
 pub struct AnonStatsStore {
@@ -35,12 +35,13 @@ impl AnonStatsStore {
         Ok(self.pool.begin().await?)
     }
 
-    pub async fn num_available_anon_stats(&self) -> Result<i64> {
+    pub async fn num_available_anon_stats(&self, origin: AnonStatsOrigin) -> Result<i64> {
         let row: (i64,) = sqlx::query_as(
             r#"
-            SELECT COUNT(*) FROM anon_stats_1d WHERE processed = FALSE
+            SELECT COUNT(*) FROM anon_stats_1d WHERE processed = FALSE and origin = $1
             "#,
         )
+        .bind(i16::from(origin))
         .fetch_one(&self.pool)
         .await?;
 
@@ -48,15 +49,17 @@ impl AnonStatsStore {
     }
     pub async fn get_available_anon_stats(
         &self,
+        origin: AnonStatsOrigin,
         limit: usize,
     ) -> Result<Vec<(i64, DistanceBundle1D)>> {
         let res: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
             r#"
-            SELECT (id, match_id,bundle) FROM anon_stats_1d WHERE processed = FALSE
+            SELECT (id, match_id,bundle) FROM anon_stats_1d WHERE processed = FALSE and origin = $1
             ORDER BY id ASC
-            LIMIT $1
+            LIMIT $2
             "#,
         )
+        .bind(i16::from(origin))
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
@@ -97,10 +100,12 @@ impl AnonStatsStore {
     pub async fn insert_anon_stats_batch(
         &self,
         anon_stats: &[(i64, DistanceBundle1D)],
+        origin: AnonStatsOrigin,
     ) -> Result<()> {
         if anon_stats.is_empty() {
             return Ok(());
         }
+        let origin = i16::from(origin);
         let mut tx = self.pool.begin().await?;
         for chunk in anon_stats.chunks(Self::ANON_STATS_1D_INSERT_BATCH_SIZE) {
             let mapped_chunk = chunk.iter().map(|(id, bundle)| {
@@ -108,12 +113,12 @@ impl AnonStatsStore {
                     bincode::serialize(bundle).expect("Failed to serialize DistanceBundle1D");
                 (id, bundle_bytes)
             });
-            let mut query = sqlx::QueryBuilder::new(
-                r#"INSERT INTO anon_stats_1d (match_id, bundle, processed)"#,
-            );
+            let mut query =
+                sqlx::QueryBuilder::new(r#"INSERT INTO anon_stats_1d (match_id, bundle, origin)"#);
             query.push_values(mapped_chunk, |mut query, (id, bytes)| {
                 query.push_bind(id);
                 query.push_bind(bytes);
+                query.push_bind(origin);
             });
 
             let res = query.build().execute(&mut *tx).await?;

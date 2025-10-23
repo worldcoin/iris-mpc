@@ -1,1 +1,1 @@
-DROP TABLE irises;
+DROP TABLE anon_stats_1d;

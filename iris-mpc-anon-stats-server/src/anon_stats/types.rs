@@ -1,10 +1,32 @@
 use std::hash::{Hash, Hasher};
 
-use iris_mpc_cpu::shares::share::DistanceShare;
+use iris_mpc_common::job::Eye;
+use iris_mpc_cpu::{execution::hawk_main::Orientation, shares::share::DistanceShare};
 
 pub type DistanceBundle1D = Vec<DistanceShare<u16>>;
 pub type LiftedDistanceBundle1D = Vec<DistanceShare<u32>>;
 pub type MinLiftedDistance1D = DistanceShare<u32>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnonStatsOrigin {
+    pub side: Eye,
+    pub orientation: Orientation,
+    pub context: u8,
+}
+
+impl From<AnonStatsOrigin> for i16 {
+    fn from(origin: AnonStatsOrigin) -> Self {
+        let side_val: i16 = match origin.side {
+            Eye::Left => 0,
+            Eye::Right => 1,
+        };
+        let orientation_val: i16 = match origin.orientation {
+            Orientation::Normal => 0,
+            Orientation::Mirror => 1,
+        };
+        (side_val << 9) | (orientation_val << 8) | (origin.context as i16)
+    }
+}
 
 pub struct AnonStats1DMapping {
     stats: Vec<(i64, DistanceBundle1D)>,

@@ -42,6 +42,10 @@ pub struct AnonStatsServerConfig {
 
     #[serde(default)]
     pub environment: String,
+
+    #[serde(default = "default_n_buckets_1d")]
+    /// Number of buckets to use in 1D anon stats computation.
+    pub n_buckets_1d: usize,
 }
 
 fn default_bind_addr() -> SocketAddr {
@@ -50,6 +54,10 @@ fn default_bind_addr() -> SocketAddr {
 
 fn default_healthcheck_port() -> usize {
     8080
+}
+
+fn default_n_buckets_1d() -> usize {
+    10
 }
 
 impl AnonStatsServerConfig {

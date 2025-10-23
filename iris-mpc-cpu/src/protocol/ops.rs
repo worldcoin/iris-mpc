@@ -158,6 +158,17 @@ pub async fn batch_signed_lift_vec(
     Ok(batch_signed_lift(session, pre_lift).await?.inner())
 }
 
+/// Lifts a share of a vector of 16-bit values to a share of a vector
+/// of 32-bit values.
+pub async fn batch_lift_vec(
+    session: &mut Session,
+    pre_lift: Vec<Share<u16>>,
+) -> Result<Vec<Share<u32>>> {
+    let pre_lift = VecShare::new_vec(pre_lift);
+    let lifted = lift(session, pre_lift).await?;
+    Ok(lifted.inner())
+}
+
 /// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).
 /// The cross product is computed as (d2.code_dist * d1.mask_dist - d1.code_dist * d2.mask_dist) and the result is shared.
 ///
