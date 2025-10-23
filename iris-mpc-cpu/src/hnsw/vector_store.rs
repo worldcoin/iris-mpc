@@ -1,4 +1,4 @@
-use eyre::Result;
+use eyre::{OptionExt, Result};
 use serde::Serialize;
 use std::{
     fmt::{Debug, Display},
@@ -135,10 +135,11 @@ pub trait VectorStore: Debug {
         &mut self,
         distances: &[(Self::VectorRef, Self::DistanceRef)],
     ) -> Result<(Self::VectorRef, Self::DistanceRef)> {
-        if distances.is_empty() {
-            return Err(eyre::eyre!("Cannot get min of empty list"));
-        }
-        let mut min_dist = distances[0].clone();
+        let mut min_dist = distances
+            .first()
+            .ok_or_eyre("Cannot get min of empty list")
+            .cloned()?;
+
         for (id, dist) in distances.iter().skip(1) {
             if self.less_than(dist, &min_dist.1).await? {
                 min_dist = (id.clone(), dist.clone());

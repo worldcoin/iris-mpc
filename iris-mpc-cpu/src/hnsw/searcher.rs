@@ -324,10 +324,9 @@ impl HnswSearcher {
         level = "trace",
         target = "searcher::cpu_time",
         fields(event_type = Operation::LayerSearch.id()),
-        skip(self,store, graph, q, W))]
+        skip(store, graph, q, W))]
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore>(
-        &self,
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
@@ -335,14 +334,6 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) -> Result<()> {
-        if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
-            && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
-        {
-            let nearest_point = Self::linear_search(store, graph, q, lc).await?;
-            W.edges.clear();
-            W.edges.push(nearest_point);
-            return Ok(());
-        }
         match ef {
             0 => {
                 bail!("ef cannot be 0");
@@ -872,8 +863,15 @@ impl HnswSearcher {
         // Search from the top layer down to layer 0
         for lc in (0..layer_count).rev() {
             let ef = self.params.get_ef_search(lc);
-            self.search_layer(store, graph, query, &mut W, ef, lc)
-                .await?;
+            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
+                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
+            {
+                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
+                W.edges.clear();
+                W.edges.push(nearest_point);
+            } else {
+                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            }
         }
 
         W.trim_to_k_nearest(k);
@@ -938,8 +936,15 @@ impl HnswSearcher {
             } else {
                 self.params.get_ef_constr_insert(lc)
             };
-            self.search_layer(store, graph, query, &mut W, ef, lc)
-                .await?;
+            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
+                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
+            {
+                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
+                W.edges.clear();
+                W.edges.push(nearest_point);
+            } else {
+                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            }
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {

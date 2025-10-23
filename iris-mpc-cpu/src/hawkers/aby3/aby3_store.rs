@@ -7,10 +7,11 @@ use crate::{
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
-            argmin_of_pair_batch, batch_signed_lift_vec, conditionally_swap_distances,
+            batch_signed_lift_vec, conditionally_select_distances_with_plain_ids,
+            conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
             conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, min_of_pair_batch, oblivious_cross_compare, open_ring,
-            DistanceId, DistanceWithId,
+            lte_threshold_and_open, min_of_pair_batch, oblivious_cross_compare,
+            oblivious_cross_compare_lifted, open_ring,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -177,6 +178,7 @@ impl Aby3Store {
         conditionally_swap_distances(&mut self.session, swap_bits, list, indices).await
     }
 
+    /// Obliviously computes the minimum distance of a given distance array.
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_min_distance(
         &mut self,
@@ -193,9 +195,7 @@ impl Aby3Store {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             // create pairs from the remaining distances
-            let mut res1 = vec![];
-            std::mem::swap(&mut res1, &mut res);
-            let pairs: Vec<(_, _)> = res1.into_iter().tuples().collect_vec();
+            let pairs: Vec<(_, _)> = res.into_iter().tuples().collect_vec();
             // compute minimums of pairs
             res = min_of_pair_batch(&mut self.session, &pairs).await?;
             // if we saved a last distance, we need to add it back
@@ -206,6 +206,7 @@ impl Aby3Store {
         Ok(res[0].clone())
     }
 
+    /// Obliviously computes the minimum distance and the corresponding vector id of a given array of pairs (id, distance).
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_argmin_distance(
         &mut self,
@@ -218,44 +219,72 @@ impl Aby3Store {
             return Ok(distances[0].clone());
         }
 
-        let mut res = distances
+        // Handle plain ids first
+        let mut plain_res = distances
             .iter()
-            .map(|(id, d)| DistanceWithId::new(DistanceId::Plain(id.index()), d.clone()))
+            .map(|(id, distance)| (id.serial_id(), distance.clone()))
             .collect_vec();
+        let plain_maybe_last_distance = if plain_res.len() % 2 == 1 {
+            plain_res.pop()
+        } else {
+            None
+        };
+        let mut dist_pairs = plain_res
+            .iter()
+            .tuples()
+            .map(|((_, dist1), (_, dist2))| (dist1.clone(), dist2.clone()))
+            .collect_vec();
+        let mut control_bits =
+            oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
+        let (left_dist, right_dist) = plain_res.into_iter().tuples().unzip();
+        let mut res = conditionally_select_distances_with_plain_ids(
+            &mut self.session,
+            left_dist,
+            right_dist,
+            control_bits,
+        )
+        .await?;
+        // If we saved a last distance, we need to add it back
+        if let Some((id, dist)) = plain_maybe_last_distance {
+            let shared_id = Share::from_const(id, self.session.own_role());
+            res.push((shared_id, dist));
+        }
 
+        // Now handle distances with shared ids
         while res.len() > 1 {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             // create pairs from the remaining distances
-            let mut res1 = vec![];
-            std::mem::swap(&mut res1, &mut res);
-            let pairs = res1.into_iter().tuples().collect_vec();
+            dist_pairs = res
+                .iter()
+                .tuples()
+                .map(|((_, dist1), (_, dist2))| (dist1.clone(), dist2.clone()))
+                .collect_vec();
             // compute minimums of pairs
-            res = argmin_of_pair_batch(&mut self.session, pairs).await?;
+            control_bits = oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
+            let (left_dist, right_dist) = res.into_iter().tuples().unzip();
+            res = conditionally_select_distances_with_shared_ids(
+                &mut self.session,
+                left_dist,
+                right_dist,
+                control_bits,
+            )
+            .await?;
             // if we saved a last distance, we need to add it back
             if let Some(dist) = maybe_last_distance {
-                let propagated_dist = match dist.id {
-                    // embed plain id into a shared id
-                    DistanceId::Plain(v) => {
-                        let new_id =
-                            DistanceId::Shared(Share::from_const(v, self.session.own_role()));
-                        DistanceWithId::new(new_id, dist.distance)
-                    }
-                    DistanceId::Shared(_) => dist,
-                };
-                res.push(propagated_dist);
+                res.push(dist);
             }
         }
         // res is guaranteed to have length 1
-        let dist = res.pop().unwrap();
+        let (shared_id, dist) = res.pop().unwrap();
         // open the id
-        let id = open_ring(&mut self.session, &[dist.id.get_shared()?]).await?;
-        let res = (Aby3VectorRef::from_0_index(id[0]), dist.distance);
+        let id = open_ring(&mut self.session, &[shared_id]).await?[0];
+        let res = (Aby3VectorRef::from_serial_id(id), dist);
         Ok(res)
     }
 
     /// Obliviously computes the minimum distance for each batch of given distances of the same size.
-    /// The inner vector distances[i] contains the ith distances of each batch.
+    /// The inner vector `distances[i]` contains the ith distances of each batch.
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_min_distance_batch(
         &mut self,
@@ -274,13 +303,11 @@ impl Aby3Store {
         while res.len() > 1 {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
-            let mut res1 = vec![];
-            std::mem::swap(&mut res1, &mut res);
-            let pairs: Vec<(_, _)> = res1
+            let pairs = res
                 .into_iter()
                 .tuples()
                 .flat_map(|(a, b)| izip!(a, b).collect_vec())
-                .collect();
+                .collect_vec();
             // compute minimums of pairs
             let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
             res = flattened_res
@@ -913,7 +940,7 @@ mod tests {
                     .iter()
                     .map(|(id, (code_dist, mask_dist))| {
                         (
-                            VectorId::from_0_index(*id),
+                            VectorId::from_serial_id(*id),
                             DistanceShare::new(
                                 Share::from_const(*code_dist, role),
                                 Share::from_const(*mask_dist, role),
@@ -950,7 +977,7 @@ mod tests {
             let code_dot = dist.code_dot.get_a().convert();
             let mask_dot = dist.mask_dot.get_a().convert();
 
-            (id.index(), (code_dot, mask_dot))
+            (id.serial_id(), (code_dot, mask_dot))
         };
         assert_eq!(distance, expected);
 
