@@ -11,9 +11,9 @@ macro_rules! join_runners {
     ($join_set:expr) => {{
         let res: Result<Vec<_>, eyre::Report> = $join_set.join_all().await.into_iter().collect();
         if res.is_err() {
-            eprintln!("join failed at line: {}", line!());
+            tracing::error!("join failed at line: {}", line!());
         } else {
-            println!("join succeeded at line: {}", line!());
+            tracing::info!("join succeeded at line: {}", line!());
         }
         let _ = res?;
         // allow time to clean up
