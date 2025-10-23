@@ -13,6 +13,10 @@ pub struct Opt {
 
     #[structopt(long)]
     healthcheck_port: Option<usize>,
+
+    #[structopt(long)]
+    /// The addresses for the networking parties.
+    pub addresses: Option<Vec<String>>,
 }
 
 /// CLI configuration for the anon stats server.
@@ -22,6 +26,10 @@ pub struct AnonStatsServerConfig {
     /// The socket address the HTTP server listens on.
     #[serde(default = "default_bind_addr")]
     pub bind_addr: SocketAddr,
+
+    /// The addresses for the networking parties.
+    #[serde(default)]
+    pub addresses: Vec<String>,
 
     #[serde(default = "default_healthcheck_port")]
     pub healthcheck_port: usize,
@@ -71,6 +79,10 @@ impl AnonStatsServerConfig {
 
         if let Some(party_id) = opts.party_id {
             self.party_id = party_id;
+        }
+
+        if let Some(addresses) = opts.addresses {
+            self.addresses = addresses;
         }
     }
 }

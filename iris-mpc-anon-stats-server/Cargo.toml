@@ -14,7 +14,9 @@ clap = { workspace = true, features = ["env"] }
 eyre.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
+itertools.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 config = "0.14.0"
@@ -22,3 +24,4 @@ serde = { version = "1.0.214", features = ["derive"] }
 dotenvy = "0.15.7"
 sqlx.workspace = true
 siphasher = "1"
+rand.workspace = true

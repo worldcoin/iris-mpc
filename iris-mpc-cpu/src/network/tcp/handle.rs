@@ -504,6 +504,7 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
                 | DescriptorByte::VecRing32
                 | DescriptorByte::VecRing64
                 | DescriptorByte::NetworkVec
+                | DescriptorByte::Bytes
         ) {
             reader.read_exact(&mut buf[1..5]).await?;
             buf_offset += 4;

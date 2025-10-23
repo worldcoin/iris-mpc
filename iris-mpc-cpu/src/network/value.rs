@@ -114,6 +114,7 @@ impl NetworkValue {
             NetworkValue::VecRing32(v) => base_len + size_of::<u32>() * v.len(),
             NetworkValue::VecRing64(v) => base_len + size_of::<u64>() * v.len(),
             NetworkValue::NetworkVec(v) => base_len + v.iter().map(|x| x.byte_len()).sum::<usize>(),
+            NetworkValue::Bytes(v) => base_len + v.len(),
             _ => base_len,
         }
     }
@@ -226,7 +227,8 @@ impl NetworkValue {
                 DescriptorByte::RingElement64 => 9,
                 DescriptorByte::VecRing16
                 | DescriptorByte::VecRing32
-                | DescriptorByte::VecRing64 => {
+                | DescriptorByte::VecRing64
+                | DescriptorByte::Bytes => {
                     if end_idx < idx + 5 {
                         bail!("Invalid length for VecRing: can't parse vector length");
                     }

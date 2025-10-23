@@ -2510,10 +2510,13 @@ dependencies = [
  "eyre",
  "iris-mpc-common",
  "iris-mpc-cpu",
+ "itertools 0.13.0",
+ "rand",
  "serde",
  "siphasher",
  "sqlx",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
