@@ -1,6 +1,6 @@
 services:
   dev_db:
-    image: public.ecr.aws/docker/library/postgres:16.10-alpine3.2
+    image: public.ecr.aws/docker/library/postgres:16.10-alpine3.22
     ports:
       - "5432:5432"
     user: "postgres"

@@ -85,5 +85,4 @@ jobs:
       - name: Execute tests in the running services
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
-          echo "temporarily disabled, re-enable when fixed"
           docker compose -f docker-compose.test.yaml exec iris_mpc_client "./run-client-docker.sh"
