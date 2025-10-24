@@ -76,14 +76,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-#      - name: Run docker compose
-#        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-#        uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
-#        with:
-#          compose-file: "./docker-compose.test.yaml"
+      - name: Run docker compose
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
+        with:
+          compose-file: "./docker-compose.test.yaml"
 
       - name: Execute tests in the running services
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
-          echo "temporarily disabled, re-enable when fixed"
-#          docker compose -f docker-compose.test.yaml exec iris_mpc_client "./run-client-docker.sh"
+          docker compose -f docker-compose.test.yaml exec iris_mpc_client "./run-client-docker.sh"
