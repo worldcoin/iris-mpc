@@ -4,7 +4,9 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use crate::hnsw::{
-    searcher::{ConnectPlan, ConnectPlanLayer, ConnectPlanV},
+    searcher::{
+        ConnectPlan, ConnectPlanLayer, ConnectPlanV, LightConnectPlanLayer, LightConnectPlanV,
+    },
     sorting::{
         batcher::partial_batcher_network, binary_search::BinarySearch, quicksort::apply_quicksort,
         swap_network::apply_swap_network,
@@ -238,8 +240,7 @@ impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector
         instances: Vec<(Vector, Vec<SortedNeighborhoodV<V>>, bool)>,
         store: &mut V,
         graph: &GraphMem<Vector>,
-        searcher: &HnswSearcher,
-    ) -> Result<Vec<ConnectPlanV<V>>>
+    ) -> Result<Vec<LightConnectPlanV<V>>>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
@@ -330,28 +331,25 @@ impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector
             searches_ongoing.retain(|n| !n.search.is_finished());
         }
 
-        for ((inserted_vector, neighbs, _), plan) in izip!(instances, plans.iter_mut()) {
-            let mut v_neighbors = neighbors.drain(0..neighbs.len()).collect::<Vec<_>>();
+        for ((_, neighbs, _), plan) in izip!(instances, plans.iter_mut()) {
+            let v_neighbors = neighbors.drain(0..neighbs.len()).collect::<Vec<_>>();
             // Directly insert new vector into neighborhoods from search results
-            for (lc, l_neighbors) in v_neighbors.iter_mut().enumerate() {
-                let max_links = searcher.params.get_M_max(lc);
-                for n in l_neighbors.iter_mut() {
-                    let insertion_idx =
-                        n.search.result().ok_or(eyre!("No insertion index found"))?;
-                    n.nb_links.insert(insertion_idx, inserted_vector.clone());
-                    n.nb_links.trim_to_k_nearest(max_links);
-                }
-            }
+            let indices = v_neighbors
+                .iter()
+                .map(|l_neighbors| {
+                    l_neighbors
+                        .iter()
+                        .map(|n| n.search.result().ok_or(eyre!("No insertion index found")))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?;
             // Generate ConnectPlanLayer structs
             plan.layers = neighbs
                 .into_iter()
-                .zip(v_neighbors)
-                .map(|(l_links, l_neighbors)| ConnectPlanLayer {
+                .zip(indices)
+                .map(|(l_links, nb_insert_index)| LightConnectPlanLayer {
                     neighbors: l_links.edge_ids(),
-                    nb_links: l_neighbors
-                        .into_iter()
-                        .map(|n| n.nb_links)
-                        .collect::<Vec<_>>(),
+                    nb_insert_index,
                 })
                 .collect();
         }

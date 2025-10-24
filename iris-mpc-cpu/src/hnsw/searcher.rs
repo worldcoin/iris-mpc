@@ -187,19 +187,22 @@ pub struct HnswSearcher {
     pub params: HnswParams,
 }
 
-pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
+pub type LightConnectPlanV<V> =
+    ConnectPlan<<V as VectorStore>::VectorRef, LightConnectPlanLayerV<V>>;
+pub type LightConnectPlanLayerV<V> = LightConnectPlanLayer<<V as VectorStore>::VectorRef>;
+pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef, ConnectPlanLayerV<V>>;
 pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlan<Vector> {
+pub struct ConnectPlan<Vector, CPL> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
     /// The HNSW graph updates required by insertion. The insertion layer of the new vector
     /// is `layers.len() - 1`.
-    pub layers: Vec<ConnectPlanLayer<Vector>>,
+    pub layers: Vec<CPL>,
 
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
     pub set_ep: bool,
@@ -214,6 +217,15 @@ pub struct ConnectPlanLayer<Vector> {
 
     /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LightConnectPlanLayer<Vector> {
+    /// The neighbors of the inserted vector
+    pub neighbors: SortedEdgeIds<Vector>,
+
+    /// `nb_insert_index[i]` is the position `j` where the insertion should take place in neighbors[i]
+    pub nb_insert_index: Vec<usize>,
 }
 
 #[allow(non_snake_case)]
@@ -1240,9 +1252,17 @@ impl HnswSearcher {
             vec![(inserted_vector, links, set_ep)],
             store,
             graph,
-            &self,
         )
         .await?;
+
+        // let full_connect_plans = results
+        //     .iter()
+        //     .map(|lcp| ConnectPlan {
+        //         inserted_vector: lcp.inserted_vector,
+        //         set_ep: lcp.set_ep,
+        //         layers: lcp.layers.iter().map(|insert_index|)
+        //     })
+        //     .collect::<Vec<_>>();
 
         Ok(results.first().unwrap().clone())
     }
