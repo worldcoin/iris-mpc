@@ -54,6 +54,7 @@ impl PyHnswSearcher {
             ef_constr_insert,
             ef_search,
             layer_probability,
+            top_layer_mode: iris_mpc_cpu::hnsw::searcher::TopLayerSearchMode::Default,
         };
         Self(HnswSearcher { params })
     }
