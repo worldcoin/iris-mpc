@@ -115,14 +115,14 @@ fn make_channels(
         let mut inbound_tx = HashMap::new();
         let mut inbound_rx = HashMap::new();
 
-        for connection_id in (0..config.num_connections).map(|x| ConnectionId::from(x as u32)) {
+        for connection_id in (0..config.num_connections).map(ConnectionId::from) {
             let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
             outbound_tx.insert(connection_id, tx);
             outbound_rx.insert(connection_id, rx);
         }
 
-        for session_id in (next_session_id..next_session_id + config.num_sessions as u32)
-            .map(|x| SessionId::from(x))
+        for session_id in
+            (next_session_id..next_session_id + config.num_sessions).map(SessionId::from)
         {
             let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
             inbound_tx.insert(session_id, tx);
@@ -176,8 +176,8 @@ async fn make_sessions_inner<T: NetworkConnection + 'static>(
 
     // create the sessions
     let mut sessions = vec![];
-    for (idx, session_id) in (next_session_id..next_session_id + num_sessions as u32)
-        .map(|x| SessionId::from(x))
+    for (idx, session_id) in (next_session_id..next_session_id + num_sessions)
+        .map(SessionId::from)
         .enumerate()
     {
         let mut tx_map = HashMap::new();

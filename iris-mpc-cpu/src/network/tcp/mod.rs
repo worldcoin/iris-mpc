@@ -37,7 +37,7 @@ pub trait NetworkHandle: Send + Sync {
 
 #[async_trait]
 pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {
-    async fn close(&mut self);
+    async fn close(&mut self) -> Result<()>;
 }
 
 // used to establish an outbound connection
@@ -76,7 +76,7 @@ pub async fn build_network_handle(
     let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
 
     let tcp_config = TcpConfig::new(
-        Duration::from_secs(30),
+        Duration::from_secs(10),
         args.connection_parallelism,
         args.request_parallelism * sessions_per_request,
     );
@@ -165,14 +165,15 @@ fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
 pub struct TcpStreamConn(pub TcpStream);
 pub struct TlsStreamConn(pub TlsStream<TcpStream>);
 
-// allow mixing TLS client and TCP server by boxing connections
+/// allow mixing TLS client and TCP server by boxing connections
 /// Dynamic stream type for mixed connectors and listeners
+/// should only be used for NGINX sidecar testing
 pub type DynStreamConn = Box<dyn NetworkConnection>;
 
 #[async_trait]
 impl NetworkConnection for DynStreamConn {
-    async fn close(&mut self) {
-        (**self).close().await;
+    async fn close(&mut self) -> Result<()> {
+        self.close().await
     }
 }
 
@@ -212,8 +213,9 @@ impl AsyncWrite for TcpStreamConn {
 
 #[async_trait]
 impl NetworkConnection for TcpStreamConn {
-    async fn close(&mut self) {
-        let _ = self.0.shutdown().await;
+    async fn close(&mut self) -> Result<()> {
+        self.0.shutdown().await?;
+        Ok(())
     }
 }
 
@@ -253,8 +255,9 @@ impl AsyncWrite for TlsStreamConn {
 
 #[async_trait]
 impl NetworkConnection for TlsStreamConn {
-    async fn close(&mut self) {
-        let _ = self.0.shutdown().await;
+    async fn close(&mut self) -> Result<()> {
+        self.0.shutdown().await?;
+        Ok(())
     }
 }
 
@@ -312,7 +315,7 @@ pub mod testing {
         assert_eq!(parties.len(), 3);
 
         let config = TcpConfig::new(
-            Duration::from_secs(30),
+            Duration::from_secs(10),
             connection_parallelism,
             request_parallelism,
         );

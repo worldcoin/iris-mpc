@@ -80,7 +80,9 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
             sessions_per_conn
         );
 
-        self.next_session_id = self.next_session_id.wrapping_add(self.config.num_sessions);
+        self.next_session_id = self
+            .next_session_id
+            .saturating_add(self.config.num_sessions);
         if self.next_session_id >= u32::MAX - self.config.num_sessions {
             self.next_session_id = 0;
         }
@@ -116,8 +118,8 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
     {
         let my_id = Arc::new(my_id);
         let peers: [Arc<Peer>; 2] = [
-            Arc::new(peers.next().expect("expected at least 2 identities").into()),
-            Arc::new(peers.next().expect("expected at least 2 identities").into()),
+            Arc::new(peers.next().expect("expected first identity").into()),
+            Arc::new(peers.next().expect("expected second identity").into()),
         ];
 
         // use the shutdown_ct to cancel anything spawned by the NetworkHandle. But don't want this to affect the calling code.
