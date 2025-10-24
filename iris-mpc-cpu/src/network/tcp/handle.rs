@@ -191,7 +191,13 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
     async fn validate_sessions(&self, sessions: &mut [TcpSession]) -> Result<()> {
         // make sure all the sessions are working
         for (idx, session) in sessions.iter_mut().enumerate() {
-            let prf = NetworkValue::PrfKey([idx as u8; 16]);
+            // turn the session id into a byte array.
+            let mut id_arr = [0u8; 16];
+            let idx_bytes = idx.to_le_bytes();
+            let len = std::cmp::min(id_arr.len(), idx_bytes.len());
+            id_arr[..len].copy_from_slice(&idx_bytes[..len]);
+
+            let prf = NetworkValue::PrfKey(id_arr);
             for peer in &self.peers {
                 session.send(prf.clone(), peer.id()).await?;
             }
@@ -199,7 +205,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
                 let r = session.receive(peer.id()).await?;
                 match r {
                     NetworkValue::PrfKey(arr) => {
-                        assert_eq!([idx as u8; 16], arr);
+                        assert_eq!(id_arr, arr);
                     }
                     _ => bail!("invalid msg received in validate_sessions()"),
                 }
