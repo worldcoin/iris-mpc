@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use eyre::{bail, Result};
+use eyre::{bail, eyre, Result};
 use futures::future::join_all;
 use itertools::Itertools;
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -28,7 +28,7 @@ pub struct TcpNetworkHandle<T: NetworkConnection + 'static, C: Client<Output = T
     conn_cmd_tx: UnboundedSender<ConnectionRequest<T>>,
     connection_state: ConnectionState,
     config: TcpConfig,
-    next_session_id: usize,
+    next_session_id: u32,
     shutdown_ct: CancellationToken,
 }
 
@@ -81,7 +81,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
         );
 
         self.next_session_id = self.next_session_id.wrapping_add(self.config.num_sessions);
-        if self.next_session_id >= usize::MAX - self.config.num_sessions {
+        if self.next_session_id >= u32::MAX - self.config.num_sessions {
             self.next_session_id = 0;
         }
 
@@ -89,8 +89,14 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
     }
 
     async fn sync_peers(&mut self) -> Result<()> {
-        let mut connections = self.make_peer_connections(1).await?;
-        connections.sync().await?;
+        let mut connections = self
+            .make_peer_connections(1)
+            .await
+            .map_err(|e| eyre!("make_peer_connections failed: {}", e))?;
+        connections
+            .sync()
+            .await
+            .map_err(|_| eyre!("sync connections failed"))?;
         Ok(())
     }
 }
@@ -103,7 +109,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         listener: S,
         config: TcpConfig,
         shutdown_ct: CancellationToken,
-    ) -> Self
+    ) -> Result<Self>
     where
         I: Iterator<Item = (Identity, String)>,
         S: Server<Output = T> + 'static,
@@ -135,29 +141,27 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
             shutdown_ct,
         };
 
-        if let Err(_e) = r.sync_peers().await {
-            tracing::warn!("NetworkHandle failed to sync peers on creation");
-        }
-        r
+        r.sync_peers().await?;
+        Ok(r)
     }
 
     // associates the connections with an Identity
-    async fn make_peer_connections(&self, conns_per_peer: usize) -> Result<PeerConnections<T>> {
+    async fn make_peer_connections(&self, conns_per_peer: u32) -> Result<PeerConnections<T>> {
         let (c0, c1) = self.make_connections(conns_per_peer).await?;
         Ok(PeerConnections::new(self.peers.clone(), c0, c1))
     }
 
     // returns the connections for each peer
     // when returned, the handshakes have successfully completed
-    async fn make_connections(&self, conns_per_peer: usize) -> Result<(Vec<T>, Vec<T>)> {
+    async fn make_connections(&self, conns_per_peer: u32) -> Result<(Vec<T>, Vec<T>)> {
         assert_eq!(self.peers.len(), 2);
-        let mut connect_futures = Vec::with_capacity(conns_per_peer * self.peers.len());
+        let mut connect_futures = Vec::with_capacity(conns_per_peer as usize * self.peers.len());
 
         // peers[0] will be associated with connections c0
         // peers[1] will be associated with connections c1
         for peer in self.peers.iter() {
             for idx in 0..conns_per_peer {
-                let connection_id = ConnectionId::new(idx as u32);
+                let connection_id = ConnectionId::new(idx);
                 let fut = super::connection::connect(
                     connection_id,
                     self.my_id.clone(),
@@ -221,10 +225,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     async fn test_tcp_network_handle() -> Result<()> {
-        const CONNECTIONS_PER_PEER: usize = 2;
+        const CONNECTIONS_PER_PEER: u32 = 2;
 
         let identities = generate_local_identities();
-        let handles = get_local_tcp_handles(identities, CONNECTIONS_PER_PEER, 1).await?;
+        let handles = get_local_tcp_handles(identities, CONNECTIONS_PER_PEER as usize, 1).await?;
 
         // for each peer, a vec of the connections to other peers
         let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> = futures::future::join_all(

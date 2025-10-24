@@ -22,7 +22,7 @@ const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
 pub async fn run<T: NetworkConnection>(
     stream: T,
-    num_sessions: usize,
+    num_sessions: u32,
     connection_state: ConnectionState,
     inbound_forwarder: HashMap<SessionId, UnboundedSender<NetworkValue>>,
     outbound_rx: UnboundedReceiver<OutboundMsg>,
@@ -33,35 +33,51 @@ pub async fn run<T: NetworkConnection>(
     let (reader, writer) = tokio::io::split(stream);
     let reader = BufReader::new(reader);
 
-    tokio::select! {
-        _ = shutdown_ct.cancelled() => {},
-        _ = err_ct.cancelled() => {},
-        e = handle_outbound_traffic(writer, outbound_rx, num_sessions) => {
-            tracing::debug!("handle_outbound_traffic: {:?}", e);
-            if e.is_err() {
-                err_ct.cancel();
-            } else {
-                // the sessions may have been dropped
-                // don't set the error logging flags in response to this.
-                return;
-            }
-        },
-        e = handle_inbound_traffic(reader, inbound_forwarder) => {
-            tracing::debug!("handle_inbound_traffic: {:?}",  e);
-            if e.is_err() {
-                err_ct.cancel();
-            } else {
-                return;
-            }
-        },
+    enum Event {
+        Shutdown,
+        Error,
+        // the sessions may have been dropped
+        // don't set the error logging flags in response to this.
+        ClosedOk,
     }
 
-    if shutdown_ct.is_cancelled() {
-        if connection_state.set_exited().await {
-            tracing::info!("shutting down TCP/TLS networking stack");
+    let evt = tokio::select! {
+        _ = shutdown_ct.cancelled() => Event::Shutdown,
+        _ = err_ct.cancelled() => Event::Error,
+        r = handle_outbound_traffic(writer, outbound_rx, num_sessions) => {
+            tracing::debug!("handle_outbound_traffic: {:?}", r);
+            if r.is_err() {
+                err_ct.cancel();
+                Event::Error
+            } else {
+                Event::ClosedOk
+            }
+        },
+        r = handle_inbound_traffic(reader, inbound_forwarder) => {
+            tracing::debug!("handle_inbound_traffic: {:?}",  r);
+            if r.is_err() {
+                err_ct.cancel();
+                Event::Error
+            } else {
+                Event::ClosedOk
+            }
+        },
+    };
+
+    match evt {
+        Event::Shutdown => {
+            if connection_state.set_exited().await {
+                tracing::info!("shutting down TCP/TLS networking stack");
+            }
         }
-    } else if err_ct.is_cancelled() && connection_state.set_cancelled().await {
-        tracing::info!("closing TCP/TLS connections");
+        Event::Error => {
+            if connection_state.set_cancelled().await {
+                tracing::info!("closing TCP/TLS connections");
+            }
+        }
+        Event::ClosedOk => {
+            // do nothing
+        }
     }
 }
 
@@ -70,7 +86,7 @@ pub async fn run<T: NetworkConnection>(
 async fn handle_outbound_traffic<T: NetworkConnection>(
     mut stream: WriteHalf<T>,
     mut outbound_rx: UnboundedReceiver<OutboundMsg>,
-    num_sessions: usize,
+    num_sessions: u32,
 ) -> io::Result<()> {
     // Time spent buffering between the first and last messages of a packet.
     let mut metrics_buffer_latency = FastHistogram::new("outbound_buffer_latency");

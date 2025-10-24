@@ -97,7 +97,7 @@ pub async fn build_network_handle(
                     tcp_config,
                     shutdown_ct,
                 )
-                .await,
+                .await?,
             ))
         };
     }
@@ -338,7 +338,7 @@ pub mod testing {
                 config.clone(),
                 shutdown_ct.clone(),
             )
-            .await;
+            .await?;
             handles.push(handle);
         }
 

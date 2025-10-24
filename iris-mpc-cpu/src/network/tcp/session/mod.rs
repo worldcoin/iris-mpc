@@ -96,7 +96,7 @@ pub async fn make_sessions<T: NetworkConnection + 'static>(
     connections: PeerConnections<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
-    next_session_id: usize,
+    next_session_id: u32,
 ) -> Vec<TcpSession> {
     let sc = make_channels(connections.peer_ids(), config, next_session_id);
     make_sessions_inner(connections, connection_state, config, next_session_id, sc).await
@@ -105,7 +105,7 @@ pub async fn make_sessions<T: NetworkConnection + 'static>(
 fn make_channels(
     peer_ids: Vec<Identity>,
     config: &TcpConfig,
-    next_session_id: usize,
+    next_session_id: u32,
 ) -> SessionChannels {
     let mut sc = SessionChannels::default();
 
@@ -121,8 +121,8 @@ fn make_channels(
             outbound_rx.insert(connection_id, rx);
         }
 
-        for session_id in (next_session_id..next_session_id + config.num_sessions)
-            .map(|x| SessionId::from(x as u32))
+        for session_id in (next_session_id..next_session_id + config.num_sessions as u32)
+            .map(|x| SessionId::from(x))
         {
             let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
             inbound_tx.insert(session_id, tx);
@@ -141,7 +141,7 @@ async fn make_sessions_inner<T: NetworkConnection + 'static>(
     connections: PeerConnections<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
-    next_session_id: usize,
+    next_session_id: u32,
     mut sc: SessionChannels,
 ) -> Vec<TcpSession> {
     let num_connections = config.num_connections;
@@ -176,13 +176,13 @@ async fn make_sessions_inner<T: NetworkConnection + 'static>(
 
     // create the sessions
     let mut sessions = vec![];
-    for (idx, session_id) in (next_session_id..next_session_id + num_sessions)
-        .map(|x| SessionId::from(x as u32))
+    for (idx, session_id) in (next_session_id..next_session_id + num_sessions as u32)
+        .map(|x| SessionId::from(x))
         .enumerate()
     {
         let mut tx_map = HashMap::new();
         let mut rx_map = HashMap::new();
-        let connection_id = ConnectionId::from((idx % num_connections) as u32);
+        let connection_id = ConnectionId::from(idx as u32 % num_connections);
 
         for peer_id in &peer_ids {
             let outbound_tx = sc

@@ -4,9 +4,9 @@ use std::{cmp, time::Duration};
 pub struct TcpConfig {
     pub timeout_duration: Duration,
     // the number of sessions managed at once
-    pub num_sessions: usize,
+    pub num_sessions: u32,
     // number of TCP connections
-    pub num_connections: usize,
+    pub num_connections: u32,
 }
 
 impl TcpConfig {
@@ -16,12 +16,12 @@ impl TcpConfig {
 
         Self {
             timeout_duration,
-            num_sessions,
-            num_connections: connection_parallelism,
+            num_sessions: num_sessions as u32,
+            num_connections: connection_parallelism as u32,
         }
     }
 
-    pub fn get_sessions_for_connection(&self, idx: usize) -> usize {
+    pub fn get_sessions_for_connection(&self, idx: u32) -> u32 {
         let num_sessions = self.num_sessions;
         let num_connections = self.num_connections;
         num_sessions / num_connections

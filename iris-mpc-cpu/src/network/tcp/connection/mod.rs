@@ -75,8 +75,8 @@ impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
             handshake::outbound(&mut stream, &self.own_id, &self.connection_id).await?;
             let mut rsp = [0; 3];
             let n = stream.read(&mut rsp[..]).await?;
-            if n != rsp.len() || &rsp != b"2ok" {
-                Err(eyre::eyre!("handshake not accepted: rsp={:?}", rsp))
+            if n != rsp.len() || &rsp[..n] != b"2ok" {
+                Err(eyre::eyre!("handshake not accepted: rsp={:?}", &rsp[..n]))
             } else {
                 Ok(stream)
             }
