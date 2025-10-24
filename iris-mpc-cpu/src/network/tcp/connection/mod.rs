@@ -98,11 +98,8 @@ impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
         sleep(Duration::from_millis(rng.gen_range(0..=3000))).await;
 
         loop {
-            match self.connect().await {
-                Ok(stream) => return stream,
-                Err(_e) => {
-                    //tracing::debug!("connect failed: {e:?}");
-                }
+            if let Ok(stream) = self.connect().await {
+                return stream;
             }
 
             sleep(Duration::from_secs(retry_sec)).await;
