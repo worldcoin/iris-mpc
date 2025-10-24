@@ -262,6 +262,7 @@ pub mod testing {
     use super::*;
     use crate::execution::player::Identity;
     use eyre::Result;
+    use futures::future::join_all;
     use itertools::izip;
     use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
     use tokio::sync::Mutex;
@@ -319,28 +320,40 @@ pub mod testing {
         let addresses = get_free_local_addresses(parties.len()).await?;
         let shutdown_ct = CancellationToken::new();
 
-        let mut handles = vec![];
-        for (peer_idx, (id, addr)) in izip!(&parties, &addresses).enumerate() {
-            let connector = TcpClient::default();
-            let listener = TcpServer::new(*addr).await?;
+        let handles_fut = izip!(&parties, &addresses)
+            .enumerate()
+            .map(|(peer_idx, (id, addr))| {
+                let config = config.clone();
+                let shutdown_ct = shutdown_ct.clone();
+                let parties = parties.clone();
+                let addresses = addresses.clone();
+                async move {
+                    let connector = TcpClient::default();
+                    let listener = TcpServer::new(*addr).await?;
 
-            let peers = izip!(&parties, &addresses)
-                .enumerate()
-                .filter(|(idx, _)| *idx != peer_idx)
-                .map(|(_, (id, url))| (id.clone(), url.to_string()))
-                .collect::<Vec<_>>();
+                    let peers = izip!(&parties, &addresses)
+                        .enumerate()
+                        .filter(|(idx, _)| *idx != peer_idx)
+                        .map(|(_, (id, url))| (id.clone(), url.to_string()))
+                        .collect::<Vec<_>>();
 
-            let handle = TcpNetworkHandle::new(
-                id.clone(),
-                peers.into_iter(),
-                connector,
-                listener,
-                config.clone(),
-                shutdown_ct.clone(),
-            )
-            .await?;
-            handles.push(handle);
-        }
+                    let handle: TcpNetworkHandle<TcpStreamConn, TcpClient> = TcpNetworkHandle::new(
+                        id.clone(),
+                        peers.into_iter(),
+                        connector,
+                        listener,
+                        config,
+                        shutdown_ct,
+                    )
+                    .await?;
+                    Ok(handle)
+                }
+            });
+
+        let handles: Vec<TcpNetworkHandle<TcpStreamConn, TcpClient>> = join_all(handles_fut)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, eyre::Report>>()?;
 
         Ok(handles)
     }
@@ -431,7 +444,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_tcp2_comms_correct() -> Result<()> {
+    async fn test_tcp_comms_correct() -> Result<()> {
         let identities = generate_local_identities();
         let (_managers, mut sessions) =
             setup_local_tcp_networking(identities.clone(), 1, 4).await?;
