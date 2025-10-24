@@ -234,7 +234,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 }
 
 impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector, Distance> {
-    async fn batch_insert_prepare<V>(
+    pub async fn batch_insert_prepare<V>(
         instances: Vec<(Vector, Vec<SortedNeighborhoodV<V>>, bool)>,
         store: &mut V,
         graph: &GraphMem<Vector>,
