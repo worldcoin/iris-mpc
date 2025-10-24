@@ -234,35 +234,23 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 }
 
 impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector, Distance> {
-    /// Prepare a `ConnectPlan` representing the updates required to insert `inserted_vector`
-    /// into `graph` with the specified neighbors `links` and setting the entry point of the
-    /// graph if `set_ep` is `true`.  The `links` vector contains the neighbor lists for the
-    /// newly inserted node in different graph layers in which it is to be inserted, starting
-    /// with layer 0.
-    ///
-    /// In this implementation, comparisons required for computing the insertion indices for
-    /// updated neighborhoods are done in batches.
-    ///
-    /// This function call does *not* update `graph`.
-    pub async fn insert_prepare<V: VectorStore>(
-        &self,
+    async fn batch_insert_prepare<V>(
+        instances: Vec<(Vector, Vec<SortedNeighborhoodV<V>>, bool)>,
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
-        inserted_vector: V::VectorRef,
-        mut links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: bool,
-    ) -> Result<ConnectPlanV<V>> {
-        let mut plan = ConnectPlan {
-            inserted_vector: inserted_vector.clone(),
-            layers: vec![],
-            set_ep,
-        };
-
-        // Truncate search results to size M before insertion
-        for (lc, l_links) in links.iter_mut().enumerate() {
-            let M = self.params.get_M(lc);
-            l_links.trim_to_k_nearest(M);
-        }
+        graph: &GraphMem<Vector>,
+        searcher: &HnswSearcher,
+    ) -> Result<Vec<ConnectPlanV<V>>>
+    where
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    {
+        let mut plans = instances
+            .iter()
+            .map(|(inserted_vector, _, set_ep)| ConnectPlan {
+                inserted_vector: inserted_vector.clone(),
+                layers: vec![],
+                set_ep: *set_ep,
+            })
+            .collect::<Vec<_>>();
 
         struct NeighborUpdate<Query, Vector, Distance> {
             /// The distance between the vector being inserted to a base vector.
@@ -278,26 +266,28 @@ impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector
         // Collect current neighborhoods of new neighbors in each layer and
         // initialize binary search
         let mut neighbors = Vec::new();
-        for (lc, l_links) in links.iter().enumerate() {
-            let nb_queries = store.vectors_as_queries(l_links.vectors_cloned()).await;
+        for (_, links, _) in instances.iter() {
+            for (lc, l_links) in links.iter().enumerate() {
+                let nb_queries = store.vectors_as_queries(l_links.vectors_cloned()).await;
 
-            let mut l_neighbors = Vec::with_capacity(l_links.len());
-            for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
-                let nb_links = graph.get_links(nb, lc).await;
-                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links.0).await);
-                let search = BinarySearch {
-                    left: 0,
-                    right: nb_links.len(),
-                };
-                let neighbor = NeighborUpdate {
-                    nb_dist: nb_dist.clone(),
-                    nb_query,
-                    nb_links,
-                    search,
-                };
-                l_neighbors.push(neighbor);
+                let mut l_neighbors = Vec::with_capacity(l_links.len());
+                for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
+                    let nb_links = graph.get_links(nb, lc).await;
+                    let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links.0).await);
+                    let search = BinarySearch {
+                        left: 0,
+                        right: nb_links.len(),
+                    };
+                    let neighbor = NeighborUpdate {
+                        nb_dist: nb_dist.clone(),
+                        nb_query,
+                        nb_links,
+                        search,
+                    };
+                    l_neighbors.push(neighbor);
+                }
+                neighbors.push(l_neighbors);
             }
-            neighbors.push(l_neighbors);
         }
 
         // Run searches until completion, executing comparisons in batches
@@ -325,7 +315,7 @@ impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector
             // This is |inserted--base| versus |base--neighborhood|.
             let lt_batch = izip!(&searches_ongoing, link_distances)
                 .map(|(n, link_dist)| (n.nb_dist.clone(), link_dist))
-                .collect_vec();
+                .collect::<Vec<_>>();
 
             // Compute the less_than.
             let results = store.less_than_batch(&lt_batch).await?;
@@ -340,27 +330,33 @@ impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector
             searches_ongoing.retain(|n| !n.search.is_finished());
         }
 
-        // Directly insert new vector into neighborhoods from search results
-        for (lc, l_neighbors) in neighbors.iter_mut().enumerate() {
-            let max_links = self.params.get_M_max(lc);
-            for n in l_neighbors.iter_mut() {
-                let insertion_idx = n.search.result().ok_or(eyre!("No insertion index found"))?;
-                n.nb_links.insert(insertion_idx, inserted_vector.clone());
-                n.nb_links.trim_to_k_nearest(max_links);
+        for ((inserted_vector, neighbs, _), plan) in izip!(instances, plans.iter_mut()) {
+            let mut v_neighbors = neighbors.drain(0..neighbs.len()).collect::<Vec<_>>();
+            // Directly insert new vector into neighborhoods from search results
+            for (lc, l_neighbors) in v_neighbors.iter_mut().enumerate() {
+                let max_links = searcher.params.get_M_max(lc);
+                for n in l_neighbors.iter_mut() {
+                    let insertion_idx =
+                        n.search.result().ok_or(eyre!("No insertion index found"))?;
+                    n.nb_links.insert(insertion_idx, inserted_vector.clone());
+                    n.nb_links.trim_to_k_nearest(max_links);
+                }
             }
+            // Generate ConnectPlanLayer structs
+            plan.layers = neighbs
+                .into_iter()
+                .zip(v_neighbors)
+                .map(|(l_links, l_neighbors)| ConnectPlanLayer {
+                    neighbors: l_links.edge_ids(),
+                    nb_links: l_neighbors
+                        .into_iter()
+                        .map(|n| n.nb_links)
+                        .collect::<Vec<_>>(),
+                })
+                .collect();
         }
 
-        // Generate ConnectPlanLayer structs
-        plan.layers = links
-            .into_iter()
-            .zip(neighbors)
-            .map(|(l_links, l_neighbors)| ConnectPlanLayer {
-                neighbors: l_links.edge_ids(),
-                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
-            })
-            .collect();
-
-        Ok(plan)
+        Ok(plans)
     }
 }
 
