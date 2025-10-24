@@ -118,8 +118,8 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
     {
         let my_id = Arc::new(my_id);
         let peers: [Arc<Peer>; 2] = [
-            Arc::new(peers.next().expect("expected first identity").into()),
-            Arc::new(peers.next().expect("expected second identity").into()),
+            Arc::new(peers.next().expect("expected at least 2 identities").into()),
+            Arc::new(peers.next().expect("expected at least 2 identities").into()),
         ];
 
         // use the shutdown_ct to cancel anything spawned by the NetworkHandle. But don't want this to affect the calling code.

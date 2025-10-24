@@ -57,7 +57,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                     Ok(r) => r,
                     Err(e) => {
                         tracing::debug!("application level handshake failed: {e:?}");
-                        let _ = stream.close().await;
+                        stream.close().await;
                         continue;
                     }
                 };
@@ -72,7 +72,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                         }
                     }
                 }
-                let _ = stream.close().await;
+                stream.close().await;
             }
             Err(e) => tracing::error!(%e, "accept_loop error"),
         }
