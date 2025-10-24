@@ -60,6 +60,9 @@ pub struct HnswParams {
 
     /// Probability `q = 1-p` for geometric distribution of layer densities
     pub layer_probability: f64,
+
+    /// Search mode for top layers of the HNSW graph
+    pub top_layer_mode: TopLayerSearchMode,
 }
 
 #[allow(non_snake_case, clippy::too_many_arguments)]
@@ -91,6 +94,7 @@ impl HnswParams {
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
             layer_probability,
+            top_layer_mode: TopLayerSearchMode::Default,
         }
     }
 
@@ -112,6 +116,7 @@ impl HnswParams {
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
             layer_probability,
+            top_layer_mode: TopLayerSearchMode::Default,
         }
     }
 
@@ -165,6 +170,10 @@ impl HnswParams {
     fn get_val(arr: &[usize; N_PARAM_LAYERS], lc: usize) -> usize {
         arr[lc.min(N_PARAM_LAYERS - 1)]
     }
+
+    pub fn set_top_layer_mode(&mut self, mode: TopLayerSearchMode) {
+        self.top_layer_mode = mode;
+    }
 }
 
 /// An implementation of the HNSW approximate k-nearest neighbors algorithm, based on "Efficient and
@@ -216,6 +225,15 @@ pub struct ConnectPlanLayer<Vector> {
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
+/// Represents the search mode for top layers of the HNSW graph.
+#[derive(PartialEq, Clone, Copy, Serialize, Deserialize)]
+pub enum TopLayerSearchMode {
+    /// Use the default search as in other layer.
+    Default,
+    /// Use linear scan to find the nearest neighbor.
+    LinearScan,
+}
+
 #[allow(non_snake_case)]
 impl HnswSearcher {
     /// Construct an HnswSearcher with specified parameters, constructed using
@@ -237,6 +255,12 @@ impl HnswSearcher {
         Self {
             params: HnswParams::new(64, 32, 32),
         }
+    }
+
+    pub fn new_with_test_parameters_and_linear_scan() -> Self {
+        let mut params = HnswParams::new(64, 32, 32);
+        params.set_top_layer_mode(TopLayerSearchMode::LinearScan);
+        Self { params }
     }
 
     /// Choose a random insertion layer from a geometric distribution, producing
@@ -270,12 +294,7 @@ impl HnswSearcher {
         self.select_layer_rng(&mut rng)
     }
 
-    /// Return a tuple containing a distance-sorted list initialized with the
-    /// entry point for the HNSW graph search (with distance to the query
-    /// pre-computed), and the number of search layers of the graph hierarchy,
-    /// that is, the layer of the entry point plus 1.
-    ///
-    /// If no entry point is initialized, returns an empty list and layer 0.
+    /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the number of search layers.
     #[allow(non_snake_case)]
     #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
     async fn search_init<V: VectorStore>(
@@ -1028,6 +1047,28 @@ impl HnswSearcher {
         }
     }
 
+    /// Linear search over all vectors in the given layer that returns a single nearest neighbor.
+    /// This is used in the top layer of the HNSW graph to hide relations between queries and the entry point.
+    async fn linear_search<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        query: &V::QueryRef,
+        lc: usize,
+    ) -> Result<(V::VectorRef, V::DistanceRef)> {
+        // retrieve all vectors in layer `lc`
+        let vectors: Vec<_> = graph.layers[lc].links.keys().cloned().collect();
+        // filter out any invalid vectors (wrong serial ids)
+        let vectors = store.only_valid_vectors(vectors).await;
+        if vectors.is_empty() {
+            bail!("No valid vectors found in layer {}", lc);
+        }
+        // compute distances from query to all vectors as a batch
+        let distances = store.eval_distance_batch(query, &vectors).await?;
+        let distances_with_ids = izip!(vectors, distances).collect_vec();
+        // find the minimum distance and the corresponding vector id
+        store.get_argmin_distance(&distances_with_ids).await
+    }
+
     /// Evaluate as a batch the distances between the unvisited neighbors of a given node at a given
     /// graph level with the query, marking unvisited neighbors as visited in the supplied
     /// hashset.
@@ -1125,7 +1166,15 @@ impl HnswSearcher {
         // Search from the top layer down to layer 0
         for lc in (0..layer_count).rev() {
             let ef = self.params.get_ef_search(lc);
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
+                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
+            {
+                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
+                W.edges.clear();
+                W.edges.push(nearest_point);
+            } else {
+                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            }
         }
 
         W.trim_to_k_nearest(k);
@@ -1190,7 +1239,15 @@ impl HnswSearcher {
             } else {
                 self.params.get_ef_constr_insert(lc)
             };
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
+                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
+            {
+                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
+                W.edges.clear();
+                W.edges.push(nearest_point);
+            } else {
+                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            }
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {
@@ -1401,12 +1458,10 @@ mod tests {
     use rand::SeedableRng;
     use tokio;
 
-    #[tokio::test]
-    async fn test_hnsw_db() -> Result<()> {
+    async fn hnsw_db_helper(db: HnswSearcher, seed: u64) -> Result<()> {
         let vector_store = &mut PlaintextStore::new();
         let graph_store = &mut GraphMem::new();
-        let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::new_with_test_parameters();
+        let rng = &mut AesRng::seed_from_u64(seed);
 
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db
@@ -1449,5 +1504,19 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hnsw_db_default() -> Result<()> {
+        let db = HnswSearcher::new_with_test_parameters();
+
+        hnsw_db_helper(db, 0).await
+    }
+
+    #[tokio::test]
+    async fn test_hnsw_db_linear_scan() -> Result<()> {
+        let db = HnswSearcher::new_with_test_parameters_and_linear_scan();
+
+        hnsw_db_helper(db, 0).await
     }
 }
