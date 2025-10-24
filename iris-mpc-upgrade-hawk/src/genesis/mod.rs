@@ -370,6 +370,7 @@ async fn exec_setup(
 
     // Initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
+    hawk_actor.sync_peers().await?;
     init_graph_from_stores(
         config,
         &iris_store,
