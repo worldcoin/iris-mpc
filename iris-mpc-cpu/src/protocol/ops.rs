@@ -436,38 +436,34 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
         eyre::bail!("Distances must not be empty");
     }
 
-    // Select ids first: c * (left_id - right_id) + right_id
-    let ids = izip!(
-        left_distances.iter(),
-        right_distances.iter(),
-        control_bits.iter()
-    )
-    .map(|((left_id, _), (right_id, _), c)| {
-        let diff = left_id.wrapping_sub(*right_id);
-        let mut res = c.clone() * RingElement(diff);
-        res.add_assign_const_role(*right_id, session.own_role());
-        res
-    })
-    .collect_vec();
-
     // Now select distances
-    let left_dist = left_distances
+    let (left_ids, left_dist): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
+    let (right_ids, right_dist): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
+    let left_dist = left_dist
         .into_iter()
-        .flat_map(|(_, d)| [d.code_dot.clone(), d.mask_dot.clone()])
+        .flat_map(|d| [d.code_dot, d.mask_dot])
         .collect_vec();
-    let right_dist = right_distances
+    let right_dist = right_dist
         .into_iter()
-        .flat_map(|(_, d)| [d.code_dot.clone(), d.mask_dot.clone()])
+        .flat_map(|d| [d.code_dot, d.mask_dot])
         .collect_vec();
+
     let distances =
         select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 2)
             .await?
             .into_iter()
             .tuples()
-            .map(|(code_dot, mask_dot)| DistanceShare::new(code_dot, mask_dot))
-            .collect_vec();
+            .map(|(code_dot, mask_dot)| DistanceShare::new(code_dot, mask_dot));
 
-    Ok(izip!(ids.into_iter(), distances.into_iter())
+    // Select ids first: c * (left_id - right_id) + right_id
+    let ids = izip!(left_ids, right_ids, control_bits).map(|(left_id, right_id, c)| {
+        let diff = left_id.wrapping_sub(right_id);
+        let mut res = c.clone() * RingElement(diff);
+        res.add_assign_const_role(right_id, session.own_role());
+        res
+    });
+
+    Ok(izip!(ids, distances)
         .map(|(id, distance)| (id, distance))
         .collect_vec())
 }

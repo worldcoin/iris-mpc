@@ -295,7 +295,6 @@ impl HnswSearcher {
     }
 
     /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the number of search layers.
-    /// The list is initialized according to the specified initialization mode.
     #[allow(non_snake_case)]
     #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
     async fn search_init<V: VectorStore>(
