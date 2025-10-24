@@ -1,11 +1,12 @@
 use super::{
-    rot::VecRots,
     scheduler::{Batch, Schedule, Task},
     BothEyes, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::Aby3Query,
-    hnsw::VectorStore, protocol::shared_iris::ArcIris,
+    execution::hawk_main::{scheduler::parallelize, VecRotations},
+    hawkers::aby3::aby3_store::Aby3Query,
+    hnsw::VectorStore,
+    protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
@@ -20,14 +21,14 @@ pub struct IntraMatch {
 
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSession>>,
-    search_queries: &Arc<BothEyes<VecRequests<VecRots<Aby3Query>>>>,
+    search_queries: &Arc<BothEyes<VecRequests<VecRotations<Aby3Query>>>>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
     let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
-    let n_rotations = search_queries[LEFT].first().map(|r| r.len()).unwrap_or(1);
+    let n_rotations = VecRotations::<Aby3Query>::n_rotations();
 
     let batches = Schedule::new(n_sessions, n_requests, n_rotations).intra_match_batches();
 
@@ -49,7 +50,7 @@ pub async fn intra_batch_is_match(
 }
 
 async fn per_session(
-    search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
+    search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
     session: &HawkSession,
     batch: Batch,
     tx: UnboundedSender<IsMatch>,

@@ -24,6 +24,7 @@ use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
+    ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use std::{array, ops::Not, time::Instant};
@@ -812,9 +813,7 @@ where
     additive_shares
 }
 
-/// Computes the dot products between a query iris and a batch of iris vectors.
-/// Returns a Vec of RingElement<u16> containing code and mask dot products for each pair.
-/// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
+/// This is similar to `pairwise_distance`, but performs dot products on all rotations of the query.
 pub fn rotation_aware_pairwise_distance<'a, I>(
     query: &'a ArcIris,
     targets: I,
@@ -824,9 +823,7 @@ where
 {
     let start = Instant::now();
     let mut count = 0;
-    // * 31 for all rotations
-    // * 2 for code and mask distances
-    let mut additive_shares = Vec::with_capacity(31 * 2 * targets.len());
+    let mut additive_shares = Vec::with_capacity(2 * ROTATIONS * targets.len());
 
     for target in targets {
         for rotation in IrisRotation::all() {
@@ -853,7 +850,6 @@ where
         metric_batch_size.record(batch_size);
         metric_per_pair_duration.record(duration);
     });
-
     additive_shares
 }
 
