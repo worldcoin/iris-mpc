@@ -100,13 +100,6 @@ pub async fn greater_than_threshold(
     extract_msb_u32_batch(session, &diffs).await
 }
 
-pub async fn greater_than_threshold_u16(
-    session: &mut Session,
-    distances: &[Share<u16>],
-) -> Result<Vec<Share<Bit>>> {
-    extract_msb_u16_batch(session, &distances).await
-}
-
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
 pub fn translate_threshold_a(t: f64) -> u32 {
     assert!(
@@ -695,6 +688,17 @@ pub async fn lte_threshold_and_open(
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<bool>> {
     let bits = greater_than_threshold(session, distances).await?;
+    open_bin(session, &bits)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+}
+
+/// Compares the given distance to a threshold and reveal the bit "less than or equal".
+pub async fn lte_threshold_and_open_u16(
+    session: &mut Session,
+    distances: &[Share<u16>],
+) -> Result<Vec<bool>> {
+    let bits = extract_msb_u16_batch(session, distances).await?;
     open_bin(session, &bits)
         .await
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
