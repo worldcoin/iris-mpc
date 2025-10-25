@@ -897,6 +897,33 @@ pub(crate) async fn extract_msb_u32_batch(
     Ok(res)
 }
 
+async fn extract_msb_u16(session: &mut Session, x_: VecShare<u16>) -> Result<VecShare<u64>, Error> {
+    let x = x_.transpose_pack_u64();
+    extract_msb::<u64>(session, x).await
+}
+
+pub(crate) async fn extract_msb_u16_batch(
+    session: &mut Session,
+    x: &[Share<u16>],
+) -> Result<Vec<Share<Bit>>> {
+    let res_len = x.len();
+    let mut res = Vec::with_capacity(res_len);
+
+    let packed_bits = extract_msb_u16(session, VecShare::new_vec(x.to_vec())).await?;
+
+    'outer: for bit_batch in packed_bits.into_iter() {
+        let (a, b) = bit_batch.get_ab();
+        for i in 0..64 {
+            res.push(Share::new(a.get_bit_as_bit(i), b.get_bit_as_bit(i)));
+            if res.len() == res_len {
+                break 'outer;
+            }
+        }
+    }
+
+    Ok(res)
+}
+
 /// Opens a vector of binary additive replicated secret shares as described in the ABY3 framework.
 ///
 /// In particular, each party holds a share of the form `(a, b)` where `a` and `b` are already known to the next and previous parties, respectively.

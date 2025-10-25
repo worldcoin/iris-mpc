@@ -720,6 +720,19 @@ pub async fn open_ring<T: IntRing2k + NetworkInt>(
         .collect::<Result<Vec<_>>>()
 }
 
+pub fn sub_pub<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    share: &mut Share<T>,
+    rhs: RingElement<T>,
+) {
+    match session.own_role().index() {
+        0 => share.a -= rhs,
+        1 => share.b -= rhs,
+        2 => {}
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
