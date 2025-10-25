@@ -701,7 +701,7 @@ pub async fn lte_threshold_and_open_u16(
     let bits = extract_msb_u16_batch(session, distances).await?;
     open_bin(session, &bits)
         .await
-        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+        .map(|v| v.into_iter().map(|x| x.convert()).collect())
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
