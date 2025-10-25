@@ -902,7 +902,7 @@ async fn extract_msb_u16(session: &mut Session, x_: VecShare<u16>) -> Result<Vec
     extract_msb::<u64>(session, x).await
 }
 
-pub async fn extract_msb_u16_batch(
+pub(crate) async fn extract_msb_u16_batch(
     session: &mut Session,
     x: &[Share<u16>],
 ) -> Result<Vec<Share<Bit>>> {

@@ -9,6 +9,7 @@ use crate::{
         NetworkValue::{self},
     },
     protocol::{
+        binary::extract_msb_u16_batch,
         prf::{Prf, PrfSeed},
         shared_iris::ArcIris,
     },
@@ -97,6 +98,13 @@ pub async fn greater_than_threshold(
         .collect();
 
     extract_msb_u32_batch(session, &diffs).await
+}
+
+pub async fn greater_than_threshold_u16(
+    session: &mut Session,
+    distances: &[Share<u16>],
+) -> Result<Vec<Share<Bit>>> {
+    extract_msb_u16_batch(session, &distances).await
 }
 
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
