@@ -1,6 +1,10 @@
 use crate::shares::{int_ring::IntRing2k, ring_impl::RingElement};
-use aes_prng::AesRng;
+use rand::rngs::OsRng;
 use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
+use rand_chacha::rand_core;
+use rand_core::RngCore;
+
+pub use rand_chacha::ChaCha20Rng as AesRng;
 
 pub type PrfSeed = <AesRng as SeedableRng>::Seed;
 
@@ -13,8 +17,8 @@ pub struct Prf {
 impl Default for Prf {
     fn default() -> Self {
         Self {
-            my_prf: AesRng::from_entropy(),
-            prev_prf: AesRng::from_entropy(),
+            my_prf: AesRng::from_rng(OsRng).expect("OsRng"),
+            prev_prf: AesRng::from_rng(OsRng).expect("OsRng"),
         }
     }
 }
@@ -36,8 +40,9 @@ impl Prf {
     }
 
     pub fn gen_seed() -> PrfSeed {
-        let mut rng = AesRng::from_entropy();
-        rng.gen::<PrfSeed>()
+        let mut s = PrfSeed::default();
+        OsRng.fill_bytes(&mut s);
+        s
     }
 
     pub fn gen_rands<T>(&mut self) -> (T, T)
