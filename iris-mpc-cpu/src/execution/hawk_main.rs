@@ -1,4 +1,3 @@
-use super::player::Identity;
 use crate::{
     execution::{
         hawk_main::{
@@ -7,8 +6,6 @@ use crate::{
             rot::{AllRotations, VecRotationSupport},
             search::SearchIds,
         },
-        local::generate_local_identities,
-        player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
@@ -327,7 +324,7 @@ impl HawkActor {
         });
 
         let network_args =
-            NetworkHandleArgs::from_hawk(&args, SessionGroups::N_SESSIONS_PER_REQUEST);
+            NetworkHandleArgs::from_hawk(args, SessionGroups::N_SESSIONS_PER_REQUEST);
         let networking = build_network_handle(network_args, ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);

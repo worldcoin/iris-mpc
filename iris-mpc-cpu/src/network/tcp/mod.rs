@@ -2,7 +2,7 @@ use crate::{
     execution::{
         hawk_main::HawkArgs,
         local::generate_local_identities,
-        player::{Identity, Role, RoleAssignment},
+        player::{Role, RoleAssignment},
         session::NetworkSession,
     },
     network::tcp::{
@@ -13,7 +13,6 @@ use crate::{
             connection_builder::PeerConnectionBuilder,
             server::TcpServer,
         },
-        session::TcpSession,
     },
 };
 use async_trait::async_trait;
@@ -221,7 +220,6 @@ pub mod testing {
             networking::{
                 client::TcpClient, connection_builder::PeerConnectionBuilder, server::TcpServer,
             },
-            session::TcpSession,
             NetworkHandle,
         },
     };
@@ -366,7 +364,6 @@ mod tests {
     use crate::execution::session::NetworkSession;
     use crate::network::tcp::data::StreamId;
     use crate::network::value::NetworkValue;
-    use crate::network::{tcp::session::TcpSession, Networking};
     use rand::Rng;
 
     use super::testing::*;
