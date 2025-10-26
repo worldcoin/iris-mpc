@@ -363,6 +363,7 @@ mod tests {
 
     use crate::execution::local::generate_local_identities;
     use crate::execution::player::{Identity, Role};
+    use crate::execution::session::NetworkSession;
     use crate::network::tcp::data::StreamId;
     use crate::network::value::NetworkValue;
     use crate::network::{tcp::session::TcpSession, Networking};
@@ -378,7 +379,7 @@ mod tests {
         NetworkValue::PrfKey(key)
     }
 
-    async fn all_parties_talk(identities: Vec<Identity>, sessions: Vec<TcpSession>) {
+    async fn all_parties_talk(identities: Vec<Identity>, sessions: Vec<NetworkSession>) {
         let mut tasks = JoinSet::new();
         let message_to_next = get_prf();
         let message_to_prev = get_prf();
@@ -397,18 +398,22 @@ mod tests {
             tasks.spawn(async move {
                 // Sending
                 session
+                    .networking
                     .send(message_to_next.clone(), &next_id)
                     .await
                     .unwrap();
                 session
+                    .networking
                     .send(message_to_prev.clone(), &prev_id)
                     .await
                     .unwrap();
 
                 // Receiving
-                let received_message_from_prev = session.receive(&prev_id).await.unwrap();
+                let received_message_from_prev =
+                    session.networking.receive(&prev_id).await.unwrap();
                 assert_eq!(received_message_from_prev, message_to_next);
-                let received_message_from_next = session.receive(&next_id).await.unwrap();
+                let received_message_from_next =
+                    session.networking.receive(&next_id).await.unwrap();
                 assert_eq!(received_message_from_next, message_to_prev);
             });
         }
@@ -458,10 +463,14 @@ mod tests {
                 let alice_msg = alice_prf.clone();
 
                 let task1 = tokio::spawn(async move {
-                    alice.send(alice_msg, &"bob".into()).await.unwrap();
+                    alice
+                        .networking
+                        .send(alice_msg, &"bob".into())
+                        .await
+                        .unwrap();
                 });
                 let task2 = tokio::spawn(async move {
-                    let rx_msg = bob.receive(&"alice".into()).await.unwrap();
+                    let rx_msg = bob.networking.receive(&"alice".into()).await.unwrap();
                     assert_eq!(alice_prf, rx_msg);
                 });
                 let _ = tokio::try_join!(task1, task2).unwrap();
