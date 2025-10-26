@@ -24,25 +24,36 @@ impl Default for Prf {
 }
 
 impl Prf {
-    pub fn new(my_key: PrfSeed, prev_key: PrfSeed) -> Self {
+    pub fn new(my_key: [u8; 16], prev_key: [u8; 16]) -> Self {
+        let my_seed = Self::expand_seed(my_key);
+        let prev_seed = Self::expand_seed(prev_key);
         Self {
-            my_prf: AesRng::from_seed(my_key),
-            prev_prf: AesRng::from_seed(prev_key),
+            my_prf: AesRng::from_seed(my_seed),
+            prev_prf: AesRng::from_seed(prev_seed),
         }
     }
 
+    pub fn gen_seed() -> [u8; 16] {
+        let mut s = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut s);
+        s
+    }
+
+    fn expand_seed(short: [u8; 16]) -> [u8; 32] {
+        use blake3::Hasher;
+        let mut hasher = Hasher::new();
+        hasher.update(&short);
+        let hash = hasher.finalize();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(hash.as_bytes());
+        out
+    }
     pub fn get_my_prf(&mut self) -> &mut AesRng {
         &mut self.my_prf
     }
 
     pub fn get_prev_prf(&mut self) -> &mut AesRng {
         &mut self.prev_prf
-    }
-
-    pub fn gen_seed() -> PrfSeed {
-        let mut s = PrfSeed::default();
-        OsRng.fill_bytes(&mut s);
-        s
     }
 
     pub fn gen_rands<T>(&mut self) -> (T, T)

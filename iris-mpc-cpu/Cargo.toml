@@ -17,6 +17,7 @@ aws-config.workspace = true
 aws-sdk-rds.workspace = true
 aws-sdk-s3.workspace = true
 bincode.workspace = true
+blake3 = "1"
 bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
