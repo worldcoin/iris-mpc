@@ -37,12 +37,8 @@ static_assertions.workspace = true
 sqlx.workspace = true
 telemetry-batteries.workspace = true
 tokio.workspace = true
-toml = { version = "0.8.23", features = ["preserve_order"] }
+toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
-
-[[bin]]
-name = "write-node-config-toml"
-path = "bin/write_node_config_toml.rs"

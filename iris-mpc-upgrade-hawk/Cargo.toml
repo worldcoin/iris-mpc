@@ -52,6 +52,3 @@ serial_test = "3.2.0"
 default = []
 db_dependent = []
 
-[[bin]]
-name = "iris-mpc-hawk-genesis"
-path = "bin/iris_mpc_hawk_genesis.rs"
