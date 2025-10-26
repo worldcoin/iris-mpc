@@ -13,7 +13,8 @@
 use crate::shares::{int_ring::IntRing2k, ring_impl::RingElement};
 use rand::rngs::OsRng;
 use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
-use rand_core::{CryptoRng, RngCore};
+use rand_chacha::rand_core;
+use rand_core::RngCore;
 
 // Fast PRG backend. We call it AesRng to preserve the rest of your code.
 pub use rand_chacha::ChaCha20Rng as AesRng;
