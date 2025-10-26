@@ -57,7 +57,7 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
         let sc = make_channels(&self.peers, &self.config, self.next_session_id);
         let tcp_sessions = self.make_sessions_inner(sc).await;
 
-        let network_sessions = tcp_sessions
+        let network_sessions: Vec<_> = tcp_sessions
             .into_iter()
             .map(|tcp_session| NetworkSession {
                 session_id: tcp_session.id(),
@@ -65,7 +65,7 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
                 networking: Box::new(tcp_session),
                 own_role: Role::new(self.party_index),
             })
-            .collect_vec();
+            .collect();
         Ok(network_sessions)
     }
 }

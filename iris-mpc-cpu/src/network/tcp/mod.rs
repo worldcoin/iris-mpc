@@ -97,7 +97,6 @@ pub async fn build_network_handle(
     });
 
     let identities = generate_local_identities();
-
     let role_assignments: RoleAssignment = identities
         .iter()
         .enumerate()
@@ -206,6 +205,7 @@ fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
 }
 
 pub mod testing {
+    use super::*;
     use eyre::Result;
 
     use itertools::izip;
@@ -250,7 +250,7 @@ pub mod testing {
         request_parallelism: usize,
     ) -> Result<(
         Vec<handle::TcpNetworkHandle<TcpStream>>,
-        Vec<Vec<TcpSession>>,
+        Vec<Vec<NetworkSession>>,
     )> {
         assert_eq!(parties.len(), 3);
 
@@ -302,10 +302,24 @@ pub mod testing {
         }
         tracing::debug!("Players connected to each other");
 
+        let identities = generate_local_identities();
+        let role_assignments: RoleAssignment = identities
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (Role::new(index), id.clone()))
+            .collect();
+        let role_assignments = Arc::new(role_assignments);
         let ct = CancellationToken::new();
         let mut handles = vec![];
-        for (r, c) in connections {
-            handles.push(TcpNetworkHandle::new(r, c, config.clone(), ct.clone()));
+        for (idx, (r, c)) in connections.into_iter().enumerate() {
+            handles.push(TcpNetworkHandle::new(
+                r,
+                c,
+                config.clone(),
+                ct.clone(),
+                idx,
+                role_assignments.clone(),
+            ));
         }
 
         tracing::debug!("waiting for make_sessions to complete");
