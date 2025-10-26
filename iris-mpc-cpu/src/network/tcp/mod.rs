@@ -1,5 +1,10 @@
 use crate::{
-    execution::{hawk_main::HawkArgs, player::Identity},
+    execution::{
+        hawk_main::HawkArgs,
+        local::generate_local_identities,
+        player::{Identity, Role, RoleAssignment},
+        session::NetworkSession,
+    },
     network::tcp::{
         config::TcpConfig,
         handle::TcpNetworkHandle,
@@ -13,8 +18,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
+use iris_mpc_common::config::TlsConfig;
 use itertools::izip;
-use std::sync::Once;
+use std::sync::{Arc, Once};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
@@ -34,7 +40,7 @@ use data::*;
 
 #[async_trait]
 pub trait NetworkHandle: Send + Sync {
-    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>>;
+    async fn make_sessions(&mut self) -> Result<Vec<NetworkSession>>;
 }
 
 pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
@@ -54,11 +60,31 @@ pub trait Server: Send {
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)>;
 }
 
+pub struct NetworkHandleArgs {
+    pub party_index: usize,
+    pub addresses: Vec<String>,
+    pub connection_parallelism: usize,
+    pub request_parallelism: usize,
+    pub sessions_per_request: usize,
+    pub tls: Option<TlsConfig>,
+}
+
+impl NetworkHandleArgs {
+    pub fn from_hawk(args: &HawkArgs, sessions_per_request: usize) -> Self {
+        Self {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request,
+            tls: args.tls.clone(),
+        }
+    }
+}
+
 pub async fn build_network_handle(
-    args: &HawkArgs,
+    args: NetworkHandleArgs,
     ct: CancellationToken,
-    identities: &[Identity],
-    sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
     static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
     INSTALL_CRYPTO_PROVIDER.call_once(|| {
@@ -70,6 +96,15 @@ pub async fn build_network_handle(
         }
     });
 
+    let identities = generate_local_identities();
+
+    let role_assignments: RoleAssignment = identities
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (Role::new(index), id.clone()))
+        .collect();
+    let role_assignments = Arc::new(role_assignments);
+
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
@@ -78,7 +113,7 @@ pub async fn build_network_handle(
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),
         args.connection_parallelism,
-        args.request_parallelism * sessions_per_request,
+        args.request_parallelism * args.sessions_per_request,
     );
 
     // PeerConnectionBuilder is generic over listener and connector and don't want to use a boxed trait to
@@ -103,7 +138,14 @@ pub async fn build_network_handle(
             }
 
             let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config, ct);
+            let networking = TcpNetworkHandle::new(
+                reconnector,
+                connections,
+                tcp_config,
+                ct,
+                my_index,
+                role_assignments,
+            );
             Ok(Box::new(networking))
         }};
     }

@@ -1,6 +1,9 @@
 use super::{session::TcpSession, Connection, OutStream, OutboundMsg, PeerConnections, StreamId};
 use crate::{
-    execution::{player::Identity, session::SessionId},
+    execution::{
+        player::{Identity, Role, RoleAssignment},
+        session::{NetworkSession, SessionId},
+    },
     network::{
         tcp::{
             config::TcpConfig, networking::connection_builder::Reconnector, NetworkConnection,
@@ -42,15 +45,28 @@ pub struct TcpNetworkHandle<T: NetworkConnection> {
     reconnector: Reconnector<T>,
     config: TcpConfig,
     next_session_id: usize,
+    party_index: usize,
+    role_assignments: Arc<RoleAssignment>,
 }
 
 #[async_trait]
 impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
-    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
+    async fn make_sessions(&mut self) -> Result<Vec<NetworkSession>> {
         tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
         let sc = make_channels(&self.peers, &self.config, self.next_session_id);
-        Ok(self.make_sessions_inner(sc).await)
+        let tcp_sessions = self.make_sessions_inner(sc).await;
+
+        let network_sessions = tcp_sessions
+            .into_iter()
+            .map(|tcp_session| NetworkSession {
+                session_id: tcp_session.id(),
+                role_assignments: self.role_assignments.clone(),
+                networking: Box::new(tcp_session),
+                own_role: Role::new(self.party_index),
+            })
+            .collect_vec();
+        Ok(network_sessions)
     }
 }
 
@@ -78,6 +94,8 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         connections: PeerConnections<T>,
         config: TcpConfig,
         ct: CancellationToken,
+        party_index: usize,
+        role_assignments: Arc<RoleAssignment>,
     ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
@@ -107,6 +125,8 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             reconnector,
             config,
             next_session_id: 0,
+            party_index,
+            role_assignments,
         }
     }
 
