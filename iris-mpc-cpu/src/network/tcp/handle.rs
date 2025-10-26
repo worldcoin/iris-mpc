@@ -2,7 +2,7 @@ use super::{session::TcpSession, Connection, OutStream, OutboundMsg, PeerConnect
 use crate::{
     execution::{
         player::{Identity, Role, RoleAssignment},
-        session::{NetworkSession, SessionId},
+        session::{NetworkSession, Session, SessionId},
     },
     network::{
         tcp::{
@@ -11,11 +11,13 @@ use crate::{
         },
         value::{DescriptorByte, NetworkValue},
     },
+    protocol::ops::setup_replicated_prf,
 };
 use async_trait::async_trait;
 use bytes::BytesMut;
 use eyre::Result;
 use iris_mpc_common::fast_metrics::FastHistogram;
+use rand::{thread_rng, Rng};
 use std::{
     collections::HashMap,
     io,
@@ -67,6 +69,25 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
             })
             .collect();
         Ok(network_sessions)
+    }
+    async fn make_sessions(&mut self) -> Result<Vec<Session>> {
+        let network_sessions = self.make_network_sessions().await?;
+
+        let mut session_futures = vec![];
+        for mut network_session in network_sessions.into_iter() {
+            let fut = async move {
+                let my_session_seed = thread_rng().gen();
+                let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+                Ok::<Session, eyre::Report>(Session {
+                    network_session,
+                    prf,
+                })
+            };
+            session_futures.push(fut);
+        }
+
+        let sessions = futures::future::try_join_all(session_futures).await?;
+        Ok(sessions)
     }
 }
 

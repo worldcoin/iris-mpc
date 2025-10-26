@@ -3,7 +3,7 @@ use crate::{
         hawk_main::HawkArgs,
         local::generate_local_identities,
         player::{Role, RoleAssignment},
-        session::NetworkSession,
+        session::{NetworkSession, Session},
     },
     network::tcp::{
         config::TcpConfig,
@@ -40,6 +40,7 @@ use data::*;
 #[async_trait]
 pub trait NetworkHandle: Send + Sync {
     async fn make_network_sessions(&mut self) -> Result<Vec<NetworkSession>>;
+    async fn make_sessions(&mut self) -> Result<Vec<Session>>;
 }
 
 pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
