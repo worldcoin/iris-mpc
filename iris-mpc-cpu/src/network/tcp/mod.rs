@@ -39,7 +39,7 @@ use data::*;
 
 #[async_trait]
 pub trait NetworkHandle: Send + Sync {
-    async fn make_sessions(&mut self) -> Result<Vec<NetworkSession>>;
+    async fn make_network_sessions(&mut self) -> Result<Vec<NetworkSession>>;
 }
 
 pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
@@ -323,7 +323,7 @@ pub mod testing {
         tracing::debug!("waiting for make_sessions to complete");
         let mut sessions = vec![];
         for h in handles.iter_mut() {
-            sessions.push(h.make_sessions().await?);
+            sessions.push(h.make_network_sessions().await?);
         }
 
         Ok((handles, sessions))

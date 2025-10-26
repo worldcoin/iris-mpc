@@ -428,7 +428,7 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
-        let mut network_sessions = self.networking.make_sessions().await?;
+        let mut network_sessions = self.networking.make_network_sessions().await?;
         let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
 
         // todo: replace this with array_chunks::<2>() once that feature

@@ -51,7 +51,7 @@ pub struct TcpNetworkHandle<T: NetworkConnection> {
 
 #[async_trait]
 impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
-    async fn make_sessions(&mut self) -> Result<Vec<NetworkSession>> {
+    async fn make_network_sessions(&mut self) -> Result<Vec<NetworkSession>> {
         tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
         let sc = make_channels(&self.peers, &self.config, self.next_session_id);
