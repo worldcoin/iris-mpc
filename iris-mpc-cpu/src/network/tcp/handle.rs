@@ -1,6 +1,7 @@
 use super::{session::TcpSession, Connection, OutStream, OutboundMsg, PeerConnections, StreamId};
 use crate::{
     execution::{
+        hawk_main::scheduler::parallelize,
         player::{Identity, Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
@@ -86,8 +87,7 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
             session_futures.push(fut);
         }
 
-        let sessions = futures::future::try_join_all(session_futures).await?;
-        Ok(sessions)
+        parallelize(session_futures.into_iter()).await
     }
 }
 
