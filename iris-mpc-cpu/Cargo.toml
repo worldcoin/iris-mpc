@@ -135,5 +135,9 @@ name = "generate_ideal_neighborhoods"
 path = "bin/generate_ideal_neighborhoods.rs"
 
 [[bin]]
+name = "get_graph_from_ideal"
+path = "bin/get_graph_from_ideal.rs"
+
+[[bin]]
 name = "construct-graph-ptxt"
 path = "bin/construct_graph_ptxt.rs"
