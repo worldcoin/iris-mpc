@@ -117,7 +117,7 @@ env:
     value: "true"
 
   - name: SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE
-    value: "32768"
+    value: "1024"
 
   - name: SMPC__ENABLE_RESET
     value: "true"
