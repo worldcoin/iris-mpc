@@ -2462,6 +2462,7 @@ dependencies = [
  "futures",
  "hkdf",
  "iris-mpc",
+ "iris-mpc-anon-stats-server",
  "iris-mpc-common",
  "iris-mpc-cpu",
  "iris-mpc-gpu",
