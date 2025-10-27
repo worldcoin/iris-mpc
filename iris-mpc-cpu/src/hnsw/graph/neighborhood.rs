@@ -236,6 +236,22 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 }
 
 impl<Vector: Ref + Display + FromStr, Distance: Clone> SortedNeighborhood<Vector, Distance> {
+    pub async fn batch_shrink_to_size_m<V>(
+        mut instances: Vec<Vec<SortedNeighborhoodV<V>>>,
+        searcher: &HnswSearcher,
+    ) -> Vec<Vec<SortedNeighborhoodV<V>>>
+    where
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    {
+        for instance in instances.iter_mut() {
+            for (lc, nb) in instance.iter_mut().enumerate() {
+                nb.trim_to_k_nearest(searcher.params.get_M(lc));
+            }
+        }
+
+        instances
+    }
+
     pub async fn batch_insert_prepare<V>(
         instances: Vec<(Vector, Vec<SortedNeighborhoodV<V>>, bool)>,
         store: &mut V,

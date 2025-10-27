@@ -1243,10 +1243,10 @@ impl HnswSearcher {
         set_ep: bool,
     ) -> Result<ConnectPlanV<V>> {
         // Truncate search results to size M before insertion
-        for (lc, l_links) in links.iter_mut().enumerate() {
-            let M = self.params.get_M(lc);
-            l_links.trim_to_k_nearest(M);
-        }
+
+        let instances = vec![links];
+        let instances = SortedNeighborhood::batch_shrink_to_size_m(instances, self).await;
+        let links = instances[0];
 
         let results = SortedNeighborhood::batch_insert_prepare(
             vec![(inserted_vector, links, set_ep)],
