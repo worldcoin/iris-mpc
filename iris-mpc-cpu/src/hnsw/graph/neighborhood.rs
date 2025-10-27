@@ -37,6 +37,8 @@ pub trait Neighborhood: Clone {
         self.len() == 0
     }
 
+    fn clear(&mut self);
+
     fn iter(&self) -> impl Iterator<Item = &(Self::Vector, Self::Distance)>;
 
     /// Inserts a single element into the neighborhood.
@@ -224,6 +226,10 @@ where
         self.edges.iter()
     }
 
+    fn clear(&mut self) {
+        self.edges.clear();
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn insert<V>(
         &mut self,
@@ -377,7 +383,11 @@ impl<Vector: Clone, Distance: Clone> UnsortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
-        let values = self.edges.iter().map(|e| e.1.clone()).collect::<Vec<_>>();
+        let values = self
+            .edges
+            .iter()
+            .map(|(_, dist)| dist.clone())
+            .collect::<Vec<_>>();
         // Get the permutation which describes the partitioned sequence
         let indices = run_quickselect_with_store(store, &values, k).await?;
         self.edges = indices
@@ -412,6 +422,10 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
         self.edges.len()
     }
 
+    fn clear(&mut self) {
+        self.edges.clear();
+    }
+
     /// Insert the element `to` with distance `dist` into the list
     ///
     /// Calls the `VectorStore` to find the insertion index.
@@ -439,7 +453,7 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
         UnsortedEdgeIds(
             self.edges
                 .iter()
-                .map(|edge| edge.0.clone())
+                .map(|(vector, _)| vector.clone())
                 .collect::<Vec<_>>(),
         )
     }
@@ -535,7 +549,7 @@ mod tests {
         Ok(())
     }
 
-    async fn test_neighborhood_generic<N: NeighborhoodV<PlaintextStore>>() {
+    async fn test_neighborhood_generic<N: NeighborhoodV<PlaintextStore>>() -> Result<()> {
         let mut rng = thread_rng();
         let mut store = PlaintextStore::new();
         let query = Arc::new(IrisCode::random_rng(&mut rng));
@@ -544,10 +558,7 @@ mod tests {
         let randos = (0..3)
             .map(|_| Arc::new(IrisCode::random_rng(&mut rng)))
             .collect::<Vec<_>>();
-        insert_batch_store_and_nbhd(query.clone(), &mut store, &mut nbhd, &randos)
-            .await
-            .unwrap();
-
+        insert_batch_store_and_nbhd(query.clone(), &mut store, &mut nbhd, &randos).await?;
         assert_eq!(nbhd.len(), 3);
         // Insert a match
         insert_single_store_and_nbhd(
@@ -556,14 +567,12 @@ mod tests {
             &mut nbhd,
             Arc::new(query.get_similar_iris(&mut rng, 0.18)),
         )
-        .await
-        .unwrap();
-
-        nbhd.retain_k_nearest(&mut store, 2).await.unwrap();
+        .await?;
+        nbhd.retain_k_nearest(&mut store, 2).await?;
         assert_eq!(nbhd.len(), 2);
 
         // We should have exactly one match at this point (almost always :))
-        assert_eq!(nbhd.matches(&mut store).await.unwrap().len(), 1);
+        assert_eq!(nbhd.matches(&mut store).await?.len(), 1);
 
         // Next candidate is arbitrary in general, but it should not be None
         _ = nbhd.get_next_candidate().unwrap();
@@ -575,36 +584,41 @@ mod tests {
             &mut nbhd,
             Arc::new(query.get_similar_iris(&mut rng, 0.05)),
         )
-        .await
-        .unwrap();
+        .await?;
         assert_eq!(nbhd.len(), 3);
 
-        nbhd.retain_k_nearest(&mut store, 2).await.unwrap();
+        nbhd.retain_k_nearest(&mut store, 2).await?;
         assert_eq!(nbhd.len(), 2);
 
         // We should have exactly two matches at this point
-        assert_eq!(nbhd.matches(&mut store).await.unwrap().len(), 2);
+        assert_eq!(nbhd.matches(&mut store).await?.len(), 2);
 
         // The furthest element should be the earliest inserted match
         let furthest = nbhd.get_furthest().unwrap();
         assert_eq!(furthest.0, IrisVectorId::from_serial_id(4));
 
         // This should clear
-        nbhd.retain_k_nearest(&mut store, 0).await.unwrap();
+        nbhd.retain_k_nearest(&mut store, 0).await?;
 
         assert_eq!(nbhd.len(), 0);
         assert!(nbhd.is_empty());
         assert!(matches!(nbhd.get_furthest(), None));
         assert!(matches!(nbhd.get_next_candidate(), None));
+
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_sorted_neighborhood() {
-        test_neighborhood_generic::<SortedNeighborhoodV<PlaintextStore>>().await
+        test_neighborhood_generic::<SortedNeighborhoodV<PlaintextStore>>()
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn test_unsorted_neighborhood() {
-        test_neighborhood_generic::<UnsortedNeighborhoodV<PlaintextStore>>().await
+        test_neighborhood_generic::<UnsortedNeighborhoodV<PlaintextStore>>()
+            .await
+            .unwrap();
     }
 }

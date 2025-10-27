@@ -17,7 +17,7 @@ use crate::hnsw::{
 use crate::hnsw::GraphMem;
 
 use aes_prng::AesRng;
-use eyre::{bail, eyre, Result};
+use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
@@ -322,8 +322,9 @@ impl HnswSearcher {
                 let start = W.get_next_candidate().ok_or(eyre!("W cannot be empty"))?;
                 let nearest = Self::layer_search_greedy(store, graph, q, start, lc).await?;
 
-                W.retain_k_nearest(store, 0).await?;
-                W.insert(store, nearest.0, nearest.1).await?;
+                W.clear();
+                let (id, dist) = nearest;
+                W.insert(store, id, dist).await?;
             }
             2..32 => {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
@@ -380,6 +381,7 @@ impl HnswSearcher {
             if c.is_none() {
                 break;
             }
+            // Always succeeds since we break early if c is None
             let c = c.unwrap();
 
             // Open the candidate node and visit its unvisited neighbors, computing
@@ -515,7 +517,7 @@ impl HnswSearcher {
         // c: the current candidate to be opened, initialized to first entry of W
         let (mut c, _cq) = W
             .get_next_candidate()
-            .ok_or(eyre!("W cannot be empty"))?
+            .ok_or_eyre("W cannot be empty")?
             .clone();
 
         // These spans accumulate running time of multiple atomic operations
