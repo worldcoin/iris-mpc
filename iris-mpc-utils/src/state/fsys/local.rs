@@ -15,7 +15,11 @@ fn get_path_to_assets() -> PathBuf {
 }
 
 /// Returns path to a node config file.
-fn get_path_to_node_config(config_kind: &str, config_idx: usize, party_idx: &PartyIdx) -> PathBuf {
+pub fn get_path_to_node_config(
+    config_kind: &str,
+    config_idx: usize,
+    party_idx: &PartyIdx,
+) -> PathBuf {
     get_path_to_assets().join(
         format!(
             "node-config/{}/{config_kind}-{config_idx}-node-{party_idx}.toml",
