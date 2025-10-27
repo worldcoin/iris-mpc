@@ -79,14 +79,3 @@ impl Client for BoxTcpClient {
         Ok(Box::new(stream))
     }
 }
-
-#[derive(Clone)]
-pub struct BoxTlsClient(pub TlsClient);
-#[async_trait]
-impl Client for BoxTlsClient {
-    type Output = DynStream;
-    async fn connect(&self, url: String) -> Result<Self::Output> {
-        let stream = self.0.connect(url).await?;
-        Ok(Box::new(stream))
-    }
-}

@@ -23,7 +23,7 @@ fn main() -> Result<()> {
 
     runtime.block_on(async {
         println!("Init tracing");
-        let _tracing_shutdown_handle = match initialize_tracing(&config) {
+        let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
             Ok(handle) => handle,
             Err(e) => {
                 eprintln!("Failed to initialize tracing: {:?}", e);
