@@ -141,7 +141,7 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         layer.set_links(base, links);
     }
 
-    pub async fn num_layers(&self) -> usize {
+    pub fn num_layers(&self) -> usize {
         self.layers.len()
     }
 
@@ -317,11 +317,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{
-        iris_db::{db::IrisDB, iris::IrisCode},
-        vector_id::VectorId,
-        IrisSerialId,
-    };
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId, IrisSerialId};
     use rand::seq::SliceRandom;
     use rand::{RngCore, SeedableRng};
     use serde_json::Deserializer;

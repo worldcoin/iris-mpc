@@ -196,7 +196,7 @@ async fn main() {
     irises.extend(stream_iterator);
     assert!(irises.len() == args.num_irises);
 
-    let num_irises = irises.len();
+    let num_irises = irises.len() as IrisSerialId;
     let mut engine = Engine::init(
         args.engine_choice,
         irises,
@@ -206,7 +206,7 @@ async fn main() {
     );
 
     let chunk_size = 2000;
-    let mut evaluated_pairs = 0usize;
+    let mut evaluated_pairs = 0u64;
     println!("Starting work at serial id: {}", engine.next_id());
 
     let start_t = Instant::now();
@@ -215,7 +215,7 @@ async fn main() {
         let results = engine.compute_chunk(chunk_size);
         let end = engine.next_id();
 
-        evaluated_pairs += (end - start) * num_irises;
+        evaluated_pairs += ((end - start) as u64) * (num_irises as u64);
 
         let mut file = OpenOptions::new()
             .append(true)

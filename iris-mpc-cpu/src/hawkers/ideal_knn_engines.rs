@@ -1,4 +1,9 @@
-use std::cmp::Ordering;
+use std::{
+    cmp::Ordering,
+    fs::File,
+    io::{BufRead, BufReader},
+    path::PathBuf,
+};
 
 use clap::ValueEnum;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
@@ -9,10 +14,6 @@ use rayon::{
 use serde::{Deserialize, Serialize};
 
 use crate::hawkers::plaintext_store::fraction_ordering;
-use serde_json;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct KNNResult<V> {
@@ -51,7 +52,7 @@ pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResul
 }
 
 pub trait KNNEngine {
-    fn init(irises: Vec<IrisCode>, k: usize, next_id: usize, num_threads: usize) -> Self;
+    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId, num_threads: usize) -> Self;
     fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>>;
 }
 
@@ -74,18 +75,12 @@ impl Engine {
         num_threads: usize,
     ) -> Self {
         match which {
-            EngineChoice::NaiveFHD => Self::NaiveFHD(NaiveNormalDistKNN::init(
-                irises,
-                k,
-                next_id as usize,
-                num_threads,
-            )),
-            EngineChoice::NaiveMinFHD => Self::NaiveMinFHD(NaiveMinFHDKNN::init(
-                irises,
-                k,
-                next_id as usize,
-                num_threads,
-            )),
+            EngineChoice::NaiveFHD => {
+                Self::NaiveFHD(NaiveNormalDistKNN::init(irises, k, next_id, num_threads))
+            }
+            EngineChoice::NaiveMinFHD => {
+                Self::NaiveMinFHD(NaiveMinFHDKNN::init(irises, k, next_id, num_threads))
+            }
         }
     }
 
@@ -97,7 +92,7 @@ impl Engine {
     }
 
     /// Next id to process
-    pub fn next_id(&self) -> usize {
+    pub fn next_id(&self) -> IrisSerialId {
         match self {
             Self::NaiveFHD(engine) => engine.next_id,
             Self::NaiveMinFHD(engine) => engine.next_id,
@@ -108,12 +103,12 @@ impl Engine {
 pub struct NaiveNormalDistKNN {
     irises: Vec<IrisCode>,
     k: usize,
-    next_id: usize,
+    next_id: IrisSerialId,
     pool: ThreadPool,
 }
 
 impl KNNEngine for NaiveNormalDistKNN {
-    fn init(irises: Vec<IrisCode>, k: usize, next_id: usize, num_threads: usize) -> Self {
+    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId, num_threads: usize) -> Self {
         NaiveNormalDistKNN {
             irises,
             k,
@@ -126,9 +121,9 @@ impl KNNEngine for NaiveNormalDistKNN {
     }
 
     fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
-        let start = self.next_id;
+        let start = self.next_id as usize;
         let end = (start + chunk_size).min(self.irises.len() + 1);
-        self.next_id = end;
+        self.next_id = end as IrisSerialId;
 
         self.pool.install(|| {
             (start..end)
@@ -166,28 +161,20 @@ impl KNNEngine for NaiveNormalDistKNN {
 }
 
 pub struct NaiveMinFHDKNN {
-    irises_with_rotations: Vec<[IrisCode; 31]>,
-    centers: Vec<IrisCode>, // Store centers separately to access them contiguously
+    irises: Vec<IrisCode>,
     k: usize,
-    next_id: usize,
+    next_id: IrisSerialId,
     pool: ThreadPool,
 }
 
 impl KNNEngine for NaiveMinFHDKNN {
-    fn init(irises: Vec<IrisCode>, k: usize, next_id: usize, num_threads: usize) -> Self {
+    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId, num_threads: usize) -> Self {
         let pool = ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .build()
             .unwrap();
-        let irises_with_rotations = pool.install(|| {
-            irises
-                .par_iter()
-                .map(|iris| iris.all_rotations().try_into().unwrap())
-                .collect::<Vec<_>>()
-        });
         NaiveMinFHDKNN {
-            irises_with_rotations,
-            centers: irises,
+            irises,
             k,
             next_id,
             pool,
@@ -195,18 +182,25 @@ impl KNNEngine for NaiveMinFHDKNN {
     }
 
     fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
-        let start = self.next_id;
-        let end = (start + chunk_size).min(self.centers.len() + 1);
-        self.next_id = end;
+        let start = self.next_id as usize;
+        let end = (start + chunk_size).min(self.irises.len() + 1);
+        self.next_id = end as IrisSerialId;
+
+        let irises_with_rotations: Vec<[IrisCode; 31]> = self.pool.install(|| {
+            self.irises[(start - 1)..(end - 1)]
+                .par_iter()
+                .map(|iris| iris.all_rotations().try_into().unwrap())
+                .collect()
+        });
 
         self.pool.install(|| {
             (start..end)
                 .collect::<Vec<_>>()
                 .into_par_iter()
                 .map(|i| {
-                    let current_iris = &self.irises_with_rotations[i - 1];
+                    let current_iris = &irises_with_rotations[i - start];
                     let mut neighbors = self
-                        .centers
+                        .irises
                         .iter()
                         .enumerate()
                         .flat_map(|(j, other_iris)| {

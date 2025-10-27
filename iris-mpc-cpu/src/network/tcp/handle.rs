@@ -1,6 +1,10 @@
 use super::{session::TcpSession, Connection, OutStream, OutboundMsg, PeerConnections, StreamId};
 use crate::{
-    execution::{player::Identity, session::SessionId},
+    execution::{
+        hawk_main::scheduler::parallelize,
+        player::{Identity, Role, RoleAssignment},
+        session::{NetworkSession, Session, SessionId},
+    },
     network::{
         tcp::{
             config::TcpConfig, networking::connection_builder::Reconnector, NetworkConnection,
@@ -8,11 +12,13 @@ use crate::{
         },
         value::{DescriptorByte, NetworkValue},
     },
+    protocol::ops::setup_replicated_prf,
 };
 use async_trait::async_trait;
 use bytes::BytesMut;
 use eyre::Result;
 use iris_mpc_common::fast_metrics::FastHistogram;
+use rand::{thread_rng, Rng};
 use std::{
     collections::HashMap,
     io,
@@ -42,15 +48,46 @@ pub struct TcpNetworkHandle<T: NetworkConnection> {
     reconnector: Reconnector<T>,
     config: TcpConfig,
     next_session_id: usize,
+    party_index: usize,
+    role_assignments: Arc<RoleAssignment>,
 }
 
 #[async_trait]
 impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
-    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
+    async fn make_network_sessions(&mut self) -> Result<Vec<NetworkSession>> {
         tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
         let sc = make_channels(&self.peers, &self.config, self.next_session_id);
-        Ok(self.make_sessions_inner(sc).await)
+        let tcp_sessions = self.make_sessions_inner(sc).await;
+
+        let network_sessions: Vec<_> = tcp_sessions
+            .into_iter()
+            .map(|tcp_session| NetworkSession {
+                session_id: tcp_session.id(),
+                role_assignments: self.role_assignments.clone(),
+                networking: Box::new(tcp_session),
+                own_role: Role::new(self.party_index),
+            })
+            .collect();
+        Ok(network_sessions)
+    }
+    async fn make_sessions(&mut self) -> Result<Vec<Session>> {
+        let network_sessions = self.make_network_sessions().await?;
+
+        let mut session_futures = vec![];
+        for mut network_session in network_sessions.into_iter() {
+            let fut = async move {
+                let my_session_seed = thread_rng().gen();
+                let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+                Ok::<Session, eyre::Report>(Session {
+                    network_session,
+                    prf,
+                })
+            };
+            session_futures.push(fut);
+        }
+
+        parallelize(session_futures.into_iter()).await
     }
 }
 
@@ -78,6 +115,8 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         connections: PeerConnections<T>,
         config: TcpConfig,
         ct: CancellationToken,
+        party_index: usize,
+        role_assignments: Arc<RoleAssignment>,
     ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
@@ -107,6 +146,8 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             reconnector,
             config,
             next_session_id: 0,
+            party_index,
+            role_assignments,
         }
     }
 
