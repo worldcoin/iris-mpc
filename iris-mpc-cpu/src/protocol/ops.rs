@@ -9,6 +9,7 @@ use crate::{
         NetworkValue::{self},
     },
     protocol::{
+        binary::and_many,
         prf::{Prf, PrfSeed},
         shared_iris::ArcIris,
     },
@@ -747,7 +748,7 @@ pub(crate) async fn oblivious_cross_compare_lifted(
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn min_of_pair_batch(
+pub(crate) async fn min_of_pair_batch(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<DistanceShare<u32>>> {
@@ -755,6 +756,159 @@ pub async fn min_of_pair_batch(
     let bits = oblivious_cross_compare_lifted(session, distances).await?;
 
     conditionally_select_distance(session, distances, bits.as_slice()).await
+}
+
+pub(crate) async fn min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<u32>>> {
+    if distances.is_empty() {
+        eyre::bail!("Expected at least one distance share");
+    }
+    if distances.len() % batch_size != 0 {
+        eyre::bail!("Distances length must be a multiple of batch size");
+    }
+
+    // Within each batch, compute all the pairwise comparisons in a round-robin fashion.
+    // The resulting comparison table looks like
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | -  | b01| b02| b03|
+    // d1 |    | -  | b12| b13|
+    // d2 |    |    | -  | b23|
+    // d3 |    |    |    | -  |
+    // where bij is the bit corresponding to di < dj.
+    // Comparison bits are arranged in a flat vector as
+    // [b01, b02, b03, b12, b13, b23]
+    let num_batches = distances.len() / batch_size;
+    let mut pairs = Vec::with_capacity(num_batches * (batch_size * (batch_size - 1) / 2));
+    for i_batch in 0..num_batches {
+        for i in 0..batch_size {
+            for j in (i + 1)..batch_size {
+                let distance_i = distances[i * num_batches + i_batch].clone();
+                let distance_j = distances[j * num_batches + i_batch].clone();
+                pairs.push((distance_i, distance_j));
+            }
+        }
+    }
+    let comparison_bits = oblivious_cross_compare(session, &pairs).await?;
+    // Fill in the rest of the comparison table by setting diagonal bits to 1 and negating the bits above the diagonal.
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | 1  | b01| b02| b03|
+    // d1 |!b01| 1  | b12| b13|
+    // d2 |!b02|!b12| 1  | b23|
+    // d3 |!b03|!b13|!b23| 1  |
+    // Extract this table column-wise to AND them element-wise.
+    // Group ith columns together, i.e., return a matrix M, where M[i] contains for the comparison bits between distance i of every batch and all the other distances within the same batch.
+    let mut batch_selection_bits = (0..batch_size)
+        .map(|_| Vec::with_capacity(num_batches * batch_size))
+        .collect_vec();
+    for batch in comparison_bits.chunks(batch_size * (batch_size - 1) / 2) {
+        let mut batch_matrix: Vec<Vec<Share<Bit>>> = (0..batch_size)
+            .map(|_| Vec::with_capacity(batch_size))
+            .collect();
+        let mut batch_counter = 0;
+        for i in 0..batch_size {
+            let row = &batch[batch_counter..batch_counter + (batch_size - i - 1)];
+            // fill in the ith column
+            batch_matrix[i].push(Share::from_const(Bit::new(true), session.own_role()));
+            for bit in row {
+                batch_matrix[i].push(bit.not());
+            }
+            // fill the other columns
+            for j in (i + 1)..batch_size {
+                batch_matrix[j].push(row[j - i - 1].clone());
+            }
+            batch_counter += batch_size - i - 1;
+        }
+        for (i, column_bits) in batch_matrix.into_iter().enumerate() {
+            batch_selection_bits[i].extend(column_bits);
+        }
+    }
+    // Compute the AND of each row in the batch_selection_bits matrix.
+    // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
+    while batch_selection_bits.len() > 1 {
+        // if the length is odd, we save the last distance to add it back later
+        let maybe_last_column = if batch_selection_bits.len() % 2 == 1 {
+            batch_selection_bits.pop()
+        } else {
+            None
+        };
+        let half_len = batch_selection_bits.len() / 2;
+        let left_bits: VecShare<u64> = VecShare::new_vec(
+            batch_selection_bits
+                .drain(..half_len)
+                .flatten()
+                .collect_vec(),
+        )
+        .pack();
+        let right_bits: VecShare<u64> =
+            VecShare::new_vec(batch_selection_bits.drain(..).flatten().collect_vec()).pack();
+        let and_bits = and_many(session, left_bits.as_slice(), right_bits.as_slice()).await?;
+        let mut and_bits = and_bits.convert_to_bits();
+        let num_and_bits = half_len * num_batches * batch_size;
+        and_bits.truncate(num_and_bits);
+        batch_selection_bits = and_bits
+            .inner()
+            .chunks(num_batches * batch_size)
+            .map(|chunk| chunk.to_vec())
+            .collect_vec();
+        batch_selection_bits.extend(maybe_last_column);
+    }
+    // The resulting bits are bit injected into u32.
+    let selection_bits: VecShare<u32> = bit_inject_ot_2round(
+        session,
+        VecShare::new_vec(batch_selection_bits.pop().unwrap()),
+    )
+    .await?;
+    // Multiply distance shares with selection bits to zero out non-minimum distances.
+    let selected_distances = {
+        let mut shares_a = Vec::with_capacity(2 * distances.len());
+        for i_batch in 0..num_batches {
+            for i in 0..batch_size {
+                let distance = &distances[i * num_batches + i_batch];
+                let b = &selection_bits.shares[i_batch * batch_size + i];
+                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
+                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
+                shares_a.push(code_a);
+                shares_a.push(mask_a);
+            }
+        }
+
+        let network = &mut session.network_session;
+        let message = if shares_a.len() == 1 {
+            NetworkValue::RingElement32(shares_a[0])
+        } else {
+            NetworkValue::VecRing32(shares_a.clone())
+        };
+        network.send_next(message).await?;
+        let shares_b = match network.receive_prev().await {
+            Ok(NetworkValue::RingElement32(element)) => vec![element],
+            Ok(NetworkValue::VecRing32(elements)) => elements,
+            _ => bail!("Could not deserialize network value"),
+        };
+        izip!(shares_a.into_iter(), shares_b.into_iter())
+            // combine a and b part into shares
+            .map(|(a, b)| Share::new(a, b))
+            .tuples()
+            .map(|(code, mask)| DistanceShare::new(code, mask))
+            .collect_vec()
+    };
+    let res = selected_distances
+        .chunks(batch_size)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .cloned()
+                .reduce(|acc, a| {
+                    DistanceShare::new(acc.code_dot + a.code_dot, acc.mask_dot + a.mask_dot)
+                })
+                .unwrap()
+        })
+        .collect_vec();
+    Ok(res)
 }
 
 use std::cell::RefCell;

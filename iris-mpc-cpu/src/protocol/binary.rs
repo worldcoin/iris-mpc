@@ -176,7 +176,7 @@ async fn and_many_receive<T: IntRing2k + NetworkInt>(
 }
 
 /// Low-level SMPC protocol to compute the AND of two vectors of bit-sliced shares.
-async fn and_many<T: IntRing2k + NetworkInt>(
+pub(crate) async fn and_many<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
