@@ -6,7 +6,7 @@
 
 use super::{
     graph::neighborhood::SortedNeighborhoodV,
-    sorting::{binary_search::BinarySearch, swap_network::apply_swap_network, tree_min::tree_min},
+    sorting::{swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
@@ -19,7 +19,6 @@ use crate::hnsw::GraphMem;
 use aes_prng::AesRng;
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::fast_metrics::FastHistogram;
-use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
@@ -187,22 +186,19 @@ pub struct HnswSearcher {
     pub params: HnswParams,
 }
 
-pub type LightConnectPlanV<V> =
-    ConnectPlan<<V as VectorStore>::VectorRef, LightConnectPlanLayerV<V>>;
-pub type LightConnectPlanLayerV<V> = LightConnectPlanLayer<<V as VectorStore>::VectorRef>;
-pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef, ConnectPlanLayerV<V>>;
+pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
 pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlan<Vector, CPL> {
+pub struct ConnectPlan<Vector> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
     /// The HNSW graph updates required by insertion. The insertion layer of the new vector
     /// is `layers.len() - 1`.
-    pub layers: Vec<CPL>,
+    pub layers: Vec<ConnectPlanLayer<Vector>>,
 
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
     pub set_ep: bool,
@@ -1239,32 +1235,27 @@ impl HnswSearcher {
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
-        mut links: Vec<SortedNeighborhoodV<V>>,
+        links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
     ) -> Result<ConnectPlanV<V>> {
         // Truncate search results to size M before insertion
 
         let instances = vec![links];
-        let instances = SortedNeighborhood::batch_shrink_to_size_m(instances, self).await;
-        let links = instances[0];
+        let instances = SortedNeighborhood::batch_shrink_to_size_m::<V>(instances, self).await;
+
+        // Unwrap always succeeds since `instances` has exactly one entry
+        let links = instances.into_iter().nth(0).unwrap();
 
         let results = SortedNeighborhood::batch_insert_prepare(
             vec![(inserted_vector, links, set_ep)],
             store,
             graph,
+            self,
         )
         .await?;
 
-        // let full_connect_plans = results
-        //     .iter()
-        //     .map(|lcp| ConnectPlan {
-        //         inserted_vector: lcp.inserted_vector,
-        //         set_ep: lcp.set_ep,
-        //         layers: lcp.layers.iter().map(|insert_index|)
-        //     })
-        //     .collect::<Vec<_>>();
-
-        Ok(results.first().unwrap().clone())
+        // Unwrap always succeeds since `results` has the same size as `instances`
+        Ok(results.into_iter().nth(0).unwrap())
     }
 
     /// Insert a vector using the search results from `search_to_insert`,
