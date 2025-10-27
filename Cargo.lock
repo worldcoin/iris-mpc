@@ -2499,6 +2499,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "iris-mpc-anon-stats-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "config",
+ "dotenvy",
+ "eyre",
+ "iris-mpc-common",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "iris-mpc-common"
 version = "0.1.0"
 dependencies = [
