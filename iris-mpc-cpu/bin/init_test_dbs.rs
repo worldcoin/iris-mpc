@@ -1,4 +1,5 @@
 use clap::Parser;
+use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
@@ -7,21 +8,15 @@ use iris_mpc_cpu::{
         graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
         HnswSearcher,
     },
-    protocol::shared_iris::GaloisRingSharedIris,
+    protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
+    utils::constants::N_PARTIES,
 };
 use itertools::{izip, Itertools};
 use rand::{prelude::StdRng, SeedableRng};
-use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
-
 use serde_json::Deserializer;
+use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
 use tokio::{sync::mpsc, task::JoinSet};
-use tracing::{info, warn};
-
-use eyre::Result;
-
-/// Number of MPC parties.
-const N_PARTIES: usize = 3;
 
 /// Default party ordinal identifer.
 const DEFAULT_PARTY_IDX: usize = 0;
@@ -29,7 +24,7 @@ const DEFAULT_PARTY_IDX: usize = 0;
 /// Number of iris code pairs to generate secret shares for at a time.
 const SECRET_SHARING_BATCH_SIZE: usize = 5000;
 
-/// Build an HNSW graph from plaintext NDJSON encoded iris codes, and persist to
+/// Builds an HNSW graph from plaintext NDJSON encoded iris codes & persists to
 /// Postgres databases. This binary iteratively builds up a graph in stages
 /// over multiple executions. On initial execution, a new GraphMem and
 /// PlaintextStore are constructed and initialized from plaintext iris codes,
@@ -139,6 +134,7 @@ struct Args {
     #[clap(long, default_value = "false")]
     skip_hnsw_graph: bool,
 
+    /// Skip insertion of specific serial IDs ... used primarily in genesis testing.
     #[clap(long, num_args = 1..)]
     skip_insert_serial_ids: Vec<u32>,
 }
@@ -185,42 +181,43 @@ pub struct IrisCodeWithSerialId {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().init();
-    info!("Initialized tracing subscriber");
+    tracing::info!("Initialized tracing subscriber");
 
-    info!("Parsing CLI arguments");
+    tracing::info!("Parsing CLI arguments");
     let args = Args::parse();
     let params = HnswParams::from(&args);
 
-    info!("Setting database connections");
+    tracing::info!("Setting database connections");
     let dbs = init_dbs(&args).await;
 
-    info!("Setting count of previously indexed irises");
+    tracing::info!("Setting count of previously indexed irises");
     let n_existing_irises = dbs[DEFAULT_PARTY_IDX].store.get_max_serial_id().await?;
-    info!("Found {} existing database irises", n_existing_irises);
-    warn!("TODO: Escape if count of persisted irises is not equivalent across all parties");
+    tracing::info!("Found {} existing database irises", n_existing_irises);
+    tracing::warn!(
+        "TODO: Escape if count of persisted irises is not equivalent across all parties"
+    );
 
     // number of iris pairs that need to be inserted to increase the DB size to at least the target
-    let num_irises = args
+    let n_irises = args
         .target_db_size
         .map(|target| target.saturating_sub(n_existing_irises));
 
-    info!("⚓ ANCHOR: Converting plaintext iris codes locally into secret shares");
+    tracing::info!("⚓ ANCHOR: Converting plaintext iris codes locally into secret shares");
 
-    let mut batch: Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>> = (0..N_PARTIES)
+    let mut batch: Vec<Vec<GaloisRingSharedIrisPair>> = (0..N_PARTIES)
         .map(|_| Vec::with_capacity(SECRET_SHARING_BATCH_SIZE))
         .collect();
-
     let mut n_read: usize = 0;
 
     let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
     let reader = BufReader::new(file);
-
     let stream = Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
         .skip(2 * n_existing_irises)
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples();
-    let stream = limited_iterator(stream, num_irises).chunks(SECRET_SHARING_BATCH_SIZE);
+    let stream = limited_iterator(stream, n_irises).chunks(SECRET_SHARING_BATCH_SIZE);
+
     for (batch_idx, vectors_batch) in stream.into_iter().enumerate() {
         let vectors_batch: Vec<(_, _)> = vectors_batch.collect();
         n_read += vectors_batch.len();
@@ -246,22 +243,22 @@ async fn main() -> Result<()> {
             let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
             assert_eq!(end_serial_id, last_idx);
         }
-        info!(
+        tracing::info!(
             "Persisted {} locally generated shares",
             last_idx - n_existing_irises
         );
     }
 
-    info!("Finished persisting {} locally generated shares", n_read);
+    tracing::info!("Finished persisting {} locally generated shares", n_read);
 
     if args.skip_hnsw_graph {
-        info!("Skipping HNSW graph construction");
+        tracing::info!("Skipping HNSW graph construction");
         return Ok(());
     }
 
-    info!("⚓ ANCHOR: Constructing HNSW graph databases");
+    tracing::info!("⚓ ANCHOR: Constructing HNSW graph databases");
 
-    info!("Initializing in-memory graphs from databases");
+    tracing::info!("Initializing in-memory graphs from databases");
     let graphs = if n_existing_irises > 0 {
         // read graph store from party 0
         let graph_l = dbs[DEFAULT_PARTY_IDX]
@@ -286,7 +283,7 @@ async fn main() -> Result<()> {
         );
         n_left as usize
     };
-    info!(
+    tracing::info!(
         "Detected {} existing irises in database HNSW graphs",
         n_existing_irises
     );
@@ -295,7 +292,8 @@ async fn main() -> Result<()> {
         .target_db_size
         .map(|target| target.saturating_sub(n_existing_irises));
 
-    info!("Initializing in-memory vectors from NDJSON file");
+    // TODO: use reader function to read NDJSON file.
+    tracing::info!("Initializing in-memory vectors from NDJSON file");
     let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
     if n_existing_irises > 0 {
         let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
@@ -311,7 +309,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    info!(
+    tracing::info!(
         "Reading NDJSON file of plaintext iris codes: {:?}",
         args.path_to_iris_codes
     );
@@ -322,7 +320,7 @@ async fn main() -> Result<()> {
     let receivers = [rx_l, rx_r];
     let mut jobs: JoinSet<Result<_>> = JoinSet::new();
 
-    info!("Initializing I/O thread for reading plaintext iris codes");
+    tracing::info!("Initializing I/O thread for reading plaintext iris codes");
     let io_thread = tokio::task::spawn_blocking(move || {
         let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
         let reader = BufReader::new(file);
@@ -344,7 +342,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    info!("Initializing jobs to process plaintext iris codes");
+    tracing::info!("Initializing jobs to process plaintext iris codes");
     for (side, mut rx, mut vector_store, mut graph) in izip!(
         STORE_IDS,
         receivers.into_iter(),
@@ -362,9 +360,10 @@ async fn main() -> Result<()> {
             while let Some(raw_query) = rx.recv().await {
                 let serial_id = raw_query.serial_id;
                 if skip_serial_ids.contains(&serial_id) {
-                    info!(
+                    tracing::info!(
                         "Skipping insertion of serial id {} for {} side",
-                        serial_id, side
+                        serial_id,
+                        side
                     );
                     continue;
                 }
@@ -389,7 +388,7 @@ async fn main() -> Result<()> {
 
                 counter += 1;
                 if counter % 1000 == 0 {
-                    info!("Processed {} plaintext entries for {} side", counter, side);
+                    tracing::info!("Processed {} plaintext entries for {} side", counter, side);
                 }
             }
 
@@ -397,7 +396,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    info!("Building in-memory plaintext vector stores and HNSW graphs");
+    tracing::info!("Building in-memory plaintext vector stores and HNSW graphs");
 
     let mut results: Vec<_> = jobs
         .join_all()
@@ -408,7 +407,7 @@ async fn main() -> Result<()> {
 
     io_thread.await?;
 
-    info!(
+    tracing::info!(
         "Finished building HNSW graphs with {} nodes",
         results[0].1.len()
     );
@@ -417,12 +416,12 @@ async fn main() -> Result<()> {
 
     for (party, db) in dbs.iter().enumerate() {
         for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
-            info!("Persisting {} graph for party {}", side, party);
+            tracing::info!("Persisting {} graph for party {}", side, party);
             db.persist_graph_db(graph.clone(), side).await?;
         }
     }
 
-    info!("Exited successfully! 🎉");
+    tracing::info!("Exited successfully! 🎉");
 
     Ok(())
 }

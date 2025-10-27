@@ -19,13 +19,13 @@ DECLARE
 BEGIN
     -- Lock the table to prevent race conditions
     LOCK TABLE modifications IN EXCLUSIVE MODE;
-
+    
     -- Find the next available ID (max + 1 or 1 if table is empty)
     SELECT COALESCE(MAX(id) + 1, 1) INTO next_id FROM modifications;
-
+    
     -- Assign the ID to the new row
     NEW.id := next_id;
-
+    
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

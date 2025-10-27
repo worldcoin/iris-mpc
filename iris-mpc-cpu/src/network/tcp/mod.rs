@@ -1,5 +1,10 @@
 use crate::{
-    execution::{hawk_main::HawkArgs, player::Identity},
+    execution::{
+        hawk_main::HawkArgs,
+        local::generate_local_identities,
+        player::{Role, RoleAssignment},
+        session::{NetworkSession, Session},
+    },
     network::tcp::{
         config::TcpConfig,
         handle::TcpNetworkHandle,
@@ -8,13 +13,13 @@ use crate::{
             connection_builder::PeerConnectionBuilder,
             server::TcpServer,
         },
-        session::TcpSession,
     },
 };
 use async_trait::async_trait;
 use eyre::Result;
+use iris_mpc_common::config::TlsConfig;
 use itertools::izip;
-use std::sync::Once;
+use std::sync::{Arc, Once};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
@@ -28,13 +33,14 @@ pub mod handle;
 pub mod networking;
 pub mod session;
 
-use crate::network::tcp::networking::client::{BoxTcpClient, BoxTlsClient};
+use crate::network::tcp::networking::client::BoxTcpClient;
 use crate::network::tcp::networking::server::{BoxTcpServer, TlsServer};
 use data::*;
 
 #[async_trait]
 pub trait NetworkHandle: Send + Sync {
-    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>>;
+    async fn make_network_sessions(&mut self) -> Result<Vec<NetworkSession>>;
+    async fn make_sessions(&mut self) -> Result<Vec<Session>>;
 }
 
 pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
@@ -54,11 +60,31 @@ pub trait Server: Send {
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)>;
 }
 
+pub struct NetworkHandleArgs {
+    pub party_index: usize,
+    pub addresses: Vec<String>,
+    pub connection_parallelism: usize,
+    pub request_parallelism: usize,
+    pub sessions_per_request: usize,
+    pub tls: Option<TlsConfig>,
+}
+
+impl NetworkHandleArgs {
+    pub fn from_hawk(args: &HawkArgs, sessions_per_request: usize) -> Self {
+        Self {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request,
+            tls: args.tls.clone(),
+        }
+    }
+}
+
 pub async fn build_network_handle(
-    args: &HawkArgs,
+    args: NetworkHandleArgs,
     ct: CancellationToken,
-    identities: &[Identity],
-    sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
     static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
     INSTALL_CRYPTO_PROVIDER.call_once(|| {
@@ -70,6 +96,14 @@ pub async fn build_network_handle(
         }
     });
 
+    let identities = generate_local_identities();
+    let role_assignments: RoleAssignment = identities
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (Role::new(index), id.clone()))
+        .collect();
+    let role_assignments = Arc::new(role_assignments);
+
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
@@ -78,7 +112,7 @@ pub async fn build_network_handle(
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),
         args.connection_parallelism,
-        args.request_parallelism * sessions_per_request,
+        args.request_parallelism * args.sessions_per_request,
     );
 
     // PeerConnectionBuilder is generic over listener and connector and don't want to use a boxed trait to
@@ -103,7 +137,14 @@ pub async fn build_network_handle(
             }
 
             let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config, ct);
+            let networking = TcpNetworkHandle::new(
+                reconnector,
+                connections,
+                tcp_config,
+                ct,
+                my_index,
+                role_assignments,
+            );
             Ok(Box::new(networking))
         }};
     }
@@ -116,33 +157,26 @@ pub async fn build_network_handle(
         );
 
         let root_certs = tls.clone().root_certs;
-        if tls.with_nginx_sidecar {
-            tracing::info!("Running in client-only TLS mode.");
 
-            let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(&root_certs).await?);
-            build_network_handle!(listener, connector)
-        } else {
-            tracing::info!("Running in full app TLS mode.");
-            if tls.private_key.is_none() || tls.leaf_cert.is_none() {
-                return Err(eyre::eyre!(
-                    "TLS configuration is required for this operation"
-                ));
-            }
-            let private_key = tls
-                .private_key
-                .as_ref()
-                .ok_or(eyre::eyre!("Private key is required for TLS"))?;
-
-            let leaf_cert = tls
-                .leaf_cert
-                .as_ref()
-                .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
-
-            let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
-            let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
-            build_network_handle!(listener, connector)
+        tracing::info!("Running in full app TLS mode.");
+        if tls.private_key.is_none() || tls.leaf_cert.is_none() {
+            return Err(eyre::eyre!(
+                "TLS configuration is required for this operation"
+            ));
         }
+        let private_key = tls
+            .private_key
+            .as_ref()
+            .ok_or(eyre::eyre!("Private key is required for TLS"))?;
+
+        let leaf_cert = tls
+            .leaf_cert
+            .as_ref()
+            .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
+
+        let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
+        let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
+        build_network_handle!(listener, connector)
     } else {
         tracing::info!(
             "Building NetworkHandle, without TLS, from config: {:?}",
@@ -164,6 +198,7 @@ fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
 }
 
 pub mod testing {
+    use super::*;
     use eyre::Result;
 
     use itertools::izip;
@@ -179,7 +214,6 @@ pub mod testing {
             networking::{
                 client::TcpClient, connection_builder::PeerConnectionBuilder, server::TcpServer,
             },
-            session::TcpSession,
             NetworkHandle,
         },
     };
@@ -208,7 +242,7 @@ pub mod testing {
         request_parallelism: usize,
     ) -> Result<(
         Vec<handle::TcpNetworkHandle<TcpStream>>,
-        Vec<Vec<TcpSession>>,
+        Vec<Vec<NetworkSession>>,
     )> {
         assert_eq!(parties.len(), 3);
 
@@ -260,16 +294,30 @@ pub mod testing {
         }
         tracing::debug!("Players connected to each other");
 
+        let identities = generate_local_identities();
+        let role_assignments: RoleAssignment = identities
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (Role::new(index), id.clone()))
+            .collect();
+        let role_assignments = Arc::new(role_assignments);
         let ct = CancellationToken::new();
         let mut handles = vec![];
-        for (r, c) in connections {
-            handles.push(TcpNetworkHandle::new(r, c, config.clone(), ct.clone()));
+        for (idx, (r, c)) in connections.into_iter().enumerate() {
+            handles.push(TcpNetworkHandle::new(
+                r,
+                c,
+                config.clone(),
+                ct.clone(),
+                idx,
+                role_assignments.clone(),
+            ));
         }
 
         tracing::debug!("waiting for make_sessions to complete");
         let mut sessions = vec![];
         for h in handles.iter_mut() {
-            sessions.push(h.make_sessions().await?);
+            sessions.push(h.make_network_sessions().await?);
         }
 
         Ok((handles, sessions))
@@ -307,9 +355,9 @@ mod tests {
 
     use crate::execution::local::generate_local_identities;
     use crate::execution::player::{Identity, Role};
+    use crate::execution::session::NetworkSession;
     use crate::network::tcp::data::StreamId;
     use crate::network::value::NetworkValue;
-    use crate::network::{tcp::session::TcpSession, Networking};
     use rand::Rng;
 
     use super::testing::*;
@@ -322,7 +370,7 @@ mod tests {
         NetworkValue::PrfKey(key)
     }
 
-    async fn all_parties_talk(identities: Vec<Identity>, sessions: Vec<TcpSession>) {
+    async fn all_parties_talk(identities: Vec<Identity>, sessions: Vec<NetworkSession>) {
         let mut tasks = JoinSet::new();
         let message_to_next = get_prf();
         let message_to_prev = get_prf();
@@ -341,18 +389,22 @@ mod tests {
             tasks.spawn(async move {
                 // Sending
                 session
+                    .networking
                     .send(message_to_next.clone(), &next_id)
                     .await
                     .unwrap();
                 session
+                    .networking
                     .send(message_to_prev.clone(), &prev_id)
                     .await
                     .unwrap();
 
                 // Receiving
-                let received_message_from_prev = session.receive(&prev_id).await.unwrap();
+                let received_message_from_prev =
+                    session.networking.receive(&prev_id).await.unwrap();
                 assert_eq!(received_message_from_prev, message_to_next);
-                let received_message_from_next = session.receive(&next_id).await.unwrap();
+                let received_message_from_next =
+                    session.networking.receive(&next_id).await.unwrap();
                 assert_eq!(received_message_from_next, message_to_prev);
             });
         }
@@ -402,10 +454,14 @@ mod tests {
                 let alice_msg = alice_prf.clone();
 
                 let task1 = tokio::spawn(async move {
-                    alice.send(alice_msg, &"bob".into()).await.unwrap();
+                    alice
+                        .networking
+                        .send(alice_msg, &"bob".into())
+                        .await
+                        .unwrap();
                 });
                 let task2 = tokio::spawn(async move {
-                    let rx_msg = bob.receive(&"alice".into()).await.unwrap();
+                    let rx_msg = bob.networking.receive(&"alice".into()).await.unwrap();
                     assert_eq!(alice_prf, rx_msg);
                 });
                 let _ = tokio::try_join!(task1, task2).unwrap();
