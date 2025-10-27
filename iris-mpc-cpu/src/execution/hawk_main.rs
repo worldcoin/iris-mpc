@@ -1,4 +1,3 @@
-use super::player::Identity;
 use crate::{
     execution::{
         hawk_main::{
@@ -7,8 +6,6 @@ use crate::{
             rot::{AllRotations, VecRotationSupport},
             search::SearchIds,
         },
-        local::generate_local_identities,
-        player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
@@ -20,7 +17,7 @@ use crate::{
     hnsw::{
         graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
-    network::tcp::{build_network_handle, NetworkHandle},
+    network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{compare_min_threshold_buckets, setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
@@ -148,7 +145,6 @@ pub struct HawkActor {
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
     prf_key: Option<Arc<[u8; 16]>>,
-    role_assignments: Arc<HashMap<Role, Identity>>,
 
     // ---- My state ----
     /// A size used by the startup loader.
@@ -327,19 +323,9 @@ impl HawkActor {
             params: search_params,
         });
 
-        let identities = generate_local_identities();
-
-        let role_assignments: RoleAssignment = identities
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (Role::new(index), id.clone()))
-            .collect();
-
-        let my_index = args.party_index;
-
-        let networking =
-            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
-                .await?;
+        let network_args =
+            NetworkHandleArgs::from_hawk(args, SessionGroups::N_SESSIONS_PER_REQUEST);
+        let networking = build_network_handle(network_args, ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -348,13 +334,13 @@ impl HawkActor {
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
-            my_index,
+            args.party_index,
             Eye::Left,
         );
         let bucket_statistics_right = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
-            my_index,
+            args.party_index,
             Eye::Right,
         );
 
@@ -367,9 +353,8 @@ impl HawkActor {
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             distances_cache: [Default::default(), Default::default()],
-            role_assignments: Arc::new(role_assignments),
             networking,
-            party_id: my_index,
+            party_id: args.party_index,
             workers_handle,
         })
     }
@@ -443,15 +428,7 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
-        let mut network_sessions = vec![];
-        for tcp_session in self.networking.make_sessions().await? {
-            network_sessions.push(NetworkSession {
-                session_id: tcp_session.id(),
-                role_assignments: self.role_assignments.clone(),
-                networking: Box::new(tcp_session),
-                own_role: Role::new(self.party_id),
-            });
-        }
+        let mut network_sessions = self.networking.make_network_sessions().await?;
         let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
 
         // todo: replace this with array_chunks::<2>() once that feature
