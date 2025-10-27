@@ -1,0 +1,197 @@
+[package]
+name = "iris-mpc-bins"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["helpers"]
+helpers = [
+  "dep:aws-config",
+  "dep:aws-sdk-kms",
+  "dep:aws-sdk-sns",
+  "dep:aws-sdk-sqs",
+  "dep:aws-sdk-secretsmanager",
+  "dep:reqwest",
+]
+
+[dependencies]
+aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+axum.workspace = true
+aws-config = { workspace = true, optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
+aws-sdk-sns = { workspace = true, optional = true }
+aws-sdk-sqs = { workspace = true, optional = true }
+aws-sdk-s3 = { workspace = true }
+aws-sdk-secretsmanager = { workspace = true, optional = true }
+base64.workspace = true
+cudarc.workspace = true
+chrono.workspace = true
+clap.workspace = true
+data-encoding.workspace = true
+dotenvy.workspace = true
+eyre.workspace = true
+futures.workspace = true
+hkdf.workspace = true
+itertools.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
+ring.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sodiumoxide = "0.2.7"
+sqlx.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tonic = "0.12.3"
+metrics.workspace = true
+metrics-exporter-statsd.workspace = true
+tracing.workspace = true
+tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
+    "uuid",
+    "chrono",
+    "smallvec",
+    "tokio",
+    "serde",
+    "env-filter",
+] }
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+iris-mpc = { path = "../iris-mpc" }
+iris-mpc-common = { path = "../iris-mpc-common" }
+iris-mpc-cpu = { path = "../iris-mpc-cpu" }
+iris-mpc-gpu = { path = "../iris-mpc-gpu" }
+iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
+iris-mpc-store = { path = "../iris-mpc-store" }
+iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
+iris-mpc-anon-stats-server = { path = "../iris-mpc-anon-stats-server" }
+
+
+# ---------------------
+# binaries for iris-mpc
+# ---------------------
+
+[[bin]]
+name = "iris-mpc-gpu"
+path = "bin/iris-mpc/server.rs"
+
+[[bin]]
+name = "iris-mpc-hawk"
+path = "bin/iris-mpc/server/iris_mpc_hawk.rs"
+
+[[bin]]
+name = "client"
+path = "bin/iris-mpc/client/client.rs"
+
+# ---------------------
+# binaries for iris-mpc-common
+# ---------------------
+
+[[bin]]
+name = "key-manager"
+path = "bin/iris-mpc-common/key_manager.rs"
+required-features = ["helpers"]
+
+[[bin]]
+name = "shares-encoding"
+path = "bin/iris-mpc-common/shares_encoding.rs"
+
+[[bin]]
+name = "migrator"
+path = "bin/iris-mpc-common/migrator.rs"
+
+[[bin]]
+name = "e2e-input-transform"
+path = "bin/iris-mpc-common/e2e_input_transform.rs"
+
+# ---------------------
+# binaries for iris-mpc-cpu
+# ---------------------
+
+[[bin]]
+name = "generate-benchmark-data"
+path = "bin/iris-mpc-cpu/generate_benchmark_data.rs"
+
+[[bin]]
+name = "graph-mem-cli"
+path = "bin/iris-mpc-cpu/graph_mem_cli.rs"
+
+[[bin]]
+name = "hawk_main"
+path = "bin/iris-mpc-cpu/hawk_main.rs"
+
+[[bin]]
+name = "hnsw_algorithm_metrics"
+path = "bin/iris-mpc-cpu/hnsw_algorithm_metrics.rs"
+
+[[bin]]
+name = "hnsw_network_stats_example"
+path = "bin/iris-mpc-cpu/hnsw_network_stats_example.rs"
+
+[[bin]]
+name = "init-test-dbs"
+path = "bin/iris-mpc-cpu/init_test_dbs.rs"
+
+[[bin]]
+name = "local_hnsw"
+path = "bin/iris-mpc-cpu/local_hnsw.rs"
+
+[[bin]]
+name = "generate_ideal_neighborhoods"
+path = "bin/iris-mpc-cpu/generate_ideal_neighborhoods.rs"
+
+[[bin]]
+name = "construct-graph-ptxt"
+path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
+
+# ---------------------
+# binaries for iris-mpc-gpu
+# ---------------------
+
+[[bin]]
+name = "nccl"
+path = "bin/iris-mpc-gpu/nccl.rs"
+
+# ---------------------
+# binaries for iris-mpc-upgrade
+# ---------------------
+
+[[bin]]
+name = "seed-v2-dbs"
+path = "bin/iris-mpc-upgrade/seed_v2_dbs.rs"
+
+[[bin]]
+name = "reshare-server"
+path = "bin/iris-mpc-upgrade/reshare-server.rs"
+
+[[bin]]
+name = "reshare-client"
+path = "bin/iris-mpc-upgrade/reshare-client.rs"
+
+# ---------------------
+# binaries for iris-mpc-upgrade-hawk
+# ---------------------
+
+[[bin]]
+name = "iris-mpc-hawk-genesis"
+path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
+
+# ---------------------
+# binaries for iris-mpc-utils
+# ---------------------
+
+[[bin]]
+name = "write-node-config-toml"
+path = "bin/iris-mpc-utils/write_node_config_toml.rs"
+
+# ---------------------
+# binaries for iris-mpc-anon-stats-server
+# ---------------------
+
+[[bin]]
+name = "iris-mpc-anon-stats-server"
+path = "bin/iris-mpc-anon-stats-server/main.rs"

@@ -26,7 +26,6 @@ aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
-dotenvy.workspace = true
 clap.workspace = true
 rand.workspace = true
 bytemuck.workspace = true
@@ -59,9 +58,6 @@ url = "2"
 hex.workspace = true
 zeroize = "1.8.1"
 wiremock = "0.6.1"
-digest = "0.10.7"
-ring = "0.17.8"
-data-encoding = "2.6.0"
 bincode.workspace = true
 serde-big-array.workspace = true
 metrics = "0.22.1"
@@ -74,20 +70,3 @@ pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
 [dev-dependencies]
 float_eq = "1"
 aws-credential-types = "1.2.1"
-
-[[bin]]
-name = "key-manager"
-path = "src/bin/key_manager.rs"
-required-features = ["helpers"]
-
-[[bin]]
-name = "shares-encoding"
-path = "src/bin/shares_encoding.rs"
-
-[[bin]]
-name = "migrator"
-path = "src/bin/migrator.rs"
-
-[[bin]]
-name = "e2e-input-transform"
-path = "src/bin/e2e_input_transform.rs"
