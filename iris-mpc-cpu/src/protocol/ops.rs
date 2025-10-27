@@ -830,7 +830,7 @@ pub(crate) async fn min_round_robin_batch(
     // Compute the AND of each row in the batch_selection_bits matrix.
     // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
     while batch_selection_bits.len() > 1 {
-        // if the length is odd, we save the last distance to add it back later
+        // if the length is odd, we save the last column to add it back later
         let maybe_last_column = if batch_selection_bits.len() % 2 == 1 {
             batch_selection_bits.pop()
         } else {
@@ -896,6 +896,8 @@ pub(crate) async fn min_round_robin_batch(
             .map(|(code, mask)| DistanceShare::new(code, mask))
             .collect_vec()
     };
+    // Now sum up the selected distances within each batch.
+    // Only one distance per batch is non-zero, so this gives us the minimum distance per batch.
     let res = selected_distances
         .chunks(batch_size)
         .map(|chunk| {
