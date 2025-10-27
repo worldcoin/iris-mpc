@@ -4,7 +4,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{AllRotations, VecRotationSupport},
+            rot::{CenterOnly, Rotations, VecRotationSupport},
             search::SearchIds,
         },
         local::generate_local_identities,
@@ -93,7 +93,7 @@ use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
 /// The master switch to enable search-per-rotation or search-center-only.
-pub type SearchRotations = AllRotations;
+pub type SearchRotations = CenterOnly;
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
@@ -835,17 +835,10 @@ impl From<BatchQuery> for HawkRequest {
                     .map(|chunk| {
                         // Collect the rotations for one request.
                         chunk
+                            .skip(SearchRotations::N_SKIP)
+                            .take(SearchRotations::N_ROTATIONS)
                             .map(|(code, mask, code_proc, mask_proc)| {
-                                // Convert to the query type of Aby3Store
-                                let iris = Arc::new(GaloisRingSharedIris {
-                                    code: code.clone(),
-                                    mask: mask.clone(),
-                                });
-                                let iris_proc = Arc::new(GaloisRingSharedIris {
-                                    code: code_proc.clone(),
-                                    mask: mask_proc.clone(),
-                                });
-                                Aby3Query { iris, iris_proc }
+                                Aby3Query::from_processed(code, mask, code_proc, mask_proc)
                             })
                             .collect_vec()
                             .into()

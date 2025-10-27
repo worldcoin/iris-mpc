@@ -21,7 +21,11 @@ use crate::{
     },
 };
 use eyre::Result;
-use iris_mpc_common::{vector_id::VectorId, ROTATIONS};
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    vector_id::VectorId,
+    ROTATIONS,
+};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
@@ -58,11 +62,21 @@ impl Aby3Query {
         Self::new(&iris)
     }
 
-    pub fn from_processed(iris: GaloisRingSharedIris, iris_proc: GaloisRingSharedIris) -> Self {
-        Self {
-            iris: Arc::new(iris),
-            iris_proc: Arc::new(iris_proc),
-        }
+    pub fn from_processed(
+        code: &GaloisRingIrisCodeShare,
+        mask: &GaloisRingTrimmedMaskCodeShare,
+        code_proc: &GaloisRingIrisCodeShare,
+        mask_proc: &GaloisRingTrimmedMaskCodeShare,
+    ) -> Self {
+        let iris = Arc::new(GaloisRingSharedIris {
+            code: code.clone(),
+            mask: mask.clone(),
+        });
+        let iris_proc = Arc::new(GaloisRingSharedIris {
+            code: code_proc.clone(),
+            mask: mask_proc.clone(),
+        });
+        Self { iris, iris_proc }
     }
 }
 

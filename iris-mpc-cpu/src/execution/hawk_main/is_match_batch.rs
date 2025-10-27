@@ -6,7 +6,6 @@ use crate::{
 };
 use eyre::Result;
 use futures::future::JoinAll;
-use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
@@ -41,7 +40,7 @@ async fn per_side(
         return Ok(VecRequests::new());
     }
     // A task is to compare one rotation to the vectors.
-    let n_tasks = n_requests * ROTATIONS;
+    let n_tasks = n_requests * VecRotations::<Aby3Query>::n_rotations();
     let n_sessions = sessions.len();
     assert_eq!(queries.len(), n_requests);
 
