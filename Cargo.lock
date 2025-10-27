@@ -2425,6 +2425,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "iris-mpc-anon-stats-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "config",
+ "dotenvy",
+ "eyre",
+ "iris-mpc-common",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "iris-mpc-bins"
 version = "0.1.0"
 dependencies = [
@@ -2471,22 +2487,6 @@ dependencies = [
  "tracing-forest",
  "tracing-subscriber",
  "uuid",
-]
-
-[[package]]
-name = "iris-mpc-anon-stats-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "config",
- "dotenvy",
- "eyre",
- "iris-mpc-common",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
