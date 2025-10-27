@@ -182,9 +182,6 @@ env:
   - name: SMPC__TLS__ROOT_CERTS
     value: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
 
-  - name: SMPC__TLS__WITH_NGINX_SIDECAR
-    value: "false"
-
   - name: SMPC__TLS__CLIENT_ONLY_TLS
     value: "false"
 

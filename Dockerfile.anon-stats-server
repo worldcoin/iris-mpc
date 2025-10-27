@@ -26,10 +26,10 @@ RUN cargo install cargo-build-deps \
     && cargo install cargo-edit --version 0.13.6 --locked
 
 FROM --platform=linux/amd64 build-image as build-app
-WORKDIR /src/gpu-iris-mpc
+WORKDIR /src/iris-mpc
 COPY . .
 
-RUN cargo build --release --target x86_64-unknown-linux-gnu --bin key-manager shares-encoding reshare-client client iris-mpc-hawk
+RUN cargo build --release --target x86_64-unknown-linux-gnu --bin iris-mpc-anon-stats-server
 
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -38,11 +38,7 @@ RUN apt-get update && apt-get install -y ca-certificates awscli
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/key-manager /bin/key-manager
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/shares-encoding /bin/shares-encoding
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-client /bin/reshare-client
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/client /bin/client
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/iris-mpc-hawk /bin/iris-mpc-hawk
+COPY --from=build-app /src/iris-mpc/target/x86_64-unknown-linux-gnu/release/iris-mpc-anon-stats-server /bin/iris-mpc-anon-stats-server
 
 USER 65534
-ENTRYPOINT ["/bin/sh"]
+ENTRYPOINT ["/bin/iris-mpc-anon-stats-server"]

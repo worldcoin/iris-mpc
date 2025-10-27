@@ -1,17 +1,29 @@
-name: Build and push base docker image for shares encoding binary [nocuda]
+name: Build and push image for anon-stats-server
 
 on:
   push:
+    branches:
+      - main
+      - feat/anon-stats-server-scaffolding
     paths:
-      - Dockerfile.shares-encoding
-      - .github/workflows/build-and-push-shares-encoding.yaml
-      - iris-mpc-common/src/bin/shares_encoding.rs
+      - Dockerfile.anon-stats-server
+      - iris-mpc-anon-stats-server/**
+      - .github/workflows/build-and-push-anon-stats-server.yaml
+
+  release:
+    types:
+      - 'published'
 
   workflow_dispatch:
 
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-shares-encoding
+  IMAGE_NAME: "anon-stats-server"
+
 jobs:
   docker:
     timeout-minutes: 40
@@ -25,8 +37,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
-      - name: Set up Docker
-        uses: docker/setup-docker-action@3fb92d6d9c634363128c8cce4bc3b2826526370a
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
       - name: Log in to the Container registry
@@ -41,9 +53,9 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          platforms: ${{ matrix.platform }}
+            ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ github.event_name == 'release' && format('{0}/worldcoin/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
+          platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.shares-encoding
+          file: Dockerfile.anon-stats-server

@@ -1,0 +1,71 @@
+image: "ghcr.io/worldcoin/anon-stats-server:c0d32364cd8bcdc435707071a0da2deee5625c45"
+
+environment: stage
+replicaCount: 1
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+hostNetwork: false
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+  - containerPort: 4000
+    name: tcp-4000
+    protocol: TCP
+  - containerPort: 4001
+    name: tcp-4001
+    protocol: TCP
+  - containerPort: 4002
+    name: tcp-4002
+    protocol: TCP
+  - containerPort: 4100
+    name: tcp-4100
+    protocol: TCP
+  - containerPort: 4101
+    name: tcp-4101
+    protocol: TCP
+  - containerPort: 4102
+    name: tcp-4102
+    protocol: TCP
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: health
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 30
+  failureThreshold: 10
+  httpGet:
+    path: /health
+    port: health
+
+resources:
+  limits:
+    cpu: 4
+    memory: 16Gi
+  requests:
+    cpu: 4
+    memory: 16Gi
+
+imagePullSecrets:
+  - name: github-secret
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
