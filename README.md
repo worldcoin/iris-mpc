@@ -65,19 +65,19 @@ cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s
 #### Running the server without config override
 
 ```
-AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin iris-mpc-gpu
+AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release -p iris-mpc-bins --bin iris-mpc-gpu
 ```
 
 #### Running the server with override
 
 ```
-AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin iris-mpc-gpu -- --party-id {0,1,2} --queue https://sqs.eu-north-1.amazonaws.com/xxx/mpc1.fifo
+AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release -p iris-mpc-bins --bin iris-mpc-gpu -- --party-id {0,1,2} --queue https://sqs.eu-north-1.amazonaws.com/xxx/mpc1.fifo
 ```
 
 #### Running the client
 
 ```
-AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo
+AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release -p iris-mpc-bins --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo
 ```
 
 ### Server configuration
@@ -197,7 +197,7 @@ Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
 ### Running Requests with file data
 
 ```bash
-cargo run --bin client -- \
+cargo run -p iris-mpc-bins --bin client -- \
     --request-topic-arn arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo \
     --requests-bucket-name wf-smpcv2-dev-sns-requests \
     --public-key-base-url "http://localhost:4566/wf-dev-public-keys" \
@@ -222,12 +222,12 @@ cargo test --release --features db_dependent -- --test-threads=1 # require a run
 If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/iris-mpc/issues/25).
 
 ## CPU Genesis
-1. Create the generated data (this will be generated to the `iris-mpc-cpu/data` folder)
+1. Create the generated data (this will be generated to the `iris-mpc-bins/data` folder)
 
-- note you can change the value of the benchmark data to generate less data (100 is required for local stack) in `iris-mpc-cpu/bin/generate_benchmark_data.rs`
+- note you can change the value of the benchmark data to generate less data (100 is required for local stack) in `iris-mpc-bins/bin/iris-mpc-cpu/generate_benchmark_data.rs`
 
 ```bash
-cargo run --bin generate-benchmark-data
+cargo run -p iris-mpc-bins --bin generate-benchmark-data
 ```
 
 2. Build the hawk genesis binary
@@ -252,7 +252,7 @@ Note: This also instantiates iris shares db with shares
 ## How to run client in the prod-dev env
 
 ```bash
-cargo run --release --bin client -- \
+cargo run -p iris-mpc-bins --release --bin client -- \
     --request-topic-arn arn:aws:sns:eu-north-1:767397716933:gpu-iris-mpc-input.fifo \
     --request-topic-region eu-north-1 \
     --response-queue-url https://sqs.eu-north-1.amazonaws.com/654654380399/temporal-results.fifo \

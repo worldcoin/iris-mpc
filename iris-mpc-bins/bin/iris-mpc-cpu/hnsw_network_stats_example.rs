@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = AesRng::seed_from_u64(0_u64);
 
     let crate_root = env!("CARGO_MANIFEST_DIR");
-    let data_dir = format!("{crate_root}/data");
+    let data_dir = format!("{crate_root}/../iris-mpc-bins/data");
     let (_, vectors_graphs) = lazy_setup_from_files_with_grpc(
         &format!("{data_dir}/store.ndjson"),
         &format!("{data_dir}/graph_{database_size}.dat"),
