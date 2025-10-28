@@ -119,6 +119,27 @@ impl IrisPoolHandle {
         self.submit(task, rx).await
     }
 
+    pub async fn rotation_aware_dot_product_pairs(
+        &mut self,
+        pairs: Vec<(ArcIris, VectorId)>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let mut responses = Vec::new();
+
+        for (query, id) in pairs {
+            let (tx, rx) = oneshot::channel();
+            let task = IrisTask::RotationAwareDotProductBatch {
+                query,
+                vector_ids: vec![id],
+                rsp: tx,
+            };
+            self.get_next_worker().send(task)?;
+            responses.push(rx);
+        }
+        let results = futures::future::try_join_all(responses).await?;
+        let results = results.into_iter().flatten().collect();
+        Ok(results)
+    }
+
     pub async fn rotation_aware_dot_product_batch(
         &mut self,
         query: ArcIris,
