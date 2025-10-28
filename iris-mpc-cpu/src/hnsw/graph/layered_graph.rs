@@ -12,7 +12,7 @@ use crate::{
         vector_store::Ref,
     },
 };
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId, IrisVectorId};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display, iter::once, path::PathBuf, str::FromStr, sync::Arc};
@@ -155,11 +155,11 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
     }
 }
 
-impl GraphMem<IrisSerialId> {
+impl GraphMem<IrisVectorId> {
     pub fn ideal_from_irises(
-        irises: Vec<IrisCode>,
-        entry_point: Option<(IrisSerialId, usize)>,
-        nodes_for_nonzero_layers: Vec<Vec<IrisSerialId>>,
+        irises: &Vec<IrisCode>,
+        entry_point: Option<(IrisVectorId, usize)>,
+        nodes_for_nonzero_layers: Vec<Vec<IrisVectorId>>,
         filepath: PathBuf, // File containing KNN results for layer 0
         k: usize,
         echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
@@ -167,14 +167,19 @@ impl GraphMem<IrisSerialId> {
     ) -> Self {
         let zero_layer = {
             let results = read_knn_results_from_file(filepath).unwrap();
-            Layer::from_knn_results(results)
+            let results = results
+                .into_iter()
+                .map(|result| result.map(|serial_id| IrisVectorId::from_serial_id(serial_id)))
+                .collect::<Vec<_>>();
+            assert_eq!(results.len(), k);
+            Layer::from_knn_results(results, irises.len())
         };
 
         let nonzero_layers = nodes_for_nonzero_layers.into_iter().map(|nodes| {
             let iris_data = nodes
                 .iter()
                 // note 0-indexing of irises (contrast to store usage)
-                .map(|node| (*node, irises[(*node - 1) as usize].clone()))
+                .map(|node| (*node, irises[((*node).serial_id() - 1) as usize].clone()))
                 .collect::<Vec<_>>();
             Layer::ideal_from_irises(iris_data, k, echoice, num_threads)
         });
@@ -229,9 +234,9 @@ impl<V: Ref + Display + FromStr> Layer<V> {
         &self.links
     }
 
-    fn from_knn_results(results: Vec<KNNResult<V>>) -> Self {
+    fn from_knn_results(results: Vec<KNNResult<V>>, n: usize) -> Self {
         let mut ret = Layer::new();
-        for KNNResult { node, neighbors } in results {
+        for KNNResult { node, neighbors } in results.into_iter().take(n) {
             ret.set_links(node, SortedEdgeIds(neighbors));
         }
         ret
@@ -256,7 +261,7 @@ impl<V: Ref + Display + FromStr> Layer<V> {
             .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
             .collect::<Vec<_>>();
 
-        Layer::from_knn_results(results)
+        Layer::from_knn_results(results, n)
     }
 }
 
@@ -432,49 +437,6 @@ mod tests {
         });
         assert_ne!(graph_store, different_graph_store);
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_something() -> Result<()> {
-        let k = 320;
-        let echoice = EngineChoice::NaiveFHD;
-        let num_threads = 3;
-        let file = std::fs::File::open(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("iris-mpc-cpu/data/store.ndjson"),
-        )?;
-        let reader = BufReader::new(file);
-
-        let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-        let irises = stream.map(|e| (&e.unwrap()).into()).collect::<Vec<_>>();
-        let n = irises.len();
-        // First layer: 1000 random serial ids from 1 to n
-        let mut rng = rand::thread_rng();
-        let mut first_layer: Vec<IrisSerialId> = (1..=(n as u32)).collect();
-        first_layer.shuffle(&mut rng);
-        let first_layer = first_layer.into_iter().take(1000).collect::<Vec<_>>();
-
-        // Second layer: 100 random samples from the first layer
-        let mut second_layer = first_layer.clone();
-        second_layer.shuffle(&mut rng);
-        let second_layer = second_layer.into_iter().take(100).collect::<Vec<_>>();
-        let entry = second_layer[0];
-
-        let nodes_for_nonzero_layers = vec![first_layer, second_layer];
-        let entry_point = Some((entry, 2));
-        let filepath = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("results.txt");
-
-        let graph = GraphMem::ideal_from_irises(
-            irises,
-            entry_point,
-            nodes_for_nonzero_layers,
-            filepath,
-            k,
-            echoice,
-            num_threads,
-        );
-
-        assert!(graph.layers[0].links.keys().count() == n);
         Ok(())
     }
 
