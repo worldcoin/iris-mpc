@@ -1,4 +1,4 @@
-FROM  ubuntu:22.04 AS build-image
+FROM  public.ecr.aws/ubuntu/ubuntu:22.04 AS build-image
 
 WORKDIR /src
 RUN apt-get update && apt-get install -y \
@@ -31,7 +31,7 @@ COPY . .
 
 RUN cargo build -p iris-mpc-bins --release --bin iris-mpc-hawk-genesis
 
-FROM ubuntu:22.04
+FROM public.ecr.aws/ubuntu/ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y ca-certificates awscli curl

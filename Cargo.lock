@@ -2435,6 +2435,7 @@ dependencies = [
  "eyre",
  "iris-mpc-common",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
