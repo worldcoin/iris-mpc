@@ -1,6 +1,6 @@
 use crate::{
     execution::player::Identity,
-    network::tcp::{data::StreamId, NetworkConnection},
+    network::tcp::{data::ConnectionId, NetworkConnection},
 };
 use eyre::{eyre, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8,10 +8,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub async fn outbound<T: NetworkConnection>(
     stream: &mut T,
     own_id: &Identity,
-    stream_id: &StreamId,
+    connection_id: &ConnectionId,
 ) -> Result<()> {
     // Perform handshake: send our StreamId, expect to read it back
-    if let Err(e) = stream.write_u32(stream_id.0).await {
+    if let Err(e) = stream.write_u32(connection_id.0).await {
         return Err(eyre!("Failed to write stream_id during handshake: {:?}", e));
     }
     let echoed_id = match stream.read_u32().await {
@@ -20,10 +20,10 @@ pub async fn outbound<T: NetworkConnection>(
             return Err(eyre!("Failed to read stream_id during handshake: {:?}", e));
         }
     };
-    if echoed_id != stream_id.0 {
+    if echoed_id != connection_id.0 {
         return Err(eyre!(
             "Handshake failed: expected stream_id {}, got {}",
-            stream_id.0,
+            connection_id.0,
             echoed_id
         ));
     }
@@ -44,14 +44,14 @@ pub async fn outbound<T: NetworkConnection>(
     Ok(())
 }
 
-pub async fn inbound<T: NetworkConnection>(stream: &mut T) -> Result<(Identity, StreamId)> {
-    let stream_id = match stream.read_u32().await {
+pub async fn inbound<T: NetworkConnection>(stream: &mut T) -> Result<(Identity, ConnectionId)> {
+    let connection_id = match stream.read_u32().await {
         Ok(id) => id,
         Err(e) => {
             return Err(eyre!("Failed to read stream_id: {:?}", e));
         }
     };
-    if let Err(e) = stream.write_u32(stream_id).await {
+    if let Err(e) = stream.write_u32(connection_id).await {
         return Err(eyre!("Failed to write stream_id back: {:?}", e));
     }
     let peer_id_length = match stream.read_u32().await {
@@ -70,5 +70,5 @@ pub async fn inbound<T: NetworkConnection>(stream: &mut T) -> Result<(Identity, 
             return Err(eyre!("Failed to parse peer_id bytes as UTF-8: {:?}", e));
         }
     };
-    Ok((peer_id, stream_id.into()))
+    Ok((peer_id, connection_id.into()))
 }

@@ -162,6 +162,7 @@ pub struct HawkActor {
 
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
+    error_ct: CancellationToken,
     party_id: usize,
 }
 
@@ -298,10 +299,10 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            ct,
+            shutdown_ct,
             [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
@@ -310,7 +311,7 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        ct: CancellationToken,
+        shutdown_ct: CancellationToken,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
@@ -325,7 +326,7 @@ impl HawkActor {
 
         let network_args =
             NetworkHandleArgs::from_hawk(args, SessionGroups::N_SESSIONS_PER_REQUEST);
-        let networking = build_network_handle(network_args, ct).await?;
+        let networking = build_network_handle(network_args, shutdown_ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -355,6 +356,7 @@ impl HawkActor {
             distances_cache: [Default::default(), Default::default()],
             networking,
             party_id: args.party_index,
+            error_ct: CancellationToken::new(),
             workers_handle,
         })
     }
@@ -428,7 +430,8 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
-        let mut network_sessions = self.networking.make_network_sessions().await?;
+        let (mut network_sessions, ct) = self.networking.make_network_sessions().await?;
+        self.error_ct = ct;
         let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
 
         // todo: replace this with array_chunks::<2>() once that feature
@@ -457,6 +460,10 @@ impl HawkActor {
         )?;
         tracing::debug!("Created {} MPC sessions.", self.args.request_parallelism);
         Ok([l, r])
+    }
+
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        self.networking.sync_peers().await
     }
 
     fn create_session(
@@ -1350,8 +1357,12 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result =
-                    Self::handle_job(&mut hawk_actor, &mut sessions, job.request).await;
+                // check if there was a networking error
+                let error_ct = hawk_actor.error_ct.clone();
+                let job_result = tokio::select! {
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request) => r,
+                    _ = error_ct.cancelled() => Err(eyre!("networking error")),
+                };
 
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
@@ -1631,6 +1642,7 @@ impl HawkHandle {
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
+            tracing::error!("job failed. recreating sessions");
             // There is some error so the sessions may be somehow invalid. Make new ones.
             *sessions = hawk_actor.new_session_groups().await?;
         }
@@ -2031,7 +2043,11 @@ mod tests_db {
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
             party_index: 0,
-            addresses: vec!["0.0.0.0:1234".to_string()],
+            addresses: vec![
+                "0.0.0.0:1234".to_string(),
+                "0.0.0.0:1235".to_string(),
+                "0.0.0.0:1236".to_string(),
+            ],
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
