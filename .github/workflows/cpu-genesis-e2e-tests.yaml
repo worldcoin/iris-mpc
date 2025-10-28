@@ -70,7 +70,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
         with:
           role-to-assume: ${{ secrets.AWS_ROLE }}
-          aws-region: eu-central-1
+          aws-region: us-east-1
 
       - name: Login to Amazon ECR
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
