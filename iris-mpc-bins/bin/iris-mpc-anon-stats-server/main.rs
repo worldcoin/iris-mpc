@@ -14,6 +14,7 @@ async fn main() -> Result<()> {
     println!("Init config");
     let mut config: AnonStatsServerConfig = AnonStatsServerConfig::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
+    config.apply_party_network_defaults()?;
 
     let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
         Ok(handle) => handle,
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
     tracing::info!("Healthcheck server running on port {}", healthcheck_port);
 
     let app = Router::new().route("/", get(root_handler));
-    let listener = tokio::net::TcpListener::bind(config.bind_addr)
+    let listener = tokio::net::TcpListener::bind(config.bind_addr.as_str())
         .await
         .wrap_err_with(|| format!("Failed to bind HTTP server on {}", config.bind_addr))?;
     tracing::info!("HTTP server listening on {}", config.bind_addr);
