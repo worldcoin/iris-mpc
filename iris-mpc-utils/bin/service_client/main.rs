@@ -17,6 +17,14 @@ mod responses;
 
 #[derive(Debug, Parser, Clone)]
 struct CliOptions {
+    /// Number of request batches to dispatch.
+    #[clap(long, default_value = "1")]
+    batch_count: usize,
+
+    /// Maximum size of each batch.
+    #[clap(long, default_value = "500")]
+    batch_size_max: usize,
+
     // Path to SMPC node-0 configuration file.
     #[clap(long)]
     path_to_node_0_config: Option<String>,
@@ -33,6 +41,14 @@ struct CliOptions {
 impl CliOptions {
     const DEFAULT_NODE_CONFIG_KIND: &str = NODE_CONFIG_KIND_MAIN;
     const DEFAULT_NODE_CONFIG_IDX: usize = 0;
+
+    fn batch_count(&self) -> &usize {
+        &self.batch_count
+    }
+
+    fn batch_size_max(&self) -> &usize {
+        &self.batch_size_max
+    }
 
     fn path_to_node_0_config(&self) -> &Option<String> {
         &self.path_to_node_0_config
@@ -76,6 +92,9 @@ impl CliOptions {
 pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     println!("Running with options: {:?}", &options,);
+
+    let generator = requests::generator::Generator::from(&options);
+    println!("{:?}", generator);
 
     Ok(())
 }
