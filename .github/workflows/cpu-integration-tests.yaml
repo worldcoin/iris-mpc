@@ -99,7 +99,6 @@ jobs:
         env:
           COMPOSE_PROGRESS: plain          # no fancy TTY bars
           COMPOSE_HTTP_TIMEOUT: 600        # bump timeout
-          COMPOSE_PARALLEL_LIMIT: 1        # limit parallelism to reduce resource usage
         with:
           compose-file: "./docker-compose.test.yaml"
 
