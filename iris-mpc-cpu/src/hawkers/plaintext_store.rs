@@ -147,13 +147,18 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
+        let distances = self.eval_distance_batch(query, &[*vector]).await?;
+        Ok(distances[0].clone())
+    }
+
+    async fn eval_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
-        let serial_id = vector.serial_id();
-        let vector_code = self
-            .storage
-            .get_vector(vector)
-            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
-        Ok(query.get_distance_fraction(vector_code))
+        self.eval_minimal_rotation_distance_batch(query, vectors)
+            .await
     }
 
     async fn eval_minimal_rotation_distance_batch(
@@ -161,7 +166,6 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
-        debug!(event_type = EvaluateDistance.id());
         let vector_codes = vectors
             .iter()
             .map(|v| {
@@ -374,37 +378,37 @@ mod tests {
 
         assert_eq!(
             store.less_than(&d01, &d23).await?,
-            db[0].get_distance(&db[1]) < db[2].get_distance(&db[3])
+            db[0].get_min_distance(&db[1]) < db[2].get_min_distance(&db[3])
         );
 
         assert_eq!(
             store.less_than(&d23, &d01).await?,
-            db[2].get_distance(&db[3]) < db[0].get_distance(&db[1])
+            db[2].get_min_distance(&db[3]) < db[0].get_min_distance(&db[1])
         );
 
         assert_eq!(
             store.less_than(&d02, &d13).await?,
-            db[0].get_distance(&db[2]) < db[1].get_distance(&db[3])
+            db[0].get_min_distance(&db[2]) < db[1].get_min_distance(&db[3])
         );
 
         assert_eq!(
             store.less_than(&d03, &d12).await?,
-            db[0].get_distance(&db[3]) < db[1].get_distance(&db[2])
+            db[0].get_min_distance(&db[3]) < db[1].get_min_distance(&db[2])
         );
 
         assert_eq!(
             store.less_than(&d10, &d23).await?,
-            db[1].get_distance(&db[0]) < db[2].get_distance(&db[3])
+            db[1].get_min_distance(&db[0]) < db[2].get_min_distance(&db[3])
         );
 
         assert_eq!(
             store.less_than(&d12, &d30).await?,
-            db[1].get_distance(&db[2]) < db[3].get_distance(&db[0])
+            db[1].get_min_distance(&db[2]) < db[3].get_min_distance(&db[0])
         );
 
         assert_eq!(
             store.less_than(&d02, &d01).await?,
-            db[0].get_distance(&db[2]) < db[0].get_distance(&db[1])
+            db[0].get_min_distance(&db[2]) < db[0].get_min_distance(&db[1])
         );
 
         Ok(())

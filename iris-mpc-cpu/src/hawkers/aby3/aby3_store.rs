@@ -130,12 +130,32 @@ impl Aby3Store {
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
+        return self.eval_pairwise_min_rotation_distances(pairs).await;
+
+        // TODO: rm.
         if pairs.is_empty() {
             return Ok(vec![]);
         }
         let ds_and_ts = self.workers.galois_ring_pairwise_distances(pairs).await?;
         let distances = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(distances).await
+    }
+
+    async fn eval_pairwise_min_rotation_distances(
+        &mut self,
+        pairs: Vec<Option<(ArcIris, ArcIris)>>,
+    ) -> Result<Vec<DistanceShare<u32>>> {
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
+        let ds_and_ts = self
+            .workers
+            .rotation_aware_pairwise_distances(pairs)
+            .await?;
+        let distances = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
+        let distances = self.lift_distances(distances).await?;
+
+        self.oblivious_min_distance_batch_flat(&distances).await
     }
 
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
@@ -1140,10 +1160,10 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_minimal_rotation_distance_batch(&plaintext_preps[0], &plaintext_inserts)
+            .eval_distance_batch(&plaintext_preps[0], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_minimal_rotation_distance_batch(&plaintext_preps[1], &plaintext_inserts)
+            .eval_distance_batch(&plaintext_preps[1], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
