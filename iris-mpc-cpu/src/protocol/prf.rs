@@ -1,5 +1,6 @@
 use crate::shares::{int_ring::IntRing2k, ring_impl::RingElement};
 use aes_prng::AesRng;
+use eyre::Result;
 use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
 
 pub type PrfSeed = <AesRng as SeedableRng>::Seed;
@@ -63,5 +64,63 @@ impl Prf {
     {
         let (a, b) = self.gen_rands::<RingElement<T>>();
         a ^ b
+    }
+
+    fn gen_u32_mod(&mut self, modulus: u32) -> Result<u32> {
+        if modulus == 0 {
+            eyre::bail!("modulus must be non-zero");
+        }
+        let modulus_64 = modulus as u64;
+        // Rejection sampling to avoid modulo bias
+        // The rejection bound is the largest multiple of modulus that fits in u64 - 1.
+        // In this case, the probability of rejection is 2^64 % modulus / 2^64 < 2^32.
+        let rejection_bound = u64::MAX - (u64::MAX % modulus_64 + 1) % modulus_64;
+        loop {
+            let v = self.my_prf.gen::<u64>();
+            if v <= rejection_bound {
+                return Ok((v % modulus_64) as u32);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chi_statistics(observed: &[u32], expected: u32) -> f64 {
+        let expected_f = expected as f64;
+        observed
+            .iter()
+            .map(|o| {
+                let diff = *o as f64 - expected_f;
+                diff * diff / expected_f
+            })
+            .sum()
+    }
+
+    #[test]
+    fn test_prf_gen_u32_mod() -> Result<()> {
+        let mut prf = Prf::default();
+
+        let modulus = 100_u32;
+        let mut counters = vec![0_u32; modulus as usize];
+        let expected = 1000;
+        let num_samples = modulus * expected;
+        for _ in 0..num_samples {
+            let v = prf.gen_u32_mod(modulus)?;
+            counters[v as usize] += 1;
+        }
+
+        // Chi-square test for uniformity with the following parameters:
+        // - Degrees of freedom = modulus - 1 = 99
+        // - Significance level = 0.001
+        // Critical value is taken from chi-square distribution table here:
+        // https://www.itl.nist.gov/div898/handbook/eda/section3/eda3674.htm
+        let chi2 = chi_statistics(&counters, expected);
+        eprintln!("Chi-square statistic: {}", chi2);
+        assert!(chi2 < 149.449);
+
+        Ok(())
     }
 }
