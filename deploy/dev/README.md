@@ -139,7 +139,7 @@ To send test messages to the dev environment, you can use the `client` binary:
 # Don't forge to unset the AWS_ENDPOINT_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY from direnv!
 export AWS_PROFILE=worldcoin-smpcv-io-vpc-dev
 export AWS_REGION=eu-central-1
-cargo run --release --bin client -- \
+cargo run --release -p iris-mpc-bins --bin client -- \
    --request-topic-arn arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo \
    --requests-bucket-name wf-smpcv2-dev-sns-requests-v2 \
    --public-key-base-url "https://pki-smpcv2-dev.worldcoin.org" \

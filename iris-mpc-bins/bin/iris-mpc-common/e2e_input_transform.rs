@@ -74,18 +74,14 @@ fn write_json_file(file_path: &str, signups: &Vec<Signup>) -> std::io::Result<()
 }
 
 fn main() {
-    let input_file = "./iris-mpc-common/src/bin/data/ss_e2e.json";
-    let output_file = "./iris-mpc-common/src/bin/data/generated_ss_e2e_shares.json";
+    let input_file = "./data/ss_e2e.json";
+    let output_file = "./data/generated_ss_e2e_shares.json";
     let mut signups = read_json_file(input_file).unwrap();
     for signup in &mut signups {
         println!("Calculating shares for signup {:?}", signup.signup_id);
         signup.add_shares();
     }
-    write_json_file(
-        "./iris-mpc-common/src/bin/data/generated_ss_e2e_shares.json",
-        &signups,
-    )
-    .unwrap();
+    write_json_file("./data/generated_ss_e2e_shares.json", &signups).unwrap();
     println!(
         "Share calculation completed. Results written to {:?}",
         output_file

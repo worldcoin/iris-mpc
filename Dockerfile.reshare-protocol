@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04 as build-image
+FROM --platform=linux/amd64 public.ecr.aws/ubuntu/ubuntu:22.04 as build-image
 
 WORKDIR /src
 RUN apt-get update && apt-get install -y \
@@ -29,9 +29,9 @@ FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
 
-RUN cargo build --release --target x86_64-unknown-linux-gnu --bin reshare-client --bin reshare-server
+RUN cargo build -p iris-mpc-bins --release --target x86_64-unknown-linux-gnu --bin reshare-client --bin reshare-server
 
-FROM --platform=linux/amd64 ubuntu:22.04
+FROM --platform=linux/amd64 public.ecr.aws/ubuntu/ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y ca-certificates awscli
