@@ -5,17 +5,18 @@ use eyre::Result;
 
 use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_utils::{
+    constants::NODE_CONFIG_KIND_MAIN,
     state::fsys::{
         local::get_path_to_node_config as get_path_to_local_node_config, reader::read_node_config,
     },
     types::NetConfig,
 };
 
-mod request_dispatcher;
-mod request_generator;
+mod requests;
+mod responses;
 
 #[derive(Debug, Parser, Clone)]
-struct Options {
+struct CliOptions {
     // Path to SMPC node-0 configuration file.
     #[clap(long)]
     path_to_node_0_config: Option<String>,
@@ -29,7 +30,10 @@ struct Options {
     path_to_node_2_config: Option<String>,
 }
 
-impl Options {
+impl CliOptions {
+    const DEFAULT_NODE_CONFIG_KIND: &str = NODE_CONFIG_KIND_MAIN;
+    const DEFAULT_NODE_CONFIG_IDX: usize = 0;
+
     fn path_to_node_0_config(&self) -> &Option<String> {
         &self.path_to_node_0_config
     }
@@ -42,16 +46,15 @@ impl Options {
         &self.path_to_node_2_config
     }
 
+    /// Returns network config files from local filesystem.  Defaults to
+    /// static assets if not passed as CLI args.
     fn net_config(&self) -> NetConfig {
-        fn load_config(party_idx: usize, path: &Option<String>) -> NodeConfig {
-            const DEFAULT_NODE_CONFIG_KIND: &str = "main";
-            const DEFAULT_NODE_CONFIG_IDX: usize = 0;
-
+        fn read_config(party_idx: usize, path: &Option<String>) -> NodeConfig {
             let path_to_config = match path {
-                Some(path) => path.to_owned(),
+                Some(path) => path.clone(),
                 None => get_path_to_local_node_config(
-                    DEFAULT_NODE_CONFIG_KIND,
-                    DEFAULT_NODE_CONFIG_IDX,
+                    CliOptions::DEFAULT_NODE_CONFIG_KIND,
+                    CliOptions::DEFAULT_NODE_CONFIG_IDX,
                     &party_idx,
                 )
                 .to_string_lossy()
@@ -62,16 +65,16 @@ impl Options {
         }
 
         [
-            load_config(0, self.path_to_node_0_config()),
-            load_config(1, self.path_to_node_1_config()),
-            load_config(2, self.path_to_node_2_config()),
+            read_config(0, self.path_to_node_0_config()),
+            read_config(1, self.path_to_node_1_config()),
+            read_config(2, self.path_to_node_2_config()),
         ]
     }
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let options = Options::parse();
+    let options = CliOptions::parse();
     println!("Running with options: {:?}", &options,);
 
     Ok(())
