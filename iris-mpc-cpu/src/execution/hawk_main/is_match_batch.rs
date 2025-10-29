@@ -154,6 +154,7 @@ mod test {
     use crate::execution::hawk_main::scheduler::parallelize;
     use crate::execution::hawk_main::test_utils::{init_iris_db, make_request};
     use crate::execution::hawk_main::{HawkActor, Orientation};
+    use tracing_test::traced_test;
 
     #[tokio::test]
     async fn test_split_tasks() {
@@ -176,6 +177,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_is_match_batch() -> Result<()> {
         let actors = setup_hawk_actors().await?;
 
@@ -187,7 +189,7 @@ mod test {
     async fn go_is_match_batch(mut actor: HawkActor) -> Result<HawkActor> {
         init_iris_db(&mut actor).await?;
 
-        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+        let sessions = actor.new_sessions().await?;
 
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
@@ -217,6 +219,7 @@ mod test {
         );
 
         // Do not drop the connections too early.
+        actor.sync_peers().await?;
         Ok(actor)
     }
 
