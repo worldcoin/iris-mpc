@@ -794,6 +794,8 @@ pub(crate) async fn min_round_robin_batch(
     }
     let comparison_bits = oblivious_cross_compare(session, &pairs).await?;
     // Fill in the rest of the comparison table by setting diagonal bits to 1 and negating the bits above the diagonal.
+    // In other words, batch_selection_bits[i][j] = (d_i < d_j) if i < j,
+    // batch_selection_bits[i][j] = (d_i <= d_j) if i >= j.
     //    | d0 | d1 | d2 | d3 |
     // ------------------------
     // d0 | 1  | b01| b02| b03|
@@ -801,7 +803,7 @@ pub(crate) async fn min_round_robin_batch(
     // d2 |!b02|!b12| 1  | b23|
     // d3 |!b03|!b13|!b23| 1  |
     // Extract this table column-wise to AND them element-wise.
-    // Group ith columns together, i.e., return a matrix M, where M[i] contains for the comparison bits between distance i of every batch and all the other distances within the same batch.
+    // Group ith columns together, i.e., return a matrix M, where M[i] contains the comparison bits between distance i of every batch and all the other distances within the same batch.
     let mut batch_selection_bits = (0..batch_size)
         .map(|_| Vec::with_capacity(num_batches * batch_size))
         .collect_vec();
