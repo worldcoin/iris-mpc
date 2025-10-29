@@ -812,7 +812,7 @@ pub(crate) async fn min_round_robin_batch(
             .map(|_| Vec::with_capacity(batch_size))
             .collect();
         let mut batch_counter = 0;
-         for i in 0..batch_size {
+        for i in 0..batch_size {
             for j in 0..batch_size {
                 let value = match i.cmp(&j) {
                     Ordering::Less => {
