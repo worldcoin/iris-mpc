@@ -13,7 +13,7 @@ concurrency:
 jobs:
   # Build job - creates all artifacts including tests, libs, bins, benchmarks, examples
   build-all:
-    timeout-minutes: 10
+    timeout-minutes: 20
     runs-on:
       labels: ubuntu-22.04-16core
     outputs:
