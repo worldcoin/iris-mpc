@@ -294,7 +294,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
             "SELECT serial_id, version_id, layer FROM {table} WHERE graph_id = $1"
         ))
         .bind(self.graph_id())
-        .fetch(self.tx())
+        .fetch_all(self.tx())
         .await
         .map_err(|e| eyre!("Failed to fetch entry point: {e}"))?;
 
@@ -303,18 +303,18 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         } else {
             let mut points = Vec::with_capacity(rows.len());
             let mut max_layer = 0;
-            while let Some(row) = rows.next().await {
-                let serial_id: i64 = row.get("serial_id");
+            for row in rows {
+                let serial_id = row.get::<i64, &str>("serial_id") as u32;
                 let version_id: i16 = row.get("version_id");
-                let row_layer: i16 = row.get("layer");
-                if row_layer as usize > max_layer {
-                    max_layer = row_layer as usize;
+                let row_layer = row.get::<i16, &str>("layer") as usize;
+                if row_layer > max_layer {
+                    max_layer = row_layer;
                     points.clear();
                 }
                 if row_layer != max_layer {
                     continue;
                 }
-                points.push(VectorId::new(serial_id as u32, version_id));
+                points.push(VectorId::new(serial_id, version_id));
             }
             // todo: return the entire list of entry points once supported
             // by the rest of the codebase.
