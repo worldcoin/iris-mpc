@@ -35,39 +35,16 @@ tonic = { version = "0.12.3", features = [
 prost = "0.13.3"
 sha2.workspace = true
 thiserror.workspace = true
-hkdf = "0.12.4"
-rustls = { version = "0.23.16", features = ["ring"] }
 blake3 = "1.8.2"
-rayon.workspace = true
-aws-config.workspace = true
-aws-sdk-s3.workspace = true
-aws-sdk-secretsmanager.workspace = true
-base64.workspace = true
-reqwest.workspace = true
+
 
 [dev-dependencies]
-float_eq = "1"
 criterion = "0.5"
+rayon = "1.10.0"
 
 
 [build-dependencies]
 tonic-build = "0.12.3"
-
-[[bin]]
-name = "seed-v2-dbs"
-path = "src/bin/seed_v2_dbs.rs"
-
-[[bin]]
-name = "reshare-server"
-path = "src/bin/reshare-server.rs"
-
-[[bin]]
-name = "reshare-client"
-path = "src/bin/reshare-client.rs"
-
-[[bin]]
-name = "rerandomize-db"
-path = "src/bin/rerandomize_db.rs"
 
 [[bench]]
 name = "rerandomize"
