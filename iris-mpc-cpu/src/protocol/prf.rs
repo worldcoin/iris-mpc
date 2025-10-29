@@ -73,7 +73,7 @@ impl Prf {
         let modulus_64 = modulus as u64;
         // Rejection sampling to avoid modulo bias
         // The rejection bound is the largest multiple of modulus that fits in u64 - 1.
-        // In this case, the probability of rejection is 2^64 % modulus / 2^64 < 2^32.
+        // In this case, the probability of rejection is 2^64 % modulus / 2^64 < 2^(-32).
         let rejection_bound = u64::MAX - (u64::MAX % modulus_64 + 1) % modulus_64;
         loop {
             let v = self.my_prf.gen::<u64>();
