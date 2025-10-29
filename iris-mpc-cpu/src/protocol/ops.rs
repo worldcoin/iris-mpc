@@ -812,18 +812,18 @@ pub(crate) async fn min_round_robin_batch(
             .map(|_| Vec::with_capacity(batch_size))
             .collect();
         let mut batch_counter = 0;
-        for i in 0..batch_size {
-            let row = &batch[batch_counter..batch_counter + (batch_size - i - 1)];
-            // fill in the ith column
-            batch_matrix[i].push(Share::from_const(Bit::new(true), session.own_role()));
-            for bit in row {
-                batch_matrix[i].push(bit.not());
+         for i in 0..batch_size {
+            for j in 0..batch_size {
+                let value = match i.cmp(&j) {
+                    Ordering::Less => {
+                        batch_counter += 1;
+                        batch[batch_counter - 1].clone()
+                    }
+                    Ordering::Equal => Share::from_const(Bit::new(true), session.own_role()),
+                    Ordering::Greater => batch_matrix[i][j].not(),
+                };
+                batch_matrix[j].push(value);
             }
-            // fill the other columns
-            for j in (i + 1)..batch_size {
-                batch_matrix[j].push(row[j - i - 1].clone());
-            }
-            batch_counter += batch_size - i - 1;
         }
         for (i, column_bits) in batch_matrix.into_iter().enumerate() {
             batch_selection_bits[i].extend(column_bits);
