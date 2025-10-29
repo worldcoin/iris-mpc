@@ -1,0 +1,37 @@
+image: "ghcr.io/worldcoin/rerandomization-protocol:02d8c8ae797fa33069eca08e6cd2ad0a14883124"
+replicaCount: 1
+
+environment: stage
+
+# this is needed to prevent the job from restarting if it fails
+backoffLimit: 0
+
+args:
+  - "rerandomize-db"
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: 4
+    memory: 16Gi
+  requests:
+    cpu: 4
+    memory: 16Gi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+concurrencyPolicy: Replace
+
+initContainer:
+  enabled: true
+  name: "rerandomize-db-key-gen"
+  image: "ghcr.io/worldcoin/rerandomization-protocol:02d8c8ae797fa33069eca08e6cd2ad0a14883124"
+  imagePullPolicy: IfNotPresent
+  command:
+    - /bin/sh
+    - -c
+    - rerandomize-db key-gen
+  env: []

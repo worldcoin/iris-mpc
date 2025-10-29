@@ -264,10 +264,6 @@ pub struct ReRandomizeConfig {
     #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
     pub public_key_bucket_name: String,
 
-    /// The region of the S3 bucket where the tripartite ECDH public keys are stored (used for local testing)
-    #[clap(long, env = "PUBLIC_KEY_BUCKET_REGION")]
-    pub public_key_bucket_region: String,
-
     /// The DB connection URL to store rerandomized iris codes to
     #[clap(long, env = "DB_URL_DEST")]
     pub dest_db_url: String,

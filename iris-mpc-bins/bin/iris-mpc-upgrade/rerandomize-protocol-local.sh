@@ -39,7 +39,6 @@ export AWS_ENDPOINT_URL="http://127.0.0.1:4566"
 # Set some common env vars for the rerandomize-db tool that are the same for all parties
 export ENVIRONMENT="testing"
 export PUBLIC_KEY_BUCKET_NAME=$BUCKET_NAME
-export PUBLIC_KEY_BUCKET_REGION="us-east-1"
 
 
 # Stage 1: Generate a keypair for each party and upload public keys to S3, for the tripartite DH

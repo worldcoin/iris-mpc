@@ -1,0 +1,48 @@
+env:
+  - name: ENVIRONMENT
+    value: stage
+  - name: DB_URL_SOURCE
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  - name: DB_URL_DEST
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  - name: SCHEMA_NAME_SOURCE
+    value: SMPC_stage_0
+  - name: SCHEMA_NAME_DEST
+    value: SMPC_stage_rerandomization_0
+  - name: SERVICE_NAME
+    value: iris-mpc-db-rerandomization-0
+  - name: AWS_REGION
+    value: eu-north-1
+  - name: RANGE_MIN
+    value: "1"
+  - name: RANGE_MAX_INCLUSIVE
+    value: "1000"
+  - name: PARTY_ID
+    value: "0"
+  - name: PUBLIC_KEY_BASE_URL
+    value: "https://pki-smpcv2-stage.worldcoin.org/iris-mpc-tripartite-ecdh-public-key-party"
+  - name: PUBLIC_KEY_BUCKET_NAME
+    value: "wf-smpcv2-stage-public-keys"
+
+initContainer:
+  enabled: true
+  name: "rerandomize-db-key-gen"
+  image: "ghcr.io/worldcoin/rerandomization-protocol:02d8c8ae797fa33069eca08e6cd2ad0a14883124"
+  imagePullPolicy: IfNotPresent
+  command:
+    - /bin/sh
+    - -c
+    - rerandomize-db key-gen
+  env:
+    - name: ENVIRONMENT
+      value: stage
+    - name: PARTY_ID
+      value: "0"
+    - name: PUBLIC_KEY_BUCKET_NAME
+      value: "wf-smpcv2-stage-public-keys"
