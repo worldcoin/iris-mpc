@@ -1,4 +1,4 @@
-use eyre::Result;
+use eyre::{OptionExt, Result};
 use serde::Serialize;
 use std::{
     fmt::{Debug, Display},
@@ -97,6 +97,14 @@ pub trait VectorStore: Debug {
         Ok(results)
     }
 
+    /// Evaluate the minimal distance over all distances between rotations of the query and a vector in the input batch.
+    /// TODO: replace eval_distance_batch with this method when API is stable.
+    async fn eval_minimal_rotation_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>>;
+
     /// Check whether a batch of distances are matches.
     /// The default implementation is a loop over `is_match`.
     /// Override for more efficient batch match checks.
@@ -121,6 +129,23 @@ pub trait VectorStore: Debug {
             results.push(self.less_than(d1, d2).await?);
         }
         Ok(results)
+    }
+
+    async fn get_argmin_distance(
+        &mut self,
+        distances: &[(Self::VectorRef, Self::DistanceRef)],
+    ) -> Result<(Self::VectorRef, Self::DistanceRef)> {
+        let mut min_dist = distances
+            .first()
+            .ok_or_eyre("Cannot get min of empty list")
+            .cloned()?;
+
+        for (id, dist) in distances.iter().skip(1) {
+            if self.less_than(dist, &min_dist.1).await? {
+                min_dist = (id.clone(), dist.clone());
+            }
+        }
+        Ok(min_dist)
     }
 }
 

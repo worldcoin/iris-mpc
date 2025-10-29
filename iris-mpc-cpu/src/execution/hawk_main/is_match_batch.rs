@@ -1,7 +1,6 @@
-use super::{
-    rot::VecRots, BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
-};
+use super::{BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT};
 use crate::{
+    execution::hawk_main::VecRotations,
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store},
     hnsw::VectorStore,
 };
@@ -13,7 +12,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
 
 pub async fn is_match_batch(
-    search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
+    search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
     vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSession>>,
 ) -> Result<BothEyes<VecRequests<MapEdges<bool>>>> {
@@ -31,7 +30,7 @@ pub async fn is_match_batch(
 }
 
 async fn per_side(
-    queries: &VecRequests<VecRots<Aby3Query>>,
+    queries: &VecRequests<VecRotations<Aby3Query>>,
     missing_vector_ids: VecRequests<VecEdges<VectorId>>,
     sessions: &Vec<HawkSession>,
 ) -> Result<VecRequests<MapEdges<bool>>> {
@@ -55,7 +54,7 @@ async fn per_side(
 
     // For each request, broadcast the vectors to the rotations.
     // Concatenate the tasks for all requests, to maximize parallelism.
-    let tasks = VecRots::flatten_broadcast(izip!(queries, missing_vector_ids));
+    let tasks = VecRotations::flatten_broadcast(izip!(queries, missing_vector_ids));
     assert_eq!(tasks.len(), n_tasks);
 
     // Prepare the tasks into one chunk per session.
@@ -74,7 +73,7 @@ async fn per_side(
     assert_eq!(results.len(), n_tasks);
 
     // Undo the flattening of rotations.
-    let results = VecRots::unflatten(results);
+    let results = VecRotations::unflatten(results);
 
     // Aggregate the results over rotations. ANY match.
     let results = results
@@ -139,7 +138,7 @@ fn unsplit_tasks<T>(chunks: Vec<std::result::Result<Result<Vec<T>>, JoinError>>)
         .map(|v| v.into_iter().flatten().collect())
 }
 
-fn aggregate_rotation_results(results: VecRots<MapEdges<bool>>) -> MapEdges<bool> {
+fn aggregate_rotation_results(results: VecRotations<MapEdges<bool>>) -> MapEdges<bool> {
     results.iter().fold(HashMap::new(), |mut acc, m| {
         for (v, is_match) in m {
             *acc.entry(*v).or_default() |= is_match;

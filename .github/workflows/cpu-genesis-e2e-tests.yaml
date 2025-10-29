@@ -70,12 +70,14 @@ jobs:
         uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
         with:
           role-to-assume: ${{ secrets.AWS_ROLE }}
-          aws-region: eu-central-1
+          aws-region: us-east-1
 
       - name: Login to Amazon ECR
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+        with:
+          registry-type: public
 
       - name: Build and export to Docker
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -94,7 +96,7 @@ jobs:
 
       - name: Run docker compose
         id: compose_up
-        continue-on-error: true
+        continue-on-error: false
         env:
           COMPOSE_PROGRESS: plain          # no fancy TTY bars
           COMPOSE_HTTP_TIMEOUT: 600        # bump timeout

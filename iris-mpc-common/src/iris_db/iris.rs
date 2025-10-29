@@ -307,6 +307,20 @@ impl IrisCode {
         (code_distance as u16, combined_mask_len as u16)
     }
 
+    /// Return the minimum distance of an iris code against all rotations of another iris code.
+    pub fn get_min_distance_fraction(&self, other: &Self) -> (u16, u16) {
+        let mut min_distance = (u16::MAX, u16::MAX);
+        for rotation in other.all_rotations() {
+            let distance = rotation.get_distance_fraction(self);
+            if distance.0 as u32 * (min_distance.1 as u32)
+                < distance.1 as u32 * min_distance.0 as u32
+            {
+                min_distance = distance;
+            }
+        }
+        min_distance
+    }
+
     /// Return the fractional Hamming distance between two iris codes, represented
     /// as the `i16` dot product of associated masked-bit vectors and the `u16` size
     /// of the common unmasked region.
