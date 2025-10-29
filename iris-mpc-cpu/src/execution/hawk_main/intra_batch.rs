@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::Aby3Query,
-    hnsw::VectorStore, protocol::shared_iris::ArcIris,
+    hnsw::VectorStore, protocol::shared_iris::ArcIris, shares::share::DistanceShare,
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
@@ -18,10 +18,16 @@ pub struct IntraMatch {
     pub is_match: BothEyes<bool>,
 }
 
+/// Matches the search queries against each other within the batch, to find intra-batch matches.
+/// Returns, for each request, the list of other requests in the batch that it matches and how it matched.
+/// Also returns the distances for all matches, grouped by eye and (request,earlier_request), for anon stats purposes.
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRots<Aby3Query>>>>,
-) -> Result<VecRequests<Vec<IntraMatch>>> {
+) -> Result<(
+    VecRequests<Vec<IntraMatch>>,
+    BothEyes<HashMap<(usize, usize), Vec<DistanceShare<u32>>>>,
+)> {
     let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
@@ -31,7 +37,7 @@ pub async fn intra_batch_is_match(
 
     let batches = Schedule::new(n_sessions, n_requests, n_rotations).intra_match_batches();
 
-    let (tx, rx) = unbounded_channel::<IsMatch>();
+    let (tx, rx) = unbounded_channel::<(IsMatch, DistanceShare<u32>)>();
 
     let per_session = |batch: Batch| {
         let session = sessions[batch.i_eye][batch.i_session].clone();
@@ -52,7 +58,7 @@ async fn per_session(
     search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
     session: &HawkSession,
     batch: Batch,
-    tx: UnboundedSender<IsMatch>,
+    tx: UnboundedSender<(IsMatch, DistanceShare<u32>)>,
 ) -> Result<()> {
     // Enumerate the pairs of requests.
     // These are unordered pairs: if we do (i, j) we skip (j, i).
@@ -86,9 +92,9 @@ async fn per_session(
     let distances = store.eval_pairwise_distances(query_pairs).await?;
     let is_matches = store.is_match_batch(&distances).await?;
 
-    for (pair, is_match) in izip!(pairs, is_matches) {
+    for (pair, is_match, distance) in izip!(pairs, is_matches, distances) {
         if is_match {
-            tx.send(pair)?;
+            tx.send((pair, distance))?;
         }
     }
 
@@ -101,18 +107,30 @@ struct IsMatch {
     earlier_request: usize,
 }
 
+/// Aggregate the results of all sessions and rotations for the intra-batch is_match.
+/// Returns, for each request, the list of other requests in the batch that it matches and how it matched.
+/// Also returns the distances for all matches, grouped by request and eye, for anon stats purposes.
 async fn aggregate_results(
     n_requests: usize,
-    mut rx: UnboundedReceiver<IsMatch>,
-) -> Result<VecRequests<Vec<IntraMatch>>> {
+    mut rx: UnboundedReceiver<(IsMatch, DistanceShare<u32>)>,
+) -> Result<(
+    VecRequests<Vec<IntraMatch>>,
+    BothEyes<HashMap<(usize, usize), Vec<DistanceShare<u32>>>>,
+)> {
     rx.close();
     let mut join = HashMap::new();
+    let mut match_distances = [HashMap::new(), HashMap::new()];
 
     // For each pair of request, reduce the result of all rotations with boolean ANY.
-    while let Some(match_result) = rx.recv().await {
+    while let Some((match_result, distance)) = rx.recv().await {
         let request_pair = (match_result.task.i_request, match_result.earlier_request);
         let eyes_match = join.entry(request_pair).or_insert([false, false]);
         eyes_match[match_result.eye] = true;
+        // also store the distance for matches to report later as part of anon stats
+        let dist_entry = match_distances[match_result.eye]
+            .entry(request_pair)
+            .or_insert(vec![]);
+        dist_entry.push(distance)
     }
 
     let mut match_lists = vec![Vec::new(); n_requests];
@@ -128,7 +146,7 @@ async fn aggregate_results(
         }
     }
 
-    Ok(match_lists)
+    Ok((match_lists, match_distances))
 }
 
 #[cfg(test)]
@@ -154,7 +172,7 @@ mod tests {
         let request = make_request_intra_match(batch_size, actor.party_id);
         let search_queries = &request.queries(Orientation::Normal);
 
-        let result = intra_batch_is_match(&sessions, search_queries).await?;
+        let (result, _) = intra_batch_is_match(&sessions, search_queries).await?;
 
         assert_eq!(
             result,
