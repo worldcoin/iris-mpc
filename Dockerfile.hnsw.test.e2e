@@ -1,5 +1,5 @@
 # Set base image.
-FROM rust:1.85-slim-bullseye AS build-image
+FROM public.ecr.aws/docker/library/rust:1.85-slim-bullseye AS build-image
 
 # Install pre-requisites.
 RUN apt-get update && apt-get install -y \
