@@ -3,7 +3,10 @@ use crate::{
         hawk_main::iris_worker::IrisPoolHandle,
         session::{Session, SessionHandles},
     },
-    hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
+    hawkers::{
+        shared_irises::{SharedIrises, SharedIrisesRef},
+        WITH_MIN_ROTA,
+    },
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -130,9 +133,11 @@ impl Aby3Store {
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
-        return self.eval_pairwise_min_rotation_distances(pairs).await;
+        if WITH_MIN_ROTA {
+            return self.eval_pairwise_distances_min_rota(pairs).await;
+        }
 
-        // TODO: rm.
+        // TODO: move.
         if pairs.is_empty() {
             return Ok(vec![]);
         }
@@ -141,7 +146,7 @@ impl Aby3Store {
         self.lift_distances(distances).await
     }
 
-    async fn eval_pairwise_min_rotation_distances(
+    async fn eval_pairwise_distances_min_rota(
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
@@ -371,7 +376,7 @@ impl Aby3Store {
             .await
     }
 
-    async fn eval_rotation_distance_pairs(
+    async fn eval_distance_pairs_rotations(
         &mut self,
         pairs: &[(Aby3Query, Aby3VectorRef)],
     ) -> Result<Vec<Aby3DistanceRef>> {
@@ -389,18 +394,21 @@ impl Aby3Store {
         self.lift_distances(dist).await
     }
 
-    async fn eval_rotation_distances_batch(
+    async fn eval_distance_batch_minimal_rotation(
         &mut self,
         query: &Aby3Query,
-        vectors: &[Aby3VectorRef],
-    ) -> Result<Vec<Aby3DistanceRef>> {
+        vectors: &[VectorId],
+    ) -> Result<Vec<DistanceShare<u32>>> {
         let ds_and_ts = self
             .workers
             .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
 
         let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
-        self.lift_distances(dist).await
+        let distances = self.lift_distances(dist).await?;
+
+        self.oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .await
     }
 }
 
@@ -469,12 +477,14 @@ impl VectorStore for Aby3Store {
             return Ok(vec![]);
         }
 
-        let distances = self.eval_rotation_distance_pairs(pairs).await?;
-        return self
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
-            .await;
+        if WITH_MIN_ROTA {
+            let distances = self.eval_distance_pairs_rotations(pairs).await?;
+            return self
+                .oblivious_min_distance_batch(transpose_from_flat(&distances))
+                .await;
+        }
 
-        // TODO: rm.
+        // TODO: move.
         let pairs = pairs
             .iter()
             .map(|(q, v)| (q.iris_proc.clone(), *v))
@@ -495,12 +505,13 @@ impl VectorStore for Aby3Store {
             return Ok(vec![]);
         }
 
-        let distances = self.eval_rotation_distances_batch(query, vectors).await?;
-        return self
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
-            .await;
+        if WITH_MIN_ROTA {
+            return self
+                .eval_distance_batch_minimal_rotation(query, vectors)
+                .await;
+        }
 
-        // TODO: rm.
+        // TODO: move.
         let ds_and_ts = self
             .workers
             .dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
@@ -508,21 +519,6 @@ impl VectorStore for Aby3Store {
 
         let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(dist).await
-    }
-
-    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
-    async fn eval_minimal_rotation_distance_batch(
-        &mut self,
-        query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
-    ) -> Result<Vec<Self::DistanceRef>> {
-        if vectors.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let distances = self.eval_rotation_distances_batch(query, vectors).await?;
-        self.oblivious_min_distance_batch(transpose_from_flat(&distances))
-            .await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]

@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
-    hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
+    hawkers::{shared_irises::{SharedIrises, SharedIrisesRef}, WITH_MIN_ROTA},
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
@@ -111,6 +111,26 @@ impl PlaintextStore {
 
         Ok(graph)
     }
+
+    async fn eval_distance_impl(
+        &mut self,
+        query: &Arc<IrisCode>,
+        vector: &VectorId,
+        min_rota: bool,
+    ) -> Result<(u16, u16)> {
+        let vector_code = self.storage.get_vector(vector).ok_or_else(|| {
+            eyre::eyre!(
+                "Vector ID not found in store for serial {}",
+                vector.serial_id()
+            )
+        })?;
+        let distance = if min_rota {
+            vector_code.get_min_distance_fraction(query)
+        } else {
+            vector_code.get_distance_fraction(query)
+        };
+        Ok(distance)
+    }
 }
 
 fn fraction_is_match(dist: &(u16, u16)) -> bool {
@@ -147,38 +167,8 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
-        let distances = self.eval_distance_batch(query, &[*vector]).await?;
-        Ok(distances[0].clone())
-    }
-
-    async fn eval_distance_batch(
-        &mut self,
-        query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
-    ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
-        self.eval_minimal_rotation_distance_batch(query, vectors)
-            .await
-    }
-
-    async fn eval_minimal_rotation_distance_batch(
-        &mut self,
-        query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
-    ) -> Result<Vec<Self::DistanceRef>> {
-        let vector_codes = vectors
-            .iter()
-            .map(|v| {
-                let serial_id = v.serial_id();
-                self.storage.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(vector_codes
-            .into_iter()
-            .map(|v| v.get_min_distance_fraction(query))
-            .collect())
+        self.eval_distance_impl(query, vector, WITH_MIN_ROTA).await
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -243,6 +233,34 @@ impl SharedPlaintextStore {
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
+
+    async fn eval_distance_batch_impl(
+        &mut self,
+        query: &Arc<IrisCode>,
+        vectors: &[VectorId],
+        min_rota: bool,
+    ) -> Result<Vec<(u16, u16)>> {
+        let store = self.storage.read().await;
+        let vector_codes = vectors
+            .iter()
+            .map(|v| {
+                let serial_id = v.serial_id();
+                store.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(vector_codes
+            .into_iter()
+            .map(|v| {
+                if min_rota {
+                    v.get_min_distance_fraction(query)
+                } else {
+                    v.get_distance_fraction(query)
+                }
+            })
+            .collect())
+    }
 }
 
 impl From<PlaintextStore> for SharedPlaintextStore {
@@ -271,35 +289,18 @@ impl VectorStore for SharedPlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
-        debug!(event_type = EvaluateDistance.id());
-        let store = self.storage.read().await;
-        let serial_id = vector.serial_id();
-        let vector_code = store
-            .get_vector(vector)
-            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
-        Ok(query.get_distance_fraction(vector_code))
+        let distances = self.eval_distance_batch(query, &[*vector]).await?;
+        Ok(distances[0].clone())
     }
 
-    async fn eval_minimal_rotation_distance_batch(
+    async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
-        let store = self.storage.read().await;
-        let vector_codes = vectors
-            .iter()
-            .map(|v| {
-                let serial_id = v.serial_id();
-                store.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(vector_codes
-            .into_iter()
-            .map(|v| v.get_min_distance_fraction(query))
-            .collect())
+        self.eval_distance_batch_impl(query, vectors, WITH_MIN_ROTA)
+            .await
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -376,39 +377,47 @@ mod tests {
         let d23 = store.eval_distance(&db[2], &ids[3]).await?;
         let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
+        fn distance(a: &IrisCode, b: &IrisCode) -> (u16, u16) {
+            if WITH_MIN_ROTA {
+                a.get_min_distance_fraction(b)
+            } else {
+                a.get_distance_fraction(b)
+            }
+        }
+
         assert_eq!(
             store.less_than(&d01, &d23).await?,
-            db[0].get_min_distance(&db[1]) < db[2].get_min_distance(&db[3])
+            distance(&db[0], &db[1]) < distance(&db[2], &db[3])
         );
 
         assert_eq!(
             store.less_than(&d23, &d01).await?,
-            db[2].get_min_distance(&db[3]) < db[0].get_min_distance(&db[1])
+            distance(&db[2], &db[3]) < distance(&db[0], &db[1])
         );
 
         assert_eq!(
             store.less_than(&d02, &d13).await?,
-            db[0].get_min_distance(&db[2]) < db[1].get_min_distance(&db[3])
+            distance(&db[0], &db[2]) < distance(&db[1], &db[3])
         );
 
         assert_eq!(
             store.less_than(&d03, &d12).await?,
-            db[0].get_min_distance(&db[3]) < db[1].get_min_distance(&db[2])
+            distance(&db[0], &db[3]) < distance(&db[1], &db[2])
         );
 
         assert_eq!(
             store.less_than(&d10, &d23).await?,
-            db[1].get_min_distance(&db[0]) < db[2].get_min_distance(&db[3])
+            distance(&db[1], &db[0]) < distance(&db[2], &db[3])
         );
 
         assert_eq!(
             store.less_than(&d12, &d30).await?,
-            db[1].get_min_distance(&db[2]) < db[3].get_min_distance(&db[0])
+            distance(&db[1], &db[2]) < distance(&db[3], &db[0])
         );
 
         assert_eq!(
             store.less_than(&d02, &d01).await?,
-            db[0].get_min_distance(&db[2]) < db[0].get_min_distance(&db[1])
+            distance(&db[0], &db[2]) < distance(&db[0], &db[1])
         );
 
         Ok(())

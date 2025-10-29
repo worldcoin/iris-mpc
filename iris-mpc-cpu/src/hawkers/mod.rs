@@ -23,3 +23,5 @@ pub mod shared_irises;
 pub mod build_plaintext;
 
 pub mod naive_knn_plaintext;
+
+const WITH_MIN_ROTA: bool = true;

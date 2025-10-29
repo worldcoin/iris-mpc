@@ -295,14 +295,6 @@ mod tests {
             Ok(hamming_distance(vector_0, vector_1))
         }
 
-        async fn eval_minimal_rotation_distance_batch(
-            &mut self,
-            _query: &Self::QueryRef,
-            _vectors: &[Self::VectorRef],
-        ) -> Result<Vec<Self::DistanceRef>> {
-            unimplemented!()
-        }
-
         async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
             Ok(*distance == 0)
         }
