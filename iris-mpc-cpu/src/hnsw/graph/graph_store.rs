@@ -290,44 +290,67 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
 
     pub async fn get_entry_point(&mut self) -> Result<Option<(V::VectorRef, usize)>> {
         let table = self.entry_table();
-        let opt = sqlx::query(&format!(
+        let rows = sqlx::query(&format!(
             "SELECT serial_id, version_id, layer FROM {table} WHERE graph_id = $1"
         ))
         .bind(self.graph_id())
-        .fetch_optional(self.tx())
+        .fetch(self.tx())
         .await
         .map_err(|e| eyre!("Failed to fetch entry point: {e}"))?;
 
-        if let Some(row) = opt {
-            let serial_id: i64 = row.get("serial_id");
-            let version_id: i16 = row.get("version_id");
-            let layer: i16 = row.get("layer");
-
-            Ok(Some((
-                VectorId::new(serial_id as u32, version_id),
-                layer as usize,
-            )))
-        } else {
+        if rows.is_empty() {
             Ok(None)
+        } else {
+            let mut points = Vec::with_capacity(rows.len());
+            let mut max_layer = 0;
+            while let Some(row) = rows.next().await {
+                let serial_id: i64 = row.get("serial_id");
+                let version_id: i16 = row.get("version_id");
+                let row_layer: i16 = row.get("layer");
+                if row_layer as usize > max_layer {
+                    max_layer = row_layer as usize;
+                    points.clear();
+                }
+                if row_layer != max_layer {
+                    continue;
+                }
+                points.push(VectorId::new(serial_id as u32, version_id));
+            }
+            // todo: return the entire list of entry points once supported
+            // by the rest of the codebase.
+            Ok(points.pop().map(|x| (x, max_layer)))
         }
     }
 
     pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
+        // todo: delete this once set_entry_point() receives a list of points.
+        let points = vec![point];
         let table = self.entry_table();
-        sqlx::query(&format!(
-            "
-            INSERT INTO {table} (graph_id, serial_id, version_id, layer)
-            VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id)
-            DO UPDATE SET (serial_id, version_id, layer) = (EXCLUDED.serial_id, EXCLUDED.version_id, EXCLUDED.layer)
-            "
-        ))
-        .bind(self.graph_id())
-        .bind(point.serial_id() as i64)
-        .bind(point.version_id())
-        .bind(layer as i16)
-        .execute(self.tx())
-        .await
-        .map_err(|e| eyre!("Failed to set entry point: {e}"))?;
+
+        // Clear existing entry points for this graph
+        sqlx::query(&format!("DELETE FROM {table} WHERE graph_id = $1"))
+            .bind(self.graph_id())
+            .execute(self.tx())
+            .await
+            .map_err(|e| eyre!("Failed to clear entry points: {e}"))?;
+
+        // Insert each point as a new entry point for this graph and layer
+        for point in points {
+            sqlx::query(&format!(
+                "
+                INSERT INTO {table} (graph_id, serial_id, version_id, layer)
+                VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, serial_id, layer)
+                DO UPDATE SET version_id = EXCLUDED.version_id
+                "
+            ))
+            .bind(self.graph_id())
+            .bind(point.serial_id() as i64)
+            .bind(point.version_id())
+            .bind(layer as i16)
+            .execute(self.tx())
+            .await
+            .map_err(|e| eyre!("Failed to insert entry point: {e}"))?;
+        }
 
         Ok(())
     }
