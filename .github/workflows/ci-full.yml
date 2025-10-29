@@ -78,11 +78,11 @@ jobs:
 
       - name: Run cargo clippy
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: cargo clippy --all-targets --all-features -- -D warnings --no-deps
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings --no-deps
       
       - name: Build Docs
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: cargo doc --all-features --no-deps --document-private-items
+        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
 
       - name: Build All Targets (including tests)
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -120,6 +120,11 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -127,6 +132,18 @@ jobs:
 
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
+
+      - name: Cache Rust build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: cache-rust
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
 
       - name: Install Rust
         run: rustup toolchain install 1.85.0
@@ -140,17 +157,23 @@ jobs:
           name: ${{ github.sha }}-artifacts
           path: target/release/
 
+      - name: Set permissions on downloaded artifacts
+        run: chmod +x target/release/* || true
+
       - name: Run Tests
         run: cargo test --release -- --test-threads=1
 
       - name: Run Tests with DB
         run: cargo test --release --features db_dependent -- --test-threads=1
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
       - name: Run CPU E2E tests
         run: cargo test --release -p iris-mpc-cpu -- e2e --test-threads=1 --include-ignored
         env:
           RUST_LOG: info
           RUST_BACKTRACE: 1
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
   integration-tests:
     timeout-minutes: 20
@@ -168,11 +191,29 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
+      - name: Install Dependencies
+        run: sudo apt install protobuf-compiler
+
+      - name: Cache Rust build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: cache-rust
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
+
       - name: Download build artifacts
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: ${{ github.sha }}-artifacts
           path: target/release/
+
+      - name: Set permissions on downloaded artifacts
+        run: chmod +x target/release/* || true
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
@@ -239,11 +280,29 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
+      - name: Install Dependencies
+        run: sudo apt install protobuf-compiler
+
+      - name: Cache Rust build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: cache-rust
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
+
       - name: Download build artifacts
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: ${{ github.sha }}-artifacts
           path: target/release/
+
+      - name: Set permissions on downloaded artifacts
+        run: chmod +x target/release/* || true
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
