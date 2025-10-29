@@ -1,0 +1,40 @@
+FROM public.ecr.aws/ubuntu/ubuntu:22.04 AS build-image
+
+WORKDIR /src
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    protobuf-compiler \
+    wget
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH "/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME "/root/.rustup"
+ENV CARGO_HOME "/root/.cargo"
+RUN rustup toolchain install 1.85.0
+RUN rustup default 1.85.0
+RUN rustup component add cargo
+RUN cargo install cargo-build-deps \
+    && cargo install cargo-edit --version 0.13.6 --locked
+
+FROM build-image AS build-app
+WORKDIR /src/iris-mpc
+COPY . .
+RUN cargo build -p iris-mpc-bins --release --bin rerandomize-db --bin rerandomize-check --bin seed-v2-dbs
+
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=build-app /src/iris-mpc/target/release/rerandomize-db  /bin/rerandomize-db
+COPY --from=build-app /src/iris-mpc/target/release/seed-v2-dbs /bin/seed-v2-dbs
+
+USER 65534
+ENTRYPOINT ["/bin/rerandomize-db"]

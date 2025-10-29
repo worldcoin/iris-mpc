@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use iris_mpc_common::id::PartyID;
 use std::{
     fmt::{self, Display, Formatter},
@@ -227,4 +227,87 @@ pub struct ReShareServerConfig {
 
     #[clap(long, default_value = "3000")]
     pub healthcheck_port: usize,
+}
+
+#[derive(Parser)]
+pub struct ReRandomizeDbConfig {
+    #[clap(subcommand)]
+    pub command: ReRandomizeDbSubCommand,
+}
+
+#[derive(Subcommand)]
+pub enum ReRandomizeDbSubCommand {
+    KeyGen(KeyGenConfig),
+    RerandomizeDb(ReRandomizeConfig),
+    KeyCleanup(KeyCleanupConfig),
+}
+
+#[derive(Args)]
+pub struct ReRandomizeConfig {
+    /// The 0-indexed party ID of the server party
+    #[clap(long, env = "PARTY_ID")]
+    pub party_id: u8,
+
+    /// The DB connection URL to load iris codes from
+    #[clap(long, env = "DB_URL_SOURCE")]
+    pub source_db_url: String,
+
+    /// The environment in which the rerandomization protocol is being run (used to determine secrets to load from SM)
+    #[clap(long, env = "ENVIRONMENT")]
+    pub env: String,
+
+    /// The base URL where the tripartite ECDH public keys are hosted
+    #[clap(long, env = "PUBLIC_KEY_BASE_URL")]
+    pub public_key_base_url: String,
+
+    /// The name of the S3 bucket where the tripartite ECDH public keys are stored (used for local testing)
+    #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
+    pub public_key_bucket_name: String,
+
+    /// The DB connection URL to store rerandomized iris codes to
+    #[clap(long, env = "DB_URL_DEST")]
+    pub dest_db_url: String,
+
+    #[clap(long, env = "SCHEMA_NAME_SOURCE")]
+    pub source_schema_name: String,
+
+    #[clap(long, env = "SCHEMA_NAME_DEST")]
+    pub dest_schema_name: String,
+
+    #[clap(long, default_value = "3000", env = "HEALTHCHECK_PORT")]
+    pub healthcheck_port: usize,
+
+    #[clap(long, default_value = "8", env = "NUM_TASKS")]
+    pub num_tasks: usize,
+
+    #[clap(long, default_value = "1000", env = "CHUNK_SIZE")]
+    pub chunk_size: usize,
+
+    #[clap(long, default_value = "1", env = "RANGE_MIN")]
+    pub range_min: usize,
+
+    #[clap(long, default_value = "9223372036854775807", env = "RANGE_MAX")]
+    pub range_max_inclusive: usize,
+}
+
+#[derive(Args)]
+pub struct KeyGenConfig {
+    /// The 0-indexed party ID of the server party
+    #[clap(long, env = "PARTY_ID")]
+    pub party_id: u8,
+
+    #[clap(long, env = "ENVIRONMENT")]
+    pub env: String,
+
+    #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
+    pub public_key_bucket_name: String,
+}
+#[derive(Args)]
+pub struct KeyCleanupConfig {
+    /// The 0-indexed party ID of the server party
+    #[clap(long, env = "PARTY_ID")]
+    pub party_id: u8,
+
+    #[clap(long, env = "ENVIRONMENT")]
+    pub env: String,
 }
