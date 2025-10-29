@@ -114,33 +114,19 @@ async fn rerandomize_db_main(config: ReRandomizeConfig) -> Result<()> {
     let private_key = tripartite_dh::PrivateKey::deserialize(&secret_key_bytes)
         .map_err(|_| eyre::eyre!("Failed to parse secret key"))?;
 
-    // Downloading the public keys from S3
+    // Downloading the public keys based on environment
     let next_id = (config.party_id + 1) % 3;
-    let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, next_id);
-    let public_key_next = download_key_from_s3(
-        &config.public_key_bucket_name,
-        &bucket_key_name,
-        &config.public_key_bucket_region,
-        &config.env,
-    )
-    .await?;
+    let public_key_next = download_public_key(&config, next_id).await?;
     let public_key_next =
         tripartite_dh::PublicKeys::deserialize(&STANDARD.decode(public_key_next)?)
-            .map_err(|_| eyre::eyre!("Failed to parse public key from S3"))?;
+            .map_err(|_| eyre::eyre!("Failed to parse public key for party {}", next_id))?;
     let prev_id = (config.party_id + 2) % 3;
-    let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, prev_id);
-    let public_key_prev = download_key_from_s3(
-        &config.public_key_bucket_name,
-        &bucket_key_name,
-        &config.public_key_bucket_region,
-        &config.env,
-    )
-    .await?;
+    let public_key_prev = download_public_key(&config, prev_id).await?;
     let public_key_prev =
         tripartite_dh::PublicKeys::deserialize(&STANDARD.decode(public_key_prev)?)
-            .map_err(|_| eyre::eyre!("Failed to parse public key from S3"))?;
+            .map_err(|_| eyre::eyre!("Failed to parse public key for party {}", prev_id))?;
 
-    tracing::info!("Successfully downloaded keys from S3 and Secrets Manager");
+    tracing::info!("Successfully downloaded keys from configured source and Secrets Manager");
     let shared_secret = private_key.derive_shared_secret(&public_key_next, &public_key_prev);
     let shared_secret_hash = blake3::hash(&shared_secret);
     tracing::info!(
@@ -304,19 +290,39 @@ async fn rerandomize_db(
     Ok(())
 }
 
-async fn download_key_from_s3(
-    bucket: &str,
-    key: &str,
-    region: &str,
-    env: &str,
-) -> Result<String, reqwest::Error> {
-    print!("Downloading key from S3 bucket: {} key: {}", bucket, key);
-    let s3_url = if env == "testing" {
-        format!("http://localhost:4566/{}/{}", bucket, key)
+async fn download_public_key(config: &ReRandomizeConfig, party_id: u8) -> Result<String> {
+    if config.env == "testing" {
+        if config.public_key_bucket_name.trim().is_empty() {
+            return Err(eyre::eyre!(
+                "PUBLIC_KEY_BUCKET_NAME must be provided when ENVIRONMENT=testing"
+            ));
+        }
+        download_public_key_from_localstack(&config.public_key_bucket_name, party_id).await
     } else {
-        format!("https://{}.s3.{}.amazonaws.com/{}", bucket, region, key)
-    };
+        if config.public_key_base_url.trim().is_empty() {
+            return Err(eyre::eyre!(
+                "PUBLIC_KEY_BASE_URL must be provided when ENVIRONMENT is not testing"
+            ));
+        }
+        download_public_key_from_http(&config.public_key_base_url, party_id).await
+    }
+}
+
+async fn download_public_key_from_http(base_url: &str, party_id: u8) -> Result<String> {
+    let normalized = base_url.trim_end_matches('/');
+    let normalized = normalized.trim_end_matches('-');
+    let request_url = format!("{}-{}", normalized, party_id);
+    tracing::info!("Downloading public key from {}", request_url);
     let client = reqwest::Client::new();
-    let response = client.get(&s3_url).send().await?.text().await?;
+    let response = client.get(&request_url).send().await?.text().await?;
+    Ok(response)
+}
+
+async fn download_public_key_from_localstack(bucket: &str, party_id: u8) -> Result<String> {
+    let key = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, party_id);
+    let request_url = format!("http://localhost:4566/{}/{}", bucket, key);
+    tracing::info!("Downloading public key from localstack {}", request_url);
+    let client = reqwest::Client::new();
+    let response = client.get(&request_url).send().await?.text().await?;
     Ok(response)
 }

@@ -256,11 +256,15 @@ pub struct ReRandomizeConfig {
     #[clap(long, env = "ENVIRONMENT")]
     pub env: String,
 
-    /// The name of the S3 bucket where the tripartite ECDH public keys are stored
+    /// The base URL where the tripartite ECDH public keys are hosted
+    #[clap(long, env = "PUBLIC_KEY_BASE_URL")]
+    pub public_key_base_url: String,
+
+    /// The name of the S3 bucket where the tripartite ECDH public keys are stored (used for local testing)
     #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
     pub public_key_bucket_name: String,
 
-    /// The region of the S3 bucket where the tripartite ECDH public keys are stored
+    /// The region of the S3 bucket where the tripartite ECDH public keys are stored (used for local testing)
     #[clap(long, env = "PUBLIC_KEY_BUCKET_REGION")]
     pub public_key_bucket_region: String,
 
