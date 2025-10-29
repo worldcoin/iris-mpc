@@ -82,44 +82,101 @@ impl Prf {
             }
         }
     }
+
+    pub fn gen_permutation(&mut self, size: u32) -> Result<Vec<u32>> {
+        let mut perm: Vec<u32> = (0..size).collect();
+        for i in 1..size {
+            let j = self.gen_u32_mod(i + 1)?;
+            perm.swap(i as usize, j as usize);
+        }
+        Ok(perm)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use statrs::distribution::{ChiSquared, ContinuousCDF};
+
     use super::*;
 
-    fn chi_statistics(observed: &[u32], expected: u32) -> f64 {
+    // Chi-square test for uniformity with the significance level = 10^-6
+    fn chi_squared_test(observed: &[u32], expected: u32) -> Result<bool> {
+        if observed.len() < 2 {
+            eyre::bail!("Need at least two bins for chi-squared test");
+        }
+        let degrees_of_freedom = observed.len() - 1;
         let expected_f = expected as f64;
-        observed
+        let chi2: f64 = observed
             .iter()
             .map(|o| {
                 let diff = *o as f64 - expected_f;
                 diff * diff / expected_f
             })
-            .sum()
+            .sum();
+
+        // Significance level
+        let alpha = 1e-6;
+        let chi_squared_dist = ChiSquared::new(degrees_of_freedom as f64)?;
+        let critical_value = chi_squared_dist.inverse_cdf(1.0 - alpha);
+
+        Ok(chi2 < critical_value)
     }
 
     #[test]
-    fn test_prf_gen_u32_mod() -> Result<()> {
+    fn test_gen_u32_mod() -> Result<()> {
         let mut prf = Prf::default();
 
-        let modulus = 100_u32;
-        let mut counters = vec![0_u32; modulus as usize];
+        // Expected count for values in each bin
         let expected = 1000;
-        let num_samples = modulus * expected;
-        for _ in 0..num_samples {
-            let v = prf.gen_u32_mod(modulus)?;
-            counters[v as usize] += 1;
-        }
 
-        // Chi-square test for uniformity with the following parameters:
-        // - Degrees of freedom = modulus - 1 = 99
-        // - Significance level = 0.001
-        // Critical value is taken from chi-square distribution table here:
-        // https://www.itl.nist.gov/div898/handbook/eda/section3/eda3674.htm
-        let chi2 = chi_statistics(&counters, expected);
-        eprintln!("Chi-square statistic: {}", chi2);
-        assert!(chi2 < 149.449);
+        let mut helper = |modulus: u32| -> Result<()> {
+            let mut counters = vec![0_u32; modulus as usize];
+            let num_samples = modulus * expected;
+            for _ in 0..num_samples {
+                let v = prf.gen_u32_mod(modulus)?;
+                counters[v as usize] += 1;
+            }
+
+            assert!(chi_squared_test(&counters, expected)?);
+
+            Ok(())
+        };
+        helper(2)?;
+        helper(7)?;
+        helper(101)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gen_permutation() -> Result<()> {
+        let mut prf = Prf::default();
+        // Expected count for each permutation
+        let expected = 100;
+
+        let mut helper = |size: u32| -> Result<()> {
+            let num_bins: u32 = (2..=size).product();
+            let num_samples = num_bins * expected;
+
+            let mut perm_stats = HashMap::new();
+            for _ in 0..num_samples {
+                let perm = prf.gen_permutation(size)?;
+                *perm_stats.entry(perm).or_insert(0_u32) += 1;
+            }
+
+            // Check that all permutations have been generated.
+            assert_eq!(perm_stats.len() as u32, num_bins);
+
+            let counters: Vec<u32> = perm_stats.values().cloned().collect();
+            assert!(chi_squared_test(&counters, expected)?);
+
+            Ok(())
+        };
+        helper(2)?;
+        helper(4)?;
+        helper(5)?;
 
         Ok(())
     }
