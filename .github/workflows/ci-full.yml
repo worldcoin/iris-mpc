@@ -13,7 +13,7 @@ concurrency:
 jobs:
   # Build job - creates all artifacts including tests, libs, bins, benchmarks, examples
   build-all:
-    timeout-minutes: 20
+    timeout-minutes: 40
     runs-on:
       labels: ubuntu-22.04-16core
     outputs:
@@ -55,16 +55,25 @@ jobs:
           restore-keys: |
             rust-build-${{ runner.os }}-
 
-      - name: Set up Rust
+      - name: Install Rust
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
-          components: clippy, rustfmt
+        run: rustup toolchain install 1.85.0
+
+      - name: Set Rust  as default
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: rustup default 1.85.0
+      
+      - name: Install Rustfmt for formatting
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: rustup component add rustfmt
 
       - name: Run cargo fmt
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo fmt -- --check
+
+      - name: Install Rust clippy for checking clippy errors
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: rustup component add clippy
 
       - name: Run cargo clippy
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -179,11 +188,11 @@ jobs:
           restore-keys: |
             rust-build-${{ runner.os }}-
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.85.0
-          components: clippy, rustfmt
+      - name: Install Rust
+        run: rustup toolchain install 1.85.0
+
+      - name: Set Rust  as default
+        run: rustup default 1.85.0
 
       - name: Download build artifacts
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
