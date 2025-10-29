@@ -15,7 +15,7 @@ jobs:
   build-all:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-16core
+      labels: ubuntu-latest
     outputs:
       src_any_changed: ${{ steps.changed-files-yaml.outputs.src_any_changed }}
     steps:
@@ -149,7 +149,7 @@ jobs:
   unit-tests:
     timeout-minutes: 20
     runs-on:
-      labels: ubuntu-22.04-16core
+      labels: ubuntu-latest
     needs: [build-all]
     if: needs.build-all.outputs.src_any_changed == 'true'
     permissions:
@@ -228,7 +228,7 @@ jobs:
   cpu-integration-tests:
     timeout-minutes: 20
     runs-on:
-      labels: ubuntu-22.04-16core
+      labels: ubuntu-latest
     needs: [build-all]
     if: needs.build-all.outputs.src_any_changed == 'true'
     permissions:
@@ -279,7 +279,7 @@ jobs:
   cpu-genesis-e2e-tests:
     timeout-minutes: 20
     runs-on:
-      labels: ubuntu-22.04-16core
+      labels: ubuntu-latest
     needs: [build-all]
     if: needs.build-all.outputs.src_any_changed == 'true'
     permissions:
