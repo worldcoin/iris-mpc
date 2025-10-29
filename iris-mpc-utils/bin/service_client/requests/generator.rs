@@ -23,7 +23,7 @@ impl Generator {
     }
 }
 
-/// Encapsulates options for generating SMPC service requests.
+/// Options for generating SMPC service requests.
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Number of request batches to dispatch.
@@ -34,18 +34,20 @@ pub struct Options {
 }
 
 impl Options {
-    fn batch_count(&self) -> &usize {
-        &self.batch_count
-    }
-
-    fn batch_size_max(&self) -> &usize {
-        &self.batch_size_max
-    }
-
     pub fn new(batch_count: usize, batch_size_max: usize) -> Self {
         Self {
             batch_count,
             batch_size_max,
         }
+    }
+}
+
+impl BatchIterator for Generator {
+    fn batch_count(&self) -> usize {
+        self.batch_count
+    }
+
+    async fn next_batch(&mut self) -> Option<Batch> {
+        unimplemented!()
     }
 }

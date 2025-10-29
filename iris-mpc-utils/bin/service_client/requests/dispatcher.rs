@@ -1,3 +1,5 @@
+use super::types::Batch;
+
 /// Encapsulates logic for dispatching SMPC service requests.
 #[derive(Debug)]
 pub struct Dispatcher {
@@ -13,9 +15,13 @@ impl Dispatcher {
     pub fn new(options: Options) -> Self {
         Self { options }
     }
+
+    pub async fn dispatch_batch(&self, _batch: Batch) {
+        unimplemented!()
+    }
 }
 
-/// Encapsulates options for dispatching SMPC service requests.
+/// Options for dispatching SMPC service requests.
 #[derive(Debug, Clone)]
 pub struct Options {}
 

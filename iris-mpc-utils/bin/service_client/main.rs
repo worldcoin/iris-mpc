@@ -12,6 +12,8 @@ use iris_mpc_utils::{
     types::NetConfig,
 };
 
+use requests::BatchIterator;
+
 mod requests;
 mod responses;
 
@@ -20,10 +22,10 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     println!("Running with options: {:?}", &options,);
 
-    let requests_generator = requests::Generator::from(&options);
-    println!("{:?}", requests_generator);
     let requests_dispatcher = requests::Dispatcher::from(&options);
-    println!("{:?}", requests_dispatcher);
+    while let Some(request_batch) = requests::Generator::from(&options).next_batch().await {
+        requests_dispatcher.dispatch_batch(request_batch).await;
+    }
 
     Ok(())
 }
