@@ -15,6 +15,19 @@ use iris_mpc_utils::{
 mod requests;
 mod responses;
 
+#[tokio::main]
+pub async fn main() -> Result<()> {
+    let options = CliOptions::parse();
+    println!("Running with options: {:?}", &options,);
+
+    let requests_generator = requests::Generator::from(&options);
+    println!("{:?}", requests_generator);
+    let requests_dispatcher = requests::Dispatcher::from(&options);
+    println!("{:?}", requests_dispatcher);
+
+    Ok(())
+}
+
 #[derive(Debug, Parser, Clone)]
 struct CliOptions {
     /// Number of request batches to dispatch.
@@ -39,9 +52,6 @@ struct CliOptions {
 }
 
 impl CliOptions {
-    const DEFAULT_NODE_CONFIG_KIND: &str = NODE_CONFIG_KIND_MAIN;
-    const DEFAULT_NODE_CONFIG_IDX: usize = 0;
-
     fn batch_count(&self) -> &usize {
         &self.batch_count
     }
@@ -68,13 +78,9 @@ impl CliOptions {
         fn read_config(party_idx: usize, path: &Option<String>) -> NodeConfig {
             let path_to_config = match path {
                 Some(path) => path.clone(),
-                None => get_path_to_local_node_config(
-                    CliOptions::DEFAULT_NODE_CONFIG_KIND,
-                    CliOptions::DEFAULT_NODE_CONFIG_IDX,
-                    &party_idx,
-                )
-                .to_string_lossy()
-                .to_string(),
+                None => get_path_to_local_node_config(NODE_CONFIG_KIND_MAIN, 0, &party_idx)
+                    .to_string_lossy()
+                    .to_string(),
             };
 
             read_node_config(Path::new(&path_to_config)).unwrap()
@@ -88,13 +94,26 @@ impl CliOptions {
     }
 }
 
-#[tokio::main]
-pub async fn main() -> Result<()> {
-    let options = CliOptions::parse();
-    println!("Running with options: {:?}", &options,);
+impl From<&CliOptions> for requests::Dispatcher {
+    fn from(options: &CliOptions) -> Self {
+        Self::new(requests::DispatcherOptions::from(options))
+    }
+}
 
-    let generator = requests::generator::Generator::from(&options);
-    println!("{:?}", generator);
+impl From<&CliOptions> for requests::DispatcherOptions {
+    fn from(_options: &CliOptions) -> Self {
+        Self::new()
+    }
+}
 
-    Ok(())
+impl From<&CliOptions> for requests::Generator {
+    fn from(options: &CliOptions) -> Self {
+        Self::new(requests::GeneratorOptions::from(options))
+    }
+}
+
+impl From<&CliOptions> for requests::GeneratorOptions {
+    fn from(options: &CliOptions) -> Self {
+        Self::new(*options.batch_count(), *options.batch_size_max())
+    }
 }

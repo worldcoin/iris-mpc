@@ -1,5 +1,3 @@
-use super::super::CliOptions;
-
 /// Encapsulates logic for dispatching SMPC service requests.
 #[derive(Debug)]
 pub struct Dispatcher {
@@ -11,22 +9,18 @@ impl Dispatcher {
     pub fn options(&self) -> &Options {
         &self.options
     }
-}
 
-impl From<&CliOptions> for Dispatcher {
-    fn from(options: &CliOptions) -> Self {
-        Self {
-            options: Options::from(options),
-        }
+    pub fn new(options: Options) -> Self {
+        Self { options }
     }
 }
 
 /// Encapsulates options for dispatching SMPC service requests.
 #[derive(Debug, Clone)]
-struct Options {}
+pub struct Options {}
 
-impl From<&CliOptions> for Options {
-    fn from(_options: &CliOptions) -> Self {
+impl Options {
+    pub fn new() -> Self {
         Self {}
     }
 }

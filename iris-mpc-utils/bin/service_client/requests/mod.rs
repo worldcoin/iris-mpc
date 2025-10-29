@@ -1,3 +1,6 @@
 mod dispatcher;
-pub mod generator;
+mod generator;
 mod types;
+
+pub use dispatcher::{Dispatcher, Options as DispatcherOptions};
+pub use generator::{Generator, Options as GeneratorOptions};

@@ -1,5 +1,4 @@
-use super::super::CliOptions;
-use super::types::Batch;
+use super::types::{Batch, BatchIterator};
 
 /// Encapsulates logic for generating SMPC service requests.
 #[derive(Debug)]
@@ -15,20 +14,18 @@ impl Generator {
     pub fn options(&self) -> &Options {
         &self.options
     }
-}
 
-impl From<&CliOptions> for Generator {
-    fn from(options: &CliOptions) -> Self {
+    pub fn new(options: Options) -> Self {
         Self {
             batch_count: 0,
-            options: Options::from(options),
+            options: options.to_owned(),
         }
     }
 }
 
 /// Encapsulates options for generating SMPC service requests.
 #[derive(Debug, Clone)]
-struct Options {
+pub struct Options {
     /// Number of request batches to dispatch.
     batch_count: usize,
 
@@ -36,11 +33,19 @@ struct Options {
     batch_size_max: usize,
 }
 
-impl From<&CliOptions> for Options {
-    fn from(options: &CliOptions) -> Self {
+impl Options {
+    fn batch_count(&self) -> &usize {
+        &self.batch_count
+    }
+
+    fn batch_size_max(&self) -> &usize {
+        &self.batch_size_max
+    }
+
+    pub fn new(batch_count: usize, batch_size_max: usize) -> Self {
         Self {
-            batch_count: *options.batch_count(),
-            batch_size_max: *options.batch_size_max(),
+            batch_count,
+            batch_size_max,
         }
     }
 }
