@@ -33,7 +33,7 @@ pub mod handle;
 pub mod networking;
 pub mod session;
 
-use crate::network::tcp::networking::client::{BoxTcpClient, BoxTlsClient};
+use crate::network::tcp::networking::client::BoxTcpClient;
 use crate::network::tcp::networking::server::{BoxTcpServer, TlsServer};
 use data::*;
 
@@ -157,33 +157,26 @@ pub async fn build_network_handle(
         );
 
         let root_certs = tls.clone().root_certs;
-        if tls.with_nginx_sidecar {
-            tracing::info!("Running in client-only TLS mode.");
 
-            let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(&root_certs).await?);
-            build_network_handle!(listener, connector)
-        } else {
-            tracing::info!("Running in full app TLS mode.");
-            if tls.private_key.is_none() || tls.leaf_cert.is_none() {
-                return Err(eyre::eyre!(
-                    "TLS configuration is required for this operation"
-                ));
-            }
-            let private_key = tls
-                .private_key
-                .as_ref()
-                .ok_or(eyre::eyre!("Private key is required for TLS"))?;
-
-            let leaf_cert = tls
-                .leaf_cert
-                .as_ref()
-                .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
-
-            let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
-            let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
-            build_network_handle!(listener, connector)
+        tracing::info!("Running in full app TLS mode.");
+        if tls.private_key.is_none() || tls.leaf_cert.is_none() {
+            return Err(eyre::eyre!(
+                "TLS configuration is required for this operation"
+            ));
         }
+        let private_key = tls
+            .private_key
+            .as_ref()
+            .ok_or(eyre::eyre!("Private key is required for TLS"))?;
+
+        let leaf_cert = tls
+            .leaf_cert
+            .as_ref()
+            .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
+
+        let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
+        let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
+        build_network_handle!(listener, connector)
     } else {
         tracing::info!(
             "Building NetworkHandle, without TLS, from config: {:?}",

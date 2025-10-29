@@ -58,7 +58,7 @@ This will output 2 keys ARNs. You will use them in a later step.
 Here, the seed-v2-dbs binary just creates fully replicated DB for 3 parties, in DBs with ports 6200,6201,6202. Additionally, there is also another DB at 6203, which we will use as a target for the reshare protocol to fill into.
 
 ```shell
-cargo run --release --bin seed-v2-dbs -- --db-url-party1 postgres://postgres:postgres@localhost:6200 --db-url-party2 postgres://postgres:postgres@localhost:6201 --db-url-party3 postgres://postgres:postgres@localhost:6202 --schema-name-party1 SMPC_testing_0 --schema-name-party2 SMPC_testing_1 --schema-name-party3 SMPC_testing_2 --fill-to 10000 --batch-size 100
+cargo run --release -p iris-mpc-bins --bin seed-v2-dbs -- --db-url-party1 postgres://postgres:postgres@localhost:6200 --db-url-party2 postgres://postgres:postgres@localhost:6201 --db-url-party3 postgres://postgres:postgres@localhost:6202 --schema-name-party1 SMPC_testing_0 --schema-name-party2 SMPC_testing_1 --schema-name-party3 SMPC_testing_2 --fill-to 10000 --batch-size 100
 ```
 
 Short rundown of the parameters:
@@ -76,12 +76,12 @@ Short rundown of the parameters:
 
 ```bash
 cd iris-mpc-upgrade/src/bin
-cargo run --release --bin reshare-client -- --party-id 0 --other-party-id 1 --target-party-id 2 --server-url https://upgrade-left.1.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
+cargo run --release -p iris-mpc-bins --bin reshare-client -- --party-id 0 --other-party-id 1 --target-party-id 2 --server-url https://upgrade-left.1.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
 ```
 
 ```bash
 cd iris-mpc-upgrade/src/bin
-cargo run --release --bin reshare-client -- --party-id 1 --other-party-id 0 --target-party-id 2 --server-url https://upgrade-left.2.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
+cargo run --release -p iris-mpc-bins --bin reshare-client -- --party-id 1 --other-party-id 0 --target-party-id 2 --server-url https://upgrade-left.2.smpcv2.stage.worldcoin.dev:6443 --environment testing --db-url postgres://postgres:postgres@localhost:6200 --db-start 1 --db-end 10001 --batch-size 100 --my-kms-key-arn <kms_key_arn-1> --other-kms-key-arn <kms_key_arn-2> --reshare-run-session-id test --ca-root-file-path nginx/cert/ca.txt
 ```
 
 Short rundown of the parameters:

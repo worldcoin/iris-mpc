@@ -830,7 +830,7 @@ async fn main() -> Result<()> {
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
     println!("Init tracing");
-    let _tracing_shutdown_handle = match initialize_tracing(&config) {
+    let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
         Ok(handle) => handle,
         Err(e) => {
             eprintln!("Failed to initialize tracing: {:?}", e);

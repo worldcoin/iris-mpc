@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04
+FROM --platform=linux/amd64 public.ecr.aws/ubuntu/ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
@@ -24,7 +24,7 @@ ENV CARGO_HOME "/root/.cargo"
 RUN rustup toolchain install 1.85.0
 RUN rustup default 1.85.0
 RUN rustup component add cargo
-RUN cargo install cargo-build-deps && cargo install cargo-edit --version 0.13.6
+RUN cargo install cargo-build-deps && cargo install cargo-edit --version 0.13.6 --locked
 
 COPY . .
 
