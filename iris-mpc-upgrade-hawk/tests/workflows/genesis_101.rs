@@ -1,8 +1,11 @@
-use crate::utils::{
-    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-    mpc_node::{DbAssertions, MpcNodes},
-    plaintext_genesis::PlaintextGenesis,
-    HawkConfigs, TestRun, TestRunContextInfo,
+use crate::{
+    join_runners,
+    utils::{
+        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+        mpc_node::{DbAssertions, MpcNodes},
+        plaintext_genesis::PlaintextGenesis,
+        HawkConfigs, TestRun, TestRunContextInfo,
+    },
 };
 use eyre::Result;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
@@ -41,15 +44,11 @@ impl TestRun for Test {
                 .await
             });
         }
-        join_set.join_all().await;
-
-        // hack to get around an "address already in use" error, emitted by HawkHandle
-        let service_ports = vec!["4003".into(), "4004".into(), "4005".into()];
+        join_runners!(join_set);
 
         let mut join_set = JoinSet::new();
-        for mut config in self.configs.iter().cloned() {
+        for config in self.configs.iter().cloned() {
             let genesis_args = DEFAULT_GENESIS_ARGS;
-            config.service_ports = service_ports.clone();
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
@@ -64,7 +63,7 @@ impl TestRun for Test {
                 .await
             });
         }
-        join_set.join_all().await;
+        join_runners!(join_set);
 
         Ok(())
     }

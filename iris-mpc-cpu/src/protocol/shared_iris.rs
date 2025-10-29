@@ -1,3 +1,4 @@
+use crate::utils::constants::N_PARTIES;
 use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -16,6 +17,12 @@ pub struct GaloisRingSharedIris {
     pub code: GaloisRingIrisCodeShare,
     pub mask: GaloisRingTrimmedMaskCodeShare,
 }
+
+// Pair of Iris shares associated with left/right eyes.
+pub type GaloisRingSharedIrisPair = (GaloisRingSharedIris, GaloisRingSharedIris);
+
+// Set of pairs of Iris shares associated with left/right eyes.
+pub type GaloisRingSharedIrisPairSet = [GaloisRingSharedIrisPair; N_PARTIES];
 
 impl GaloisRingSharedIris {
     /// Empty code and mask share. party_id is 0-based.

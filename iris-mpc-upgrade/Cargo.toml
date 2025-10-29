@@ -18,12 +18,10 @@ iris-mpc-store = { path = "../iris-mpc-store" }
 clap = { workspace = true, features = ["env"] }
 eyre.workspace = true
 bytemuck.workspace = true
-sqlx.workspace = true
 serde.workspace = true
 serde-big-array = "0.5"
 tracing.workspace = true
 itertools.workspace = true
-futures.workspace = true
 rand.workspace = true
 rand_chacha = "0.3"
 tokio.workspace = true
@@ -35,7 +33,7 @@ tonic = { version = "0.12.3", features = [
     "transport",
 ] }
 prost = "0.13.3"
-sha2 = "0.10.8"
+sha2.workspace = true
 thiserror.workspace = true
 hkdf = "0.12.4"
 rustls = { version = "0.23.16", features = ["ring"] }

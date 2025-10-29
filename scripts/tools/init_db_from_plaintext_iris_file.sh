@@ -44,7 +44,7 @@ function get_default_path_to_iris_plaintext() {
     here="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
     root=$( dirname "$( dirname "$here" )" )
 
-    echo "$root/iris-mpc-cpu/data/store.ndjson"
+    echo "$root/iris-mpc-bins/data/store.ndjson"
 }
 
 # Returns default path to prng state file utilised between runs.
@@ -59,7 +59,7 @@ if [[ "${SMPC_INIT_SKIP_HNSW_GRAPH}" == "true" ]]; then
 fi
 
 
-cargo run --release --bin init-test-dbs -- \
+cargo run --release -p iris-mpc-bins --bin init-test-dbs -- \
     --db-schema-party1 \
         "${SMPC_INIT_DB_SCHEMA_PARTY_1:-$(get_default_db_schema 1)}" \
     --db-schema-party2 \

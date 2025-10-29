@@ -80,7 +80,7 @@ jobs:
     steps:
       - name: Install Foundry
         # https://github.com/foundry-rs/foundry-toolchain/releases/tag/v1.4.0
-        uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de
+        uses: foundry-rs/foundry-toolchain@50d5a8956f2e319df19e6b57539d7e2acb9f8c1e
 
       - name: Sign the image digest
         # TODO: continue-on-error is only for the PoC phase, remove when use mainnet
