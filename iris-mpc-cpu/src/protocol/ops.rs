@@ -28,7 +28,7 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use std::{array, ops::Not, time::Instant};
+use std::{array, cmp::Ordering, ops::Not, time::Instant};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;

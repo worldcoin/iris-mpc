@@ -191,7 +191,7 @@ impl Aby3Store {
             return Ok(distances[0].clone());
         }
         let mut res = distances.to_vec();
-        while res.len() > 1 {
+        while res.len() > 16 {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             // create pairs from the remaining distances
@@ -203,7 +203,10 @@ impl Aby3Store {
                 res.push(last_distance.clone());
             }
         }
-        res.pop().ok_or_eyre("Cannot compute minimum of empty list")
+        min_round_robin_batch(&mut self.session, &res, res.len())
+            .await?
+            .pop()
+            .ok_or_eyre("Should not be here: distances are empty")
     }
 
     /// Obliviously computes the minimum distance and the corresponding vector id of a given array of pairs (id, distance).
