@@ -1,0 +1,69 @@
+FROM public.ecr.aws/docker/library/rust:1.85-slim-bullseye AS hawk-base
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    protobuf-compiler \
+    wget \
+    vim \
+    ca-certificates \ 
+    awscli \ 
+    unzip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /
+
+RUN useradd -m -u 1000 -s /bin/bash runner
+USER runner
+
+# ------
+
+FROM hawk-base as hawk-certs
+
+RUN curl -o /usr/local/share/ca-certificates/ca_party_dev_0.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_dev_1.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_dev_2.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_2.pem
+
+RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_2.pem
+
+RUN curl -o /usr/local/share/ca-certificates/ca_party_prod_0.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_prod_1.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_prod_2.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_2.pem
+
+COPY certs /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
+# ------
+
+FROM hawk-base as hawk-e2e
+
+WORKDIR /src/iris-mpc
+COPY . .
+WORKDIR /
+
+# ------
+
+FROM hawk-certs as hawk-dev
+
+WORKDIR /src/iris-mpc
+
+COPY target/release/iris-mpc-hawk /bin/iris-mpc-hawk
+COPY target/release/key-manager /bin/key-manager
+COPY target/release/client /bin/client
+COPY target/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
+
+COPY scripts/run-server-docker.sh .
+COPY scripts/run-client-docker.sh .
+
+WORKDIR /

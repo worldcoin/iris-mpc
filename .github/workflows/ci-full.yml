@@ -86,6 +86,65 @@ jobs:
           path: |
             target/release/*
           retention-days: 1
+      
+      - name: Detect Dockerfile changes
+        id: changed-dockerfile
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62
+        with:
+          files: |
+            Dockerfile.hnsw.test.e2e
+      
+      - name: Set up QEMU
+        if: steps.changed-dockerfile.outputs.any_changed == 'true'
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+
+      - name: Set up Docker Buildx
+        if: steps.changed-dockerfile.outputs.any_changed == 'true'
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+        with:
+          registry-type: public
+
+      - name: Build Docker image hawk-server-local
+        if: steps.changed-dockerfile.outputs.any_changed == 'true'
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        with:
+          context: .
+          file: Dockerfile.hawk.multistage
+          platforms: linux/amd64
+          push: true
+          tags: hawk-server-local-build:latest
+          target: hawk-dev
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Build Docker image hnsw-tests-e2e-local
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        with:
+          context: .
+          file: Dockerfile.hawk.multistage
+          platforms: linux/amd64
+          load: true
+          tags: hnsw-tests-e2e-local:latest
+          target: hawk-e2e
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # Unit test job
   unit-tests:
@@ -203,42 +262,6 @@ jobs:
       - name: Restore build artifacts
         run: mkdir -p target/release && cp -r build-artifacts/* target/release/
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE }}
-          aws-region: us-east-1
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
-        with:
-          registry-type: public
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and export Docker image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
-        with:
-          context: .
-          file: Dockerfile.dev.hawk
-          platforms: linux/amd64
-          load: true
-          tags: hawk-server-local-build:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
         env:
@@ -289,42 +312,6 @@ jobs:
 
       - name: Restore build artifacts
         run: mkdir -p target/release && cp -r build-artifacts/* target/release/
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE }}
-          aws-region: us-east-1
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
-        with:
-          registry-type: public
-
-      - name: Build and export Docker image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
-        with:
-          context: .
-          file: Dockerfile.hnsw.test.e2e
-          platforms: linux/amd64
-          load: true
-          tags: hnsw-tests-e2e-local:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Show disk space before compose
         run: df -h && docker system df -v
