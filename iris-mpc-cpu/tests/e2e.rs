@@ -164,7 +164,8 @@ async fn e2e_test() -> Result<()> {
 
     let args0 = HawkArgs {
         party_index: 0,
-        addresses,
+        addresses: addresses.clone(),
+        outbound_addrs: addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
         hnsw_param_ef_constr: HNSW_EF_CONSTR,
