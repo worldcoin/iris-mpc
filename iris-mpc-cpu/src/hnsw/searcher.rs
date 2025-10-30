@@ -288,7 +288,8 @@ impl HnswSearcher {
             let distance = store.eval_distance(query, &entry_point).await?;
 
             let mut W = N::new();
-            W.insert(store, entry_point, distance).await?;
+            W.insert_and_retain_k(store, entry_point, distance, None)
+                .await?;
 
             Ok((W, layer + 1))
         } else {
@@ -324,7 +325,7 @@ impl HnswSearcher {
 
                 W.clear();
                 let (id, dist) = nearest;
-                W.insert(store, id, dist).await?;
+                W.insert_and_retain_k(store, id, dist, None).await?;
             }
             2..32 => {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
@@ -404,10 +405,9 @@ impl HnswSearcher {
                     continue;
                 }
 
-                W.insert(store, e, eq)
+                W.insert_and_retain_k(store, e, eq, Some(ef))
                     .instrument(insert_span.clone())
                     .await?;
-                W.retain_k_nearest(store, ef).await?;
 
                 // fq stays the furthest distance in W
                 (_, fq) = W
@@ -567,7 +567,7 @@ impl HnswSearcher {
             if W.len() < ef && !c_links.is_empty() {
                 let n_insert = c_links.len().min(ef - W.len());
                 let batch: Vec<_> = c_links.drain(0..n_insert).collect();
-                W.insert_batch(store, &batch)
+                W.insert_batch_and_retain_k(store, &batch, Some(ef))
                     .instrument(insert_span.clone())
                     .await?;
             }
@@ -638,10 +638,9 @@ impl HnswSearcher {
                 // Process pending insertions queue if there are enough elements
                 while insertion_queue.len() >= insertion_batch_size {
                     let batch: Vec<_> = insertion_queue.drain(0..insertion_batch_size).collect();
-                    W.insert_batch(store, &batch)
+                    W.insert_batch_and_retain_k(store, &batch, Some(ef))
                         .instrument(insert_span.clone())
                         .await?;
-                    W.retain_k_nearest(store, ef).await?;
                 }
             }
 
@@ -695,10 +694,9 @@ impl HnswSearcher {
 
                 // Step 2: insert new neighbors which have passed the filtering step
                 for chunk in insertion_queue.chunks(insertion_batch_size) {
-                    W.insert_batch(store, chunk)
+                    W.insert_batch_and_retain_k(store, chunk, Some(ef))
                         .instrument(insert_span.clone())
                         .await?;
-                    W.retain_k_nearest(store, ef).await?;
                 }
                 insertion_queue.clear();
 
@@ -826,7 +824,7 @@ impl HnswSearcher {
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
         }
 
-        W.retain_k_nearest(store, k).await?;
+        W.insert_batch_and_retain_k(store, &[], Some(k));
         Ok(W)
     }
 
@@ -937,7 +935,9 @@ impl HnswSearcher {
         // Truncate search results to size M before insertion
         for (lc, l_links) in links.iter_mut().enumerate() {
             let M = self.params.get_M(lc);
-            l_links.retain_k_nearest(store, M).await?;
+            l_links
+                .insert_batch_and_retain_k(store, &[], Some(M))
+                .await?;
         }
 
         struct NeighborUpdate<Query, Vector, Distance> {

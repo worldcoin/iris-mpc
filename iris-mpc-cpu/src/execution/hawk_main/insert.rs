@@ -100,7 +100,9 @@ async fn add_batch_neighbors<V: VectorStore>(
                 .map(|(id, dist)| (id, dist))
                 .collect_vec();
 
-            bottom_layer.insert_batch(&mut *store, &ids_dists).await?;
+            bottom_layer
+                .insert_batch_and_retain_k(&mut *store, &ids_dists, None)
+                .await?;
         }
     }
 

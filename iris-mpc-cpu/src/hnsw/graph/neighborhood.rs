@@ -45,23 +45,29 @@ pub trait Neighborhood: Clone {
     /// Generally, `retain_k_nearest` needs to be called after an insert to ensure
     /// query methods return correct values, but specific implementations may
     /// offer stronger guarantees.
-    async fn insert<V>(
+    async fn insert_and_retain_k<V>(
         &mut self,
         store: &mut V,
         to: Self::Vector,
         dist: Self::Distance,
+        k: Option<usize>,
     ) -> Result<()>
     where
-        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
+    {
+        self.insert_batch_and_retain_k(store, &[(to, dist)], k)
+            .await
+    }
 
     /// Inserts a batch of elements into the neighborhood.
     /// Generally, `retain_k_nearest` needs to be called after an insert to ensure
     /// query methods return correct values, but specific implementations may
     /// offer stronger guarantees.
-    async fn insert_batch<V>(
+    async fn insert_batch_and_retain_k<V>(
         &mut self,
         store: &mut V,
         vals: &[(Self::Vector, Self::Distance)],
+        k: Option<usize>,
     ) -> Result<()>
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
@@ -83,13 +89,6 @@ pub trait Neighborhood: Clone {
     /// Not guaranteed to function correctly if inserts have taken place
     /// without a `retain_k_nearest` call for some `k`.
     fn get_furthest(&self) -> Option<&(Self::Vector, Self::Distance)>;
-
-    /// Retains the `k` closest nodes in the neighborhood and eliminates the rest
-    /// Additionally, it is guaranteed that the last element in the collection is
-    /// the furthest one (the `k-1`th distance, assuming 0-indexing)
-    async fn retain_k_nearest<V>(&mut self, store: &mut V, k: usize) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
 }
 
 /// A sorted list of edge IDs (without distances).
@@ -230,56 +229,59 @@ where
         self.edges.clear();
     }
 
-    #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn insert<V>(
-        &mut self,
-        store: &mut V,
-        to: Self::Vector,
-        dist: Self::Distance,
-    ) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
-    {
-        {
-            let mut bin_search = BinarySearch {
-                left: 0,
-                right: self.edges.len(),
-            };
-            while let Some(cmp_idx) = bin_search.next() {
-                let res = store.less_than(&dist, &self.edges[cmp_idx].1).await?;
-                bin_search.update(res);
-            }
-            let index_asc = bin_search
-                .result()
-                .ok_or(eyre!("Failed to find insertion index"))?;
-            self.edges.insert(index_asc, (to, dist));
-            Ok(())
-        }
-    }
+    // #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    // async fn insert_and_retain_k<V>(
+    //     &mut self,
+    //     store: &mut V,
+    //     to: Self::Vector,
+    //     dist: Self::Distance,
+    //     k: usize,
+    // ) -> Result<()>
+    // where
+    //     V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
+    // {
+    //     unimplemented!();
+    //     {
+    //         let mut bin_search = BinarySearch {
+    //             left: 0,
+    //             right: self.edges.len(),
+    //         };
+    //         while let Some(cmp_idx) = bin_search.next() {
+    //             let res = store.less_than(&dist, &self.edges[cmp_idx].1).await?;
+    //             bin_search.update(res);
+    //         }
+    //         let index_asc = bin_search
+    //             .result()
+    //             .ok_or(eyre!("Failed to find insertion index"))?;
+    //         self.edges.insert(index_asc, (to, dist));
+    //         self.edges.truncate(k);
+    //         Ok(())
+    //     }
+    // }
 
     /// Insert a collection of `(Vector, Distance)` pairs into the list,
     /// maintaining the ascending order, using an efficient sorting network on
     /// input values.
     // TODO: only append values and move quicksort to `retain_k_nearest`?
-    async fn insert_batch<V>(
+    async fn insert_batch_and_retain_k<V>(
         &mut self,
         store: &mut V,
         vals: &[(Self::Vector, Self::Distance)],
+        k: Option<usize>,
     ) -> Result<()>
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
     {
         debug!(batch_size = vals.len(), "Insert batch into neighborhood");
 
-        if vals.is_empty() {
-            return Ok(());
-        }
-
         // Note that quicksort insert does not suffer from reduced performance
         // for small batch sizes, as the functionality gracefully degrades to
         // the default individual binary insertion procedure as batch size
         // approaches 1.
-        self.quicksort_insert(store, vals).await
+        self.quicksort_insert(store, vals).await?;
+        let k = k.unwrap_or(self.edges.len());
+        self.edges.truncate(k);
+        Ok(())
     }
 
     fn edge_ids(&self) -> SortedEdgeIds<Self::Vector> {
@@ -293,15 +295,6 @@ where
     fn get_furthest(&self) -> Option<&(Self::Vector, Self::Distance)> {
         self.edges.last()
     }
-
-    async fn retain_k_nearest<V>(&mut self, _store: &mut V, k: usize) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
-    {
-        self.edges.truncate(k);
-        Ok(())
-    }
-
     /// Count the neighbors that match according to `store.is_match`.
     /// The nearest `count` elements are matches and the rest are non-matches.
     async fn matches<V>(&self, store: &mut V) -> Result<Vec<(Vector, Distance)>>
@@ -426,26 +419,44 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
         self.edges.clear();
     }
 
-    /// Insert the element `to` with distance `dist` into the list
-    ///
-    /// Calls the `VectorStore` to find the insertion index.
-    #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn insert<V>(&mut self, _store: &mut V, to: Vector, dist: Distance) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
-    {
-        self.edges.push((to, dist));
-        Ok(())
-    }
+    // /// Insert the element `to` with distance `dist` into the list
+    // ///
+    // /// Calls the `VectorStore` to find the insertion index.
+    // #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    // async fn insert_and_retain_k<V>(
+    //     &mut self,
+    //     _store: &mut V,
+    //     to: Vector,
+    //     dist: Distance,
+    //     k: usize,
+    // ) -> Result<()>
+    // where
+    //     V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    // {
+    //     unimplemented!();
+    //     self.edges.push((to, dist));
+    //     Ok(())
+    // }
 
     // / Insert a collection of `(Vector, Distance)` pairs into the list,
-
-    async fn insert_batch<V>(&mut self, _store: &mut V, vals: &[(Vector, Distance)]) -> Result<()>
+    async fn insert_batch_and_retain_k<V>(
+        &mut self,
+        store: &mut V,
+        vals: &[(Vector, Distance)],
+        k: Option<usize>,
+    ) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
         debug!(batch_size = vals.len(), "Insert batch into neighborhood");
         self.edges.extend(vals.to_vec());
+
+        let k = k.unwrap_or(self.edges.len());
+        if k == 0 {
+            self.edges.clear();
+        } else {
+            self.quickselect(store, k).await?;
+        }
         Ok(())
     }
 
@@ -464,22 +475,6 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
 
     fn get_furthest(&self) -> Option<&(Vector, Distance)> {
         self.edges.last()
-    }
-
-    async fn retain_k_nearest<V>(&mut self, store: &mut V, k: usize) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
-    {
-        if self.len() <= k {
-            return Ok(());
-        }
-
-        if k == 0 {
-            self.edges.clear();
-        } else {
-            self.quickselect(store, k).await?;
-        }
-        Ok(())
     }
 
     /// Count the neighbors that match according to `store.is_match`.
@@ -526,7 +521,8 @@ mod tests {
         let vector = store.insert(&iris).await;
         let distance = store.eval_distance(&query, &vector).await?;
 
-        nbhd.insert(store, vector, distance).await?;
+        nbhd.insert_and_retain_k(store, vector, distance, None)
+            .await?;
 
         Ok(())
     }
@@ -544,7 +540,7 @@ mod tests {
             pairs.push((vector, distance));
         }
 
-        nbhd.insert_batch(store, &pairs).await?;
+        nbhd.insert_batch_and_retain_k(store, &pairs, None).await?;
 
         Ok(())
     }
@@ -568,7 +564,8 @@ mod tests {
             Arc::new(query.get_similar_iris(&mut rng, 0.18)),
         )
         .await?;
-        nbhd.retain_k_nearest(&mut store, 2).await?;
+        nbhd.insert_batch_and_retain_k(&mut store, &[], Some(2))
+            .await?;
         assert_eq!(nbhd.len(), 2);
 
         // We should have exactly one match at this point (almost always :))
@@ -587,7 +584,8 @@ mod tests {
         .await?;
         assert_eq!(nbhd.len(), 3);
 
-        nbhd.retain_k_nearest(&mut store, 2).await?;
+        nbhd.insert_batch_and_retain_k(&mut store, &[], Some(2))
+            .await?;
         assert_eq!(nbhd.len(), 2);
 
         // We should have exactly two matches at this point
@@ -598,7 +596,8 @@ mod tests {
         assert_eq!(furthest.0, IrisVectorId::from_serial_id(4));
 
         // This should clear
-        nbhd.retain_k_nearest(&mut store, 0).await?;
+        nbhd.insert_batch_and_retain_k(&mut store, &[], Some(0))
+            .await?;
 
         assert_eq!(nbhd.len(), 0);
         assert!(nbhd.is_empty());
