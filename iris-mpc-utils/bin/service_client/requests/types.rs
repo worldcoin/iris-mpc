@@ -1,22 +1,56 @@
 use std::{fmt, future::Future};
 
+use iris_mpc_common::helpers::smpc_request::UniquenessRequest;
+
 /// A batch of system requests.
 #[derive(Debug)]
 pub struct Batch {
-    /// Ordinal batch identifier assigned by generator.
-    pub batch_id: usize,
+    /// Ordinal batch identifier to distinguish batches.
+    batch_id: usize,
+
+    /// Requests in batch.
+    requests: Vec<Message>,
 }
 
 impl Batch {
-    fn new(batch_id: usize) -> Self {
-        Self { batch_id }
+    pub fn batch_id(&self) -> usize {
+        self.batch_id
+    }
+
+    pub fn requests(&self) -> &Vec<Message> {
+        &self.requests
+    }
+
+    pub fn requests_mut(&mut self) -> &mut Vec<Message> {
+        &mut self.requests
+    }
+
+    pub fn new(batch_id: usize) -> Self {
+        Self {
+            batch_id,
+            requests: Vec::new(),
+        }
     }
 }
 
 impl fmt::Display for Batch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "id={}", self.batch_id)
+        write!(f, "batch-id={}", self.batch_id)
     }
+}
+
+/// The profile of a batch of system requests is related to the type of requests it contains.
+#[derive(Debug, Clone)]
+pub enum BatchProfile {
+    /// All requests in batch are of same type.
+    Simple(&'static str),
+}
+
+/// Size of each batch, typcially static but dynamic sizing may be in scope for some tests.
+#[derive(Debug, Clone)]
+pub enum BatchSize {
+    /// Fixed batch size.
+    Static(usize),
 }
 
 /// Trait encapsulting iterating over a set of requests for dispatch.
@@ -31,4 +65,10 @@ pub trait BatchIterator {
     /// Future that resolves to maybe a Batch.
     ///
     fn next_batch(&mut self) -> impl Future<Output = Option<Batch>> + Send;
+}
+
+/// Enumeration over set of supported request message types.
+#[derive(Debug, Clone)]
+pub enum Message {
+    Uniqueness(UniquenessRequest),
 }

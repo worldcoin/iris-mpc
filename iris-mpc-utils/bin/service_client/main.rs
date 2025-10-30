@@ -3,7 +3,9 @@ use std::path::Path;
 use clap::Parser;
 use eyre::Result;
 
-use iris_mpc_common::config::Config as NodeConfig;
+use iris_mpc_common::{
+    config::Config as NodeConfig, helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
+};
 use iris_mpc_utils::{
     constants::NODE_CONFIG_KIND_MAIN,
     state::fsys::{
@@ -12,7 +14,7 @@ use iris_mpc_utils::{
     types::NetConfig,
 };
 
-use requests::BatchIterator;
+use requests::{BatchIterator, BatchProfile, BatchSize};
 
 mod requests;
 mod responses;
@@ -23,7 +25,10 @@ pub async fn main() -> Result<()> {
     println!("Running with options: {:?}", &options,);
 
     let requests_dispatcher = requests::Dispatcher::from(&options);
-    while let Some(request_batch) = requests::Generator::from(&options).next_batch().await {
+    let mut requests_generator = requests::Generator::from(&options);
+
+    while let Some(request_batch) = requests_generator.next_batch().await {
+        println!("Request batch generated: {:?}", request_batch);
         requests_dispatcher.dispatch_batch(request_batch).await;
     }
 
@@ -32,13 +37,13 @@ pub async fn main() -> Result<()> {
 
 #[derive(Debug, Parser, Clone)]
 struct CliOptions {
-    /// Number of request batches to dispatch.
-    #[clap(long, default_value = "1")]
-    batch_count: usize,
-
-    /// Maximum size of each batch.
+    /// Maximum size of each request batch.
     #[clap(long, default_value = "500")]
-    batch_size_max: usize,
+    batch_size: usize,
+
+    /// Number of request batches to process.
+    #[clap(long, default_value = "1")]
+    n_batches: usize,
 
     // Path to SMPC node-0 configuration file.
     #[clap(long)]
@@ -54,12 +59,12 @@ struct CliOptions {
 }
 
 impl CliOptions {
-    fn batch_count(&self) -> &usize {
-        &self.batch_count
+    fn batch_size(&self) -> &usize {
+        &self.batch_size
     }
 
-    fn batch_size_max(&self) -> &usize {
-        &self.batch_size_max
+    fn n_batches(&self) -> &usize {
+        &self.n_batches
     }
 
     fn path_to_node_0_config(&self) -> &Option<String> {
@@ -116,6 +121,11 @@ impl From<&CliOptions> for requests::Generator {
 
 impl From<&CliOptions> for requests::GeneratorOptions {
     fn from(options: &CliOptions) -> Self {
-        Self::new(*options.batch_count(), *options.batch_size_max())
+        // TODD: hydrate batch-profile from cli options.
+        Self::new(
+            BatchProfile::Simple(UNIQUENESS_MESSAGE_TYPE),
+            BatchSize::Static(*options.batch_size()),
+            *options.n_batches(),
+        )
     }
 }

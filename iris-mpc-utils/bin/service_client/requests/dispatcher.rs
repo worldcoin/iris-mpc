@@ -8,16 +8,12 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-    pub fn options(&self) -> &Options {
-        &self.options
-    }
-
     pub fn new(options: Options) -> Self {
         Self { options }
     }
 
-    pub async fn dispatch_batch(&self, _batch: Batch) {
-        unimplemented!()
+    pub async fn dispatch_batch(&self, batch: Batch) {
+        println!("TODO: dispatch request batch: {:?}", batch);
     }
 }
 
