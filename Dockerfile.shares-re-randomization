@@ -28,7 +28,7 @@ RUN cargo install cargo-build-deps \
 FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
-RUN cargo build -p iris-mpc-bins --release --bin rerandomize-db --bin rerandomize-check --bin seed-v2-dbs
+RUN cargo build -p iris-mpc-bins --release --bin rerandomize-db --bin seed-v2-dbs
 
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
