@@ -693,10 +693,6 @@ where
         );
     };
 
-    if len < 32 {
-        bail!("Input length should be at least 32: {len}");
-    }
-
     // Let x1, x2, x3 are integers modulo 2^k.
     //
     // Full adder where x3 plays the role of an input carry yields
@@ -952,4 +948,33 @@ pub(crate) async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> Re
     izip!(shares.iter(), b_from_previous.iter())
         .map(|(s, prev_b)| Ok((s.a ^ s.b ^ prev_b).convert()))
         .collect::<Result<Vec<_>>>()
+}
+
+/// Extracts the MSBs of the secret shared input values in a bit-sliced form as u64 shares, i.e., the i-th bit of the j-th u64 secret share is the MSB of the (j * 64 + i)-th input value.
+async fn extract_msb_u16(session: &mut Session, x_: VecShare<u16>) -> Result<VecShare<u64>, Error> {
+    let x = x_.transpose_pack_u64();
+    extract_msb::<u64>(session, x).await
+}
+
+/// Extracts the MSB of the secret shared input value.
+pub(crate) async fn extract_msb_u16_batch(
+    session: &mut Session,
+    x: &[Share<u16>],
+) -> Result<Vec<Share<Bit>>> {
+    let res_len = x.len();
+    let mut res = Vec::with_capacity(res_len);
+
+    let packed_bits = extract_msb_u16(session, VecShare::new_vec(x.to_vec())).await?;
+
+    'outer: for bit_batch in packed_bits.into_iter() {
+        let (a, b) = bit_batch.get_ab();
+        for i in 0..64 {
+            res.push(Share::new(a.get_bit_as_bit(i), b.get_bit_as_bit(i)));
+            if res.len() == res_len {
+                break 'outer;
+            }
+        }
+    }
+
+    Ok(res)
 }
