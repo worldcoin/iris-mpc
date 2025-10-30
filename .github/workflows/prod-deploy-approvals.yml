@@ -2,9 +2,6 @@ name: Enforce prod deploy approvals
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
-  pull_request_review:
-    types: [submitted, dismissed]
 
 jobs:
   check-approvals:
@@ -20,17 +17,17 @@ jobs:
           script: |
             // Configuration - modify these values as needed
             const protectedPath = 'deploy/prod';
-            
+
             // Define approval groups - each group must have at least one approval
             approversGroupA = [
-              'philsippl', 
-              'eaypek-tfh', 
-              'carlomazzaferro', 
-              'wojciechsromek', 
-              'leonanos8', 
+              'philsippl',
+              'eaypek-tfh',
+              'carlomazzaferro',
+              'wojciechsromek',
+              'leonanos8',
               'danielle-tfh'
             ];
-            
+
             approversGroupB = [
               'camelop',      // UC Berkeley
               'stneng',       // UC Berkeley
@@ -43,16 +40,16 @@ jobs:
               'SyrineSlim',   // FAU
               'sebhlr'        // FAU
             ];
-            
+
             const approvalGroups = new Map([
               ['Group A', approversGroupA],
               ['Group B', approversGroupB]
             ]);
-            
+
             const pull_number = context.payload.pull_request.number;
             const { owner, repo } = context.repo;
             core.info(`Checking PR #${pull_number} in ${owner}/${repo}`);
-            
+
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner,
               repo,
@@ -61,12 +58,12 @@ jobs:
             core.info(`Found ${files.length} changed files`);
             const fileNames = files.map(f => f.filename).join(', ');
             core.info(`Changed files: ${fileNames}`);
-            
+
             const touchesProdDeploy = files.some((file) =>
               file.filename === protectedPath || file.filename.startsWith(`${protectedPath}/`)
             );
             core.info(`Touches ${protectedPath}: ${touchesProdDeploy}`);
-            
+
             if (!touchesProdDeploy) {
               core.info(`No changes in ${protectedPath} detected. Skipping approval requirements.`);
               return;
@@ -110,14 +107,14 @@ jobs:
             // Check approvals for each group
             const groupApprovalStatus = new Map();
             const groupApprovers = new Map();
-            
+
             for (const [groupName, members] of approvalGroups) {
               const approvers = approvedLogins.filter((login) => members.includes(login));
               const hasApproval = approvers.length > 0;
-              
+
               groupApprovers.set(groupName, approvers);
               groupApprovalStatus.set(groupName, hasApproval);
-              
+
               core.info(`${groupName} approvers: [${approvers.join(', ')}] - Has approval: ${hasApproval}`);
             }
 

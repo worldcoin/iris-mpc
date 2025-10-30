@@ -14,12 +14,10 @@ iris-mpc-store = { path = "../iris-mpc-store" }
 clap = { workspace = true, features = ["env"] }
 eyre.workspace = true
 bytemuck.workspace = true
-sqlx.workspace = true
 serde.workspace = true
 serde-big-array = "0.5"
 tracing.workspace = true
 itertools.workspace = true
-futures.workspace = true
 rand.workspace = true
 rand_chacha = "0.3"
 tokio.workspace = true
@@ -31,10 +29,8 @@ tonic = { version = "0.12.3", features = [
     "transport",
 ] }
 prost = "0.13.3"
-sha2 = "0.10.8"
+sha2.workspace = true
 thiserror.workspace = true
-hkdf = "0.12.4"
-rustls = { version = "0.23.16", features = ["ring"] }
 
 [dev-dependencies]
 float_eq = "1"
@@ -42,15 +38,3 @@ float_eq = "1"
 
 [build-dependencies]
 tonic-build = "0.12.3"
-
-[[bin]]
-name = "seed-v2-dbs"
-path = "src/bin/seed_v2_dbs.rs"
-
-[[bin]]
-name = "reshare-server"
-path = "src/bin/reshare-server.rs"
-
-[[bin]]
-name = "reshare-client"
-path = "src/bin/reshare-client.rs"

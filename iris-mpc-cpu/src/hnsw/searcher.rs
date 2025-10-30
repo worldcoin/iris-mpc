@@ -60,6 +60,9 @@ pub struct HnswParams {
 
     /// Probability `q = 1-p` for geometric distribution of layer densities
     pub layer_probability: f64,
+
+    /// Search mode for top layers of the HNSW graph
+    pub top_layer_mode: TopLayerSearchMode,
 }
 
 #[allow(non_snake_case, clippy::too_many_arguments)]
@@ -91,6 +94,7 @@ impl HnswParams {
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
             layer_probability,
+            top_layer_mode: TopLayerSearchMode::Default,
         }
     }
 
@@ -112,6 +116,7 @@ impl HnswParams {
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
             layer_probability,
+            top_layer_mode: TopLayerSearchMode::Default,
         }
     }
 
@@ -165,6 +170,10 @@ impl HnswParams {
     fn get_val(arr: &[usize; N_PARAM_LAYERS], lc: usize) -> usize {
         arr[lc.min(N_PARAM_LAYERS - 1)]
     }
+
+    pub fn set_top_layer_mode(&mut self, mode: TopLayerSearchMode) {
+        self.top_layer_mode = mode;
+    }
 }
 
 /// An implementation of the HNSW approximate k-nearest neighbors algorithm, based on "Efficient and
@@ -216,6 +225,15 @@ pub struct ConnectPlanLayer<Vector> {
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
+/// Represents the search mode for top layers of the HNSW graph.
+#[derive(PartialEq, Clone, Copy, Serialize, Deserialize)]
+pub enum TopLayerSearchMode {
+    /// Use the default search as in other layer.
+    Default,
+    /// Use linear scan to find the nearest neighbor.
+    LinearScan,
+}
+
 #[allow(non_snake_case)]
 impl HnswSearcher {
     /// Construct an HnswSearcher with specified parameters, constructed using
@@ -237,6 +255,12 @@ impl HnswSearcher {
         Self {
             params: HnswParams::new(64, 32, 32),
         }
+    }
+
+    pub fn new_with_test_parameters_and_linear_scan() -> Self {
+        let mut params = HnswParams::new(64, 32, 32);
+        params.set_top_layer_mode(TopLayerSearchMode::LinearScan);
+        Self { params }
     }
 
     /// Choose a random insertion layer from a geometric distribution, producing
@@ -270,12 +294,7 @@ impl HnswSearcher {
         self.select_layer_rng(&mut rng)
     }
 
-    /// Return a tuple containing a distance-sorted list initialized with the
-    /// entry point for the HNSW graph search (with distance to the query
-    /// pre-computed), and the number of search layers of the graph hierarchy,
-    /// that is, the layer of the entry point plus 1.
-    ///
-    /// If no entry point is initialized, returns an empty list and layer 0.
+    /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the number of search layers.
     #[allow(non_snake_case)]
     #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
     async fn search_init<V: VectorStore, N: NeighborhoodV<V>>(
@@ -331,7 +350,7 @@ impl HnswSearcher {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
             }
             _ => {
-                Self::layer_search_batched(store, graph, q, W, ef, lc).await?;
+                Self::layer_search_batched_v2(store, graph, q, W, ef, lc).await?;
             }
         }
         Ok(())
@@ -723,6 +742,258 @@ impl HnswSearcher {
         Ok(())
     }
 
+    /// Run an HNSW layer search with batched operation. The algorithm mutates
+    /// the input sorted neighborhood `W` into the `ef` (approximate) nearest
+    /// vectors to the query `q` in layer `lc` of the layered graph `graph`.
+    ///
+    /// As in the standard HNSW layer search, this algorithm proceeds by
+    /// sequentially inspecting the neighbors of previously un-opened entries of
+    /// `W` closest to `q`, inserting inspected nodes into `W` if they are
+    /// nearer to `q` than the current farthest entry of `W` (or unconditionally
+    /// if `W` needs to be filled to size `ef`). The entries of `W` are stored
+    /// in sorted order of their distance to `q`, so new nodes are inserted into
+    /// `W` using a search/sort procedure.
+    ///
+    /// Distinct from the standard HNSW algorithm, this batched implementation
+    /// opens and processes multiple candidate nodes in batches rather than
+    /// individually so that basic operations can be executed in parallel. This
+    /// has to be handled with some care, as efficient traversal of the graph
+    /// layer depends on aspects of the ongoing sequential search pattern. It is
+    /// accomplished in the following way.
+    ///
+    /// First, as `W` is initially filled up to size `ef`, an initial
+    /// breadth-first graph traversal is executed to choose a starting search
+    /// neighborhood from which the main search can proceed.  Once neighbors are
+    /// chosen, the distances between all new neighbors and the search query are
+    /// evaluated as a batch, and the nodes are organized into a candidate
+    /// neighborhood by a single sorting operation.
+    ///
+    /// Once `W` has size `ef`, the second phase of graph traversal starts. In
+    /// this phase, batches of unopened elements of `W` are opened and
+    /// processed, so that each batch produces approximately a constant number
+    /// of "improved" neighbors which are to be included in `W`. During graph
+    /// traversal, the proportion of inspected nodes which ultimately are
+    /// inserted into `W` decreases as the neighborhood `W` better approximates
+    /// the actual nearest neighbors of `q`. To achieve an approximately
+    /// constant number of newly inserted elements per batch, an estimate of the
+    /// approximate "current insertion rate per inspected node" is maintained,
+    /// and this value is used to choose the number of nodes opened in a batch
+    /// at each step.
+    ///
+    /// The insertion rate estimate is maintained throughout the traversal as
+    /// the ratio of a fixed numerator and a dynamic denominator, which is
+    /// periodically multiplied by a scaling factor when the estimated rate is
+    /// lower than the measured insertion rate over a batch. This representation
+    /// is chosen so that the reciprocal of the rate, which is the factor the
+    /// target batch insertion size is multiplied by to estimate the required
+    /// number of elements to inspect, is a fixed-precision value which avoids
+    /// the issue of numerator and denominator values growing too large after
+    /// repeated algebraic manipulations.
+    ///
+    /// The process of opening batches of nodes from `W`, filtering to remove
+    /// nodes which are not nearer to the query than the current worst item in
+    /// `W`, and adding the resulting filtered elements into `W`, continues
+    /// until all items currently in `W` at the end of a traversal loop have
+    /// been opened, at which point the elements in `W` represent the
+    /// approximate nearest neighbors to the query and the function returns.
+    ///
+    /// Note: the difference between this batched implementation and that in
+    /// `layer_search_batched` is that the latter does not batch node openings,
+    /// and instead maintains several explicit queues for batched filtering and
+    /// batched insertion into `W`.  This achieves a similar effect, but does
+    /// not allow batching of distance evaluation, which has become a
+    /// significant latency bottleneck in practice.
+    #[instrument(level = "debug", skip(store, graph, q, W))]
+    async fn layer_search_batched_v2<V: VectorStore, N: NeighborhoodV<V>>(
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        q: &V::QueryRef,
+        W: &mut N,
+        ef: usize,
+        lc: usize,
+    ) -> Result<()> {
+        // These spans accumulate running time of multiple atomic operations
+        let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
+        let less_than_span = trace_span!(target: "searcher::cpu_time", "less_than_aggr");
+        let insert_span =
+            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
+
+        // The set of vectors which have been considered as potential neighbors
+        let mut visited = HashSet::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+
+        // The set of visited vectors for which we have inspected their neighborhood
+        let mut opened = HashSet::new();
+
+        // Fill initial candidate neighborhood from W.  List is constructed as:
+        //
+        // [w1, w2, ..., wk, ---N(w1)---, ---N(w2)---, ...],
+        //
+        // where neighborhoods of elements in the list are added to the end,
+        // starting with the elements of W, then with the neighbors of w1, then
+        // those of w2, and so on, until the list has length at least ef.  This
+        // represents a breadth-first traversal of the graph, starting with W.
+        // This is done initially without opening nodes so that all distances
+        // can be computed in a single batch.
+        let mut init_nodes = Vec::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+        let mut open_idx = 0;
+        while open_idx < init_nodes.len() && init_nodes.len() < ef {
+            // get valid, unvisited neighbors of current node at `open_idx`
+            let mut nbhd = graph.get_links(&init_nodes[open_idx], lc).await.0;
+            nbhd.retain(|x| !init_nodes.contains(x));
+            nbhd = store.only_valid_vectors(nbhd).await;
+
+            // extend `init_nodes` with these neighbors, and progress
+            init_nodes.extend(nbhd);
+            open_idx += 1;
+        }
+        // open nodes identified above and insert neighbors into `W`
+        let (init_opened, init_links) = HnswSearcher::open_nodes_batch(
+            store,
+            graph,
+            &init_nodes[..open_idx],
+            lc,
+            q,
+            &mut visited,
+            None,
+        )
+        .instrument(eval_dist_span.clone())
+        .await?;
+
+        opened.extend(init_opened);
+
+        W.insert_batch_and_retain_k(store, &init_links, Some(ef))
+            .instrument(insert_span.clone())
+            .await?;
+
+        // Target number of elements to insert into candidate neighborhood as a batch.
+        //
+        // TODO optimize batch size selection
+        let insertion_batch_size = ef / 2;
+
+        // Numerator and denominator of estimated current insertion rate
+        const INS_RATE_NUM: usize = 64;
+        let mut ins_rate_denom = INS_RATE_NUM;
+        const MAX_INS_RATE_DENOM: usize = INS_RATE_NUM * 1000;
+
+        // When the estimated insertion rate is determined to be too low, the value is
+        // updated by a fixed factor, rounding up to respect the fixed-precision
+        // representation.
+        //
+        // TODO optimize insertion rate estimate update size
+        const INS_RATE_UPDATE: (usize, usize) = (5, 6);
+
+        // The insertion rate after the next update
+        let mut next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
+
+        // Sequential depth of traversal process (number of batch openings) for metrics
+        let mut depth = 0;
+
+        // The current list of elements of `W` which are unopened
+        let mut cur_unopened = Vec::from_iter(
+            W.iter()
+                .map(|(c, _)| c)
+                .filter(|&c| !opened.contains(c))
+                .cloned(),
+        );
+
+        // Main graph traversal loop: continue until all graph nodes in the exploration
+        // set W have been opened and none of the neighbors are closer to the
+        // query than the nodes in W
+        while !cur_unopened.is_empty() {
+            depth += 1;
+
+            // Estimate the number of neighbors to visit which will result in approximately
+            // the desired number of new elements to be inserted into the candidate neighborhood.
+            let target_batch_size = insertion_batch_size * ins_rate_denom / INS_RATE_NUM;
+
+            // Open several candidate nodes, visit unvisited neighbors, and compute distances
+            // between the query and neighbors as a batch. Opens nodes until at least
+            // `target_batch_size` neighbors are visited or all nodes are opened.
+            let (new_opened, c_links) = HnswSearcher::open_nodes_batch(
+                store,
+                graph,
+                &cur_unopened,
+                lc,
+                q,
+                &mut visited,
+                Some(target_batch_size),
+            )
+            .instrument(eval_dist_span.clone())
+            .await?;
+
+            debug!(
+                event_type = Operation::OpenNode.id(),
+                increment_amount = new_opened.len(),
+                ef,
+                lc
+            );
+            opened.extend(new_opened);
+
+            // Compare elements against current farthest element of W
+            let fq = W
+                .get_furthest()
+                .ok_or(eyre!("No furthest element found"))?
+                .1
+                .clone();
+            let batch: Vec<_> = c_links
+                .iter()
+                .map(|(_c, cq)| (cq.clone(), fq.clone()))
+                .collect();
+            let batch_size = batch.len();
+            let results = store
+                .less_than_batch(&batch)
+                .instrument(less_than_span.clone())
+                .await?;
+
+            // Filter out elements which are not strictly closer than the current worst candidate
+            let filtered_links: Vec<_> = results
+                .into_iter()
+                .zip(c_links)
+                .filter_map(|(res, link)| if res { Some(link) } else { None })
+                .collect();
+
+            let n_insertions = filtered_links.len();
+            debug!(
+                batch_size,
+                n_insertions, "Batch distances comparison filter"
+            );
+
+            // Insert elements which remain into candidate neighborhood, truncating to length `ef`
+            W.insert_batch_and_retain_k(store, &filtered_links, Some(ef))
+                .instrument(insert_span.clone())
+                .await?;
+
+            // If measured insertion rate is too low, update the estimated insertion rate.
+            //
+            // Update rule: if measured insertion rate is smaller than the harmonic mean of
+            // the current estimated insertion rate and the next update to this rate, then
+            // apply the update.
+            if (ins_rate_denom + next_ins_rate_denom) * n_insertions < 2 * INS_RATE_NUM * batch_size
+                && next_ins_rate_denom < MAX_INS_RATE_DENOM
+            {
+                debug!(
+                    prev = ins_rate_denom,
+                    new = next_ins_rate_denom,
+                    "Update insertion rate estimate denominator"
+                );
+                ins_rate_denom = next_ins_rate_denom;
+                next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
+            }
+
+            // Refresh the list of currently unopened nodes in the candidate neighborhood `W`
+            cur_unopened = Vec::from_iter(
+                W.iter()
+                    .map(|(c, _)| c)
+                    .filter(|&c| !opened.contains(c))
+                    .cloned(),
+            );
+        }
+
+        let metrics_labels = [("layer", lc.to_string())];
+        metrics::histogram!("search_depth", &metrics_labels).record(depth as f64);
+        Ok(())
+    }
+
     /// Variant of layer search using ef parameter of 1, which conducts a greedy search for the node
     /// with minimum distance from the query.
     #[instrument(level = "debug", skip(store, graph, q, start))]
@@ -773,6 +1044,28 @@ impl HnswSearcher {
         }
     }
 
+    /// Linear search over all vectors in the given layer that returns a single nearest neighbor.
+    /// This is used in the top layer of the HNSW graph to hide relations between queries and the entry point.
+    async fn linear_search<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        query: &V::QueryRef,
+        lc: usize,
+    ) -> Result<(V::VectorRef, V::DistanceRef)> {
+        // retrieve all vectors in layer `lc`
+        let vectors: Vec<_> = graph.layers[lc].links.keys().cloned().collect();
+        // filter out any invalid vectors (wrong serial ids)
+        let vectors = store.only_valid_vectors(vectors).await;
+        if vectors.is_empty() {
+            bail!("No valid vectors found in layer {}", lc);
+        }
+        // compute distances from query to all vectors as a batch
+        let distances = store.eval_distance_batch(query, &vectors).await?;
+        let distances_with_ids = izip!(vectors, distances).collect_vec();
+        // find the minimum distance and the corresponding vector id
+        store.get_argmin_distance(&distances_with_ids).await
+    }
+
     /// Evaluate as a batch the distances between the unvisited neighbors of a given node at a given
     /// graph level with the query, marking unvisited neighbors as visited in the supplied
     /// hashset.
@@ -802,6 +1095,55 @@ impl HnswSearcher {
             .collect())
     }
 
+    /// Evaluate as a batch the distances between the unvisited neighbors of a
+    /// list of nodes at a given graph level with the query, marking unvisited
+    /// neighbors as visited in the supplied hashset.
+    ///
+    /// If `limit` is `Some(l)`, then elements of `nodes` will be opened until
+    /// *at least* `l` unvisited neighbors have been visited, or until all
+    /// elements of `nodes` are opened.  If `limit` is `None`, then all elements
+    /// of `nodes` will be opened.
+    async fn open_nodes_batch<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        nodes: &[V::VectorRef],
+        lc: usize,
+        query: &V::QueryRef,
+        visited: &mut HashSet<V::VectorRef>,
+        limit: Option<usize>,
+    ) -> Result<(Vec<V::VectorRef>, Vec<(V::VectorRef, V::DistanceRef)>)> {
+        let mut valid_neighbors = Vec::new();
+        let mut opened_nodes = Vec::with_capacity(nodes.len());
+
+        for node in nodes {
+            let neighbors = graph.get_links(node, lc).await;
+
+            let unvisited_neighbors: Vec<_> = neighbors
+                .0
+                .into_iter()
+                .filter(|e| visited.insert(e.clone()))
+                .collect();
+
+            valid_neighbors.extend(store.only_valid_vectors(unvisited_neighbors).await);
+            opened_nodes.push(node.clone());
+
+            // halt opening once at least limit valid neighbors have been visited, if specified
+            if let Some(l) = limit {
+                if valid_neighbors.len() >= l {
+                    break;
+                }
+            }
+        }
+
+        let distances = store.eval_distance_batch(query, &valid_neighbors).await?;
+        let nodes_with_distances = valid_neighbors
+            .into_iter()
+            .zip(distances.into_iter())
+            .collect();
+
+        Ok((opened_nodes, nodes_with_distances))
+    }
+
     /// Search for the `k` nearest neighbors to `query` in `store` using HNSW graph `graph`.
     /// Returns a distance-sorted list (nearest first) of the neighbors.
     ///
@@ -821,7 +1163,16 @@ impl HnswSearcher {
         // Search from the top layer down to layer 0
         for lc in (0..layer_count).rev() {
             let ef = self.params.get_ef_search(lc);
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
+                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
+            {
+                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
+                W.clear();
+                let (v, dist) = nearest_point;
+                W.insert_and_retain_k(store, v, dist, None);
+            } else {
+                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            }
         }
 
         W.insert_batch_and_retain_k(store, &[], Some(k));
@@ -886,7 +1237,16 @@ impl HnswSearcher {
             } else {
                 self.params.get_ef_constr_insert(lc)
             };
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
+                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
+            {
+                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
+                W.clear();
+                let (v, dist) = nearest_point;
+                W.insert_and_retain_k(store, v, dist, None);
+            } else {
+                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            }
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {
@@ -1103,12 +1463,10 @@ mod tests {
     use rand::SeedableRng;
     use tokio;
 
-    #[tokio::test]
-    async fn test_hnsw_db() -> Result<()> {
+    async fn hnsw_db_helper(db: HnswSearcher, seed: u64) -> Result<()> {
         let vector_store = &mut PlaintextStore::new();
         let graph_store = &mut GraphMem::new();
-        let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::new_with_test_parameters();
+        let rng = &mut AesRng::seed_from_u64(seed);
 
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db
@@ -1151,5 +1509,19 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hnsw_db_default() -> Result<()> {
+        let db = HnswSearcher::new_with_test_parameters();
+
+        hnsw_db_helper(db, 0).await
+    }
+
+    #[tokio::test]
+    async fn test_hnsw_db_linear_scan() -> Result<()> {
+        let db = HnswSearcher::new_with_test_parameters_and_linear_scan();
+
+        hnsw_db_helper(db, 0).await
     }
 }

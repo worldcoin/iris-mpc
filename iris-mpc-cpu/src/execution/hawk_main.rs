@@ -1,9 +1,11 @@
-use super::player::Identity;
 use crate::{
     execution::{
-        hawk_main::{insert::InsertPlanV, iris_worker::IrisPoolHandle, search::SearchIds},
-        local::generate_local_identities,
-        player::{Role, RoleAssignment},
+        hawk_main::{
+            insert::InsertPlanV,
+            iris_worker::IrisPoolHandle,
+            rot::{AllRotations, VecRotationSupport},
+            search::SearchIds,
+        },
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
@@ -16,7 +18,7 @@ use crate::{
     hnsw::{
         graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
-    network::tcp::{build_network_handle, NetworkHandle},
+    network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{compare_min_threshold_buckets, setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
@@ -87,7 +89,11 @@ pub mod state_check;
 use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
-use rot::VecRots;
+
+/// The master switch to enable search-per-rotation or search-center-only.
+pub type SearchRotations = AllRotations;
+/// Rotation support as configured by SearchRotations.
+pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
 #[derive(Clone, Parser)]
 #[allow(non_snake_case)]
@@ -140,7 +146,6 @@ pub struct HawkActor {
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
     prf_key: Option<Arc<[u8; 16]>>,
-    role_assignments: Arc<HashMap<Role, Identity>>,
 
     // ---- My state ----
     /// A size used by the startup loader.
@@ -306,19 +311,9 @@ impl HawkActor {
             params: search_params,
         });
 
-        let identities = generate_local_identities();
-
-        let role_assignments: RoleAssignment = identities
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (Role::new(index), id.clone()))
-            .collect();
-
-        let my_index = args.party_index;
-
-        let networking =
-            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
-                .await?;
+        let network_args =
+            NetworkHandleArgs::from_hawk(args, SessionGroups::N_SESSIONS_PER_REQUEST);
+        let networking = build_network_handle(network_args, ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -327,13 +322,13 @@ impl HawkActor {
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
-            my_index,
+            args.party_index,
             Eye::Left,
         );
         let bucket_statistics_right = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
-            my_index,
+            args.party_index,
             Eye::Right,
         );
 
@@ -346,9 +341,8 @@ impl HawkActor {
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             distances_cache: [Default::default(), Default::default()],
-            role_assignments: Arc::new(role_assignments),
             networking,
-            party_id: my_index,
+            party_id: args.party_index,
             workers_handle,
         })
     }
@@ -422,15 +416,7 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
-        let mut network_sessions = vec![];
-        for tcp_session in self.networking.make_sessions().await? {
-            network_sessions.push(NetworkSession {
-                session_id: tcp_session.id(),
-                role_assignments: self.role_assignments.clone(),
-                networking: Box::new(tcp_session),
-                own_role: Role::new(self.party_id),
-            });
-        }
+        let mut network_sessions = self.networking.make_network_sessions().await?;
         let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
 
         // todo: replace this with array_chunks::<2>() once that feature
@@ -527,7 +513,7 @@ impl HawkActor {
     async fn update_anon_stats(
         &mut self,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
@@ -546,7 +532,7 @@ impl HawkActor {
             .collect_vec()
     }
 
-    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<HawkInsertPlan>]) {
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRotations<HawkInsertPlan>]) {
         // maps query_id and db_id to a vector of distances.
         let mut distances_with_ids: BTreeMap<(u32, u32), Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
@@ -750,8 +736,8 @@ struct HawkJob {
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
     batch: BatchQuery,
-    queries: SearchQueries,
-    queries_mirror: SearchQueries,
+    queries: SearchQueries<SearchRotations>,
+    queries_mirror: SearchQueries<SearchRotations>,
     ids: SearchIds,
 }
 
@@ -863,9 +849,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_orient(
-        queries: SearchQueries,
+        queries: SearchQueries<SearchRotations>,
         workers: &BothEyes<IrisPoolHandle>,
-    ) -> SearchQueries {
+    ) -> SearchQueries<SearchRotations> {
         let (left, right) = join!(
             Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
             Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
@@ -874,9 +860,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_side(
-        requests: &VecRequests<VecRots<Aby3Query>>,
+        requests: &VecRequests<VecRotations<Aby3Query>>,
         worker: &IrisPoolHandle,
-    ) -> VecRequests<VecRots<Aby3Query>> {
+    ) -> VecRequests<VecRotations<Aby3Query>> {
         // Iterate over all the irises.
         let all_irises_iter = requests.iter().flat_map(|rots| {
             rots.iter()
@@ -948,7 +934,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn queries(&self, orient: Orientation) -> SearchQueries {
+    fn queries(&self, orient: Orientation) -> SearchQueries<SearchRotations> {
         match orient {
             Orientation::Normal => self.queries.clone(),
             Orientation::Mirror => self.queries_mirror.clone(),
@@ -991,7 +977,7 @@ impl HawkRequest {
                         }
                     };
                     let query = Aby3Query::new_from_raw(iris);
-                    VecRots::new_center_only(query)
+                    VecRotationSupport::new_center_only(query)
                 })
                 .collect_vec()
         });
@@ -1418,8 +1404,13 @@ impl HawkHandle {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results =
-                search::search(sessions_search, search_queries, search_ids, search_params).await?;
+            let search_results = search::search::<SearchRotations>(
+                sessions_search,
+                search_queries,
+                search_ids,
+                search_params,
+            )
+            .await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
@@ -1494,7 +1485,7 @@ impl HawkHandle {
     async fn handle_mutations(
         hawk_actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        search_results: BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
         request: &HawkRequest,
@@ -1649,6 +1640,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
+        utils::constants::N_PARTIES,
     };
     use aes_prng::AesRng;
     use futures::future::JoinAll;
@@ -1683,10 +1675,9 @@ mod tests {
             }
         };
 
-        let n_parties = 3;
-        let addresses = get_free_local_addresses(n_parties).await?;
+        let addresses = get_free_local_addresses(N_PARTIES).await?;
 
-        let handles = (0..n_parties)
+        let handles = (0..N_PARTIES)
             .map(|i| go(addresses.clone(), i))
             .map(tokio::spawn)
             .collect::<JoinAll<_>>()
@@ -1712,7 +1703,7 @@ mod tests {
             .collect_vec();
 
         // Unzip: party -> iris_id -> (share, share_mirrored)
-        let irises = (0..n_parties)
+        let irises = (0..N_PARTIES)
             .map(|party_index| {
                 irises
                     .iter()
@@ -1795,7 +1786,7 @@ mod tests {
         };
 
         let failed_request_i = 1;
-        let all_results = parallelize((0..n_parties).map(|party_i| {
+        let all_results = parallelize((0..N_PARTIES).map(|party_i| {
             // Mess with the shares to make one request fail.
             let mut shares = irises[party_i].clone();
             shares[failed_request_i].0 = GaloisRingSharedIris::dummy_for_party(party_i);
@@ -1816,7 +1807,7 @@ mod tests {
 
         let batch_2 = batch_0;
 
-        let all_results = parallelize((0..n_parties).map(|party_i| {
+        let all_results = parallelize((0..N_PARTIES).map(|party_i| {
             let batch = batch_of_party(&batch_2, &irises[party_i]);
             let mut handle = handles[party_i].clone();
             async move { handle.submit_batch_query(batch).await.await }

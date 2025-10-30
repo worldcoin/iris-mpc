@@ -13,7 +13,7 @@ updates:
       # Used to get an immediate test
       time: "05:10"
       timezone: "Etc/UTC"
-      
+
   - package-ecosystem: "github-actions" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:

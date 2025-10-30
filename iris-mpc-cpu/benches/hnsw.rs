@@ -201,7 +201,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
 /// To run this benchmark, you need to generate the data first by running the
 /// following commands:
 ///
-/// cargo run --release --bin generate_benchmark_data
+/// cargo run --release -p iris-mpc-bins --bin generate-benchmark-data
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);
@@ -215,8 +215,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
         let secret_searcher = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
             lazy_setup_from_files_with_grpc(
-                "./data/store.ndjson",
-                &format!("./data/graph_{}.dat", database_size),
+                "../iris-mpc-bins/data/store.ndjson",
+                &format!("../iris-mpc-bins/data/graph_{}.dat", database_size),
                 &mut rng,
                 database_size,
             )

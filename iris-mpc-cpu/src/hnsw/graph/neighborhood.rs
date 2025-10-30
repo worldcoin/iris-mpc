@@ -5,16 +5,15 @@
 
 use crate::hnsw::{
     sorting::{
-        batcher::partial_batcher_network, binary_search::BinarySearch,
-        quickselect::run_quickselect_with_store, quicksort::apply_quicksort,
-        swap_network::apply_swap_network,
+        batcher::partial_batcher_network, quickselect::run_quickselect_with_store,
+        quicksort::apply_quicksort, swap_network::apply_swap_network,
     },
     VectorStore,
 };
-use eyre::{eyre, Result};
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 pub trait NeighborhoodV<V: VectorStore>:
     Neighborhood<Vector = V::VectorRef, Distance = V::DistanceRef>
@@ -23,6 +22,10 @@ pub trait NeighborhoodV<V: VectorStore>:
 
 impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V> {}
 
+/// Trait that captures the requirements for an HNSW candidate list container/data-structure.
+/// Implementers should ensure the following post-condition for calls to `..and_retain_k` methods:
+/// - The elements in the container are the smallest `container.length` ones among all insertions.
+/// - The last element in the container is the largest one.
 #[allow(async_fn_in_trait)]
 pub trait Neighborhood: Clone {
     type Vector: Clone;
@@ -41,10 +44,23 @@ pub trait Neighborhood: Clone {
 
     fn iter(&self) -> impl Iterator<Item = &(Self::Vector, Self::Distance)>;
 
+    /// Inserts a batch of elements into the neighborhood and applies the necessary
+    /// changes to ensure the neighborhood invariant holds
+    /// Note that in general maintaining the invariant may incur significant overhead.
+    /// Consult implementer for performance specs
+    async fn insert_batch_and_retain_k<V>(
+        &mut self,
+        store: &mut V,
+        vals: &[(Self::Vector, Self::Distance)],
+        k: Option<usize>,
+    ) -> Result<()>
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
+
     /// Inserts a single element into the neighborhood.
-    /// Generally, `retain_k_nearest` needs to be called after an insert to ensure
-    /// query methods return correct values, but specific implementations may
-    /// offer stronger guarantees.
+    /// By default calls batched version with size 1.
+    /// Note that in general maintaining the invariant may incur significant overhead.
+    /// Consult implementer for performance specs.
     async fn insert_and_retain_k<V>(
         &mut self,
         store: &mut V,
@@ -58,19 +74,6 @@ pub trait Neighborhood: Clone {
         self.insert_batch_and_retain_k(store, &[(to, dist)], k)
             .await
     }
-
-    /// Inserts a batch of elements into the neighborhood.
-    /// Generally, `retain_k_nearest` needs to be called after an insert to ensure
-    /// query methods return correct values, but specific implementations may
-    /// offer stronger guarantees.
-    async fn insert_batch_and_retain_k<V>(
-        &mut self,
-        store: &mut V,
-        vals: &[(Self::Vector, Self::Distance)],
-        k: Option<usize>,
-    ) -> Result<()>
-    where
-        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
 
     /// Returns matching records in the neighborhood.
     /// No specific order should be assumed.
@@ -86,8 +89,6 @@ pub trait Neighborhood: Clone {
     fn get_next_candidate(&self) -> Option<&(Self::Vector, Self::Distance)>;
 
     /// Returns the node with maximum distance in the neighborhood
-    /// Not guaranteed to function correctly if inserts have taken place
-    /// without a `retain_k_nearest` call for some `k`.
     fn get_furthest(&self) -> Option<&(Self::Vector, Self::Distance)>;
 }
 
@@ -229,40 +230,10 @@ where
         self.edges.clear();
     }
 
-    // #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    // async fn insert_and_retain_k<V>(
-    //     &mut self,
-    //     store: &mut V,
-    //     to: Self::Vector,
-    //     dist: Self::Distance,
-    //     k: usize,
-    // ) -> Result<()>
-    // where
-    //     V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
-    // {
-    //     unimplemented!();
-    //     {
-    //         let mut bin_search = BinarySearch {
-    //             left: 0,
-    //             right: self.edges.len(),
-    //         };
-    //         while let Some(cmp_idx) = bin_search.next() {
-    //             let res = store.less_than(&dist, &self.edges[cmp_idx].1).await?;
-    //             bin_search.update(res);
-    //         }
-    //         let index_asc = bin_search
-    //             .result()
-    //             .ok_or(eyre!("Failed to find insertion index"))?;
-    //         self.edges.insert(index_asc, (to, dist));
-    //         self.edges.truncate(k);
-    //         Ok(())
-    //     }
-    // }
-
-    /// Insert a collection of `(Vector, Distance)` pairs into the list,
-    /// maintaining the ascending order, using an efficient sorting network on
-    /// input values.
-    // TODO: only append values and move quicksort to `retain_k_nearest`?
+    /// Appends `vals` to the neighborhood, applies quicksort and truncates to length `k`.
+    /// Expected bandwitdh: loglinear in `|self.edges| + |vals|`, but `|vals| log |self.edges|` for small `|vals|`.
+    /// Expected rounds: logarithmic in `|self.edges| + |vals|`.
+    /// Consult quicksort implementation for details on performance.
     async fn insert_batch_and_retain_k<V>(
         &mut self,
         store: &mut V,
@@ -419,26 +390,9 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
         self.edges.clear();
     }
 
-    // /// Insert the element `to` with distance `dist` into the list
-    // ///
-    // /// Calls the `VectorStore` to find the insertion index.
-    // #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    // async fn insert_and_retain_k<V>(
-    //     &mut self,
-    //     _store: &mut V,
-    //     to: Vector,
-    //     dist: Distance,
-    //     k: usize,
-    // ) -> Result<()>
-    // where
-    //     V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
-    // {
-    //     unimplemented!();
-    //     self.edges.push((to, dist));
-    //     Ok(())
-    // }
-
-    // / Insert a collection of `(Vector, Distance)` pairs into the list,
+    /// Appends `vals` to the neighborhood, applies quickselect and truncates to length k.
+    /// Expected bandwitdh: linear in `|self.edges| + |vals|`
+    /// Expected rounds: logarithmic in `|self.edges| + |vals|`
     async fn insert_batch_and_retain_k<V>(
         &mut self,
         store: &mut V,

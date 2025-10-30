@@ -24,6 +24,7 @@ use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
+    ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use std::{array, ops::Not, time::Instant};
@@ -287,6 +288,70 @@ pub(crate) async fn cross_mul(
         .collect())
 }
 
+/// Conditionally selects equally-sized slices of input shares based on control bits.
+/// If the control bit is 1, it selects the left value shares; otherwise, it selects the right value share.
+async fn select_shared_slices_by_bits(
+    session: &mut Session,
+    left_values: &[Share<u32>],
+    right_values: &[Share<u32>],
+    control_bits: &[Share<u32>],
+    slice_size: usize,
+) -> Result<Vec<Share<u32>>> {
+    if left_values.len() != right_values.len() {
+        bail!("Left and right values must have the same length");
+    }
+    if left_values.len() % slice_size != 0 {
+        bail!("Left and right values length must be multiple of slice size");
+    }
+    if control_bits.len() != left_values.len() / slice_size {
+        bail!("Number of control bits must match number of slices");
+    }
+
+    // Conditional multiplexing:
+    // If control bit is 1, select left_value, else select right_value.
+    // res = c * (left_value - right_value) + right_value
+    // Compute c * (left_value - right_value)
+    let res_a: Vec<RingElement<u32>> = izip!(
+        left_values.chunks(slice_size),
+        right_values.chunks(slice_size),
+        control_bits.iter()
+    )
+    .flat_map(|(left_chunk, right_chunk, c)| {
+        left_chunk
+            .iter()
+            .zip(right_chunk.iter())
+            .map(|(left, right)| {
+                let diff = left.clone() - right.clone();
+                session.prf.gen_zero_share() + c.a * diff.a + c.b * diff.a + c.a * diff.b
+            })
+            .collect_vec()
+    })
+    .collect();
+
+    let network = &mut session.network_session;
+
+    let message = if res_a.len() == 1 {
+        NetworkValue::RingElement32(res_a[0])
+    } else {
+        NetworkValue::VecRing32(res_a.clone())
+    };
+    network.send_next(message).await?;
+
+    let res_b = match network.receive_prev().await {
+        Ok(NetworkValue::RingElement32(element)) => vec![element],
+        Ok(NetworkValue::VecRing32(elements)) => elements,
+        _ => bail!("Could not deserialize RingElement32"),
+    };
+
+    // Pack networking messages into shares and
+    // compute the result by adding the right shares
+    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+        .map(|(a, b)| Share::new(a, b))
+        .zip(right_values.iter())
+        .map(|(res, right)| res + right)
+        .collect())
+}
+
 /// Conditionally selects the distance shares based on control bits.
 /// If the control bit is 1, it selects the first distance share (d1),
 /// otherwise it selects the second distance share (d2).
@@ -297,10 +362,9 @@ async fn conditionally_select_distance(
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
     control_bits: &[Share<u32>],
 ) -> Result<Vec<DistanceShare<u32>>> {
-    assert!(
-        distances.len() == control_bits.len(),
-        "Number of distances must match number of control bits"
-    );
+    if distances.len() != control_bits.len() {
+        bail!("Number of distances must match number of control bits");
+    }
 
     // Conditional multiplexing:
     // If control bit is 1, select d1, else select d2.
@@ -354,6 +418,91 @@ async fn conditionally_select_distance(
             mask_dot: res.mask_dot + &d2.mask_dot,
         })
         .collect())
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub(crate) async fn conditionally_select_distances_with_plain_ids(
+    session: &mut Session,
+    left_distances: Vec<(u32, DistanceShare<u32>)>,
+    right_distances: Vec<(u32, DistanceShare<u32>)>,
+    control_bits: Vec<Share<u32>>,
+) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+    if left_distances.len() != control_bits.len() {
+        eyre::bail!("Number of distances must match number of control bits");
+    }
+    if left_distances.len() != right_distances.len() {
+        eyre::bail!("Left and right distances must have the same length");
+    }
+    if left_distances.is_empty() {
+        eyre::bail!("Distances must not be empty");
+    }
+
+    // Now select distances
+    let (left_ids, left_dist): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
+    let (right_ids, right_dist): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
+    let left_dist = left_dist
+        .into_iter()
+        .flat_map(|d| [d.code_dot, d.mask_dot])
+        .collect_vec();
+    let right_dist = right_dist
+        .into_iter()
+        .flat_map(|d| [d.code_dot, d.mask_dot])
+        .collect_vec();
+
+    let distances =
+        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 2)
+            .await?
+            .into_iter()
+            .tuples()
+            .map(|(code_dot, mask_dot)| DistanceShare::new(code_dot, mask_dot));
+
+    // Select ids first: c * (left_id - right_id) + right_id
+    let ids = izip!(left_ids, right_ids, control_bits).map(|(left_id, right_id, c)| {
+        let diff = left_id.wrapping_sub(right_id);
+        let mut res = c.clone() * RingElement(diff);
+        res.add_assign_const_role(right_id, session.own_role());
+        res
+    });
+
+    Ok(izip!(ids, distances)
+        .map(|(id, distance)| (id, distance))
+        .collect_vec())
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub(crate) async fn conditionally_select_distances_with_shared_ids(
+    session: &mut Session,
+    left_distances: Vec<(Share<u32>, DistanceShare<u32>)>,
+    right_distances: Vec<(Share<u32>, DistanceShare<u32>)>,
+    control_bits: Vec<Share<u32>>,
+) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+    if left_distances.len() != control_bits.len() {
+        eyre::bail!("Number of distances must match number of control bits");
+    }
+    if left_distances.len() != right_distances.len() {
+        eyre::bail!("Left and right distances must have the same length");
+    }
+    if left_distances.is_empty() {
+        eyre::bail!("Distances must not be empty");
+    }
+
+    let left_dist = left_distances
+        .into_iter()
+        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .collect_vec();
+    let right_dist = right_distances
+        .into_iter()
+        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .collect_vec();
+    let distances =
+        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 3)
+            .await?
+            .into_iter()
+            .tuples()
+            .map(|(id, code_dot, mask_dot)| (id, DistanceShare::new(code_dot, mask_dot)))
+            .collect_vec();
+
+    Ok(distances)
 }
 
 /// Conditionally swaps the distance shares based on control bits.
@@ -565,7 +714,7 @@ pub async fn cross_compare(
 /// 2. The most significant bit of the result is extracted.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn oblivious_cross_compare(
+pub(crate) async fn oblivious_cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<Share<Bit>>> {
@@ -573,6 +722,26 @@ pub async fn oblivious_cross_compare(
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
     extract_msb_u32_batch(session, &diff).await
+}
+
+/// For every pair of distance shares (d1, d2), this computes the secret-shared bit d2 < d1 and lift it to u32 shares.
+///
+/// The less-than operator is implemented in 2 steps:
+///
+/// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
+/// 2. The most significant bit of the result is extracted.
+///
+/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
+pub(crate) async fn oblivious_cross_compare_lifted(
+    session: &mut Session,
+    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+) -> Result<Vec<Share<u32>>> {
+    // compute the secret-shared bits d1 < d2
+    let bits = oblivious_cross_compare(session, distances).await?;
+    // inject bits to T shares
+    Ok(bit_inject_ot_2round(session, VecShare { shares: bits })
+        .await?
+        .inner())
 }
 
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
@@ -583,13 +752,9 @@ pub async fn min_of_pair_batch(
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<DistanceShare<u32>>> {
     // compute the secret-shared bits d1 < d2
-    let bits = oblivious_cross_compare(session, distances).await?;
-    // inject bits to u32 shares
-    let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
-        .await?
-        .inner();
+    let bits = oblivious_cross_compare_lifted(session, distances).await?;
 
-    conditionally_select_distance(session, distances, u32_bits.as_slice()).await
+    conditionally_select_distance(session, distances, bits.as_slice()).await
 }
 
 use std::cell::RefCell;
@@ -648,9 +813,7 @@ where
     additive_shares
 }
 
-/// Computes the dot products between a query iris and a batch of iris vectors.
-/// Returns a Vec of RingElement<u16> containing code and mask dot products for each pair.
-/// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
+/// This is similar to `pairwise_distance`, but performs dot products on all rotations of the query.
 pub fn rotation_aware_pairwise_distance<'a, I>(
     query: &'a ArcIris,
     targets: I,
@@ -660,9 +823,7 @@ where
 {
     let start = Instant::now();
     let mut count = 0;
-    // * 31 for all rotations
-    // * 2 for code and mask distances
-    let mut additive_shares = Vec::with_capacity(31 * 2 * targets.len());
+    let mut additive_shares = Vec::with_capacity(2 * ROTATIONS * targets.len());
 
     for target in targets {
         for rotation in IrisRotation::all() {
@@ -689,7 +850,6 @@ where
         metric_batch_size.record(batch_size);
         metric_per_pair_duration.record(duration);
     });
-
     additive_shares
 }
 

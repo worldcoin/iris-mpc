@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-cudarc = { version = "0.13.4", features = ["cuda-12020", "nccl"] }
+cudarc.workspace = true
 eyre.workspace = true
 tracing.workspace = true
 bytemuck.workspace = true
@@ -19,17 +19,11 @@ hex.workspace = true
 tokio.workspace = true
 ring = "0.17.8"
 axum.workspace = true
-reqwest.workspace = true
 num-traits.workspace = true
 rand.workspace = true
 static_assertions.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-sodiumoxide = "0.2.7"
 iris-mpc-common = { path = "../iris-mpc-common" }
-base64 = "0.22.1"
 metrics = "0.22.1"
-metrics-exporter-statsd = "0.7"
 memmap2.workspace = true
 
 [dev-dependencies]
@@ -54,7 +48,3 @@ harness = false
 [[bench]]
 name = "transpose"
 harness = false
-
-[[bin]]
-name = "nccl"
-path = "src/bin/nccl.rs"

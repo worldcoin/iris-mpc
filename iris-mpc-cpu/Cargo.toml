@@ -11,10 +11,7 @@ repository.workspace = true
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
 ansiterm = "0.12.2"
 async-channel = "2.3.1"
-async-stream = "0.3.6"
 async-trait = "~0.1"
-aws-config.workspace = true
-aws-sdk-rds.workspace = true
 aws-sdk-s3.workspace = true
 bincode.workspace = true
 bytes = "1.7"
@@ -23,7 +20,6 @@ clap.workspace = true
 core_affinity = "0.8.3"
 crossbeam = "0.8.4"
 dashmap = "6.1.0"
-dotenvy.workspace = true
 eyre.workspace = true
 futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
@@ -39,7 +35,7 @@ serde.workspace = true
 serde_json.workspace = true
 siphasher = "1"
 socket2 = { version = "0.6.0", features = ["all"] }
-static_assertions.workspace = true
+statrs = "0.18.0"
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -58,23 +54,17 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
 ] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
-uuid.workspace = true
 backon = { version = "1.4.0", default-features = false, features = [
     "tokio-sleep",
 ] }
 rand_chacha = { version = "0.3", features = ["serde1"] }
 num_enum = "0.7.3"
 tokio-rustls = { version = "0.26.2" }
-rustls-native-certs = "0.8.1"
-rustls = "0.21.12"
-x509-parser = "0.17.0"
-anyhow = "1.0.93"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
-metrics-logger = "0.22.1"
 
 [build-dependencies]
 tonic-build = "0.12.3"
@@ -101,35 +91,3 @@ harness = false
 
 [[example]]
 name = "hnsw-ex"
-
-[[bin]]
-name = "generate_benchmark_data"
-path = "bin/generate_benchmark_data.rs"
-
-[[bin]]
-name = "hawk_main"
-path = "bin/hawk_main.rs"
-
-[[bin]]
-name = "hnsw_algorithm_metrics"
-path = "bin/hnsw_algorithm_metrics.rs"
-
-[[bin]]
-name = "hnsw_network_stats_example"
-path = "bin/hnsw_network_stats_example.rs"
-
-[[bin]]
-name = "init-test-dbs"
-path = "bin/init_test_dbs.rs"
-
-[[bin]]
-name = "local_hnsw"
-path = "bin/local_hnsw.rs"
-
-[[bin]]
-name = "generate_ideal_neighborhoods"
-path = "bin/generate_ideal_neighborhoods.rs"
-
-[[bin]]
-name = "construct-graph-ptxt"
-path = "bin/construct_graph_ptxt.rs"
