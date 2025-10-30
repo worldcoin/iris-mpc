@@ -889,6 +889,7 @@ async fn get_hawk_actor(
     let hawk_args = HawkArgs {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
+        outbound_addrs: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,

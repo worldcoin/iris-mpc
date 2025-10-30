@@ -58,6 +58,7 @@ pub trait Server: Send {
 pub struct NetworkHandleArgs {
     pub party_index: usize,
     pub addresses: Vec<String>,
+    pub outbound_addresses: Vec<String>,
     pub connection_parallelism: usize,
     pub request_parallelism: usize,
     pub sessions_per_request: usize,
@@ -69,6 +70,7 @@ impl NetworkHandleArgs {
         Self {
             party_index: args.party_index,
             addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
             connection_parallelism: args.connection_parallelism,
             request_parallelism: args.request_parallelism,
             sessions_per_request,
@@ -110,7 +112,7 @@ pub async fn build_network_handle(
         args.request_parallelism * args.sessions_per_request,
     );
 
-    let peers = izip!(identities, &args.addresses)
+    let peers = izip!(identities, &args.outbound_addresses)
         .enumerate()
         .filter(|(idx, _)| *idx != my_index)
         .map(|(_, (id, url))| (id.clone(), url.to_string()));
