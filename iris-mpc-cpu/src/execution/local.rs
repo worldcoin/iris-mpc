@@ -4,7 +4,6 @@ use crate::{
         session::{NetworkSession, Session, SessionId},
     },
     network::{
-        grpc::setup_local_grpc_networking,
         local::LocalNetworkingStore,
         tcp::testing::{interleave_vecs, setup_local_tcp_networking},
         NetworkType,
@@ -21,6 +20,9 @@ use std::{
     sync::{Arc, LazyLock},
 };
 use tokio::{sync::Mutex, task::JoinHandle};
+
+#[cfg(test)]
+use crate::network::grpc::setup_local_grpc_networking;
 
 pub fn generate_local_identities() -> Vec<Identity> {
     vec![
@@ -74,6 +76,7 @@ impl LocalRuntime {
         Self::mock_setup(NetworkType::Local).await
     }
 
+    #[cfg(test)]
     pub async fn mock_setup_with_grpc(
         connection_parallelism: usize,
         stream_parallelism: usize,
@@ -114,6 +117,7 @@ impl LocalRuntime {
                     .collect();
                 network_sessions
             }
+            #[cfg(test)]
             NetworkType::Grpc {
                 connection_parallelism,
                 stream_parallelism,
@@ -219,6 +223,7 @@ impl LocalRuntime {
         Self::mock_sessions(NetworkType::Local).await
     }
 
+    #[cfg(test)]
     pub async fn mock_sessions_with_grpc(
         connection_parallelism: usize,
         stream_parallelism: usize,

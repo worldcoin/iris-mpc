@@ -19,6 +19,7 @@ pub trait Networking {
 #[derive(Clone)]
 pub enum NetworkType {
     Local,
+    #[cfg(test)]
     Grpc {
         connection_parallelism: usize,
         stream_parallelism: usize,
@@ -43,6 +44,7 @@ impl NetworkType {
         1
     }
 
+    #[cfg(test)]
     pub fn default_grpc() -> Self {
         Self::Grpc {
             connection_parallelism: Self::default_connection_parallelism(),
@@ -50,8 +52,16 @@ impl NetworkType {
             request_parallelism: Self::default_request_parallelism(),
         }
     }
+
+    pub fn default_tcp() -> Self {
+        Self::Tcp {
+            connection_parallelism: Self::default_connection_parallelism(),
+            request_parallelism: Self::default_request_parallelism(),
+        }
+    }
 }
 
+#[cfg(test)]
 pub mod grpc;
 pub mod local;
 pub mod tcp;
