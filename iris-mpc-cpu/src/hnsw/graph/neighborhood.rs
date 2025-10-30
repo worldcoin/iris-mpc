@@ -477,7 +477,7 @@ mod tests {
     ) -> Result<()> {
         let mut pairs = Vec::new();
         for iris in irises {
-            let vector = store.insert(&iris).await;
+            let vector = store.insert(iris).await;
             let distance = store.eval_distance(&query, &vector).await?;
             pairs.push((vector, distance));
         }
@@ -504,7 +504,7 @@ mod tests {
             query.clone(),
             &mut store,
             &mut nbhd,
-            &vec![Arc::new(query.get_similar_iris(&mut rng, 0.18))],
+            &[Arc::new(query.get_similar_iris(&mut rng, 0.18))],
         )
         .await?;
         nbhd.insert_batch_and_retain_k(&mut store, &[], Some(2))
@@ -522,7 +522,7 @@ mod tests {
             query.clone(),
             &mut store,
             &mut nbhd,
-            &vec![Arc::new(query.get_similar_iris(&mut rng, 0.05))],
+            &[Arc::new(query.get_similar_iris(&mut rng, 0.05))],
         )
         .await?;
         assert_eq!(nbhd.len(), 3);
@@ -545,8 +545,8 @@ mod tests {
 
         assert_eq!(nbhd.len(), 0);
         assert!(nbhd.is_empty());
-        assert!(matches!(nbhd.get_furthest(), None));
-        assert!(matches!(nbhd.get_next_candidate(), None));
+        assert!(nbhd.get_furthest().is_none());
+        assert!(nbhd.get_next_candidate().is_none());
 
         Ok(())
     }

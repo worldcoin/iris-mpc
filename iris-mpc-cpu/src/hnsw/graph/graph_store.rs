@@ -705,7 +705,7 @@ mod tests {
             for j in 0..5 {
                 if i != j {
                     links
-                        .insert(&mut vector_store, vectors[j], distances[j])
+                        .insert_and_retain_k(&mut vector_store, vectors[j], distances[j], None)
                         .await?;
                 }
             }
@@ -777,7 +777,7 @@ mod tests {
 
             for j in 4..7 {
                 links
-                    .insert(&mut vector_store, vectors[j], distances[j])
+                    .insert_and_retain_k(&mut vector_store, vectors[j], distances[j], None)
                     .await?;
             }
             let links = links.edge_ids();

@@ -515,6 +515,7 @@ impl HnswSearcher {
     /// inserted items in `W`. If no new entries are inserted in this
     /// clean-up step, then the graph traversal is complete, and the function
     /// returns.
+    #[allow(dead_code)]
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_batched<V: VectorStore, N: NeighborhoodV<V>>(
         store: &mut V,
