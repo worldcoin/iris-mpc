@@ -156,7 +156,7 @@ impl LocalRuntime {
                 connection_parallelism,
                 request_parallelism,
             } => {
-                let (handles, sessions) = setup_local_tcp_networking(
+                let (handles, network_sessions) = setup_local_tcp_networking(
                     identities.clone(),
                     connection_parallelism,
                     request_parallelism,
@@ -171,18 +171,7 @@ impl LocalRuntime {
                 let h = Arc::new(handles);
                 std::mem::forget(h);
 
-                let interleaved = interleave_vecs(sessions);
-                let network_sessions: Vec<NetworkSession> = interleaved
-                    .into_iter()
-                    .enumerate()
-                    .map(|(id, session)| NetworkSession {
-                        session_id: session.id(),
-                        role_assignments: Arc::new(role_assignments.clone()),
-                        networking: Box::new(session),
-                        own_role: Role::new(id % seeds.len()),
-                    })
-                    .collect();
-                network_sessions
+                interleave_vecs(network_sessions)
             }
         };
 

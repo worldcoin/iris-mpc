@@ -41,7 +41,7 @@ export RUST_MIN_STACK=104857600
 
 
 if [ "$BINARY" == "genesis" ]; then
-    cargo run --release --bin iris-mpc-hawk-genesis -- --max-height "${GENESIS_MAX_HEIGHT}" --perform-snapshot=false
+    cargo run --release -p iris-mpc-bins --bin iris-mpc-hawk-genesis -- --max-height "${GENESIS_MAX_HEIGHT}" --perform-snapshot=false
 else
-    cargo run --release --bin iris-mpc-hawk
+    cargo run --release -p iris-mpc-bins --bin iris-mpc-hawk
 fi

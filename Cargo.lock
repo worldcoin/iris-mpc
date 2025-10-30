@@ -161,6 +161,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c95c10ba0b00a02636238b814946408b1322d5ac4760326e6fb8ec956d85775"
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "arraydeque"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -171,45 +180,6 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
-
-[[package]]
-name = "asn1-rs"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56624a96882bb8c26d61312ae18cb45868e5a9992ea73c58e45c3101e56a1e60"
-dependencies = [
- "asn1-rs-derive",
- "asn1-rs-impl",
- "displaydoc",
- "nom",
- "num-traits",
- "rusticata-macros",
- "thiserror 2.0.16",
- "time",
-]
-
-[[package]]
-name = "asn1-rs-derive"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "synstructure",
-]
-
-[[package]]
-name = "asn1-rs-impl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "assert-json-diff"
@@ -1546,20 +1516,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "der-parser"
-version = "10.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
-dependencies = [
- "asn1-rs",
- "displaydoc",
- "nom",
- "num-bigint",
- "num-traits",
- "rusticata-macros",
-]
-
-[[package]]
 name = "deranged"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1599,17 +1555,6 @@ dependencies = [
  "option-ext",
  "redox_users",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "displaydoc"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -2466,35 +2411,25 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
- "axum",
  "base64 0.22.1",
  "bincode",
  "bytemuck",
  "chrono",
  "clap",
- "criterion",
- "dotenvy",
  "eyre",
- "futures",
  "iris-mpc-common",
  "iris-mpc-cpu",
- "iris-mpc-gpu",
  "iris-mpc-store",
  "itertools 0.13.0",
  "metrics 0.22.3",
- "metrics-exporter-statsd 0.7.0",
  "pprof",
  "rand",
- "reqwest",
  "serde",
  "serde_json",
  "sodiumoxide",
  "sqlx",
- "static_assertions",
- "telemetry-batteries",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -2516,6 +2451,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "iris-mpc-bins"
+version = "0.1.0"
+dependencies = [
+ "aes-prng",
+ "aws-config",
+ "aws-sdk-kms",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "cudarc",
+ "data-encoding",
+ "dotenvy",
+ "eyre",
+ "futures",
+ "hkdf",
+ "iris-mpc",
+ "iris-mpc-anon-stats-server",
+ "iris-mpc-common",
+ "iris-mpc-cpu",
+ "iris-mpc-gpu",
+ "iris-mpc-store",
+ "iris-mpc-upgrade",
+ "iris-mpc-upgrade-hawk",
+ "itertools 0.13.0",
+ "metrics 0.22.3",
+ "metrics-exporter-statsd 0.7.0",
+ "rand",
+ "reqwest",
+ "ring",
+ "rustls 0.23.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sodiumoxide",
+ "sqlx",
+ "tokio",
+ "toml",
+ "tonic",
+ "tracing",
+ "tracing-forest",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "iris-mpc-common"
 version = "0.1.0"
 dependencies = [
@@ -2533,9 +2518,6 @@ dependencies = [
  "chrono",
  "clap",
  "config",
- "data-encoding",
- "digest",
- "dotenvy",
  "eyre",
  "float_eq",
  "futures",
@@ -2551,7 +2533,6 @@ dependencies = [
  "rand",
  "rayon",
  "reqwest",
- "ring",
  "serde",
  "serde-big-array",
  "serde_json",
@@ -2577,12 +2558,8 @@ version = "0.1.0"
 dependencies = [
  "aes-prng",
  "ansiterm",
- "anyhow",
  "async-channel",
- "async-stream",
  "async-trait",
- "aws-config",
- "aws-sdk-rds",
  "aws-sdk-s3",
  "backon",
  "bincode",
@@ -2593,14 +2570,12 @@ dependencies = [
  "criterion",
  "crossbeam",
  "dashmap",
- "dotenvy",
  "eyre",
  "futures",
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
  "metrics 0.22.3",
- "metrics-logger",
  "num-traits",
  "num_cpus",
  "num_enum",
@@ -2610,14 +2585,12 @@ dependencies = [
  "rand_distr",
  "rayon",
  "rstest",
- "rustls 0.21.12",
- "rustls-native-certs 0.8.1",
  "serde",
  "serde_json",
  "siphasher",
  "socket2 0.6.0",
  "sqlx",
- "static_assertions",
+ "statrs",
  "thiserror 1.0.65",
  "tokio",
  "tokio-rustls 0.26.2",
@@ -2629,8 +2602,6 @@ dependencies = [
  "tracing-forest",
  "tracing-subscriber",
  "tracing-test",
- "uuid",
- "x509-parser",
 ]
 
 [[package]]
@@ -2638,7 +2609,6 @@ name = "iris-mpc-gpu"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "bytemuck",
  "criterion",
  "cudarc",
@@ -2650,16 +2620,11 @@ dependencies = [
  "itertools 0.13.0",
  "memmap2",
  "metrics 0.22.3",
- "metrics-exporter-statsd 0.7.0",
  "ndarray",
  "num-traits",
  "rand",
  "rayon",
- "reqwest",
  "ring",
- "serde",
- "serde_json",
- "sodiumoxide",
  "static_assertions",
  "tokio",
  "tracing",
@@ -2705,19 +2670,15 @@ dependencies = [
  "clap",
  "eyre",
  "float_eq",
- "futures",
- "hkdf",
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
  "prost 0.13.3",
  "rand",
  "rand_chacha",
- "rustls 0.23.28",
  "serde",
  "serde-big-array",
  "sha2",
- "sqlx",
  "thiserror 1.0.65",
  "tokio",
  "tonic",
@@ -2730,87 +2691,50 @@ dependencies = [
 name = "iris-mpc-upgrade-hawk"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "aws-config",
  "aws-sdk-rds",
  "aws-sdk-s3",
- "aws-sdk-secretsmanager",
- "aws-sdk-sqs",
- "base64 0.22.1",
- "bytemuck",
  "chrono",
- "clap",
- "criterion",
- "dotenvy",
  "eyre",
- "futures",
  "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",
- "iris-mpc-gpu",
  "iris-mpc-store",
  "itertools 0.13.0",
  "metrics 0.22.3",
- "metrics-exporter-statsd 0.7.0",
  "rand",
- "reqwest",
  "serde",
  "serde_json",
  "serial_test",
- "sodiumoxide",
  "sqlx",
- "static_assertions",
- "telemetry-batteries",
  "thiserror 1.0.65",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
- "tracing-test",
- "uuid",
 ]
 
 [[package]]
 name = "iris-mpc-utils"
 version = "0.1.0"
 dependencies = [
- "aes-prng",
- "async-trait",
- "aws-config",
- "aws-sdk-rds",
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
  "base64 0.22.1",
  "bincode",
- "bytemuck",
- "chrono",
- "clap",
- "dotenvy",
  "eyre",
- "futures",
  "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",
  "iris-mpc-store",
  "itertools 0.13.0",
- "metrics 0.22.3",
- "metrics-exporter-statsd 0.7.0",
  "rand",
- "reqwest",
  "serde",
  "serde_json",
- "sodiumoxide",
  "sqlx",
- "static_assertions",
- "telemetry-batteries",
- "tokio",
- "toml",
  "tracing",
- "tracing-subscriber",
- "tracing-test",
- "uuid",
 ]
 
 [[package]]
@@ -3116,15 +3040,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metrics-logger"
-version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51842f541c2515cf93ee1a4ef97728816d5ca163d70cbc67d8605246725fec7d"
-dependencies = [
- "metrics 0.22.3",
-]
-
-[[package]]
 name = "metrics-util"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3177,6 +3092,23 @@ name = "multimap"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "defc4c55412d89136f966bbb339008b474350e5e6e78d2714439c386b3137a03"
+
+[[package]]
+name = "nalgebra"
+version = "0.33.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26aecdf64b707efd1310e3544d709c5c0ac61c13756046aaaba41be5c4f66a3b"
+dependencies = [
+ "approx",
+ "matrixmultiply",
+ "num-complex",
+ "num-rational",
+ "num-traits",
+ "rand",
+ "rand_distr",
+ "simba",
+ "typenum",
+]
 
 [[package]]
 name = "native-tls"
@@ -3313,6 +3245,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3360,15 +3303,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6a622008b6e321afc04970976f62ee297fdbaa6f95318ca343e3eebb9648441"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "oid-registry"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
-dependencies = [
- "asn1-rs",
 ]
 
 [[package]]
@@ -4353,15 +4287,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rusticata-macros"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
-dependencies = [
- "nom",
-]
-
-[[package]]
 name = "rustix"
 version = "0.38.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4486,6 +4411,15 @@ name = "ryu"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
+
+[[package]]
+name = "safe_arch"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "same-file"
@@ -4753,6 +4687,19 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest",
  "rand_core",
+]
+
+[[package]]
+name = "simba"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c99284beb21666094ba2b75bbceda012e610f5479dfcc2d6e2426f53197ffd95"
+dependencies = [
+ "approx",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "wide",
 ]
 
 [[package]]
@@ -5073,6 +5020,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "statrs"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a3fe7c28c6512e766b0874335db33c94ad7b8f9054228ae1c2abd47ce7d335e"
+dependencies = [
+ "approx",
+ "nalgebra",
+ "num-traits",
+ "rand",
+]
+
+[[package]]
 name = "str_stack"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5142,17 +5101,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7065abeca94b6a8a577f9bd45aa0867a2238b74e8eb67cf10d492bc39351394"
 dependencies = [
  "futures-core",
-]
-
-[[package]]
-name = "synstructure"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -5976,6 +5924,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wide"
+version = "0.7.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6224,23 +6182,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
-]
-
-[[package]]
-name = "x509-parser"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4569f339c0c402346d4a75a9e39cf8dad310e287eef1ff56d4c68e5067f53460"
-dependencies = [
- "asn1-rs",
- "data-encoding",
- "der-parser",
- "lazy_static",
- "nom",
- "oid-registry",
- "rusticata-macros",
- "thiserror 2.0.16",
- "time",
 ]
 
 [[package]]
