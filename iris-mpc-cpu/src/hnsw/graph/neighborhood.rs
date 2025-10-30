@@ -347,6 +347,7 @@ impl<Vector: Clone, Distance: Clone> UnsortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
+        assert!(0 < k && k <= self.edges.len());
         let values = self
             .edges
             .iter()
@@ -406,6 +407,8 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
         self.edges.extend(vals.to_vec());
 
         let k = k.unwrap_or(self.edges.len());
+        let k = k.min(self.edges.len());
+
         if k == 0 {
             self.edges.clear();
         } else {
@@ -466,21 +469,6 @@ mod tests {
     use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
     use rand::thread_rng;
 
-    async fn insert_single_store_and_nbhd<N: NeighborhoodV<PlaintextStore>>(
-        query: Arc<IrisCode>,
-        store: &mut PlaintextStore,
-        nbhd: &mut N,
-        iris: Arc<IrisCode>,
-    ) -> Result<()> {
-        let vector = store.insert(&iris).await;
-        let distance = store.eval_distance(&query, &vector).await?;
-
-        nbhd.insert_and_retain_k(store, vector, distance, None)
-            .await?;
-
-        Ok(())
-    }
-
     async fn insert_batch_store_and_nbhd<N: NeighborhoodV<PlaintextStore>>(
         query: Arc<IrisCode>,
         store: &mut PlaintextStore,
@@ -494,8 +482,8 @@ mod tests {
             pairs.push((vector, distance));
         }
 
+        // This is a bit wasteful but we don't care
         nbhd.insert_batch_and_retain_k(store, &pairs, None).await?;
-
         Ok(())
     }
 
@@ -509,13 +497,14 @@ mod tests {
             .map(|_| Arc::new(IrisCode::random_rng(&mut rng)))
             .collect::<Vec<_>>();
         insert_batch_store_and_nbhd(query.clone(), &mut store, &mut nbhd, &randos).await?;
+
         assert_eq!(nbhd.len(), 3);
         // Insert a match
-        insert_single_store_and_nbhd(
+        insert_batch_store_and_nbhd(
             query.clone(),
             &mut store,
             &mut nbhd,
-            Arc::new(query.get_similar_iris(&mut rng, 0.18)),
+            &vec![Arc::new(query.get_similar_iris(&mut rng, 0.18))],
         )
         .await?;
         nbhd.insert_batch_and_retain_k(&mut store, &[], Some(2))
@@ -529,15 +518,16 @@ mod tests {
         _ = nbhd.get_next_candidate().unwrap();
 
         // Insert an even closer match
-        insert_single_store_and_nbhd(
+        insert_batch_store_and_nbhd(
             query.clone(),
             &mut store,
             &mut nbhd,
-            Arc::new(query.get_similar_iris(&mut rng, 0.05)),
+            &vec![Arc::new(query.get_similar_iris(&mut rng, 0.05))],
         )
         .await?;
         assert_eq!(nbhd.len(), 3);
 
+        // Let's shrink to closest 2
         nbhd.insert_batch_and_retain_k(&mut store, &[], Some(2))
             .await?;
         assert_eq!(nbhd.len(), 2);

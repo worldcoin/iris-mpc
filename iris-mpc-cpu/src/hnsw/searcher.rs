@@ -1169,13 +1169,13 @@ impl HnswSearcher {
                 let nearest_point = Self::linear_search(store, graph, query, lc).await?;
                 W.clear();
                 let (v, dist) = nearest_point;
-                W.insert_and_retain_k(store, v, dist, None);
+                W.insert_and_retain_k(store, v, dist, None).await?;
             } else {
                 Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
             }
         }
 
-        W.insert_batch_and_retain_k(store, &[], Some(k));
+        W.insert_batch_and_retain_k(store, &[], Some(k)).await?;
         Ok(W)
     }
 
@@ -1243,7 +1243,7 @@ impl HnswSearcher {
                 let nearest_point = Self::linear_search(store, graph, query, lc).await?;
                 W.clear();
                 let (v, dist) = nearest_point;
-                W.insert_and_retain_k(store, v, dist, None);
+                W.insert_and_retain_k(store, v, dist, None).await?;
             } else {
                 Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
             }
