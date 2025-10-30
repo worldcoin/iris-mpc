@@ -672,7 +672,7 @@ where
     Ok(s_msb ^ c_msb ^ carry)
 }
 
-/// Returns the MSB of the sum of three 32-bit integers using the binary parallel prefix adder tree.
+/// Returns the MSB of the sum of three integers of type T using the binary parallel prefix adder tree.
 /// Input integers are given in binary form.
 async fn binary_add_3_get_msb_prefix<T: IntRing2k + NetworkInt>(
     session: &mut Session,
