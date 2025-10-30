@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - "dk/re_randomize_db"
+      - "fix/add-rerandomize-check-binary"
     paths:
       - Dockerfile.shares-re-randomization
       - iris-mpc-upgrade/**
