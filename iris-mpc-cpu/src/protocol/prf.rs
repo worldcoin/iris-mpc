@@ -5,7 +5,7 @@ use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
 type PrfRng = aes_prng::AesRng;
 
 #[cfg(feature = "chacha_prf")]
-type PrfRng = rand_chacha::ChaCha20Rng;
+type PrfRng = rand_chacha::ChaCha8Rng;
 
 pub type PrfSeed = [u8; 16];
 
