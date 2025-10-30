@@ -3,12 +3,12 @@ use super::types::Batch;
 /// Encapsulates logic for dispatching SMPC service requests.
 #[derive(Debug)]
 pub struct Dispatcher {
-    // Associated dispatch options.
-    options: Options,
+    // Associated options.
+    options: DispatcherOptions,
 }
 
 impl Dispatcher {
-    pub fn new(options: Options) -> Self {
+    pub fn new(options: DispatcherOptions) -> Self {
         Self { options }
     }
 
@@ -19,9 +19,9 @@ impl Dispatcher {
 
 /// Options for dispatching SMPC service requests.
 #[derive(Debug, Clone)]
-pub struct Options {}
+pub struct DispatcherOptions {}
 
-impl Options {
+impl DispatcherOptions {
     pub fn new() -> Self {
         Self {}
     }

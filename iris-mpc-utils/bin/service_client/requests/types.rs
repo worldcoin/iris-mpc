@@ -6,15 +6,15 @@ use iris_mpc_common::helpers::smpc_request::UniquenessRequest;
 #[derive(Debug)]
 pub struct Batch {
     /// Ordinal batch identifier to distinguish batches.
-    batch_id: usize,
+    batch_idx: usize,
 
     /// Requests in batch.
     requests: Vec<Message>,
 }
 
 impl Batch {
-    pub fn batch_id(&self) -> usize {
-        self.batch_id
+    pub fn batch_idx(&self) -> usize {
+        self.batch_idx
     }
 
     pub fn requests(&self) -> &Vec<Message> {
@@ -25,9 +25,9 @@ impl Batch {
         &mut self.requests
     }
 
-    pub fn new(batch_id: usize) -> Self {
+    pub fn new(batch_idx: usize) -> Self {
         Self {
-            batch_id,
+            batch_idx,
             requests: Vec::new(),
         }
     }
@@ -35,7 +35,7 @@ impl Batch {
 
 impl fmt::Display for Batch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "batch-id={}", self.batch_id)
+        write!(f, "batch-id={}", self.batch_idx)
     }
 }
 
@@ -46,7 +46,8 @@ pub enum BatchProfile {
     Simple(&'static str),
 }
 
-/// Size of each batch, typcially static but dynamic sizing may be in scope for some tests.
+/// Size of each batch.
+/// N.B. typcially static but dynamic sizing may be in scope for some tests.
 #[derive(Debug, Clone)]
 pub enum BatchSize {
     /// Fixed batch size.

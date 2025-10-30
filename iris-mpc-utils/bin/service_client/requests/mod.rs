@@ -1,7 +1,9 @@
+mod batch_generator;
 mod dispatcher;
-mod generator;
+mod factory;
 mod types;
 
-pub use dispatcher::{Dispatcher, Options as DispatcherOptions};
-pub use generator::{Generator, Options as GeneratorOptions};
-pub use types::{Batch, BatchIterator, BatchProfile, BatchSize, Message};
+pub use batch_generator::{BatchGenerator, BatchGeneratorOptions};
+pub use dispatcher::{Dispatcher, DispatcherOptions};
+pub use factory::{Factory, FactoryOptions};
+pub use types::{BatchIterator, BatchProfile, BatchSize};

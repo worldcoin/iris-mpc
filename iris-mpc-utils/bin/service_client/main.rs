@@ -14,10 +14,10 @@ use iris_mpc_utils::{
     types::NetConfig,
 };
 
-use requests::{BatchIterator, BatchProfile, BatchSize};
-
 mod requests;
 mod responses;
+
+use requests::BatchIterator;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
@@ -25,7 +25,7 @@ pub async fn main() -> Result<()> {
     println!("Running with options: {:?}", &options,);
 
     let requests_dispatcher = requests::Dispatcher::from(&options);
-    let mut requests_generator = requests::Generator::from(&options);
+    let mut requests_generator = requests::BatchGenerator::from(&options);
 
     while let Some(request_batch) = requests_generator.next_batch().await {
         println!("Request batch generated: {:?}", request_batch);
@@ -113,18 +113,32 @@ impl From<&CliOptions> for requests::DispatcherOptions {
     }
 }
 
-impl From<&CliOptions> for requests::Generator {
+impl From<&CliOptions> for requests::Factory {
     fn from(options: &CliOptions) -> Self {
-        Self::new(requests::GeneratorOptions::from(options))
+        Self::new(requests::FactoryOptions::from(options))
     }
 }
 
-impl From<&CliOptions> for requests::GeneratorOptions {
-    fn from(options: &CliOptions) -> Self {
+impl From<&CliOptions> for requests::FactoryOptions {
+    fn from(_options: &CliOptions) -> Self {
         // TODD: hydrate batch-profile from cli options.
+        Self::new(requests::BatchProfile::Simple(UNIQUENESS_MESSAGE_TYPE))
+    }
+}
+
+impl From<&CliOptions> for requests::BatchGenerator {
+    fn from(options: &CliOptions) -> Self {
         Self::new(
-            BatchProfile::Simple(UNIQUENESS_MESSAGE_TYPE),
-            BatchSize::Static(*options.batch_size()),
+            requests::BatchGeneratorOptions::from(options),
+            requests::Factory::from(options),
+        )
+    }
+}
+
+impl From<&CliOptions> for requests::BatchGeneratorOptions {
+    fn from(options: &CliOptions) -> Self {
+        Self::new(
+            requests::BatchSize::Static(*options.batch_size()),
             *options.n_batches(),
         )
     }
