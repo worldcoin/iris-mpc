@@ -178,11 +178,6 @@ name = "rerandomize-db"
 path = "bin/iris-mpc-upgrade/rerandomize_db.rs"
 
 
-[[bin]]
-name = "rerandomize-check"
-path = "bin/iris-mpc-upgrade/randomize_check.rs"
-
-
 
 # ---------------------
 # binaries for iris-mpc-upgrade-hawk
