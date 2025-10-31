@@ -63,6 +63,9 @@ pub struct HnswParams {
 
     /// Search mode for top layers of the HNSW graph
     pub top_layer_mode: TopLayerSearchMode,
+
+    /// layers >= top_layer will be considered the top layer.
+    pub top_layer: Option<usize>,
 }
 
 #[allow(non_snake_case, clippy::too_many_arguments)]
@@ -95,6 +98,7 @@ impl HnswParams {
             ef_search: ef_search_arr,
             layer_probability,
             top_layer_mode: TopLayerSearchMode::Default,
+            top_layer: None,
         }
     }
 
@@ -117,6 +121,7 @@ impl HnswParams {
             ef_search: ef_search_arr,
             layer_probability,
             top_layer_mode: TopLayerSearchMode::Default,
+            top_layer: None,
         }
     }
 
@@ -211,7 +216,16 @@ pub struct ConnectPlan<Vector> {
     pub layers: Vec<ConnectPlanLayer<Vector>>,
 
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
-    pub set_ep: bool,
+    pub set_ep: SetEntryPoint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SetEntryPoint {
+    False,
+    /// On new layer, clear the existing entry point before inserting
+    NewLayer,
+    /// On the top layer, add to the list of entry points
+    AddToLayer,
 }
 
 /// Represents the state updates required for insertion of a new node into a single layer of
@@ -269,7 +283,12 @@ impl HnswSearcher {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom)?;
 
-        Ok(geom_distr.sample(rng) as usize)
+        let layer = geom_distr.sample(rng) as usize;
+        let capped = match self.params.top_layer {
+            None => layer,
+            Some(x) => std::cmp::min(layer, x),
+        };
+        Ok(capped)
     }
 
     /// Choose a random insertion layer from a geometric distribution, producing
@@ -303,12 +322,22 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
     ) -> Result<(SortedNeighborhoodV<V>, usize)> {
-        if let Some((entry_point, layer)) = graph.get_entry_point().await {
+        let mut W = SortedNeighborhood::new();
+
+        if self.params.top_layer_mode == TopLayerSearchMode::LinearScan {
+            if !graph.entry_point.is_empty() {
+                let v = graph.get_ep_layer();
+                let (nearest, distance) = Self::linear_search(store, query, v).await?;
+                W.insert(store, nearest, distance).await?;
+                let layer = graph.entry_point[0].layer;
+                // don't do layer + 1 because a search has already happened over this layer
+                Ok((W, layer))
+            } else {
+                Ok((SortedNeighborhood::new(), 0))
+            }
+        } else if let Some((entry_point, layer)) = graph.get_entry_point().await {
             let distance = store.eval_distance(query, &entry_point).await?;
-
-            let mut W = SortedNeighborhood::new();
             W.insert(store, entry_point, distance).await?;
-
             Ok((W, layer + 1))
         } else {
             Ok((SortedNeighborhood::new(), 0))
@@ -1051,16 +1080,13 @@ impl HnswSearcher {
     /// This is used in the top layer of the HNSW graph to hide relations between queries and the entry point.
     async fn linear_search<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
-        lc: usize,
+        vectors: Vec<V::VectorRef>,
     ) -> Result<(V::VectorRef, V::DistanceRef)> {
-        // retrieve all vectors in layer `lc`
-        let vectors: Vec<_> = graph.layers[lc].links.keys().cloned().collect();
         // filter out any invalid vectors (wrong serial ids)
         let vectors = store.only_valid_vectors(vectors).await;
         if vectors.is_empty() {
-            bail!("No valid vectors found in layer {}", lc);
+            bail!("No valid vectors found");
         }
         // compute distances from query to all vectors as a batch
         let distances = store.eval_distance_batch(query, &vectors).await?;
@@ -1166,15 +1192,7 @@ impl HnswSearcher {
         // Search from the top layer down to layer 0
         for lc in (0..layer_count).rev() {
             let ef = self.params.get_ef_search(lc);
-            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
-                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
-            {
-                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
-                W.edges.clear();
-                W.edges.push(nearest_point);
-            } else {
-                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
-            }
+            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
         }
 
         W.trim_to_k_nearest(k);
@@ -1227,7 +1245,7 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(Vec<SortedNeighborhoodV<V>>, bool)> {
+    ) -> Result<(Vec<SortedNeighborhoodV<V>>, SetEntryPoint)> {
         let mut links = vec![];
 
         let (mut W, n_layers) = self.search_init(store, graph, query).await?;
@@ -1239,15 +1257,8 @@ impl HnswSearcher {
             } else {
                 self.params.get_ef_constr_insert(lc)
             };
-            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
-                && (lc == (graph.num_layers() - 1) || lc == graph.num_layers() - 2)
-            {
-                let nearest_point = Self::linear_search(store, graph, query, lc).await?;
-                W.edges.clear();
-                W.edges.push(nearest_point);
-            } else {
-                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
-            }
+
+            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {
@@ -1258,9 +1269,20 @@ impl HnswSearcher {
         // We inserted top-down, so reverse to match the layer indices (bottom=0)
         links.reverse();
 
+        let set_ep = if insertion_layer + 1 > n_layers {
+            SetEntryPoint::NewLayer
+        } else if self
+            .params
+            .top_layer
+            .map(|l| l == insertion_layer)
+            .unwrap_or_default()
+        {
+            SetEntryPoint::AddToLayer
+        } else {
+            SetEntryPoint::False
+        };
         // If query is to be inserted at a new highest layer as a new entry
         // point, insert additional empty neighborhoods for any new layers
-        let set_ep = insertion_layer + 1 > n_layers;
         for _ in links.len()..insertion_layer + 1 {
             links.push(SortedNeighborhood::new());
         }
@@ -1285,7 +1307,7 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         mut links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: bool,
+        set_ep: SetEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
         let mut plan = ConnectPlan {
             inserted_vector: inserted_vector.clone(),
@@ -1412,7 +1434,7 @@ impl HnswSearcher {
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: bool,
+        set_ep: SetEntryPoint,
     ) -> Result<()> {
         let plan = self
             .insert_prepare(store, graph, inserted_vector, links, set_ep)
