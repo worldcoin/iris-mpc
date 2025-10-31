@@ -5,19 +5,64 @@ use eyre::Result;
 use iris_mpc_common::ROTATIONS;
 use itertools::Itertools;
 
-pub struct DistanceSimple;
+#[derive(Debug, Clone, Copy)]
+pub enum DistanceFn {
+    Simple,
+    MinimalRotation,
+}
+
+use DistanceFn::*;
+
+impl DistanceFn {
+    pub async fn eval_pairwise_distances(
+        self,
+        store: &mut Aby3Store,
+        pairs: Vec<Option<(ArcIris, ArcIris)>>,
+    ) -> Result<Vec<DistanceShare<u32>>> {
+        match self {
+            Simple => DistanceSimple::eval_pairwise_distances(store, pairs).await,
+            MinimalRotation => DistanceMinimalRotation::eval_pairwise_distances(store, pairs).await,
+        }
+    }
+
+    pub async fn eval_distance_pairs(
+        self,
+        store: &mut Aby3Store,
+        pairs: &[(Aby3Query, Aby3VectorRef)],
+    ) -> Result<Vec<Aby3DistanceRef>> {
+        match self {
+            Simple => DistanceSimple::eval_distance_pairs(store, pairs).await,
+            MinimalRotation => DistanceMinimalRotation::eval_distance_pairs(store, pairs).await,
+        }
+    }
+
+    pub async fn eval_distance_batch(
+        self,
+        store: &mut Aby3Store,
+        query: &Aby3Query,
+        vectors: &[VectorId],
+    ) -> Result<Vec<DistanceShare<u32>>> {
+        match self {
+            Simple => DistanceSimple::eval_distance_batch(store, query, vectors).await,
+            MinimalRotation => {
+                DistanceMinimalRotation::eval_distance_batch(store, query, vectors).await
+            }
+        }
+    }
+}
+
+struct DistanceSimple;
 
 impl DistanceSimple {
-    pub async fn eval_pairwise_distances(
+    async fn eval_pairwise_distances(
         store: &mut Aby3Store,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
         let ds_and_ts = store.workers.galois_ring_pairwise_distances(pairs).await?;
-
         store.gr_to_lifted_distances(ds_and_ts).await
     }
 
-    pub async fn eval_distance_pairs(
+    async fn eval_distance_pairs(
         store: &mut Aby3Store,
         pairs: &[(Aby3Query, Aby3VectorRef)],
     ) -> Result<Vec<Aby3DistanceRef>> {
@@ -25,13 +70,11 @@ impl DistanceSimple {
             .iter()
             .map(|(q, v)| (q.iris_proc.clone(), *v))
             .collect_vec();
-
         let ds_and_ts = store.workers.dot_product_pairs(pairs).await?;
-
         store.gr_to_lifted_distances(ds_and_ts).await
     }
 
-    pub async fn eval_distance_batch(
+    async fn eval_distance_batch(
         store: &mut Aby3Store,
         query: &Aby3Query,
         vectors: &[VectorId],
@@ -40,15 +83,14 @@ impl DistanceSimple {
             .workers
             .dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
-
         store.gr_to_lifted_distances(ds_and_ts).await
     }
 }
 
-pub struct DistanceMinimalRotation;
+struct DistanceMinimalRotation;
 
 impl DistanceMinimalRotation {
-    pub async fn eval_pairwise_distances(
+    async fn eval_pairwise_distances(
         store: &mut Aby3Store,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
@@ -56,15 +98,13 @@ impl DistanceMinimalRotation {
             .workers
             .rotation_aware_pairwise_distances(pairs)
             .await?;
-
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-
         store
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
             .await
     }
 
-    pub async fn eval_distance_pairs(
+    async fn eval_distance_pairs(
         store: &mut Aby3Store,
         pairs: &[(Aby3Query, Aby3VectorRef)],
     ) -> Result<Vec<Aby3DistanceRef>> {
@@ -77,15 +117,13 @@ impl DistanceMinimalRotation {
                     .collect(),
             )
             .await?;
-
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-
         store
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
             .await
     }
 
-    pub async fn eval_distance_batch(
+    async fn eval_distance_batch(
         store: &mut Aby3Store,
         query: &Aby3Query,
         vectors: &[VectorId],
@@ -94,9 +132,7 @@ impl DistanceMinimalRotation {
             .workers
             .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
-
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-
         store
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
             .await

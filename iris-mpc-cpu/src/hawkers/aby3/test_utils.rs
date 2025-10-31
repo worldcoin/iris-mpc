@@ -14,8 +14,9 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::{
-        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef, Aby3VectorRef},
+        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef, Aby3VectorRef, DistanceFn},
         plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        WITH_MIN_ROTA,
     },
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
@@ -30,6 +31,12 @@ use crate::{
 use super::aby3_store::Aby3Store;
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
+
+const DISTANCE_FN: DistanceFn = if WITH_MIN_ROTA {
+    DistanceFn::MinimalRotation
+} else {
+    DistanceFn::Simple
+};
 
 pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
@@ -77,11 +84,12 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .zip(storages.into_iter())
         .map(|(session, storage)| {
             let workers = iris_worker::init_workers(0, storage.clone(), true);
-            Ok(Arc::new(Mutex::new(Aby3Store {
-                session,
+            Ok(Arc::new(Mutex::new(Aby3Store::new(
                 storage,
+                session,
                 workers,
-            })))
+                DISTANCE_FN,
+            ))))
         })
         .collect()
 }
@@ -95,11 +103,12 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
             let storage = Aby3Store::new_storage(None).to_arc();
             let workers = iris_worker::init_workers(0, storage.clone(), true);
 
-            Ok(Arc::new(Mutex::new(Aby3Store {
+            Ok(Arc::new(Mutex::new(Aby3Store::new(
+                storage.clone(),
                 session,
-                storage: storage.clone(),
                 workers,
-            })))
+                DISTANCE_FN,
+            ))))
         })
         .collect()
 }

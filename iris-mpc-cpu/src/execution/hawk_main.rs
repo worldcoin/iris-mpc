@@ -10,7 +10,7 @@ use crate::{
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef,
+            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef, DistanceFn,
         },
         shared_irises::SharedIrises,
     },
@@ -91,6 +91,12 @@ use is_match_batch::is_match_batch;
 
 /// The master switch to enable search-per-rotation or search-center-only.
 pub type SearchRotations = CenterOnly;
+/// The choice of distance function to use in the Aby3Store.
+const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
+    DistanceFn::MinimalRotation
+} else {
+    DistanceFn::Simple
+};
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
@@ -473,14 +479,15 @@ impl HawkActor {
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
-            let aby3_store = Aby3Store {
-                session: Session {
+            let aby3_store = Aby3Store::new(
+                storage,
+                Session {
                     network_session,
                     prf,
                 },
-                storage,
                 workers,
-            };
+                DISTANCE_FN,
+            );
 
             let hawk_session = HawkSession {
                 aby3_store: Arc::new(RwLock::new(aby3_store)),

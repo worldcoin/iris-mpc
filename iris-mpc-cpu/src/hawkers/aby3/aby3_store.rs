@@ -25,15 +25,13 @@ use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     vector_id::VectorId,
-    ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
 
 mod distance_fn;
-
-type DistanceFn = distance_fn::DistanceMinimalRotation;
+pub use distance_fn::DistanceFn;
 
 /// Iris to be searcher or inserted into the store.
 ///
@@ -104,9 +102,25 @@ pub struct Aby3Store {
 
     /// used to spawn cpu bound tasks on a thread pool
     pub workers: IrisPoolHandle,
+
+    distance_fn: distance_fn::DistanceFn,
 }
 
 impl Aby3Store {
+    pub fn new(
+        storage: Aby3SharedIrisesRef,
+        session: Session,
+        workers: IrisPoolHandle,
+        distance_fn: DistanceFn,
+    ) -> Self {
+        Self {
+            storage,
+            session,
+            distance_fn,
+            workers,
+        }
+    }
+
     /// Converts distances from u16 secret shares to u32 shares.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn lift_distances(
@@ -148,7 +162,7 @@ impl Aby3Store {
             return Ok(vec![]);
         }
 
-        DistanceFn::eval_pairwise_distances(self, pairs).await
+        self.distance_fn.eval_pairwise_distances(self, pairs).await
     }
 
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
@@ -398,7 +412,7 @@ impl VectorStore for Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        DistanceFn::eval_distance_pairs(self, pairs).await
+        self.distance_fn.eval_distance_pairs(self, pairs).await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
@@ -410,7 +424,9 @@ impl VectorStore for Aby3Store {
         if vectors.is_empty() {
             return Ok(vec![]);
         }
-        DistanceFn::eval_distance_batch(self, query, vectors).await
+        self.distance_fn
+            .eval_distance_batch(self, query, vectors)
+            .await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
