@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use DistanceFn::*;
 
 impl DistanceFn {
-    pub fn plain_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
+    pub fn plaintext_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
         match self {
             Simple => a.get_distance_fraction(b),
             MinimalRotation => a.get_min_distance_fraction(b),

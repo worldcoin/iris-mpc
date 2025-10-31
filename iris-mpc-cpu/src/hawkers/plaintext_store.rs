@@ -170,7 +170,7 @@ impl VectorStore for PlaintextStore {
                 vector.serial_id()
             )
         })?;
-        let distance = self.distance_fn.plain_distance(vector_code, query);
+        let distance = self.distance_fn.plaintext_distance(vector_code, query);
         Ok(distance)
     }
 
@@ -289,7 +289,7 @@ impl VectorStore for SharedPlaintextStore {
             .collect::<Result<Vec<_>>>()?;
         Ok(vector_codes
             .into_iter()
-            .map(|v| self.distance_fn.plain_distance(v, query))
+            .map(|v| self.distance_fn.plaintext_distance(v, query))
             .collect())
     }
 
@@ -367,7 +367,7 @@ mod tests {
         let d23 = store.eval_distance(&db[2], &ids[3]).await?;
         let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
-        let distance = |a, b| TEST_DISTANCE_FN.plain_distance(a, b);
+        let distance = |a, b| TEST_DISTANCE_FN.plaintext_distance(a, b);
 
         assert_eq!(
             store.less_than(&d01, &d23).await?,

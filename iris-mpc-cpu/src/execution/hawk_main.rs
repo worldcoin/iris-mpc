@@ -92,7 +92,7 @@ use is_match_batch::is_match_batch;
 /// The master switch to enable search-per-rotation or search-center-only.
 pub type SearchRotations = CenterOnly;
 /// The choice of distance function to use in the Aby3Store.
-const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
+pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
     DistanceFn::MinimalRotation
 } else {
     DistanceFn::Simple
