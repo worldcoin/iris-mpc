@@ -113,7 +113,7 @@ impl From<&CliOptions> for requests::Factory {
     }
 }
 
-impl From<&CliOptions> for requests::Generator {
+impl From<&CliOptions> for requests::Generator<requests::Factory> {
     fn from(options: &CliOptions) -> Self {
         Self::new(
             requests::BatchSize::Static(*options.batch_size()),

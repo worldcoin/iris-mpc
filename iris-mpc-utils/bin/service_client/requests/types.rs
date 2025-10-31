@@ -2,7 +2,10 @@ use std::{fmt, future::Future};
 
 use async_trait::async_trait;
 
-use iris_mpc_common::helpers::smpc_request::UniquenessRequest;
+use iris_mpc_common::helpers::smpc_request::{
+    IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest,
+    UniquenessRequest,
+};
 
 /// A data structure representing a batch of requests for system processing.
 #[derive(Debug)]
@@ -79,10 +82,14 @@ pub enum BatchSize {
 /// An enumeration over a set of request message types.
 #[derive(Debug, Clone)]
 pub enum Message {
+    IdentityDeletion(IdentityDeletionRequest),
+    Reauthorisation(ReAuthRequest),
+    ResetCheck(ResetCheckRequest),
+    ResetUpdate(ResetUpdateRequest),
     Uniqueness(UniquenessRequest),
 }
 
 /// A component responsible for generating request message instances.
 pub trait MessageFactory {
-    fn create_request_message(&self, batch_idx: usize, item_idx: usize) -> Message;
+    fn create_message(&self, batch_idx: usize, item_idx: usize) -> Message;
 }
