@@ -1,12 +1,12 @@
-use super::plaintext_store::Base64IrisCode;
-use crate::{
+use crate::{misc::limited_iterator, types::IrisCodeBase64};
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
+use iris_mpc_cpu::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         graph::neighborhood::{Neighborhood, SortedNeighborhoodV},
         GraphMem, HnswSearcher,
     },
 };
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use rand::rngs::ThreadRng;
 use serde_json::{self, Deserializer};
 use std::{fs::File, io::BufReader, sync::Arc};
@@ -115,8 +115,8 @@ pub fn fill_from_ndjson_file(
         let reader = BufReader::new(file);
 
         // Create an iterator over deserialized objects
-        let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-        let stream = super::limited_iterator(stream, limit);
+        let stream = Deserializer::from_reader(reader).into_iter::<IrisCodeBase64>();
+        let stream = limited_iterator(stream, limit);
 
         // Iterate over each deserialized object
         for json_pt in stream {

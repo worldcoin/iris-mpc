@@ -668,8 +668,9 @@ mod tests {
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
         hnsw::{
-            graph::layered_graph::EntryPoint, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-            SortedNeighborhood,
+            graph::{layered_graph::EntryPoint, neighborhood::Neighborhood},
+            vector_store::VectorStoreMut,
+            GraphMem, HnswSearcher, SortedNeighborhood,
         },
     };
     use aes_prng::AesRng;
@@ -727,7 +728,7 @@ mod tests {
             for j in 0..5 {
                 if i != j {
                     links
-                        .insert(&mut vector_store, vectors[j], distances[j])
+                        .insert_and_retain_k(&mut vector_store, vectors[j], distances[j], None)
                         .await?;
                 }
             }
@@ -799,7 +800,7 @@ mod tests {
 
             for j in 4..7 {
                 links
-                    .insert(&mut vector_store, vectors[j], distances[j])
+                    .insert_and_retain_k(&mut vector_store, vectors[j], distances[j], None)
                     .await?;
             }
             let links = links.edge_ids();
