@@ -7,7 +7,7 @@ use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::state_check::SetHash,
     hnsw::{
-        searcher::{ConnectPlan, ConnectPlanLayer},
+        searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
         vector_store::Ref,
     },
 };
@@ -80,14 +80,25 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         self.layers.clone()
     }
 
+    pub fn get_ep_layer(&self) -> Vec<V> {
+        self.entry_point.iter().map(|ep| ep.point.clone()).collect()
+    }
+
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
+        let insertion_layer = plan.layers.len() - 1;
         // If required, set vector as new entry point
-        if plan.set_ep {
-            let insertion_layer = plan.layers.len() - 1;
-            self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
-                .await;
+        match plan.set_ep {
+            SetEntryPoint::False => {}
+            SetEntryPoint::NewLayer => {
+                self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                    .await;
+            }
+            SetEntryPoint::AddToLayer => {
+                self.add_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                    .await;
+            }
         }
 
         // Connect the new vector to its neighbors in each layer.
@@ -112,6 +123,20 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         self.entry_point
             .first()
             .map(|ep| (ep.point.clone(), ep.layer))
+    }
+
+    pub async fn init_entry_points(&mut self, points: Vec<V>, layer: usize) {
+        self.entry_point = points
+            .into_iter()
+            .map(|point| EntryPoint { point, layer })
+            .collect()
+    }
+
+    pub async fn add_entry_point(&mut self, point: V, layer: usize) {
+        if let Some(previous) = self.entry_point.first() {
+            assert!(previous.layer == layer, "add_entry_point: layer mismatch");
+        }
+        self.entry_point.push(EntryPoint { point, layer });
     }
 
     pub async fn set_entry_point(&mut self, point: V, layer: usize) {
@@ -218,14 +243,12 @@ where
 {
     let new_entry_point = graph
         .entry_point
-        .first()
-        .map(|ep| {
-            vec![EntryPoint {
-                point: vector_map(ep.point.clone()),
-                layer: ep.layer,
-            }]
+        .iter()
+        .map(|ep| EntryPoint {
+            point: vector_map(ep.point.clone()),
+            layer: ep.layer,
         })
-        .unwrap_or_default();
+        .collect();
 
     let new_layers: Vec<_> = graph
         .layers
