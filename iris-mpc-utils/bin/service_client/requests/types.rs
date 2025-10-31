@@ -1,8 +1,10 @@
 use std::{fmt, future::Future};
 
+use async_trait::async_trait;
+
 use iris_mpc_common::helpers::smpc_request::UniquenessRequest;
 
-/// A batch of system requests.
+/// A data structure representing a batch of requests for system processing.
 #[derive(Debug)]
 pub struct Batch {
     /// Ordinal batch identifier to distinguish batches.
@@ -39,22 +41,14 @@ impl fmt::Display for Batch {
     }
 }
 
-/// The profile of a batch of system requests is related to the type of requests it contains.
-#[derive(Debug, Clone)]
-pub enum BatchProfile {
-    /// All requests in batch are of same type.
-    Simple(&'static str),
+/// A component responsible for dispatching request messages to system services.
+#[async_trait]
+pub trait BatchDispatcher {
+    /// Dispatchs a batch of requests to system services.
+    pub async fn dispatch_batch(&self, batch: Batch);
 }
 
-/// Size of each batch.
-/// N.B. typcially static but dynamic sizing may be in scope for some tests.
-#[derive(Debug, Clone)]
-pub enum BatchSize {
-    /// Fixed batch size.
-    Static(usize),
-}
-
-/// Trait encapsulting iterating over a set of requests for dispatch.
+/// A component responsible for iterating over sets of requests.
 pub trait BatchIterator {
     /// Count of generated batches.
     fn batch_count(&self) -> usize;
@@ -68,8 +62,27 @@ pub trait BatchIterator {
     fn next_batch(&mut self) -> impl Future<Output = Option<Batch>> + Send;
 }
 
-/// Enumeration over set of supported request message types.
+/// A data structure representing the profile of a request batch, i.e. the type of requests to be processed.
+#[derive(Debug, Clone)]
+pub enum BatchProfile {
+    /// All requests in batch are of same type.
+    Simple(&'static str),
+}
+
+/// A data structure representing inputs used to compute size of a request batch.
+#[derive(Debug, Clone)]
+pub enum BatchSize {
+    /// Batch size is static.
+    Static(usize),
+}
+
+/// An enumeration over a set of request message types.
 #[derive(Debug, Clone)]
 pub enum Message {
     Uniqueness(UniquenessRequest),
+}
+
+/// A component responsible for generating request message instances.
+pub trait MessageFactory {
+    pub fn create_request_message(&self, batch_idx: usize, item_idx: usize) -> Message;
 }

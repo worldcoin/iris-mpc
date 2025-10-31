@@ -17,7 +17,7 @@ use iris_mpc_utils::{
 mod requests;
 mod responses;
 
-use requests::BatchIterator;
+use requests::{BatchDispatcher, BatchIterator};
 
 #[tokio::main]
 pub async fn main() -> Result<()> {

@@ -30,9 +30,9 @@ tracing-test = "0.2.5"
 uuid.workspace = true
 
 [[bin]]
-name = "write-node-config-toml"
-path = "bin/write_node_config_toml.rs"
-
-[[bin]]
 name = "service-client"
 path = "bin/service_client/main.rs"
+
+[[bin]]
+name = "write-node-config-toml"
+path = "bin/write_node_config_toml.rs"

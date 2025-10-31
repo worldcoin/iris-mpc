@@ -6,4 +6,4 @@ mod types;
 pub use batch_generator::{BatchGenerator, BatchGeneratorOptions};
 pub use dispatcher::{Dispatcher, DispatcherOptions};
 pub use factory::{Factory, FactoryOptions};
-pub use types::{BatchIterator, BatchProfile, BatchSize};
+pub use types::{BatchDispatcher, BatchIterator, BatchProfile, BatchSize, MessageFactory};
