@@ -16,6 +16,7 @@ impl MessageFactory for Factory {
     }
 }
 
+/// A service request factory.
 pub struct Factory {
     /// Determines type of requests to be included in each batch.
     batch_profile: BatchProfile,
@@ -69,6 +70,14 @@ impl FactoryByKind {
     }
 
     fn create_uniqueness(_batch_idx: usize, _item_idx: usize) -> UniquenessRequest {
-        unimplemented!("create_uniqueness")
+        UniquenessRequest {
+            batch_size: None,
+            signup_id: "test_signup_id".to_string(),
+            s3_key: key.to_string(),
+            or_rule_serial_ids: None,
+            skip_persistence: None,
+            full_face_mirror_attacks_detection_enabled: Some(true),
+            disable_anonymized_stats: None,
+        }
     }
 }

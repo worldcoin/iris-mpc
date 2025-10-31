@@ -1,6 +1,6 @@
 use super::types::{Batch, BatchIterator, BatchSize, MessageFactory};
 
-/// Encapsulates logic for generating batches of SMPC service requests.
+/// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
 pub struct Generator<F>
 where
