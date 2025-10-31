@@ -3,14 +3,14 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{AllRotations, VecRotationSupport},
+            rot::{CenterOnly, Rotations, VecRotationSupport},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef,
+            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef, DistanceFn,
         },
         shared_irises::SharedIrises,
     },
@@ -90,7 +90,13 @@ use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
 /// The master switch to enable search-per-rotation or search-center-only.
-pub type SearchRotations = AllRotations;
+pub type SearchRotations = CenterOnly;
+/// The choice of distance function to use in the Aby3Store.
+pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
+    DistanceFn::MinimalRotation
+} else {
+    DistanceFn::Simple
+};
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
@@ -473,14 +479,15 @@ impl HawkActor {
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
-            let aby3_store = Aby3Store {
-                session: Session {
+            let aby3_store = Aby3Store::new(
+                storage,
+                Session {
                     network_session,
                     prf,
                 },
-                storage,
                 workers,
-            };
+                DISTANCE_FN,
+            );
 
             let hawk_session = HawkSession {
                 aby3_store: Arc::new(RwLock::new(aby3_store)),
@@ -764,6 +771,7 @@ pub struct HawkRequest {
 // TODO: Unify `BatchQuery` and `HawkRequest`.
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<BatchQuery> for HawkRequest {
+    #[allow(clippy::iter_skip_zero)]
     fn from(batch: BatchQuery) -> Self {
         let n_queries = batch.request_ids.len();
 
@@ -812,17 +820,10 @@ impl From<BatchQuery> for HawkRequest {
                     .map(|chunk| {
                         // Collect the rotations for one request.
                         chunk
+                            .skip(SearchRotations::N_SKIP)
+                            .take(SearchRotations::N_ROTATIONS)
                             .map(|(code, mask, code_proc, mask_proc)| {
-                                // Convert to the query type of Aby3Store
-                                let iris = Arc::new(GaloisRingSharedIris {
-                                    code: code.clone(),
-                                    mask: mask.clone(),
-                                });
-                                let iris_proc = Arc::new(GaloisRingSharedIris {
-                                    code: code_proc.clone(),
-                                    mask: mask_proc.clone(),
-                                });
-                                Aby3Query { iris, iris_proc }
+                                Aby3Query::from_processed(code, mask, code_proc, mask_proc)
                             })
                             .collect_vec()
                             .into()

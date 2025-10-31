@@ -97,14 +97,6 @@ pub trait VectorStore: Debug {
         Ok(results)
     }
 
-    /// Evaluate the minimal distance over all distances between rotations of the query and a vector in the input batch.
-    /// TODO: replace eval_distance_batch with this method when API is stable.
-    async fn eval_minimal_rotation_distance_batch(
-        &mut self,
-        query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
-    ) -> Result<Vec<Self::DistanceRef>>;
-
     /// Check whether a batch of distances are matches.
     /// The default implementation is a loop over `is_match`.
     /// Override for more efficient batch match checks.

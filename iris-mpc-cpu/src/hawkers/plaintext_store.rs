@@ -1,7 +1,11 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
-    hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
+    hawkers::{
+        aby3::aby3_store::DistanceFn,
+        shared_irises::{SharedIrises, SharedIrisesRef},
+        TEST_DISTANCE_FN,
+    },
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
@@ -32,15 +36,29 @@ pub type PlaintextSharedIrisesRef = SharedIrisesRef<PlaintextStoredIris>;
 /// Vector store which works over plaintext iris codes and distance computations.
 ///
 /// This variant is only suitable for single-threaded operation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub storage: PlaintextSharedIrises,
+    pub distance_fn: DistanceFn,
+}
+
+impl Default for PlaintextStore {
+    fn default() -> Self {
+        Self::with_storage(PlaintextSharedIrises::default())
+    }
 }
 
 impl PlaintextStore {
     /// Generate a new empty `PlaintextStore`.
     pub fn new() -> Self {
-        Self::default()
+        Default::default()
+    }
+
+    pub fn with_storage(storage: PlaintextSharedIrises) -> Self {
+        Self {
+            storage,
+            distance_fn: TEST_DISTANCE_FN,
+        }
     }
 
     /// Return the size of the underlying set of irises.
@@ -69,9 +87,7 @@ impl PlaintextStore {
             .enumerate()
             .map(|(idx, iris)| (VectorId::from_0_index(idx as u32), Arc::new(iris)))
             .collect::<HashMap<VectorId, PlaintextStoredIris>>();
-        Self {
-            storage: SharedIrises::new(points, Default::default()),
-        }
+        Self::with_storage(SharedIrises::new(points, Default::default()))
     }
 
     /// Generate an HNSW graph over the first `graph_size` entries of this `PlaintextStore`, sorted in increasing
@@ -148,33 +164,14 @@ impl VectorStore for PlaintextStore {
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
-        let serial_id = vector.serial_id();
-        let vector_code = self
-            .storage
-            .get_vector(vector)
-            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
-        Ok(query.get_distance_fraction(vector_code))
-    }
-
-    async fn eval_minimal_rotation_distance_batch(
-        &mut self,
-        query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
-    ) -> Result<Vec<Self::DistanceRef>> {
-        debug!(event_type = EvaluateDistance.id());
-        let vector_codes = vectors
-            .iter()
-            .map(|v| {
-                let serial_id = v.serial_id();
-                self.storage.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(vector_codes
-            .into_iter()
-            .map(|v| v.get_min_distance_fraction(query))
-            .collect())
+        let vector_code = self.storage.get_vector(vector).ok_or_else(|| {
+            eyre::eyre!(
+                "Vector ID not found in store for serial {}",
+                vector.serial_id()
+            )
+        })?;
+        let distance = self.distance_fn.plaintext_distance(vector_code, query);
+        Ok(distance)
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -217,12 +214,14 @@ impl VectorStoreMut for PlaintextStore {
 #[derive(Debug, Clone)]
 pub struct SharedPlaintextStore {
     pub storage: PlaintextSharedIrisesRef,
+    distance_fn: DistanceFn,
 }
 
 impl Default for SharedPlaintextStore {
     fn default() -> Self {
         Self {
             storage: SharedIrises::default().to_arc(),
+            distance_fn: TEST_DISTANCE_FN,
         }
     }
 }
@@ -245,6 +244,7 @@ impl From<PlaintextStore> for SharedPlaintextStore {
     fn from(value: PlaintextStore) -> Self {
         Self {
             storage: value.storage.to_arc(),
+            distance_fn: value.distance_fn,
         }
     }
 }
@@ -267,16 +267,11 @@ impl VectorStore for SharedPlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
-        debug!(event_type = EvaluateDistance.id());
-        let store = self.storage.read().await;
-        let serial_id = vector.serial_id();
-        let vector_code = store
-            .get_vector(vector)
-            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
-        Ok(query.get_distance_fraction(vector_code))
+        let distances = self.eval_distance_batch(query, &[*vector]).await?;
+        Ok(distances[0])
     }
 
-    async fn eval_minimal_rotation_distance_batch(
+    async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
@@ -294,7 +289,7 @@ impl VectorStore for SharedPlaintextStore {
             .collect::<Result<Vec<_>>>()?;
         Ok(vector_codes
             .into_iter()
-            .map(|v| v.get_min_distance_fraction(query))
+            .map(|v| self.distance_fn.plaintext_distance(v, query))
             .collect())
     }
 
@@ -372,39 +367,41 @@ mod tests {
         let d23 = store.eval_distance(&db[2], &ids[3]).await?;
         let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
+        let distance = |a, b| TEST_DISTANCE_FN.plaintext_distance(a, b);
+
         assert_eq!(
             store.less_than(&d01, &d23).await?,
-            db[0].get_distance(&db[1]) < db[2].get_distance(&db[3])
+            distance(&db[0], &db[1]) < distance(&db[2], &db[3])
         );
 
         assert_eq!(
             store.less_than(&d23, &d01).await?,
-            db[2].get_distance(&db[3]) < db[0].get_distance(&db[1])
+            distance(&db[2], &db[3]) < distance(&db[0], &db[1])
         );
 
         assert_eq!(
             store.less_than(&d02, &d13).await?,
-            db[0].get_distance(&db[2]) < db[1].get_distance(&db[3])
+            distance(&db[0], &db[2]) < distance(&db[1], &db[3])
         );
 
         assert_eq!(
             store.less_than(&d03, &d12).await?,
-            db[0].get_distance(&db[3]) < db[1].get_distance(&db[2])
+            distance(&db[0], &db[3]) < distance(&db[1], &db[2])
         );
 
         assert_eq!(
             store.less_than(&d10, &d23).await?,
-            db[1].get_distance(&db[0]) < db[2].get_distance(&db[3])
+            distance(&db[1], &db[0]) < distance(&db[2], &db[3])
         );
 
         assert_eq!(
             store.less_than(&d12, &d30).await?,
-            db[1].get_distance(&db[2]) < db[3].get_distance(&db[0])
+            distance(&db[1], &db[2]) < distance(&db[3], &db[0])
         );
 
         assert_eq!(
             store.less_than(&d02, &d01).await?,
-            db[0].get_distance(&db[2]) < db[0].get_distance(&db[1])
+            distance(&db[0], &db[2]) < distance(&db[0], &db[1])
         );
 
         Ok(())

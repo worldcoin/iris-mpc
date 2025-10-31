@@ -10,6 +10,8 @@
 //! Each store implements the `Store` trait which defines the common interface for all the stores.
 //! The `Store` trait is defined in `hnsw::vector_store.rs`.
 
+use crate::{execution::hawk_main, hawkers::aby3::aby3_store::DistanceFn};
+
 /// Store with vectors in secret shared form.
 /// The underlying operations are secure multi-party computation (MPC) operations.
 pub mod aby3;
@@ -23,3 +25,5 @@ pub mod shared_irises;
 pub mod build_plaintext;
 
 pub mod naive_knn_plaintext;
+
+const TEST_DISTANCE_FN: DistanceFn = hawk_main::DISTANCE_FN;

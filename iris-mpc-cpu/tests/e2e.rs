@@ -65,12 +65,8 @@ async fn create_graph_from_plain_dbs(
         .collect();
     let right_storage = SharedIrises::new(right_points, Default::default());
 
-    let mut left_store = PlaintextStore {
-        storage: left_storage,
-    };
-    let mut right_store = PlaintextStore {
-        storage: right_storage,
-    };
+    let mut left_store = PlaintextStore::with_storage(left_storage);
+    let mut right_store = PlaintextStore::with_storage(right_storage);
 
     let searcher = HnswSearcher {
         params: params.clone(),
