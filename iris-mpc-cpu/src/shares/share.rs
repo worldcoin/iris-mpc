@@ -284,6 +284,11 @@ impl<T: IntRing2k> Neg for &Share<T> {
     }
 }
 
+// WARNING: This only works because there are three additive shares.
+// NOT(b) = NOT(b_0 XOR b_1 XOR b_2)
+// = b_0 XOR b_1 XOR b_2 XOR 1
+// = b_0 XOR 1 XOR b_1 XOR 1 XOR b_2 XOR 1
+// = NOT(b_0) XOR NOT(b_1) XOR NOT(b_2)
 impl<T: IntRing2k> Not for &Share<T> {
     type Output = Share<T>;
 
