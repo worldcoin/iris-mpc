@@ -771,6 +771,7 @@ pub struct HawkRequest {
 // TODO: Unify `BatchQuery` and `HawkRequest`.
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<BatchQuery> for HawkRequest {
+    #[allow(clippy::iter_skip_zero)]
     fn from(batch: BatchQuery) -> Self {
         let n_queries = batch.request_ids.len();
 

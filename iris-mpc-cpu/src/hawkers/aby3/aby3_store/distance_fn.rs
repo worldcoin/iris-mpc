@@ -2,18 +2,26 @@ use super::{
     Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
 };
 use eyre::Result;
-use iris_mpc_common::ROTATIONS;
+use iris_mpc_common::{iris_db::iris::IrisCode, ROTATIONS};
 use itertools::Itertools;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DistanceFn {
     Simple,
     MinimalRotation,
 }
 
+use serde::{Deserialize, Serialize};
 use DistanceFn::*;
 
 impl DistanceFn {
+    pub fn plain_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
+        match self {
+            Simple => a.get_distance_fraction(b),
+            MinimalRotation => a.get_min_distance_fraction(b),
+        }
+    }
+
     pub async fn eval_pairwise_distances(
         self,
         store: &mut Aby3Store,

@@ -1,7 +1,11 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
-    hawkers::{shared_irises::{SharedIrises, SharedIrisesRef}, WITH_MIN_ROTA},
+    hawkers::{
+        aby3::aby3_store::DistanceFn,
+        shared_irises::{SharedIrises, SharedIrisesRef},
+        TEST_DISTANCE_FN,
+    },
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
@@ -32,15 +36,29 @@ pub type PlaintextSharedIrisesRef = SharedIrisesRef<PlaintextStoredIris>;
 /// Vector store which works over plaintext iris codes and distance computations.
 ///
 /// This variant is only suitable for single-threaded operation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub storage: PlaintextSharedIrises,
+    pub distance_fn: DistanceFn,
+}
+
+impl Default for PlaintextStore {
+    fn default() -> Self {
+        Self::with_storage(PlaintextSharedIrises::default())
+    }
 }
 
 impl PlaintextStore {
     /// Generate a new empty `PlaintextStore`.
     pub fn new() -> Self {
-        Self::default()
+        Default::default()
+    }
+
+    pub fn with_storage(storage: PlaintextSharedIrises) -> Self {
+        Self {
+            storage,
+            distance_fn: TEST_DISTANCE_FN,
+        }
     }
 
     /// Return the size of the underlying set of irises.
@@ -69,9 +87,7 @@ impl PlaintextStore {
             .enumerate()
             .map(|(idx, iris)| (VectorId::from_0_index(idx as u32), Arc::new(iris)))
             .collect::<HashMap<VectorId, PlaintextStoredIris>>();
-        Self {
-            storage: SharedIrises::new(points, Default::default()),
-        }
+        Self::with_storage(SharedIrises::new(points, Default::default()))
     }
 
     /// Generate an HNSW graph over the first `graph_size` entries of this `PlaintextStore`, sorted in increasing
@@ -111,26 +127,6 @@ impl PlaintextStore {
 
         Ok(graph)
     }
-
-    async fn eval_distance_impl(
-        &mut self,
-        query: &Arc<IrisCode>,
-        vector: &VectorId,
-        min_rota: bool,
-    ) -> Result<(u16, u16)> {
-        let vector_code = self.storage.get_vector(vector).ok_or_else(|| {
-            eyre::eyre!(
-                "Vector ID not found in store for serial {}",
-                vector.serial_id()
-            )
-        })?;
-        let distance = if min_rota {
-            vector_code.get_min_distance_fraction(query)
-        } else {
-            vector_code.get_distance_fraction(query)
-        };
-        Ok(distance)
-    }
 }
 
 fn fraction_is_match(dist: &(u16, u16)) -> bool {
@@ -168,7 +164,14 @@ impl VectorStore for PlaintextStore {
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
-        self.eval_distance_impl(query, vector, WITH_MIN_ROTA).await
+        let vector_code = self.storage.get_vector(vector).ok_or_else(|| {
+            eyre::eyre!(
+                "Vector ID not found in store for serial {}",
+                vector.serial_id()
+            )
+        })?;
+        let distance = self.distance_fn.plain_distance(vector_code, query);
+        Ok(distance)
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -211,12 +214,14 @@ impl VectorStoreMut for PlaintextStore {
 #[derive(Debug, Clone)]
 pub struct SharedPlaintextStore {
     pub storage: PlaintextSharedIrisesRef,
+    distance_fn: DistanceFn,
 }
 
 impl Default for SharedPlaintextStore {
     fn default() -> Self {
         Self {
             storage: SharedIrises::default().to_arc(),
+            distance_fn: TEST_DISTANCE_FN,
         }
     }
 }
@@ -233,40 +238,13 @@ impl SharedPlaintextStore {
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
-
-    async fn eval_distance_batch_impl(
-        &mut self,
-        query: &Arc<IrisCode>,
-        vectors: &[VectorId],
-        min_rota: bool,
-    ) -> Result<Vec<(u16, u16)>> {
-        let store = self.storage.read().await;
-        let vector_codes = vectors
-            .iter()
-            .map(|v| {
-                let serial_id = v.serial_id();
-                store.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(vector_codes
-            .into_iter()
-            .map(|v| {
-                if min_rota {
-                    v.get_min_distance_fraction(query)
-                } else {
-                    v.get_distance_fraction(query)
-                }
-            })
-            .collect())
-    }
 }
 
 impl From<PlaintextStore> for SharedPlaintextStore {
     fn from(value: PlaintextStore) -> Self {
         Self {
             storage: value.storage.to_arc(),
+            distance_fn: value.distance_fn,
         }
     }
 }
@@ -290,7 +268,7 @@ impl VectorStore for SharedPlaintextStore {
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         let distances = self.eval_distance_batch(query, &[*vector]).await?;
-        Ok(distances[0].clone())
+        Ok(distances[0])
     }
 
     async fn eval_distance_batch(
@@ -299,8 +277,20 @@ impl VectorStore for SharedPlaintextStore {
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
-        self.eval_distance_batch_impl(query, vectors, WITH_MIN_ROTA)
-            .await
+        let store = self.storage.read().await;
+        let vector_codes = vectors
+            .iter()
+            .map(|v| {
+                let serial_id = v.serial_id();
+                store.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(vector_codes
+            .into_iter()
+            .map(|v| self.distance_fn.plain_distance(v, query))
+            .collect())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -377,13 +367,7 @@ mod tests {
         let d23 = store.eval_distance(&db[2], &ids[3]).await?;
         let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
-        fn distance(a: &IrisCode, b: &IrisCode) -> (u16, u16) {
-            if WITH_MIN_ROTA {
-                a.get_min_distance_fraction(b)
-            } else {
-                a.get_distance_fraction(b)
-            }
-        }
+        let distance = |a, b| TEST_DISTANCE_FN.plain_distance(a, b);
 
         assert_eq!(
             store.less_than(&d01, &d23).await?,
