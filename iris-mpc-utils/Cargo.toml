@@ -28,11 +28,3 @@ sqlx.workspace = true
 toml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-
-[[bin]]
-name = "service-client"
-path = "bin/service_client/main.rs"
-
-[[bin]]
-name = "write-node-config-toml"
-path = "bin/write_node_config_toml.rs"

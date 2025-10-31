@@ -69,7 +69,7 @@ iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
 iris-mpc-anon-stats-server = { path = "../iris-mpc-anon-stats-server" }
-
+iris-mpc-utils = { path = "../iris-mpc-utils" }
 
 # ---------------------
 # binaries for iris-mpc
@@ -187,6 +187,10 @@ path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
 [[bin]]
 name = "write-node-config-toml"
 path = "bin/iris-mpc-utils/write_node_config_toml.rs"
+
+[[bin]]
+name = "node-service-client"
+path = "bin/node_service_client/main.rs"
 
 # ---------------------
 # binaries for iris-mpc-anon-stats-server
