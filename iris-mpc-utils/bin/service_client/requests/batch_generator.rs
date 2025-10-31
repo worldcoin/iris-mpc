@@ -5,60 +5,45 @@ use super::{
 
 /// Encapsulates logic for generating batches of SMPC service requests.
 #[derive(Debug)]
-pub struct BatchGenerator {
+pub struct Generator {
     // Count of generated batches.
     batch_count: usize,
 
-    // Associated component that instantiates request instances.
-    factory: Factory,
-
-    // Associated options.
-    options: BatchGeneratorOptions,
-}
-
-impl BatchGenerator {
-    pub fn new(options: BatchGeneratorOptions, factory: Factory) -> Self {
-        Self {
-            factory,
-            batch_count: 0,
-            options: options.to_owned(),
-        }
-    }
-}
-
-/// Options for request batch generation.
-#[derive(Debug, Clone)]
-pub struct BatchGeneratorOptions {
     /// Size of each batch.
     batch_size: BatchSize,
+
+    // Associated component that instantiates request instances.
+    factory: Factory,
 
     /// Number of request batches to generate.
     n_batches: usize,
 }
 
-impl BatchGeneratorOptions {
-    pub fn new(batch_size: BatchSize, n_batches: usize) -> Self {
+impl Generator {
+    pub fn new(batch_size: BatchSize, factory: Factory, n_batches: usize) -> Self {
         Self {
+            batch_count: 0,
             batch_size,
+            factory,
             n_batches,
         }
     }
 }
 
-impl BatchIterator for BatchGenerator {
+impl BatchIterator for Generator {
     fn batch_count(&self) -> usize {
         self.batch_count
     }
 
     async fn next_batch(&mut self) -> Option<Batch> {
-        if self.batch_count() == self.options.n_batches {
+        if self.batch_count() == self.n_batches {
             return None;
         }
 
         let batch_idx = self.batch_count() + 1;
         let mut batch = Batch::new(batch_idx);
 
-        match self.options.batch_size {
+        match self.batch_size {
             BatchSize::Static(size) => {
                 for item_idx in 1..(size + 1) {
                     let item = self.factory.create_request_message(batch_idx, item_idx);

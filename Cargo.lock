@@ -2906,16 +2906,17 @@ dependencies = [
 name = "iris-mpc-utils"
 version = "0.1.0"
 dependencies = [
- "aes-prng",
  "async-trait",
  "aws-config",
  "aws-sdk-rds",
  "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
  "bincode",
+ "clap",
+ "dotenvy",
  "eyre",
- "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",
  "iris-mpc-store",
@@ -2924,10 +2925,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tokio",
+ "toml",
  "tracing",
- "tracing-subscriber",
- "tracing-test",
- "uuid",
 ]
 
 [[package]]

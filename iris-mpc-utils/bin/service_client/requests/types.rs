@@ -45,7 +45,7 @@ impl fmt::Display for Batch {
 #[async_trait]
 pub trait BatchDispatcher {
     /// Dispatchs a batch of requests to system services.
-    pub async fn dispatch_batch(&self, batch: Batch);
+    async fn dispatch_batch(&self, batch: Batch);
 }
 
 /// A component responsible for iterating over sets of requests.
@@ -84,5 +84,5 @@ pub enum Message {
 
 /// A component responsible for generating request message instances.
 pub trait MessageFactory {
-    pub fn create_request_message(&self, batch_idx: usize, item_idx: usize) -> Message;
+    fn create_request_message(&self, batch_idx: usize, item_idx: usize) -> Message;
 }

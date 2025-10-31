@@ -6,17 +6,17 @@ use super::types::{BatchProfile, Message};
 
 #[derive(Debug)]
 pub struct Factory {
-    // Associated options.
-    options: FactoryOptions,
+    /// Determines type of requests to be included in each batch.
+    batch_profile: BatchProfile,
 }
 
 impl Factory {
-    pub fn new(options: FactoryOptions) -> Self {
-        Self { options }
+    pub fn new(batch_profile: BatchProfile) -> Self {
+        Self { batch_profile }
     }
 
     pub fn create_request_message(&self, batch_idx: usize, item_idx: usize) -> Message {
-        match self.options.batch_profile {
+        match self.batch_profile {
             BatchProfile::Simple(kind) => match kind {
                 UNIQUENESS_MESSAGE_TYPE => {
                     Message::Uniqueness(create_request_uniqueness(batch_idx, item_idx))
@@ -24,19 +24,6 @@ impl Factory {
                 _ => panic!("Unsupported batch profile"),
             },
         }
-    }
-}
-
-/// Options for creating SMPC service requests.
-#[derive(Debug, Clone)]
-pub struct FactoryOptions {
-    /// Type of requests to be included in each batch.
-    batch_profile: BatchProfile,
-}
-
-impl FactoryOptions {
-    pub fn new(batch_profile: BatchProfile) -> Self {
-        Self { batch_profile }
     }
 }
 

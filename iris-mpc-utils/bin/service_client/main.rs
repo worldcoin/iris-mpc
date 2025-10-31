@@ -25,7 +25,7 @@ pub async fn main() -> Result<()> {
     println!("Running with options: {:?}", &options,);
 
     let requests_dispatcher = requests::Dispatcher::from(&options);
-    let mut requests_generator = requests::BatchGenerator::from(&options);
+    let mut requests_generator = requests::Generator::from(&options);
 
     while let Some(request_batch) = requests_generator.next_batch().await {
         println!("Request batch generated: {:?}", request_batch);
@@ -102,43 +102,22 @@ impl CliOptions {
 }
 
 impl From<&CliOptions> for requests::Dispatcher {
-    fn from(options: &CliOptions) -> Self {
-        Self::new(requests::DispatcherOptions::from(options))
-    }
-}
-
-impl From<&CliOptions> for requests::DispatcherOptions {
     fn from(_options: &CliOptions) -> Self {
         Self::new()
     }
 }
 
 impl From<&CliOptions> for requests::Factory {
-    fn from(options: &CliOptions) -> Self {
-        Self::new(requests::FactoryOptions::from(options))
-    }
-}
-
-impl From<&CliOptions> for requests::FactoryOptions {
-    fn from(_options: &CliOptions) -> Self {
-        // TODD: hydrate batch-profile from cli options.
+    fn from(_: &CliOptions) -> Self {
         Self::new(requests::BatchProfile::Simple(UNIQUENESS_MESSAGE_TYPE))
     }
 }
 
-impl From<&CliOptions> for requests::BatchGenerator {
-    fn from(options: &CliOptions) -> Self {
-        Self::new(
-            requests::BatchGeneratorOptions::from(options),
-            requests::Factory::from(options),
-        )
-    }
-}
-
-impl From<&CliOptions> for requests::BatchGeneratorOptions {
+impl From<&CliOptions> for requests::Generator {
     fn from(options: &CliOptions) -> Self {
         Self::new(
             requests::BatchSize::Static(*options.batch_size()),
+            requests::Factory::from(options),
             *options.n_batches(),
         )
     }
