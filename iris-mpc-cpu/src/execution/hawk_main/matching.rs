@@ -1,7 +1,8 @@
 use super::{
-    intra_batch::IntraMatch, rot::VecRots, BothEyes, HawkInsertPlan, MapEdges, Orientation,
-    StoreId, UseOrRule, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
+    intra_batch::IntraMatch, BothEyes, HawkInsertPlan, MapEdges, Orientation, StoreId, UseOrRule,
+    VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
+use crate::execution::hawk_main::VecRotations;
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
 
@@ -25,7 +26,7 @@ pub struct BatchStep1(VecRequests<Step1>);
 
 impl BatchStep1 {
     pub fn new(
-        plans: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        plans: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
         luc_ids: &VecRequests<Vec<VectorId>>,
         request_types: VecRequests<RequestType>,
     ) -> Self {
@@ -78,7 +79,7 @@ struct Step1 {
 
 impl Step1 {
     fn new(
-        search_results: BothEyes<&VecRots<HawkInsertPlan>>,
+        search_results: BothEyes<&VecRotations<HawkInsertPlan>>,
         luc_ids: Vec<VectorId>,
         request_type: RequestType,
     ) -> Step1 {
@@ -397,7 +398,7 @@ impl Step3 {
 ///
 /// LUC *OR* policy: "Local" irises match if either side matches.
 ///
-/// Intra-batch *OR* policy: match against requests before this request in the same batch.
+/// Intra-batch *AND* policy: match against requests before this request in the same batch.
 ///
 /// Partial matches: set `eyes: Only(Left)` or `eyes: Only(Right)`.
 ///
@@ -449,15 +450,14 @@ impl Filter {
     }
 
     fn intra_rule(&self, left: bool, right: bool) -> bool {
-        self.intra_batch && self.luc_rule(left, right)
+        self.intra_batch && self.search_rule(left, right)
     }
 }
 #[cfg(test)]
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
-    use iris_mpc_common::ROTATIONS;
-
-    use crate::execution::hawk_main::{HawkResult, InsertPlanV};
+    use crate::execution::hawk_main::rot::Rotations;
+    use crate::execution::hawk_main::{HawkResult, InsertPlanV, SearchRotations, VecRotations};
     use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::SortedNeighborhood;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
@@ -549,10 +549,10 @@ mod tests {
     #[test]
     fn test_intra_rule() {
         for x in [false, true] {
-            // Matching within a batch: OR rule.
-            assert_eq!(FILTER_INTRA.intra_rule(true, x), true);
-            assert_eq!(FILTER_INTRA.intra_rule(x, true), true);
-            assert_eq!(FILTER_INTRA.intra_rule(false, false), false);
+            // Matching within a batch: AND rule.
+            assert_eq!(FILTER_INTRA.intra_rule(false, x), false);
+            assert_eq!(FILTER_INTRA.intra_rule(x, false), false);
+            assert_eq!(FILTER_INTRA.intra_rule(true, true), true);
 
             // If intra-batch is not requested, always false.
             for y in [false, true] {
@@ -711,7 +711,7 @@ mod tests {
                     set_ep: false,
                 },
             };
-            VecRots::from(vec![insert_plan; ROTATIONS])
+            VecRotations::from(vec![insert_plan; SearchRotations::N_ROTATIONS])
         };
 
         let search_results = [

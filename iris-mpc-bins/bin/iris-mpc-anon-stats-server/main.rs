@@ -39,6 +39,7 @@ async fn main() -> Result<()> {
     println!("Init config");
     let mut config: AnonStatsServerConfig = AnonStatsServerConfig::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
+    config.apply_party_network_defaults()?;
 
     let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
         Ok(handle) => handle,
@@ -58,7 +59,6 @@ async fn main() -> Result<()> {
     tracing::info!("Healthcheck server running on port {}", healthcheck_port);
 
     // set up tcp networking
-
     let identities = generate_local_identities();
     let role_assignments: RoleAssignment = identities
         .iter()

@@ -2,7 +2,7 @@ use crate::{
     execution::session::Session,
     protocol::{
         binary::{bit_inject_ot_2round, extract_msb_u32_batch},
-        ops::{cross_compare_and_swap, B},
+        ops::{min_of_pair_batch, B},
     },
     shares::{share::DistanceShare, vecshare::VecShare, Share},
 };
@@ -91,7 +91,7 @@ pub async fn compare_min_threshold_buckets(
             .map(|(new, reduced)| (new, reduced.clone()))
             .collect();
 
-        reduced_distances = cross_compare_and_swap(session, &distances_to_reduce).await?;
+        reduced_distances = min_of_pair_batch(session, &distances_to_reduce).await?;
     }
 
     // Now we have a single distance for each group, we can compare it to the thresholds
