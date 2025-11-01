@@ -16,20 +16,15 @@ use iris_mpc_common::{
 };
 use iris_mpc_common::{job::Eye, tracing::initialize_tracing};
 use iris_mpc_cpu::{
-    execution::{
-        hawk_main::{HawkArgs, Orientation},
-        local::generate_local_identities,
-        player::{Role, RoleAssignment},
-        session::{NetworkSession, Session},
+    execution::hawk_main::Orientation,
+    network::{
+        tcp::{build_network_handle, NetworkHandleArgs},
+        value::NetworkValue,
     },
-    network::{tcp::build_network_handle, value::NetworkValue},
-    protocol::{
-        anon_stats::compare_min_threshold_buckets,
-        ops::{open_ring, setup_replicated_prf},
-    },
+    protocol::{anon_stats::compare_min_threshold_buckets, ops::open_ring},
 };
 use itertools::Itertools;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -59,61 +54,22 @@ async fn main() -> Result<()> {
     tracing::info!("Healthcheck server running on port {}", healthcheck_port);
 
     // set up tcp networking
-    let identities = generate_local_identities();
-    let role_assignments: RoleAssignment = identities
-        .iter()
-        .enumerate()
-        .map(|(index, id)| (Role::new(index), id.clone()))
-        .collect();
-    let role_assignments = std::sync::Arc::new(role_assignments);
-
-    // abuse the hawk args struct for now
-    let args = HawkArgs {
+    let args = NetworkHandleArgs {
         party_index: config.party_id,
         addresses: config.addresses.clone(),
-        request_parallelism: 1,
-        connection_parallelism: 1,
-        hnsw_param_M: 0,
-        hnsw_param_ef_search: 0,
-        hnsw_param_ef_constr: 0,
-        disable_persistence: false,
-        hnsw_prf_key: None,
+        connection_parallelism: 8,
+        request_parallelism: 8,
+        sessions_per_request: 1,
         tls: None,
-        n_buckets: 0,
-        match_distances_buffer_size: 0,
-        numa: false,
     };
     let ct = CancellationToken::new();
 
-    // TODO: encapsulate networking setup in a function
-    let mut networking = build_network_handle(&args, ct.child_token(), &identities, 8).await?;
-
-    let tcp_sessions = networking
+    let mut networking = build_network_handle(args, ct.child_token()).await?;
+    let mut sessions = networking
         .as_mut()
         .make_sessions()
         .await
         .context("Making sessions")?;
-
-    let networking_sessions = tcp_sessions
-        .into_iter()
-        .map(|tcp_session| NetworkSession {
-            session_id: tcp_session.id(),
-            role_assignments: role_assignments.clone(),
-            networking: Box::new(tcp_session),
-            own_role: Role::new(config.party_id),
-        })
-        .collect_vec();
-    let mut sessions = Vec::new();
-    // todo parallelize session setup
-    for mut network_session in networking_sessions {
-        let my_session_seed = rand::thread_rng().gen();
-        let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
-        let session = Session {
-            network_session,
-            prf,
-        };
-        sessions.push(session);
-    }
     tracing::info!("Networking sessions established.");
 
     let session = &mut sessions[0];

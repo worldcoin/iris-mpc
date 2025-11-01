@@ -45,18 +45,19 @@ sha2.workspace = true
 sodiumoxide = "0.2.7"
 sqlx.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 toml.workspace = true
 tonic = "0.12.3"
 metrics.workspace = true
 metrics-exporter-statsd.workspace = true
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
-    "uuid",
-    "chrono",
-    "smallvec",
-    "tokio",
-    "serde",
-    "env-filter",
+  "uuid",
+  "chrono",
+  "smallvec",
+  "tokio",
+  "serde",
+  "env-filter",
 ] }
 tracing-subscriber.workspace = true
 uuid.workspace = true
@@ -176,7 +177,6 @@ path = "bin/iris-mpc-upgrade/reshare-client.rs"
 [[bin]]
 name = "rerandomize-db"
 path = "bin/iris-mpc-upgrade/rerandomize_db.rs"
-
 
 
 # ---------------------
