@@ -46,6 +46,19 @@ pub struct AnonStatsServerConfig {
     /// Number of buckets to use in 1D anon stats computation.
     pub n_buckets_1d: usize,
 
+    #[serde(default = "default_min_1d_job_size")]
+    /// Minimum job size for 1D anon stats computation.
+    /// If the available job size is smaller than this, the party will wait until enough data is available.
+    pub min_1d_job_size: usize,
+
+    #[serde(default)]
+    /// Database connection URL.
+    pub db_url: String,
+
+    #[serde(default = "default_schema_name")]
+    /// Database schema name.
+    pub db_schema_name: String,
+
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub node_hostnames: Vec<String>,
 
@@ -66,6 +79,14 @@ fn default_healthcheck_port() -> usize {
 
 fn default_n_buckets_1d() -> usize {
     10
+}
+
+fn default_min_1d_job_size() -> usize {
+    1000
+}
+
+fn default_schema_name() -> String {
+    "anon_stats_mpc".to_string()
 }
 
 impl AnonStatsServerConfig {

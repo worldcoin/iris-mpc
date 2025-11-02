@@ -47,14 +47,16 @@ impl AnonStatsStore {
 
         Ok(row.0)
     }
+    /// Get available anon stats entries from the DB for the given origin, up to the given limit.
+    /// Returns a tuple of (ids, Vec<(match_id, DistanceBundle1D)>)
     pub async fn get_available_anon_stats(
         &self,
         origin: AnonStatsOrigin,
         limit: usize,
-    ) -> Result<Vec<(i64, DistanceBundle1D)>> {
+    ) -> Result<(Vec<i64>, Vec<(i64, DistanceBundle1D)>)> {
         let res: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
             r#"
-            SELECT (id, match_id,bundle) FROM anon_stats_1d WHERE processed = FALSE and origin = $1
+            SELECT id, match_id, bundle FROM anon_stats_1d WHERE processed = FALSE and origin = $1
             ORDER BY id ASC
             LIMIT $2
             "#,
@@ -64,7 +66,7 @@ impl AnonStatsStore {
         .fetch_all(&self.pool)
         .await?;
 
-        let distance_bundles = res
+        let (ids, distance_bundles) = res
             .into_iter()
             .map(|(id, match_id, bundle_bytes)| {
                 let bundle: DistanceBundle1D =
@@ -75,11 +77,11 @@ impl AnonStatsStore {
                             e
                         )
                     })?;
-                Result::<_, eyre::Report>::Ok((match_id, bundle))
+                Result::<_, eyre::Report>::Ok((id, (match_id, bundle)))
             })
-            .collect::<Result<Vec<_>, eyre::Report>>()?;
+            .collect::<Result<(Vec<_>, Vec<_>), eyre::Report>>()?;
 
-        Ok(distance_bundles)
+        Ok((ids, distance_bundles))
     }
 
     pub async fn mark_anon_stats_processed(&self, ids: &[i64]) -> Result<()> {

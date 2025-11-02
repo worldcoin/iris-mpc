@@ -63,4 +63,8 @@ impl AnonStats1DMapping {
     pub fn into_bundles(self) -> Vec<DistanceBundle1D> {
         self.stats.into_iter().map(|(_, bundle)| bundle).collect()
     }
+
+    pub fn truncate(&mut self, new_size: usize) {
+        self.stats.truncate(new_size);
+    }
 }

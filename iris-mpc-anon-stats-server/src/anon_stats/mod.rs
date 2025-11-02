@@ -1,11 +1,18 @@
 use eyre::Result;
-use iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
+use iris_mpc_common::{
+    helpers::statistics::BucketStatistics, iris_db::iris::MATCH_THRESHOLD_RATIO,
+};
 use iris_mpc_cpu::{
     execution::session::Session,
-    protocol::ops::{batch_signed_lift_vec, translate_threshold_a},
+    protocol::{
+        anon_stats::compare_min_threshold_buckets,
+        ops::{batch_signed_lift_vec, open_ring, translate_threshold_a},
+    },
     shares::share::DistanceShare,
 };
 use itertools::Itertools;
+
+use crate::anon_stats::types::{AnonStats1DMapping, AnonStatsOrigin};
 
 pub mod store;
 pub mod types;
@@ -49,6 +56,32 @@ pub async fn lift_bundles_1d(
         .collect();
     assert!(idx == lifted_flattened.len());
     Ok(lifted)
+}
+
+pub async fn process_1d_anon_stats_job(
+    session: &mut Session,
+    job: AnonStats1DMapping,
+    origin: &AnonStatsOrigin,
+    config: &crate::config::AnonStatsServerConfig,
+) -> Result<BucketStatistics> {
+    let job_size = job.len();
+    let job_data = job.into_bundles();
+    let lifted_data = lift_bundles_1d(session, &job_data).await?;
+    let translated_thresholds = calculate_threshold_a(config.n_buckets_1d);
+
+    // execute anon stats MPC protocol
+    let bucket_result_shares = compare_min_threshold_buckets(
+        session,
+        translated_thresholds.as_slice(),
+        lifted_data.as_slice(),
+    )
+    .await?;
+
+    let buckets = open_ring(session, &bucket_result_shares).await?;
+    let mut anon_stats =
+        BucketStatistics::new(job_size, config.n_buckets_1d, config.party_id, origin.side);
+    anon_stats.fill_buckets(&buckets, MATCH_THRESHOLD_RATIO, None);
+    Ok(anon_stats)
 }
 
 pub mod test_helper {
