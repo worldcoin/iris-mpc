@@ -101,8 +101,12 @@ pub async fn process_1d_anon_stats_job(
     .await?;
 
     let buckets = open_ring(session, &bucket_result_shares).await?;
-    let mut anon_stats =
-        BucketStatistics::new(job_size, config.n_buckets_1d, config.party_id, origin.side);
+    let mut anon_stats = BucketStatistics::new(
+        job_size,
+        config.n_buckets_1d,
+        config.party_id,
+        origin.side.expect("1d stats need a side"),
+    );
     anon_stats.fill_buckets(&buckets, MATCH_THRESHOLD_RATIO, None);
     Ok(anon_stats)
 }
@@ -126,8 +130,12 @@ pub async fn process_1d_lifted_anon_stats_job(
     .await?;
 
     let buckets = open_ring(session, &bucket_result_shares).await?;
-    let mut anon_stats =
-        BucketStatistics::new(job_size, config.n_buckets_1d, config.party_id, origin.side);
+    let mut anon_stats = BucketStatistics::new(
+        job_size,
+        config.n_buckets_1d,
+        config.party_id,
+        origin.side.expect("1d stats need a side"),
+    );
     anon_stats.fill_buckets(&buckets, MATCH_THRESHOLD_RATIO, None);
     Ok(anon_stats)
 }

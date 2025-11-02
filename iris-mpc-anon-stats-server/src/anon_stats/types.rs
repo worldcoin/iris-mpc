@@ -13,7 +13,7 @@ pub type MinLiftedDistance2D = (DistanceShare<u32>, DistanceShare<u32>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnonStatsOrigin {
-    pub side: Eye,
+    pub side: Option<Eye>,
     pub orientation: Orientation,
     pub context: AnonStatsContext,
 }
@@ -21,13 +21,15 @@ pub struct AnonStatsOrigin {
 impl From<AnonStatsOrigin> for i16 {
     fn from(origin: AnonStatsOrigin) -> Self {
         let side_val: i16 = match origin.side {
-            Eye::Left => 0,
-            Eye::Right => 1,
+            Some(Eye::Left) => 0,
+            Some(Eye::Right) => 1,
+            None => 2,
         };
         let orientation_val: i16 = match origin.orientation {
             Orientation::Normal => 0,
             Orientation::Mirror => 1,
         };
+        // 2 bits side + 1 bit orientation + 8 bits context
         (side_val << 9) | (orientation_val << 8) | (origin.context as i16)
     }
 }
@@ -36,7 +38,7 @@ impl From<AnonStatsOrigin> for i16 {
 #[repr(u8)]
 pub enum AnonStatsContext {
     GPU = 0,
-    HSNW = 1,
+    HNSW = 1,
 }
 
 pub struct AnonStatsMapping<T> {

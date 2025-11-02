@@ -1,14 +1,23 @@
 use eyre::Result;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::anon_stats::types::{AnonStatsOrigin, DistanceBundle1D, LiftedDistanceBundle1D};
+use crate::anon_stats::types::{
+    AnonStatsOrigin, DistanceBundle1D, DistanceBundle2D, LiftedDistanceBundle1D,
+    LiftedDistanceBundle2D,
+};
 
 #[derive(Clone, Debug)]
 pub struct AnonStatsStore {
     pub pool: PgPool,
     pub schema_name: String,
 }
+
+const ANON_STATS_1D_TABLE: &str = "anon_stats_1d";
+const ANON_STATS_1D_LIFTED_TABLE: &str = "anon_stats_1d_lifted";
+const ANON_STATS_2D_TABLE: &str = "anon_stats_2d";
+const ANON_STATS_2D_LIFTED_TABLE: &str = "anon_stats_2d_lifted";
 
 impl AnonStatsStore {
     pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
@@ -35,12 +44,20 @@ impl AnonStatsStore {
         Ok(self.pool.begin().await?)
     }
 
-    /// Get number of available anon stats entries from the DB for the given origin.
-    pub async fn num_available_anon_stats(&self, origin: AnonStatsOrigin) -> Result<i64> {
+    async fn num_available_anon_stats(
+        &self,
+        table_name: &'static str,
+        origin: AnonStatsOrigin,
+    ) -> Result<i64> {
         let row: (i64,) = sqlx::query_as(
-            r#"
-            SELECT COUNT(*) FROM anon_stats_1d WHERE processed = FALSE and origin = $1
+            &[
+                r#"
+            SELECT COUNT(*) FROM "#,
+                table_name,
+                r#" WHERE processed = FALSE and origin = $1
             "#,
+            ]
+            .concat(),
         )
         .bind(i16::from(origin))
         .fetch_one(&self.pool)
@@ -48,99 +65,118 @@ impl AnonStatsStore {
 
         Ok(row.0)
     }
-
     /// Get number of available lifted anon stats entries from the DB for the given origin.
-    pub async fn num_available_anon_stats_lifted(&self, origin: AnonStatsOrigin) -> Result<i64> {
-        let row: (i64,) = sqlx::query_as(
-            r#"
-            SELECT COUNT(*) FROM anon_stats_1d_lifted WHERE processed = FALSE and origin = $1
+    pub async fn num_available_anon_stats_1d(&self, origin: AnonStatsOrigin) -> Result<i64> {
+        self.num_available_anon_stats(ANON_STATS_1D_TABLE, origin)
+            .await
+    }
+    /// Get number of available lifted anon stats entries from the DB for the given origin.
+    pub async fn num_available_anon_stats_1d_lifted(&self, origin: AnonStatsOrigin) -> Result<i64> {
+        self.num_available_anon_stats(ANON_STATS_1D_LIFTED_TABLE, origin)
+            .await
+    }
+    /// Get number of available lifted anon stats entries from the DB for the given origin.
+    pub async fn num_available_anon_stats_2d(&self, origin: AnonStatsOrigin) -> Result<i64> {
+        self.num_available_anon_stats(ANON_STATS_2D_TABLE, origin)
+            .await
+    }
+    /// Get number of available lifted anon stats entries from the DB for the given origin.
+    pub async fn num_available_anon_stats_2d_lifted(&self, origin: AnonStatsOrigin) -> Result<i64> {
+        self.num_available_anon_stats(ANON_STATS_2D_LIFTED_TABLE, origin)
+            .await
+    }
+
+    async fn get_available_anon_stats<T: for<'a> Deserialize<'a>>(
+        &self,
+        table_name: &'static str,
+        origin: AnonStatsOrigin,
+        limit: usize,
+    ) -> Result<(Vec<i64>, Vec<(i64, T)>)> {
+        let res: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
+            &[
+                r#"
+            SELECT id, match_id, bundle FROM "#,
+                table_name,
+                r#" WHERE processed = FALSE and origin = $1
+            ORDER BY id ASC
+            LIMIT $2
             "#,
+            ]
+            .concat(),
         )
         .bind(i16::from(origin))
-        .fetch_one(&self.pool)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
         .await?;
 
-        Ok(row.0)
+        let (ids, distance_bundles) = res
+            .into_iter()
+            .map(|(id, match_id, bundle_bytes)| {
+                let bundle: T = bincode::deserialize(&bundle_bytes).map_err(|e| {
+                    eyre::eyre!(
+                        "Failed to deserialize distance bundle from table {} for anon_stats id {}: {:?}",
+                        table_name,
+                        id,
+                        e
+                    )
+                })?;
+                Result::<_, eyre::Report>::Ok((id, (match_id, bundle)))
+            })
+            .collect::<Result<(Vec<_>, Vec<_>), eyre::Report>>()?;
+
+        Ok((ids, distance_bundles))
     }
+
     /// Get available anon stats entries from the DB for the given origin, up to the given limit.
     /// Returns a tuple of (ids, Vec<(match_id, DistanceBundle1D)>)
-    pub async fn get_available_anon_stats(
+    pub async fn get_available_anon_stats_1d(
         &self,
         origin: AnonStatsOrigin,
         limit: usize,
     ) -> Result<(Vec<i64>, Vec<(i64, DistanceBundle1D)>)> {
-        let res: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
-            r#"
-            SELECT id, match_id, bundle FROM anon_stats_1d WHERE processed = FALSE and origin = $1
-            ORDER BY id ASC
-            LIMIT $2
-            "#,
-        )
-        .bind(i16::from(origin))
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let (ids, distance_bundles) = res
-            .into_iter()
-            .map(|(id, match_id, bundle_bytes)| {
-                let bundle: DistanceBundle1D =
-                    bincode::deserialize(&bundle_bytes).map_err(|e| {
-                        eyre::eyre!(
-                            "Failed to deserialize DistanceBundle1D for anon_stats id {}: {:?}",
-                            id,
-                            e
-                        )
-                    })?;
-                Result::<_, eyre::Report>::Ok((id, (match_id, bundle)))
-            })
-            .collect::<Result<(Vec<_>, Vec<_>), eyre::Report>>()?;
-
-        Ok((ids, distance_bundles))
+        self.get_available_anon_stats(ANON_STATS_1D_TABLE, origin, limit)
+            .await
     }
-
     /// Get available lifted anon stats entries from the DB for the given origin, up to the given limit.
     /// Returns a tuple of (ids, Vec<(match_id, LiftedDistanceBundle1D)>)
-    pub async fn get_available_anon_stats_lifted(
+    pub async fn get_available_anon_stats_1d_lifted(
         &self,
         origin: AnonStatsOrigin,
         limit: usize,
     ) -> Result<(Vec<i64>, Vec<(i64, LiftedDistanceBundle1D)>)> {
-        let res: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
-            r#"
-            SELECT id, match_id, bundle FROM anon_stats_1d_lifted WHERE processed = FALSE and origin = $1
-            ORDER BY id ASC
-            LIMIT $2
-            "#,
-        )
-        .bind(i16::from(origin))
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let (ids, distance_bundles) = res
-            .into_iter()
-            .map(|(id, match_id, bundle_bytes)| {
-                let bundle: LiftedDistanceBundle1D =
-                    bincode::deserialize(&bundle_bytes).map_err(|e| {
-                        eyre::eyre!(
-                            "Failed to deserialize DistanceBundle1D for anon_stats id {}: {:?}",
-                            id,
-                            e
-                        )
-                    })?;
-                Result::<_, eyre::Report>::Ok((id, (match_id, bundle)))
-            })
-            .collect::<Result<(Vec<_>, Vec<_>), eyre::Report>>()?;
-
-        Ok((ids, distance_bundles))
+        self.get_available_anon_stats(ANON_STATS_1D_LIFTED_TABLE, origin, limit)
+            .await
+    }
+    /// Get available anon stats entries from the DB for the given origin, up to the given limit.
+    /// Returns a tuple of (ids, Vec<(match_id, DistanceBundle2D)>)
+    pub async fn get_available_anon_stats_2d(
+        &self,
+        origin: AnonStatsOrigin,
+        limit: usize,
+    ) -> Result<(Vec<i64>, Vec<(i64, DistanceBundle2D)>)> {
+        self.get_available_anon_stats(ANON_STATS_2D_TABLE, origin, limit)
+            .await
+    }
+    /// Get available lifted anon stats entries from the DB for the given origin, up to the given limit.
+    /// Returns a tuple of (ids, Vec<(match_id, LiftedDistanceBundle2D)>)
+    pub async fn get_available_anon_stats_2d_lifted(
+        &self,
+        origin: AnonStatsOrigin,
+        limit: usize,
+    ) -> Result<(Vec<i64>, Vec<(i64, LiftedDistanceBundle2D)>)> {
+        self.get_available_anon_stats(ANON_STATS_2D_LIFTED_TABLE, origin, limit)
+            .await
     }
 
-    pub async fn mark_anon_stats_processed(&self, ids: &[i64]) -> Result<()> {
+    async fn mark_anon_stats_processed(&self, table_name: &'static str, ids: &[i64]) -> Result<()> {
         sqlx::query(
-            r#"
-            UPDATE anon_stats_1d SET processed = TRUE WHERE id = ANY($1)
+            &[
+                "UPDATE ",
+                table_name,
+                r#" SET processed = TRUE WHERE id = ANY($1)
             "#,
+            ]
+            .concat(),
         )
         .bind(ids)
         .execute(&self.pool)
@@ -148,24 +184,29 @@ impl AnonStatsStore {
 
         Ok(())
     }
-    pub async fn mark_lifted_anon_stats_processed(&self, ids: &[i64]) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE anon_stats_1d_lifted SET processed = TRUE WHERE id = ANY($1)
-            "#,
-        )
-        .bind(ids)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
+    pub async fn mark_anon_stats_processed_1d(&self, ids: &[i64]) -> Result<()> {
+        self.mark_anon_stats_processed(ANON_STATS_1D_TABLE, ids)
+            .await
+    }
+    pub async fn mark_anon_stats_processed_1d_lifted(&self, ids: &[i64]) -> Result<()> {
+        self.mark_anon_stats_processed(ANON_STATS_1D_LIFTED_TABLE, ids)
+            .await
+    }
+    pub async fn mark_anon_stats_processed_2d(&self, ids: &[i64]) -> Result<()> {
+        self.mark_anon_stats_processed(ANON_STATS_2D_TABLE, ids)
+            .await
+    }
+    pub async fn mark_anon_stats_processed_2d_lifted(&self, ids: &[i64]) -> Result<()> {
+        self.mark_anon_stats_processed(ANON_STATS_2D_LIFTED_TABLE, ids)
+            .await
     }
 
-    const ANON_STATS_1D_INSERT_BATCH_SIZE: usize = 10000;
+    const ANON_STATS_INSERT_BATCH_SIZE: usize = 10000;
 
-    pub async fn insert_anon_stats_batch(
+    async fn insert_anon_stats_batch<T: Serialize>(
         &self,
-        anon_stats: &[(i64, DistanceBundle1D)],
+        table_name: &'static str,
+        anon_stats: &[(i64, T)],
         origin: AnonStatsOrigin,
     ) -> Result<()> {
         if anon_stats.is_empty() {
@@ -173,52 +214,14 @@ impl AnonStatsStore {
         }
         let origin = i16::from(origin);
         let mut tx = self.pool.begin().await?;
-        for chunk in anon_stats.chunks(Self::ANON_STATS_1D_INSERT_BATCH_SIZE) {
+        for chunk in anon_stats.chunks(Self::ANON_STATS_INSERT_BATCH_SIZE) {
             let mapped_chunk = chunk.iter().map(|(id, bundle)| {
                 let bundle_bytes =
-                    bincode::serialize(bundle).expect("Failed to serialize DistanceBundle1D");
-                (id, bundle_bytes)
-            });
-            let mut query =
-                sqlx::QueryBuilder::new(r#"INSERT INTO anon_stats_1d (match_id, bundle, origin)"#);
-            query.push_values(mapped_chunk, |mut query, (id, bytes)| {
-                query.push_bind(id);
-                query.push_bind(bytes);
-                query.push_bind(origin);
-            });
-
-            let res = query.build().execute(&mut *tx).await?;
-            if res.rows_affected() != chunk.len() as u64 {
-                return Err(eyre::eyre!(
-                    "Expected to insert {} rows, but only inserted {} rows",
-                    chunk.len(),
-                    res.rows_affected()
-                ));
-            }
-        }
-        tx.commit().await?;
-
-        Ok(())
-    }
-
-    pub async fn insert_anon_stats_batch_lifted(
-        &self,
-        anon_stats: &[(i64, LiftedDistanceBundle1D)],
-        origin: AnonStatsOrigin,
-    ) -> Result<()> {
-        if anon_stats.is_empty() {
-            return Ok(());
-        }
-        let origin = i16::from(origin);
-        let mut tx = self.pool.begin().await?;
-        for chunk in anon_stats.chunks(Self::ANON_STATS_1D_INSERT_BATCH_SIZE) {
-            let mapped_chunk = chunk.iter().map(|(id, bundle)| {
-                let bundle_bytes =
-                    bincode::serialize(bundle).expect("Failed to serialize DistanceBundle1D");
+                    bincode::serialize(bundle).expect("Failed to serialize DistanceBundle");
                 (id, bundle_bytes)
             });
             let mut query = sqlx::QueryBuilder::new(
-                r#"INSERT INTO anon_stats_1d_lifted (match_id, bundle, origin)"#,
+                ["INSERT INTO ", table_name, r#" (match_id, bundle, origin)"#].concat(),
             );
             query.push_values(mapped_chunk, |mut query, (id, bytes)| {
                 query.push_bind(id);
@@ -238,5 +241,38 @@ impl AnonStatsStore {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    pub async fn insert_anon_stats_batch_1d(
+        &self,
+        anon_stats: &[(i64, DistanceBundle1D)],
+        origin: AnonStatsOrigin,
+    ) -> Result<()> {
+        self.insert_anon_stats_batch(ANON_STATS_1D_TABLE, anon_stats, origin)
+            .await
+    }
+    pub async fn insert_anon_stats_batch_1d_lifted(
+        &self,
+        anon_stats: &[(i64, LiftedDistanceBundle1D)],
+        origin: AnonStatsOrigin,
+    ) -> Result<()> {
+        self.insert_anon_stats_batch(ANON_STATS_1D_LIFTED_TABLE, anon_stats, origin)
+            .await
+    }
+    pub async fn insert_anon_stats_batch_2d(
+        &self,
+        anon_stats: &[(i64, DistanceBundle2D)],
+        origin: AnonStatsOrigin,
+    ) -> Result<()> {
+        self.insert_anon_stats_batch(ANON_STATS_2D_TABLE, anon_stats, origin)
+            .await
+    }
+    pub async fn insert_anon_stats_batch_2d_lifted(
+        &self,
+        anon_stats: &[(i64, LiftedDistanceBundle2D)],
+        origin: AnonStatsOrigin,
+    ) -> Result<()> {
+        self.insert_anon_stats_batch(ANON_STATS_2D_LIFTED_TABLE, anon_stats, origin)
+            .await
     }
 }

@@ -6,14 +6,15 @@ use iris_mpc_anon_stats_server::{
     anon_stats::{
         self, calculate_threshold_a,
         store::AnonStatsStore,
-        test_helper_1d,
+        test_helper_1d, test_helper_2d,
         types::{AnonStatsContext, AnonStatsMapping, AnonStatsOrigin},
     },
     config::{AnonStatsServerConfig, Opt},
     spawn_healthcheck_server,
 };
 use iris_mpc_common::{
-    helpers::task_monitor::TaskMonitor,
+    helpers::{statistics::BucketStatistics2D, task_monitor::TaskMonitor},
+    iris_db::iris::MATCH_THRESHOLD_RATIO,
     postgres::{AccessMode, PostgresClient},
 };
 use iris_mpc_common::{job::Eye, tracing::initialize_tracing};
@@ -93,20 +94,26 @@ async fn main() -> Result<()> {
             }
         }
         for origin in [
+            // 1d anon stats jobs for left and right eyes, GPU and HSNW contexts
             AnonStatsOrigin {
-                side: Eye::Left,
+                side: Some(Eye::Left),
                 orientation: Orientation::Normal,
                 context: AnonStatsContext::GPU,
             },
             AnonStatsOrigin {
-                side: Eye::Right,
+                side: Some(Eye::Right),
                 orientation: Orientation::Normal,
                 context: AnonStatsContext::GPU,
             },
             AnonStatsOrigin {
-                side: Eye::Left,
+                side: Some(Eye::Left),
                 orientation: Orientation::Normal,
-                context: AnonStatsContext::HSNW,
+                context: AnonStatsContext::HNSW,
+            },
+            AnonStatsOrigin {
+                side: Some(Eye::Right),
+                orientation: Orientation::Normal,
+                context: AnonStatsContext::HNSW,
             },
         ] {
             tracing::info!("Starting anon stats job for origin {:?}", origin);
@@ -139,13 +146,13 @@ async fn main() -> Result<()> {
                 AnonStatsContext::GPU => {
                     tracing::info!("Inserting test anon stats data into DB");
                     anon_stats_store
-                        .insert_anon_stats_batch(&my_shares, origin)
+                        .insert_anon_stats_batch_1d(&my_shares, origin)
                         .await?;
 
                     // we get the size of available anon stats from all parties
                     tracing::info!("Loading anon stats job data from DB");
                     let available_anon_stats = match usize::try_from(
-                        anon_stats_store.num_available_anon_stats(origin).await?,
+                        anon_stats_store.num_available_anon_stats_1d(origin).await?,
                     ) {
                         Ok(n) => n,
                         Err(e) => {
@@ -168,7 +175,7 @@ async fn main() -> Result<()> {
                         origin,
                     );
                     let (ids, my_anon_stats_shares) = anon_stats_store
-                        .get_available_anon_stats(origin, min_job_size)
+                        .get_available_anon_stats_1d(origin, min_job_size)
                         .await?;
 
                     let job_1d = AnonStatsMapping::new(my_anon_stats_shares);
@@ -194,10 +201,10 @@ async fn main() -> Result<()> {
                         anon_stats,
                     );
                     tracing::info!("Anon stats calculation complete, marking as processed in DB");
-                    anon_stats_store.mark_anon_stats_processed(&ids).await?;
+                    anon_stats_store.mark_anon_stats_processed_1d(&ids).await?;
                     anon_stats
                 }
-                AnonStatsContext::HSNW => {
+                AnonStatsContext::HNSW => {
                     tracing::info!("Inserting test anon stats data into DB");
                     let my_shares = my_shares.into_iter().map(|(_, share)| share).collect_vec();
                     let lifted = anon_stats::lift_bundles_1d(session, &my_shares).await?;
@@ -207,14 +214,14 @@ async fn main() -> Result<()> {
                         .map(|(i, share)| (i as i64, share))
                         .collect_vec();
                     anon_stats_store
-                        .insert_anon_stats_batch_lifted(&my_shares, origin)
+                        .insert_anon_stats_batch_1d_lifted(&my_shares, origin)
                         .await?;
 
                     // we get the size of available anon stats from all parties
                     tracing::info!("Loading anon stats job data from DB");
                     let available_anon_stats = match usize::try_from(
                         anon_stats_store
-                            .num_available_anon_stats_lifted(origin)
+                            .num_available_anon_stats_1d_lifted(origin)
                             .await?,
                     ) {
                         Ok(n) => n,
@@ -238,7 +245,7 @@ async fn main() -> Result<()> {
                         origin,
                     );
                     let (ids, my_anon_stats_shares) = anon_stats_store
-                        .get_available_anon_stats_lifted(origin, min_job_size)
+                        .get_available_anon_stats_1d_lifted(origin, min_job_size)
                         .await?;
 
                     let job_1d = AnonStatsMapping::new(my_anon_stats_shares);
@@ -266,7 +273,7 @@ async fn main() -> Result<()> {
                     );
                     tracing::info!("Anon stats calculation complete, marking as processed in DB");
                     anon_stats_store
-                        .mark_lifted_anon_stats_processed(&ids)
+                        .mark_anon_stats_processed_1d_lifted(&ids)
                         .await?;
                     anon_stats
                 }
@@ -287,6 +294,102 @@ async fn main() -> Result<()> {
                 .1;
             // verify correctness against ground truth
             assert_eq!(buckets, expected);
+        }
+
+        // 2d anon stats
+        #[allow(clippy::single_element_loop)]
+        for origin in [
+            AnonStatsOrigin {
+                side: None,
+                orientation: Orientation::Normal,
+                context: AnonStatsContext::GPU,
+            },
+            // TODO HNSW 2D stats
+        ] {
+            tracing::info!("Starting 2D anon stats job for origin {:?}", origin);
+            // prepare test data
+            let (expected, my_shares) = {
+                let translated_thresholds = calculate_threshold_a(config.n_buckets_1d);
+                let data = test_helper_2d::TestDistances::generate_ground_truth_input(
+                    &mut StdRng::seed_from_u64(123),
+                    1000,
+                    6,
+                );
+                let expected = data.ground_truth_buckets(&translated_thresholds);
+                let my_shares = match config.party_id {
+                    0 => data.shares0,
+                    1 => data.shares1,
+                    2 => data.shares2,
+                    _ => panic!("Invalid party index"),
+                }
+                .into_iter()
+                .enumerate()
+                .map(|(i, share)| (i as i64, share))
+                .collect_vec();
+                (expected, my_shares)
+            };
+
+            tracing::info!("Inserting 2D test anon stats data into DB");
+            anon_stats_store
+                .insert_anon_stats_batch_2d(&my_shares, origin)
+                .await?;
+
+            // we get the size of available anon stats from all parties
+            tracing::info!("Loading anon stats job data from DB");
+            let available_anon_stats = match usize::try_from(
+                anon_stats_store.num_available_anon_stats_2d(origin).await?,
+            ) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::error!("Failed to convert num_available_anon_stats to usize: {:?}, using 0 as a standing", e);
+                    0
+                }
+            };
+            let min_job_size =
+                iris_mpc_anon_stats_server::sync::sync_on_job_sizes(session, available_anon_stats)
+                    .await?;
+            if min_job_size < config.min_1d_job_size {
+                tracing::info!("Not enough available anon stats for origin {:?} (available: {}, minimum required: {}), will retry later", origin, min_job_size, config.min_1d_job_size);
+                continue;
+            }
+
+            tracing::info!(
+                "Loading {min_job_size} available anon stats for origin {:?} from DB",
+                origin,
+            );
+            let (ids, my_anon_stats_shares) = anon_stats_store
+                .get_available_anon_stats_2d(origin, min_job_size)
+                .await?;
+
+            let job_2d = AnonStatsMapping::new(my_anon_stats_shares);
+            let job_hash = job_2d.get_id_hash();
+
+            let hashes_match =
+                iris_mpc_anon_stats_server::sync::sync_on_id_hash(session, job_hash).await?;
+            if !hashes_match {
+                tracing::info!(
+                    "Mismatched job data detected among parties, will retry at a later point"
+                );
+            }
+
+            let start = Instant::now();
+            let anon_stats =
+                anon_stats::process_2d_anon_stats_job(session, job_2d, &config).await?;
+
+            tracing::info!(
+                "Completed anon stats job for origin {:?} of size {} in {:?}. Stats: {:?}",
+                origin,
+                min_job_size,
+                start.elapsed(),
+                anon_stats,
+            );
+            tracing::info!("Anon stats calculation complete, marking as processed in DB");
+            anon_stats_store.mark_anon_stats_processed_2d(&ids).await?;
+
+            let mut expected_stats =
+                BucketStatistics2D::new(min_job_size, config.n_buckets_1d, config.party_id); // verify correctness against ground truth
+            expected_stats.fill_buckets(&expected, MATCH_THRESHOLD_RATIO, None);
+            assert_eq!(anon_stats.buckets, expected_stats.buckets);
         }
     }
 
