@@ -7,11 +7,15 @@ pub type DistanceBundle1D = Vec<DistanceShare<u16>>;
 pub type LiftedDistanceBundle1D = Vec<DistanceShare<u32>>;
 pub type MinLiftedDistance1D = DistanceShare<u32>;
 
+pub type DistanceBundle2D = (DistanceBundle1D, DistanceBundle1D);
+pub type LiftedDistanceBundle2D = (LiftedDistanceBundle1D, LiftedDistanceBundle1D);
+pub type MinLiftedDistance2D = (DistanceShare<u32>, DistanceShare<u32>);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnonStatsOrigin {
     pub side: Eye,
     pub orientation: Orientation,
-    pub context: u8,
+    pub context: AnonStatsContext,
 }
 
 impl From<AnonStatsOrigin> for i16 {
@@ -28,12 +32,19 @@ impl From<AnonStatsOrigin> for i16 {
     }
 }
 
-pub struct AnonStats1DMapping {
-    stats: Vec<(i64, DistanceBundle1D)>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AnonStatsContext {
+    GPU = 0,
+    HSNW = 1,
 }
 
-impl AnonStats1DMapping {
-    pub fn new(mut stats: Vec<(i64, DistanceBundle1D)>) -> Self {
+pub struct AnonStats1DMapping<T> {
+    stats: Vec<(i64, T)>,
+}
+
+impl<T> AnonStats1DMapping<T> {
+    pub fn new(mut stats: Vec<(i64, T)>) -> Self {
         // ensure it is sorted by id
         stats.sort_by_key(|(id, _)| *id);
         AnonStats1DMapping { stats }
@@ -60,7 +71,7 @@ impl AnonStats1DMapping {
         hasher.finish()
     }
 
-    pub fn into_bundles(self) -> Vec<DistanceBundle1D> {
+    pub fn into_bundles(self) -> Vec<T> {
         self.stats.into_iter().map(|(_, bundle)| bundle).collect()
     }
 

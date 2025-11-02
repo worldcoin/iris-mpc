@@ -12,7 +12,9 @@ use iris_mpc_cpu::{
 };
 use itertools::Itertools;
 
-use crate::anon_stats::types::{AnonStats1DMapping, AnonStatsOrigin};
+use crate::anon_stats::types::{
+    AnonStats1DMapping, AnonStatsOrigin, DistanceBundle1D, LiftedDistanceBundle1D,
+};
 
 pub mod store;
 pub mod types;
@@ -60,7 +62,7 @@ pub async fn lift_bundles_1d(
 
 pub async fn process_1d_anon_stats_job(
     session: &mut Session,
-    job: AnonStats1DMapping,
+    job: AnonStats1DMapping<DistanceBundle1D>,
     origin: &AnonStatsOrigin,
     config: &crate::config::AnonStatsServerConfig,
 ) -> Result<BucketStatistics> {
@@ -74,6 +76,31 @@ pub async fn process_1d_anon_stats_job(
         session,
         translated_thresholds.as_slice(),
         lifted_data.as_slice(),
+    )
+    .await?;
+
+    let buckets = open_ring(session, &bucket_result_shares).await?;
+    let mut anon_stats =
+        BucketStatistics::new(job_size, config.n_buckets_1d, config.party_id, origin.side);
+    anon_stats.fill_buckets(&buckets, MATCH_THRESHOLD_RATIO, None);
+    Ok(anon_stats)
+}
+
+pub async fn process_1d_lifted_anon_stats_job(
+    session: &mut Session,
+    job: AnonStats1DMapping<LiftedDistanceBundle1D>,
+    origin: &AnonStatsOrigin,
+    config: &crate::config::AnonStatsServerConfig,
+) -> Result<BucketStatistics> {
+    let job_size = job.len();
+    let job_data = job.into_bundles();
+    let translated_thresholds = calculate_threshold_a(config.n_buckets_1d);
+
+    // execute anon stats MPC protocol
+    let bucket_result_shares = compare_min_threshold_buckets(
+        session,
+        translated_thresholds.as_slice(),
+        job_data.as_slice(),
     )
     .await?;
 

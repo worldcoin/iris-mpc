@@ -7,7 +7,7 @@ use iris_mpc_anon_stats_server::{
         self, calculate_threshold_a,
         store::AnonStatsStore,
         test_helper,
-        types::{AnonStats1DMapping, AnonStatsOrigin},
+        types::{AnonStats1DMapping, AnonStatsContext, AnonStatsOrigin},
     },
     config::{AnonStatsServerConfig, Opt},
     spawn_healthcheck_server,
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
             AnonStatsOrigin {
                 side: Eye::Left,
                 orientation: Orientation::Normal,
-                context: 0,
+                context: AnonStatsContext::GPU,
             },
             // AnonStatsOrigin {
             //     side: Eye::Right,
