@@ -53,7 +53,7 @@ impl AnonStatsStore {
     pub async fn num_available_anon_stats_lifted(&self, origin: AnonStatsOrigin) -> Result<i64> {
         let row: (i64,) = sqlx::query_as(
             r#"
-            SELECT COUNT(*) FROM anon_stats_1d WHERE processed = FALSE and origin = $1
+            SELECT COUNT(*) FROM anon_stats_1d_lifted WHERE processed = FALSE and origin = $1
             "#,
         )
         .bind(i16::from(origin))
@@ -108,7 +108,7 @@ impl AnonStatsStore {
     ) -> Result<(Vec<i64>, Vec<(i64, LiftedDistanceBundle1D)>)> {
         let res: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
             r#"
-            SELECT id, match_id, bundle FROM anon_stats_1d WHERE processed = FALSE and origin = $1
+            SELECT id, match_id, bundle FROM anon_stats_1d_lifted WHERE processed = FALSE and origin = $1
             ORDER BY id ASC
             LIMIT $2
             "#,
@@ -140,6 +140,18 @@ impl AnonStatsStore {
         sqlx::query(
             r#"
             UPDATE anon_stats_1d SET processed = TRUE WHERE id = ANY($1)
+            "#,
+        )
+        .bind(ids)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+    pub async fn mark_lifted_anon_stats_processed(&self, ids: &[i64]) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE anon_stats_1d_lifted SET processed = TRUE WHERE id = ANY($1)
             "#,
         )
         .bind(ids)
