@@ -836,6 +836,41 @@ pub async fn open_ring<T: IntRing2k + NetworkInt>(
         .collect::<Result<Vec<_>>>()
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+/// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
+/// each party needs to send its entire share to the next and previous party.
+pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    shares: &[RingElement<T>],
+) -> Result<Vec<T>> {
+    let network = &mut session.network_session;
+    let message = if shares.len() == 1 {
+        T::new_network_element(shares[0])
+    } else {
+        T::new_network_vec(shares.to_vec())
+    };
+
+    network.send_next(message.clone()).await?;
+    network.send_prev(message).await?;
+
+    // receiving from previous party
+    let b = network
+        .receive_prev()
+        .await
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+    let c = network
+        .receive_next()
+        .await
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+
+    // ADD shares with the received shares
+    izip!(shares.iter(), b.iter(), c.iter())
+        .map(|(a, b, c)| Ok((*a + *b + *c).convert()))
+        .collect::<Result<Vec<_>>>()
+}
+
 /// Compares the given distances to zero and reveal the bit "less than zero".
 pub async fn lt_zero_and_open_u16(
     session: &mut Session,

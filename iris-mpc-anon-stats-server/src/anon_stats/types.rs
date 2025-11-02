@@ -39,15 +39,15 @@ pub enum AnonStatsContext {
     HSNW = 1,
 }
 
-pub struct AnonStats1DMapping<T> {
+pub struct AnonStatsMapping<T> {
     stats: Vec<(i64, T)>,
 }
 
-impl<T> AnonStats1DMapping<T> {
+impl<T> AnonStatsMapping<T> {
     pub fn new(mut stats: Vec<(i64, T)>) -> Self {
         // ensure it is sorted by id
         stats.sort_by_key(|(id, _)| *id);
-        AnonStats1DMapping { stats }
+        AnonStatsMapping { stats }
     }
 
     pub fn len(&self) -> usize {

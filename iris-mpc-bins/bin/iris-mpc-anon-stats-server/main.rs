@@ -6,8 +6,8 @@ use iris_mpc_anon_stats_server::{
     anon_stats::{
         self, calculate_threshold_a,
         store::AnonStatsStore,
-        test_helper,
-        types::{AnonStats1DMapping, AnonStatsContext, AnonStatsOrigin},
+        test_helper_1d,
+        types::{AnonStatsContext, AnonStatsMapping, AnonStatsOrigin},
     },
     config::{AnonStatsServerConfig, Opt},
     spawn_healthcheck_server,
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
             // prepare test data
             let (expected, my_shares) = {
                 let translated_thresholds = calculate_threshold_a(config.n_buckets_1d);
-                let data = test_helper::TestDistances::generate_ground_truth_input(
+                let data = test_helper_1d::TestDistances::generate_ground_truth_input(
                     &mut StdRng::seed_from_u64(123),
                     1000,
                     6,
@@ -171,7 +171,7 @@ async fn main() -> Result<()> {
                         .get_available_anon_stats(origin, min_job_size)
                         .await?;
 
-                    let job_1d = AnonStats1DMapping::new(my_anon_stats_shares);
+                    let job_1d = AnonStatsMapping::new(my_anon_stats_shares);
                     let job_hash = job_1d.get_id_hash();
 
                     let hashes_match =
@@ -241,7 +241,7 @@ async fn main() -> Result<()> {
                         .get_available_anon_stats_lifted(origin, min_job_size)
                         .await?;
 
-                    let job_1d = AnonStats1DMapping::new(my_anon_stats_shares);
+                    let job_1d = AnonStatsMapping::new(my_anon_stats_shares);
                     let job_hash = job_1d.get_id_hash();
 
                     let hashes_match =
