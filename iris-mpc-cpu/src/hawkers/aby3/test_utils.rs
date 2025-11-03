@@ -16,6 +16,7 @@ use crate::{
     hawkers::{
         aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef, Aby3VectorRef},
         plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        TEST_DISTANCE_FN,
     },
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
@@ -77,11 +78,12 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .zip(storages.into_iter())
         .map(|(session, storage)| {
             let workers = iris_worker::init_workers(0, storage.clone(), true);
-            Ok(Arc::new(Mutex::new(Aby3Store {
-                session,
+            Ok(Arc::new(Mutex::new(Aby3Store::new(
                 storage,
+                session,
                 workers,
-            })))
+                plain_store.distance_fn,
+            ))))
         })
         .collect()
 }
@@ -95,11 +97,12 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
             let storage = Aby3Store::new_storage(None).to_arc();
             let workers = iris_worker::init_workers(0, storage.clone(), true);
 
-            Ok(Arc::new(Mutex::new(Aby3Store {
+            Ok(Arc::new(Mutex::new(Aby3Store::new(
+                storage.clone(),
                 session,
-                storage: storage.clone(),
                 workers,
-            })))
+                TEST_DISTANCE_FN,
+            ))))
         })
         .collect()
 }

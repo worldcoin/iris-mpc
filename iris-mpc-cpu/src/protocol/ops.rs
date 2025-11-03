@@ -853,6 +853,13 @@ where
     additive_shares
 }
 
+pub fn non_existent_distance() -> Vec<RingElement<u16>> {
+    vec![
+        RingElement(SHARE_OF_MAX_DISTANCE.0),
+        RingElement(SHARE_OF_MAX_DISTANCE.1),
+    ]
+}
+
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by
 /// masking it with a zero sharing
 pub async fn galois_ring_to_rep3(
