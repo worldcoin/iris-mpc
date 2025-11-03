@@ -112,16 +112,6 @@ $TARGET_DIR/release/rerandomize-db rerandomize-db \
   --dest-schema-name SMPC_testing_rerand_2 \
   --range-min 5001
 
-# Stage 3: Delete the private keys from secrets manager to prevent key reuse
-# ATM this only deletes the secret keys, not the public keys in the bucket
-echo "Deleting private keys from secrets manager, before:"
-aws_local secretsmanager list-secrets --no-cli-pager
-$TARGET_DIR/release/rerandomize-db key-cleanup --party-id 0
-$TARGET_DIR/release/rerandomize-db key-cleanup --party-id 1
-$TARGET_DIR/release/rerandomize-db key-cleanup --party-id 2
-echo "Deleting private keys from secrets manager, after:"
-aws_local secretsmanager list-secrets --no-cli-pager
-
 # TEST only: Check that the rerandomized DBs have the same data as the original DBs (just in a different encoding)
 echo "Checking Rerandomized DBs"
 $TARGET_DIR/release/rerandomize-db rerandomize-check \
