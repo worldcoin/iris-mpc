@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
+use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use clap::Parser;
@@ -68,20 +69,83 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
     let s3_client = S3Client::from_conf(s3_config_builder.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
-    s3_client
+    // Upload public key to S3 if it does not already exist.
+    // Use If-None-Match: "*" to ensure we don't overwrite existing objects.
+    match s3_client
         .put_object()
-        .bucket(config.public_key_bucket_name)
-        .key(bucket_key_name)
+        .bucket(&config.public_key_bucket_name)
+        .key(&bucket_key_name)
+        .if_none_match("*")
         .body(public_key_b64.to_string().into_bytes().into())
         .send()
-        .await?;
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(
+                "Uploaded public key object s3://{}/{}",
+                config.public_key_bucket_name,
+                bucket_key_name
+            );
+        }
+        Err(aws_sdk_s3::error::SdkError::ServiceError(err)) => {
+            // PreconditionFailed => object already exists
+            if err.err().code() == Some("PreconditionFailed") {
+                tracing::info!(
+                    "Public key object s3://{}/{} already exists, skipping upload",
+                    config.public_key_bucket_name,
+                    bucket_key_name
+                );
+            } else {
+                let code = err.err().code().unwrap_or("Unknown");
+                let message = err.err().message().unwrap_or("<no message>");
+                eyre::bail!("S3 put_object failed: code={}, message={}", code, message);
+            }
+        }
+        Err(e) => return Err(e.into()),
+    }
 
-    sm_client
-        .create_secret()
-        .name(private_key_secret_id)
-        .secret_string(secret_key_b64)
+    // Create the private key secret only if it does not exist.
+    let secret_exists = match sm_client
+        .describe_secret()
+        .secret_id(&private_key_secret_id)
         .send()
-        .await?;
+        .await
+    {
+        Ok(_) => true,
+        Err(aws_sdk_secretsmanager::error::SdkError::ServiceError(err)) => {
+            // ResourceNotFoundException => secret does not exist
+            if err.err().code() == Some("ResourceNotFoundException") {
+                false
+            } else {
+                let code = err.err().code().unwrap_or("Unknown");
+                let message = err.err().message().unwrap_or("<no message>");
+                eyre::bail!(
+                    "SecretsManager describe_secret failed: code={}, message={}",
+                    code,
+                    message
+                );
+            }
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    if secret_exists {
+        tracing::info!(
+            "Secret {} already exists in Secrets Manager, skipping creation",
+            private_key_secret_id
+        );
+    } else {
+        sm_client
+            .create_secret()
+            .name(&private_key_secret_id)
+            .secret_string(secret_key_b64)
+            .send()
+            .await?;
+        tracing::info!(
+            "Created secret {} in Secrets Manager",
+            private_key_secret_id
+        );
+    }
 
     Ok(())
 }
