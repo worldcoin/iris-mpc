@@ -8,6 +8,7 @@ on:
     paths:
       - Dockerfile.shares-re-randomization
       - iris-mpc-upgrade/**
+      - iris-mpc-bins/bin/iris-mpc-upgrade/**
       - .github/workflows/build-and-push-rerandomization-protocol.yaml
 
   release:
