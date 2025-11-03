@@ -16,6 +16,7 @@ use crate::{
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
+        graph_v2,
     },
 };
 
@@ -211,6 +212,87 @@ impl From<GraphV0> for GraphMem<IrisVectorId> {
                 .map(|ep| ep.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+        }
+    }
+}
+
+/* --------------- Conversion GraphMem -> GraphV2 ------------------- */
+
+impl From<IrisVectorId> for graph_v2::VectorId {
+    fn from(value: IrisVectorId) -> Self {
+        graph_v2::VectorId {
+            id: value.serial_id(),
+            version: value.version_id(),
+        }
+    }
+}
+
+impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v2::EntryPoint {
+    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
+        graph_v2::EntryPoint {
+            point: value.point.into(),
+            layer: value.layer,
+        }
+    }
+}
+
+impl From<neighborhood::SortedEdgeIds<IrisVectorId>> for graph_v2::EdgeIds {
+    fn from(value: neighborhood::SortedEdgeIds<IrisVectorId>) -> Self {
+        graph_v2::EdgeIds(value.0.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<Layer<IrisVectorId>> for graph_v2::Layer {
+    fn from(value: Layer<IrisVectorId>) -> Self {
+        graph_v2::Layer {
+            links: value
+                .links
+                .into_iter()
+                .map(|(v, nb)| (v.into(), nb.into()))
+                .collect(),
+        }
+    }
+}
+
+/* --------------- Conversion GraphV2 -> GraphMem ------------------- */
+
+impl From<graph_v2::VectorId> for IrisVectorId {
+    fn from(value: graph_v2::VectorId) -> Self {
+        IrisVectorId::new(value.id, value.version)
+    }
+}
+
+impl From<graph_v2::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
+    fn from(value: graph_v2::EntryPoint) -> Self {
+        layered_graph::EntryPoint {
+            point: value.point.into(),
+            layer: value.layer,
+        }
+    }
+}
+
+impl From<graph_v2::EdgeIds> for neighborhood::SortedEdgeIds<IrisVectorId> {
+    fn from(value: graph_v2::EdgeIds) -> Self {
+        neighborhood::SortedEdgeIds(value.0.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<graph_v2::Layer> for Layer<IrisVectorId> {
+    fn from(value: graph_v2::Layer) -> Self {
+        let mut layer = Layer::new();
+        for (v, nb) in value.links.into_iter() {
+            layer.set_links(v.into(), nb.into());
+        }
+        layer
+    }
+}
+
+impl From<graph_v2::GraphV2> for GraphMem<IrisVectorId> {
+    fn from(value: graph_v2::GraphV2) -> Self {
+        GraphMem {
+            // V2 uses a Vec<EntryPoint>, which matches GraphMem
+            entry_point: value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
         }
     }

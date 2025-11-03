@@ -8,4 +8,5 @@
 pub mod graph_v0;
 pub mod graph_v1;
 pub mod graph_v1_pair;
+pub mod graph_v2;
 pub mod iris_base64;
