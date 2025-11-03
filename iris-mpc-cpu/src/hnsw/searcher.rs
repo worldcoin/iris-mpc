@@ -1279,7 +1279,24 @@ impl HnswSearcher {
 
         // If query is to be inserted at a new highest layer as a new entry
         // point, insert additional empty neighborhoods for any new layers
-        let set_ep = insertion_layer + 1 > n_layers;
+        let set_ep = match self.params.top_layer_mode {
+            TopLayerSearchMode::LinearScan => {
+                if insertion_layer + 1 > n_layers {
+                    SetEntryPoint::NewLayer
+                } else if insertion_layer == n_layers {
+                    SetEntryPoint::AddToLayer
+                } else {
+                    SetEntryPoint::False
+                }
+            }
+            TopLayerSearchMode::Default => {
+                if insertion_layer + 1 > n_layers {
+                    SetEntryPoint::NewLayer
+                } else {
+                    SetEntryPoint::False
+                }
+            }
+        };
         for _ in links.len()..insertion_layer + 1 {
             links.push(SortedNeighborhood::new());
         }
