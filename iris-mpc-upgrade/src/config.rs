@@ -239,7 +239,6 @@ pub struct ReRandomizeDbConfig {
 pub enum ReRandomizeDbSubCommand {
     KeyGen(KeyGenConfig),
     RerandomizeDb(ReRandomizeConfig),
-    KeyCleanup(KeyCleanupConfig),
     RerandomizeCheck(ReRandomizeCheckConfig),
 }
 
@@ -302,15 +301,6 @@ pub struct KeyGenConfig {
 
     #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
     pub public_key_bucket_name: String,
-}
-#[derive(Args)]
-pub struct KeyCleanupConfig {
-    /// The 0-indexed party ID of the server party
-    #[clap(long, env = "PARTY_ID")]
-    pub party_id: u8,
-
-    #[clap(long, env = "ENVIRONMENT")]
-    pub env: String,
 }
 
 #[derive(Args)]

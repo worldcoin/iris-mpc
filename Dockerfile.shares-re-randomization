@@ -15,6 +15,8 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     wget
 
+RUN update-ca-certificates
+
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH "/root/.cargo/bin:${PATH}"
 ENV RUSTUP_HOME "/root/.rustup"
@@ -33,6 +35,7 @@ RUN cargo build -p iris-mpc-bins --release --bin rerandomize-db --bin seed-v2-db
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
+COPY --from=build-app /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build-app /src/iris-mpc/target/release/rerandomize-db  /bin/rerandomize-db
 COPY --from=build-app /src/iris-mpc/target/release/seed-v2-dbs /bin/seed-v2-dbs
 
