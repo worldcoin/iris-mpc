@@ -80,8 +80,25 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         self.layers.clone()
     }
 
-    pub fn get_ep_layer(&self) -> Vec<V> {
-        self.entry_point.iter().map(|ep| ep.point.clone()).collect()
+    pub fn get_num_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    pub fn get_top_layer(&self) -> Option<Vec<V>> {
+        self.layers
+            .iter()
+            .last()
+            .cloned()
+            .map(|x| x.links.keys().cloned().collect())
+    }
+
+    pub fn get_ep_layer(&self) -> Option<Vec<V>> {
+        let v: Vec<_> = self.entry_point.iter().map(|ep| ep.point.clone()).collect();
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
     }
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the

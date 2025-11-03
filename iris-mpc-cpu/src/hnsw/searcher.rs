@@ -63,9 +63,6 @@ pub struct HnswParams {
 
     /// Search mode for top layers of the HNSW graph
     pub top_layer_mode: TopLayerSearchMode,
-
-    /// layers >= top_layer will be considered the top layer.
-    pub top_layer: Option<usize>,
 }
 
 #[allow(non_snake_case, clippy::too_many_arguments)]
@@ -98,7 +95,6 @@ impl HnswParams {
             ef_search: ef_search_arr,
             layer_probability,
             top_layer_mode: TopLayerSearchMode::Default,
-            top_layer: None,
         }
     }
 
@@ -121,7 +117,6 @@ impl HnswParams {
             ef_search: ef_search_arr,
             layer_probability,
             top_layer_mode: TopLayerSearchMode::Default,
-            top_layer: None,
         }
     }
 
@@ -176,9 +171,12 @@ impl HnswParams {
         arr[lc.min(N_PARAM_LAYERS - 1)]
     }
 
-    pub fn set_top_layer_mode(&mut self, mode: TopLayerSearchMode, top_layer: usize) {
+    pub fn set_top_layer_mode(&mut self, mode: TopLayerSearchMode) {
         self.top_layer_mode = mode;
-        self.top_layer.replace(top_layer);
+    }
+
+    pub fn get_ep_layer(&self) -> Option<usize> {
+        self.top_layer_mode.get_ep_layer()
     }
 }
 
@@ -246,7 +244,31 @@ pub enum TopLayerSearchMode {
     /// Use the default search as in other layer.
     Default,
     /// Use linear scan to find the nearest neighbor.
-    LinearScan,
+    /// usize is the entry point layer (zero indexed)
+    LinearScan(usize),
+}
+
+impl TopLayerSearchMode {
+    pub fn get_ep_layer(&self) -> Option<usize> {
+        match self {
+            Self::Default => None,
+            Self::LinearScan(r) => Some(*r),
+        }
+    }
+
+    // the entry point layer isn't in the graph. ensure that layer goes from 0..=(ep_layer -1)
+    pub fn cap_layer(&self, layer: usize) -> usize {
+        match self {
+            Self::Default => layer,
+            Self::LinearScan(r) => {
+                if layer >= *r {
+                    r.saturating_sub(1)
+                } else {
+                    layer
+                }
+            }
+        }
+    }
 }
 
 #[allow(non_snake_case)]
@@ -274,7 +296,7 @@ impl HnswSearcher {
 
     pub fn new_with_test_parameters_and_linear_scan() -> Self {
         let mut params = HnswParams::new(64, 32, 32);
-        params.set_top_layer_mode(TopLayerSearchMode::LinearScan, 3);
+        params.set_top_layer_mode(TopLayerSearchMode::LinearScan(2));
         Self { params }
     }
 
@@ -285,7 +307,7 @@ impl HnswSearcher {
         let geom_distr = Geometric::new(p_geom)?;
 
         let layer = geom_distr.sample(rng) as usize;
-        let capped = match self.params.top_layer {
+        let capped = match self.params.get_ep_layer() {
             None => layer,
             Some(x) => std::cmp::min(layer, x),
         };
@@ -1180,21 +1202,41 @@ impl HnswSearcher {
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
-        let (mut W, layer_count) = self.search_init(store, graph, query).await?;
+        let (mut W, n_layers) = match self.params.top_layer_mode {
+            TopLayerSearchMode::LinearScan(top_layer) => {
+                let n_layers = graph.get_num_layers();
+                assert!(n_layers <= top_layer);
+
+                if n_layers < top_layer {
+                    match graph.get_top_layer() {
+                        Some(top_layer) => {
+                            let nearest_point =
+                                Self::linear_search(store, query, top_layer).await?;
+                            let mut W = SortedNeighborhood::new();
+                            W.edges.push(nearest_point);
+                            (W, n_layers)
+                        }
+                        None => (SortedNeighborhood::new(), 0),
+                    }
+                } else {
+                    match graph.get_ep_layer() {
+                        Some(ep_layer) => {
+                            let nearest_point = Self::linear_search(store, query, ep_layer).await?;
+                            let mut W = SortedNeighborhood::new();
+                            W.edges.push(nearest_point);
+                            (W, n_layers)
+                        }
+                        None => (SortedNeighborhood::new(), 0),
+                    }
+                }
+            }
+            TopLayerSearchMode::Default => self.search_init(store, graph, query).await?,
+        };
 
         // Search from the top layer down to layer 0
-        for lc in (0..layer_count).rev() {
+        for lc in (0..n_layers).rev() {
             let ef = self.params.get_ef_search(lc);
-            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
-                && lc == (graph.num_layers() - 1)
-            {
-                let v = graph.get_ep_layer();
-                let nearest_point = Self::linear_search(store, query, v).await?;
-                W.edges.clear();
-                W.edges.push(nearest_point);
-            } else {
-                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
-            }
+            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
         }
 
         W.trim_to_k_nearest(k);
@@ -1250,7 +1292,45 @@ impl HnswSearcher {
     ) -> Result<(Vec<SortedNeighborhoodV<V>>, SetEntryPoint)> {
         let mut links = vec![];
 
-        let (mut W, n_layers) = self.search_init(store, graph, query).await?;
+        let (mut W, n_layers, set_ep) = match self.params.top_layer_mode {
+            TopLayerSearchMode::LinearScan(top_layer) => {
+                assert!(insertion_layer <= top_layer);
+                let n_layers = graph.get_num_layers();
+                if insertion_layer < top_layer {
+                    match graph.get_top_layer() {
+                        Some(top_layer) => {
+                            let nearest_point =
+                                Self::linear_search(store, query, top_layer).await?;
+                            let mut W = SortedNeighborhood::new();
+                            W.edges.push(nearest_point);
+                            (W, n_layers, SetEntryPoint::False)
+                        }
+                        None => (SortedNeighborhood::new(), 0, SetEntryPoint::False),
+                    }
+                } else {
+                    match graph.get_ep_layer() {
+                        Some(ep_layer) => {
+                            let nearest_point = Self::linear_search(store, query, ep_layer).await?;
+                            let mut W = SortedNeighborhood::new();
+                            W.edges.push(nearest_point);
+                            (W, n_layers, SetEntryPoint::AddToLayer)
+                        }
+                        None => (SortedNeighborhood::new(), 0, SetEntryPoint::AddToLayer),
+                    }
+                }
+            }
+            TopLayerSearchMode::Default => {
+                let (W, n_layers) = self.search_init(store, graph, query).await?;
+                let set_ep = if insertion_layer + 1 > n_layers {
+                    SetEntryPoint::NewLayer
+                } else {
+                    SetEntryPoint::False
+                };
+                (W, n_layers, set_ep)
+            }
+        };
+
+        let insertion_layer = self.params.top_layer_mode.cap_layer(insertion_layer);
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
@@ -1259,16 +1339,8 @@ impl HnswSearcher {
             } else {
                 self.params.get_ef_constr_insert(lc)
             };
-            if self.params.top_layer_mode == TopLayerSearchMode::LinearScan
-                && lc == (graph.num_layers() - 1)
-            {
-                let v = graph.get_ep_layer();
-                let nearest_point = Self::linear_search(store, query, v).await?;
-                W.edges.clear();
-                W.edges.push(nearest_point);
-            } else {
-                Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
-            }
+
+            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {
@@ -1281,24 +1353,6 @@ impl HnswSearcher {
 
         // If query is to be inserted at a new highest layer as a new entry
         // point, insert additional empty neighborhoods for any new layers
-        let set_ep = match self.params.top_layer_mode {
-            TopLayerSearchMode::LinearScan => {
-                if insertion_layer + 1 > n_layers {
-                    SetEntryPoint::NewLayer
-                } else if insertion_layer + 1 == n_layers {
-                    SetEntryPoint::AddToLayer
-                } else {
-                    SetEntryPoint::False
-                }
-            }
-            TopLayerSearchMode::Default => {
-                if insertion_layer + 1 > n_layers {
-                    SetEntryPoint::NewLayer
-                } else {
-                    SetEntryPoint::False
-                }
-            }
-        };
         for _ in links.len()..insertion_layer + 1 {
             links.push(SortedNeighborhood::new());
         }
