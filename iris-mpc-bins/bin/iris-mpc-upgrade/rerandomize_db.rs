@@ -51,7 +51,7 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
 
     let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, config.party_id);
     let private_key_secret_id: String = format!(
-        "{}/iris-mpc/tripartite-ecdh-private-key-{}",
+        "{}/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-{}",
         config.env, config.party_id
     );
 
@@ -88,7 +88,7 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
 
 async fn keycleanup_main(config: KeyCleanupConfig) -> Result<()> {
     let private_key_secret_id: String = format!(
-        "{}/iris-mpc/tripartite-ecdh-private-key-{}",
+        "{}/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-{}",
         config.env, config.party_id
     );
     let sdk_config = aws_config::from_env().load().await;
@@ -109,7 +109,7 @@ async fn rerandomize_db_main(config: ReRandomizeConfig) -> Result<()> {
     let sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(&sdk_config);
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
     let private_key_secret_id: String = format!(
-        "{}/iris-mpc/tripartite-ecdh-private-key-{}",
+        "{}/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-{}",
         config.env, config.party_id
     );
 

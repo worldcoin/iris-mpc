@@ -14,7 +14,7 @@ aws_local() {
 }
 
 # Create a bucket for public keys
-BUCKET_NAME=wf-smpcv2-testing-public-keys
+BUCKET_NAME=wf-smpcv2-pki-testing
 aws_local s3api create-bucket --bucket $BUCKET_NAME --region us-east-1
 
 # Build rust binaries and grab target dir
