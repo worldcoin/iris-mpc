@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use tokio::time::sleep;
-const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(20);
+const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(30);
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionId(pub u32);
 
