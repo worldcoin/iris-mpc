@@ -1,7 +1,13 @@
 use std::ops::Range;
 
-use aws_sdk_s3::Client as S3Client;
-use aws_sdk_secretsmanager::Client as SecretsManagerClient;
+use aws_sdk_s3::{
+    config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
+    Error as S3Error,
+};
+use aws_sdk_secretsmanager::{
+    operation::{get_secret_value::GetSecretValueOutput, put_secret_value::PutSecretValueOutput},
+    Client as SecretsManagerClient, Error as SecretsManagerError,
+};
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -40,12 +46,38 @@ async fn main() -> Result<()> {
     match config.command {
         ReRandomizeDbSubCommand::RerandomizeDb(config) => rerandomize_db_main(config).await,
         ReRandomizeDbSubCommand::KeyGen(config) => keygen_main(config).await,
-        ReRandomizeDbSubCommand::KeyCleanup(config) => keycleanup_main(config).await,
         ReRandomizeDbSubCommand::RerandomizeCheck(config) => rerandomize_check_main(config).await,
     }
 }
 
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "iris-mpc-tripartite-ecdh-public-key-party";
+async fn upload_private_key_to_asm(
+    client: &SecretsManagerClient,
+    secret_id: &str,
+    content: &str,
+) -> Result<PutSecretValueOutput, SecretsManagerError> {
+    Ok(client
+        .put_secret_value()
+        .secret_string(content)
+        .secret_id(secret_id)
+        .send()
+        .await?)
+}
+
+async fn upload_public_key_to_s3(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+    content: &str,
+) -> Result<PutObjectOutput, S3Error> {
+    Ok(client
+        .put_object()
+        .bucket(bucket)
+        .key(key)
+        .body(content.to_string().into_bytes().into())
+        .send()
+        .await?)
+}
 
 async fn keygen_main(config: KeyGenConfig) -> Result<()> {
     let sdk_config = aws_config::from_env().load().await;
@@ -61,35 +93,6 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
     let s3_client = S3Client::from_conf(s3_config_builder.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
-    // If the secret already exists, skip key generation and upload.
-    match sm_client
-        .describe_secret()
-        .secret_id(&private_key_secret_id)
-        .send()
-        .await
-    {
-        Ok(_) => {
-            tracing::info!(
-                "Secret {} already exists in Secrets Manager, skipping key generation",
-                private_key_secret_id
-            );
-            return Ok(());
-        }
-        Err(aws_sdk_secretsmanager::error::SdkError::ServiceError(err)) => {
-            // ResourceNotFoundException => proceed to create
-            if err.err().code() != Some("ResourceNotFoundException") {
-                let code = err.err().code().unwrap_or("Unknown");
-                let message = err.err().message().unwrap_or("<no message>");
-                eyre::bail!(
-                    "SecretsManager describe_secret failed: code={}, message={}",
-                    code,
-                    message
-                );
-            }
-        }
-        Err(e) => return Err(e.into()),
-    }
-
     // Generate keys only when the secret does not exist
     let mut rng = rand::thread_rng();
     let secret_key = tripartite_dh::PrivateKey::random(&mut rng);
@@ -99,49 +102,47 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
     let secret_key_b64 = STANDARD.encode(&secret_key_bytes);
     let public_key_b64 = STANDARD.encode(&public_key_bytes);
 
-    // Create the private key secret
-    sm_client
-        .create_secret()
-        .name(&private_key_secret_id)
-        .secret_string(secret_key_b64)
-        .send()
-        .await?;
-    tracing::info!(
-        "Created secret {} in Secrets Manager",
-        private_key_secret_id
-    );
+    match upload_public_key_to_s3(
+        &s3_client,
+        config.public_key_bucket_name.as_str(),
+        bucket_key_name.as_str(),
+        public_key_b64.as_str(),
+    )
+    .await
+    {
+        Ok(output) => {
+            println!("Bucket: {}", config.public_key_bucket_name);
+            println!("Key: {}", bucket_key_name);
+            println!("ETag: {}", output.e_tag.unwrap());
+        }
+        Err(e) => {
+            eprintln!("Error uploading public key to S3: {:?}", e);
+            return Err(eyre::eyre!("Error uploading public key to S3"));
+        }
+    }
 
-    // Upload public key to S3 (overwrite is fine)
-    s3_client
-        .put_object()
-        .bucket(&config.public_key_bucket_name)
-        .key(&bucket_key_name)
-        .body(public_key_b64.to_string().into_bytes().into())
-        .send()
-        .await?;
-    tracing::info!(
-        "Uploaded public key object s3://{}/{}",
-        config.public_key_bucket_name,
-        bucket_key_name
-    );
+    match upload_private_key_to_asm(
+        &sm_client,
+        private_key_secret_id.as_str(),
+        secret_key_b64.as_str(),
+    )
+    .await
+    {
+        Ok(output) => {
+            println!("Secret ARN: {}", output.arn.unwrap());
+            println!("Secret Name: {}", output.name.unwrap());
+            println!("Version ID: {}", output.version_id.unwrap());
+        }
+        Err(e) => {
+            eprintln!("Error uploading private key to Secrets Manager: {:?}", e);
+            return Err(eyre::eyre!(
+                "Error uploading private key to Secrets Manager"
+            ));
+        }
+    }
 
-    Ok(())
-}
+    println!("File uploaded successfully!");
 
-async fn keycleanup_main(config: KeyCleanupConfig) -> Result<()> {
-    let private_key_secret_id: String = format!(
-        "{}/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-{}",
-        config.env, config.party_id
-    );
-    let sdk_config = aws_config::from_env().load().await;
-    let sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(&sdk_config);
-    let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
-    sm_client
-        .delete_secret()
-        .secret_id(private_key_secret_id)
-        .force_delete_without_recovery(true)
-        .send()
-        .await?;
     Ok(())
 }
 

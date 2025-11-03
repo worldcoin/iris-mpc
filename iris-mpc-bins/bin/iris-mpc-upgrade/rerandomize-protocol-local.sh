@@ -40,6 +40,10 @@ export AWS_ENDPOINT_URL="http://127.0.0.1:4566"
 export ENVIRONMENT="testing"
 export PUBLIC_KEY_BUCKET_NAME=$BUCKET_NAME
 
+awslocal secretsmanager create-secret --name dev/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-0 --description "Secret for 0" --secret-string "{\"private-key\":\"\"}" --region us-east-1
+awslocal secretsmanager create-secret --name dev/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-1 --description "Secret for 1" --secret-string "{\"private-key\":\"\"}" --region us-east-1
+awslocal secretsmanager create-secret --name dev/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-2 --description "Secret for 2" --secret-string "{\"private-key\":\"\"}" --region us-east-1
+
 
 # Stage 1: Generate a keypair for each party and upload public keys to S3, for the tripartite DH
 echo "Key generation"
