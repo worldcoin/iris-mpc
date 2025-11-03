@@ -22,13 +22,6 @@ cargo build -p iris-mpc-bins --release --bin seed-v2-dbs --bin rerandomize-db
 
 TARGET_DIR=$(cargo metadata --format-version 1 | jq ".target_directory" -r)
 
-
-# Seed DBs with initial data
-echo "Seeding DBs"
-$TARGET_DIR/release/seed-v2-dbs --db-url-party-0 postgres://postgres:postgres@localhost:6200 --db-url-party-1 postgres://postgres:postgres@localhost:6201 --db-url-party-2 postgres://postgres:postgres@localhost:6202 --schema-name-party-0 SMPC_testing_0 --schema-name-party-1 SMPC_testing_1 --schema-name-party-2 SMPC_testing_2 --fill-to 10000 --batch-size 100
-echo "Seeding complete"
-
-
 # Set AWS env vars for localstack
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
@@ -40,9 +33,16 @@ export AWS_ENDPOINT_URL="http://127.0.0.1:4566"
 export ENVIRONMENT="testing"
 export PUBLIC_KEY_BUCKET_NAME=$BUCKET_NAME
 
-awslocal secretsmanager create-secret --name dev/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-0 --description "Secret for 0" --secret-string "{\"private-key\":\"\"}" --region us-east-1
-awslocal secretsmanager create-secret --name dev/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-1 --description "Secret for 1" --secret-string "{\"private-key\":\"\"}" --region us-east-1
-awslocal secretsmanager create-secret --name dev/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-2 --description "Secret for 2" --secret-string "{\"private-key\":\"\"}" --region us-east-1
+# create initial secrets in secrets manager for each party's private key
+echo "Creating secrets in secrets manager"
+awslocal secretsmanager create-secret --name $ENVIRONMENT/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-0 --description "Secret for 0" --secret-string "{\"private-key\":\"\"}" --region us-east-1
+awslocal secretsmanager create-secret --name $ENVIRONMENT/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-1 --description "Secret for 1" --secret-string "{\"private-key\":\"\"}" --region us-east-1
+awslocal secretsmanager create-secret --name $ENVIRONMENT/iris-mpc-db-rerandomization/tripartite-ecdh-private-key-2 --description "Secret for 2" --secret-string "{\"private-key\":\"\"}" --region us-east-1
+
+# Seed DBs with initial data
+echo "Seeding DBs"
+$TARGET_DIR/release/seed-v2-dbs --db-url-party-0 postgres://postgres:postgres@localhost:6200 --db-url-party-1 postgres://postgres:postgres@localhost:6201 --db-url-party-2 postgres://postgres:postgres@localhost:6202 --schema-name-party-0 SMPC_testing_0 --schema-name-party-1 SMPC_testing_1 --schema-name-party-2 SMPC_testing_2 --fill-to 10000 --batch-size 100
+echo "Seeding complete"
 
 
 # Stage 1: Generate a keypair for each party and upload public keys to S3, for the tripartite DH
