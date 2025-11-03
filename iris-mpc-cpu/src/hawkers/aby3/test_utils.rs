@@ -26,7 +26,7 @@ use crate::{
     shares::{RingElement, Share},
     utils::serialization::{
         graph::{read_graph_from_file, GraphFormat},
-        iris_ndjson::{from_ndjson_file, IrisSelection},
+        iris_ndjson::IrisSelection,
     },
 };
 
@@ -197,7 +197,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
     let generation_comment =
         "Please, generate benchmark data with cargo run --release -p iris-mpc-bins --bin \
                                   generate-benchmark-data.";
-    let plaintext_vector_store = from_ndjson_file(
+    let plaintext_vector_store = PlaintextStore::from_ndjson_file(
         Path::new(plainstore_file),
         Some(database_size),
         IrisSelection::All,

@@ -4,7 +4,7 @@ use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     protocol::shared_iris::GaloisRingSharedIris,
-    utils::serialization::iris_ndjson::{irises_from_ndjson_file, IrisSelection},
+    utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
 };
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
@@ -32,12 +32,11 @@ pub fn read_irises_from_ndjson(
         ),
     );
 
-    let iris_pairs = irises_from_ndjson_file(
+    let iris_pairs = irises_from_ndjson_iter(
         ndjson_path.as_path(),
         Some(2 * num_pairs),
         IrisSelection::All,
     )?
-    .into_iter()
     .tuples::<(_, _)>()
     .collect_vec();
 

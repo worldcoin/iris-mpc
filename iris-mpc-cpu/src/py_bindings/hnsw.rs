@@ -1,4 +1,4 @@
-use crate::utils::serialization::iris_ndjson::{irises_from_ndjson_file, IrisSelection};
+use crate::utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection};
 use crate::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{GraphMem, HnswSearcher},
@@ -106,7 +106,7 @@ pub fn fill_from_ndjson_file(
         let mut rng = ThreadRng::default();
 
         let stream =
-            irises_from_ndjson_file(Path::new(filename), limit, IrisSelection::All).unwrap();
+            irises_from_ndjson_iter(Path::new(filename), limit, IrisSelection::All).unwrap();
 
         // Iterate over each deserialized object
         for raw_query in stream {

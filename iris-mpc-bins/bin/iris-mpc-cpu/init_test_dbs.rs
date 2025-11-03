@@ -9,13 +9,23 @@ use iris_mpc_cpu::{
         HnswSearcher,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
-    py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
-    utils::constants::N_PARTIES,
+    utils::{
+        constants::N_PARTIES,
+        serialization::{
+            iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
+            types::iris_base64::Base64IrisCode,
+        },
+    },
 };
 use itertools::{izip, Itertools};
 use rand::{prelude::StdRng, SeedableRng};
 use serde_json::Deserializer;
-use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::{sync::mpsc, task::JoinSet};
 
 /// Default party ordinal identifer.
@@ -216,7 +226,9 @@ async fn main() -> Result<()> {
         .skip(2 * n_existing_irises)
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples();
-    let stream = limited_iterator(stream, n_irises).chunks(SECRET_SHARING_BATCH_SIZE);
+    let stream = stream
+        .take(n_irises.unwrap_or(usize::MAX))
+        .chunks(SECRET_SHARING_BATCH_SIZE);
 
     for (batch_idx, vectors_batch) in stream.into_iter().enumerate() {
         let vectors_batch: Vec<(_, _)> = vectors_batch.collect();
@@ -296,13 +308,12 @@ async fn main() -> Result<()> {
     tracing::info!("Initializing in-memory vectors from NDJSON file");
     let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
     if n_existing_irises > 0 {
-        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
-        let reader = BufReader::new(file);
-        let stream = Deserializer::from_reader(reader)
-            .into_iter::<Base64IrisCode>()
-            .take(2 * n_existing_irises);
-        for (count, json_pt) in stream.enumerate() {
-            let raw_query = (&json_pt.unwrap()).into();
+        let stream = irises_from_ndjson_iter(
+            Path::new(args.path_to_iris_codes.as_path()),
+            num_irises,
+            IrisSelection::All,
+        )?;
+        for (count, raw_query) in stream.enumerate() {
             let side = count % 2;
             let query = Arc::new(raw_query);
             vectors[side].insert(&query).await;
@@ -328,7 +339,7 @@ async fn main() -> Result<()> {
         let stream = Deserializer::from_reader(reader)
             .into_iter::<Base64IrisCode>()
             .skip(2 * n_existing_irises);
-        let stream = limited_iterator(stream, num_irises.map(|x| 2 * x));
+        let stream = stream.take(num_irises.map(|x| 2 * x).unwrap_or(usize::MAX));
         for (idx, json_pt) in stream.enumerate() {
             let iris_code_query = (&json_pt.unwrap()).into();
             let serial_id = ((idx / 2) + 1 + n_existing_irises) as u32;

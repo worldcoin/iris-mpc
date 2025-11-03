@@ -49,7 +49,7 @@ pub enum IrisSelection {
     Odd,
 }
 
-pub fn load_from_irises_ndjson(
+pub fn irises_from_ndjson_iter(
     path: &Path,
     limit: Option<usize>,
     selection: IrisSelection,
@@ -74,12 +74,12 @@ pub fn load_from_irises_ndjson(
 /// Read `limit` iris codes from the specified file into an in-memory `Vec`, or
 /// all iris codes of `limit` is `None`.  Read all, even, or odd iris codes from the
 /// file depending on the value of `selection`.
-pub fn irises_from_ndjson_file(
+pub fn irises_from_ndjson(
     path: &Path,
     limit: Option<usize>,
     selection: IrisSelection,
 ) -> Result<Vec<IrisCode>> {
-    let stream_iterator = load_from_irises_ndjson(path, limit, selection)?;
+    let stream_iterator = irises_from_ndjson_iter(path, limit, selection)?;
     let codes = stream_iterator.collect_vec();
 
     // Check that enough codes were present in file
@@ -97,41 +97,41 @@ pub fn irises_from_ndjson_file(
     Ok(codes)
 }
 
-// TODO: rename to reflect his is a wrapper to produce a PlaintextStore
+impl PlaintextStore {
+    pub fn from_ndjson_file(
+        path: &Path,
+        limit: Option<usize>,
+        selection: IrisSelection,
+    ) -> Result<PlaintextStore> {
+        let stream_iterator = irises_from_ndjson_iter(path, limit, selection)?;
 
-pub fn from_ndjson_file(
-    path: &Path,
-    limit: Option<usize>,
-    selection: IrisSelection,
-) -> Result<PlaintextStore> {
-    let stream_iterator = load_from_irises_ndjson(path, limit, selection)?;
+        // Iterate over each deserialized object
+        let mut vector = PlaintextStore::new();
+        for (idx, iris) in stream_iterator.enumerate() {
+            let id = IrisVectorId::from_0_index(idx as u32);
+            vector.insert_with_id(id, Arc::new(iris));
+        }
 
-    // Iterate over each deserialized object
-    let mut vector = PlaintextStore::new();
-    for (idx, iris) in stream_iterator.enumerate() {
-        let id = IrisVectorId::from_0_index(idx as u32);
-        vector.insert_with_id(id, Arc::new(iris));
+        Ok(vector)
     }
 
-    Ok(vector)
+    pub fn to_ndjson_file(&self, path: &Path) -> Result<()> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+
+        let serial_ids = self.storage.get_sorted_serial_ids();
+        let irises = serial_ids.into_iter().map(|serial_id| {
+            let iris_code_arc = self
+                .storage
+                .get_vector_by_serial_id(serial_id)
+                .expect("key not found in store");
+            (&**iris_code_arc).into()
+        });
+
+        write_to_iris_ndjson(&mut writer, irises)?;
+        writer.flush()?;
+        Ok(())
+    }
 }
 
 // TODO: refactor into function which write from `Vec<IrisCode>`, plus wrapper which takes a PlaintextStore
-
-pub fn to_ndjson_file(vector: &PlaintextStore, path: &Path) -> Result<()> {
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-
-    let serial_ids = vector.storage.get_sorted_serial_ids();
-    let irises = serial_ids.into_iter().map(|serial_id| {
-        let iris_code_arc = vector
-            .storage
-            .get_vector_by_serial_id(serial_id)
-            .expect("key not found in store");
-        (&**iris_code_arc).into()
-    });
-
-    write_to_iris_ndjson(&mut writer, irises)?;
-    writer.flush()?;
-    Ok(())
-}

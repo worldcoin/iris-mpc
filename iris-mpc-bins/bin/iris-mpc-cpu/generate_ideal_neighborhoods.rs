@@ -8,7 +8,7 @@ use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::naive_knn_plaintext::{Engine, EngineChoice, KNNResult},
-    utils::serialization::iris_ndjson::{load_from_irises_ndjson, IrisSelection},
+    utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
 };
 use metrics::IntoF64;
 
@@ -168,7 +168,7 @@ async fn main() {
 
     let mut irises: Vec<IrisCode> = Vec::with_capacity(args.num_irises);
 
-    let stream_iterator_res = load_from_irises_ndjson(
+    let stream_iterator_res = irises_from_ndjson_iter(
         path_to_iris_codes.as_path(),
         Some(args.num_irises),
         args.irises_selection,
