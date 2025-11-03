@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use async_from::{self, AsyncFrom};
 use clap::Parser;
 use eyre::Result;
 
@@ -8,29 +9,33 @@ use iris_mpc_common::{
 };
 use iris_mpc_utils::{
     constants::NODE_CONFIG_KIND_MAIN,
-    state::fsys::{
-        local::get_path_to_node_config as get_path_to_local_node_config, reader::read_node_config,
+    state::{
+        aws::{NodeAwsClient as NodeServiceClient, NodeAwsConfig as NodeServiceConfig},
+        fsys::{
+            local::get_path_to_node_config as get_path_to_local_node_config,
+            reader::read_node_config,
+        },
     },
-    types::NetConfig,
+    types::{NetNodeConfig, NetServiceClients, NetServiceConfig},
 };
 
+mod client;
 mod requests;
 mod responses;
-
-use requests::{BatchDispatcher, BatchIterator};
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
-    println!("Running with options: {:?}", &options,);
+    println!("Instantiated options: {:?}", &options);
 
-    let requests_dispatcher = requests::Dispatcher::from(&options);
-    let mut requests_generator = requests::Generator::from(&options);
+    let mut client = client::Client::new(
+        requests::AwsDispatcher::async_from(options.clone()).await,
+        requests::Generator::from(&options),
+    );
+    println!("Instantiated client");
 
-    while let Some(request_batch) = requests_generator.next_batch().await {
-        println!("Request batch generated: {:?}", request_batch);
-        requests_dispatcher.dispatch_batch(request_batch).await;
-    }
+    println!("Running client ...");
+    client.run().await;
 
     Ok(())
 }
@@ -78,32 +83,42 @@ impl CliOptions {
     fn path_to_node_2_config(&self) -> &Option<String> {
         &self.path_to_node_2_config
     }
+}
 
-    /// Returns network config files from local filesystem.  Defaults to
-    /// static assets if not passed as CLI args.
-    fn net_config(&self) -> NetConfig {
-        fn read_config(party_idx: usize, path: &Option<String>) -> NodeConfig {
-            let path_to_config = match path {
-                Some(path) => path.clone(),
-                None => get_path_to_local_node_config(NODE_CONFIG_KIND_MAIN, 0, &party_idx)
-                    .to_string_lossy()
-                    .to_string(),
-            };
-
-            read_node_config(Path::new(&path_to_config)).unwrap()
-        }
-
+impl From<&CliOptions> for NetNodeConfig {
+    fn from(options: &CliOptions) -> Self {
         [
-            read_config(0, self.path_to_node_0_config()),
-            read_config(1, self.path_to_node_1_config()),
-            read_config(2, self.path_to_node_2_config()),
+            read_config_of_node(0, options.path_to_node_0_config()),
+            read_config_of_node(1, options.path_to_node_1_config()),
+            read_config_of_node(2, options.path_to_node_2_config()),
         ]
     }
 }
 
-impl From<&CliOptions> for requests::Dispatcher {
-    fn from(_options: &CliOptions) -> Self {
-        Self::new()
+#[async_from::async_trait]
+impl AsyncFrom<CliOptions> for NetServiceClients {
+    async fn async_from(options: CliOptions) -> Self {
+        NetServiceConfig::async_from(options)
+            .await
+            .map(|x| NodeServiceClient::new(x))
+    }
+}
+
+#[async_from::async_trait]
+impl AsyncFrom<CliOptions> for NetServiceConfig {
+    async fn async_from(options: CliOptions) -> Self {
+        [
+            NodeServiceConfig::new(read_config_of_node(0, options.path_to_node_0_config())).await,
+            NodeServiceConfig::new(read_config_of_node(1, options.path_to_node_1_config())).await,
+            NodeServiceConfig::new(read_config_of_node(2, options.path_to_node_2_config())).await,
+        ]
+    }
+}
+
+#[async_from::async_trait]
+impl AsyncFrom<CliOptions> for requests::AwsDispatcher {
+    async fn async_from(options: CliOptions) -> Self {
+        Self::new(NetServiceClients::async_from(options).await)
     }
 }
 
@@ -121,4 +136,15 @@ impl From<&CliOptions> for requests::Generator<requests::Factory> {
             requests::Factory::from(options),
         )
     }
+}
+
+fn read_config_of_node(party_idx: usize, path: &Option<String>) -> NodeConfig {
+    let path_to_config = match path {
+        Some(path) => path.clone(),
+        None => get_path_to_local_node_config(NODE_CONFIG_KIND_MAIN, 0, &party_idx)
+            .to_string_lossy()
+            .to_string(),
+    };
+
+    read_node_config(Path::new(&path_to_config)).unwrap()
 }

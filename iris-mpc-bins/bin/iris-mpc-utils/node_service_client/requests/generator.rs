@@ -1,4 +1,4 @@
-use super::types::{Batch, BatchIterator, BatchSize, PayloadFactory};
+use super::types::{Batch, BatchSize, PayloadFactory, RequestIterator};
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
@@ -33,20 +33,16 @@ where
     }
 }
 
-impl<F> BatchIterator for Generator<F>
+impl<F> RequestIterator for Generator<F>
 where
     F: PayloadFactory + Send,
 {
-    fn batch_count(&self) -> usize {
-        self.batch_count
-    }
-
-    async fn next_batch(&mut self) -> Option<Batch> {
-        if self.batch_count() == self.n_batches {
+    async fn next(&mut self) -> Option<Batch> {
+        if self.batch_count == self.n_batches {
             return None;
         }
 
-        let batch_idx = self.batch_count() + 1;
+        let batch_idx = self.batch_count + 1;
         let mut batch = Batch::new(batch_idx);
 
         match self.batch_size {

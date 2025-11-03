@@ -1,11 +1,13 @@
 use aws_config::SdkConfig;
 use aws_sdk_sqs::config::Region;
+
 use iris_mpc_common::config::Config as NodeConfig;
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Encpasulates AWS service client configuration.
-pub struct ServiceConfig {
+#[derive(Debug)]
+pub struct NodeAwsConfig {
     /// Associated node configuration.
     node: NodeConfig,
 
@@ -13,16 +15,16 @@ pub struct ServiceConfig {
     sdk: SdkConfig,
 }
 
-impl ServiceConfig {
-    pub async fn new(node_config: &NodeConfig) -> Self {
+impl NodeAwsConfig {
+    pub async fn new(node_config: NodeConfig) -> Self {
         Self {
             node: node_config.to_owned(),
-            sdk: get_sdk_config(node_config).await,
+            sdk: get_sdk_config(&node_config).await,
         }
     }
 }
 
-impl Clone for ServiceConfig {
+impl Clone for NodeAwsConfig {
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
@@ -31,7 +33,7 @@ impl Clone for ServiceConfig {
     }
 }
 
-impl ServiceConfig {
+impl NodeAwsConfig {
     pub fn environment(&self) -> &String {
         &self.node().environment
     }
@@ -61,16 +63,16 @@ async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::ServiceConfig;
+    use super::NodeAwsConfig;
     use crate::{
         constants::{DEFAULT_AWS_REGION, NODE_CONFIG_KIND_MAIN},
         state::fsys::local::read_node_config,
     };
 
-    async fn create_config() -> ServiceConfig {
+    async fn create_config() -> NodeAwsConfig {
         let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        ServiceConfig::new(&node_config).await
+        NodeAwsConfig::new(&node_config).await
     }
 
     #[tokio::test]

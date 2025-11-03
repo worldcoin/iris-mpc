@@ -9,6 +9,7 @@ use iris_mpc_common::helpers::smpc_request::{
 use super::types::{BatchKind, Payload, PayloadFactory};
 
 /// A service request factory.
+#[derive(Debug)]
 pub struct Factory {
     /// Determines type of requests to be included in each batch.
     batch_profile: BatchKind,

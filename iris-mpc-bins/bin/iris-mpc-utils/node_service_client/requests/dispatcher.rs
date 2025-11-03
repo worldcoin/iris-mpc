@@ -1,22 +1,25 @@
 use async_trait::async_trait;
 
-use iris_mpc_utils::state::aws::ServiceClients;
+use iris_mpc_utils::types::NetServiceClients;
 
-use super::types::{Batch, BatchDispatcher};
+use super::types::{Batch, RequestDispatcher};
 
-/// Encapsulates logic for dispatching SMPC service requests.
+/// A dispatcher that dispatches SMPC service requests to an AWS service.
 #[derive(Debug)]
-pub struct Dispatcher {}
+pub struct AwsDispatcher {
+    /// Associated network wide AWS service clients.
+    net_aws_clients: NetServiceClients,
+}
 
-impl Dispatcher {
-    pub fn new() -> Self {
-        Self {}
+impl AwsDispatcher {
+    pub fn new(net_aws_clients: NetServiceClients) -> Self {
+        Self { net_aws_clients }
     }
 }
 
 #[async_trait]
-impl BatchDispatcher for Dispatcher {
-    async fn dispatch_batch(&self, batch: Batch) {
+impl RequestDispatcher for AwsDispatcher {
+    async fn dispatch(&self, batch: Batch) {
         println!("TODO: dispatch request batch: {:?}", batch);
     }
 }

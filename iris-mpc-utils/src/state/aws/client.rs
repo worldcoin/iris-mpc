@@ -8,16 +8,17 @@ use aws_sdk_sqs::{config::Builder, Client as SQSClient};
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 
-use super::config::ServiceConfig;
+use super::config::NodeAwsConfig;
 use crate::misc::{log_error, log_info};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "State-AWS";
 
-/// Encpasulates access to a set of AWS service clients.
-pub struct ServiceClients {
+/// Encpasulates access to a node's set of AWS service clients.
+#[derive(Debug)]
+pub struct NodeAwsClient {
     /// Associated configuration.
-    config: ServiceConfig,
+    config: NodeAwsConfig,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -32,8 +33,8 @@ pub struct ServiceClients {
     sqs: SQSClient,
 }
 
-impl ServiceClients {
-    pub fn new(config: ServiceConfig) -> Self {
+impl NodeAwsClient {
+    pub fn new(config: NodeAwsConfig) -> Self {
         Self {
             config: config.to_owned(),
             s3: S3Client::from(&config),
@@ -44,7 +45,7 @@ impl ServiceClients {
     }
 }
 
-impl Clone for ServiceClients {
+impl Clone for NodeAwsClient {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -56,8 +57,8 @@ impl Clone for ServiceClients {
     }
 }
 
-impl ServiceClients {
-    pub fn config(&self) -> &ServiceConfig {
+impl NodeAwsClient {
+    pub fn config(&self) -> &NodeAwsConfig {
         &self.config
     }
 
@@ -78,7 +79,7 @@ impl ServiceClients {
     }
 }
 
-impl ServiceClients {
+impl NodeAwsClient {
     pub(super) fn log_error(&self, msg: &str) {
         log_error(COMPONENT, msg);
     }
@@ -88,8 +89,8 @@ impl ServiceClients {
     }
 }
 
-impl From<&ServiceConfig> for S3Client {
-    fn from(config: &ServiceConfig) -> Self {
+impl From<&NodeAwsConfig> for S3Client {
+    fn from(config: &NodeAwsConfig) -> Self {
         let force_path_style =
             config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
 
@@ -102,20 +103,20 @@ impl From<&ServiceConfig> for S3Client {
     }
 }
 
-impl From<&ServiceConfig> for SecretsManagerClient {
-    fn from(config: &ServiceConfig) -> Self {
+impl From<&NodeAwsConfig> for SecretsManagerClient {
+    fn from(config: &NodeAwsConfig) -> Self {
         SecretsManagerClient::new(config.sdk())
     }
 }
 
-impl From<&ServiceConfig> for SNSClient {
-    fn from(config: &ServiceConfig) -> Self {
+impl From<&NodeAwsConfig> for SNSClient {
+    fn from(config: &NodeAwsConfig) -> Self {
         SNSClient::new(config.sdk())
     }
 }
 
-impl From<&ServiceConfig> for SQSClient {
-    fn from(config: &ServiceConfig) -> Self {
+impl From<&NodeAwsConfig> for SQSClient {
+    fn from(config: &NodeAwsConfig) -> Self {
         SQSClient::from_conf(
             Builder::from(config.sdk())
                 .timeout_config(
@@ -132,10 +133,10 @@ impl From<&ServiceConfig> for SQSClient {
 
 #[cfg(test)]
 mod tests {
-    use super::ServiceClients;
+    use super::NodeAwsClient;
     use crate::{constants::NODE_CONFIG_KIND_MAIN, state::fsys::local::read_node_config};
 
-    fn assert_clients(clients: &ServiceClients) {
+    fn assert_clients(clients: &NodeAwsClient) {
         let client = clients.s3();
         assert!(client.config().region().is_some());
 
@@ -149,10 +150,10 @@ mod tests {
         assert!(client.config().region().is_some());
     }
 
-    async fn create_clients() -> ServiceClients {
+    async fn create_clients() -> NodeAwsClient {
         let config = create_config().await;
 
-        ServiceClients::new(config)
+        NodeAwsClient::new(config)
     }
 
     async fn create_config() -> ServiceConfig {

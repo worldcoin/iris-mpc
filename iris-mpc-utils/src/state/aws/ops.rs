@@ -1,4 +1,4 @@
-use super::clients::ServiceClients;
+use super::client::NodeAwsClient;
 use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream as S3_ByteStream;
 use eyre::{eyre, Result};
@@ -12,7 +12,7 @@ pub trait ServiceOperations {
 }
 
 #[async_trait]
-impl ServiceOperations for ServiceClients {
+impl ServiceOperations for NodeAwsClient {
     /// Uploads a set of Iris serial identifiers to be marked as deleted.
     async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()> {
         // Set key/bucket.

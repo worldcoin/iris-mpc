@@ -368,6 +368,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "async_from"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b397bca84f93309aa3c1f6a8153678bfb260a6749a4be58dc5458d18e1bb517"
+dependencies = [
+ "async-trait",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2638,6 +2647,7 @@ version = "0.1.0"
 dependencies = [
  "aes-prng",
  "async-trait",
+ "async_from",
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-s3",

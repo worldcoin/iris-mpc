@@ -44,27 +44,6 @@ impl fmt::Display for Batch {
     }
 }
 
-/// A component responsible for dispatching request messages to system services.
-#[async_trait]
-pub trait BatchDispatcher {
-    /// Dispatchs a batch of requests to system services.
-    async fn dispatch_batch(&self, batch: Batch);
-}
-
-/// A component responsible for iterating over sets of requests.
-pub trait BatchIterator {
-    /// Count of generated batches.
-    fn batch_count(&self) -> usize;
-
-    /// Iterator over batches of requests to be dispatched.
-    ///
-    /// # Returns
-    ///
-    /// Future that resolves to maybe a Batch.
-    ///
-    fn next_batch(&mut self) -> impl Future<Output = Option<Batch>> + Send;
-}
-
 /// A data structure representing the kind of request batch, i.e. the type of requests to be processed.
 #[derive(Debug, Clone)]
 pub enum BatchKind {
@@ -92,4 +71,22 @@ pub enum Payload {
 /// A component responsible for generating request payload instances.
 pub trait PayloadFactory {
     fn create_payload(&self, batch_idx: usize, item_idx: usize) -> Payload;
+}
+
+/// A component responsible for dispatching request messages to system services.
+#[async_trait]
+pub trait RequestDispatcher {
+    /// Dispatchs a batch of requests to system services.
+    async fn dispatch(&self, batch: Batch);
+}
+
+/// A component responsible for iterating over sets of requests.
+pub trait RequestIterator {
+    /// Iterator over batches of requests to be dispatched.
+    ///
+    /// # Returns
+    ///
+    /// Future that resolves to maybe a Batch.
+    ///
+    fn next(&mut self) -> impl Future<Output = Option<Batch>> + Send;
 }

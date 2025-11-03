@@ -1,7 +1,7 @@
-mod clients;
+mod client;
 mod config;
 mod ops;
 
-pub use clients::ServiceClients;
-pub use config::ServiceConfig;
+pub use client::NodeAwsClient;
+pub use config::NodeAwsConfig;
 pub use ops::ServiceOperations;
