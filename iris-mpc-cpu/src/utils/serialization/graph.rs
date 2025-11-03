@@ -106,7 +106,7 @@ impl From<Layer<IrisVectorId>> for graph_v1::Layer {
 impl From<GraphMem<IrisVectorId>> for GraphV1 {
     fn from(value: GraphMem<IrisVectorId>) -> Self {
         graph_v1::GraphV1 {
-            entry_point: value.entry_point.map(|ep| ep.into()),
+            entry_point: value.entry_point.first().cloned().map(|ep| ep.into()),
             layers: value
                 .layers
                 .into_iter()
@@ -152,7 +152,11 @@ impl From<graph_v1::Layer> for Layer<IrisVectorId> {
 impl From<GraphV1> for GraphMem<IrisVectorId> {
     fn from(value: GraphV1) -> Self {
         GraphMem {
-            entry_point: value.entry_point.map(|ep| ep.into()),
+            entry_point: value
+                .entry_point
+                .map(|e| e.into())
+                .into_iter()
+                .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
         }
     }
@@ -202,7 +206,11 @@ impl From<graph_v0::Layer> for Layer<IrisVectorId> {
 impl From<GraphV0> for GraphMem<IrisVectorId> {
     fn from(value: GraphV0) -> Self {
         GraphMem {
-            entry_point: value.entry_point.map(|ep| ep.into()),
+            entry_point: value
+                .entry_point
+                .map(|ep| ep.into())
+                .into_iter()
+                .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
         }
     }
