@@ -1,7 +1,4 @@
-use std::{
-    fs::File,
-    io::{BufReader, BufWriter},
-};
+use std::{fmt::Display, fs::File, io::BufReader, str::FromStr};
 
 use clap::ValueEnum;
 use eyre::Result;
@@ -9,9 +6,12 @@ use iris_mpc_common::IrisVectorId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hnsw::graph::{
-        layered_graph::{self, GraphMem, Layer},
-        neighborhood,
+    hnsw::{
+        graph::{
+            layered_graph::{self, GraphMem, Layer},
+            neighborhood,
+        },
+        vector_store::Ref,
     },
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
@@ -26,29 +26,25 @@ pub enum GraphFormat {
 
     /// Binary format with cached `(u16, u16)` distances
     V0,
+
+    /// Current format (unstable)
+    GraphMem,
 }
 
-// fn write_bin<T, P>(data: T, path: P) -> Result<()>
-// where
-//     T: Serialize,
-//     P: AsRef<std::path::Path>,
-// {
-//     let file = File::create(path)?;
-//     let writer = BufWriter::new(file);
-//     bincode::serialize_into(writer, &data)?;
-//     Ok(())
-// }
+pub fn read_graph_current<V: Ref + Display + FromStr, R: std::io::Read>(
+    reader: &mut R,
+) -> eyre::Result<GraphMem<V>> {
+    let data = bincode::deserialize_from(reader)?;
+    Ok(data)
+}
 
-// fn read_bin<T, P>(path: P) -> Result<T>
-// where
-//     T: DeserializeOwned,
-//     P: AsRef<std::path::Path>,
-// {
-//     let file = File::open(path)?;
-//     let reader = BufReader::new(file);
-//     let data: T = bincode::deserialize_from(reader)?;
-//     Ok(data)
-// }
+pub fn write_graph_v1<V: Ref + Display + FromStr, W: std::io::Write>(
+    writer: &mut W,
+    data: &GraphMem<V>,
+) -> eyre::Result<()> {
+    bincode::serialize_into(writer, data)?;
+    Ok(())
+}
 
 pub fn read_graph_from_file<P: AsRef<std::path::Path>>(
     path: P,
@@ -65,22 +61,11 @@ pub fn read_graph_from_file<P: AsRef<std::path::Path>>(
             let graph = read_graph_v0(&mut reader)?;
             Ok(graph.into())
         }
+        GraphFormat::GraphMem => Ok(read_graph_current(&mut reader)?),
     }
 }
 
-pub fn write_graph_to_file<P: AsRef<std::path::Path>>(
-    path: P,
-    _data: &GraphMem<IrisVectorId>,
-) -> Result<()> {
-    let file = File::create(path)?;
-    let _writer = BufWriter::new(file);
-
-    todo!()
-}
-
 /* --------------- Conversion GraphMem -> GraphV1 ------------------- */
-
-// TODO -- finish conversion boilerplate
 
 impl From<IrisVectorId> for graph_v1::VectorId {
     fn from(value: IrisVectorId) -> Self {

@@ -64,22 +64,11 @@ pub fn load_from_irises_ndjson(
         IrisSelection::Odd => (1, 2),
     };
 
-    let stream = stream
+    Ok(stream
         .skip(skip)
         .step_by(step)
-        .map(|json_pt| (&json_pt.unwrap()).into());
-
-    Ok(limited_iterator(stream, limit))
-}
-
-fn limited_iterator<I>(iter: I, limit: Option<usize>) -> Box<dyn Iterator<Item = I::Item>>
-where
-    I: Iterator + 'static,
-{
-    match limit {
-        Some(num) => Box::new(iter.take(num)),
-        None => Box::new(iter),
-    }
+        .map(|json_pt| (&json_pt.unwrap()).into())
+        .take(limit.unwrap_or(usize::MAX)))
 }
 
 /// Read `limit` iris codes from the specified file into an in-memory `Vec`, or
