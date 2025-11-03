@@ -1980,7 +1980,7 @@ mod tests_db {
     use super::*;
     use crate::hnsw::{
         graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
-        searcher::ConnectPlanLayerV,
+        searcher::{ConnectPlanLayerV, SetEntryPoint},
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -2001,7 +2001,11 @@ mod tests_db {
                         neighbors: SortedEdgeIds::from_ascending_vec(vec![vectors[side]]),
                         nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
                     }],
-                    set_ep: i == side,
+                    set_ep: if i == side {
+                        SetEntryPoint::NewLayer
+                    } else {
+                        SetEntryPoint::False
+                    },
                 })
                 .map(Some)
                 .collect_vec()
@@ -2073,7 +2077,10 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
+    use crate::hnsw::{
+        graph::neighborhood::SortedEdgeIds,
+        searcher::{ConnectPlanLayerV, SetEntryPoint},
+    };
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
@@ -2085,7 +2092,7 @@ mod hawk_mutation_tests {
                 neighbors: SortedEdgeIds::from_ascending_vec(vec![vector_id]),
                 nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
             }],
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         }
     }
 

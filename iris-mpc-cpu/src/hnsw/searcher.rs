@@ -63,6 +63,9 @@ pub struct HnswParams {
 
     /// Search mode for top layers of the HNSW graph
     pub top_layer_mode: TopLayerSearchMode,
+
+    /// layers >= top_layer will be considered the top layer.
+    pub top_layer: Option<usize>,
 }
 
 #[allow(non_snake_case, clippy::too_many_arguments)]
@@ -95,6 +98,7 @@ impl HnswParams {
             ef_search: ef_search_arr,
             layer_probability,
             top_layer_mode: TopLayerSearchMode::Default,
+            top_layer: None,
         }
     }
 
@@ -117,6 +121,7 @@ impl HnswParams {
             ef_search: ef_search_arr,
             layer_probability,
             top_layer_mode: TopLayerSearchMode::Default,
+            top_layer: None,
         }
     }
 
@@ -171,8 +176,9 @@ impl HnswParams {
         arr[lc.min(N_PARAM_LAYERS - 1)]
     }
 
-    pub fn set_top_layer_mode(&mut self, mode: TopLayerSearchMode) {
+    pub fn set_top_layer_mode(&mut self, mode: TopLayerSearchMode, top_layer: usize) {
         self.top_layer_mode = mode;
+        self.top_layer.replace(top_layer);
     }
 }
 
@@ -211,7 +217,16 @@ pub struct ConnectPlan<Vector> {
     pub layers: Vec<ConnectPlanLayer<Vector>>,
 
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
-    pub set_ep: bool,
+    pub set_ep: SetEntryPoint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SetEntryPoint {
+    False,
+    /// On new layer, clear the existing entry point before inserting
+    NewLayer,
+    /// On the top layer, add to the list of entry points
+    AddToLayer,
 }
 
 /// Represents the state updates required for insertion of a new node into a single layer of
@@ -259,7 +274,7 @@ impl HnswSearcher {
 
     pub fn new_with_test_parameters_and_linear_scan() -> Self {
         let mut params = HnswParams::new(64, 32, 32);
-        params.set_top_layer_mode(TopLayerSearchMode::LinearScan);
+        params.set_top_layer_mode(TopLayerSearchMode::LinearScan, 3);
         Self { params }
     }
 
@@ -269,7 +284,12 @@ impl HnswSearcher {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom)?;
 
-        Ok(geom_distr.sample(rng) as usize)
+        let layer = geom_distr.sample(rng) as usize;
+        let capped = match self.params.top_layer {
+            None => layer,
+            Some(x) => std::cmp::min(layer, x),
+        };
+        Ok(capped)
     }
 
     /// Choose a random insertion layer from a geometric distribution, producing
@@ -294,7 +314,9 @@ impl HnswSearcher {
         self.select_layer_rng(&mut rng)
     }
 
-    /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the number of search layers.
+    /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the
+    /// remaining number of search layers. For TopLayerSearchMode::LinearScan, the top layer is searched, and
+    /// the remaning number of layers to search is returned.
     #[allow(non_snake_case)]
     #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
     async fn search_init<V: VectorStore>(
@@ -1051,16 +1073,13 @@ impl HnswSearcher {
     /// This is used in the top layer of the HNSW graph to hide relations between queries and the entry point.
     async fn linear_search<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
-        lc: usize,
+        vectors: Vec<V::VectorRef>,
     ) -> Result<(V::VectorRef, V::DistanceRef)> {
-        // retrieve all vectors in layer `lc`
-        let vectors: Vec<_> = graph.layers[lc].links.keys().cloned().collect();
         // filter out any invalid vectors (wrong serial ids)
         let vectors = store.only_valid_vectors(vectors).await;
         if vectors.is_empty() {
-            bail!("No valid vectors found in layer {}", lc);
+            bail!("No valid vectors found");
         }
         // compute distances from query to all vectors as a batch
         let distances = store.eval_distance_batch(query, &vectors).await?;
@@ -1227,7 +1246,7 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(Vec<SortedNeighborhoodV<V>>, bool)> {
+    ) -> Result<(Vec<SortedNeighborhoodV<V>>, SetEntryPoint)> {
         let mut links = vec![];
 
         let (mut W, n_layers) = self.search_init(store, graph, query).await?;
@@ -1285,7 +1304,7 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         mut links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: bool,
+        set_ep: SetEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
         let mut plan = ConnectPlan {
             inserted_vector: inserted_vector.clone(),
@@ -1412,7 +1431,7 @@ impl HnswSearcher {
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: bool,
+        set_ep: SetEntryPoint,
     ) -> Result<()> {
         let plan = self
             .insert_prepare(store, graph, inserted_vector, links, set_ep)
@@ -1470,16 +1489,25 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        for query in queries1.iter() {
+        for (idx, query) in queries1.iter().enumerate() {
             let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
             assert!(!db.is_match(vector_store, &neighbors).await?);
+            println!(
+                " at insertion layer: {} for idx: {}, set_ep is {:?}",
+                insertion_layer, idx, set_ep
+            );
+
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
             db.insert_from_search_results(vector_store, graph_store, inserted, neighbors, set_ep)
                 .await?;
+
+            // figure out why insert seems to fail
+            let neighbors = db.search(vector_store, graph_store, query, 1).await?;
+            assert!(db.is_match(vector_store, &[neighbors]).await?,);
         }
 
         let queries2 = IrisDB::new_random_rng(100, rng)
@@ -1496,11 +1524,12 @@ mod tests {
         }
 
         // Search for the same codes and find matches.
-        for query in queries1.iter().chain(queries2.iter()) {
+        for (idx, query) in queries1.iter().chain(queries2.iter()).enumerate() {
             let neighbors = db.search(vector_store, graph_store, query, 1).await?;
-            println!("query: {query:?}");
-            println!("neighbors: {neighbors:?}");
-            assert!(db.is_match(vector_store, &[neighbors]).await?);
+            assert!(
+                db.is_match(vector_store, &[neighbors]).await?,
+                "failed at idx {idx}"
+            );
         }
 
         Ok(())
