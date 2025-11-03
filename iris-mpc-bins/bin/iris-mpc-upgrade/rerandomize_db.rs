@@ -56,67 +56,28 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
         config.env, config.party_id
     );
 
-    let mut rng = rand::thread_rng();
-
-    let secret_key = tripartite_dh::PrivateKey::random(&mut rng);
-    let public_key = secret_key.public_key();
-    let secret_key_bytes = secret_key.serialize();
-    let public_key_bytes = public_key.serialize();
-    let secret_key_b64 = STANDARD.encode(&secret_key_bytes);
-    let public_key_b64 = STANDARD.encode(&public_key_bytes);
     let s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
     let sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(&sdk_config);
     let s3_client = S3Client::from_conf(s3_config_builder.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
-    // Upload public key to S3 if it does not already exist.
-    // Use If-None-Match: "*" to ensure we don't overwrite existing objects.
-    match s3_client
-        .put_object()
-        .bucket(&config.public_key_bucket_name)
-        .key(&bucket_key_name)
-        .if_none_match("*")
-        .body(public_key_b64.to_string().into_bytes().into())
-        .send()
-        .await
-    {
-        Ok(_) => {
-            tracing::info!(
-                "Uploaded public key object s3://{}/{}",
-                config.public_key_bucket_name,
-                bucket_key_name
-            );
-        }
-        Err(aws_sdk_s3::error::SdkError::ServiceError(err)) => {
-            // PreconditionFailed => object already exists
-            if err.err().code() == Some("PreconditionFailed") {
-                tracing::info!(
-                    "Public key object s3://{}/{} already exists, skipping upload",
-                    config.public_key_bucket_name,
-                    bucket_key_name
-                );
-            } else {
-                let code = err.err().code().unwrap_or("Unknown");
-                let message = err.err().message().unwrap_or("<no message>");
-                eyre::bail!("S3 put_object failed: code={}, message={}", code, message);
-            }
-        }
-        Err(e) => return Err(e.into()),
-    }
-
-    // Create the private key secret only if it does not exist.
-    let secret_exists = match sm_client
+    // If the secret already exists, skip key generation and upload.
+    match sm_client
         .describe_secret()
         .secret_id(&private_key_secret_id)
         .send()
         .await
     {
-        Ok(_) => true,
+        Ok(_) => {
+            tracing::info!(
+                "Secret {} already exists in Secrets Manager, skipping key generation",
+                private_key_secret_id
+            );
+            return Ok(());
+        }
         Err(aws_sdk_secretsmanager::error::SdkError::ServiceError(err)) => {
-            // ResourceNotFoundException => secret does not exist
-            if err.err().code() == Some("ResourceNotFoundException") {
-                false
-            } else {
+            // ResourceNotFoundException => proceed to create
+            if err.err().code() != Some("ResourceNotFoundException") {
                 let code = err.err().code().unwrap_or("Unknown");
                 let message = err.err().message().unwrap_or("<no message>");
                 eyre::bail!(
@@ -127,25 +88,42 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
             }
         }
         Err(e) => return Err(e.into()),
-    };
-
-    if secret_exists {
-        tracing::info!(
-            "Secret {} already exists in Secrets Manager, skipping creation",
-            private_key_secret_id
-        );
-    } else {
-        sm_client
-            .create_secret()
-            .name(&private_key_secret_id)
-            .secret_string(secret_key_b64)
-            .send()
-            .await?;
-        tracing::info!(
-            "Created secret {} in Secrets Manager",
-            private_key_secret_id
-        );
     }
+
+    // Generate keys only when the secret does not exist
+    let mut rng = rand::thread_rng();
+    let secret_key = tripartite_dh::PrivateKey::random(&mut rng);
+    let public_key = secret_key.public_key();
+    let secret_key_bytes = secret_key.serialize();
+    let public_key_bytes = public_key.serialize();
+    let secret_key_b64 = STANDARD.encode(&secret_key_bytes);
+    let public_key_b64 = STANDARD.encode(&public_key_bytes);
+
+    // Create the private key secret
+    sm_client
+        .create_secret()
+        .name(&private_key_secret_id)
+        .secret_string(secret_key_b64)
+        .send()
+        .await?;
+    tracing::info!(
+        "Created secret {} in Secrets Manager",
+        private_key_secret_id
+    );
+
+    // Upload public key to S3 (overwrite is fine)
+    s3_client
+        .put_object()
+        .bucket(&config.public_key_bucket_name)
+        .key(&bucket_key_name)
+        .body(public_key_b64.to_string().into_bytes().into())
+        .send()
+        .await?;
+    tracing::info!(
+        "Uploaded public key object s3://{}/{}",
+        config.public_key_bucket_name,
+        bucket_key_name
+    );
 
     Ok(())
 }
