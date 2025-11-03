@@ -1,14 +1,10 @@
 use std::ops::Range;
 
-use aws_sdk_s3::{
-    config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
-    Error as S3Error,
-};
+use aws_sdk_s3::{operation::put_object::PutObjectOutput, Client as S3Client, Error as S3Error};
 use aws_sdk_secretsmanager::{
-    operation::{get_secret_value::GetSecretValueOutput, put_secret_value::PutSecretValueOutput},
-    Client as SecretsManagerClient, Error as SecretsManagerError,
+    operation::put_secret_value::PutSecretValueOutput, Client as SecretsManagerClient,
+    Error as SecretsManagerError,
 };
-use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use clap::Parser;
@@ -25,8 +21,7 @@ use iris_mpc_common::id::PartyID;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::{DbStoredIris, Store, StoredIrisRef};
 use iris_mpc_upgrade::config::{
-    KeyCleanupConfig, KeyGenConfig, ReRandomizeCheckConfig, ReRandomizeConfig,
-    ReRandomizeDbSubCommand,
+    KeyGenConfig, ReRandomizeCheckConfig, ReRandomizeConfig, ReRandomizeDbSubCommand,
 };
 use iris_mpc_upgrade::rerandomization::randomize_iris;
 use iris_mpc_upgrade::tripartite_dh;
