@@ -16,12 +16,15 @@ use crate::{
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
-        graph_v2,
+        graph_v2::{self, read_graph_v2},
     },
 };
 
 #[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
 pub enum GraphFormat {
+    /// Binary format with Vec of entry points
+    V2,
+
     /// Binary format without cached distances
     V1,
 
@@ -54,6 +57,10 @@ pub fn read_graph_from_file<P: AsRef<std::path::Path>>(
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     match format {
+        GraphFormat::V2 => {
+            let graph = read_graph_v2(&mut reader)?;
+            Ok(graph.into())
+        }
         GraphFormat::V1 => {
             let graph = read_graph_v1(&mut reader)?;
             Ok(graph.into())
