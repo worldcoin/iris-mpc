@@ -5,11 +5,11 @@ use iris_mpc_common::{
     galois_engine::degree4::FullGaloisRingIrisCodeShare, iris_db::iris::IrisCode,
 };
 use iris_mpc_store::{Store, StoredIrisRef};
+use iris_mpc_upgrade::utils::install_tracing;
 use itertools::Itertools;
 use rand::thread_rng;
 use std::cmp::min;
 use tracing::{info, warn};
-use iris_mpc_upgrade::utils::install_tracing;
 
 #[derive(Debug, Clone, Parser)]
 struct Args {
@@ -110,12 +110,20 @@ async fn main() -> Result<()> {
         .as_deref()
         .map(parse_deleted_identities)
         .unwrap_or_default();
-    info!(deleted_count = deleted_serial_ids.len(), "Parsed deleted identities");
+    info!(
+        deleted_count = deleted_serial_ids.len(),
+        "Parsed deleted identities"
+    );
 
     for range_chunk in &(latest_serial_id..args.fill_to).chunks(args.batch_size) {
         let range_chunk = range_chunk.collect_vec();
         if let (Some(begin), Some(end)) = (range_chunk.first(), range_chunk.last()) {
-            info!(start = *begin, end = *end + 1, size = range_chunk.len(), "Processing batch range");
+            info!(
+                start = *begin,
+                end = *end + 1,
+                size = range_chunk.len(),
+                "Processing batch range"
+            );
         }
         let (party1, party2, party3): (Vec<_>, Vec<_>, Vec<_>) = range_chunk
             .iter()

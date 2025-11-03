@@ -25,7 +25,7 @@ TARGET_DIR=$(cargo metadata --format-version 1 | jq ".target_directory" -r)
 
 # Seed DBs with initial data
 echo "Seeding DBs"
-$TARGET_DIR/release/seed-v2-dbs --db-url-party1 postgres://postgres:postgres@localhost:6200 --db-url-party2 postgres://postgres:postgres@localhost:6201 --db-url-party3 postgres://postgres:postgres@localhost:6202 --schema-name-party1 SMPC_testing_0 --schema-name-party2 SMPC_testing_1 --schema-name-party3 SMPC_testing_2 --fill-to 10000 --batch-size 100
+$TARGET_DIR/release/seed-v2-dbs --db-url-party-0 postgres://postgres:postgres@localhost:6200 --db-url-party-1 postgres://postgres:postgres@localhost:6201 --db-url-party-2 postgres://postgres:postgres@localhost:6202 --schema-name-party-0 SMPC_testing_0 --schema-name-party-1 SMPC_testing_1 --schema-name-party-2 SMPC_testing_2 --fill-to 10000 --batch-size 100
 echo "Seeding complete"
 
 
