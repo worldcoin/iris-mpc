@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     hnsw::graph::{
-        layered_graph::{self, GraphMem},
+        layered_graph::{self, GraphMem, Layer},
         neighborhood,
     },
     utils::serialization::types::{
-        graph_v0::{read_graph_v0, GraphV0},
+        graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
     },
 };
@@ -106,11 +106,28 @@ impl From<neighborhood::SortedEdgeIds<IrisVectorId>> for graph_v1::EdgeIds {
     }
 }
 
-// ...
+impl From<Layer<IrisVectorId>> for graph_v1::Layer {
+    fn from(value: Layer<IrisVectorId>) -> Self {
+        graph_v1::Layer {
+            links: value
+                .links
+                .into_iter()
+                .map(|(v, nb)| (v.into(), nb.into()))
+                .collect(),
+        }
+    }
+}
 
 impl From<GraphMem<IrisVectorId>> for GraphV1 {
-    fn from(_value: GraphMem<IrisVectorId>) -> Self {
-        todo!()
+    fn from(value: GraphMem<IrisVectorId>) -> Self {
+        graph_v1::GraphV1 {
+            entry_point: value.entry_point.map(|ep| ep.into()),
+            layers: value
+                .layers
+                .into_iter()
+                .map(|layer| layer.into())
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
@@ -137,22 +154,71 @@ impl From<graph_v1::EdgeIds> for neighborhood::SortedEdgeIds<IrisVectorId> {
     }
 }
 
-// ...
+impl From<graph_v1::Layer> for Layer<IrisVectorId> {
+    fn from(value: graph_v1::Layer) -> Self {
+        let mut layer = Layer::new();
+        for (v, nb) in value.links.into_iter() {
+            layer.set_links(v.into(), nb.into());
+        }
+        layer
+    }
+}
 
 impl From<GraphV1> for GraphMem<IrisVectorId> {
-    fn from(_value: GraphV1) -> Self {
-        todo!()
+    fn from(value: GraphV1) -> Self {
+        GraphMem {
+            entry_point: value.entry_point.map(|ep| ep.into()),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+        }
     }
 }
 
 /* --------------- Conversion GraphV0 -> GraphMem ------------------- */
 
-//...
-
-impl From<GraphV0> for GraphMem<IrisVectorId> {
-    fn from(_value: GraphV0) -> Self {
-        todo!()
+impl From<graph_v0::PointId> for IrisVectorId {
+    fn from(value: graph_v0::PointId) -> Self {
+        // The V0 format only stores a u32 ID. We assume version 0.
+        IrisVectorId::new(value.0, 0)
     }
 }
 
-// TODO: utility function to read and write "pair of graph", serialized as type `GraphV1Pair`
+impl From<graph_v0::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
+    fn from(value: graph_v0::EntryPoint) -> Self {
+        layered_graph::EntryPoint {
+            point: value.point.into(),
+            layer: value.layer,
+        }
+    }
+}
+
+impl From<graph_v0::Edges> for neighborhood::SortedEdgeIds<IrisVectorId> {
+    fn from(value: graph_v0::Edges) -> Self {
+        // V0 stores distances (PointId, (u16, u16)), we drop the distances.
+        neighborhood::SortedEdgeIds(
+            value
+                .0
+                .into_iter()
+                .map(|(point_id, _distances)| point_id.into())
+                .collect(),
+        )
+    }
+}
+
+impl From<graph_v0::Layer> for Layer<IrisVectorId> {
+    fn from(value: graph_v0::Layer) -> Self {
+        let mut layer = Layer::new();
+        for (point_id, edges) in value.links.into_iter() {
+            layer.set_links(point_id.into(), edges.into());
+        }
+        layer
+    }
+}
+
+impl From<GraphV0> for GraphMem<IrisVectorId> {
+    fn from(value: GraphV0) -> Self {
+        GraphMem {
+            entry_point: value.entry_point.map(|ep| ep.into()),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+        }
+    }
+}

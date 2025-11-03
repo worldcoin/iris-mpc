@@ -159,7 +159,7 @@ pub struct Layer<V: Ref + Display + FromStr> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
     pub links: HashMap<V, SortedEdgeIds<V>>,
-    set_hash: SetHash,
+    pub set_hash: SetHash,
 }
 
 impl<V: Ref + Display + FromStr> Clone for Layer<V> {

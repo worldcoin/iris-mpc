@@ -24,13 +24,6 @@ pub struct EntryPoint {
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Layer {
     pub links: HashMap<VectorId, EdgeIds>,
-    pub set_hash: SetHash,
-}
-
-/// Type associated with the `GraphV1` serialization type.
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetHash {
-    pub accumulator: u64,
 }
 
 /// Type associated with the `GraphV1` serialization type.
