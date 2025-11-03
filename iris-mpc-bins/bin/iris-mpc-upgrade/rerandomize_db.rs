@@ -16,6 +16,7 @@ use iris_mpc_common::galois::degree4::GaloisRingElement;
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
+use iris_mpc_common::helpers::key_pair::SharesDecodingError;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::id::PartyID;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
@@ -46,6 +47,7 @@ async fn main() -> Result<()> {
 }
 
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "iris-mpc-tripartite-ecdh-public-key-party";
+
 async fn upload_private_key_to_asm(
     client: &SecretsManagerClient,
     secret_id: &str,
@@ -154,6 +156,7 @@ async fn rerandomize_db_main(config: ReRandomizeConfig) -> Result<()> {
     let secret_key_b64 = sm_client
         .get_secret_value()
         .secret_id(private_key_secret_id)
+        .version_stage("AWSCURRENT")
         .send()
         .await?
         .secret_string
