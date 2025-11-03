@@ -68,11 +68,6 @@ pub enum Payload {
     Uniqueness(UniquenessRequest),
 }
 
-/// A component responsible for generating request payload instances.
-pub trait PayloadFactory {
-    fn create_payload(&self, batch_idx: usize, item_idx: usize) -> Payload;
-}
-
 /// A component responsible for dispatching request messages to system services.
 #[async_trait]
 pub trait RequestDispatcher {

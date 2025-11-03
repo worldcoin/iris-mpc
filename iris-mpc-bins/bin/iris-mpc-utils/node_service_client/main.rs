@@ -122,18 +122,12 @@ impl AsyncFrom<CliOptions> for requests::AwsDispatcher {
     }
 }
 
-impl From<&CliOptions> for requests::Factory {
-    fn from(_: &CliOptions) -> Self {
-        Self::new(requests::BatchKind::Simple(UNIQUENESS_MESSAGE_TYPE))
-    }
-}
-
-impl From<&CliOptions> for requests::Generator<requests::Factory> {
+impl From<&CliOptions> for requests::Generator {
     fn from(options: &CliOptions) -> Self {
         Self::new(
+            requests::BatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
             requests::BatchSize::Static(*options.batch_size()),
             *options.n_batches(),
-            requests::Factory::from(options),
         )
     }
 }
