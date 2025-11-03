@@ -1,10 +1,10 @@
-use super::types::{Batch, BatchIterator, BatchSize, MessageFactory};
+use super::types::{Batch, BatchIterator, BatchSize, PayloadFactory};
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
 pub struct Generator<F>
 where
-    F: MessageFactory,
+    F: PayloadFactory,
 {
     // Count of generated batches.
     batch_count: usize,
@@ -13,7 +13,7 @@ where
     batch_size: BatchSize,
 
     // Associated component that instantiates messages instances.
-    message_factory: F,
+    request_payload_factory: F,
 
     /// Number of request batches to generate.
     n_batches: usize,
@@ -21,21 +21,21 @@ where
 
 impl<F> Generator<F>
 where
-    F: MessageFactory,
+    F: PayloadFactory,
 {
-    pub fn new(batch_size: BatchSize, message_factory: F, n_batches: usize) -> Self {
+    pub fn new(batch_size: BatchSize, n_batches: usize, request_payload_factory: F) -> Self {
         Self {
             batch_count: 0,
             batch_size,
-            message_factory,
             n_batches,
+            request_payload_factory,
         }
     }
 }
 
 impl<F> BatchIterator for Generator<F>
 where
-    F: MessageFactory + Send,
+    F: PayloadFactory + Send,
 {
     fn batch_count(&self) -> usize {
         self.batch_count
@@ -52,7 +52,9 @@ where
         match self.batch_size {
             BatchSize::Static(size) => {
                 for item_idx in 1..(size + 1) {
-                    let item = self.message_factory.create_message(batch_idx, item_idx);
+                    let item = self
+                        .request_payload_factory
+                        .create_payload(batch_idx, item_idx);
                     batch.requests_mut().push(item);
                 }
             }

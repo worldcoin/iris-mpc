@@ -109,7 +109,7 @@ impl From<&CliOptions> for requests::Dispatcher {
 
 impl From<&CliOptions> for requests::Factory {
     fn from(_: &CliOptions) -> Self {
-        Self::new(requests::BatchProfile::Simple(UNIQUENESS_MESSAGE_TYPE))
+        Self::new(requests::BatchKind::Simple(UNIQUENESS_MESSAGE_TYPE))
     }
 }
 
@@ -117,8 +117,8 @@ impl From<&CliOptions> for requests::Generator<requests::Factory> {
     fn from(options: &CliOptions) -> Self {
         Self::new(
             requests::BatchSize::Static(*options.batch_size()),
-            requests::Factory::from(options),
             *options.n_batches(),
+            requests::Factory::from(options),
         )
     }
 }

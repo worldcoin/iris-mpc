@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 
+use iris_mpc_utils::state::aws::ServiceClients;
+
 use super::types::{Batch, BatchDispatcher};
 
 /// Encapsulates logic for dispatching SMPC service requests.

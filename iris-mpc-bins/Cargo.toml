@@ -18,6 +18,7 @@ helpers = [
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+async-trait.workspace = true
 axum.workspace = true
 aws-config = { workspace = true, optional = true }
 aws-sdk-kms = { workspace = true, optional = true }
@@ -190,7 +191,7 @@ path = "bin/iris-mpc-utils/write_node_config_toml.rs"
 
 [[bin]]
 name = "node-service-client"
-path = "bin/node_service_client/main.rs"
+path = "bin/iris-mpc-utils/node_service_client/main.rs"
 
 # ---------------------
 # binaries for iris-mpc-anon-stats-server

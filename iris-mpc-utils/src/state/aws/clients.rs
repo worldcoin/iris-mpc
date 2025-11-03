@@ -1,16 +1,15 @@
-use crate::misc::{log_error, log_info};
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
+use std::time::Duration;
+
+use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{
-    config::{Builder, Region},
-    Client as SQSClient,
-};
-use iris_mpc_common::config::{Config as NodeConfig, ENV_PROD, ENV_STAGE};
-use std::time::Duration;
+use aws_sdk_sqs::{config::Builder, Client as SQSClient};
 
-const DEFAULT_REGION: &str = "eu-north-1";
+use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+
+use super::config::ServiceConfig;
+use crate::misc::{log_error, log_info};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "State-AWS";
@@ -33,15 +32,6 @@ pub struct ServiceClients {
     sqs: SQSClient,
 }
 
-/// Encpasulates AWS service client configuration.
-pub struct ServiceConfig {
-    /// Associated node configuration.
-    node: NodeConfig,
-
-    /// Associated AWS SDK configuration.
-    sdk: SdkConfig,
-}
-
 impl ServiceClients {
     pub fn new(config: ServiceConfig) -> Self {
         Self {
@@ -54,15 +44,6 @@ impl ServiceClients {
     }
 }
 
-impl ServiceConfig {
-    pub async fn new(node_config: &NodeConfig) -> Self {
-        Self {
-            node: node_config.to_owned(),
-            sdk: get_sdk_config(node_config).await,
-        }
-    }
-}
-
 impl Clone for ServiceClients {
     fn clone(&self) -> Self {
         Self {
@@ -71,15 +52,6 @@ impl Clone for ServiceClients {
             sns: self.sns.clone(),
             s3: self.s3.clone(),
             secrets_manager: self.secrets_manager.clone(),
-        }
-    }
-}
-
-impl Clone for ServiceConfig {
-    fn clone(&self) -> Self {
-        Self {
-            node: self.node.clone(),
-            sdk: self.sdk.clone(),
         }
     }
 }
@@ -103,20 +75,6 @@ impl ServiceClients {
 
     pub fn sqs(&self) -> &SQSClient {
         &self.sqs
-    }
-}
-
-impl ServiceConfig {
-    pub fn environment(&self) -> &String {
-        &self.node().environment
-    }
-
-    pub fn node(&self) -> &NodeConfig {
-        &self.node
-    }
-
-    pub fn sdk(&self) -> &SdkConfig {
-        &self.sdk
     }
 }
 
@@ -172,27 +130,10 @@ impl From<&ServiceConfig> for SQSClient {
     }
 }
 
-/// Returns AWS SDK configuration from a node configuration instance.
-async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
-    aws_config::from_env()
-        .region(Region::new(
-            node_config
-                .clone()
-                .aws
-                .and_then(|aws| aws.region)
-                .unwrap_or_else(|| DEFAULT_REGION.to_owned()),
-        ))
-        .load()
-        .await
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ServiceClients, ServiceConfig};
-    use crate::{
-        constants::{DEFAULT_AWS_REGION, NODE_CONFIG_KIND_MAIN},
-        state::fsys::local::read_node_config,
-    };
+    use super::ServiceClients;
+    use crate::{constants::NODE_CONFIG_KIND_MAIN, state::fsys::local::read_node_config};
 
     fn assert_clients(clients: &ServiceClients) {
         let client = clients.s3();
@@ -230,13 +171,5 @@ mod tests {
     async fn test_clients_new_then_clone() {
         let clients = create_clients().await.clone();
         assert_clients(&clients);
-    }
-
-    #[tokio::test]
-    async fn test_config_new() {
-        let config = create_config().await;
-        // TODO: check why this assert fails.
-        // assert!(config.sdk().endpoint_url().is_some());
-        assert_eq!(config.sdk().region().unwrap().as_ref(), DEFAULT_AWS_REGION);
     }
 }

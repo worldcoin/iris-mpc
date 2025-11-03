@@ -2637,6 +2637,7 @@ name = "iris-mpc-bins"
 version = "0.1.0"
 dependencies = [
  "aes-prng",
+ "async-trait",
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-s3",
@@ -2854,6 +2855,7 @@ dependencies = [
  "ark-ff",
  "ark-serialize",
  "axum",
+ "blake3",
  "bytemuck",
  "clap",
  "criterion",
