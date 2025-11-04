@@ -4,7 +4,7 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::types::{Batch, BatchKind, BatchSize, Payload, RequestIterator};
+use super::types::{Batch, BatchKind, BatchSize, Request, RequestIterator, RequestPayload};
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
@@ -36,7 +36,7 @@ impl RequestIterator for RequestGenerator {
                 for item_idx in 1..(size + 1) {
                     batch
                         .requests_mut()
-                        .push(self.create_payload(batch_idx, item_idx));
+                        .push(self.create_request(batch_idx, item_idx));
                 }
             }
         }
@@ -57,27 +57,29 @@ impl RequestGenerator {
         }
     }
 
-    fn create_payload(&self, batch_idx: usize, item_idx: usize) -> Payload {
-        match self.batch_kind {
+    fn create_request(&self, batch_idx: usize, item_idx: usize) -> Request {
+        let payload = match self.batch_kind {
             BatchKind::Simple(kind) => match kind {
-                IDENTITY_DELETION_MESSAGE_TYPE => {
-                    Payload::IdentityDeletion(self.create_identity_deletion(batch_idx, item_idx))
-                }
-                REAUTH_MESSAGE_TYPE => {
-                    Payload::Reauthorisation(self.create_reauthorisation(batch_idx, item_idx))
-                }
+                IDENTITY_DELETION_MESSAGE_TYPE => RequestPayload::IdentityDeletion(
+                    self.create_identity_deletion(batch_idx, item_idx),
+                ),
+                REAUTH_MESSAGE_TYPE => RequestPayload::Reauthorisation(
+                    self.create_reauthorisation(batch_idx, item_idx),
+                ),
                 RESET_CHECK_MESSAGE_TYPE => {
-                    Payload::ResetCheck(self.create_reset_check(batch_idx, item_idx))
+                    RequestPayload::ResetCheck(self.create_reset_check(batch_idx, item_idx))
                 }
                 RESET_UPDATE_MESSAGE_TYPE => {
-                    Payload::ResetUpdate(self.create_reset_update(batch_idx, item_idx))
+                    RequestPayload::ResetUpdate(self.create_reset_update(batch_idx, item_idx))
                 }
                 UNIQUENESS_MESSAGE_TYPE => {
-                    Payload::Uniqueness(self.create_uniqueness(batch_idx, item_idx))
+                    RequestPayload::Uniqueness(self.create_uniqueness(batch_idx, item_idx))
                 }
                 _ => panic!("Unsupported request kind: {}", kind),
             },
-        }
+        };
+
+        Request::new(batch_idx, item_idx, payload)
     }
 
     fn create_identity_deletion(

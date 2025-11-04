@@ -3,6 +3,7 @@ use std::path::Path;
 use async_from::{self, AsyncFrom};
 use clap::Parser;
 use eyre::Result;
+use rand::{rngs::StdRng, SeedableRng};
 
 use iris_mpc_common::{
     config::Config as NodeConfig, helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
@@ -48,17 +49,21 @@ struct CliOptions {
     #[clap(long, default_value = "1")]
     n_batches: usize,
 
-    // Path to SMPC node-0 configuration file.
+    /// Path to SMPC node-0 configuration file.
     #[clap(long)]
     path_to_node_0_config: Option<String>,
 
-    // Path to SMPC node-0 configuration file.
+    /// Path to SMPC node-0 configuration file.
     #[clap(long)]
     path_to_node_1_config: Option<String>,
 
-    // Path to SMPC node-0 configuration file.
+    /// Path to SMPC node-0 configuration file.
     #[clap(long)]
     path_to_node_2_config: Option<String>,
+
+    /// A random number generator seed for upstream entropy.
+    #[clap(long)]
+    rng_seed: Option<u64>,
 }
 
 impl CliOptions {
@@ -80,6 +85,14 @@ impl CliOptions {
 
     fn path_to_node_2_config(&self) -> &Option<String> {
         &self.path_to_node_2_config
+    }
+
+    fn rng_seed(&self) -> StdRng {
+        if self.rng_seed.is_some() {
+            StdRng::seed_from_u64(self.rng_seed.unwrap())
+        } else {
+            StdRng::from_entropy()
+        }
     }
 }
 

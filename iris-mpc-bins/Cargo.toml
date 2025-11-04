@@ -37,6 +37,8 @@ eyre.workspace = true
 futures.workspace = true
 hkdf.workspace = true
 itertools.workspace = true
+metrics.workspace = true
+metrics-exporter-statsd.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
 ring.workspace = true
@@ -49,8 +51,6 @@ sqlx.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tonic = "0.12.3"
-metrics.workspace = true
-metrics-exporter-statsd.workspace = true
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
     "uuid",

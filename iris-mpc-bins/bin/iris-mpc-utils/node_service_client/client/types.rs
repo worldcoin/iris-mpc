@@ -1,6 +1,7 @@
 use std::{fmt, future::Future};
 
 use async_trait::async_trait;
+use uuid;
 
 use iris_mpc_common::helpers::smpc_request::{
     IdentityDeletionRequest, ReAuthRequest as ReauthorisationRequest, ResetCheckRequest,
@@ -14,7 +15,7 @@ pub struct Batch {
     batch_idx: usize,
 
     /// Requests in batch.
-    requests: Vec<Payload>,
+    requests: Vec<Request>,
 }
 
 impl Batch {
@@ -22,11 +23,11 @@ impl Batch {
         self.batch_idx
     }
 
-    pub fn requests(&self) -> &Vec<Payload> {
+    pub fn requests(&self) -> &Vec<Request> {
         &self.requests
     }
 
-    pub fn requests_mut(&mut self) -> &mut Vec<Payload> {
+    pub fn requests_mut(&mut self) -> &mut Vec<Request> {
         &mut self.requests
     }
 
@@ -58,14 +59,31 @@ pub enum BatchSize {
     Static(usize),
 }
 
-/// An enumeration over a set of request payload types.
-#[derive(Debug, Clone)]
-pub enum Payload {
-    IdentityDeletion(IdentityDeletionRequest),
-    Reauthorisation(ReauthorisationRequest),
-    ResetCheck(ResetCheckRequest),
-    ResetUpdate(ResetUpdateRequest),
-    Uniqueness(UniquenessRequest),
+/// A service request to be dispatched to a node's ingress queue.
+#[derive(Debug)]
+pub struct Request {
+    /// Idx of batch within which request was included.
+    batch_idx: usize,
+
+    /// Idx of batch item within which request was included.
+    batch_item_idx: usize,
+
+    /// Unique request identifier for correlation purposes.
+    request_id: uuid::Uuid,
+
+    /// Associated request payload.
+    payload: RequestPayload,
+}
+
+impl Request {
+    pub fn new(batch_idx: usize, batch_item_idx: usize, payload: RequestPayload) -> Self {
+        Self {
+            batch_idx,
+            batch_item_idx,
+            payload,
+            request_id: uuid::Uuid::new_v4(),
+        }
+    }
 }
 
 /// A component responsible for dispatching request messages to system services.
@@ -84,4 +102,14 @@ pub trait RequestIterator {
     /// Future that resolves to maybe a Batch.
     ///
     fn next(&mut self) -> impl Future<Output = Option<Batch>> + Send;
+}
+
+/// An enumeration over a set of request payload types.
+#[derive(Debug, Clone)]
+pub enum RequestPayload {
+    IdentityDeletion(IdentityDeletionRequest),
+    Reauthorisation(ReauthorisationRequest),
+    ResetCheck(ResetCheckRequest),
+    ResetUpdate(ResetUpdateRequest),
+    Uniqueness(UniquenessRequest),
 }
