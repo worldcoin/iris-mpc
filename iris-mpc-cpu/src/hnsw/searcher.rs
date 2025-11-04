@@ -1614,7 +1614,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hnsw_db_linear_scanM() -> Result<()> {
+    async fn test_hnsw_db_linear_scan_m() -> Result<()> {
         // ensure the top layer gets exercised
         let db = HnswSearcher::new_with_test_parameters_and_linear_scan_m4();
 
