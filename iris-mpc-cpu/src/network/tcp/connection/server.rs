@@ -1,9 +1,9 @@
-use crate::network::tcp::networking::client::DynStream;
-use crate::network::tcp::{networking::configure_tcp_stream, Server};
+use crate::network::tcp::data::configure_tcp_stream;
+use crate::network::tcp::{DynStreamConn, Server, TcpStreamConn, TlsStreamConn};
 use async_trait::async_trait;
 use eyre::{eyre, Result};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio_rustls::rustls::{
     pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
     server::WebPkiClientVerifier,
@@ -64,29 +64,29 @@ impl TcpServer {
 
 #[async_trait]
 impl Server for TlsServer {
-    type Output = TlsStream<TcpStream>;
+    type Output = TlsStreamConn;
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
         configure_tcp_stream(&tcp_stream)?;
         let tls_stream = self.tls_acceptor.accept(tcp_stream).await?;
-        Ok((peer_addr, TlsStream::Server(tls_stream)))
+        Ok((peer_addr, TlsStreamConn(TlsStream::Server(tls_stream))))
     }
 }
 
 #[async_trait]
 impl Server for TcpServer {
-    type Output = TcpStream;
+    type Output = TcpStreamConn;
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
         configure_tcp_stream(&tcp_stream)?;
-        Ok((peer_addr, tcp_stream))
+        Ok((peer_addr, TcpStreamConn(tcp_stream)))
     }
 }
 
 pub struct BoxTcpServer(pub TcpServer);
 #[async_trait]
 impl Server for BoxTcpServer {
-    type Output = DynStream;
+    type Output = DynStreamConn;
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (addr, stream) = self.0.accept().await?;
         Ok((addr, Box::new(stream)))
@@ -96,7 +96,7 @@ impl Server for BoxTcpServer {
 pub struct BoxTlsServer(pub TlsServer);
 #[async_trait]
 impl Server for BoxTlsServer {
-    type Output = DynStream;
+    type Output = DynStreamConn;
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (addr, stream) = self.0.accept().await?;
         Ok((addr, Box::new(stream)))
