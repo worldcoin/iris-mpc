@@ -174,6 +174,31 @@ impl VectorStore for PlaintextStore {
         Ok(distance)
     }
 
+    async fn eval_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        use rayon::prelude::*;
+
+        debug!(event_type = EvaluateDistance.id());
+        let storage = &self.storage;
+        let distance_fn = &self.distance_fn;
+
+        let results = vectors.par_iter().map(|vector| {
+            let vector_code = storage.get_vector(vector).ok_or_else(|| {
+                eyre::eyre!(
+                    "Vector ID not found in store for serial {}",
+                    vector.serial_id()
+                )
+            })?;
+            let distance = distance_fn.plaintext_distance(vector_code, query);
+            Ok(distance)
+        });
+
+        results.collect::<Result<Vec<_>>>()
+    }
+
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         Ok(fraction_is_match(distance))
     }
