@@ -86,6 +86,7 @@ impl CliOptions {
         &self.path_to_node_2_config
     }
 
+    #[allow(dead_code)]
     fn rng_seed(&self) -> StdRng {
         if self.rng_seed.is_some() {
             StdRng::seed_from_u64(self.rng_seed.unwrap())
@@ -95,8 +96,8 @@ impl CliOptions {
     }
 }
 
-impl From<&CliOptions> for NetNodeConfig {
-    fn from(options: &CliOptions) -> Self {
+impl From<CliOptions> for NetNodeConfig {
+    fn from(options: CliOptions) -> Self {
         [
             read_config_of_node(0, options.path_to_node_0_config()),
             read_config_of_node(1, options.path_to_node_1_config()),
@@ -117,10 +118,11 @@ impl AsyncFrom<CliOptions> for NetServiceClients {
 #[async_from::async_trait]
 impl AsyncFrom<CliOptions> for NetServiceConfig {
     async fn async_from(options: CliOptions) -> Self {
+        let node_configs = NetNodeConfig::from(options);
         [
-            NodeServiceConfig::new(read_config_of_node(0, options.path_to_node_0_config())).await,
-            NodeServiceConfig::new(read_config_of_node(1, options.path_to_node_1_config())).await,
-            NodeServiceConfig::new(read_config_of_node(2, options.path_to_node_2_config())).await,
+            NodeServiceConfig::new(node_configs[0].to_owned()).await,
+            NodeServiceConfig::new(node_configs[1].to_owned()).await,
+            NodeServiceConfig::new(node_configs[2].to_owned()).await,
         ]
     }
 }
