@@ -8,7 +8,7 @@ use super::types::{Batch, BatchKind, BatchSize, Payload, RequestIterator};
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
-pub struct Generator {
+pub struct RequestGenerator {
     // Count of generated batches.
     batch_count: usize,
 
@@ -22,7 +22,32 @@ pub struct Generator {
     n_batches: usize,
 }
 
-impl Generator {
+impl RequestIterator for RequestGenerator {
+    async fn next(&mut self) -> Option<Batch> {
+        if self.batch_count == self.n_batches {
+            return None;
+        }
+
+        let batch_idx = self.batch_count + 1;
+        let mut batch = Batch::new(batch_idx);
+
+        match self.batch_size {
+            BatchSize::Static(size) => {
+                for item_idx in 1..(size + 1) {
+                    batch
+                        .requests_mut()
+                        .push(self.create_payload(batch_idx, item_idx));
+                }
+            }
+        }
+
+        self.batch_count += 1;
+
+        Some(batch)
+    }
+}
+
+impl RequestGenerator {
     pub fn new(batch_kind: BatchKind, batch_size: BatchSize, n_batches: usize) -> Self {
         Self {
             batch_count: 0,
@@ -85,30 +110,5 @@ impl Generator {
             signup_id: "test_signup_id".to_string(),
             skip_persistence: None,
         }
-    }
-}
-
-impl RequestIterator for Generator {
-    async fn next(&mut self) -> Option<Batch> {
-        if self.batch_count == self.n_batches {
-            return None;
-        }
-
-        let batch_idx = self.batch_count + 1;
-        let mut batch = Batch::new(batch_idx);
-
-        match self.batch_size {
-            BatchSize::Static(size) => {
-                for item_idx in 1..(size + 1) {
-                    batch
-                        .requests_mut()
-                        .push(self.create_payload(batch_idx, item_idx));
-                }
-            }
-        }
-
-        self.batch_count += 1;
-
-        Some(batch)
     }
 }

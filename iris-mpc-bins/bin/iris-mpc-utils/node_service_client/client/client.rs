@@ -1,4 +1,4 @@
-use super::requests::{RequestDispatcher, RequestIterator};
+use super::types::{RequestDispatcher, RequestIterator};
 
 #[derive(Debug)]
 pub struct Client<RD, RI>

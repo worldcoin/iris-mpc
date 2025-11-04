@@ -20,8 +20,6 @@ use iris_mpc_utils::{
 };
 
 mod client;
-mod requests;
-mod responses;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
@@ -29,8 +27,8 @@ pub async fn main() -> Result<()> {
     println!("Instantiated options: {:?}", &options);
 
     let mut client = client::Client::new(
-        requests::AwsDispatcher::async_from(options.clone()).await,
-        requests::Generator::from(&options),
+        client::AwsRequestDispatcher::async_from(options.clone()).await,
+        client::RequestGenerator::from(&options),
     );
     println!("Instantiated client");
 
@@ -116,17 +114,17 @@ impl AsyncFrom<CliOptions> for NetServiceConfig {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for requests::AwsDispatcher {
+impl AsyncFrom<CliOptions> for client::AwsRequestDispatcher {
     async fn async_from(options: CliOptions) -> Self {
         Self::new(NetServiceClients::async_from(options).await)
     }
 }
 
-impl From<&CliOptions> for requests::Generator {
+impl From<&CliOptions> for client::RequestGenerator {
     fn from(options: &CliOptions) -> Self {
         Self::new(
-            requests::BatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
-            requests::BatchSize::Static(*options.batch_size()),
+            client::BatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
+            client::BatchSize::Static(*options.batch_size()),
             *options.n_batches(),
         )
     }
