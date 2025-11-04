@@ -1564,7 +1564,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        for (_idx, query) in queries1.iter().enumerate() {
+        for query in queries1.iter() {
             let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
@@ -1591,7 +1591,7 @@ mod tests {
         }
 
         // Search for the same codes and find matches.
-        for (_idx, query) in queries1.iter().chain(queries2.iter()).enumerate() {
+        for query in queries1.iter().chain(queries2.iter()) {
             let neighbors = db.search(vector_store, graph_store, query, 1).await?;
             assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
