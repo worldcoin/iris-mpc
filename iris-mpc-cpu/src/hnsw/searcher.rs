@@ -300,6 +300,13 @@ impl HnswSearcher {
         Self { params }
     }
 
+    /// set M to 4 so that with 100 samples, the top layer will occur a few times.
+    pub fn new_with_test_parameters_and_linear_scan_m4() -> Self {
+        let mut params = HnswParams::new(64, 32, 4);
+        params.set_top_layer_mode(TopLayerSearchMode::LinearScan(2));
+        Self { params }
+    }
+
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
     pub fn select_layer_rng(&self, rng: &mut impl RngCore) -> Result<usize> {
@@ -1205,9 +1212,6 @@ impl HnswSearcher {
         let (mut W, n_layers) = match self.params.top_layer_mode {
             TopLayerSearchMode::LinearScan(max_layer) => {
                 let n_layers = graph.get_num_layers();
-                if n_layers >= max_layer + 1 {
-                    println!("n_layers is {} and max layer is {}", n_layers, max_layer);
-                }
                 assert!(n_layers < max_layer + 1);
 
                 match graph.get_ep_layer() {
@@ -1562,25 +1566,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        for (idx, query) in queries1.iter().enumerate() {
+        for (_idx, query) in queries1.iter().enumerate() {
             let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
             assert!(!db.is_match(vector_store, &neighbors).await?);
-            println!(
-                " at insertion layer: {} for idx: {}, set_ep is {:?}",
-                insertion_layer, idx, set_ep
-            );
 
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
             db.insert_from_search_results(vector_store, graph_store, inserted, neighbors, set_ep)
                 .await?;
-
-            // figure out why insert seems to fail
-            let neighbors = db.search(vector_store, graph_store, query, 1).await?;
-            assert!(db.is_match(vector_store, &[neighbors]).await?,);
         }
 
         let queries2 = IrisDB::new_random_rng(100, rng)
@@ -1597,9 +1593,8 @@ mod tests {
         }
 
         // Search for the same codes and find matches.
-        for (idx, query) in queries1.iter().chain(queries2.iter()).enumerate() {
+        for (_idx, query) in queries1.iter().chain(queries2.iter()).enumerate() {
             let neighbors = db.search(vector_store, graph_store, query, 1).await?;
-            println!("idx {}", idx);
             assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
 
@@ -1616,6 +1611,14 @@ mod tests {
     #[tokio::test]
     async fn test_hnsw_db_linear_scan() -> Result<()> {
         let db = HnswSearcher::new_with_test_parameters_and_linear_scan();
+
+        hnsw_db_helper(db, 0).await
+    }
+
+    #[tokio::test]
+    async fn test_hnsw_db_linear_scanM() -> Result<()> {
+        // ensure the top layer gets exercised
+        let db = HnswSearcher::new_with_test_parameters_and_linear_scan_m4;
 
         hnsw_db_helper(db, 0).await
     }
