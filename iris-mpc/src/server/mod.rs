@@ -134,19 +134,15 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
 
-    let should_persist_anon_stats = config.enable_sending_anonymized_stats_message
-        || config.enable_sending_anonymized_stats_2d_message;
-    if should_persist_anon_stats {
-        if let Some(url) = config.get_anon_stats_db_url() {
-            let schema = config.get_anon_stats_db_schema();
-            let anon_client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
-            let anon_store = AnonStatsStore::new(&anon_client).await?;
-            hawk_actor.set_anon_stats_store(Some(anon_store));
-        } else {
-            tracing::warn!(
+    if let Some(url) = config.get_anon_stats_db_url() {
+        let schema = config.get_anon_stats_db_schema();
+        let anon_client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        let anon_store = AnonStatsStore::new(&anon_client).await?;
+        hawk_actor.set_anon_stats_store(Some(anon_store));
+    } else {
+        tracing::warn!(
                 "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
             );
-        }
     }
 
     load_database(
