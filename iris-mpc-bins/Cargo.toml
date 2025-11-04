@@ -187,12 +187,12 @@ path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
 # ---------------------
 
 [[bin]]
-name = "write-node-config-toml"
-path = "bin/iris-mpc-utils/write_node_config_toml.rs"
+name = "node-service-client"
+path = "bin/iris-mpc-utils/node_service_client.rs"
 
 [[bin]]
-name = "node-service-client"
-path = "bin/iris-mpc-utils/node_service_client/main.rs"
+name = "write-node-config-toml"
+path = "bin/iris-mpc-utils/write_node_config_toml.rs"
 
 # ---------------------
 # binaries for iris-mpc-anon-stats-server
