@@ -1565,7 +1565,7 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     //     vec_of_msb_shares.push(add_3_get_msb_fss(session, x_).await?);
     // }
 
-    let batch_size: usize = 64;
+    let batch_size: usize = 512;
 
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
     for batch in x.chunks(batch_size) {
@@ -1677,6 +1677,7 @@ pub(crate) async fn open_bin_fss(
 /// XOR my 2 shares with the one I received from the prev party, return the MSB
 /// we assume the parties have RSS shares of the MSB, and the shares are u128
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
+#[allow(dead_code)]
 pub(crate) async fn open_bin_fss_from_rss(
     session: &mut Session,
     shares: &[Share<u128>],
