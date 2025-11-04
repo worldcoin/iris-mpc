@@ -1203,12 +1203,21 @@ impl HnswSearcher {
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
         let (mut W, n_layers) = match self.params.top_layer_mode {
-            TopLayerSearchMode::LinearScan(top_layer) => {
+            TopLayerSearchMode::LinearScan(max_layer) => {
                 let n_layers = graph.get_num_layers();
-                assert!(n_layers <= top_layer);
+                if n_layers >= max_layer + 1 {
+                    println!("n_layers is {} and max layer is {}", n_layers, max_layer);
+                }
+                assert!(n_layers < max_layer + 1);
 
-                if n_layers < top_layer {
-                    match graph.get_top_layer() {
+                match graph.get_ep_layer() {
+                    Some(ep_layer) => {
+                        let nearest_point = Self::linear_search(store, query, ep_layer).await?;
+                        let mut W = SortedNeighborhood::new();
+                        W.edges.push(nearest_point);
+                        (W, n_layers)
+                    }
+                    None => match graph.get_top_layer() {
                         Some(top_layer) => {
                             let nearest_point =
                                 Self::linear_search(store, query, top_layer).await?;
@@ -1217,17 +1226,7 @@ impl HnswSearcher {
                             (W, n_layers)
                         }
                         None => (SortedNeighborhood::new(), 0),
-                    }
-                } else {
-                    match graph.get_ep_layer() {
-                        Some(ep_layer) => {
-                            let nearest_point = Self::linear_search(store, query, ep_layer).await?;
-                            let mut W = SortedNeighborhood::new();
-                            W.edges.push(nearest_point);
-                            (W, n_layers)
-                        }
-                        None => (SortedNeighborhood::new(), 0),
-                    }
+                    },
                 }
             }
             TopLayerSearchMode::Default => self.search_init(store, graph, query).await?,
@@ -1293,30 +1292,31 @@ impl HnswSearcher {
         let mut links = vec![];
 
         let (mut W, n_layers, set_ep) = match self.params.top_layer_mode {
-            TopLayerSearchMode::LinearScan(top_layer) => {
-                assert!(insertion_layer <= top_layer);
+            TopLayerSearchMode::LinearScan(max_layer) => {
+                assert!(insertion_layer <= max_layer);
                 let n_layers = graph.get_num_layers();
-                if insertion_layer < top_layer {
-                    match graph.get_top_layer() {
+                let set_ep = if insertion_layer == max_layer {
+                    SetEntryPoint::AddToLayer
+                } else {
+                    SetEntryPoint::False
+                };
+                match graph.get_ep_layer() {
+                    Some(ep_layer) => {
+                        let nearest_point = Self::linear_search(store, query, ep_layer).await?;
+                        let mut W = SortedNeighborhood::new();
+                        W.edges.push(nearest_point);
+                        (W, n_layers, set_ep)
+                    }
+                    None => match graph.get_top_layer() {
                         Some(top_layer) => {
                             let nearest_point =
                                 Self::linear_search(store, query, top_layer).await?;
                             let mut W = SortedNeighborhood::new();
                             W.edges.push(nearest_point);
-                            (W, n_layers, SetEntryPoint::False)
+                            (W, n_layers, set_ep)
                         }
-                        None => (SortedNeighborhood::new(), 0, SetEntryPoint::False),
-                    }
-                } else {
-                    match graph.get_ep_layer() {
-                        Some(ep_layer) => {
-                            let nearest_point = Self::linear_search(store, query, ep_layer).await?;
-                            let mut W = SortedNeighborhood::new();
-                            W.edges.push(nearest_point);
-                            (W, n_layers, SetEntryPoint::AddToLayer)
-                        }
-                        None => (SortedNeighborhood::new(), 0, SetEntryPoint::AddToLayer),
-                    }
+                        None => (SortedNeighborhood::new(), 0, set_ep),
+                    },
                 }
             }
             TopLayerSearchMode::Default => {
@@ -1562,16 +1562,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        for (_idx, query) in queries1.iter().enumerate() {
+        for (idx, query) in queries1.iter().enumerate() {
             let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
             assert!(!db.is_match(vector_store, &neighbors).await?);
-            /*println!(
+            println!(
                 " at insertion layer: {} for idx: {}, set_ep is {:?}",
                 insertion_layer, idx, set_ep
-            );*/
+            );
 
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
@@ -1579,8 +1579,8 @@ mod tests {
                 .await?;
 
             // figure out why insert seems to fail
-            //let neighbors = db.search(vector_store, graph_store, query, 1).await?;
-            //assert!(db.is_match(vector_store, &[neighbors]).await?,);
+            let neighbors = db.search(vector_store, graph_store, query, 1).await?;
+            assert!(db.is_match(vector_store, &[neighbors]).await?,);
         }
 
         let queries2 = IrisDB::new_random_rng(100, rng)
@@ -1597,8 +1597,9 @@ mod tests {
         }
 
         // Search for the same codes and find matches.
-        for query in queries1.iter().chain(queries2.iter()) {
+        for (idx, query) in queries1.iter().chain(queries2.iter()).enumerate() {
             let neighbors = db.search(vector_store, graph_store, query, 1).await?;
+            println!("idx {}", idx);
             assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
 
