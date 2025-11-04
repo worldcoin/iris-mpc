@@ -312,8 +312,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     async fn test_hnsw_local() {
+        use std::time::Instant;
+
+        let t0 = Instant::now(); //measurte time it takes for test to run
+
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let database_size = 2;
+        let database_size = 20;
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut vectors_and_graphs = shared_random_setup(
             &mut rng,
@@ -355,5 +359,7 @@ mod tests {
                 assert!(r, "Failed at index {:?} by party {:?}", i, party_index);
             }
         }
+        let dt = t0.elapsed();
+        eprintln!("TIME: {:?}", dt);
     }
 }

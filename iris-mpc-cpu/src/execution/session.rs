@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use tokio::time::sleep;
-const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(10);
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionId(pub u32);
 
@@ -17,6 +17,20 @@ impl From<u32> for SessionId {
         SessionId(id)
     }
 }
+/// Added to introduce delay
+const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(50); // this is for dev tests
+                                                                   // use std::sync::OnceLock; // use this for local tests
+
+// fn artificial_link_delay() -> Duration {
+//     static DELAY: OnceLock<Duration> = OnceLock::new();
+//     *DELAY.get_or_init(|| {
+//         std::env::var("NET_DELAY")
+//             .ok()
+//             .and_then(|s| s.parse::<u64>().ok())
+//             .map(Duration::from_millis)
+//             .unwrap_or(Duration::from_millis(30)) // default if NET_DELAY unset
+//     })
+// }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct StreamId(pub u32);
@@ -43,7 +57,10 @@ pub struct NetworkSession {
 
 impl NetworkSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
-        sleep(ARTIFICIAL_LINK_DELAY).await;
+        // let d = artificial_link_delay();
+        // sleep(d).await;
+
+        sleep(ARTIFICIAL_LINK_DELAY).await; //uncomment this for dev tests
         self.networking.send(value, receiver).await
     }
 
