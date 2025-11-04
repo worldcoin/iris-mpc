@@ -120,6 +120,7 @@ mod e2e_anon_stats_test {
                 false,
                 Eye::Left,
                 false,
+                None,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0, &mut actor);
@@ -155,6 +156,7 @@ mod e2e_anon_stats_test {
                 false,
                 Eye::Left,
                 false,
+                None,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1, &mut actor);
@@ -190,6 +192,7 @@ mod e2e_anon_stats_test {
                 false,
                 Eye::Left,
                 false,
+                None,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2, &mut actor);

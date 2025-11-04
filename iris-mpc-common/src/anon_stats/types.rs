@@ -1,20 +1,11 @@
 use std::hash::{Hash, Hasher};
 
-use iris_mpc_common::job::Eye;
-use iris_mpc_cpu::{execution::hawk_main::Orientation, shares::share::DistanceShare};
+use crate::job::Eye;
 
-pub type DistanceBundle1D = Vec<DistanceShare<u16>>;
-pub type LiftedDistanceBundle1D = Vec<DistanceShare<u32>>;
-pub type MinLiftedDistance1D = DistanceShare<u32>;
-
-pub type DistanceBundle2D = (DistanceBundle1D, DistanceBundle1D);
-pub type LiftedDistanceBundle2D = (LiftedDistanceBundle1D, LiftedDistanceBundle1D);
-pub type MinLiftedDistance2D = (DistanceShare<u32>, DistanceShare<u32>);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AnonStatsOrigin {
     pub side: Option<Eye>,
-    pub orientation: Orientation,
+    pub orientation: AnonStatsOrientation,
     pub context: AnonStatsContext,
 }
 
@@ -26,15 +17,21 @@ impl From<AnonStatsOrigin> for i16 {
             None => 2,
         };
         let orientation_val: i16 = match origin.orientation {
-            Orientation::Normal => 0,
-            Orientation::Mirror => 1,
+            AnonStatsOrientation::Normal => 0,
+            AnonStatsOrientation::Mirror => 1,
         };
         // 2 bits side + 1 bit orientation + 8 bits context
         (side_val << 9) | (orientation_val << 8) | (origin.context as i16)
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AnonStatsOrientation {
+    Normal,
+    Mirror,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum AnonStatsContext {
     GPU = 0,

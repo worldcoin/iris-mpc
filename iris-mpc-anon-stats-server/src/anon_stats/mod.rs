@@ -1,6 +1,7 @@
 use eyre::Result;
 use iris_mpc_common::{
-    helpers::statistics::{BucketStatistics, BucketStatistics2D},
+    anon_stats::{AnonStatsContext, AnonStatsMapping, AnonStatsOrigin},
+    helpers::statistics::{AnonStatsResultSource, BucketStatistics, BucketStatistics2D},
     iris_db::iris::MATCH_THRESHOLD_RATIO,
 };
 use iris_mpc_cpu::{
@@ -18,12 +19,10 @@ use iris_mpc_cpu::{
 };
 use itertools::{izip, Itertools};
 
-use crate::anon_stats::types::{
-    AnonStatsMapping, AnonStatsOrigin, DistanceBundle1D, DistanceBundle2D, LiftedDistanceBundle1D,
-};
-
-pub mod store;
-pub mod types;
+pub type DistanceBundle1D = Vec<DistanceShare<u16>>;
+pub type LiftedDistanceBundle1D = Vec<DistanceShare<u32>>;
+pub type DistanceBundle2D = (DistanceBundle1D, DistanceBundle1D);
+pub type LiftedDistanceBundle2D = (LiftedDistanceBundle1D, LiftedDistanceBundle1D);
 
 pub fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
     (1..=n_buckets)
@@ -35,8 +34,8 @@ pub fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
 
 pub async fn lift_bundles_1d(
     session: &mut Session,
-    bundles: &[types::DistanceBundle1D],
-) -> Result<Vec<types::LiftedDistanceBundle1D>> {
+    bundles: &[DistanceBundle1D],
+) -> Result<Vec<LiftedDistanceBundle1D>> {
     let flattened = bundles
         .iter()
         .flat_map(|x| {
@@ -68,8 +67,8 @@ pub async fn lift_bundles_1d(
 
 pub async fn lift_bundles_2d(
     session: &mut Session,
-    bundles: &[types::DistanceBundle2D],
-) -> Result<Vec<types::LiftedDistanceBundle2D>> {
+    bundles: &[DistanceBundle2D],
+) -> Result<Vec<LiftedDistanceBundle2D>> {
     let bundle_left = bundles.iter().map(|(left, _)| left.clone()).collect_vec();
     let bundle_right = bundles.iter().map(|(_, right)| right.clone()).collect_vec();
     let lifted_left = lift_bundles_1d(session, &bundle_left).await?;
@@ -108,6 +107,7 @@ pub async fn process_1d_anon_stats_job(
         origin.side.expect("1d stats need a side"),
     );
     anon_stats.fill_buckets(&buckets, MATCH_THRESHOLD_RATIO, None);
+    anon_stats.source = AnonStatsResultSource::Aggregator;
     Ok(anon_stats)
 }
 
@@ -137,6 +137,7 @@ pub async fn process_1d_lifted_anon_stats_job(
         origin.side.expect("1d stats need a side"),
     );
     anon_stats.fill_buckets(&buckets, MATCH_THRESHOLD_RATIO, None);
+    anon_stats.source = AnonStatsResultSource::Aggregator;
     Ok(anon_stats)
 }
 
@@ -213,6 +214,7 @@ pub async fn process_2d_anon_stats_job(
     let buckets = open_ring_element_broadcast(session, &bucket_shares).await?;
     let mut anon_stats = BucketStatistics2D::new(job_size, config.n_buckets_1d, config.party_id);
     anon_stats.fill_buckets(&buckets, MATCH_THRESHOLD_RATIO, None);
+    anon_stats.source = AnonStatsResultSource::Aggregator;
     Ok(anon_stats)
 }
 
@@ -220,7 +222,7 @@ pub mod test_helper_1d {
     use iris_mpc_cpu::shares::{share::DistanceShare, RingElement, Share};
     use itertools::Itertools;
 
-    use crate::anon_stats::types::DistanceBundle1D;
+    use crate::anon_stats::DistanceBundle1D;
 
     pub struct TestDistances {
         pub distances: Vec<Vec<[i16; 2]>>,
@@ -398,7 +400,7 @@ pub mod test_helper_2d {
     use iris_mpc_cpu::shares::{share::DistanceShare, RingElement, Share};
     use itertools::Itertools;
 
-    use crate::anon_stats::types::DistanceBundle2D;
+    use crate::anon_stats::DistanceBundle2D;
 
     pub struct TestDistances {
         #[allow(clippy::type_complexity)]

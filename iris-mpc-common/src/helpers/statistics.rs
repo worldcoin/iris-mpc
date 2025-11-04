@@ -6,6 +6,19 @@ use chrono::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnonStatsResultSource {
+    Legacy,
+    Aggregator,
+}
+
+impl Default for AnonStatsResultSource {
+    fn default() -> Self {
+        Self::Legacy
+    }
+}
+
 // 1D anonymized statistics types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketResult {
@@ -30,6 +43,8 @@ pub struct BucketStatistics {
     pub match_distances_buffer_size: usize,
     pub party_id: usize,
     pub eye: Eye,
+    #[serde(default)]
+    pub source: AnonStatsResultSource,
     #[serde(with = "ts_seconds")]
     // Start timestamp at which we start recording the statistics
     pub start_time_utc_timestamp: DateTime<Utc>,
@@ -54,6 +69,7 @@ impl fmt::Display for BucketStatistics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "    party_id: {}", self.party_id)?;
         writeln!(f, "    eye: {:?}", self.eye)?;
+        writeln!(f, "    source: {:?}", self.source)?;
         writeln!(f, "    start_time_utc: {}", self.start_time_utc_timestamp)?;
         match &self.end_time_utc_timestamp {
             Some(end) => writeln!(f, "    end_time_utc: {}", end)?,
@@ -84,6 +100,7 @@ impl BucketStatistics {
             eye,
             match_distances_buffer_size,
             party_id,
+            source: AnonStatsResultSource::Legacy,
             start_time_utc_timestamp: Utc::now(),
             end_time_utc_timestamp: None,
             next_start_time_utc_timestamp: None,
@@ -181,6 +198,8 @@ pub struct BucketStatistics2D {
     // The number of two-sided matches gathered before sending the statistics
     pub match_distances_buffer_size: usize,
     pub party_id: usize,
+    #[serde(default)]
+    pub source: AnonStatsResultSource,
     #[serde(with = "ts_seconds")]
     pub start_time_utc_timestamp: DateTime<Utc>,
     #[serde(with = "ts_seconds_option")]
@@ -200,6 +219,7 @@ impl BucketStatistics2D {
 impl fmt::Display for BucketStatistics2D {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "    party_id: {}", self.party_id)?;
+        writeln!(f, "    source: {:?}", self.source)?;
         writeln!(f, "    start_time_utc: {}", self.start_time_utc_timestamp)?;
         match &self.end_time_utc_timestamp {
             Some(end) => writeln!(f, "    end_time_utc: {}", end)?,
@@ -231,6 +251,7 @@ impl BucketStatistics2D {
             n_buckets_per_side,
             match_distances_buffer_size,
             party_id,
+            source: AnonStatsResultSource::Legacy,
             start_time_utc_timestamp: Utc::now(),
             end_time_utc_timestamp: None,
             next_start_time_utc_timestamp: None,

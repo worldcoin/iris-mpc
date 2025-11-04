@@ -32,6 +32,9 @@ env:
         key: SNS_RESULTS_ARN
         name: application
 
+  - name: SMPC__AWS__REGION
+    value: "eu-north-1"
+
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
 

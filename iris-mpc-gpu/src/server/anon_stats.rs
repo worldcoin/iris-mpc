@@ -270,6 +270,12 @@ pub struct OneSidedDistanceCache {
     map: HashMap<u64, Vec<CpuDistanceShare>>,
 }
 
+impl OneSidedDistanceCache {
+    pub fn iter(&self) -> impl Iterator<Item = (&u64, &Vec<CpuDistanceShare>)> {
+        self.map.iter()
+    }
+}
+
 /// Represents a cache for match distances that matched on both sides.
 #[derive(Debug, Default, Clone)]
 pub struct TwoSidedDistanceCache {
@@ -309,6 +315,12 @@ impl TwoSidedDistanceCache {
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&u64, &(Vec<CpuDistanceShare>, Vec<CpuDistanceShare>))> {
+        self.map.iter()
     }
 
     fn sort_internal_groups(&mut self) {

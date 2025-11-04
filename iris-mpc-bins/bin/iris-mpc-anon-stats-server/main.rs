@@ -1,49 +1,372 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
+use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
 use clap::Parser;
-use eyre::{Context, Result};
+use eyre::{bail, eyre, Context, Result};
 use iris_mpc_anon_stats_server::{
-    anon_stats::{
-        self, calculate_threshold_a,
-        store::AnonStatsStore,
-        test_helper_1d, test_helper_2d,
-        types::{AnonStatsContext, AnonStatsMapping, AnonStatsOrigin},
-    },
+    anon_stats::{self, DistanceBundle1D, DistanceBundle2D},
     config::{AnonStatsServerConfig, Opt},
-    spawn_healthcheck_server,
+    spawn_healthcheck_server, sync,
 };
+use iris_mpc_common::anon_stats::{
+    AnonStatsContext, AnonStatsMapping, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
+};
+use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
-    helpers::{statistics::BucketStatistics2D, task_monitor::TaskMonitor},
-    iris_db::iris::MATCH_THRESHOLD_RATIO,
+    helpers::{
+        smpc_request::{ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE},
+        smpc_response::create_message_type_attribute_map,
+        statistics::{BucketStatistics, BucketStatistics2D},
+        task_monitor::TaskMonitor,
+    },
     postgres::{AccessMode, PostgresClient},
+    tracing::initialize_tracing,
 };
-use iris_mpc_common::{job::Eye, tracing::initialize_tracing};
 use iris_mpc_cpu::{
     execution::hawk_main::Orientation,
+    execution::session::Session,
     network::tcp::{build_network_handle, NetworkHandleArgs},
 };
-use itertools::Itertools;
-use rand::{rngs::StdRng, SeedableRng};
+use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
+
+const GPU_1D_ORIGINS: [AnonStatsOrigin; 2] = [
+    AnonStatsOrigin {
+        side: Some(Eye::Left),
+        orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::GPU,
+    },
+    AnonStatsOrigin {
+        side: Some(Eye::Right),
+        orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::GPU,
+    },
+];
+
+const HNSW_1D_ORIGINS: [AnonStatsOrigin; 2] = [
+    AnonStatsOrigin {
+        side: Some(Eye::Left),
+        orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::HNSW,
+    },
+    AnonStatsOrigin {
+        side: Some(Eye::Right),
+        orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::HNSW,
+    },
+];
+
+const GPU_2D_ORIGINS: [AnonStatsOrigin; 1] = [AnonStatsOrigin {
+    side: None,
+    orientation: AnonStatsOrientation::Normal,
+    context: AnonStatsContext::GPU,
+}];
+
+#[derive(Clone, Copy, Debug)]
+enum JobKind {
+    Gpu1D,
+    Hnsw1D,
+    Gpu2D,
+}
+
+struct PublishTargets {
+    topic_arn: String,
+    message_group_id: String,
+    attributes_1d: HashMap<String, MessageAttributeValue>,
+    attributes_2d: HashMap<String, MessageAttributeValue>,
+}
+
+struct AnonStatsProcessor {
+    config: Arc<AnonStatsServerConfig>,
+    store: AnonStatsStore,
+    sns_client: SNSClient,
+    publish: PublishTargets,
+    sync_failures: HashMap<AnonStatsOrigin, usize>,
+}
+
+impl AnonStatsProcessor {
+    fn new(
+        config: Arc<AnonStatsServerConfig>,
+        store: AnonStatsStore,
+        sns_client: SNSClient,
+    ) -> Self {
+        let publish = PublishTargets {
+            topic_arn: config.results_topic_arn.clone(),
+            message_group_id: format!("party-id-{}", config.party_id),
+            attributes_1d: create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE),
+            attributes_2d: create_message_type_attribute_map(ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE),
+        };
+
+        Self {
+            config,
+            store,
+            sns_client,
+            publish,
+            sync_failures: HashMap::new(),
+        }
+    }
+
+    async fn run_iteration(&mut self, session: &mut Session) -> Result<()> {
+        for origin in GPU_1D_ORIGINS {
+            self.run_1d_job(session, origin, JobKind::Gpu1D).await?;
+        }
+        for origin in HNSW_1D_ORIGINS {
+            self.run_1d_job(session, origin, JobKind::Hnsw1D).await?;
+        }
+        for origin in GPU_2D_ORIGINS {
+            self.run_2d_job(session, origin).await?;
+        }
+        Ok(())
+    }
+
+    async fn run_1d_job(
+        &mut self,
+        session: &mut Session,
+        origin: AnonStatsOrigin,
+        kind: JobKind,
+    ) -> Result<()> {
+        let available = match kind {
+            JobKind::Gpu1D => self.store.num_available_anon_stats_1d(origin).await?,
+            JobKind::Hnsw1D => {
+                self.store
+                    .num_available_anon_stats_1d_lifted(origin)
+                    .await?
+            }
+            JobKind::Gpu2D => 0,
+        };
+        let available = usize::try_from(available).unwrap_or(0);
+        if available == 0 {
+            return Ok(());
+        }
+
+        let min_job_size = sync::sync_on_job_sizes(session, available).await?;
+        if min_job_size < self.config.min_1d_job_size {
+            debug!(
+                ?origin,
+                available,
+                min_job_size,
+                required = self.config.min_1d_job_size,
+                "Not enough entries yet for 1D anon stats job"
+            );
+            return Ok(());
+        }
+
+        let (ids, bundles) = match kind {
+            JobKind::Gpu1D => {
+                self.store
+                    .get_available_anon_stats_1d(origin, min_job_size)
+                    .await?
+            }
+            JobKind::Hnsw1D => {
+                self.store
+                    .get_available_anon_stats_1d_lifted(origin, min_job_size)
+                    .await?
+            }
+            JobKind::Gpu2D => (Vec::new(), Vec::new()),
+        };
+
+        if bundles.is_empty() {
+            return Ok(());
+        }
+
+        let mut job = AnonStatsMapping::new(bundles);
+        if job.len() > min_job_size {
+            job.truncate(min_job_size);
+        }
+        let job_size = job.len();
+        let job_hash = job.get_id_hash();
+
+        if !sync::sync_on_id_hash(session, job_hash).await? {
+            warn!(
+                ?origin,
+                job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
+            );
+            self.handle_sync_failure(origin, kind).await?;
+            return Ok(());
+        }
+
+        let start = Instant::now();
+        let stats = match kind {
+            JobKind::Gpu1D => {
+                anon_stats::process_1d_anon_stats_job(session, job, &origin, self.config.as_ref())
+                    .await?
+            }
+            JobKind::Hnsw1D => {
+                anon_stats::process_1d_lifted_anon_stats_job(
+                    session,
+                    job,
+                    &origin,
+                    self.config.as_ref(),
+                )
+                .await?
+            }
+            JobKind::Gpu2D => unreachable!(),
+        };
+        info!(
+            ?origin,
+            job_size,
+            elapsed_ms = start.elapsed().as_millis(),
+            "Completed 1D anon stats job"
+        );
+
+        self.publish_1d_stats(&stats).await?;
+        match kind {
+            JobKind::Gpu1D => self.store.mark_anon_stats_processed_1d(&ids).await?,
+            JobKind::Hnsw1D => self.store.mark_anon_stats_processed_1d_lifted(&ids).await?,
+            JobKind::Gpu2D => {}
+        }
+        self.sync_failures.remove(&origin);
+        Ok(())
+    }
+
+    async fn run_2d_job(&mut self, session: &mut Session, origin: AnonStatsOrigin) -> Result<()> {
+        let available =
+            usize::try_from(self.store.num_available_anon_stats_2d(origin).await?).unwrap_or(0);
+        if available == 0 {
+            return Ok(());
+        }
+
+        let min_job_size = sync::sync_on_job_sizes(session, available).await?;
+        if min_job_size < self.config.min_1d_job_size {
+            debug!(
+                ?origin,
+                available,
+                min_job_size,
+                required = self.config.min_1d_job_size,
+                "Not enough entries yet for 2D anon stats job"
+            );
+            return Ok(());
+        }
+
+        let (ids, bundles) = self
+            .store
+            .get_available_anon_stats_2d(origin, min_job_size)
+            .await?;
+        if bundles.is_empty() {
+            return Ok(());
+        }
+
+        let mut job = AnonStatsMapping::new(bundles);
+        if job.len() > min_job_size {
+            job.truncate(min_job_size);
+        }
+        let job_size = job.len();
+        let job_hash = job.get_id_hash();
+
+        if !sync::sync_on_id_hash(session, job_hash).await? {
+            warn!(
+                ?origin,
+                job_size, "Mismatched 2D anon stats job hash detected; scheduling recovery"
+            );
+            self.handle_sync_failure(origin, JobKind::Gpu2D).await?;
+            return Ok(());
+        }
+
+        let start = Instant::now();
+        let stats =
+            anon_stats::process_2d_anon_stats_job(session, job, self.config.as_ref()).await?;
+        info!(
+            ?origin,
+            job_size,
+            elapsed_ms = start.elapsed().as_millis(),
+            "Completed 2D anon stats job"
+        );
+
+        self.publish_2d_stats(&stats).await?;
+        self.store.mark_anon_stats_processed_2d(&ids).await?;
+        self.sync_failures.remove(&origin);
+        Ok(())
+    }
+
+    async fn publish_1d_stats(&self, stats: &BucketStatistics) -> Result<()> {
+        let payload =
+            serde_json::to_string(stats).wrap_err("failed to serialize 1D anon stats payload")?;
+        self.publish_message(payload, &self.publish.attributes_1d)
+            .await
+    }
+
+    async fn publish_2d_stats(&self, stats: &BucketStatistics2D) -> Result<()> {
+        let payload =
+            serde_json::to_string(stats).wrap_err("failed to serialize 2D anon stats payload")?;
+        self.publish_message(payload, &self.publish.attributes_2d)
+            .await
+    }
+
+    async fn publish_message(
+        &self,
+        payload: String,
+        attributes: &HashMap<String, MessageAttributeValue>,
+    ) -> Result<()> {
+        self.sns_client
+            .publish()
+            .topic_arn(&self.publish.topic_arn)
+            .message(payload)
+            .message_group_id(&self.publish.message_group_id)
+            .set_message_attributes(Some(attributes.clone()))
+            .send()
+            .await
+            .wrap_err("failed to publish anon stats result to SNS")?;
+        Ok(())
+    }
+
+    async fn handle_sync_failure(&mut self, origin: AnonStatsOrigin, kind: JobKind) -> Result<()> {
+        let failures = self.sync_failures.entry(origin).or_insert(0);
+        *failures += 1;
+
+        if *failures < self.config.max_sync_failures_before_reset {
+            debug!(
+                ?origin,
+                failure_count = *failures,
+                "Anon stats sync mismatch recorded"
+            );
+            return Ok(());
+        }
+
+        warn!(
+            ?origin,
+            "Exceeded sync mismatches threshold; clearing local anon stats queue"
+        );
+
+        let cleared = match kind {
+            JobKind::Gpu1D => self.store.clear_unprocessed_anon_stats_1d(origin).await?,
+            JobKind::Hnsw1D => {
+                self.store
+                    .clear_unprocessed_anon_stats_1d_lifted(origin)
+                    .await?
+            }
+            JobKind::Gpu2D => self.store.clear_unprocessed_anon_stats_2d(origin).await?,
+        };
+        info!(?origin, cleared, "Cleared unprocessed anon stats entries");
+        self.sync_failures.insert(origin, 0);
+        Ok(())
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
-    println!("Init config");
-    let mut config: AnonStatsServerConfig = AnonStatsServerConfig::load_config("SMPC").unwrap();
+    info!("Init config");
+    let mut config = AnonStatsServerConfig::load_config("SMPC")?;
     config.overwrite_defaults_with_cli_args(Opt::parse());
     config.apply_party_network_defaults()?;
 
-    let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("Failed to initialize tracing: {:?}", e);
-            return Err(e);
-        }
-    };
+    if config.results_topic_arn.is_empty() {
+        bail!("SMPC__RESULTS_TOPIC_ARN must be provided");
+    }
 
-    tracing::info!("Connecting to database");
+    let config = Arc::new(config);
+
+    let _tracing_shutdown_handle =
+        initialize_tracing(config.service.clone()).wrap_err("Failed to initialize tracing")?;
+
+    info!("Connecting to database");
     let postgres_client = PostgresClient::new(
         &config.db_url,
         &config.db_schema_name,
@@ -52,16 +375,16 @@ async fn main() -> Result<()> {
     .await?;
     let anon_stats_store = AnonStatsStore::new(&postgres_client).await?;
 
-    tracing::info!("Starting anon stats server.");
+    let sns_client = build_sns_client(config.as_ref()).await?;
 
+    info!("Starting anon stats server.");
     let mut background_tasks = TaskMonitor::new();
     let healthcheck_port = config.healthcheck_port;
     let _healthcheck_handle =
         background_tasks.spawn(async move { spawn_healthcheck_server(healthcheck_port).await });
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck server running on port {}", healthcheck_port);
+    info!("Healthcheck server running on port {}", healthcheck_port);
 
-    // set up tcp networking
     let args = NetworkHandleArgs {
         party_index: config.party_id,
         addresses: config.addresses.clone(),
@@ -73,331 +396,55 @@ async fn main() -> Result<()> {
     let ct = CancellationToken::new();
 
     let mut networking = build_network_handle(args, ct.child_token()).await?;
-    let mut sessions = networking
-        .as_mut()
-        .make_sessions()
-        .await
-        .context("Making sessions")?;
-    tracing::info!("Networking sessions established.");
+    let mut sessions = networking.as_mut().make_sessions().await?;
+    let session = sessions
+        .get_mut(0)
+        .ok_or_else(|| eyre!("expected at least one network session"))?;
 
-    let session = &mut sessions[0];
-    let mut interval = tokio::time::interval(Duration::from_secs(10));
+    let mut processor = AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client);
+
+    let mut poll_interval = interval(Duration::from_secs(config.poll_interval_secs));
+    poll_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    if let Err(err) = processor.run_iteration(session).await {
+        warn!(error = ?err, "Anon stats iteration failed");
+    }
+
     loop {
         tokio::select! {
-            // TODO: configure heartbeat interval
-            _ = interval.tick() => {
-                tracing::info!("Anon stats server heartbeat - alive and running.");
+            _ = poll_interval.tick() => {
+                if let Err(err) = processor.run_iteration(session).await {
+                    warn!(error = ?err, "Anon stats iteration failed");
+                }
             }
             _ = shutdown_signal() => {
-                tracing::info!("Cancellation token triggered, shutting down anon stats server.");
+                info!("Shutdown signal received, stopping anon stats processor.");
                 break;
             }
         }
-        for origin in [
-            // 1d anon stats jobs for left and right eyes, GPU and HSNW contexts
-            AnonStatsOrigin {
-                side: Some(Eye::Left),
-                orientation: Orientation::Normal,
-                context: AnonStatsContext::GPU,
-            },
-            AnonStatsOrigin {
-                side: Some(Eye::Right),
-                orientation: Orientation::Normal,
-                context: AnonStatsContext::GPU,
-            },
-            AnonStatsOrigin {
-                side: Some(Eye::Left),
-                orientation: Orientation::Normal,
-                context: AnonStatsContext::HNSW,
-            },
-            AnonStatsOrigin {
-                side: Some(Eye::Right),
-                orientation: Orientation::Normal,
-                context: AnonStatsContext::HNSW,
-            },
-        ] {
-            tracing::info!("Starting anon stats job for origin {:?}", origin);
-
-            // prepare test data
-            let (expected, my_shares) = {
-                let translated_thresholds = calculate_threshold_a(config.n_buckets_1d);
-                let data = test_helper_1d::TestDistances::generate_ground_truth_input(
-                    &mut StdRng::seed_from_u64(123),
-                    1000,
-                    6,
-                );
-                let expected = data.ground_truth_buckets(&translated_thresholds);
-                let my_shares = match config.party_id {
-                    0 => data.shares0,
-                    1 => data.shares1,
-                    2 => data.shares2,
-                    _ => panic!("Invalid party index"),
-                }
-                .into_iter()
-                .enumerate()
-                .map(|(i, share)| (i as i64, share))
-                .collect_vec();
-                (expected, my_shares)
-            };
-
-            // need to call different methods because GPU and HSNW anon stats inputs are different formats
-            // GPU is u16, while HSNW is lifted u32
-            let anon_stats = match origin.context {
-                AnonStatsContext::GPU => {
-                    tracing::info!("Inserting test anon stats data into DB");
-                    anon_stats_store
-                        .insert_anon_stats_batch_1d(&my_shares, origin)
-                        .await?;
-
-                    // we get the size of available anon stats from all parties
-                    tracing::info!("Loading anon stats job data from DB");
-                    let available_anon_stats = match usize::try_from(
-                        anon_stats_store.num_available_anon_stats_1d(origin).await?,
-                    ) {
-                        Ok(n) => n,
-                        Err(e) => {
-                            tracing::error!("Failed to convert num_available_anon_stats to usize: {:?}, using 0 as a standing", e);
-                            0
-                        }
-                    };
-                    let min_job_size = iris_mpc_anon_stats_server::sync::sync_on_job_sizes(
-                        session,
-                        available_anon_stats,
-                    )
-                    .await?;
-                    if min_job_size < config.min_1d_job_size {
-                        tracing::info!("Not enough available anon stats for origin {:?} (available: {}, minimum required: {}), will retry later", origin, min_job_size, config.min_1d_job_size);
-                        continue;
-                    }
-
-                    tracing::info!(
-                        "Loading {min_job_size} available anon stats for origin {:?} from DB",
-                        origin,
-                    );
-                    let (ids, my_anon_stats_shares) = anon_stats_store
-                        .get_available_anon_stats_1d(origin, min_job_size)
-                        .await?;
-
-                    let job_1d = AnonStatsMapping::new(my_anon_stats_shares);
-                    let job_hash = job_1d.get_id_hash();
-
-                    let hashes_match =
-                        iris_mpc_anon_stats_server::sync::sync_on_id_hash(session, job_hash)
-                            .await?;
-                    if !hashes_match {
-                        tracing::info!("Mismatched job data detected among parties, will retry at a later point");
-                    }
-
-                    let start = Instant::now();
-                    let anon_stats =
-                        anon_stats::process_1d_anon_stats_job(session, job_1d, &origin, &config)
-                            .await?;
-
-                    tracing::info!(
-                        "Completed anon stats job for origin {:?} of size {} in {:?}. Stats: {:?}",
-                        origin,
-                        min_job_size,
-                        start.elapsed(),
-                        anon_stats,
-                    );
-                    tracing::info!("Anon stats calculation complete, marking as processed in DB");
-                    anon_stats_store.mark_anon_stats_processed_1d(&ids).await?;
-                    anon_stats
-                }
-                AnonStatsContext::HNSW => {
-                    tracing::info!("Inserting test anon stats data into DB");
-                    let my_shares = my_shares.into_iter().map(|(_, share)| share).collect_vec();
-                    let lifted = anon_stats::lift_bundles_1d(session, &my_shares).await?;
-                    let my_shares = lifted
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, share)| (i as i64, share))
-                        .collect_vec();
-                    anon_stats_store
-                        .insert_anon_stats_batch_1d_lifted(&my_shares, origin)
-                        .await?;
-
-                    // we get the size of available anon stats from all parties
-                    tracing::info!("Loading anon stats job data from DB");
-                    let available_anon_stats = match usize::try_from(
-                        anon_stats_store
-                            .num_available_anon_stats_1d_lifted(origin)
-                            .await?,
-                    ) {
-                        Ok(n) => n,
-                        Err(e) => {
-                            tracing::error!("Failed to convert num_available_anon_stats to usize: {:?}, using 0 as a standing", e);
-                            0
-                        }
-                    };
-                    let min_job_size = iris_mpc_anon_stats_server::sync::sync_on_job_sizes(
-                        session,
-                        available_anon_stats,
-                    )
-                    .await?;
-                    if min_job_size < config.min_1d_job_size {
-                        tracing::info!("Not enough available anon stats for origin {:?} (available: {}, minimum required: {}), will retry later", origin, min_job_size, config.min_1d_job_size);
-                        continue;
-                    }
-
-                    tracing::info!(
-                        "Loading {min_job_size} available anon stats for origin {:?} from DB",
-                        origin,
-                    );
-                    let (ids, my_anon_stats_shares) = anon_stats_store
-                        .get_available_anon_stats_1d_lifted(origin, min_job_size)
-                        .await?;
-
-                    let job_1d = AnonStatsMapping::new(my_anon_stats_shares);
-                    let job_hash = job_1d.get_id_hash();
-
-                    let hashes_match =
-                        iris_mpc_anon_stats_server::sync::sync_on_id_hash(session, job_hash)
-                            .await?;
-                    if !hashes_match {
-                        tracing::info!("Mismatched job data detected among parties, will retry at a later point");
-                    }
-
-                    let start = Instant::now();
-                    let anon_stats = anon_stats::process_1d_lifted_anon_stats_job(
-                        session, job_1d, &origin, &config,
-                    )
-                    .await?;
-
-                    tracing::info!(
-                        "Completed anon stats job for origin {:?} of size {} in {:?}. Stats: {:?}",
-                        origin,
-                        min_job_size,
-                        start.elapsed(),
-                        anon_stats,
-                    );
-                    tracing::info!("Anon stats calculation complete, marking as processed in DB");
-                    anon_stats_store
-                        .mark_anon_stats_processed_1d_lifted(&ids)
-                        .await?;
-                    anon_stats
-                }
-            };
-
-            let buckets = anon_stats
-                .buckets
-                .iter()
-                .fold(
-                    (0u32, Vec::with_capacity(config.n_buckets_1d)),
-                    |(total, mut vec), b| {
-                        let cummulative = total + b.count as u32;
-
-                        vec.push(cummulative);
-                        (cummulative, vec)
-                    },
-                )
-                .1;
-            // verify correctness against ground truth
-            assert_eq!(buckets, expected);
-        }
-
-        // 2d anon stats
-        #[allow(clippy::single_element_loop)]
-        for origin in [
-            AnonStatsOrigin {
-                side: None,
-                orientation: Orientation::Normal,
-                context: AnonStatsContext::GPU,
-            },
-            // TODO HNSW 2D stats
-        ] {
-            tracing::info!("Starting 2D anon stats job for origin {:?}", origin);
-            // prepare test data
-            let (expected, my_shares) = {
-                let translated_thresholds = calculate_threshold_a(config.n_buckets_1d);
-                let data = test_helper_2d::TestDistances::generate_ground_truth_input(
-                    &mut StdRng::seed_from_u64(123),
-                    1000,
-                    6,
-                );
-                let expected = data.ground_truth_buckets(&translated_thresholds);
-                let my_shares = match config.party_id {
-                    0 => data.shares0,
-                    1 => data.shares1,
-                    2 => data.shares2,
-                    _ => panic!("Invalid party index"),
-                }
-                .into_iter()
-                .enumerate()
-                .map(|(i, share)| (i as i64, share))
-                .collect_vec();
-                (expected, my_shares)
-            };
-
-            tracing::info!("Inserting 2D test anon stats data into DB");
-            anon_stats_store
-                .insert_anon_stats_batch_2d(&my_shares, origin)
-                .await?;
-
-            // we get the size of available anon stats from all parties
-            tracing::info!("Loading anon stats job data from DB");
-            let available_anon_stats = match usize::try_from(
-                anon_stats_store.num_available_anon_stats_2d(origin).await?,
-            ) {
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::error!("Failed to convert num_available_anon_stats to usize: {:?}, using 0 as a standing", e);
-                    0
-                }
-            };
-            let min_job_size =
-                iris_mpc_anon_stats_server::sync::sync_on_job_sizes(session, available_anon_stats)
-                    .await?;
-            if min_job_size < config.min_1d_job_size {
-                tracing::info!("Not enough available anon stats for origin {:?} (available: {}, minimum required: {}), will retry later", origin, min_job_size, config.min_1d_job_size);
-                continue;
-            }
-
-            tracing::info!(
-                "Loading {min_job_size} available anon stats for origin {:?} from DB",
-                origin,
-            );
-            let (ids, my_anon_stats_shares) = anon_stats_store
-                .get_available_anon_stats_2d(origin, min_job_size)
-                .await?;
-
-            let job_2d = AnonStatsMapping::new(my_anon_stats_shares);
-            let job_hash = job_2d.get_id_hash();
-
-            let hashes_match =
-                iris_mpc_anon_stats_server::sync::sync_on_id_hash(session, job_hash).await?;
-            if !hashes_match {
-                tracing::info!(
-                    "Mismatched job data detected among parties, will retry at a later point"
-                );
-            }
-
-            let start = Instant::now();
-            let anon_stats =
-                anon_stats::process_2d_anon_stats_job(session, job_2d, &config).await?;
-
-            tracing::info!(
-                "Completed anon stats job for origin {:?} of size {} in {:?}. Stats: {:?}",
-                origin,
-                min_job_size,
-                start.elapsed(),
-                anon_stats,
-            );
-            tracing::info!("Anon stats calculation complete, marking as processed in DB");
-            anon_stats_store.mark_anon_stats_processed_2d(&ids).await?;
-
-            let mut expected_stats =
-                BucketStatistics2D::new(min_job_size, config.n_buckets_1d, config.party_id); // verify correctness against ground truth
-            expected_stats.fill_buckets(&expected, MATCH_THRESHOLD_RATIO, None);
-            assert_eq!(anon_stats.buckets, expected_stats.buckets);
-        }
     }
 
-    // TODO: how to wait for networking shutdown?
     ct.cancel();
     background_tasks.abort_and_wait_for_finish().await;
 
     Ok(())
+}
+
+async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
+    let mut loader = aws_config::from_env();
+    if let Some(aws) = &config.aws {
+        if let Some(region) = &aws.region {
+            loader = loader.region(Region::new(region.clone()));
+        }
+    }
+    let shared_config = loader.load().await;
+    let mut sns_config_builder = aws_sdk_sns::config::Builder::from(&shared_config);
+    if let Some(aws) = &config.aws {
+        if let Some(endpoint) = &aws.endpoint {
+            sns_config_builder = sns_config_builder.endpoint_url(endpoint);
+        }
+    }
+    Ok(SNSClient::from_conf(sns_config_builder.build()))
 }
 
 async fn shutdown_signal() {
@@ -421,5 +468,5 @@ async fn shutdown_signal() {
             .expect("Failed to install Ctrl-C handler");
     }
 
-    tracing::info!("Shutdown signal received.");
+    info!("Shutdown signal received.");
 }

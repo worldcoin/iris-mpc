@@ -2610,6 +2610,8 @@ dependencies = [
 name = "iris-mpc-anon-stats-server"
 version = "0.1.0"
 dependencies = [
+ "aws-config",
+ "aws-sdk-sns",
  "axum",
  "bincode",
  "clap",
@@ -2719,6 +2721,7 @@ dependencies = [
  "serde-big-array",
  "serde_json",
  "sha2",
+ "siphasher",
  "sodiumoxide",
  "sqlx",
  "telemetry-batteries",
@@ -2799,6 +2802,7 @@ dependencies = [
  "futures",
  "hex",
  "iris-mpc-common",
+ "iris-mpc-cpu",
  "itertools 0.13.0",
  "memmap2",
  "metrics 0.22.3",

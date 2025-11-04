@@ -1,5 +1,5 @@
 use clap::Parser;
-use iris_mpc_common::config::ServiceConfig;
+use iris_mpc_common::config::{AwsConfig, ServiceConfig};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Parser)]
@@ -16,6 +16,9 @@ pub struct Opt {
 
     #[clap(long)]
     pub healthcheck_port: Option<usize>,
+
+    #[clap(long)]
+    pub results_topic_arn: Option<String>,
 }
 
 /// CLI configuration for the anon stats server.
@@ -37,10 +40,16 @@ pub struct AnonStatsServerConfig {
     pub service: Option<ServiceConfig>,
 
     #[serde(default)]
+    pub aws: Option<AwsConfig>,
+
+    #[serde(default)]
     pub party_id: usize,
 
     #[serde(default)]
     pub environment: String,
+
+    #[serde(default)]
+    pub results_topic_arn: String,
 
     #[serde(default = "default_n_buckets_1d")]
     /// Number of buckets to use in 1D anon stats computation.
@@ -50,6 +59,14 @@ pub struct AnonStatsServerConfig {
     /// Minimum job size for 1D anon stats computation.
     /// If the available job size is smaller than this, the party will wait until enough data is available.
     pub min_1d_job_size: usize,
+
+    #[serde(default = "default_poll_interval_secs")]
+    /// Interval, in seconds, between polling attempts.
+    pub poll_interval_secs: u64,
+
+    #[serde(default = "default_max_sync_failures_before_reset")]
+    /// Number of consecutive sync mismatches before clearing the local queue for an origin.
+    pub max_sync_failures_before_reset: usize,
 
     #[serde(default)]
     /// Database connection URL.
@@ -89,6 +106,14 @@ fn default_schema_name() -> String {
     "anon_stats_mpc".to_string()
 }
 
+fn default_poll_interval_secs() -> u64 {
+    30
+}
+
+fn default_max_sync_failures_before_reset() -> usize {
+    3
+}
+
 impl AnonStatsServerConfig {
     pub fn load_config(prefix: &str) -> eyre::Result<AnonStatsServerConfig> {
         let settings = config::Config::builder();
@@ -125,6 +150,10 @@ impl AnonStatsServerConfig {
 
         if let Some(addresses) = opts.addresses {
             self.addresses = addresses;
+        }
+
+        if let Some(results_topic_arn) = opts.results_topic_arn {
+            self.results_topic_arn = results_topic_arn;
         }
     }
 

@@ -5,3 +5,4 @@ CREATE TABLE IF NOT EXISTS anon_stats_1d_lifted (
     processed BOOLEAN NOT NULL DEFAULT FALSE,
     origin SMALLINT NOT NULL
 );
+

@@ -18,6 +18,7 @@ use iris_mpc::services::processors::modifications_sync::{
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
+use iris_mpc_common::anon_stats::AnonStatsStore;
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
@@ -1303,6 +1304,18 @@ async fn server_main(config: Config) -> Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
+    let runtime_handle = tokio::runtime::Handle::current();
+    let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
+        let schema = config.get_anon_stats_db_schema();
+        let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        let store = AnonStatsStore::new(&client).await?;
+        Some((store, runtime_handle.clone()))
+    } else {
+        tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
+        None
+    };
+    let anon_stats_writer_for_actor = anon_stats_writer.clone();
+
     let (tx, rx) = oneshot::channel();
     let config_clone = config.clone();
     background_tasks.spawn_blocking(move || {
@@ -1326,6 +1339,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.enable_debug_timing,
             config.full_scan_side,
             config.full_scan_side_switching_enabled,
+            anon_stats_writer_for_actor,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");
