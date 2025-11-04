@@ -343,9 +343,7 @@ impl HnswSearcher {
         self.select_layer_rng(&mut rng)
     }
 
-    /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the
-    /// remaining number of search layers. For TopLayerSearchMode::LinearScan, the top layer is searched, and
-    /// the remaning number of layers to search is returned.
+    /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the number of search layers.
     #[allow(non_snake_case)]
     #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
     async fn search_init<V: VectorStore>(
