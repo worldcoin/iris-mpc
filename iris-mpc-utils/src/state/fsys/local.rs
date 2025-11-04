@@ -52,14 +52,12 @@ pub fn read_node_config(
 
 /// Returns network configuration deserialized from a toml file.
 pub fn read_net_config(config_kind: &str, config_idx: usize) -> Result<NetNodeConfig, Error> {
-    let config = PARTY_INDICES
+    Ok(PARTY_INDICES
         .iter()
         .map(|party_idx| read_node_config(config_kind, config_idx, party_idx).unwrap())
         .collect::<Vec<_>>()
         .try_into()
-        .unwrap();
-
-    Ok(config)
+        .unwrap())
 }
 
 impl NodeExecutionHost {

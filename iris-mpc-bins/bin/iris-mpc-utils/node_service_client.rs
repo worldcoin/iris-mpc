@@ -12,19 +12,24 @@ use iris_mpc_utils::{
     constants::NODE_CONFIG_KIND_MAIN,
     service_client as client,
     state::{
-        aws::{NodeAwsClient as NodeServiceClient, NodeAwsConfig as NodeServiceConfig},
+        aws::{
+            download_net_encryption_public_keys, NodeAwsClient as NodeServiceClient,
+            NodeAwsConfig as NodeServiceConfig,
+        },
         fsys::{
             local::get_path_to_node_config as get_path_to_local_node_config,
             reader::read_node_config,
         },
     },
-    types::{NetNodeConfig, NetServiceClients, NetServiceConfig},
+    types::{NetEncryptionPublicKeys, NetNodeConfig, NetServiceClients, NetServiceConfig},
 };
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     println!("Instantiated options: {:?}", &options);
+
+    let _ = NetEncryptionPublicKeys::async_from(options.clone()).await;
 
     let mut client = client::Client::new(
         client::AwsRequestDispatcher::async_from(options.clone()).await,
@@ -60,6 +65,10 @@ struct CliOptions {
     #[clap(long)]
     path_to_node_2_config: Option<String>,
 
+    /// Base URL to use when downloading node encryption public keys.
+    #[clap(long, default_value = "http://localhost:4566/wf-dev-public-keys")]
+    public_key_base_url: String,
+
     /// A random number generator seed for upstream entropy.
     #[clap(long)]
     rng_seed: Option<u64>,
@@ -86,6 +95,10 @@ impl CliOptions {
         &self.path_to_node_2_config
     }
 
+    fn public_key_base_url(&self) -> &String {
+        &self.public_key_base_url
+    }
+
     #[allow(dead_code)]
     fn rng_seed(&self) -> StdRng {
         if self.rng_seed.is_some() {
@@ -93,6 +106,15 @@ impl CliOptions {
         } else {
             StdRng::from_entropy()
         }
+    }
+}
+
+#[async_from::async_trait]
+impl AsyncFrom<CliOptions> for NetEncryptionPublicKeys {
+    async fn async_from(options: CliOptions) -> Self {
+        download_net_encryption_public_keys(options.public_key_base_url())
+            .await
+            .unwrap()
     }
 }
 

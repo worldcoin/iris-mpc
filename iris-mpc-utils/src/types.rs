@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use sodiumoxide::crypto::box_::PublicKey;
+
 use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
@@ -19,6 +21,9 @@ pub type NetServiceConfig = [NodeAwsConfig; N_PARTIES];
 
 // Network wide node AWS service clients.
 pub type NetServiceClients = [NodeServiceClients; N_PARTIES];
+
+// Network wide node encryption public keys.
+pub type NetEncryptionPublicKeys = [PublicKey; N_PARTIES];
 
 /// Set of node execution hosts.
 #[derive(Debug, Clone, Copy)]
