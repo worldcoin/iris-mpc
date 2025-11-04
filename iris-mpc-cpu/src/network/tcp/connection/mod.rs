@@ -18,7 +18,6 @@ use crate::{
 use eyre::Result;
 use std::{sync::Arc, time::Duration};
 use tokio::{
-    io::AsyncReadExt,
     sync::{mpsc::UnboundedSender, oneshot},
     time::sleep,
 };
@@ -73,13 +72,8 @@ impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
         if &*self.own_id > self.peer.id() {
             let mut stream = self.client.connect(self.peer.url().to_string()).await?;
             handshake::outbound(&mut stream, &self.own_id, &self.connection_id).await?;
-            let mut rsp = [0; 3];
-            let n = stream.read(&mut rsp[..]).await?;
-            if n != rsp.len() || &rsp[..n] != b"2ok" {
-                Err(eyre::eyre!("handshake not accepted: rsp={:?}", &rsp[..n]))
-            } else {
-                Ok(stream)
-            }
+            handshake::outbound_ok(&mut stream).await?;
+            Ok(stream)
         } else {
             let (rsp_tx, rsp_rx) = oneshot::channel();
             let req = ConnectionRequest::new(self.peer.id().clone(), self.connection_id, rsp_tx);

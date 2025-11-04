@@ -32,7 +32,10 @@ Contains the `TcpNetworkHandle` struct, which does the following:
 - spawns a task that accepts inbound connections
 
 ## `connection` module
-- contains code to establish inbound/outbound connections. The connect code will retry until it either succeeds or is cancelled.
+- contains code to establish inbound/outbound connections.
+- `connection/mod.rs` contains the `Connector` struct, which will attempt to connect to a peer by calling `connect()` until it either succeeds or is cancelled. 
+- The peer with the greater ID initiates the connection, using `Client::connect()`. The other party uses the `listener::Server` module to send a request to the `accept_loop()`. The `accept_loop()` accepts all incoming connections but unless it has previously been told to accept a connection from a certain peer, incoming connections are then dropped. 
+- When the `Server` accepts a peer's connection, the peers will perform a handshake, where the initiator sends its peer ID. If this ID matches one that the `Server` was commanded to accept, the `Server` initiates a second handshake. 
 
 ## `session` module
 - contains the `TcpSession` struct, which despite the name also is used for the `TLS` protocol.

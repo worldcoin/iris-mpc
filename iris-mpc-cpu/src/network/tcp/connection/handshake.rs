@@ -5,6 +5,8 @@ use crate::{
 use eyre::{eyre, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+const HANDSHAKE_OK: &[u8] = b"2ok";
+
 pub async fn outbound<T: NetworkConnection>(
     stream: &mut T,
     own_id: &Identity,
@@ -71,4 +73,19 @@ pub async fn inbound<T: NetworkConnection>(stream: &mut T) -> Result<(Identity, 
         }
     };
     Ok((peer_id, connection_id.into()))
+}
+
+pub async fn outbound_ok<T: NetworkConnection>(stream: &mut T) -> Result<()> {
+    let mut rsp = [0; 3];
+    let n = stream.read(&mut rsp[..]).await?;
+    if n != rsp.len() || &rsp[..n] != HANDSHAKE_OK {
+        Err(eyre::eyre!("handshake not accepted: rsp={:?}", &rsp[..n]))
+    } else {
+        Ok(())
+    }
+}
+
+pub async fn inbound_ok<T: NetworkConnection>(stream: &mut T) -> Result<()> {
+    stream.write_all(HANDSHAKE_OK).await?;
+    Ok(())
 }

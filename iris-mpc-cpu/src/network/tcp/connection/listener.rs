@@ -1,8 +1,5 @@
 use std::collections::HashMap;
-use tokio::{
-    io::AsyncWriteExt,
-    sync::{mpsc::UnboundedReceiver, oneshot},
-};
+use tokio::sync::{mpsc::UnboundedReceiver, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -64,7 +61,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
 
                 if let Some(peer_map) = connection_requests.get_mut(&peer_id) {
                     if let Some(rsp) = peer_map.remove(&connection_id) {
-                        if stream.write_all(b"2ok").await.is_err() {
+                        if handshake::inbound_ok(&mut stream).await.is_err() {
                             tracing::debug!("second handshake failed");
                         } else {
                             let _ = rsp.send(stream);
