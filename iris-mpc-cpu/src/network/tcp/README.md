@@ -3,50 +3,44 @@
 
 # Overview
 
-The TCP networking stack supports either TCP or TLS. The following traits make that possible:
-- `NetworkConnection`: both `TcpStream` and `TlsStream` support `AsyncRead` and `AsyncWrite`. Both can be passed to `tokio::io::split()` to get a read/write half. 
+The TCP networking stack provides the communication channels needed for the 3-party MPC protocol. 
+Each party has an Identity and public address (url:port). Each party must connect to the other and over each connection,
+establish some number of communication channels, called sessions. 
+
+The parties work on batches jobs over these sessions. The networking stack needs to do the following:
+
+1. Establish connections between the parties
+2. Set up the communication channels (sessions) ove each connection
+3. Indicate if connectivity was lost. This is expected to cause a job to fail. 
+4. Allow for re-creation of connections and sessions.
+5. Shutdown gracefully. 
+
+The entry point into this module is `build_network_handle()`. It returns a `Box<dyn NetworkHandle>`, which wraps a `TcpNetworkHandle`. This struct is generic over the types of connections used for inbound and outbound traffic: could be either `TCP` or `TLS`. Normally inbound/outbound traffic uses the same protocol but for testing purposes, it is possible to use different protocols for inbound and outbound traffic.
+
+
+## Important Traits
+- `NetworkConnection`: implements `AsyncRead` and `AsyncWrite`. These allow it to be passed to `tokio::io::split()` to get a read/write half. 
 - `Client`: used to initiate a connection.
 - `Server`: used to listen for connections.
-- `NetworkHandle`: simplifies `HawkActor`. `TcpNetworkHandle` is generic over `NetworkConnection` but `HawkActor` doesn't need to be. 
+- `NetworkHandle`: provides `make_sessions()`
+- `Networking`: defined in `iris-mpc-cpu/src/network`. Is implemented by `TcpSession`.
 
-## `connection_builder.rs`
+## `handle` module
+Contains the `TcpNetworkHandle` struct, which does the following:
+- implements `NetworkHandle`
+- creates connections
+- spawns a task that accepts inbound connections
 
-This module manages peer-to-peer TCP connections by coordinating connection setup, acceptance, and reconnection.
+## `connection` module
+- contains code to establish inbound/outbound connections.
+- `connection/mod.rs` contains the `Connector` struct, which will attempt to connect to a peer by calling `connect()` until it either succeeds or is cancelled. 
+- The peer with the greater ID initiates the connection, using `Client::connect()`. The other party uses the `listener::Server` module to send a request to the `accept_loop()`. The `accept_loop()` accepts all incoming connections but unless it has previously been told to accept a connection from a certain peer, incoming connections are then dropped. 
+- When the `Server` accepts a peer's connection, the peers will perform a handshake, where the initiator sends its peer ID. If this ID matches one that the `Server` was commanded to accept, the `Server` initiates a second handshake. 
 
-The logic resides in the `Worker` struct. It contains HashMaps for pending connections, requested connections, and requested reconnections. It also contains a mapping from peer ID to socket address.
-
-In a loop, the worker struct `tokio::select!`s from the following:
-- incoming TCP connections (sent from an `accept_loop`)
-- incoming commands (sent from either the `PeerConnectionBuilder` or `Reconnector` structs)
-- a channel used to cancel the worker.
-
-To start the connection process, `PeerConnectionBuilder::include_peer()` is called for each peer the user wishes to connect to. This sends a `Cmd::Connect` to the worker task. Each peer is added to `requested_connections`. 
-
-`PeerConnectionBuilder::build()` will wait for all requested connections to complete and return a tuple of (`Reconnector`, `PeerConnections`). These are used as input to `TcpNetworkHandle:new()`.
-
-The `Reconnector` can only request that a previously established connection be re-created. After `PeerConnectionBuilder::build()`, the worker task only allows connections from peers that were saved in `requested_connections`.
-
-## `handle.rs`
-
-This module handles the following:
-- session-level multiplexing over TCP sockets
-- creation of `TcpSession`s
-- TCP reconnection
-
-In this module, a `stream_id` refers to a `TcpStream`. For each peer ID, the streams are numbered from zero to `connection_parallelism` (which is a configuration parameter).
-
-For each `(peer, stream_id)` there is a control task to manage the following:
-- an inbound and outbound forwarder
-- reconnections - has to obtain a new TcpStream and give the read and write half to the respective forwarders 
-- session creation - has to create a mapping of `(peer_id, session_id)` to channel and give these channels to their respective forwarders.
-
-The program lifecycle is as follows:
-1. `TcpNetworkHandle::new()` is called with a `PeerConnections` map and spawns one task per `(peer, stream_id)`.
-2. These tasks wait until they receive a `Cmd::NewSessions` message before doing any forwarding.
-3. When `make_sessions()` is called, channel pairs are created. One side of the channels goes to a `TcpSession` and the other side is stored in a HashMap and sent to the respective forwarders via `Cmd::NewSessions`
-4. If a connection fails, it is automatically re-established using the `Reconnector`. Session mappings are kept up to date.
-
-# Technical Details
+## `session` module
+- contains the `TcpSession` struct, which despite the name also is used for the `TLS` protocol.
+- creates channels used to forward data between the sockets and the `TcpSession`s. 
+- spawns tasks to multiplex sessions over a socket. see `multiplexer.rs`.
 
 ## Message Format
 This section is related to `network/value.rs` - namely the `NetworkValue` and `DescriptorByte` enums.
@@ -56,8 +50,5 @@ This section is related to `network/value.rs` - namely the `NetworkValue` and `D
 `NetworkValue` does not know about the session id - this field is inserted by the outbound forwarding task and is used by the inbound forwarding task to send the message to the correct `TcpSession`.
 
 ## Establishing Connections
-When `PeerConnectionBuilder::include_peer()` is called
-- the connection builder compares its Identity with the peers Identity. The peer with the greater ID initiates the connection. 
-- both peers have to call `PeerConnectionBuilder::include_peer()` for the connection process to work, but the peer with the lower id receives the connection passively via the accept loop.
 - when the accept loop accepts an inbound TCP connection, a handshake process is used to establish who initiated the connection and what ID to use for the TcpStream.
 - it is crucial that `set_nodelay(true)` is called on the `TcpStream`. Without this, the TCP networking stack will be at least 10x slower than the previous gRPC networking stack, even though the gRPC networking stack used 3 additional framing protocols between `NetworkValue` the TCP.
