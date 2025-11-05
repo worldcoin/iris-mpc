@@ -58,6 +58,8 @@ pub trait Server: Send {
 pub struct NetworkHandleArgs {
     pub party_index: usize,
     pub addresses: Vec<String>,
+    // using separate addresses for listen and dial (outbound) allows
+    // for inserting a proxy between mpc parties, to facilitate network testing
     pub outbound_addresses: Vec<String>,
     pub connection_parallelism: usize,
     pub request_parallelism: usize,

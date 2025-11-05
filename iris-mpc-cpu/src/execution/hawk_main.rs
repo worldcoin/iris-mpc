@@ -109,7 +109,8 @@ pub struct HawkArgs {
     #[clap(short, long, value_delimiter = ',')]
     pub addresses: Vec<String>,
 
-    // address to connect to
+    // address to connect to. allows for inserting
+    // a proxy between MPC parties for testing purposes.
     #[clap(short, long, value_delimiter = ',')]
     pub outbound_addrs: Vec<String>,
 
