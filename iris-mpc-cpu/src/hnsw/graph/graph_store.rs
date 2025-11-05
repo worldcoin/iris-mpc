@@ -315,23 +315,25 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         if rows.is_empty() {
             Ok(None)
         } else {
+            // ensure all entrypoints are on the same layer
+            let mut expected_layer = None;
             let mut points = Vec::with_capacity(rows.len());
-            let mut max_layer = 0;
             for row in rows {
                 let serial_id = row.get::<i64, &str>("serial_id") as u32;
                 let version_id: i16 = row.get("version_id");
                 let row_layer = row.get::<i16, &str>("layer") as usize;
 
-                if row_layer > max_layer {
-                    max_layer = row_layer;
+                if expected_layer.is_none() {
+                    expected_layer.replace(row_layer);
                 }
+
                 // if this fails, then add_entry_point() was used incorrectly.
-                assert_eq!(row_layer, max_layer);
+                assert_eq!(Some(row_layer), expected_layer);
 
                 points.push(VectorId::new(serial_id, version_id));
             }
 
-            Ok(Some((points, max_layer)))
+            Ok(Some((points, expected_layer.unwrap())))
         }
     }
 
