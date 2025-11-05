@@ -17,7 +17,6 @@ members = [
     "iris-mpc-common",
     "iris-mpc-cpu",
     "iris-mpc-gpu",
-    "iris-mpc-py",
     "iris-mpc-store",
     "iris-mpc-upgrade",
     "iris-mpc-upgrade-hawk",
