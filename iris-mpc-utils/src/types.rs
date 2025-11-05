@@ -9,8 +9,8 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::GaloisRingSharedIris};
 
 use super::{
+    aws::{NodeAwsClient as NodeServiceClients, NodeAwsConfig},
     constants::N_PARTIES,
-    state::aws::{NodeAwsClient as NodeServiceClients, NodeAwsConfig},
 };
 
 // Pair of Iris codes aassociated with left/right eyes.

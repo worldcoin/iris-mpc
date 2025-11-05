@@ -1,3 +1,4 @@
+pub mod aws;
 pub mod constants;
 pub mod irises;
 pub mod misc;

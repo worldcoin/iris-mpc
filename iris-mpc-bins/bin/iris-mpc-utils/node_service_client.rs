@@ -9,17 +9,14 @@ use iris_mpc_common::{
     config::Config as NodeConfig, helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_utils::{
+    aws::{
+        download_net_encryption_public_keys, NodeAwsClient as NodeServiceClient,
+        NodeAwsConfig as NodeServiceConfig,
+    },
     constants::NODE_CONFIG_KIND_MAIN,
     service_client as client,
-    state::{
-        aws::{
-            download_net_encryption_public_keys, NodeAwsClient as NodeServiceClient,
-            NodeAwsConfig as NodeServiceConfig,
-        },
-        fsys::{
-            local::get_path_to_node_config as get_path_to_local_node_config,
-            reader::read_node_config,
-        },
+    state::fsys::{
+        local::get_path_to_node_config as get_path_to_local_node_config, reader::read_node_config,
     },
     types::{NetEncryptionPublicKeys, NetNodeConfig, NetServiceClients, NetServiceConfig},
 };
