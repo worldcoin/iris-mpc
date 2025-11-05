@@ -847,7 +847,7 @@ where
     }
 
     // Sum the binary shares using the binary parallel prefix adder and return the MSB
-    binary_add_3_get_msb_prefix(session, x1, x2, x3).await
+    binary_add_3_get_msb(session, x1, x2, x3).await
 }
 
 /// Extracts the MSBs of the secret shared input values in a bit-sliced form as u64 shares, i.e., the i-th bit of the j-th u64 secret share is the MSB of the (j * 64 + i)-th input value.
