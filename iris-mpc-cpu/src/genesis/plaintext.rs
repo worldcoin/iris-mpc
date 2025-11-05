@@ -351,13 +351,13 @@ mod tests {
 
     use super::*;
 
-    fn gen_base_state(n_src_enrollments: usize) -> GenesisState {
+    fn gen_base_state(n_src_enrollments: usize, max_indexation_id: u32) -> GenesisState {
         let mut rng = AesRng::seed_from_u64(0);
         let irises_left = IrisDB::new_random_rng(n_src_enrollments, &mut rng).db;
         let irises_right = IrisDB::new_random_rng(n_src_enrollments, &mut rng).db;
         let src_db_irises: HashMap<_, _> = izip!(irises_left, irises_right)
             .enumerate()
-            .map(|(id, (left, right))| (id as IrisSerialId, (0, left, right)))
+            .map(|(id, (left, right))| ((id + 1) as IrisSerialId, (0, left, right)))
             .collect();
 
         GenesisState {
@@ -380,7 +380,7 @@ mod tests {
                 hawk_prf_key: Some(0),
             },
             args: GenesisArgs {
-                max_indexation_id: 100,
+                max_indexation_id,
                 batch_size: 0,
                 batch_size_error_rate: 128,
             },
@@ -423,76 +423,90 @@ mod tests {
 
     #[tokio::test]
     async fn test_plaintext_genesis() -> Result<()> {
-        let init_state = gen_base_state(200);
+        let num_enroll = 25;
+        let max_index = 25;
+        let init_state = gen_base_state(num_enroll, max_index);
 
         let new_state = run_plaintext_genesis(init_state).await?;
 
-        assert_eq!(new_state.dst_db.irises.len(), 100);
-        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 100);
-        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 100);
+        assert_eq!(new_state.dst_db.irises.len(), max_index as usize);
+        assert_eq!(
+            new_state.dst_db.graphs[0].layers[0].links.len(),
+            max_index as usize
+        );
+        assert_eq!(
+            new_state.dst_db.graphs[1].layers[0].links.len(),
+            max_index as usize
+        );
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_plaintext_genesis_with_deletions() -> Result<()> {
-        let mut init_state = gen_base_state(200);
-        init_state.s3_deletions = vec![25, 40, 50, 60, 90];
+        let num_enroll = 50;
+        let max_index = 25;
+        let mut init_state = gen_base_state(num_enroll, max_index);
+        init_state.s3_deletions = vec![3, 5, 11, 38, 49];
 
         let new_state = run_plaintext_genesis(init_state).await?;
 
-        assert_eq!(new_state.dst_db.irises.len(), 100);
-        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 95);
-        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 95);
+        assert_eq!(new_state.dst_db.irises.len(), max_index as usize);
+        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 22);
+        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 22);
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_plaintext_genesis_repeated() -> Result<()> {
-        let mut init_state = gen_base_state(200);
-        init_state.s3_deletions = vec![25, 40, 50, 60, 90];
-        init_state.args.max_indexation_id = 50;
+        let num_enroll = 50;
+        let max_index = 25;
+        let mut init_state = gen_base_state(num_enroll, max_index);
+        init_state.s3_deletions = vec![3, 5, 11, 38, 40];
 
         let mut state_1 = run_plaintext_genesis(init_state).await?;
 
-        assert_eq!(state_1.dst_db.irises.len(), 50);
-        assert_eq!(state_1.dst_db.graphs[0].layers[0].links.len(), 47);
-        assert_eq!(state_1.dst_db.graphs[1].layers[0].links.len(), 47);
+        assert_eq!(state_1.dst_db.irises.len(), 25);
+        assert_eq!(state_1.dst_db.graphs[0].layers[0].links.len(), 22);
+        assert_eq!(state_1.dst_db.graphs[1].layers[0].links.len(), 22);
 
-        state_1.args.max_indexation_id = 100;
+        state_1.args.max_indexation_id = num_enroll as u32;
         let state_2 = run_plaintext_genesis(state_1).await?;
 
-        assert_eq!(state_2.dst_db.irises.len(), 100);
-        assert_eq!(state_2.dst_db.graphs[0].layers[0].links.len(), 95);
-        assert_eq!(state_2.dst_db.graphs[1].layers[0].links.len(), 95);
+        assert_eq!(state_2.dst_db.irises.len(), num_enroll);
+        assert_eq!(state_2.dst_db.graphs[0].layers[0].links.len(), 45);
+        assert_eq!(state_2.dst_db.graphs[1].layers[0].links.len(), 45);
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_plaintext_genesis_batched() -> Result<()> {
-        let mut init_state = gen_base_state(200);
-        init_state.s3_deletions = vec![25, 40, 50, 60, 90];
+        let num_enroll = 50;
+        let max_index = 25;
+        let mut init_state = gen_base_state(num_enroll, max_index);
+        init_state.s3_deletions = vec![3, 5, 11, 38, 40];
         init_state.args.batch_size = 10;
 
         let new_state = run_plaintext_genesis(init_state).await?;
 
-        assert_eq!(new_state.dst_db.irises.len(), 100);
-        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 95);
-        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 95);
+        assert_eq!(new_state.dst_db.irises.len(), max_index as usize);
+        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 22);
+        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 22);
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_plaintext_genesis_delta() -> Result<()> {
-        let mut init_state = gen_base_state(200);
-        init_state.args.max_indexation_id = 50;
+        let num_enroll = 50;
+        let max_index = 25;
+        let init_state = gen_base_state(num_enroll, max_index);
 
         let mut state_1 = run_plaintext_genesis(init_state).await?;
 
-        assert_eq!(state_1.dst_db.irises.len(), 50);
+        assert_eq!(state_1.dst_db.irises.len(), max_index as usize);
 
         apply_modification(&mut state_1, 2, 20, smpc_request::REAUTH_MESSAGE_TYPE);
         assert_ne!(
@@ -500,11 +514,11 @@ mod tests {
             state_1.src_db.irises.get(&20)
         );
 
-        state_1.args.max_indexation_id = 100;
+        state_1.args.max_indexation_id = num_enroll as u32;
 
         let state_2 = run_plaintext_genesis(state_1).await?;
 
-        assert_eq!(state_2.dst_db.irises.len(), 100);
+        assert_eq!(state_2.dst_db.irises.len(), num_enroll);
         assert_eq!(
             state_2.dst_db.irises.get(&20),
             state_2.src_db.irises.get(&20)
@@ -515,7 +529,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_plaintext_genesis_delta_with_skipped() -> Result<()> {
-        let mut init_state = gen_base_state(200);
+        let num_enroll = 50;
+        let max_index = 25;
+        let mut init_state = gen_base_state(num_enroll, max_index);
 
         // Add modification that doesn't apply
         apply_modification(
@@ -528,11 +544,10 @@ mod tests {
             init_state.dst_db.irises.get(&10),
             init_state.src_db.irises.get(&10)
         );
-        init_state.args.max_indexation_id = 50;
 
         let mut state_1 = run_plaintext_genesis(init_state).await?;
 
-        assert_eq!(state_1.dst_db.irises.len(), 50);
+        assert_eq!(state_1.dst_db.irises.len(), max_index as usize);
         assert_eq!(
             state_1.dst_db.irises.get(&10),
             state_1.src_db.irises.get(&10)
@@ -543,20 +558,20 @@ mod tests {
             state_1.dst_db.irises.get(&20),
             state_1.src_db.irises.get(&20)
         );
-        apply_modification(&mut state_1, 3, 70, smpc_request::RESET_UPDATE_MESSAGE_TYPE);
+        apply_modification(&mut state_1, 3, 21, smpc_request::RESET_UPDATE_MESSAGE_TYPE);
 
-        state_1.args.max_indexation_id = 100;
+        state_1.args.max_indexation_id = num_enroll as u32;
 
         let state_2 = run_plaintext_genesis(state_1).await?;
 
-        assert_eq!(state_2.dst_db.irises.len(), 100);
+        assert_eq!(state_2.dst_db.irises.len(), num_enroll);
         assert_eq!(
             state_2.dst_db.irises.get(&20),
             state_2.src_db.irises.get(&20)
         );
         assert_eq!(
-            state_2.dst_db.irises.get(&70),
-            state_2.src_db.irises.get(&70)
+            state_2.dst_db.irises.get(&21),
+            state_2.src_db.irises.get(&21)
         );
 
         Ok(())
