@@ -1565,7 +1565,7 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     //     vec_of_msb_shares.push(add_3_get_msb_fss(session, x_).await?);
     // }
 
-    let batch_size: usize = 1024;
+    let batch_size: usize = 64;
 
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
     for batch in x.chunks(batch_size) {
