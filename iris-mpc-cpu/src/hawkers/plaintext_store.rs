@@ -204,10 +204,7 @@ impl VectorStore for PlaintextStore {
     }
 
     async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
-        let results = distances
-            .par_iter()
-            .map(|distance| fraction_is_match(distance))
-            .collect();
+        let results = distances.par_iter().map(fraction_is_match).collect();
 
         Ok(results)
     }
@@ -348,10 +345,7 @@ impl VectorStore for SharedPlaintextStore {
     }
 
     async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
-        let results = distances
-            .par_iter()
-            .map(|distance| fraction_is_match(distance))
-            .collect();
+        let results = distances.par_iter().map(fraction_is_match).collect();
 
         Ok(results)
     }
