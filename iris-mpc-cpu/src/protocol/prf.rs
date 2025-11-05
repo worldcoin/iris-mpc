@@ -6,67 +6,59 @@ use aes_prng::AesRng;
 use eyre::Result;
 use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
 
-#[cfg(not(feature = "chacha_prf"))]
-type PrfRng = aes_prng::AesRng;
+/// Generate a uniformly random u32 in [0, modulus)
+fn gen_u32_mod(rng: &mut AesRng, modulus: u32) -> Result<u32> {
+    if modulus == 0 {
+        eyre::bail!("modulus must be non-zero");
+    }
+    let modulus_64 = modulus as u64;
+    // Rejection sampling to avoid modulo bias
+    // The rejection bound is the largest multiple of modulus that fits in u64 - 1.
+    // In this case, the probability of rejection is 2^64 % modulus / 2^64 < 2^(-32).
+    let rejection_bound = u64::MAX - (u64::MAX % modulus_64 + 1) % modulus_64;
+    loop {
+        let v = rng.gen::<u64>();
+        if v <= rejection_bound {
+            return Ok((v % modulus_64) as u32);
+        }
+    }
+}
 
-#[cfg(feature = "chacha_prf")]
-type PrfRng = rand_chacha::ChaCha20Rng;
-
-pub type PrfSeed = [u8; 16];
+pub type PrfSeed = <AesRng as SeedableRng>::Seed;
 
 #[derive(Clone, Debug)]
 pub struct Prf {
-    pub my_prf: PrfRng,
-    pub prev_prf: PrfRng,
+    pub my_prf: AesRng,
+    pub prev_prf: AesRng,
 }
 
 impl Default for Prf {
     fn default() -> Self {
         Self {
-            my_prf: PrfRng::from_entropy(),
-            prev_prf: PrfRng::from_entropy(),
+            my_prf: AesRng::from_entropy(),
+            prev_prf: AesRng::from_entropy(),
         }
     }
 }
 
 impl Prf {
-    #[cfg(feature = "chacha_prf")]
     pub fn new(my_key: PrfSeed, prev_key: PrfSeed) -> Self {
         Self {
-            my_prf: PrfRng::from_seed(Self::expand_seed(my_key)),
-            prev_prf: PrfRng::from_seed(Self::expand_seed(prev_key)),
+            my_prf: AesRng::from_seed(my_key),
+            prev_prf: AesRng::from_seed(prev_key),
         }
     }
 
-    #[cfg(not(feature = "chacha_prf"))]
-    pub fn new(my_key: PrfSeed, prev_key: PrfSeed) -> Self {
-        Self {
-            my_prf: PrfRng::from_seed(my_key),
-            prev_prf: PrfRng::from_seed(prev_key),
-        }
-    }
-
-    #[cfg(feature = "chacha_prf")]
-    fn expand_seed(seed: PrfSeed) -> [u8; 32] {
-        use blake3::Hasher;
-        let mut h = Hasher::new();
-        h.update(&seed);
-        let digest = h.finalize();
-        let mut out = [0u8; 32];
-        out.copy_from_slice(digest.as_bytes());
-        out
-    }
-
-    pub fn get_my_prf(&mut self) -> &mut PrfRng {
+    pub fn get_my_prf(&mut self) -> &mut AesRng {
         &mut self.my_prf
     }
 
-    pub fn get_prev_prf(&mut self) -> &mut PrfRng {
+    pub fn get_prev_prf(&mut self) -> &mut AesRng {
         &mut self.prev_prf
     }
 
     pub fn gen_seed() -> PrfSeed {
-        let mut rng = PrfRng::from_entropy();
+        let mut rng = AesRng::from_entropy();
         rng.gen::<PrfSeed>()
     }
 
