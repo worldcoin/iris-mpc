@@ -2942,6 +2942,7 @@ dependencies = [
  "sodiumoxide",
  "sqlx",
  "tokio",
+ "tokio-util",
  "toml",
  "tracing",
  "uuid",

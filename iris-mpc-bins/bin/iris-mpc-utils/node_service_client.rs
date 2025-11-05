@@ -10,7 +10,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_utils::{
     aws::{
-        download_net_encryption_public_keys, NodeAwsClient as NodeServiceClient,
+        download_net_encryption_public_keys, NodeAwsClients as NodeServiceClient,
         NodeAwsConfig as NodeServiceConfig,
     },
     client,
@@ -26,7 +26,7 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     println!("Instantiated options: {:?}", &options);
 
-    let _ = NetEncryptionPublicKeys::async_from(options.clone()).await;
+    // let _ = NetEncryptionPublicKeys::async_from(options.clone()).await;
 
     let mut client = client::Client::new(
         client::AwsRequestDispatcher::async_from(options.clone()).await,

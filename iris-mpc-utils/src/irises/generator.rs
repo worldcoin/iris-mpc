@@ -97,3 +97,45 @@ pub fn generate_shared_iris_locally_mirrored<R: Rng + CryptoRng>(
         },
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        generate_iris_code_share, generate_iris_code_shares, generate_shared_iris_locally,
+        generate_shared_iris_locally_mirrored, IrisCode,
+    };
+    use rand::{rngs::StdRng, SeedableRng};
+
+    fn create_iris_code() -> IrisCode {
+        IrisCode::default()
+    }
+
+    fn create_rng() -> StdRng {
+        StdRng::from_entropy()
+    }
+
+    #[test]
+    fn test_can_generate_iris_code_shares() {
+        let mut rng = create_rng();
+        let _ = generate_iris_code_shares(&mut rng);
+    }
+
+    #[test]
+    fn test_can_generate_iris_code_share() {
+        let mut rng = create_rng();
+        let _ = generate_iris_code_share(&mut rng, None);
+        let _ = generate_iris_code_share(&mut rng, Some(create_iris_code()));
+    }
+
+    #[test]
+    fn test_can_generate_shared_iris_locally() {
+        let mut rng = create_rng();
+        let _ = generate_shared_iris_locally(&mut rng, create_iris_code());
+    }
+
+    #[test]
+    fn test_can_generate_shared_iris_locally_mirrored() {
+        let mut rng = create_rng();
+        let _ = generate_shared_iris_locally_mirrored(&mut rng, create_iris_code());
+    }
+}

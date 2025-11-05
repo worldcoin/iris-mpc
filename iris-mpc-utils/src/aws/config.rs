@@ -72,7 +72,7 @@ mod tests {
     async fn create_config() -> NodeAwsConfig {
         let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        NodeAwsConfig::new(&node_config).await
+        NodeAwsConfig::new(node_config).await
     }
 
     #[tokio::test]

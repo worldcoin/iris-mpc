@@ -5,40 +5,28 @@ use iris_mpc_common::helpers::smpc_request::IrisCodeSharesJSON;
 
 use crate::types::{NetGaloisRingIrisCodeShare, NetIrisCodeSharesJSON};
 
+/// TODO: review use of these constants.
+const IRIS_VERSION: &str = "1.0";
+const IRIS_SHARES_VERSION: &str = "1.3";
+
+/// Converts iris code shares into a JSON representation.
 fn to_iris_code_shares_json(
     left_shared_code: NetGaloisRingIrisCodeShare,
     left_shared_mask: NetGaloisRingIrisCodeShare,
     right_shared_code: NetGaloisRingIrisCodeShare,
     right_shared_mask: NetGaloisRingIrisCodeShare,
 ) -> NetIrisCodeSharesJSON {
-    [
-        IrisCodeSharesJSON {
-            iris_version: "1.0".to_string(),
-            iris_shares_version: "1.3".to_string(),
-            right_iris_code_shares: right_shared_code[0].to_base64(),
-            right_mask_code_shares: right_shared_mask[0].to_base64(),
-            left_iris_code_shares: left_shared_code[0].to_base64(),
-            left_mask_code_shares: left_shared_mask[0].to_base64(),
-        },
-        IrisCodeSharesJSON {
-            iris_version: "1.0".to_string(),
-            iris_shares_version: "1.3".to_string(),
-            right_iris_code_shares: right_shared_code[1].to_base64(),
-            right_mask_code_shares: right_shared_mask[1].to_base64(),
-            left_iris_code_shares: left_shared_code[1].to_base64(),
-            left_mask_code_shares: left_shared_mask[1].to_base64(),
-        },
-        IrisCodeSharesJSON {
-            iris_version: "1.0".to_string(),
-            iris_shares_version: "1.3".to_string(),
-            right_iris_code_shares: right_shared_code[2].to_base64(),
-            right_mask_code_shares: right_shared_mask[2].to_base64(),
-            left_iris_code_shares: left_shared_code[2].to_base64(),
-            left_mask_code_shares: left_shared_mask[2].to_base64(),
-        },
-    ]
+    std::array::from_fn(|i| IrisCodeSharesJSON {
+        iris_version: IRIS_VERSION.to_string(),
+        iris_shares_version: IRIS_SHARES_VERSION.to_string(),
+        right_iris_code_shares: right_shared_code[i].to_base64(),
+        right_mask_code_shares: right_shared_mask[i].to_base64(),
+        left_iris_code_shares: left_shared_code[i].to_base64(),
+        left_mask_code_shares: left_shared_mask[i].to_base64(),
+    })
 }
 
+/// Converts iris code shares into a JSON representation.
 fn to_iris_code_party_shares(
     left_shared_code: NetGaloisRingIrisCodeShare,
     left_shared_mask: NetGaloisRingIrisCodeShare,

@@ -16,7 +16,7 @@ const COMPONENT: &str = "State-AWS";
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
-pub struct NodeAwsClient {
+pub struct NodeAwsClients {
     /// Associated configuration.
     config: NodeAwsConfig,
 
@@ -33,7 +33,7 @@ pub struct NodeAwsClient {
     sqs: SQSClient,
 }
 
-impl NodeAwsClient {
+impl NodeAwsClients {
     pub fn new(config: NodeAwsConfig) -> Self {
         Self {
             config: config.to_owned(),
@@ -45,7 +45,7 @@ impl NodeAwsClient {
     }
 }
 
-impl Clone for NodeAwsClient {
+impl Clone for NodeAwsClients {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -57,7 +57,7 @@ impl Clone for NodeAwsClient {
     }
 }
 
-impl NodeAwsClient {
+impl NodeAwsClients {
     pub fn config(&self) -> &NodeAwsConfig {
         &self.config
     }
@@ -79,7 +79,7 @@ impl NodeAwsClient {
     }
 }
 
-impl NodeAwsClient {
+impl NodeAwsClients {
     pub(super) fn log_error(&self, msg: &str) {
         log_error(COMPONENT, msg);
     }
@@ -133,10 +133,10 @@ impl From<&NodeAwsConfig> for SQSClient {
 
 #[cfg(test)]
 mod tests {
-    use super::NodeAwsClient;
+    use super::{super::config::NodeAwsConfig, NodeAwsClients};
     use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
 
-    fn assert_clients(clients: &NodeAwsClient) {
+    fn assert_clients(clients: &NodeAwsClients) {
         let client = clients.s3();
         assert!(client.config().region().is_some());
 
@@ -150,16 +150,16 @@ mod tests {
         assert!(client.config().region().is_some());
     }
 
-    async fn create_clients() -> NodeAwsClient {
+    async fn create_clients() -> NodeAwsClients {
         let config = create_config().await;
 
-        NodeAwsClient::new(config)
+        NodeAwsClients::new(config)
     }
 
-    async fn create_config() -> ServiceConfig {
+    async fn create_config() -> NodeAwsConfig {
         let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        ServiceConfig::new(&node_config).await
+        NodeAwsConfig::new(node_config).await
     }
 
     #[tokio::test]
