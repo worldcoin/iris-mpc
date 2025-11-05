@@ -57,13 +57,7 @@ impl<T: IntRing2k + std::fmt::Display> IntoIterator for VecRingElement<T> {
 
 impl<T: IntRing2k + std::fmt::Display> FromIterator<RingElement<T>> for VecRingElement<T> {
     fn from_iter<I: IntoIterator<Item = RingElement<T>>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (lower_bound, _) = iter.size_hint();
-
-        let mut res = Vec::with_capacity(lower_bound);
-        for i in iter {
-            res.push(i)
-        }
+        let res = Vec::from_iter(iter);
 
         VecRingElement(res)
     }
@@ -71,13 +65,7 @@ impl<T: IntRing2k + std::fmt::Display> FromIterator<RingElement<T>> for VecRingE
 
 impl<T: IntRing2k + std::fmt::Display> Extend<RingElement<T>> for VecRingElement<T> {
     fn extend<I: IntoIterator<Item = RingElement<T>>>(&mut self, iter: I) {
-        let iter = iter.into_iter();
-        let (lower_bound, _) = iter.size_hint();
-
-        self.0.reserve(lower_bound);
-        for i in iter {
-            self.0.push(i)
-        }
+        self.0.extend(iter);
     }
 }
 

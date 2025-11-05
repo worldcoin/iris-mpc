@@ -172,13 +172,13 @@ async fn shuffle_party_1(
         .map(|_| prf.gen_rands::<RingElement<u32>>())
         .unzip();
 
-    // Y1 = pi_01(C - Z_01)
-    let y1 = shuffle_triplets(pi_01, (c - z01)?);
+    // Y0 = pi_01(C - Z_01)
+    let y0 = shuffle_triplets(pi_01, (c - z01)?);
 
     // ROUND 1
     // Send Y1 to party 2
     let network = &mut session.network_session;
-    network.send_ring_vec_next(&y1).await?;
+    network.send_ring_vec_next(&y0).await?;
 
     // Receive X1 from party 0
     let x1 = network.receive_ring_vec_prev().await?;
