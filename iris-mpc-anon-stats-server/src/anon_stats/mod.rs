@@ -1,6 +1,6 @@
 use eyre::Result;
 use iris_mpc_common::{
-    anon_stats::{AnonStatsContext, AnonStatsMapping, AnonStatsOrigin},
+    anon_stats::{AnonStatsMapping, AnonStatsOrigin},
     helpers::statistics::{AnonStatsResultSource, BucketStatistics, BucketStatistics2D},
     iris_db::iris::MATCH_THRESHOLD_RATIO,
 };
@@ -396,7 +396,6 @@ pub mod test_helper_1d {
 }
 
 pub mod test_helper_2d {
-
     use iris_mpc_cpu::shares::{share::DistanceShare, RingElement, Share};
     use itertools::Itertools;
 
