@@ -31,7 +31,6 @@ use iris_mpc_cpu::{
     execution::session::Session,
     network::tcp::{build_network_handle, NetworkHandleArgs},
 };
-use log::info;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
