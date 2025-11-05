@@ -9,7 +9,7 @@ use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSCli
 use clap::Parser;
 use eyre::{bail, eyre, Context, Result};
 use iris_mpc_anon_stats_server::{
-    anon_stats::{self, DistanceBundle1D, DistanceBundle2D},
+    anon_stats::{self, DistanceBundle1D, LiftedDistanceBundle1D},
     config::{AnonStatsServerConfig, Opt},
     spawn_healthcheck_server, sync,
 };
@@ -28,10 +28,10 @@ use iris_mpc_common::{
     tracing::initialize_tracing,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::Orientation,
     execution::session::Session,
     network::tcp::{build_network_handle, NetworkHandleArgs},
 };
+use log::info;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -141,7 +141,12 @@ impl AnonStatsProcessor {
             JobKind::Gpu2D => 0,
         };
         let available = usize::try_from(available).unwrap_or(0);
+        info!(
+            "Available anon stats entries for {:?}: {}",
+            origin, available
+        );
         if available == 0 {
+            info!("No anon stats entries for {:?}", origin);
             return Ok(());
         }
 
@@ -157,72 +162,100 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        let (ids, bundles) = match kind {
+        match kind {
             JobKind::Gpu1D => {
-                self.store
+                let (ids, bundles) = self
+                    .store
                     .get_available_anon_stats_1d(origin, min_job_size)
-                    .await?
-            }
-            JobKind::Hnsw1D => {
-                self.store
-                    .get_available_anon_stats_1d_lifted(origin, min_job_size)
-                    .await?
-            }
-            JobKind::Gpu2D => (Vec::new(), Vec::new()),
-        };
+                    .await?;
+                if bundles.is_empty() {
+                    return Ok(());
+                }
 
-        if bundles.is_empty() {
-            return Ok(());
-        }
+                let mut job: AnonStatsMapping<DistanceBundle1D> = AnonStatsMapping::new(bundles);
+                if job.len() > min_job_size {
+                    job.truncate(min_job_size);
+                }
+                let job_size = job.len();
+                let job_hash = job.get_id_hash();
 
-        let mut job = AnonStatsMapping::new(bundles);
-        if job.len() > min_job_size {
-            job.truncate(min_job_size);
-        }
-        let job_size = job.len();
-        let job_hash = job.get_id_hash();
+                if !sync::sync_on_id_hash(session, job_hash).await? {
+                    warn!(
+                        ?origin,
+                        job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
+                    );
+                    self.handle_sync_failure(origin, kind).await?;
+                    return Ok(());
+                }
 
-        if !sync::sync_on_id_hash(session, job_hash).await? {
-            warn!(
-                ?origin,
-                job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
-            );
-            self.handle_sync_failure(origin, kind).await?;
-            return Ok(());
-        }
-
-        let start = Instant::now();
-        let stats = match kind {
-            JobKind::Gpu1D => {
-                anon_stats::process_1d_anon_stats_job(session, job, &origin, self.config.as_ref())
-                    .await?
-            }
-            JobKind::Hnsw1D => {
-                anon_stats::process_1d_lifted_anon_stats_job(
+                let start = Instant::now();
+                let stats = anon_stats::process_1d_anon_stats_job(
                     session,
                     job,
                     &origin,
                     self.config.as_ref(),
                 )
-                .await?
+                .await?;
+                info!(
+                    ?origin,
+                    job_size,
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "Completed 1D anon stats job"
+                );
+
+                self.publish_1d_stats(&stats).await?;
+                self.store.mark_anon_stats_processed_1d(&ids).await?;
+                self.sync_failures.remove(&origin);
+                Ok(())
+            }
+            JobKind::Hnsw1D => {
+                let (ids, bundles) = self
+                    .store
+                    .get_available_anon_stats_1d_lifted(origin, min_job_size)
+                    .await?;
+                if bundles.is_empty() {
+                    return Ok(());
+                }
+
+                let mut job: AnonStatsMapping<LiftedDistanceBundle1D> =
+                    AnonStatsMapping::new(bundles);
+                if job.len() > min_job_size {
+                    job.truncate(min_job_size);
+                }
+                let job_size = job.len();
+                let job_hash = job.get_id_hash();
+
+                if !sync::sync_on_id_hash(session, job_hash).await? {
+                    warn!(
+                        ?origin,
+                        job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
+                    );
+                    self.handle_sync_failure(origin, kind).await?;
+                    return Ok(());
+                }
+
+                let start = Instant::now();
+                let stats = anon_stats::process_1d_lifted_anon_stats_job(
+                    session,
+                    job,
+                    &origin,
+                    self.config.as_ref(),
+                )
+                .await?;
+                info!(
+                    ?origin,
+                    job_size,
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "Completed 1D anon stats job"
+                );
+
+                self.publish_1d_stats(&stats).await?;
+                self.store.mark_anon_stats_processed_1d_lifted(&ids).await?;
+                self.sync_failures.remove(&origin);
+                Ok(())
             }
             JobKind::Gpu2D => unreachable!(),
-        };
-        info!(
-            ?origin,
-            job_size,
-            elapsed_ms = start.elapsed().as_millis(),
-            "Completed 1D anon stats job"
-        );
-
-        self.publish_1d_stats(&stats).await?;
-        match kind {
-            JobKind::Gpu1D => self.store.mark_anon_stats_processed_1d(&ids).await?,
-            JobKind::Hnsw1D => self.store.mark_anon_stats_processed_1d_lifted(&ids).await?,
-            JobKind::Gpu2D => {}
         }
-        self.sync_failures.remove(&origin);
-        Ok(())
     }
 
     async fn run_2d_job(&mut self, session: &mut Session, origin: AnonStatsOrigin) -> Result<()> {
@@ -248,7 +281,15 @@ impl AnonStatsProcessor {
             .store
             .get_available_anon_stats_2d(origin, min_job_size)
             .await?;
+
+        info!(
+            ?origin,
+            "Fetched {} anon stats 2D bundles for processing",
+            bundles.len()
+        );
+
         if bundles.is_empty() {
+            info!("No anon stats entries for {:?}", origin);
             return Ok(());
         }
 
@@ -355,7 +396,6 @@ async fn main() -> Result<()> {
     info!("Init config");
     let mut config = AnonStatsServerConfig::load_config("SMPC")?;
     config.overwrite_defaults_with_cli_args(Opt::parse());
-    config.apply_party_network_defaults()?;
 
     if config.results_topic_arn.is_empty() {
         bail!("SMPC__RESULTS_TOPIC_ARN must be provided");

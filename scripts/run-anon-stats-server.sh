@@ -9,6 +9,7 @@ if [ -z "$NODE_ID" ]; then
 fi
 export RUST_LOG=info
 export SMPC__DB_URL="postgres://postgres:postgres@localhost:5432/SMPC_dev_${NODE_ID}"
+export SMPC__POLL_INTERVAL_SECS="10"
 export SMPC__PARTY_ID="${NODE_ID}"
 export SMPC__AWS__ENDPOINT="http://127.0.0.1:4566"
 export SMPC__RESULTS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo"
