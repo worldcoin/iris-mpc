@@ -79,7 +79,7 @@ impl From<IrisVectorId> for graph_v1::VectorId {
     fn from(value: IrisVectorId) -> Self {
         graph_v1::VectorId {
             id: value.serial_id(),
-            version: value.version_id(),
+            //value.version_id(),
         }
     }
 }
@@ -128,7 +128,7 @@ impl From<GraphMem<IrisVectorId>> for GraphV1 {
 
 impl From<graph_v1::VectorId> for IrisVectorId {
     fn from(value: graph_v1::VectorId) -> Self {
-        IrisVectorId::new(value.id, value.version)
+        IrisVectorId::new(value.id, 0)
     }
 }
 
