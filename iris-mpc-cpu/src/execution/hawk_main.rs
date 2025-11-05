@@ -1702,6 +1702,8 @@ mod tests {
                     "hawk_main",
                     "--addresses",
                     &addresses.join(","),
+                    "--outbound-addrs",
+                    &addresses.join(","),
                     "--party-index",
                     &index.to_string(),
                 ]);
