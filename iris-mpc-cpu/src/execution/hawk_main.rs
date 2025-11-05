@@ -109,6 +109,11 @@ pub struct HawkArgs {
     #[clap(short, long, value_delimiter = ',')]
     pub addresses: Vec<String>,
 
+    // address to connect to. allows for inserting
+    // a proxy between MPC parties for testing purposes.
+    #[clap(short, long, value_delimiter = ',')]
+    pub outbound_addrs: Vec<String>,
+
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
 
@@ -2041,14 +2046,16 @@ mod tests_db {
             graph_tx.tx.commit().await?;
         }
 
+        let addresses = vec![
+            "0.0.0.0:1234".to_string(),
+            "0.0.0.0:1235".to_string(),
+            "0.0.0.0:1236".to_string(),
+        ];
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
             party_index: 0,
-            addresses: vec![
-                "0.0.0.0:1234".to_string(),
-                "0.0.0.0:1235".to_string(),
-                "0.0.0.0:1236".to_string(),
-            ],
+            addresses: addresses.clone(),
+            outbound_addrs: addresses,
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,

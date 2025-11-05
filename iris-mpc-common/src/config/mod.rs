@@ -120,6 +120,12 @@ pub struct Config {
     pub service_ports: Vec<String>,
 
     #[serde(
+        default = "default_service_ports",
+        deserialize_with = "deserialize_yaml_json_string"
+    )]
+    pub service_outbound_ports: Vec<String>,
+
+    #[serde(
         default = "default_healthcheck_ports",
         deserialize_with = "deserialize_yaml_json_string"
     )]
@@ -776,6 +782,7 @@ impl From<Config> for CommonConfig {
             enable_debug_timing: _,
             node_hostnames: _,            // Could be different for each server
             service_ports: _,             // Could be different for each server
+            service_outbound_ports: _,    // Could be different for each server
             healthcheck_ports: _,         // Could be different for each server
             http_query_retry_delay_ms: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,
