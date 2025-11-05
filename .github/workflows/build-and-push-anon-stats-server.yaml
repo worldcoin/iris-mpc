@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - chore/fix-ports-parsing-anon-stats-server
+      - feat/anon_stats_service
     paths:
       - Dockerfile.anon-stats-server
       - iris-mpc-anon-stats-server/**
