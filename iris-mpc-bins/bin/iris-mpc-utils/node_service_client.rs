@@ -14,10 +14,10 @@ use iris_mpc_utils::{
         NodeAwsConfig as NodeServiceConfig,
     },
     constants::NODE_CONFIG_KIND_MAIN,
-    service_client as client,
-    state::fsys::{
+    fsys::{
         local::get_path_to_node_config as get_path_to_local_node_config, reader::read_node_config,
     },
+    service_client as client,
     types::{NetEncryptionPublicKeys, NetNodeConfig, NetServiceClients, NetServiceConfig},
 };
 

@@ -66,7 +66,7 @@ mod tests {
     use super::NodeAwsConfig;
     use crate::{
         constants::{DEFAULT_AWS_REGION, NODE_CONFIG_KIND_MAIN},
-        state::fsys::local::read_node_config,
+        fsys::local::read_node_config,
     };
 
     async fn create_config() -> NodeAwsConfig {

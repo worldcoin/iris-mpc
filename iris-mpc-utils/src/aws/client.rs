@@ -134,7 +134,7 @@ impl From<&NodeAwsConfig> for SQSClient {
 #[cfg(test)]
 mod tests {
     use super::NodeAwsClient;
-    use crate::{constants::NODE_CONFIG_KIND_MAIN, state::fsys::local::read_node_config};
+    use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
 
     fn assert_clients(clients: &NodeAwsClient) {
         let client = clients.s3();
