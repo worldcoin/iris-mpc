@@ -21,6 +21,7 @@ use iris_mpc_common::{
     vector_id::VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -174,8 +175,41 @@ impl VectorStore for PlaintextStore {
         Ok(distance)
     }
 
+    async fn eval_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        debug!(event_type = EvaluateDistance.id());
+
+        let storage = &self.storage;
+        let distance_fn = &self.distance_fn;
+
+        let results = vectors.par_iter().map(|vector| {
+            let vector_code = storage.get_vector(vector).ok_or_else(|| {
+                eyre::eyre!(
+                    "Vector ID not found in store for serial {}",
+                    vector.serial_id()
+                )
+            })?;
+            let distance = distance_fn.plaintext_distance(vector_code, query);
+            Ok(distance)
+        });
+
+        results.collect::<Result<Vec<_>>>()
+    }
+
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         Ok(fraction_is_match(distance))
+    }
+
+    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
+        let results = distances
+            .par_iter()
+            .map(|distance| fraction_is_match(distance))
+            .collect();
+
+        Ok(results)
     }
 
     async fn less_than(
@@ -185,6 +219,20 @@ impl VectorStore for PlaintextStore {
     ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
         Ok(fraction_less_than(distance1, distance2))
+    }
+
+    async fn less_than_batch(
+        &mut self,
+        distances: &[(Self::DistanceRef, Self::DistanceRef)],
+    ) -> Result<Vec<bool>> {
+        debug!(event_type = CompareDistance.id());
+
+        let results = distances
+            .par_iter()
+            .map(|(d1, d2)| fraction_less_than(d1, d2))
+            .collect();
+
+        Ok(results)
     }
 
     async fn only_valid_vectors(
@@ -277,24 +325,35 @@ impl VectorStore for SharedPlaintextStore {
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
-        let store = self.storage.read().await;
-        let vector_codes = vectors
-            .iter()
-            .map(|v| {
-                let serial_id = v.serial_id();
-                store.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(vector_codes
-            .into_iter()
-            .map(|v| self.distance_fn.plaintext_distance(v, query))
-            .collect())
+
+        let storage = self.storage.read().await;
+        let distance_fn = &self.distance_fn;
+
+        let results = vectors.par_iter().map(|vector| {
+            let vector_code = storage.get_vector(vector).ok_or_else(|| {
+                eyre::eyre!(
+                    "Vector ID not found in store for serial {}",
+                    vector.serial_id()
+                )
+            })?;
+            let distance = distance_fn.plaintext_distance(vector_code, query);
+            Ok(distance)
+        });
+
+        results.collect::<Result<Vec<_>>>()
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         Ok(fraction_is_match(distance))
+    }
+
+    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
+        let results = distances
+            .par_iter()
+            .map(|distance| fraction_is_match(distance))
+            .collect();
+
+        Ok(results)
     }
 
     async fn less_than(
@@ -304,6 +363,20 @@ impl VectorStore for SharedPlaintextStore {
     ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
         Ok(fraction_less_than(distance1, distance2))
+    }
+
+    async fn less_than_batch(
+        &mut self,
+        distances: &[(Self::DistanceRef, Self::DistanceRef)],
+    ) -> Result<Vec<bool>> {
+        debug!(event_type = CompareDistance.id());
+
+        let results = distances
+            .par_iter()
+            .map(|(d1, d2)| fraction_less_than(d1, d2))
+            .collect();
+
+        Ok(results)
     }
 
     async fn only_valid_vectors(
