@@ -1,4 +1,7 @@
-use crate::shares::{int_ring::IntRing2k, ring_impl::RingElement};
+use crate::{
+    protocol::shuffle::Permutation,
+    shares::{int_ring::IntRing2k, ring_impl::RingElement},
+};
 use aes_prng::AesRng;
 use eyre::Result;
 use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
@@ -92,30 +95,22 @@ impl Prf {
         a ^ b
     }
 
-    fn gen_u32_mod(&mut self, modulus: u32) -> Result<u32> {
-        if modulus == 0 {
-            eyre::bail!("modulus must be non-zero");
-        }
-        let modulus_64 = modulus as u64;
-        // Rejection sampling to avoid modulo bias
-        // The rejection bound is the largest multiple of modulus that fits in u64 - 1.
-        // In this case, the probability of rejection is 2^64 % modulus / 2^64 < 2^(-32).
-        let rejection_bound = u64::MAX - (u64::MAX % modulus_64 + 1) % modulus_64;
-        loop {
-            let v = self.my_prf.gen::<u64>();
-            if v <= rejection_bound {
-                return Ok((v % modulus_64) as u32);
-            }
-        }
+    // Generates shared random u32 in [0, modulus)
+    fn gen_u32_mod(&mut self, modulus: u32) -> Result<(u32, u32)> {
+        let a = gen_u32_mod(&mut self.my_prf, modulus)?;
+        let b = gen_u32_mod(&mut self.prev_prf, modulus)?;
+        Ok((a, b))
     }
 
-    pub fn gen_permutation(&mut self, size: u32) -> Result<Vec<u32>> {
-        let mut perm: Vec<u32> = (0..size).collect();
+    pub fn gen_permutation(&mut self, size: u32) -> Result<Permutation> {
+        let mut perm_a: Vec<u32> = (0..size).collect();
+        let mut perm_b: Vec<u32> = (0..size).collect();
         for i in 1..size {
-            let j = self.gen_u32_mod(i + 1)?;
-            perm.swap(i as usize, j as usize);
+            let (j_a, j_b) = self.gen_u32_mod(i + 1)?;
+            perm_a.swap(i as usize, j_a as usize);
+            perm_b.swap(i as usize, j_b as usize);
         }
-        Ok(perm)
+        Ok((perm_a, perm_b))
     }
 }
 
@@ -158,14 +153,17 @@ mod tests {
         let expected = 1000;
 
         let mut helper = |modulus: u32| -> Result<()> {
-            let mut counters = vec![0_u32; modulus as usize];
+            let mut counters_a = vec![0_u32; modulus as usize];
+            let mut counters_b = vec![0_u32; modulus as usize];
             let num_samples = modulus * expected;
             for _ in 0..num_samples {
-                let v = prf.gen_u32_mod(modulus)?;
-                counters[v as usize] += 1;
+                let (v_a, v_b) = prf.gen_u32_mod(modulus)?;
+                counters_a[v_a as usize] += 1;
+                counters_b[v_b as usize] += 1;
             }
 
-            assert!(chi_squared_test(&counters, expected)?);
+            assert!(chi_squared_test(&counters_a, expected)?);
+            assert!(chi_squared_test(&counters_b, expected)?);
 
             Ok(())
         };
@@ -184,12 +182,13 @@ mod tests {
 
         let mut helper = |size: u32| -> Result<()> {
             let num_bins: u32 = (2..=size).product();
-            let num_samples = num_bins * expected;
+            let num_samples = num_bins * expected / 2;
 
             let mut perm_stats = HashMap::new();
             for _ in 0..num_samples {
                 let perm = prf.gen_permutation(size)?;
-                *perm_stats.entry(perm).or_insert(0_u32) += 1;
+                *perm_stats.entry(perm.0).or_insert(0_u32) += 1;
+                *perm_stats.entry(perm.1).or_insert(0_u32) += 1;
             }
 
             // Check that all permutations have been generated.
