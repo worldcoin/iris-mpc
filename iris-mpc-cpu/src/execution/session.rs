@@ -18,8 +18,8 @@ impl From<u32> for SessionId {
     }
 }
 /// Added to introduce delay
-const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(0); // this is for dev tests
-                                                                  // use std::sync::OnceLock; // use this for local tests
+const ARTIFICIAL_LINK_DELAY: Duration = Duration::from_millis(10); // this is for dev tests
+                                                                   // use std::sync::OnceLock; // use this for local tests
 
 // fn artificial_link_delay() -> Duration {
 //     static DELAY: OnceLock<Duration> = OnceLock::new();
