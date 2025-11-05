@@ -18,6 +18,7 @@ bincode.workspace = true
 clap.workspace = true
 dotenvy.workspace = true
 eyre.workspace = true
+iris-mpc = { path = "../iris-mpc" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
 iris-mpc-store = { path = "../iris-mpc-store" }

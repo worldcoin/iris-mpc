@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::fs::File;
 use std::io::Read;
 use uuid::Uuid;
+
 #[derive(Debug, Deserialize)]
 pub struct EnrollmentIrisData {
     #[serde(rename = "signup_id")]

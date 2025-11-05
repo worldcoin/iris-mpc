@@ -2,8 +2,11 @@ use std::path::Path;
 
 use sodiumoxide::crypto::box_::PublicKey;
 
-use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
-use iris_mpc_cpu::execution::hawk_main::BothEyes;
+use iris_mpc_common::{
+    config::Config as NodeConfig, galois_engine::degree4::GaloisRingIrisCodeShare,
+    helpers::smpc_request::IrisCodeSharesJSON, iris_db::iris::IrisCode,
+};
+use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::GaloisRingSharedIris};
 
 use super::{
     constants::N_PARTIES,
@@ -12,6 +15,15 @@ use super::{
 
 // Pair of Iris codes aassociated with left/right eyes.
 pub type IrisCodePair = BothEyes<IrisCode>;
+
+// Network wide galois ring iris code shares.
+pub type NetGaloisRingIrisCodeShare = [GaloisRingIrisCodeShare; N_PARTIES];
+
+// Network wide galois ring shared iris's.
+pub type NetGaloisRingSharedIris = [GaloisRingSharedIris; N_PARTIES];
+
+// Network wide iris code shares in JSON format.
+pub type NetIrisCodeSharesJSON = [IrisCodeSharesJSON; N_PARTIES];
 
 // Network wide node configuration set.
 pub type NetNodeConfig = [NodeConfig; N_PARTIES];

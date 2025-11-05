@@ -2931,6 +2931,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "eyre",
+ "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",
  "iris-mpc-store",
