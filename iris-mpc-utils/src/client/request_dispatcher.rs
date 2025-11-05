@@ -7,6 +7,7 @@ use crate::types::NetServiceClients;
 #[derive(Debug)]
 pub struct AwsRequestDispatcher {
     /// Associated network wide AWS service clients.
+    #[allow(dead_code)]
     net_aws_clients: NetServiceClients,
 }
 

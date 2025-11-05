@@ -16,6 +16,9 @@ use super::{
 // Pair of Iris codes aassociated with left/right eyes.
 pub type IrisCodePair = BothEyes<IrisCode>;
 
+// Iris code and mask galois shares.
+pub type IrisCodeAndMaskShares = [[GaloisRingIrisCodeShare; N_PARTIES]; 2];
+
 // Network wide galois ring iris code shares.
 pub type NetGaloisRingIrisCodeShare = [GaloisRingIrisCodeShare; N_PARTIES];
 

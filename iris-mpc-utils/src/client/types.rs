@@ -63,15 +63,19 @@ pub enum BatchSize {
 #[derive(Debug)]
 pub struct Request {
     /// Idx of batch within which request was included.
+    #[allow(dead_code)]
     batch_idx: usize,
 
     /// Idx of batch item within which request was included.
+    #[allow(dead_code)]
     batch_item_idx: usize,
 
     /// Unique request identifier for correlation purposes.
+    #[allow(dead_code)]
     request_id: uuid::Uuid,
 
     /// Associated request payload.
+    #[allow(dead_code)]
     payload: RequestPayload,
 }
 

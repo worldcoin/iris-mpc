@@ -34,30 +34,6 @@ pub struct NodeAwsClients {
 }
 
 impl NodeAwsClients {
-    pub fn new(config: NodeAwsConfig) -> Self {
-        Self {
-            config: config.to_owned(),
-            s3: S3Client::from(&config),
-            secrets_manager: SecretsManagerClient::from(&config),
-            sqs: SQSClient::from(&config),
-            sns: SNSClient::from(&config),
-        }
-    }
-}
-
-impl Clone for NodeAwsClients {
-    fn clone(&self) -> Self {
-        Self {
-            config: self.config.clone(),
-            sqs: self.sqs.clone(),
-            sns: self.sns.clone(),
-            s3: self.s3.clone(),
-            secrets_manager: self.secrets_manager.clone(),
-        }
-    }
-}
-
-impl NodeAwsClients {
     pub fn config(&self) -> &NodeAwsConfig {
         &self.config
     }
@@ -77,15 +53,35 @@ impl NodeAwsClients {
     pub fn sqs(&self) -> &SQSClient {
         &self.sqs
     }
-}
 
-impl NodeAwsClients {
+    pub fn new(config: NodeAwsConfig) -> Self {
+        Self {
+            config: config.to_owned(),
+            s3: S3Client::from(&config),
+            secrets_manager: SecretsManagerClient::from(&config),
+            sqs: SQSClient::from(&config),
+            sns: SNSClient::from(&config),
+        }
+    }
+
     pub(super) fn log_error(&self, msg: &str) {
         log_error(COMPONENT, msg);
     }
 
     pub(super) fn log_info(&self, msg: &str) {
         log_info(COMPONENT, msg);
+    }
+}
+
+impl Clone for NodeAwsClients {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            sqs: self.sqs.clone(),
+            sns: self.sns.clone(),
+            s3: self.s3.clone(),
+            secrets_manager: self.secrets_manager.clone(),
+        }
     }
 }
 
