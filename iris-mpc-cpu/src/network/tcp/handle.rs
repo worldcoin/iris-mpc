@@ -1,64 +1,83 @@
-use super::{session::TcpSession, Connection, OutStream, OutboundMsg, PeerConnections, StreamId};
+use std::sync::Arc;
+
 use crate::{
     execution::{
         hawk_main::scheduler::parallelize,
         player::{Identity, Role, RoleAssignment},
-        session::{NetworkSession, Session, SessionId},
+        session::{NetworkSession, Session},
     },
     network::{
         tcp::{
-            config::TcpConfig, networking::connection_builder::Reconnector, NetworkConnection,
-            NetworkHandle,
+            config::TcpConfig,
+            connection::{accept_loop, ConnectionRequest, ConnectionState},
+            data::{ConnectionId, Peer, PeerConnections},
+            session::TcpSession,
+            Client, NetworkConnection, NetworkHandle, Server,
         },
-        value::{DescriptorByte, NetworkValue},
+        value::NetworkValue,
+        Networking,
     },
     protocol::ops::setup_replicated_prf,
 };
 use async_trait::async_trait;
-use bytes::BytesMut;
-use eyre::Result;
-use iris_mpc_common::fast_metrics::FastHistogram;
+use eyre::{bail, eyre, Result};
+use futures::future::join_all;
+use itertools::Itertools;
 use rand::{thread_rng, Rng};
-use std::{
-    collections::HashMap,
-    io,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Instant,
-};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
-    sync::{
-        mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
-        oneshot, Mutex,
-    },
-};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
-const BUFFER_CAPACITY: usize = 32 * 1024;
-const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
-
-/// spawns a task for each TCP connection (there are x connections per peer and each of the x
-/// connections has y sessions, of the same session id)
-pub struct TcpNetworkHandle<T: NetworkConnection> {
-    peers: Vec<Identity>,
-    ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
-    reconnector: Reconnector<T>,
+pub struct TcpNetworkHandle<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> {
+    peers: [Arc<Peer>; 2],
+    my_id: Arc<Identity>,
+    connector: C,
+    conn_cmd_tx: UnboundedSender<ConnectionRequest<T>>,
+    connection_state: ConnectionState,
     config: TcpConfig,
-    next_session_id: usize,
+    next_session_id: u32,
+    shutdown_ct: CancellationToken,
     party_index: usize,
     role_assignments: Arc<RoleAssignment>,
 }
 
+impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> Drop
+    for TcpNetworkHandle<T, C>
+{
+    fn drop(&mut self) {
+        self.shutdown_ct.cancel();
+        tracing::debug!("TcpNetworkHandle dropped");
+    }
+}
+
 #[async_trait]
-impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
-    async fn make_network_sessions(&mut self) -> Result<Vec<NetworkSession>> {
-        tracing::debug!("make_sessions");
-        self.reconnector.wait_for_reconnections().await?;
-        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
-        let tcp_sessions = self.make_sessions_inner(sc).await;
+impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHandle
+    for TcpNetworkHandle<T, C>
+{
+    async fn make_network_sessions(&mut self) -> Result<(Vec<NetworkSession>, CancellationToken)> {
+        let err_ct = CancellationToken::new();
+        // cancel the old token just in case
+        self.connection_state.err_ct().await.cancel();
+        self.connection_state
+            .replace_cancellation_token(err_ct.clone())
+            .await;
+
+        // wait for all peers to establish all connections
+        let mut connections = self
+            .make_peer_connections(self.config.num_connections)
+            .await?;
+
+        connections.sync().await?;
+
+        // calls multiplexer::run() on each TCP/TLS stream
+        let mut tcp_sessions = super::session::make_sessions(
+            connections,
+            self.connection_state.clone(),
+            &self.config,
+            self.next_session_id,
+        )
+        .await;
+
+        self.validate_sessions(&mut tcp_sessions).await?;
 
         let network_sessions: Vec<_> = tcp_sessions
             .into_iter()
@@ -69,10 +88,28 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
                 own_role: Role::new(self.party_index),
             })
             .collect();
-        Ok(network_sessions)
+
+        let sessions_per_conn = (0..self.config.num_connections)
+            .map(|idx| self.config.get_sessions_for_connection(idx))
+            .collect_vec();
+        tracing::info!(
+            "make_sessions succeeded. starting id: {} sessions per connection: {:?}",
+            self.next_session_id,
+            sessions_per_conn
+        );
+
+        self.next_session_id = self
+            .next_session_id
+            .saturating_add(self.config.num_sessions);
+        if self.next_session_id >= u32::MAX - self.config.num_sessions {
+            self.next_session_id = 0;
+        }
+
+        Ok((network_sessions, err_ct))
     }
-    async fn make_sessions(&mut self) -> Result<Vec<Session>> {
-        let network_sessions = self.make_network_sessions().await?;
+
+    async fn make_sessions(&mut self) -> Result<(Vec<Session>, CancellationToken)> {
+        let (network_sessions, ct) = self.make_network_sessions().await?;
 
         let mut session_futures = vec![];
         for mut network_session in network_sessions.into_iter() {
@@ -87,587 +124,208 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
             session_futures.push(fut);
         }
 
-        parallelize(session_futures.into_iter()).await
+        let r = parallelize(session_futures.into_iter()).await?;
+        Ok((r, ct))
+    }
+
+    async fn sync_peers(&mut self) -> Result<()> {
+        let mut connections = self
+            .make_peer_connections(1)
+            .await
+            .map_err(|e| eyre!("make_peer_connections failed: {}", e))?;
+        connections
+            .sync()
+            .await
+            .map_err(|_| eyre!("sync connections failed"))?;
+        Ok(())
     }
 }
 
-#[derive(Default)]
-struct SessionChannels {
-    outbound_tx: HashMap<Identity, HashMap<StreamId, UnboundedSender<OutboundMsg>>>,
-    outbound_rx: HashMap<Identity, HashMap<StreamId, UnboundedReceiver<OutboundMsg>>>,
-    inbound_tx: HashMap<Identity, HashMap<SessionId, UnboundedSender<NetworkValue>>>,
-    inbound_rx: HashMap<Identity, HashMap<SessionId, UnboundedReceiver<NetworkValue>>>,
-}
-
-enum Cmd {
-    NewSessions {
-        inbound_forwarder: HashMap<SessionId, OutStream>,
-        outbound_rx: UnboundedReceiver<OutboundMsg>,
-        rsp: oneshot::Sender<()>,
-    },
-    #[cfg(test)]
-    TestReconnect { rsp: oneshot::Sender<Result<()>> },
-}
-
-impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
-    pub fn new(
-        reconnector: Reconnector<T>,
-        connections: PeerConnections<T>,
+impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetworkHandle<T, C> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new<I, S>(
+        my_id: Identity,
+        mut peers: I,
+        connector: C,
+        listener: S,
         config: TcpConfig,
-        ct: CancellationToken,
+        shutdown_ct: CancellationToken,
         party_index: usize,
         role_assignments: Arc<RoleAssignment>,
-    ) -> Self {
-        let peers = connections.keys().cloned().collect();
-        let mut ch_map = HashMap::new();
-        let conn_state = ConnectionState::new();
-        for (peer_id, connections) in connections {
-            let mut m = HashMap::new();
-            for (stream_id, connection) in connections {
-                let rc = reconnector.clone();
-                let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-                m.insert(stream_id, cmd_tx);
+    ) -> Result<Self>
+    where
+        I: Iterator<Item = (Identity, String)>,
+        S: Server<Output = T> + 'static,
+    {
+        let my_id = Arc::new(my_id);
+        let peers: [Arc<Peer>; 2] = [
+            Arc::new(peers.next().expect("expected at least 2 identities").into()),
+            Arc::new(peers.next().expect("expected at least 2 identities").into()),
+        ];
 
-                let ct2 = ct.clone();
-                tokio::spawn(manage_connection(
-                    connection,
-                    rc,
-                    config.get_sessions_for_stream(&stream_id),
-                    cmd_rx,
-                    ct2,
-                    conn_state.clone(),
-                ));
-            }
-            ch_map.insert(peer_id.clone(), m);
-        }
-        Self {
+        // use the shutdown_ct to cancel anything spawned by the NetworkHandle. But don't want this to affect the calling code.
+        // Hence the child_token()
+        let shutdown_ct = shutdown_ct.child_token();
+        let connection_state = ConnectionState::new(shutdown_ct.clone(), CancellationToken::new());
+
+        let (conn_cmd_tx, conn_cmd_rx) = mpsc::unbounded_channel::<ConnectionRequest<T>>();
+
+        // be sure not to make more than one network handle...
+        tokio::spawn(accept_loop(listener, conn_cmd_rx, shutdown_ct.clone()));
+
+        Ok(Self {
+            my_id,
             peers,
-            ch_map,
-            reconnector,
+            connector,
             config,
+            conn_cmd_tx,
+            connection_state,
             next_session_id: 0,
+            shutdown_ct,
             party_index,
             role_assignments,
-        }
+        })
     }
 
-    #[cfg(test)]
-    pub async fn test_reconnect(&self, peer: Identity, stream_id: StreamId) -> Result<()> {
-        let ch = self
-            .ch_map
-            .get(&peer)
-            .and_then(|m| m.get(&stream_id))
-            .unwrap();
-        let (rsp_tx, rsp_rx) = oneshot::channel();
-        ch.send(Cmd::TestReconnect { rsp: rsp_tx }).unwrap();
-        rsp_rx.await?
+    // associates the connections with an Identity
+    async fn make_peer_connections(&self, conns_per_peer: u32) -> Result<PeerConnections<T>> {
+        let (c0, c1) = self.make_connections(conns_per_peer).await?;
+        Ok(PeerConnections::new(self.peers.clone(), c0, c1))
     }
 
-    async fn make_sessions_inner(&mut self, mut sc: SessionChannels) -> Vec<TcpSession> {
-        let num_connections = self.config.num_connections;
-        let num_sessions = self.config.num_sessions;
+    // returns the connections for each peer
+    // when returned, the handshakes have successfully completed
+    async fn make_connections(&self, conns_per_peer: u32) -> Result<(Vec<T>, Vec<T>)> {
+        assert_eq!(self.peers.len(), 2);
+        let mut connect_futures = Vec::with_capacity(conns_per_peer as usize * self.peers.len());
 
-        // spawn the forwarders
-        for peer_id in &self.peers {
-            for stream_id in (0..num_connections).map(|x| StreamId::from(x as u32)) {
-                let outbound_rx = sc
-                    .outbound_rx
-                    .get_mut(peer_id)
-                    .unwrap()
-                    .remove(&stream_id)
-                    .unwrap();
-
-                let inbound_forwarder = sc.inbound_tx.get(peer_id).cloned().unwrap();
-                let ch = self.ch_map.get(peer_id).unwrap().get(&stream_id).unwrap();
-                let (rsp_tx, rsp_rx) = oneshot::channel();
-                ch.send(Cmd::NewSessions {
-                    inbound_forwarder,
-                    outbound_rx,
-                    rsp: rsp_tx,
-                })
-                .unwrap();
-                rsp_rx.await.unwrap();
+        // peers[0] will be associated with connections c0
+        // peers[1] will be associated with connections c1
+        for peer in self.peers.iter() {
+            for idx in 0..conns_per_peer {
+                let connection_id = ConnectionId::new(idx);
+                let fut = super::connection::connect(
+                    connection_id,
+                    self.my_id.clone(),
+                    peer.clone(),
+                    self.connection_state.clone(),
+                    self.connector.clone(),
+                    self.conn_cmd_tx.clone(),
+                );
+                connect_futures.push(fut);
             }
         }
+        let results: Vec<T> = join_all(connect_futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // create the sessions
-        let mut sessions = vec![];
-        for (idx, session_id) in (self.next_session_id..self.next_session_id + num_sessions)
-            .map(|x| SessionId::from(x as u32))
-            .enumerate()
-        {
-            let mut tx_map = HashMap::new();
-            let mut rx_map = HashMap::new();
-            let stream_id = StreamId::from((idx % num_connections) as u32);
+        let mut c1 = results;
+        let mut c0 = vec![];
+        c0.extend(c1.drain(0..c1.len() / 2));
+        assert_eq!(c1.len(), c0.len());
 
-            for peer_id in &self.peers {
-                let outbound_tx = sc
-                    .outbound_tx
-                    .get(peer_id)
-                    .unwrap()
-                    .get(&stream_id)
-                    .cloned()
-                    .unwrap();
-                tx_map.insert(peer_id.clone(), outbound_tx.clone());
-                let inbound_rx = sc
-                    .inbound_rx
-                    .get_mut(peer_id)
-                    .unwrap()
-                    .remove(&session_id)
-                    .unwrap();
-                rx_map.insert(peer_id.clone(), inbound_rx);
+        Ok((c0, c1))
+    }
+
+    async fn validate_sessions(&self, sessions: &mut [TcpSession]) -> Result<()> {
+        // make sure all the sessions are working
+        for (idx, session) in sessions.iter_mut().enumerate() {
+            // turn the session id into a byte array.
+            let mut id_arr = [0u8; 16];
+            let idx_bytes = idx.to_le_bytes();
+            let len = std::cmp::min(id_arr.len(), idx_bytes.len());
+            id_arr[..len].copy_from_slice(&idx_bytes[..len]);
+
+            let prf = NetworkValue::PrfKey(id_arr);
+            for peer in &self.peers {
+                session.send(prf.clone(), peer.id()).await?;
             }
-
-            // Create the TcpSession for this stream
-            let session = TcpSession::new(session_id, tx_map, rx_map, self.config.clone());
-            sessions.push(session);
-        }
-
-        // ensures that if new sessions are created, the setup process (which requires communication with peers) isn't
-        // interfered with by communications from old sessions.
-        self.next_session_id = self.next_session_id.saturating_add(num_sessions);
-        if self.next_session_id > 1 << 30 {
-            self.next_session_id = 0;
-        }
-        assert_eq!(self.config.num_sessions, sessions.len());
-        sessions
-    }
-}
-
-fn make_channels(
-    peers: &[Identity],
-    config: &TcpConfig,
-    next_session_id: usize,
-) -> SessionChannels {
-    let mut sc = SessionChannels::default();
-
-    for peer_id in peers {
-        let mut outbound_tx = HashMap::new();
-        let mut outbound_rx = HashMap::new();
-        let mut inbound_tx = HashMap::new();
-        let mut inbound_rx = HashMap::new();
-
-        for stream_id in (0..config.num_connections).map(|x| StreamId::from(x as u32)) {
-            let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
-            outbound_tx.insert(stream_id, tx);
-            outbound_rx.insert(stream_id, rx);
-        }
-
-        for session_id in (next_session_id..next_session_id + config.num_sessions)
-            .map(|x| SessionId::from(x as u32))
-        {
-            let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
-            inbound_tx.insert(session_id, tx);
-            inbound_rx.insert(session_id, rx);
-        }
-
-        sc.outbound_tx.insert(peer_id.clone(), outbound_tx);
-        sc.outbound_rx.insert(peer_id.clone(), outbound_rx);
-        sc.inbound_tx.insert(peer_id.clone(), inbound_tx);
-        sc.inbound_rx.insert(peer_id.clone(), inbound_rx);
-    }
-    sc
-}
-
-async fn manage_connection<T: NetworkConnection>(
-    connection: Connection<T>,
-    reconnector: Reconnector<T>,
-    num_sessions: usize,
-    mut cmd_ch: UnboundedReceiver<Cmd>,
-    ct: CancellationToken,
-    conn_state: ConnectionState,
-) {
-    let Connection {
-        peer,
-        stream,
-        stream_id,
-    } = connection;
-
-    // We enter the loop only after receiving the first NewSessions
-    let (mut inbound_forwarder, mut outbound_rx) = match cmd_ch.recv().await {
-        Some(Cmd::NewSessions {
-            inbound_forwarder,
-            outbound_rx,
-            rsp,
-        }) => {
-            let _ = rsp.send(());
-            (inbound_forwarder, outbound_rx)
-        }
-        #[cfg(test)]
-        Some(_) => {
-            tracing::error!("invalid command received. expected NewSessions");
-            return;
-        }
-        None => {
-            tracing::debug!("cmd channel closed before first session assignment");
-            return;
-        }
-    };
-
-    // need to wrap these in an Option to drop them before reconnecting.
-    let (reader, writer) = tokio::io::split(stream);
-    let mut reader = Some(BufReader::new(reader));
-    let mut writer = Some(writer);
-
-    // on disconnect, reconnect automatically. tear down and stand up the forwarders.
-    // when new sessions are requested, also tear down and stand up the forwarders.
-    loop {
-        let r_writer = writer.as_mut().expect("writer should be Some");
-        let outbound_task = handle_outbound_traffic(r_writer, &mut outbound_rx, num_sessions);
-
-        let r_reader = reader.as_mut().expect("reader should be Some");
-        let inbound_task = handle_inbound_traffic(r_reader, &inbound_forwarder);
-
-        enum Evt {
-            Cmd(Cmd),
-            Disconnected,
-            Shutdown,
-        }
-        let event = tokio::select! {
-            maybe_cmd = cmd_ch.recv() => {
-                match maybe_cmd {
-                    Some(cmd) => Evt::Cmd(cmd),
-                    None => {
-                        // basically means the networking stack was shut down before a command was received.
-                        if conn_state.exited() {
-                            tracing::info!("cmd channel closed");
-                        };
-                        ct.cancel();
-                        return;
+            for peer in &self.peers {
+                let r = session.receive(peer.id()).await?;
+                match r {
+                    NetworkValue::PrfKey(arr) => {
+                        assert_eq!(id_arr, arr);
                     }
+                    _ => bail!("invalid msg received in validate_sessions()"),
                 }
-            }
-            r = inbound_task => {
-                if ct.is_cancelled() {
-                    Evt::Shutdown
-                } else if let Err(e) = r {
-                    if conn_state.incr_reconnect().await {
-                        tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
-                    }
-                    Evt::Disconnected
-                } else {
-                    unreachable!();
-                }
-            },
-            r = outbound_task => {
-                if ct.is_cancelled() {
-                    Evt::Shutdown
-                } else if let Err(e) = r {
-                     if conn_state.incr_reconnect().await {
-                        tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
-                    }
-                    Evt::Disconnected
-                } else {
-                    unreachable!();
-                }
-            },
-            _ = ct.cancelled() => Evt::Shutdown,
-        };
-
-        // update the Arcs depending on the event. wait for reconnect if needed.
-        match event {
-            Evt::Cmd(cmd) => match cmd {
-                Cmd::NewSessions {
-                    inbound_forwarder: tx,
-                    outbound_rx: rx,
-                    rsp,
-                } => {
-                    metrics::counter!("network.new_sessions").increment(1);
-                    tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
-                    inbound_forwarder = tx;
-                    outbound_rx = rx;
-                    let _ = rsp.send(());
-                    continue;
-                }
-                #[cfg(test)]
-                Cmd::TestReconnect { rsp } => {
-                    if let Err(e) = reconnect_and_replace(
-                        &reconnector,
-                        &peer,
-                        stream_id,
-                        &mut reader,
-                        &mut writer,
-                    )
-                    .await
-                    {
-                        tracing::debug!("reconnect failed: {e:?}");
-                        return;
-                    };
-                    rsp.send(Ok(())).unwrap();
-                }
-            },
-            Evt::Disconnected => {
-                tracing::debug!("reconnecting to {:?}: {:?}", peer, stream_id);
-                if let Err(e) =
-                    reconnect_and_replace(&reconnector, &peer, stream_id, &mut reader, &mut writer)
-                        .await
-                {
-                    if conn_state.exited() {
-                        if ct.is_cancelled() {
-                            tracing::info!("shutting down TCP/TLS networking stack");
-                        } else {
-                            tracing::error!("reconnect failed: {e:?}");
-                        }
-                    }
-                    return;
-                } else if conn_state.decr_reconnect().await {
-                    tracing::info!("all connections re-established");
-                }
-            }
-            Evt::Shutdown => {
-                if conn_state.exited() {
-                    tracing::info!("shutting down TCP/TLS networking stack");
-                }
-                return;
             }
         }
+        Ok(())
     }
 }
 
-async fn reconnect_and_replace<T: NetworkConnection>(
-    reconnector: &Reconnector<T>,
-    peer: &Identity,
-    stream_id: StreamId,
-    reader: &mut Option<BufReader<ReadHalf<T>>>,
-    writer: &mut Option<WriteHalf<T>>,
-) -> Result<(), eyre::Report> {
-    metrics::counter!("network.reconnect").increment(1);
-    reader.take();
-    writer.take();
+#[cfg(test)]
+mod tests {
+    use super::super::testing::*;
 
-    let stream = reconnector.reconnect(peer.clone(), stream_id).await?;
-    let (r, w) = tokio::io::split(stream);
+    use eyre::Result;
 
-    reader.replace(BufReader::new(r));
-    writer.replace(w);
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::task::JoinSet;
 
-    Ok(())
-}
+    use tracing_test::traced_test;
 
-/// Outbound: send messages from rx to the socket.
-/// the sender needs to prepend the session id to the message.
-async fn handle_outbound_traffic<T: NetworkConnection>(
-    stream: &mut WriteHalf<T>,
-    outbound_rx: &mut UnboundedReceiver<OutboundMsg>,
-    num_sessions: usize,
-) -> io::Result<()> {
-    // Time spent buffering between the first and last messages of a packet.
-    let mut metrics_buffer_latency = FastHistogram::new("outbound_buffer_latency");
-    // Number of messages per packet.
-    let mut metrics_messages = FastHistogram::new("outbound_packet_messages");
-    // Number of bytes per packet.
-    let mut metrics_packet_bytes = FastHistogram::new("outbound_packet_bytes");
+    use crate::execution::local::generate_local_identities;
 
-    let mut buf = BytesMut::with_capacity(BUFFER_CAPACITY);
+    use crate::network::tcp::TcpStreamConn;
 
-    while let Some((session_id, msg)) = outbound_rx.recv().await {
-        // First message of the next packet.
-        let mut buffered_msgs = 1;
-        buf.extend_from_slice(&session_id.0.to_le_bytes());
-        msg.serialize(&mut buf);
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_tcp_network_handle() -> Result<()> {
+        const CONNECTIONS_PER_PEER: u32 = 2;
 
-        // Try to fill the buffer with more messages, up to num_sessions, BUFFER_CAPACITY or two attempts.
-        let loop_start_time = Instant::now();
-        let mut retried = false;
-        while buffered_msgs < num_sessions {
-            match outbound_rx.try_recv() {
-                Ok((session_id, msg)) => {
-                    buffered_msgs += 1;
-                    buf.extend_from_slice(&session_id.0.to_le_bytes());
-                    msg.serialize(&mut buf);
-                    if buf.len() >= BUFFER_CAPACITY {
-                        break;
-                    }
-                }
-                Err(TryRecvError::Empty) if !retried => {
-                    retried = true;
-                    tokio::task::yield_now().await;
-                }
-                _ => break,
+        let identities = generate_local_identities();
+        let handles = get_local_tcp_handles(identities, CONNECTIONS_PER_PEER as usize, 1).await?;
+
+        // for each peer, a vec of the connections to other peers
+        let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> = futures::future::join_all(
+            handles
+                .iter()
+                .map(|h| h.make_connections(CONNECTIONS_PER_PEER)),
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let mut jobs = JoinSet::new();
+        let peer_ids: [u8; 3] = [0, 1, 2];
+
+        tracing::debug!("connections created. sending data");
+
+        for (peer_idx, (p0, p1)) in connections.into_iter().enumerate() {
+            let my_peer_ids = peer_ids
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != peer_idx)
+                .map(|(_, id)| *id)
+                .collect::<Vec<_>>();
+
+            for (conn_idx, (mut c0, mut c1)) in p0.into_iter().zip(p1.into_iter()).enumerate() {
+                let p0_data = [my_peer_ids[0], conn_idx as u8];
+                let p1_data = [my_peer_ids[1], conn_idx as u8];
+
+                jobs.spawn(async move {
+                    c0.write_all(&p0_data).await.unwrap();
+                    c0.flush().await.unwrap();
+
+                    let mut recv_data = [0u8; 2];
+                    c0.read_exact(&mut recv_data).await.unwrap();
+                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
+                });
+
+                jobs.spawn(async move {
+                    c1.write_all(&p1_data).await.unwrap();
+                    c1.flush().await.unwrap();
+
+                    let mut recv_data = [0u8; 2];
+                    c1.read_exact(&mut recv_data).await.unwrap();
+                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
+                });
             }
         }
 
-        metrics_buffer_latency.record(loop_start_time.elapsed().as_secs_f64());
-        metrics_messages.record(buffered_msgs as f64);
-        metrics_packet_bytes.record(buf.len() as f64);
-
-        #[cfg(feature = "networking_metrics")]
-        {
-            if buf.len() >= BUFFER_CAPACITY {
-                metrics::counter!("network.flush_reason.buf_len").increment(1);
-            } else if buffered_msgs >= num_sessions {
-                metrics::counter!("network.flush_reason.msg_count").increment(1);
-            } else {
-                metrics::counter!("network.flush_reason.timeout").increment(1);
-            }
-        }
-
-        write_buf(stream, &mut buf).await?
-    }
-
-    if !buf.is_empty() {
-        write_buf(stream, &mut buf).await?
-    }
-    // the channel will not receive any more commands
-    tracing::debug!("outbound_rx closed");
-    Ok(())
-}
-
-/// Inbound: read from the socket and send to tx.
-async fn handle_inbound_traffic<T: NetworkConnection>(
-    reader: &mut BufReader<ReadHalf<T>>,
-    inbound_tx: &HashMap<SessionId, UnboundedSender<NetworkValue>>,
-) -> io::Result<()> {
-    let mut buf = vec![0u8; READ_BUF_SIZE];
-
-    loop {
-        let mut buf_offset = 0;
-
-        // first read the session id. this does not get passed to the next layer.
-        let mut session_id_buf = [0u8; 4];
-        reader.read_exact(&mut session_id_buf).await?;
-        let _rx_start = Instant::now();
-        let session_id = u32::from_le_bytes(session_id_buf);
-
-        // then read the descriptor byte
-        reader.read_exact(&mut buf[..1]).await?;
-        buf_offset += 1;
-
-        // depending on the descriptor, read the length field too
-        let nd: DescriptorByte = buf[0]
-            .try_into()
-            .map_err(|_e| io::Error::new(io::ErrorKind::Other, "invalid descriptor byte"))?;
-        // base_len includes the descriptor byte
-        let base_len = nd.base_len();
-        let total_len: usize = if matches!(
-            nd,
-            DescriptorByte::VecRing16
-                | DescriptorByte::VecRing32
-                | DescriptorByte::VecRing64
-                | DescriptorByte::NetworkVec
-        ) {
-            reader.read_exact(&mut buf[1..5]).await?;
-            buf_offset += 4;
-            let payload_len = u32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize;
-            base_len + payload_len
-        } else {
-            base_len
-        };
-
-        // then read the rest of the message
-        if buf.len() < total_len {
-            buf.resize(total_len, 0);
-        }
-        reader.read_exact(&mut buf[buf_offset..total_len]).await?;
-
-        #[cfg(feature = "networking_metrics")]
-        {
-            let elapsed = _rx_start.elapsed().as_micros();
-            metrics::histogram!("network.inbound.rx_time_us").record(elapsed as f64);
-        }
-        // forward the message to the correct session.
-        if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
-            match NetworkValue::deserialize(&buf[..total_len]) {
-                Ok(nv) => {
-                    if ch.send(nv).is_err() {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "failed to forward message",
-                        ));
-                    }
-                }
-                Err(e) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("failed to deserialize message: {e}"),
-                    ));
-                }
-            };
-        } else {
-            tracing::debug!(
-                "failed to forward message for {:?} - channel not found",
-                session_id
-            );
-        }
-    }
-}
-
-/// Helper to write & flush, then clear the buffer
-async fn write_buf<T: NetworkConnection>(
-    stream: &mut WriteHalf<T>,
-    buf: &mut BytesMut,
-) -> io::Result<()> {
-    stream.write_all(buf).await?;
-    stream.flush().await?;
-    buf.clear();
-    Ok(())
-}
-
-// state which is shared by all connections. used to reduce the number of logs
-// emitted upon loss of network connectivity.
-#[derive(Clone)]
-struct ConnectionState {
-    inner: Arc<ConnectionStateInner>,
-}
-
-impl ConnectionState {
-    fn new() -> Self {
-        Self {
-            inner: Arc::new(ConnectionStateInner::new()),
-        }
-    }
-
-    fn exited(&self) -> bool {
-        self.inner
-            .exited
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    }
-
-    async fn incr_reconnect(&self) -> bool {
-        self.inner.reconnecting.increment().await
-    }
-
-    async fn decr_reconnect(&self) -> bool {
-        self.inner.reconnecting.decrement().await
-    }
-}
-
-struct ConnectionStateInner {
-    reconnecting: Counter,
-    exited: AtomicBool,
-}
-
-impl ConnectionStateInner {
-    fn new() -> Self {
-        Self {
-            reconnecting: Counter::new(),
-            exited: AtomicBool::new(false),
-        }
-    }
-}
-
-struct Counter {
-    num: Mutex<usize>,
-}
-
-impl Counter {
-    fn new() -> Self {
-        Self { num: Mutex::new(0) }
-    }
-
-    // returns true if num was zero
-    async fn increment(&self) -> bool {
-        let mut l = self.num.lock().await;
-        *l += 1;
-        *l == 1
-    }
-
-    // returns true if num was one before decrementing
-    async fn decrement(&self) -> bool {
-        let mut l = self.num.lock().await;
-        let r = *l == 1;
-        *l = l.saturating_sub(1);
-        r
+        jobs.join_all().await;
+        Ok(())
     }
 }

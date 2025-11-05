@@ -14,11 +14,7 @@ use tokio::{sync::Mutex, task::JoinSet};
 mod bench_utils;
 use bench_utils::create_random_sharing;
 
-criterion_group!(
-    networking,
-    bench_is_match_batch_tcp,
-    bench_is_match_batch_grpc,
-);
+criterion_group!(networking, bench_is_match_batch_tcp,);
 criterion_main!(networking);
 
 async fn run_jobs(
@@ -97,66 +93,6 @@ fn bench_is_match_batch_tcp(c: &mut Criterion) {
                         let sessions = &sessions;
                         rt.block_on(async move {
                             for _ in 0..nj / rp {
-                                run_jobs(
-                                    1,
-                                    sessions,
-                                    d1.clone(),
-                                    d2.clone(),
-                                    t1.clone(),
-                                    t2.clone(),
-                                )
-                                .await;
-                            }
-                        });
-                    })
-                },
-            );
-        }
-    }
-}
-
-fn bench_is_match_batch_grpc(c: &mut Criterion) {
-    let mut group = c.benchmark_group("is_match_batch");
-    group.sample_size(10);
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    #[allow(clippy::single_element_loop)]
-    for nj in [1024] {
-        #[allow(clippy::single_element_loop)]
-        for (cp, sp, rp) in [(1, 32, 32)] {
-            let mut rng = AesRng::seed_from_u64(0_u64);
-            let d1 = create_random_sharing(&mut rng, 10_u16);
-            let d2 = create_random_sharing(&mut rng, 10_u16);
-            let t1 = create_random_sharing(&mut rng, 10_u16);
-            let t2 = create_random_sharing(&mut rng, 10_u16);
-
-            // if num_jobs is 8 and request parallelism is 16, don't do extra work.
-            let actual_rp = if nj < rp { nj } else { rp };
-
-            let sessions = rt
-                .block_on(
-                    async move { LocalRuntime::mock_sessions_with_grpc(cp, sp, actual_rp).await },
-                )
-                .unwrap();
-
-            let num_parties = 3;
-            assert_eq!(sessions.len(), actual_rp * num_parties);
-
-            group.bench_function(
-                BenchmarkId::new(
-                    "local",
-                    format!("cp: {}, sp: {}, rp: {}, nj: {}", cp, sp, rp, nj),
-                ),
-                |b| {
-                    b.iter(|| {
-                        let (d1, d2, t1, t2) = (d1.clone(), d2.clone(), t1.clone(), t2.clone());
-                        let sessions = &sessions;
-                        rt.block_on(async move {
-                            for _ in 0..nj / actual_rp {
                                 run_jobs(
                                     1,
                                     sessions,
