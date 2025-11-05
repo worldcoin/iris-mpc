@@ -6,8 +6,8 @@ use std::collections::HashMap;
 /// This type is a serialization-focused adapter, provided for long-term
 /// compatibility and portability of serialized data.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GraphV2 {
-    pub entry_point: Option<EntryPoint>,
+pub struct GraphV3 {
+    pub entry_point: Vec<EntryPoint>,
     pub layers: Vec<Layer>,
 }
 
@@ -22,7 +22,6 @@ pub struct EntryPoint {
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Layer {
     pub links: HashMap<VectorId, EdgeIds>,
-    pub set_hash: u64,
 }
 
 /// Type associated with the `GraphV1` serialization type.
@@ -38,12 +37,12 @@ pub struct VectorId {
 
 /* ------------------------------- I/O ------------------------------ */
 
-pub fn read_graph_v2<R: std::io::Read>(reader: &mut R) -> eyre::Result<GraphV2> {
+pub fn read_graph_v3<R: std::io::Read>(reader: &mut R) -> eyre::Result<GraphV3> {
     let data = bincode::deserialize_from(reader)?;
     Ok(data)
 }
 
-pub fn write_graph_v2<W: std::io::Write>(writer: &mut W, data: &GraphV2) -> eyre::Result<()> {
+pub fn write_graph_v3<W: std::io::Write>(writer: &mut W, data: &GraphV3) -> eyre::Result<()> {
     bincode::serialize_into(writer, data)?;
     Ok(())
 }

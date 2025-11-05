@@ -23,27 +23,26 @@ fn main() -> Result<()> {
         env!("CARGO_MANIFEST_DIR"),
         "/db1M_M96_efConstruction256_graph.bin"
     );
-    dbg!(&path_v0);
 
-    // println!("Attempting to read V0 graph from: {}", path_v0);
-    // match read_graph_from_file(path_v0, GraphFormat::V0) {
-    //     Ok(graph) => {
-    //         println!("[SUCCESS] V0 graph deserialized.");
-    //         println!("    Layers: {}", graph.layers.len());
-    //         for (i, layer) in graph.layers.iter().enumerate() {
-    //             println!("    Layer {}: {} nodes", i, layer.links.len());
-    //         }
-    //         // Safely check the first layer
-    //         if let Some(first_layer) = graph.layers.first() {
-    //             println!("    Layer 0 Nodes: {}", first_layer.links.len());
-    //         }
-    //         println!("    Entry Points: {}", graph.entry_point.len());
-    //     }
-    //     Err(e) => {
-    //         eprintln!("[FAILURE] Failed to deserialize V0 graph.");
-    //         eprintln!("    Error: {:?}", e);
-    //     }
-    // }
+    println!("Attempting to read V0 graph from: {}", path_v0);
+    match read_graph_from_file(path_v0, GraphFormat::V0) {
+        Ok(graph) => {
+            println!("[SUCCESS] V0 graph deserialized.");
+            println!("    Layers: {}", graph.layers.len());
+            for (i, layer) in graph.layers.iter().enumerate() {
+                println!("    Layer {}: {} nodes", i, layer.links.len());
+            }
+            // Safely check the first layer
+            if let Some(first_layer) = graph.layers.first() {
+                println!("    Layer 0 Nodes: {}", first_layer.links.len());
+            }
+            println!("    Entry Points: {}", graph.entry_point.len());
+        }
+        Err(e) => {
+            eprintln!("[FAILURE] Failed to deserialize V0 graph.");
+            eprintln!("    Error: {:?}", e);
+        }
+    }
 
     println!("\nRunning test for V1 format...");
 
@@ -54,12 +53,6 @@ fn main() -> Result<()> {
     let path_v1 = concat!(env!("CARGO_MANIFEST_DIR"), "/graph_65536.dat");
 
     println!("Attempting to read V1 graph from: {}", path_v1);
-
-    let file = File::open(path_v1)?;
-    let mut reader = BufReader::new(file);
-    let v1 = read_graph_v1(&mut reader)?;
-
-    //dbg!(&v1);
 
     match read_graph_from_file(path_v1, GraphFormat::V1) {
         Ok(graph) => {
