@@ -616,10 +616,6 @@ where
         );
     };
 
-    if len < 32 {
-        bail!("Input length should be at least 32: {len}");
-    }
-
     // Let x1, x2, x3 are integers modulo 2^k.
     //
     // Full adder where x3 plays the role of an input carry yields
