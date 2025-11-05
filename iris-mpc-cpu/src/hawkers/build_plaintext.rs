@@ -91,7 +91,7 @@ pub async fn plaintext_parallel_batch_insert(
 mod tests {
     use super::*;
     use crate::{
-        hawkers::plaintext_store::PlaintextStore,
+        hawkers::{aby3::aby3_store::DistanceFn, plaintext_store::PlaintextStore},
         hnsw::{HnswParams, HnswSearcher},
     };
     use aes_prng::AesRng;
@@ -113,6 +113,7 @@ mod tests {
         let prf_seed = [0u8; 16];
 
         let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size);
+        ptxt_vector.distance_fn = DistanceFn::Simple;
         let ptxt_graph = ptxt_vector
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
