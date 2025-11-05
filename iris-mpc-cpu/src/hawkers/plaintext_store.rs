@@ -174,31 +174,6 @@ impl VectorStore for PlaintextStore {
         Ok(distance)
     }
 
-    async fn eval_distance_batch(
-        &mut self,
-        query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
-    ) -> Result<Vec<Self::DistanceRef>> {
-        use rayon::prelude::*;
-        debug!(event_type = EvaluateDistance.id());
-
-        let storage = &self.storage;
-        let distance_fn = &self.distance_fn;
-
-        let results = vectors.par_iter().map(|vector| {
-            let vector_code = storage.get_vector(vector).ok_or_else(|| {
-                eyre::eyre!(
-                    "Vector ID not found in store for serial {}",
-                    vector.serial_id()
-                )
-            })?;
-            let distance = distance_fn.plaintext_distance(vector_code, query);
-            Ok(distance)
-        });
-
-        results.collect::<Result<Vec<_>>>()
-    }
-
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         Ok(fraction_is_match(distance))
     }
@@ -301,24 +276,21 @@ impl VectorStore for SharedPlaintextStore {
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
-        use rayon::prelude::*;
         debug!(event_type = EvaluateDistance.id());
-
-        let storage = self.storage.read().await;
-        let distance_fn = &self.distance_fn;
-
-        let results = vectors.par_iter().map(|vector| {
-            let vector_code = storage.get_vector(vector).ok_or_else(|| {
-                eyre::eyre!(
-                    "Vector ID not found in store for serial {}",
-                    vector.serial_id()
-                )
-            })?;
-            let distance = distance_fn.plaintext_distance(vector_code, query);
-            Ok(distance)
-        });
-
-        results.collect::<Result<Vec<_>>>()
+        let store = self.storage.read().await;
+        let vector_codes = vectors
+            .iter()
+            .map(|v| {
+                let serial_id = v.serial_id();
+                store.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(vector_codes
+            .into_iter()
+            .map(|v| self.distance_fn.plaintext_distance(v, query))
+            .collect())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
