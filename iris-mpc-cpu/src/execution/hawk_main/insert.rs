@@ -121,9 +121,9 @@ fn join_plans<V: VectorStore>(
     if !ep_layers.is_empty() {
         let max_insertion_layer = ep_layers.into_iter().max().unwrap_or_default();
 
-        // All plans below max_insertion_layer will have SetEntryPoint::False
-        // on the max layer, there will be at most one SetEntryPoint::NewLayer
-        // subsequent SetEntryPoint::NewLayer plans will be changed to SetEntryPoint::AddToLayer
+        // for TopLevelSearchMode::Default, SetEntryPoint::NewLayer is used.
+        // for TopLevelSearchMode::LinearScan, SetEntryPoint::AddToLayer is used.
+        // if multiple plans have SetEntryPoint::NewLayer, an arbitrary one is chosen as the entry point.
         let mut set_ep_new_layer = false;
         for plan in plans.iter_mut() {
             let Some(plan) = plan else { continue };
@@ -142,7 +142,7 @@ fn join_plans<V: VectorStore>(
                 if !set_ep_new_layer {
                     set_ep_new_layer = true;
                 } else {
-                    plan.set_ep = SetEntryPoint::AddToLayer;
+                    plan.set_ep = SetEntryPoint::False;
                 }
             }
         }
