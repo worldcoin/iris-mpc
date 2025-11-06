@@ -109,3 +109,6 @@ jobs:
           NCCL_NET: Socket
           NCCL_P2P_DIRECT_DISABLE: 1
           NCCL_SHM_DISABLE: 1
+          INTERNAL_SEED: 42
+          DB_SEED: 42
+          CUDA_LAUNCH_BLOCKING: 1
