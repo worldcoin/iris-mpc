@@ -13,7 +13,7 @@ use crate::{
 };
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{cmp, collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -31,7 +31,7 @@ pub struct EntryPoint<VectorRef> {
 /// An in-memory implementation of an HNSW hierarchical graph.
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
-pub struct GraphMem<V: Ref + Display + FromStr> {
+pub struct GraphMem<V: Ref + Display + FromStr + cmp::Ord> {
     /// Starting vector and layer for HNSW search
     pub entry_point: Vec<EntryPoint<V>>,
 
@@ -41,7 +41,7 @@ pub struct GraphMem<V: Ref + Display + FromStr> {
     pub layers: Vec<Layer<V>>,
 }
 
-impl<V: Ref + Display + FromStr> Clone for GraphMem<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> Clone for GraphMem<V> {
     fn clone(&self) -> Self {
         GraphMem {
             entry_point: self.entry_point.clone(),
@@ -50,7 +50,7 @@ impl<V: Ref + Display + FromStr> Clone for GraphMem<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr> GraphMem<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
     pub fn new() -> Self {
         GraphMem {
             entry_point: vec![],
@@ -201,14 +201,14 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
 
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
-pub struct Layer<V: Ref + Display + FromStr> {
+pub struct Layer<V: Ref + Display + FromStr + cmp::Ord> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
     pub links: HashMap<V, SortedEdgeIds<V>>,
     set_hash: SetHash,
 }
 
-impl<V: Ref + Display + FromStr> Clone for Layer<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> Clone for Layer<V> {
     fn clone(&self) -> Self {
         Layer {
             links: self.links.clone(),
@@ -217,7 +217,7 @@ impl<V: Ref + Display + FromStr> Clone for Layer<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr> Layer<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> Layer<V> {
     pub fn new() -> Self {
         Layer {
             links: HashMap::new(),
@@ -254,8 +254,8 @@ impl<V: Ref + Display + FromStr> Layer<V> {
 /// - vector ids are re-mapped to remove blank entries left by deletions
 pub fn migrate<U, V, VecMap>(graph: GraphMem<U>, vector_map: VecMap) -> GraphMem<V>
 where
-    U: Ref + Display + FromStr,
-    V: Ref + Display + FromStr,
+    U: Ref + Display + FromStr + cmp::Ord,
+    V: Ref + Display + FromStr + cmp::Ord,
     VecMap: Fn(U) -> V + Copy,
 {
     let new_entry_point = graph
