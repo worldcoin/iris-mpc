@@ -255,20 +255,6 @@ impl TopLayerSearchMode {
             Self::LinearScan(r) => Some(*r),
         }
     }
-
-    // the entry point layer isn't in the graph. ensure that layer goes from 0..=(ep_layer -1)
-    pub fn cap_layer(&self, layer: usize) -> usize {
-        match self {
-            Self::Default => layer,
-            Self::LinearScan(r) => {
-                if layer >= *r {
-                    r.saturating_sub(1)
-                } else {
-                    layer
-                }
-            }
-        }
-    }
 }
 
 #[allow(non_snake_case)]
@@ -351,8 +337,50 @@ impl HnswSearcher {
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
+        insertion_layer: usize,
+    ) -> Result<(SortedNeighborhoodV<V>, usize, SetEntryPoint)> {
+        match self.params.top_layer_mode {
+            TopLayerSearchMode::LinearScan(max_layer) => {
+                assert!(insertion_layer <= max_layer);
+                let n_layers = graph.get_num_layers();
+                let set_ep = if insertion_layer == max_layer {
+                    SetEntryPoint::AddToLayer
+                } else {
+                    SetEntryPoint::False
+                };
+                if let Some(ep_layer) = graph.get_ep_layer() {
+                    // fall back to simple_init on failure. linear_search will filter out
+                    // deleted vectors and this could fail.
+                    if let Ok(nearest_point) = Self::linear_search(store, query, ep_layer).await {
+                        let mut W = SortedNeighborhood::new();
+                        W.edges.push(nearest_point);
+                        return Ok((W, n_layers, set_ep));
+                    }
+                }
+                let ep = graph.get_temp_ep();
+                let (W, n_layers) = self.simple_init(store, ep, query).await?;
+                Ok((W, n_layers, set_ep))
+            }
+            TopLayerSearchMode::Default => {
+                let ep = graph.get_entry_point().await;
+                let (W, n_layers) = self.simple_init(store, ep, query).await?;
+                let set_ep = if insertion_layer + 1 > n_layers {
+                    SetEntryPoint::NewLayer
+                } else {
+                    SetEntryPoint::False
+                };
+                Ok((W, n_layers, set_ep))
+            }
+        }
+    }
+
+    async fn simple_init<V: VectorStore>(
+        &self,
+        store: &mut V,
+        ep: Option<(V::VectorRef, usize)>,
+        query: &V::QueryRef,
     ) -> Result<(SortedNeighborhoodV<V>, usize)> {
-        if let Some((entry_point, layer)) = graph.get_entry_point().await {
+        if let Some((entry_point, layer)) = ep {
             let distance = store.eval_distance(query, &entry_point).await?;
 
             let mut W = SortedNeighborhood::new();
@@ -1207,32 +1235,8 @@ impl HnswSearcher {
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
-        let (mut W, n_layers) = match self.params.top_layer_mode {
-            TopLayerSearchMode::LinearScan(max_layer) => {
-                let n_layers = graph.get_num_layers();
-                assert!(n_layers < max_layer + 1);
-
-                match graph.get_ep_layer() {
-                    Some(ep_layer) => {
-                        let nearest_point = Self::linear_search(store, query, ep_layer).await?;
-                        let mut W = SortedNeighborhood::new();
-                        W.edges.push(nearest_point);
-                        (W, n_layers)
-                    }
-                    None => match graph.get_top_layer() {
-                        Some(top_layer) => {
-                            let nearest_point =
-                                Self::linear_search(store, query, top_layer).await?;
-                            let mut W = SortedNeighborhood::new();
-                            W.edges.push(nearest_point);
-                            (W, n_layers)
-                        }
-                        None => (SortedNeighborhood::new(), 0),
-                    },
-                }
-            }
-            TopLayerSearchMode::Default => self.search_init(store, graph, query).await?,
-        };
+        // insertion layer doesn't matter here because set_ep is ignored
+        let (mut W, n_layers, _) = self.search_init(store, graph, query, 0).await?;
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
@@ -1292,47 +1296,9 @@ impl HnswSearcher {
         insertion_layer: usize,
     ) -> Result<(Vec<SortedNeighborhoodV<V>>, SetEntryPoint)> {
         let mut links = vec![];
-
-        let (mut W, n_layers, set_ep) = match self.params.top_layer_mode {
-            TopLayerSearchMode::LinearScan(max_layer) => {
-                assert!(insertion_layer <= max_layer);
-                let n_layers = graph.get_num_layers();
-                let set_ep = if insertion_layer == max_layer {
-                    SetEntryPoint::AddToLayer
-                } else {
-                    SetEntryPoint::False
-                };
-                match graph.get_ep_layer() {
-                    Some(ep_layer) => {
-                        let nearest_point = Self::linear_search(store, query, ep_layer).await?;
-                        let mut W = SortedNeighborhood::new();
-                        W.edges.push(nearest_point);
-                        (W, n_layers, set_ep)
-                    }
-                    None => match graph.get_top_layer() {
-                        Some(top_layer) => {
-                            let nearest_point =
-                                Self::linear_search(store, query, top_layer).await?;
-                            let mut W = SortedNeighborhood::new();
-                            W.edges.push(nearest_point);
-                            (W, n_layers, set_ep)
-                        }
-                        None => (SortedNeighborhood::new(), 0, set_ep),
-                    },
-                }
-            }
-            TopLayerSearchMode::Default => {
-                let (W, n_layers) = self.search_init(store, graph, query).await?;
-                let set_ep = if insertion_layer + 1 > n_layers {
-                    SetEntryPoint::NewLayer
-                } else {
-                    SetEntryPoint::False
-                };
-                (W, n_layers, set_ep)
-            }
-        };
-
-        let insertion_layer = self.params.top_layer_mode.cap_layer(insertion_layer);
+        let (mut W, n_layers, set_ep) = self
+            .search_init(store, graph, query, insertion_layer)
+            .await?;
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {

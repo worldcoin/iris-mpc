@@ -84,12 +84,12 @@ impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
         self.layers.len()
     }
 
-    pub fn get_top_layer(&self) -> Option<Vec<V>> {
+    pub fn get_temp_ep(&self) -> Option<(V, usize)> {
         self.layers
             .iter()
+            .enumerate()
             .last()
-            .cloned()
-            .map(|x| x.links.keys().cloned().collect())
+            .and_then(|(idx, x)| x.links.keys().min().map(|x| (x.clone(), idx)))
     }
 
     pub fn get_ep_layer(&self) -> Option<Vec<V>> {
