@@ -3,6 +3,7 @@ use base64::{prelude::BASE64_STANDARD, Engine};
 use bytemuck::cast_slice;
 use eyre::bail;
 use eyre::Result;
+use itertools::izip;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -296,13 +297,17 @@ impl IrisCode {
             .collect()
     }
 
-    /// Return the fractional Hamming distance between two iris codes,
-    /// represented as `u16` numerator and denominator.
-    /// the rotation is applied to left
+    /// Return the rotated fractional Hamming distance between two iris codes
+    /// represented with bit encodings for which `u64` limbs restrict to
+    /// geometric columns, as produced by [IrisCode::transform_iris_code_array].
     ///
-    /// iterate over left as though it has been rotated according to the iris rotation.
-    /// this involves chunking by CODE_COLS and then rotating the chunk by (rotation)
-    /// the rotation is accomplished by operating over two slices
+    /// The returned distance is represented by a `u16` tuple of the fraction
+    /// numerator and denominator.
+    ///
+    /// Iterates over left array as though it has been rotated according to the
+    /// iris rotation. This involves splitting the array at the index for which
+    /// cyclic rotation wraps, and doing hamming distance computations over two
+    /// separate slices.
     fn get_distance_fraction_with_rotation(
         left_code: &[u64; Self::CODE_COLS],
         left_mask: &[u64; Self::CODE_COLS],
@@ -334,22 +339,14 @@ impl IrisCode {
         let (right_code1, right_code2) = right_code.split_at(chunk_size - skip);
         let (right_mask1, right_mask2) = right_mask.split_at(chunk_size - skip);
 
-        for ((lc, lm), (rc, rm)) in left_code1
-            .iter()
-            .zip(left_mask1.iter())
-            .zip(right_code2.iter().zip(right_mask2.iter()))
-        {
+        for (lc, lm, rc, rm) in izip!(left_code1, left_mask1, right_code2, right_mask2) {
             let combined_mask = lm & rm;
             combined_mask_len += combined_mask.count_ones() as u16;
             let combined_code = (lc ^ rc) & combined_mask;
             code_distance += combined_code.count_ones() as u16;
         }
 
-        for ((lc, lm), (rc, rm)) in left_code2
-            .iter()
-            .zip(left_mask2.iter())
-            .zip(right_code1.iter().zip(right_mask1.iter()))
-        {
+        for (lc, lm, rc, rm) in izip!(left_code2, left_mask2, right_code1, right_mask1) {
             let combined_mask = lm & rm;
             combined_mask_len += combined_mask.count_ones() as u16;
             let combined_code = (lc ^ rc) & combined_mask;
@@ -359,6 +356,41 @@ impl IrisCode {
         (code_distance, combined_mask_len)
     }
 
+    /// Transform an iris code array to a bit embedding for which iris rotations
+    /// respect `u64` limbs, i.e each limb represents the bits in one geometric
+    /// column of the iris code.
+    ///
+    /// The current "standard" embedding encodes bits in a way that matches the
+    /// representation as MPC shares, which is optimized for transformations
+    /// needed over the Galois ring secret sharing scheme.  Bits in this scheme
+    /// appear in blocks of `800 = 4 * IrisCode::CODE_COLS`, which represent
+    /// blocks of 4 spaced out geometric rows for each geometric column:
+    ///
+    /// ```text
+    /// (r, c) = (0, 0), (4, 0), (8, 0), (12, 0), (0, 1), (4, 1), (8, 1), (12, 1), ...
+    ///       (0, 199), (4, 199), (8, 199), (12, 199), (1, 0), (5, 0), (9, 0), (13, 0), ...
+    /// ```
+    ///
+    /// See [GaloisRingIrisCodeShare] for the explicit mapping of coordinates.
+    ///
+    /// To convert this to a representation where each `u64` limb holds only
+    /// bits in a single geometric column which can then be rotated directly to
+    /// represent iris code rotations, the 4-bit blocks of the first 800 bits of
+    /// the array are mapped into the first 4 bits each of 200 new `u64` limbs,
+    /// the 4-bit blocks of the next 800 bits of the array are mapped each to
+    /// the second 4 bits of the new limbs, and so on through the full array.
+    ///
+    /// The resulting embedding into `u64` limbs encodes all bits from a single
+    /// geometric column for both wavelengths and both the real and imaginary
+    /// parts in the following geometric row order:
+    ///
+    /// ```text
+    /// r = 0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15
+    /// ```
+    ///
+    /// This ordering is repeated for the real bits for each of the two wavelet
+    /// frequencies in succession, and then the same again for the imaginary
+    /// bits.
     fn transform_iris_code_array(input: &IrisCodeArray) -> [u64; Self::CODE_COLS] {
         // r is zeroed
         let mut r = [0; Self::CODE_COLS];

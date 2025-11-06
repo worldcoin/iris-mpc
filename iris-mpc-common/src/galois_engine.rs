@@ -620,7 +620,9 @@ pub mod degree4 {
 
     impl IrisRotationIter {
         pub fn new() -> Self {
-            Self { idx: -15 }
+            Self {
+                idx: -1 * (IrisCode::ROTATIONS_PER_DIRECTION as isize),
+            }
         }
     }
 
@@ -628,8 +630,10 @@ pub mod degree4 {
         type Item = IrisRotation;
 
         fn next(&mut self) -> Option<Self::Item> {
+            const LEFT: isize = 0 - IrisCode::ROTATIONS_PER_DIRECTION as isize;
+            const RIGHT: isize = IrisCode::ROTATIONS_PER_DIRECTION as isize;
             match self.idx {
-                -15..=-1 => {
+                LEFT..=-1 => {
                     let rot = IrisRotation::Left(-self.idx as usize);
                     self.idx += 1;
                     Some(rot)
@@ -638,7 +642,7 @@ pub mod degree4 {
                     self.idx += 1;
                     Some(IrisRotation::Center)
                 }
-                1..=15 => {
+                1..=RIGHT => {
                     let rot = IrisRotation::Right((self.idx) as usize);
                     self.idx += 1;
                     Some(rot)
