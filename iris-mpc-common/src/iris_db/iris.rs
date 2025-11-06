@@ -1,5 +1,6 @@
-use crate::galois_engine::degree4::GaloisRingIrisCodeShare;
+use crate::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
 use base64::{prelude::BASE64_STANDARD, Engine};
+use bytemuck::cast_slice;
 use eyre::bail;
 use eyre::Result;
 use rand::{
@@ -295,6 +296,127 @@ impl IrisCode {
             .collect()
     }
 
+    /// Return the fractional Hamming distance between two iris codes,
+    /// represented as `u16` numerator and denominator.
+    /// the rotation is applied to left
+    ///
+    /// iterate over left as though it has been rotated according to the iris rotation.
+    /// this involves chunking by CODE_COLS and then rotating the chunk by (rotation)
+    /// the rotation is accomplished by operating over two slices
+    fn get_distance_fraction_with_rotation(
+        left_code: &[u64; Self::CODE_COLS],
+        left_mask: &[u64; Self::CODE_COLS],
+        right_code: &[u64; Self::CODE_COLS],
+        right_mask: &[u64; Self::CODE_COLS],
+        rotation: &IrisRotation,
+    ) -> (u16, u16) {
+        // what this code mimics:
+        // let combined_mask = self.mask & other.mask;
+        // let combined_mask_len = combined_mask.count_ones();
+        //
+        //  let combined_code = (self.code ^ other.code) & combined_mask;
+        // let code_distance = combined_code.count_ones();
+
+        let chunk_size = Self::CODE_COLS;
+        let skip = match rotation {
+            IrisRotation::Center => 0,
+            IrisRotation::Left(rot) => *rot,
+            IrisRotation::Right(rot) => chunk_size - *rot,
+        };
+
+        let mut code_distance = 0u16;
+        let mut combined_mask_len = 0u16;
+
+        // Split the rotation into two contiguous loops,
+        // allowing the compiler to vectorize
+        let (left_code1, left_code2) = left_code.split_at(skip);
+        let (left_mask1, left_mask2) = left_mask.split_at(skip);
+        let (right_code1, right_code2) = right_code.split_at(chunk_size - skip);
+        let (right_mask1, right_mask2) = right_mask.split_at(chunk_size - skip);
+
+        for ((lc, lm), (rc, rm)) in left_code1
+            .iter()
+            .zip(left_mask1.iter())
+            .zip(right_code2.iter().zip(right_mask2.iter()))
+        {
+            let combined_mask = lm & rm;
+            combined_mask_len += combined_mask.count_ones() as u16;
+            let combined_code = (lc ^ rc) & combined_mask;
+            code_distance += combined_code.count_ones() as u16;
+        }
+
+        for ((lc, lm), (rc, rm)) in left_code2
+            .iter()
+            .zip(left_mask2.iter())
+            .zip(right_code1.iter().zip(right_mask1.iter()))
+        {
+            let combined_mask = lm & rm;
+            combined_mask_len += combined_mask.count_ones() as u16;
+            let combined_code = (lc ^ rc) & combined_mask;
+            code_distance += combined_code.count_ones() as u16;
+        }
+
+        (code_distance, combined_mask_len)
+    }
+
+    fn transform_iris_code_array(input: &IrisCodeArray) -> [u64; Self::CODE_COLS] {
+        // r is zeroed
+        let mut r = [0; Self::CODE_COLS];
+
+        // first 200 4 bit blocks -> 800 bits -> 25 u32
+        let input_u32 = cast_slice::<u64, u32>(&input.0);
+        for (chunk_idx, chunk) in input_u32.chunks_exact(25).enumerate() {
+            // do the first 4 bits first, next the second 4 bits, etc.
+            let rshift = chunk_idx << 2; // multiply chunk_idx by 4
+            let mut output_idx = 0;
+            for &half_word in chunk.iter() {
+                let half_word = half_word as u64;
+                r[output_idx] |= (half_word & 0xF) << rshift;
+                r[output_idx + 1] |= ((half_word >> 4) & 0xF) << rshift;
+                r[output_idx + 2] |= ((half_word >> 8) & 0xF) << rshift;
+                r[output_idx + 3] |= ((half_word >> 12) & 0xF) << rshift;
+                r[output_idx + 4] |= ((half_word >> 16) & 0xF) << rshift;
+                r[output_idx + 5] |= ((half_word >> 20) & 0xF) << rshift;
+                r[output_idx + 6] |= ((half_word >> 24) & 0xF) << rshift;
+                r[output_idx + 7] |= ((half_word >> 28) & 0xF) << rshift;
+
+                output_idx += 8;
+            }
+        }
+
+        r
+    }
+
+    /// Return the minimum distance of an iris code against all rotations of another iris code
+    /// using the IrisRotation enum. This avoids generating all rotation copies.
+    /// snote that the rotations are applied to Other.
+    pub fn get_min_distance_fraction_rotation_aware(&self, other: &Self) -> (u16, u16) {
+        let mut min_distance = (u16::MAX, u16::MAX);
+
+        let self_code = Self::transform_iris_code_array(&self.code);
+        let self_mask = Self::transform_iris_code_array(&self.mask);
+        let other_code = Self::transform_iris_code_array(&other.code);
+        let other_mask = Self::transform_iris_code_array(&other.mask);
+
+        // go through all rotations of other
+        for rotation in IrisRotation::all() {
+            let distance = Self::get_distance_fraction_with_rotation(
+                &other_code,
+                &other_mask,
+                &self_code,
+                &self_mask,
+                &rotation,
+            );
+            if distance.0 as u32 * (min_distance.1 as u32)
+                < distance.1 as u32 * min_distance.0 as u32
+            {
+                min_distance = distance;
+            }
+        }
+
+        min_distance
+    }
+
     /// Return the fractional Hamming distance between two iris codes, represented
     /// as `u16` numerator and denominator.
     pub fn get_distance_fraction(&self, other: &Self) -> (u16, u16) {
@@ -585,5 +707,61 @@ mod tests {
 
         assert_float_eq!(t1_iris.get_distance(&t2_iris), dist_0, abs <= 1e-6);
         assert_float_eq!(t1_iris.get_min_distance(&t2_iris), dist_15, abs <= 1e-6);
+    }
+
+    #[test]
+    fn test_get_distance_fraction_with_rotation() {
+        use crate::galois_engine::degree4::IrisRotation;
+        let mut rng = rand::thread_rng();
+
+        // Test that get_distance_fraction_with_rotation
+        // produces the same result as get_distance_fraction
+        for _ in 0..10 {
+            let iris1 = IrisCode::random_rng(&mut rng);
+            let iris2 = IrisCode::random_rng(&mut rng);
+
+            let iris1_code = IrisCode::transform_iris_code_array(&iris1.code);
+            let iris1_mask = IrisCode::transform_iris_code_array(&iris1.mask);
+            let iris2_code = IrisCode::transform_iris_code_array(&iris2.code);
+            let iris2_mask = IrisCode::transform_iris_code_array(&iris2.mask);
+
+            let standard_result = iris1.get_distance_fraction(&iris2);
+            let rotation_result = IrisCode::get_distance_fraction_with_rotation(
+                &iris2_code,
+                &iris2_mask,
+                &iris1_code,
+                &iris1_mask,
+                &IrisRotation::Center,
+            );
+            assert_eq!(standard_result, rotation_result);
+
+            for left_rot in 1..=15 {
+                let rotation_result = IrisCode::get_distance_fraction_with_rotation(
+                    &iris2_code,
+                    &iris2_mask,
+                    &iris1_code,
+                    &iris1_mask,
+                    &IrisRotation::Left(left_rot),
+                );
+                let mut rotated_iris2 = iris2.clone();
+                rotated_iris2.rotate_left(left_rot);
+                let standard_result = iris1.get_distance_fraction(&rotated_iris2);
+                assert_eq!(standard_result, rotation_result);
+            }
+
+            for right_rot in 1..=15 {
+                let rotation_result = IrisCode::get_distance_fraction_with_rotation(
+                    &iris2_code,
+                    &iris2_mask,
+                    &iris1_code,
+                    &iris1_mask,
+                    &IrisRotation::Right(right_rot),
+                );
+                let mut rotated_iris2 = iris2.clone();
+                rotated_iris2.rotate_right(right_rot);
+                let standard_result = iris1.get_distance_fraction(&rotated_iris2);
+                assert_eq!(standard_result, rotation_result);
+            }
+        }
     }
 }
