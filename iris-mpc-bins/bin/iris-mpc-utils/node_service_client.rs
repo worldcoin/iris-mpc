@@ -10,8 +10,8 @@ use iris_mpc_common::{
 };
 use iris_mpc_utils::{
     aws::{
-        download_net_encryption_public_keys, NodeAwsClients as NodeServiceClient,
-        NodeAwsConfig as NodeServiceConfig,
+        download_net_encryption_public_keys, AwsClient as NodeServiceClient,
+        AwsClientConfig as NodeServiceConfig,
     },
     client,
     constants::NODE_CONFIG_KIND_MAIN,

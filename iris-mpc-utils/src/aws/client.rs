@@ -10,7 +10,7 @@ use thiserror::Error;
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 use iris_mpc_common::helpers::sqs_s3_helper;
 
-use super::config::NodeAwsConfig;
+use super::config::AwsClientConfig;
 use crate::misc::{log_error, log_info};
 
 /// Component name for logging purposes.
@@ -18,9 +18,9 @@ const COMPONENT: &str = "State-AWS";
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
-pub struct NodeAwsClients {
+pub struct AwsClient {
     /// Associated configuration.
-    config: NodeAwsConfig,
+    config: AwsClientConfig,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -35,8 +35,8 @@ pub struct NodeAwsClients {
     sqs: SQSClient,
 }
 
-impl NodeAwsClients {
-    pub fn config(&self) -> &NodeAwsConfig {
+impl AwsClient {
+    pub fn config(&self) -> &AwsClientConfig {
         &self.config
     }
 
@@ -56,7 +56,7 @@ impl NodeAwsClients {
         &self.sqs
     }
 
-    pub fn new(config: NodeAwsConfig) -> Self {
+    pub fn new(config: AwsClientConfig) -> Self {
         Self {
             config: config.to_owned(),
             s3: S3Client::from(&config),
@@ -79,15 +79,15 @@ impl NodeAwsClients {
         bucket: &str,
         key: &str,
         payload: &[u8],
-    ) -> Result<(), NodeAwsClientsError> {
+    ) -> Result<(), AwsClientError> {
         match sqs_s3_helper::upload_file_to_s3(bucket, key, self.s3().clone(), payload).await {
-            Err(_) => Err(NodeAwsClientsError::S3UploadFailed),
+            Err(_) => Err(AwsClientError::S3UploadFailed),
             Ok(_) => Ok(()),
         }
     }
 }
 
-impl Clone for NodeAwsClients {
+impl Clone for AwsClient {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -100,13 +100,13 @@ impl Clone for NodeAwsClients {
 }
 
 #[derive(Error, Debug)]
-pub enum NodeAwsClientsError {
+pub enum AwsClientError {
     #[error("AWS S3 file upload error")]
     S3UploadFailed,
 }
 
-impl From<&NodeAwsConfig> for S3Client {
-    fn from(config: &NodeAwsConfig) -> Self {
+impl From<&AwsClientConfig> for S3Client {
+    fn from(config: &AwsClientConfig) -> Self {
         let force_path_style =
             config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
 
@@ -119,20 +119,20 @@ impl From<&NodeAwsConfig> for S3Client {
     }
 }
 
-impl From<&NodeAwsConfig> for SecretsManagerClient {
-    fn from(config: &NodeAwsConfig) -> Self {
+impl From<&AwsClientConfig> for SecretsManagerClient {
+    fn from(config: &AwsClientConfig) -> Self {
         SecretsManagerClient::new(config.sdk())
     }
 }
 
-impl From<&NodeAwsConfig> for SNSClient {
-    fn from(config: &NodeAwsConfig) -> Self {
+impl From<&AwsClientConfig> for SNSClient {
+    fn from(config: &AwsClientConfig) -> Self {
         SNSClient::new(config.sdk())
     }
 }
 
-impl From<&NodeAwsConfig> for SQSClient {
-    fn from(config: &NodeAwsConfig) -> Self {
+impl From<&AwsClientConfig> for SQSClient {
+    fn from(config: &AwsClientConfig) -> Self {
         SQSClient::from_conf(
             Builder::from(config.sdk())
                 .timeout_config(
@@ -149,10 +149,10 @@ impl From<&NodeAwsConfig> for SQSClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::config::NodeAwsConfig, NodeAwsClients};
+    use super::{super::config::AwsClientConfig, AwsClient};
     use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
 
-    fn assert_clients(clients: &NodeAwsClients) {
+    fn assert_clients(clients: &AwsClient) {
         let client = clients.s3();
         assert!(client.config().region().is_some());
 
@@ -166,16 +166,16 @@ mod tests {
         assert!(client.config().region().is_some());
     }
 
-    async fn create_clients() -> NodeAwsClients {
+    async fn create_clients() -> AwsClient {
         let config = create_config().await;
 
-        NodeAwsClients::new(config)
+        AwsClient::new(config)
     }
 
-    async fn create_config() -> NodeAwsConfig {
+    async fn create_config() -> AwsClientConfig {
         let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        NodeAwsConfig::new(node_config).await
+        AwsClientConfig::new(node_config).await
     }
 
     #[tokio::test]

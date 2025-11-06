@@ -9,7 +9,7 @@ use sodiumoxide::crypto::box_::PublicKey;
 use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
-use super::{client::NodeAwsClients, convertor};
+use super::{client::AwsClient, convertor};
 use crate::{constants::N_PARTIES, types::NetEncryptionPublicKeys};
 
 #[async_trait]
@@ -26,7 +26,7 @@ pub trait ServiceOperations {
 }
 
 #[async_trait]
-impl ServiceOperations for NodeAwsClients {
+impl ServiceOperations for AwsClient {
     async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()> {
         // Payload struct.
         #[derive(Serialize, Debug, Clone)]

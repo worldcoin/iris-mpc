@@ -9,7 +9,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::GaloisRingSharedIris};
 
 use super::{
-    aws::{NodeAwsClients as NodeServiceClients, NodeAwsConfig},
+    aws::{AwsClient as NodeServiceClients, AwsClientConfig},
     constants::N_PARTIES,
 };
 
@@ -32,7 +32,7 @@ pub type NetIrisCodeSharesJSON = [IrisCodeSharesJSON; N_PARTIES];
 pub type NetNodeConfig = [NodeConfig; N_PARTIES];
 
 // Network wide configuration set.
-pub type NetServiceConfig = [NodeAwsConfig; N_PARTIES];
+pub type NetServiceConfig = [AwsClientConfig; N_PARTIES];
 
 // Network wide node AWS service clients.
 pub type NetServiceClients = [NodeServiceClients; N_PARTIES];
