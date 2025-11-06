@@ -148,10 +148,6 @@ path = "bin/iris-mpc-cpu/generate_ideal_neighborhoods.rs"
 name = "construct-graph-ptxt"
 path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
 
-[[bin]]
-name = "test_serializing"
-path = "bin/iris-mpc-cpu/test_serializing.rs"
-
 # ---------------------
 # binaries for iris-mpc-gpu
 # ---------------------

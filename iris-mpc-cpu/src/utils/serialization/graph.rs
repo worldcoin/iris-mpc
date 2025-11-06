@@ -62,7 +62,7 @@ pub fn read_graph_current<V: Ref + Display + FromStr, R: std::io::Read>(
     Ok(data)
 }
 
-pub fn write_graph_v1<V: Ref + Display + FromStr, W: std::io::Write>(
+pub fn write_graph_current<V: Ref + Display + FromStr, W: std::io::Write>(
     writer: &mut W,
     data: &GraphMem<V>,
 ) -> eyre::Result<()> {
@@ -81,116 +81,61 @@ pub fn read_graph_from_file<P: AsRef<std::path::Path>>(
             let graph = read_graph_v3(&mut reader)?;
             Ok(graph.into())
         }
-        GraphFormat::V1 => {
-            let graph = read_graph_v1(&mut reader)?;
-            Ok(graph.into())
-        }
         GraphFormat::V2 => {
             let graph = read_graph_v2(&mut reader)?;
+            Ok(graph.into())
+        }
+        GraphFormat::V1 => {
+            let graph = read_graph_v1(&mut reader)?;
             Ok(graph.into())
         }
         GraphFormat::V0 => {
             let graph = read_graph_v0(&mut reader)?;
             Ok(graph.into())
         }
-        GraphFormat::GraphMem => Ok(read_graph_current(&mut reader)?),
+        GraphFormat::GraphMem => read_graph_current(&mut reader),
     }
 }
 
-/* --------------- Conversion GraphMem -> GraphV1 ------------------- */
+pub fn read_graph_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(
+    reader: &mut R,
+) -> eyre::Result<[G; 2]> {
+    let data = bincode::deserialize_from(reader)?;
+    Ok(data)
+}
 
-impl From<IrisVectorId> for graph_v1::VectorId {
-    fn from(value: IrisVectorId) -> Self {
-        graph_v1::VectorId {
-            id: value.serial_id(),
-            //value.version_id(),
+pub fn write_graph_pair<W: std::io::Write>(
+    writer: &mut W,
+    data: &[GraphMem<IrisVectorId>; 2],
+) -> eyre::Result<()> {
+    bincode::serialize_into(writer, data)?;
+    Ok(())
+}
+
+pub fn read_graph_pair_from_file<P: AsRef<std::path::Path>>(
+    path: P,
+    format: GraphFormat,
+) -> Result<[GraphMem<IrisVectorId>; 2]> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    match format {
+        GraphFormat::V3 => {
+            let graphs = read_graph_pair::<_, graph_v3::GraphV3>(&mut reader)?;
+            Ok(graphs.map(|graph| graph.into()))
         }
-    }
-}
-
-impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v1::EntryPoint {
-    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
-        graph_v1::EntryPoint {
-            point: value.point.into(),
-            layer: value.layer,
+        GraphFormat::V2 => {
+            let graphs = read_graph_pair::<_, graph_v2::GraphV2>(&mut reader)?;
+            Ok(graphs.map(|graph| graph.into()))
         }
-    }
-}
-
-impl From<neighborhood::SortedEdgeIds<IrisVectorId>> for graph_v1::EdgeIds {
-    fn from(value: neighborhood::SortedEdgeIds<IrisVectorId>) -> Self {
-        graph_v1::EdgeIds(value.0.into_iter().map(Into::into).collect())
-    }
-}
-
-impl From<Layer<IrisVectorId>> for graph_v1::Layer {
-    fn from(value: Layer<IrisVectorId>) -> Self {
-        graph_v1::Layer {
-            links: value
-                .links
-                .into_iter()
-                .map(|(v, nb)| (v.into(), nb.into()))
-                .collect(),
+        GraphFormat::V1 => {
+            let graphs = read_graph_pair::<_, graph_v1::GraphV1>(&mut reader)?;
+            Ok(graphs.map(|graph| graph.into()))
         }
-    }
-}
-
-impl From<GraphMem<IrisVectorId>> for GraphV1 {
-    fn from(value: GraphMem<IrisVectorId>) -> Self {
-        graph_v1::GraphV1 {
-            entry_point: value.entry_point.first().cloned().map(|ep| ep.into()),
-            layers: value
-                .layers
-                .into_iter()
-                .map(|layer| layer.into())
-                .collect::<Vec<_>>(),
+        GraphFormat::V0 => {
+            let graphs = read_graph_pair::<_, graph_v0::GraphV0>(&mut reader)?;
+            Ok(graphs.map(|graph| graph.into()))
         }
-    }
-}
-
-/* --------------- Conversion GraphV1 -> GraphMem ------------------- */
-
-impl From<graph_v1::VectorId> for IrisVectorId {
-    fn from(value: graph_v1::VectorId) -> Self {
-        IrisVectorId::new(value.id, 0)
-    }
-}
-
-impl From<graph_v1::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
-    fn from(value: graph_v1::EntryPoint) -> Self {
-        layered_graph::EntryPoint {
-            point: value.point.into(),
-            layer: value.layer,
-        }
-    }
-}
-
-impl From<graph_v1::EdgeIds> for neighborhood::SortedEdgeIds<IrisVectorId> {
-    fn from(value: graph_v1::EdgeIds) -> Self {
-        neighborhood::SortedEdgeIds(value.0.into_iter().map(Into::into).collect())
-    }
-}
-
-impl From<graph_v1::Layer> for Layer<IrisVectorId> {
-    fn from(value: graph_v1::Layer) -> Self {
-        let mut layer = Layer::new();
-        for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.into());
-        }
-        layer
-    }
-}
-
-impl From<GraphV1> for GraphMem<IrisVectorId> {
-    fn from(value: GraphV1) -> Self {
-        GraphMem {
-            entry_point: value
-                .entry_point
-                .map(|e| e.into())
-                .into_iter()
-                .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-        }
+        GraphFormat::GraphMem => read_graph_pair::<_, GraphMem<IrisVectorId>>(&mut reader),
     }
 }
 
@@ -235,55 +180,48 @@ impl From<graph_v0::Layer> for Layer<IrisVectorId> {
     }
 }
 
-impl From<IrisVectorId> for graph_v2::VectorId {
-    fn from(value: IrisVectorId) -> Self {
-        graph_v2::VectorId {
-            id: value.serial_id(),
-            version: value.version_id(),
-        }
+/* --------------- Conversion GraphV1 -> GraphMem ------------------- */
+
+impl From<graph_v1::VectorId> for IrisVectorId {
+    fn from(value: graph_v1::VectorId) -> Self {
+        IrisVectorId::new(value.0, 0)
     }
 }
 
-impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v2::EntryPoint {
-    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
-        graph_v2::EntryPoint {
+impl From<graph_v1::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
+    fn from(value: graph_v1::EntryPoint) -> Self {
+        layered_graph::EntryPoint {
             point: value.point.into(),
             layer: value.layer,
         }
     }
 }
 
-impl From<neighborhood::SortedEdgeIds<IrisVectorId>> for graph_v2::EdgeIds {
-    fn from(value: neighborhood::SortedEdgeIds<IrisVectorId>) -> Self {
-        graph_v2::EdgeIds(value.0.into_iter().map(Into::into).collect())
+impl From<graph_v1::EdgeIds> for neighborhood::SortedEdgeIds<IrisVectorId> {
+    fn from(value: graph_v1::EdgeIds) -> Self {
+        neighborhood::SortedEdgeIds(value.0.into_iter().map(Into::into).collect())
     }
 }
 
-impl From<Layer<IrisVectorId>> for graph_v2::Layer {
-    fn from(value: Layer<IrisVectorId>) -> Self {
-        graph_v2::Layer {
-            links: value
-                .links
-                .into_iter()
-                .map(|(v, nb)| (v.into(), nb.into()))
-                .collect(),
-            // This is ignored when deserializing
-            // But it needs to exist
-            set_hash: 0,
+impl From<graph_v1::Layer> for Layer<IrisVectorId> {
+    fn from(value: graph_v1::Layer) -> Self {
+        let mut layer = Layer::new();
+        for (v, nb) in value.links.into_iter() {
+            layer.set_links(v.into(), nb.into());
         }
+        layer
     }
 }
 
-impl From<GraphMem<IrisVectorId>> for graph_v2::GraphV2 {
-    fn from(value: GraphMem<IrisVectorId>) -> Self {
-        graph_v2::GraphV2 {
-            // V2 uses a single entry-point, so we take the first if it exists.
-            entry_point: value.entry_point.first().cloned().map(|ep| ep.into()),
-            layers: value
-                .layers
+impl From<GraphV1> for GraphMem<IrisVectorId> {
+    fn from(value: GraphV1) -> Self {
+        GraphMem {
+            entry_point: value
+                .entry_point
+                .map(|e| e.into())
                 .into_iter()
-                .map(|layer| layer.into())
                 .collect::<Vec<_>>(),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
         }
     }
 }
@@ -351,44 +289,6 @@ impl From<GraphV0> for GraphMem<IrisVectorId> {
     }
 }
 
-/* --------------- Conversion GraphMem -> GraphV3 ------------------- */
-
-impl From<IrisVectorId> for graph_v3::VectorId {
-    fn from(value: IrisVectorId) -> Self {
-        graph_v3::VectorId {
-            id: value.serial_id(),
-            version: value.version_id(),
-        }
-    }
-}
-
-impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v3::EntryPoint {
-    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
-        graph_v3::EntryPoint {
-            point: value.point.into(),
-            layer: value.layer,
-        }
-    }
-}
-
-impl From<neighborhood::SortedEdgeIds<IrisVectorId>> for graph_v3::EdgeIds {
-    fn from(value: neighborhood::SortedEdgeIds<IrisVectorId>) -> Self {
-        graph_v3::EdgeIds(value.0.into_iter().map(Into::into).collect())
-    }
-}
-
-impl From<Layer<IrisVectorId>> for graph_v3::Layer {
-    fn from(value: Layer<IrisVectorId>) -> Self {
-        graph_v3::Layer {
-            links: value
-                .links
-                .into_iter()
-                .map(|(v, nb)| (v.into(), nb.into()))
-                .collect(),
-        }
-    }
-}
-
 /* --------------- Conversion GraphV3 -> GraphMem ------------------- */
 
 impl From<graph_v3::VectorId> for IrisVectorId {
@@ -428,6 +328,47 @@ impl From<graph_v3::GraphV3> for GraphMem<IrisVectorId> {
             // V3 uses a Vec<EntryPoint>, which matches GraphMem
             entry_point: value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+        }
+    }
+}
+
+/* --------------- Conversion GraphMem -> GraphV3 ------------------- */
+
+impl From<IrisVectorId> for graph_v3::VectorId {
+    fn from(value: IrisVectorId) -> Self {
+        graph_v3::VectorId {
+            id: value.serial_id(),
+            version: value.version_id(),
+        }
+    }
+}
+
+impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v3::EntryPoint {
+    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
+        graph_v3::EntryPoint {
+            point: value.point.into(),
+            layer: value.layer,
+        }
+    }
+}
+
+impl From<neighborhood::SortedEdgeIds<IrisVectorId>> for graph_v3::EdgeIds {
+    fn from(value: neighborhood::SortedEdgeIds<IrisVectorId>) -> Self {
+        graph_v3::EdgeIds(value.0.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<Layer<IrisVectorId>> for graph_v3::Layer {
+    fn from(value: Layer<IrisVectorId>) -> Self {
+        graph_v3::Layer {
+            links: value
+                .links
+                .into_iter()
+                .map(|(v, nb)| (v.into(), nb.into()))
+                .collect(),
+            // This is ignored when deserializing
+            // But it needs to exist
+            set_hash: 0,
         }
     }
 }

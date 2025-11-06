@@ -225,8 +225,7 @@ async fn main() -> Result<()> {
         .into_iter::<Base64IrisCode>()
         .skip(2 * n_existing_irises)
         .map(|x| IrisCode::from(&x.unwrap()))
-        .tuples();
-    let stream = stream
+        .tuples()
         .take(n_irises.unwrap_or(usize::MAX))
         .chunks(SECRET_SHARING_BATCH_SIZE);
 
@@ -338,8 +337,8 @@ async fn main() -> Result<()> {
 
         let stream = Deserializer::from_reader(reader)
             .into_iter::<Base64IrisCode>()
-            .skip(2 * n_existing_irises);
-        let stream = stream.take(num_irises.map(|x| 2 * x).unwrap_or(usize::MAX));
+            .skip(2 * n_existing_irises)
+            .take(num_irises.map(|x| 2 * x).unwrap_or(usize::MAX));
         for (idx, json_pt) in stream.enumerate() {
             let iris_code_query = (&json_pt.unwrap()).into();
             let serial_id = ((idx / 2) + 1 + n_existing_irises) as u32;

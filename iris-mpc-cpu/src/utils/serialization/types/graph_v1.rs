@@ -32,9 +32,7 @@ pub struct EdgeIds(pub Vec<VectorId>);
 
 /// Type associated with the `GraphV1` serialization type.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct VectorId {
-    pub id: u32,
-}
+pub struct VectorId(pub u32);
 
 /* ------------------------------- I/O ------------------------------ */
 

@@ -11,25 +11,25 @@ pub struct GraphV2 {
     pub layers: Vec<Layer>,
 }
 
-/// Type associated with the `GraphV1` serialization type.
+/// Type associated with the `GraphV2` serialization type.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryPoint {
     pub point: VectorId,
     pub layer: usize,
 }
 
-/// Type associated with the `GraphV1` serialization type.
+/// Type associated with the `GraphV2` serialization type.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Layer {
     pub links: HashMap<VectorId, EdgeIds>,
     pub set_hash: u64,
 }
 
-/// Type associated with the `GraphV1` serialization type.
+/// Type associated with the `GraphV2` serialization type.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EdgeIds(pub Vec<VectorId>);
 
-/// Type associated with the `GraphV1` serialization type.
+/// Type associated with the `GraphV2` serialization type.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct VectorId {
     pub id: u32,
