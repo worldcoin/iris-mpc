@@ -20,7 +20,7 @@ env:
   - name: SMPC__HEALTHCHECK_PORT
     value: '3000'
 
-  - name: SMPC__NODE_HOSTNAMES
+  - name: SMPC__ADDRESSES
     value: '["anon-stats-server.1.stage.smpcv2.worldcoin.dev:4000","anon-stats-server.2.stage.smpcv2.worldcoin.dev:4001","0.0.0.0:4002"]'
 
   - name: SMPC__RESULTS_TOPIC_ARN
