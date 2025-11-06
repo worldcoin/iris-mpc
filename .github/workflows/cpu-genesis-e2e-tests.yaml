@@ -12,7 +12,7 @@ env:
 
 jobs:
   cpu-e2e:
-    timeout-minutes: 40
+    timeout-minutes: 20
     runs-on:
       labels: ubuntu-22.04-16core
     permissions:

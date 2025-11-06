@@ -12,7 +12,7 @@ env:
 
 jobs:
   cpu-integration-tests:
-    timeout-minutes: 30
+    timeout-minutes: 20
     runs-on:
       labels: ubuntu-22.04-16core
     permissions:
