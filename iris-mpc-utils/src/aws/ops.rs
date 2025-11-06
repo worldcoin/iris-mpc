@@ -3,17 +3,26 @@ use aws_sdk_s3::primitives::ByteStream as S3_ByteStream;
 use base64::{engine::general_purpose, Engine};
 use eyre::{eyre, Result};
 use serde::Serialize;
+use serde_json;
 use sodiumoxide::crypto::box_::PublicKey;
 
+use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
-use super::client::NodeAwsClients;
-use crate::types::NetEncryptionPublicKeys;
+use super::{client::NodeAwsClients, convertor};
+use crate::{constants::N_PARTIES, types::NetEncryptionPublicKeys};
 
 #[async_trait]
 pub trait ServiceOperations {
     /// Uploads a set of Iris serial identifiers to be marked as deleted.
     async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()>;
+
+    /// Uploads Iris shares for subsequent request processing.
+    async fn upload_iris_party_shares(
+        &self,
+        shares: &IrisCodePartyShares,
+        encryption_public_keys: &[PublicKey; N_PARTIES],
+    ) -> Result<()>;
 }
 
 #[async_trait]
@@ -57,6 +66,36 @@ impl ServiceOperations for NodeAwsClients {
                 self.log_error(format!("Failed to upload file to S3: {}", err).as_str());
                 eyre!("Failed to upload Iris deletions to S3")
             })?;
+
+        Ok(())
+    }
+
+    async fn upload_iris_party_shares(
+        &self,
+        shares: &IrisCodePartyShares,
+        encryption_public_keys: &[PublicKey; N_PARTIES],
+    ) -> Result<()> {
+        let payload = serde_json::to_vec(&convertor::to_iris_party_shares_for_s3(
+            shares,
+            encryption_public_keys,
+        ))?;
+
+        self.upload_to_s3(
+            self.config().requests_bucket_name(),
+            shares.signup_id.as_str(),
+            &payload,
+        )
+        .await
+        .map_err(|err| {
+            self.log_error(
+                format!(
+                    "Failed to upload iris party shares to S3: {} :: {}",
+                    shares.signup_id, err
+                )
+                .as_str(),
+            );
+            eyre!("Failed to upload Iris shares to S3")
+        })?;
 
         Ok(())
     }

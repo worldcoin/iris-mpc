@@ -11,6 +11,9 @@ pub struct NodeAwsConfig {
     /// Associated node configuration.
     node: NodeConfig,
 
+    /// The name of an S3 bucket used to post system request payloads.
+    requests_bucket_name: String,
+
     /// Associated AWS SDK configuration.
     sdk: SdkConfig,
 }
@@ -19,6 +22,7 @@ impl NodeAwsConfig {
     pub async fn new(node_config: NodeConfig) -> Self {
         Self {
             node: node_config.to_owned(),
+            requests_bucket_name: "TODO: requests_bucket_name".to_string(),
             sdk: get_sdk_config(&node_config).await,
         }
     }
@@ -28,6 +32,7 @@ impl Clone for NodeAwsConfig {
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
+            requests_bucket_name: self.requests_bucket_name.clone(),
             sdk: self.sdk.clone(),
         }
     }
@@ -40,6 +45,10 @@ impl NodeAwsConfig {
 
     pub fn node(&self) -> &NodeConfig {
         &self.node
+    }
+
+    pub fn requests_bucket_name(&self) -> &String {
+        &self.requests_bucket_name
     }
 
     pub fn sdk(&self) -> &SdkConfig {

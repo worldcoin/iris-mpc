@@ -5,8 +5,10 @@ use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Builder, Client as SQSClient};
+use thiserror::Error;
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+use iris_mpc_common::helpers::sqs_s3_helper;
 
 use super::config::NodeAwsConfig;
 use crate::misc::{log_error, log_info};
@@ -71,6 +73,18 @@ impl NodeAwsClients {
     pub(super) fn log_info(&self, msg: &str) {
         log_info(COMPONENT, msg);
     }
+
+    pub async fn upload_to_s3(
+        &self,
+        bucket: &str,
+        key: &str,
+        payload: &[u8],
+    ) -> Result<(), NodeAwsClientsError> {
+        match sqs_s3_helper::upload_file_to_s3(bucket, key, self.s3().clone(), payload).await {
+            Err(_) => Err(NodeAwsClientsError::S3UploadFailed),
+            Ok(_) => Ok(()),
+        }
+    }
 }
 
 impl Clone for NodeAwsClients {
@@ -83,6 +97,12 @@ impl Clone for NodeAwsClients {
             secrets_manager: self.secrets_manager.clone(),
         }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum NodeAwsClientsError {
+    #[error("AWS S3 file upload error")]
+    S3UploadFailed,
 }
 
 impl From<&NodeAwsConfig> for S3Client {
