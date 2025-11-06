@@ -21,7 +21,7 @@ env:
     value: '3000'
 
   - name: SMPC__NODE_HOSTNAMES
-    value: '["anon-stats-server.0.stage.smpcv2.worldcoin.dev:4000","anon-stats-server.1.stage.smpcv2.worldcoin.dev:4001","0.0.0.0:4002"]'
+    value: '["anon-stats-server.1.stage.smpcv2.worldcoin.dev:4000","anon-stats-server.2.stage.smpcv2.worldcoin.dev:4001","0.0.0.0:4002"]'
 
   - name: SMPC__RESULTS_TOPIC_ARN
     valueFrom:
