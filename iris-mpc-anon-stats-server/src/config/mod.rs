@@ -68,9 +68,6 @@ pub struct AnonStatsServerConfig {
     #[serde(default = "default_schema_name")]
     /// Database schema name.
     pub db_schema_name: String,
-
-    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
-    pub service_ports: Vec<String>,
 }
 
 fn default_healthcheck_port() -> usize {
