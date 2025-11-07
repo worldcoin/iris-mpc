@@ -243,7 +243,7 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
         plaingraph_file,
         rng,
         database_size,
-        NetworkType::default_grpc(),
+        NetworkType::default_tcp(),
     )
     .await
 }
@@ -316,7 +316,7 @@ pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     (PlaintextStore, GraphMem<PlaintextVectorRef>),
     Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
 )> {
-    lazy_random_setup(rng, database_size, NetworkType::default_grpc()).await
+    lazy_random_setup(rng, database_size, NetworkType::default_tcp()).await
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each
@@ -389,5 +389,5 @@ pub async fn shared_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> {
-    shared_random_setup(rng, database_size, NetworkType::default_grpc()).await
+    shared_random_setup(rng, database_size, NetworkType::default_tcp()).await
 }
