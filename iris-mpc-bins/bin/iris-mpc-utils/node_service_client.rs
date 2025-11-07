@@ -12,7 +12,9 @@ use iris_mpc_utils::{
         AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME, AWS_REQUESTS_TOPIC_ARN,
         AWS_RESPONSE_QUEUE_URL,
     },
-    client::{self, AwsRequestDispatcher, Client, RequestGenerator},
+    client::{
+        self, Client, RequestBatchKind, RequestBatchSize, RequestDispatcher, RequestGenerator,
+    },
     constants::NODE_CONFIG_KIND_MAIN,
     fsys,
     types::{NetEncryptionPublicKeys, NetNodeConfig},
@@ -104,14 +106,6 @@ impl CliOptions {
             .to_string()
     }
 
-    fn batch_size(&self) -> &usize {
-        &self.batch_size
-    }
-
-    fn n_batches(&self) -> &usize {
-        &self.n_batches
-    }
-
     fn path_to_node_0_config(&self) -> PathBuf {
         Self::get_path_to_node_config(&self.path_to_node_0_config, 0)
     }
@@ -146,11 +140,11 @@ impl CliOptions {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for Client<AwsRequestDispatcher, RequestGenerator> {
+impl AsyncFrom<CliOptions> for Client {
     async fn async_from(options: CliOptions) -> Self {
         // let _ = NetEncryptionPublicKeys::async_from(options.clone()).await;
         Client::new(
-            AwsRequestDispatcher::async_from(options.clone()).await,
+            RequestDispatcher::async_from(options.clone()).await,
             RequestGenerator::from(&options),
         )
     }
@@ -219,7 +213,7 @@ impl AsyncFrom<CliOptions> for NetAwsClientConfig {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for AwsRequestDispatcher {
+impl AsyncFrom<CliOptions> for RequestDispatcher {
     async fn async_from(options: CliOptions) -> Self {
         Self::new(NetAwsClient::async_from(options).await)
     }
@@ -227,10 +221,15 @@ impl AsyncFrom<CliOptions> for AwsRequestDispatcher {
 
 impl From<&CliOptions> for client::RequestGenerator {
     fn from(options: &CliOptions) -> Self {
+        // Currently defaults to static batches of uniqueness requests.
+        let batch_kind = RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE);
+        let batch_size = RequestBatchSize::Static(options.batch_size);
+
         Self::new(
-            client::RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
-            client::RequestBatchSize::Static(*options.batch_size()),
-            *options.n_batches(),
+            batch_kind,
+            batch_size,
+            options.n_batches,
+            options.rng_seed(),
         )
     }
 }

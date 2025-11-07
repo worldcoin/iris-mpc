@@ -1,14 +1,12 @@
-use std::{fmt, future::Future};
+use std::fmt;
 
-use async_trait::async_trait;
 use uuid;
 
-use iris_mpc_common::helpers::smpc_request::{
-    IdentityDeletionRequest, ReAuthRequest as ReauthorisationRequest, ResetCheckRequest,
-    ResetUpdateRequest, UniquenessRequest,
-};
+use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
-/// A service request to be dispatched to a node's ingress queue.
+use crate::types::IrisCodeAndMaskShares;
+
+/// Encapsualates information to dispatch a system service request.
 #[derive(Debug)]
 pub struct Request {
     /// Batch ordinal identifier.
@@ -21,20 +19,36 @@ pub struct Request {
 
     /// Associated request payload.
     #[allow(dead_code)]
-    payload: RequestPayload,
+    data: RequestData,
 
     /// Unique request identifier for correlation purposes.
     #[allow(dead_code)]
-    request_id: uuid::Uuid,
+    identifier: uuid::Uuid,
 }
 
 impl Request {
-    pub fn new(batch_idx: usize, batch_item_idx: usize, payload: RequestPayload) -> Self {
+    pub fn batch_idx(&self) -> &usize {
+        &self.batch_idx
+    }
+
+    pub fn batch_item_idx(&self) -> &usize {
+        &self.batch_item_idx
+    }
+
+    pub fn data(&self) -> &RequestData {
+        &self.data
+    }
+
+    pub fn identifier(&self) -> &uuid::Uuid {
+        &self.identifier
+    }
+
+    pub fn new(batch_idx: usize, batch_item_idx: usize, data: RequestData) -> Self {
         Self {
             batch_idx,
             batch_item_idx,
-            payload,
-            request_id: uuid::Uuid::new_v4(),
+            data,
+            identifier: uuid::Uuid::new_v4(),
         }
     }
 }
@@ -62,10 +76,10 @@ impl RequestBatch {
         &mut self.requests
     }
 
-    pub fn new(batch_idx: usize) -> Self {
+    pub fn new(batch_idx: usize, batch_size: usize) -> Self {
         Self {
             batch_idx,
-            requests: Vec::new(),
+            requests: Vec::with_capacity(batch_size),
         }
     }
 }
@@ -76,44 +90,32 @@ impl fmt::Display for RequestBatch {
     }
 }
 
-/// A data structure representing the kind of request batch, i.e. the type of requests to be processed.
+/// Encapsulates inputs used to derive the kind of request batch.
 #[derive(Debug, Clone)]
 pub enum RequestBatchKind {
-    /// All requests in batch are of same type.
+    /// All requests are of same type.
     Simple(&'static str),
 }
 
-/// A data structure representing inputs used to compute size of a request batch.
+/// Encapsulates inputs used to compute size of a request batch.
 #[derive(Debug, Clone)]
 pub enum RequestBatchSize {
     /// Batch size is static.
     Static(usize),
 }
 
-/// A component responsible for dispatching request messages to system services.
-#[async_trait]
-pub trait RequestDispatcher {
-    /// Dispatchs a batch of requests to system services.
-    async fn dispatch(&self, batch: RequestBatch);
-}
-
-/// A component responsible for iterating over sets of requests.
-pub trait RequestIterator {
-    /// Iterator over batches of requests to be dispatched.
-    ///
-    /// # Returns
-    ///
-    /// Future that resolves to maybe a Batch.
-    ///
-    fn next(&mut self) -> impl Future<Output = Option<RequestBatch>> + Send;
-}
-
-/// An enumeration over a set of request payload types.
+/// Enumeration over data associated with a request.
 #[derive(Debug, Clone)]
-pub enum RequestPayload {
-    IdentityDeletion(IdentityDeletionRequest),
-    Reauthorisation(ReauthorisationRequest),
-    ResetCheck(ResetCheckRequest),
-    ResetUpdate(ResetUpdateRequest),
-    Uniqueness(UniquenessRequest),
+#[allow(clippy::large_enum_variant)]
+pub enum RequestData {
+    IdentityDeletion,
+    Reauthorisation,
+    ResetCheck,
+    ResetUpdate,
+    Uniqueness(RequestDataUniqueness),
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestDataUniqueness {
+    pub iris_shares: BothEyes<IrisCodeAndMaskShares>,
 }
