@@ -19,11 +19,6 @@ impl RequestDispatcher {
 
     pub async fn dispatch(&self, batch: RequestBatch) {
         for request in batch.requests() {
-            println!(
-                "Dispatching request: {}::{}",
-                request.batch_idx(),
-                request.batch_item_idx()
-            );
             match request.data() {
                 RequestData::Uniqueness(data) => {
                     self.dispatch_uniqueness_request(request, data).await;
@@ -33,7 +28,7 @@ impl RequestDispatcher {
         }
     }
 
-    async fn dispatch_uniqueness_request(&self, _request: &Request, _data: &RequestDataUniqueness) {
-        unimplemented!()
+    async fn dispatch_uniqueness_request(&self, request: &Request, _data: &RequestDataUniqueness) {
+        println!("Dispatching request: {}", request,);
     }
 }

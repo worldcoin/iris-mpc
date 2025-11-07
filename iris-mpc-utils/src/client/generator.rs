@@ -65,9 +65,9 @@ impl RequestGenerator {
         let batch_size = self.batch_size();
         let mut batch = RequestBatch::new(batch_idx, batch_size);
         for item_idx in 1..(batch_size + 1) {
-            batch
-                .requests_mut()
-                .push(self.generate_request(batch_idx, item_idx));
+            let item = self.generate_request(batch_idx, item_idx);
+            println!("Generated request: {}", item,);
+            batch.requests_mut().push(item);
         }
         self.batch_count += 1;
 

@@ -1,6 +1,6 @@
+mod correlator;
 mod dispatcher;
 mod generator;
-mod response_correlator;
 mod types;
 
 pub use dispatcher::RequestDispatcher;

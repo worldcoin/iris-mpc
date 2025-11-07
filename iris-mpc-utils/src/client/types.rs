@@ -53,6 +53,16 @@ impl Request {
     }
 }
 
+impl fmt::Display for Request {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "request: {}::{}::{}",
+            self.batch_idx, self.batch_item_idx, self.data
+        )
+    }
+}
+
 /// A data structure representing a batch of requests for system processing.
 #[derive(Debug)]
 pub struct RequestBatch {
@@ -118,4 +128,26 @@ pub enum RequestData {
 #[derive(Debug, Clone)]
 pub struct RequestDataUniqueness {
     pub iris_shares: BothEyes<IrisCodeAndMaskShares>,
+}
+
+impl fmt::Display for RequestData {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::IdentityDeletion => {
+                write!(f, "AMPC.IdentityDeletion")
+            }
+            RequestData::Reauthorisation => {
+                write!(f, "AMPC.Reauthorisation")
+            }
+            RequestData::ResetCheck => {
+                write!(f, "AMPC.ResetCheck")
+            }
+            RequestData::ResetUpdate => {
+                write!(f, "AMPC.ResetUpdate")
+            }
+            RequestData::Uniqueness(_) => {
+                write!(f, "AMPC.Uniqueness")
+            }
+        }
+    }
 }
