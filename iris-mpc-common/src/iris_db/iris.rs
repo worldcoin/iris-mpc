@@ -1,9 +1,11 @@
 use crate::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
+use crate::IRIS_CODE_LENGTH;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bytemuck::cast_slice;
 use eyre::bail;
 use eyre::Result;
 use itertools::izip;
+use rand::seq::SliceRandom;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -518,6 +520,30 @@ impl IrisCode {
         res
     }
 
+    pub fn get_graded_similar_iris<R: Rng>(
+        &self,
+        rng: &mut R,
+        target_distance: (u16, u16),
+    ) -> IrisCode {
+        let mut visible_bits = (0..IRIS_CODE_LENGTH)
+            .filter_map(|i| self.mask.get_bit(i).then_some(i))
+            .collect::<Vec<_>>();
+
+        visible_bits.shuffle(rng);
+
+        // Compute the ideal number of differing bits in the result
+        let (num, denom) = target_distance;
+        let neq_cnt =
+            ((num as usize) * visible_bits.len() + (denom / 2) as usize) / (denom as usize);
+
+        let mut result = self.clone();
+        for i in visible_bits.iter().take(neq_cnt) {
+            result.code.flip_bit(*i);
+        }
+
+        result
+    }
+
     pub fn mirrored(&self) -> IrisCode {
         let mut mirrored = IrisCode::default();
         for i in 0..IrisCode::IRIS_CODE_SIZE {
@@ -595,6 +621,9 @@ mod tests {
     use eyre::Result;
     use eyre::{Context, ContextCompat};
     use float_eq::assert_float_eq;
+    use rand::rngs::SmallRng;
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
     use std::cmp::min;
     use std::collections::HashMap;
 
@@ -795,5 +824,47 @@ mod tests {
                 assert_eq!(standard_result, rotation_result);
             }
         }
+    }
+
+    #[test]
+    fn test_get_graded_similar_iris() {
+        let mut base_rng = SmallRng::seed_from_u64(42);
+        let mut iris_a = IrisCode::random_rng(&mut base_rng);
+
+        // Start with full mask and flip 1200 bits
+        iris_a.mask = IrisCodeArray::ONES;
+        let mut indices = (0..(IrisCode::IRIS_CODE_SIZE / 2))
+            .take(600)
+            .collect::<Vec<_>>();
+        indices.shuffle(&mut base_rng);
+        for &i in indices.iter() {
+            iris_a.mask.flip_bit(2 * i);
+            iris_a.mask.flip_bit(2 * i + 1);
+        }
+
+        let dist_b_target = (1, 8);
+        let dist_c_target = (1, 4);
+
+        let mut rng_for_b = base_rng.clone();
+        let mut rng_for_c = base_rng.clone();
+
+        let iris_b = iris_a.get_graded_similar_iris(&mut rng_for_b, dist_b_target);
+        let iris_c = iris_a.get_graded_similar_iris(&mut rng_for_c, dist_c_target);
+
+        let dist_a_b = iris_a.get_distance(&iris_b);
+        let expected_dist_b = dist_b_target.0 as f64 / dist_b_target.1 as f64;
+
+        assert_float_eq!(dist_a_b, expected_dist_b, abs <= 1e-5);
+
+        let dist_a_c = iris_a.get_distance(&iris_c);
+        let expected_dist_c = dist_c_target.0 as f64 / dist_c_target.1 as f64;
+        assert_float_eq!(dist_a_c, expected_dist_c, abs <= 1e-5);
+
+        let dist_b_c = iris_b.get_distance(&iris_c);
+        let expected_dist_b_c = expected_dist_c - expected_dist_b;
+        assert_float_eq!(dist_b_c, expected_dist_b_c, abs <= 1e-5);
+
+        assert_eq!(iris_a.mask, iris_b.mask);
+        assert_eq!(iris_a.mask, iris_c.mask);
     }
 }
