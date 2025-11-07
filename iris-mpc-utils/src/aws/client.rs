@@ -166,7 +166,11 @@ impl From<&NodeAwsClientConfig> for SQSClient {
 #[cfg(test)]
 mod tests {
     use super::super::{constants, NodeAwsClient, NodeAwsClientConfig};
-    use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys};
+    use crate::{
+        constants::{NODE_CONFIG_KIND_MAIN, N_PARTIES},
+        fsys,
+    };
+    use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
 
     fn assert_clients(clients: &NodeAwsClient) {
         assert!(clients.s3().config().region().is_some());
@@ -175,8 +179,12 @@ mod tests {
         assert!(clients.sqs().config().region().is_some());
     }
 
-    async fn create_clients() -> NodeAwsClient {
-        NodeAwsClient::new(create_config().await)
+    async fn create_client() -> NodeAwsClient {
+        NodeAwsClient::new(create_config().await, create_public_keys_for_encryption())
+    }
+
+    fn create_public_keys_for_encryption() -> [PublicKey; N_PARTIES] {
+        std::array::from_fn(|_| gen_keypair().0)
     }
 
     async fn create_config() -> NodeAwsClientConfig {
@@ -184,7 +192,6 @@ mod tests {
 
         NodeAwsClientConfig::new(
             node_config,
-            constants::AWS_PUBLIC_KEY_BASE_URL.to_string(),
             constants::AWS_REQUEST_BUCKET_NAME.to_string(),
             constants::AWS_REQUEST_TOPIC_ARN.to_string(),
             constants::AWS_RESPONSE_QUEUE_URL.to_string(),
@@ -193,14 +200,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_clients_new() {
-        let clients = create_clients().await;
+    async fn test_client_new() {
+        let clients = create_client().await;
         assert_clients(&clients);
     }
 
     #[tokio::test]
-    async fn test_clients_new_then_clone() {
-        let clients = create_clients().await.clone();
+    async fn test_client_clone() {
+        let clients = create_client().await.clone();
         assert_clients(&clients);
     }
 }
