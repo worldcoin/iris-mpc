@@ -2622,6 +2622,7 @@ dependencies = [
  "iris-mpc-cpu",
  "itertools 0.13.0",
  "rand",
+ "reqwest",
  "serde",
  "serde_json",
  "siphasher",
@@ -2630,6 +2631,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

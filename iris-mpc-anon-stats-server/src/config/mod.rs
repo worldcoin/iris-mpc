@@ -22,13 +22,6 @@ pub struct Opt {
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnonStatsServerConfig {
-    /// The addresses for the networking parties.
-    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
-    pub addresses: Vec<String>,
-
-    #[serde(default = "default_healthcheck_port")]
-    pub healthcheck_port: usize,
-
     #[serde(default)]
     pub service: Option<ServiceConfig>,
 
@@ -40,6 +33,9 @@ pub struct AnonStatsServerConfig {
 
     #[serde(default)]
     pub environment: String,
+
+    #[serde(default)]
+    pub image_name: String,
 
     #[serde(default)]
     pub results_topic_arn: String,
@@ -68,10 +64,21 @@ pub struct AnonStatsServerConfig {
     #[serde(default = "default_schema_name")]
     /// Database schema name.
     pub db_schema_name: String,
-}
 
-fn default_healthcheck_port() -> usize {
-    8080
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub node_hostnames: Vec<String>,
+
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub healthcheck_ports: Vec<String>,
+
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub service_ports: Vec<String>,
+
+    #[serde(default = "default_http_query_retry_delay_ms")]
+    pub http_query_retry_delay_ms: u64,
+
+    #[serde(default = "default_startup_sync_timeout_secs")]
+    pub startup_sync_timeout_secs: u64,
 }
 
 fn default_n_buckets_1d() -> usize {
@@ -94,6 +101,14 @@ fn default_max_sync_failures_before_reset() -> usize {
     3
 }
 
+fn default_http_query_retry_delay_ms() -> u64 {
+    250
+}
+
+fn default_startup_sync_timeout_secs() -> u64 {
+    180
+}
+
 impl AnonStatsServerConfig {
     pub fn load_config(prefix: &str) -> eyre::Result<AnonStatsServerConfig> {
         let settings = config::Config::builder();
@@ -110,16 +125,8 @@ impl AnonStatsServerConfig {
     }
 
     pub fn overwrite_defaults_with_cli_args(&mut self, opts: Opt) {
-        if let Some(healthcheck_port) = opts.healthcheck_port {
-            self.healthcheck_port = healthcheck_port;
-        }
-
         if let Some(party_id) = opts.party_id {
             self.party_id = party_id;
-        }
-
-        if let Some(addresses) = opts.addresses {
-            self.addresses = addresses;
         }
 
         if let Some(results_topic_arn) = opts.results_topic_arn {

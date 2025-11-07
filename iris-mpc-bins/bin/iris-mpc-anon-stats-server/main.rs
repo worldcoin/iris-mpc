@@ -11,7 +11,7 @@ use eyre::{bail, eyre, Context, Result};
 use iris_mpc_anon_stats_server::{
     anon_stats::{self, DistanceBundle1D, LiftedDistanceBundle1D},
     config::{AnonStatsServerConfig, Opt},
-    spawn_healthcheck_server, sync,
+    coordination, sync,
 };
 use iris_mpc_common::anon_stats::{
     AnonStatsContext, AnonStatsMapping, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
@@ -402,6 +402,13 @@ async fn main() -> Result<()> {
 
     let config = Arc::new(config);
 
+    let node_addresses: Vec<String> = config
+        .node_hostnames
+        .iter()
+        .zip(config.service_ports.iter())
+        .map(|(host, port)| format!("{}:{}", host, port))
+        .collect();
+
     let _tracing_shutdown_handle =
         initialize_tracing(config.service.clone()).wrap_err("Failed to initialize tracing")?;
 
@@ -418,15 +425,21 @@ async fn main() -> Result<()> {
 
     info!("Starting anon stats server.");
     let mut background_tasks = TaskMonitor::new();
-    let healthcheck_port = config.healthcheck_port;
-    let _healthcheck_handle =
-        background_tasks.spawn(async move { spawn_healthcheck_server(healthcheck_port).await });
+    let coordination_handles =
+        coordination::start_coordination_server(config.as_ref(), &mut background_tasks);
     background_tasks.check_tasks();
-    info!("Healthcheck server running on port {}", healthcheck_port);
+    info!(
+        "Healthcheck server running on port {}",
+        config.healthcheck_ports[config.party_id].clone()
+    );
+
+    coordination::wait_for_others_unready(config.as_ref())
+        .await
+        .wrap_err("waiting for other anon stats servers to become unready")?;
 
     let args = NetworkHandleArgs {
         party_index: config.party_id,
-        addresses: config.addresses.clone(),
+        addresses: node_addresses,
         connection_parallelism: 8,
         request_parallelism: 8,
         sessions_per_request: 1,
@@ -441,6 +454,11 @@ async fn main() -> Result<()> {
         .ok_or_else(|| eyre!("expected at least one network session"))?;
 
     let mut processor = AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client);
+
+    coordination_handles.set_ready();
+    coordination::wait_for_others_ready(config.as_ref())
+        .await
+        .wrap_err("waiting for other anon stats servers to become ready")?;
 
     let mut poll_interval = interval(Duration::from_secs(config.poll_interval_secs));
     poll_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -463,6 +481,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    coordination_handles.mark_shutting_down();
     ct.cancel();
     background_tasks.abort_and_wait_for_finish().await;
 
