@@ -7,7 +7,7 @@ use iris_mpc_common::config::Config as NodeConfig;
 
 /// Encpasulates AWS service client configuration.
 #[derive(Debug)]
-pub struct AwsClientConfig {
+pub struct NodeAwsClientConfig {
     /// Associated node configuration.
     node: NodeConfig,
 
@@ -28,9 +28,9 @@ pub struct AwsClientConfig {
 }
 
 // Network wide configuration set.
-pub type NetAwsClientConfig = [AwsClientConfig; N_PARTIES];
+pub type NetAwsClientConfig = [NodeAwsClientConfig; N_PARTIES];
 
-impl AwsClientConfig {
+impl NodeAwsClientConfig {
     pub async fn new(
         node_config: NodeConfig,
         public_key_base_url: String,
@@ -49,7 +49,7 @@ impl AwsClientConfig {
     }
 }
 
-impl Clone for AwsClientConfig {
+impl Clone for NodeAwsClientConfig {
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
@@ -62,7 +62,7 @@ impl Clone for AwsClientConfig {
     }
 }
 
-impl AwsClientConfig {
+impl NodeAwsClientConfig {
     pub fn environment(&self) -> &String {
         &self.node().environment
     }
@@ -112,13 +112,13 @@ mod tests {
         AWS_PUBLIC_KEY_BASE_URL, AWS_REGION, AWS_REQUESTS_BUCKET_NAME, AWS_REQUESTS_TOPIC_ARN,
         AWS_RESPONSE_QUEUE_URL,
     };
-    use super::AwsClientConfig;
+    use super::NodeAwsClientConfig;
     use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
 
-    async fn create_config() -> AwsClientConfig {
+    async fn create_config() -> NodeAwsClientConfig {
         let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        AwsClientConfig::new(
+        NodeAwsClientConfig::new(
             node_config,
             AWS_PUBLIC_KEY_BASE_URL.to_string(),
             AWS_REQUESTS_BUCKET_NAME.to_string(),

@@ -8,9 +8,9 @@ use rand::{rngs::StdRng, SeedableRng};
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_utils::{
     aws::{
-        download_net_encryption_public_keys, AwsClient, AwsClientConfig, NetAwsClient,
-        NetAwsClientConfig, AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME,
-        AWS_REQUESTS_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
+        NetAwsClient, NetAwsClientConfig, NodeAwsClient, NodeAwsClientConfig,
+        AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME, AWS_REQUESTS_TOPIC_ARN,
+        AWS_RESPONSE_QUEUE_URL,
     },
     client::{self, AwsRequestDispatcher, Client, RequestGenerator},
     constants::NODE_CONFIG_KIND_MAIN,
@@ -159,7 +159,7 @@ impl AsyncFrom<CliOptions> for Client<AwsRequestDispatcher, RequestGenerator> {
 #[async_from::async_trait]
 impl AsyncFrom<CliOptions> for NetEncryptionPublicKeys {
     async fn async_from(options: CliOptions) -> Self {
-        download_net_encryption_public_keys(&options.aws_public_key_base_url())
+        NodeAwsClient::download_net_encryption_public_keys(&options.aws_public_key_base_url())
             .await
             .unwrap()
     }
@@ -180,7 +180,7 @@ impl AsyncFrom<CliOptions> for NetAwsClient {
     async fn async_from(options: CliOptions) -> Self {
         NetAwsClientConfig::async_from(options)
             .await
-            .map(|x| AwsClient::new(x))
+            .map(|x| NodeAwsClient::new(x))
     }
 }
 
@@ -190,7 +190,7 @@ impl AsyncFrom<CliOptions> for NetAwsClientConfig {
         let node_configs = NetNodeConfig::from(options.clone());
 
         [
-            AwsClientConfig::new(
+            NodeAwsClientConfig::new(
                 node_configs[0].to_owned(),
                 options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
@@ -198,7 +198,7 @@ impl AsyncFrom<CliOptions> for NetAwsClientConfig {
                 options.aws_response_queue_url(),
             )
             .await,
-            AwsClientConfig::new(
+            NodeAwsClientConfig::new(
                 node_configs[1].to_owned(),
                 options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
@@ -206,7 +206,7 @@ impl AsyncFrom<CliOptions> for NetAwsClientConfig {
                 options.aws_response_queue_url(),
             )
             .await,
-            AwsClientConfig::new(
+            NodeAwsClientConfig::new(
                 node_configs[2].to_owned(),
                 options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
