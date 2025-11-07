@@ -120,7 +120,7 @@ pub struct Config {
     pub service_ports: Vec<String>,
 
     // should be set to the same as service_ports if not explicitly set.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub service_outbound_ports: Vec<String>,
 
     #[serde(
