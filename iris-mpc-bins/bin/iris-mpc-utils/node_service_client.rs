@@ -7,10 +7,7 @@ use rand::{rngs::StdRng, SeedableRng};
 
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_utils::{
-    aws::{
-        NetAwsClientConfig, NodeAwsClientConfig, AWS_PUBLIC_KEY_BASE_URL, AWS_REQUEST_BUCKET_NAME,
-        AWS_REQUEST_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
-    },
+    aws::{NetAwsClientConfig, NodeAwsClientConfig},
     client::{Client, RequestBatchKind, RequestBatchSize},
     constants::NODE_CONFIG_KIND_MAIN,
     fsys,
@@ -35,19 +32,19 @@ pub async fn main() -> Result<()> {
 struct CliOptions {
     /// AWS: base URL for downloading node encryption public keys.
     #[clap(long)]
-    aws_public_key_base_url: Option<String>,
+    aws_public_key_base_url: String,
 
     /// AWS: system request ingress queue URL.
     #[clap(long)]
-    aws_request_bucket_name: Option<String>,
+    aws_request_bucket_name: String,
 
     /// AWS: system request ingress queue topic.
     #[clap(long)]
-    aws_request_topic_arn: Option<String>,
+    aws_request_topic_arn: String,
 
     /// AWS: system response egress queue URL.
     #[clap(long)]
-    aws_response_queue_url: Option<String>,
+    aws_response_queue_url: String,
 
     /// Path to SMPC node-0 configuration file.
     #[clap(long)]
@@ -75,34 +72,6 @@ struct CliOptions {
 }
 
 impl CliOptions {
-    fn aws_public_key_base_url(&self) -> String {
-        self.aws_public_key_base_url
-            .as_deref()
-            .unwrap_or(AWS_PUBLIC_KEY_BASE_URL)
-            .to_string()
-    }
-
-    fn aws_request_bucket_name(&self) -> String {
-        self.aws_request_bucket_name
-            .as_deref()
-            .unwrap_or(AWS_REQUEST_BUCKET_NAME)
-            .to_string()
-    }
-
-    fn aws_request_topic_arn(&self) -> String {
-        self.aws_request_topic_arn
-            .as_deref()
-            .unwrap_or(AWS_REQUEST_TOPIC_ARN)
-            .to_string()
-    }
-
-    fn aws_response_queue_url(&self) -> String {
-        self.aws_response_queue_url
-            .as_deref()
-            .unwrap_or(AWS_RESPONSE_QUEUE_URL)
-            .to_string()
-    }
-
     fn path_to_node_0_config(&self) -> PathBuf {
         Self::get_path_to_node_config(&self.path_to_node_0_config, 0)
     }
@@ -152,7 +121,7 @@ impl AsyncFrom<CliOptions> for Client<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
         Client::new(
             NetAwsClientConfig::async_from(options.clone()).await,
-            options.aws_public_key_base_url(),
+            options.aws_public_key_base_url.as_str(),
             options.request_batch_count,
             options.request_batch_kind(),
             options.request_batch_size(),
@@ -166,30 +135,16 @@ impl AsyncFrom<CliOptions> for Client<StdRng> {
 impl AsyncFrom<CliOptions> for NetAwsClientConfig {
     async fn async_from(options: CliOptions) -> Self {
         let node_configs = NetNodeConfig::from(options.clone());
+        let configs = node_configs.iter().map(|node_config| {
+            NodeAwsClientConfig::new(
+                node_config.to_owned(),
+                options.aws_request_topic_arn.clone(),
+                options.aws_request_bucket_name.clone(),
+                options.aws_response_queue_url.clone(),
+            )
+        });
 
-        [
-            NodeAwsClientConfig::new(
-                node_configs[0].to_owned(),
-                options.aws_request_topic_arn(),
-                options.aws_request_bucket_name(),
-                options.aws_response_queue_url(),
-            )
-            .await,
-            NodeAwsClientConfig::new(
-                node_configs[1].to_owned(),
-                options.aws_request_topic_arn(),
-                options.aws_request_bucket_name(),
-                options.aws_response_queue_url(),
-            )
-            .await,
-            NodeAwsClientConfig::new(
-                node_configs[2].to_owned(),
-                options.aws_request_topic_arn(),
-                options.aws_request_bucket_name(),
-                options.aws_response_queue_url(),
-            )
-            .await,
-        ]
+        futures::future::join_all(configs).await.try_into().unwrap()
     }
 }
 

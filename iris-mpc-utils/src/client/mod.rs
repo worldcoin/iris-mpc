@@ -33,14 +33,14 @@ pub struct Client<R: Rng + CryptoRng> {
 impl<R: Rng + CryptoRng> Client<R> {
     pub async fn new(
         net_aws_client_config: NetAwsClientConfig,
-        net_public_key_base_url: String,
+        net_public_key_base_url: &str,
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
         rng_seed: R,
     ) -> Self {
         let net_encryption_public_keys =
-            NodeAwsClient::download_net_encryption_public_keys(net_public_key_base_url.as_str())
+            NodeAwsClient::download_net_encryption_public_keys(net_public_key_base_url)
                 .await
                 .unwrap();
         let net_aws_clients = [
