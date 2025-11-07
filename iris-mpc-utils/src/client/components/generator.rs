@@ -1,4 +1,4 @@
-use rand::rngs::StdRng;
+use rand::{CryptoRng, Rng};
 
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
@@ -12,7 +12,7 @@ use crate::irises::generate_iris_code_and_mask_shares_both_eyes;
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
-pub struct RequestGenerator {
+pub struct RequestGenerator<R: Rng + CryptoRng> {
     // Count of generated batches.
     batch_count: usize,
 
@@ -26,11 +26,11 @@ pub struct RequestGenerator {
     n_batches: usize,
 
     /// Entropy source.
-    rng_seed: StdRng,
+    rng_seed: R,
 }
 
-impl RequestGenerator {
-    fn rng_seed_mut(&mut self) -> &mut StdRng {
+impl<R: Rng + CryptoRng> RequestGenerator<R> {
+    fn rng_seed_mut(&mut self) -> &mut R {
         &mut self.rng_seed
     }
 
@@ -44,7 +44,7 @@ impl RequestGenerator {
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
         n_batches: usize,
-        rng_seed: StdRng,
+        rng_seed: R,
     ) -> Self {
         Self {
             batch_count: 0,

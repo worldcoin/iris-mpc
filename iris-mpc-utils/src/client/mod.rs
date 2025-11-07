@@ -1,4 +1,4 @@
-use rand::rngs::StdRng;
+use rand::{CryptoRng, Rng};
 
 use crate::aws::{NetAwsClientConfig, NodeAwsClient};
 
@@ -14,12 +14,12 @@ mod components;
 mod types;
 
 #[derive(Debug)]
-pub struct Client {
+pub struct Client<R: Rng + CryptoRng> {
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
     // Component that generates system requests.
-    request_generator: RequestGenerator,
+    request_generator: RequestGenerator<R>,
 
     // Component that correlates system requests & responses.
     #[allow(dead_code)]
@@ -30,14 +30,14 @@ pub struct Client {
     response_dequeuer: ResponseDequeuer,
 }
 
-impl Client {
+impl<R: Rng + CryptoRng> Client<R> {
     pub async fn new(
         net_aws_client_config: NetAwsClientConfig,
         net_public_key_base_url: String,
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
-        rng_seed: StdRng,
+        rng_seed: R,
     ) -> Self {
         let net_encryption_public_keys =
             NodeAwsClient::download_net_encryption_public_keys(net_public_key_base_url.as_str())

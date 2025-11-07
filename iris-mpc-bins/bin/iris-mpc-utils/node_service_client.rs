@@ -148,7 +148,7 @@ impl CliOptions {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for Client {
+impl AsyncFrom<CliOptions> for Client<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
         Client::new(
             NetAwsClientConfig::async_from(options.clone()).await,
