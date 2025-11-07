@@ -8,14 +8,14 @@ use rand::{rngs::StdRng, SeedableRng};
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_utils::{
     aws::{
-        download_net_encryption_public_keys, AwsClient as NodeServiceClient,
-        AwsClientConfig as NodeServiceConfig, AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME,
+        download_net_encryption_public_keys, AwsClient, AwsClientConfig, NetAwsClient,
+        NetAwsClientConfig, AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME,
         AWS_REQUESTS_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
     },
     client::{self, AwsRequestDispatcher, Client, RequestGenerator},
     constants::NODE_CONFIG_KIND_MAIN,
     fsys,
-    types::{NetEncryptionPublicKeys, NetNodeConfig, NetServiceClients, NetServiceConfig},
+    types::{NetEncryptionPublicKeys, NetNodeConfig},
 };
 
 #[tokio::main]
@@ -176,21 +176,21 @@ impl From<CliOptions> for NetNodeConfig {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for NetServiceClients {
+impl AsyncFrom<CliOptions> for NetAwsClient {
     async fn async_from(options: CliOptions) -> Self {
-        NetServiceConfig::async_from(options)
+        NetAwsClientConfig::async_from(options)
             .await
-            .map(|x| NodeServiceClient::new(x))
+            .map(|x| AwsClient::new(x))
     }
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for NetServiceConfig {
+impl AsyncFrom<CliOptions> for NetAwsClientConfig {
     async fn async_from(options: CliOptions) -> Self {
         let node_configs = NetNodeConfig::from(options.clone());
 
         [
-            NodeServiceConfig::new(
+            AwsClientConfig::new(
                 node_configs[0].to_owned(),
                 options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
@@ -198,7 +198,7 @@ impl AsyncFrom<CliOptions> for NetServiceConfig {
                 options.aws_response_queue_url(),
             )
             .await,
-            NodeServiceConfig::new(
+            AwsClientConfig::new(
                 node_configs[1].to_owned(),
                 options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
@@ -206,7 +206,7 @@ impl AsyncFrom<CliOptions> for NetServiceConfig {
                 options.aws_response_queue_url(),
             )
             .await,
-            NodeServiceConfig::new(
+            AwsClientConfig::new(
                 node_configs[2].to_owned(),
                 options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
@@ -221,15 +221,15 @@ impl AsyncFrom<CliOptions> for NetServiceConfig {
 #[async_from::async_trait]
 impl AsyncFrom<CliOptions> for AwsRequestDispatcher {
     async fn async_from(options: CliOptions) -> Self {
-        Self::new(NetServiceClients::async_from(options).await)
+        Self::new(NetAwsClient::async_from(options).await)
     }
 }
 
 impl From<&CliOptions> for client::RequestGenerator {
     fn from(options: &CliOptions) -> Self {
         Self::new(
-            client::BatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
-            client::BatchSize::Static(*options.batch_size()),
+            client::RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
+            client::RequestBatchSize::Static(*options.batch_size()),
             *options.n_batches(),
         )
     }

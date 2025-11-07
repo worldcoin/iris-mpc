@@ -4,7 +4,9 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::types::{Batch, BatchKind, BatchSize, Request, RequestIterator, RequestPayload};
+use super::types::{
+    Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestIterator, RequestPayload,
+};
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
@@ -13,26 +15,26 @@ pub struct RequestGenerator {
     batch_count: usize,
 
     /// Determines type of requests to be included in each batch.
-    batch_kind: BatchKind,
+    batch_kind: RequestBatchKind,
 
     /// Size of each batch.
-    batch_size: BatchSize,
+    batch_size: RequestBatchSize,
 
     /// Number of request batches to generate.
     n_batches: usize,
 }
 
 impl RequestIterator for RequestGenerator {
-    async fn next(&mut self) -> Option<Batch> {
+    async fn next(&mut self) -> Option<RequestBatch> {
         if self.batch_count == self.n_batches {
             return None;
         }
 
         let batch_idx = self.batch_count + 1;
-        let mut batch = Batch::new(batch_idx);
+        let mut batch = RequestBatch::new(batch_idx);
 
         match self.batch_size {
-            BatchSize::Static(size) => {
+            RequestBatchSize::Static(size) => {
                 for item_idx in 1..(size + 1) {
                     batch
                         .requests_mut()
@@ -48,7 +50,11 @@ impl RequestIterator for RequestGenerator {
 }
 
 impl RequestGenerator {
-    pub fn new(batch_kind: BatchKind, batch_size: BatchSize, n_batches: usize) -> Self {
+    pub fn new(
+        batch_kind: RequestBatchKind,
+        batch_size: RequestBatchSize,
+        n_batches: usize,
+    ) -> Self {
         Self {
             batch_count: 0,
             batch_kind,
@@ -59,7 +65,7 @@ impl RequestGenerator {
 
     fn create_request(&self, batch_idx: usize, item_idx: usize) -> Request {
         let payload = match self.batch_kind {
-            BatchKind::Simple(kind) => match kind {
+            RequestBatchKind::Simple(kind) => match kind {
                 IDENTITY_DELETION_MESSAGE_TYPE => RequestPayload::IdentityDeletion(
                     self.create_identity_deletion(batch_idx, item_idx),
                 ),

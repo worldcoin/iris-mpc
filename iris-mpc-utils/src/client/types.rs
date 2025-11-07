@@ -8,9 +8,40 @@ use iris_mpc_common::helpers::smpc_request::{
     ResetUpdateRequest, UniquenessRequest,
 };
 
+/// A service request to be dispatched to a node's ingress queue.
+#[derive(Debug)]
+pub struct Request {
+    /// Batch ordinal identifier.
+    #[allow(dead_code)]
+    batch_idx: usize,
+
+    /// Batch item ordinal identifier.
+    #[allow(dead_code)]
+    batch_item_idx: usize,
+
+    /// Associated request payload.
+    #[allow(dead_code)]
+    payload: RequestPayload,
+
+    /// Unique request identifier for correlation purposes.
+    #[allow(dead_code)]
+    request_id: uuid::Uuid,
+}
+
+impl Request {
+    pub fn new(batch_idx: usize, batch_item_idx: usize, payload: RequestPayload) -> Self {
+        Self {
+            batch_idx,
+            batch_item_idx,
+            payload,
+            request_id: uuid::Uuid::new_v4(),
+        }
+    }
+}
+
 /// A data structure representing a batch of requests for system processing.
 #[derive(Debug)]
-pub struct Batch {
+pub struct RequestBatch {
     /// Ordinal batch identifier to distinguish batches.
     batch_idx: usize,
 
@@ -18,7 +49,7 @@ pub struct Batch {
     requests: Vec<Request>,
 }
 
-impl Batch {
+impl RequestBatch {
     pub fn batch_idx(&self) -> usize {
         self.batch_idx
     }
@@ -39,7 +70,7 @@ impl Batch {
     }
 }
 
-impl fmt::Display for Batch {
+impl fmt::Display for RequestBatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "batch-id={}", self.batch_idx)
     }
@@ -47,54 +78,23 @@ impl fmt::Display for Batch {
 
 /// A data structure representing the kind of request batch, i.e. the type of requests to be processed.
 #[derive(Debug, Clone)]
-pub enum BatchKind {
+pub enum RequestBatchKind {
     /// All requests in batch are of same type.
     Simple(&'static str),
 }
 
 /// A data structure representing inputs used to compute size of a request batch.
 #[derive(Debug, Clone)]
-pub enum BatchSize {
+pub enum RequestBatchSize {
     /// Batch size is static.
     Static(usize),
-}
-
-/// A service request to be dispatched to a node's ingress queue.
-#[derive(Debug)]
-pub struct Request {
-    /// Idx of batch within which request was included.
-    #[allow(dead_code)]
-    batch_idx: usize,
-
-    /// Idx of batch item within which request was included.
-    #[allow(dead_code)]
-    batch_item_idx: usize,
-
-    /// Unique request identifier for correlation purposes.
-    #[allow(dead_code)]
-    request_id: uuid::Uuid,
-
-    /// Associated request payload.
-    #[allow(dead_code)]
-    payload: RequestPayload,
-}
-
-impl Request {
-    pub fn new(batch_idx: usize, batch_item_idx: usize, payload: RequestPayload) -> Self {
-        Self {
-            batch_idx,
-            batch_item_idx,
-            payload,
-            request_id: uuid::Uuid::new_v4(),
-        }
-    }
 }
 
 /// A component responsible for dispatching request messages to system services.
 #[async_trait]
 pub trait RequestDispatcher {
     /// Dispatchs a batch of requests to system services.
-    async fn dispatch(&self, batch: Batch);
+    async fn dispatch(&self, batch: RequestBatch);
 }
 
 /// A component responsible for iterating over sets of requests.
@@ -105,7 +105,7 @@ pub trait RequestIterator {
     ///
     /// Future that resolves to maybe a Batch.
     ///
-    fn next(&mut self) -> impl Future<Output = Option<Batch>> + Send;
+    fn next(&mut self) -> impl Future<Output = Option<RequestBatch>> + Send;
 }
 
 /// An enumeration over a set of request payload types.

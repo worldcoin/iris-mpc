@@ -103,10 +103,10 @@ impl ServiceOperations for AwsClient {
 
 /// Downloads network wide set of node encryption public keys.
 pub async fn download_net_encryption_public_keys(
-    public_key_base_url: &String,
+    public_key_base_url: &str,
 ) -> Result<NetEncryptionPublicKeys> {
-    async fn get_public_key(party_idx: usize, public_key_base_url: &String) -> PublicKey {
-        let pbk_raw = download_public_key(public_key_base_url.clone(), party_idx.to_string())
+    async fn get_public_key(party_idx: usize, public_key_base_url: &str) -> PublicKey {
+        let pbk_raw = download_public_key(public_key_base_url.to_string(), party_idx.to_string())
             .await
             .unwrap();
         let pbk_bytes = general_purpose::STANDARD.decode(pbk_raw).unwrap();

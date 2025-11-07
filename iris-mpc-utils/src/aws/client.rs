@@ -11,7 +11,10 @@ use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 use iris_mpc_common::helpers::sqs_s3_helper;
 
 use super::config::AwsClientConfig;
-use crate::misc::{log_error, log_info};
+use crate::{
+    constants::N_PARTIES,
+    misc::{log_error, log_info},
+};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "State-AWS";
@@ -34,6 +37,9 @@ pub struct AwsClient {
     /// Client for Amazon Simple Queue Service.
     sqs: SQSClient,
 }
+
+// Network wide node AWS service clients.
+pub type NetAwsClient = [AwsClient; N_PARTIES];
 
 impl AwsClient {
     pub fn config(&self) -> &AwsClientConfig {

@@ -3,7 +3,6 @@ use serde_json;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use uuid::Uuid;
 
-use crate::constants::N_PARTIES;
 use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare,
@@ -12,6 +11,8 @@ use iris_mpc_common::{
         smpc_request::{IrisCodeSharesJSON, SharesS3Object},
     },
 };
+
+use crate::constants::N_PARTIES;
 
 /// TODO: review use of these constants.
 const IRIS_VERSION: &str = "1.0";
@@ -59,14 +60,11 @@ pub fn to_iris_party_shares_for_s3(
 ) -> SharesS3Object {
     let mut hash_set: [String; N_PARTIES] = Default::default();
     let mut content_set: [String; N_PARTIES] = Default::default();
-
     for i in 0..N_PARTIES {
-        let as_obj = shares.party(i);
-        let as_json = serde_json::to_string(as_obj)
+        let as_json = serde_json::to_string(shares.party(i))
             .expect("Serialization failed")
             .clone();
         let as_bytes = sealedbox::seal(as_json.as_bytes(), &encryption_public_keys[i]);
-
         content_set[i] = b64.encode(&as_bytes);
         hash_set[i] = sha256_as_hex_string(&as_json);
     }
@@ -84,30 +82,19 @@ pub fn to_iris_party_shares_for_s3(
 #[cfg(test)]
 mod tests {
     use super::{to_iris_code_party_shares, to_iris_code_shares_json, to_iris_party_shares_for_s3};
-    use crate::{
-        constants::N_PARTIES, irises::generate_iris_code_and_mask_shares_for_both_eyes,
-        types::IrisCodeAndMaskShares,
-    };
-    use iris_mpc_cpu::execution::hawk_main::BothEyes;
+    use crate::{constants::N_PARTIES, irises::generate_iris_code_and_mask_shares_both_eyes};
     use rand::{rngs::StdRng, SeedableRng};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
-
-    fn create_iris_code_and_mask_shares_for_both_eyes() -> BothEyes<IrisCodeAndMaskShares> {
-        let mut rng = create_rng();
-        generate_iris_code_and_mask_shares_for_both_eyes(&mut rng)
-    }
 
     fn create_public_keys_for_encryption() -> [PublicKey; N_PARTIES] {
         std::array::from_fn(|_| gen_keypair().0)
     }
 
-    fn create_rng() -> StdRng {
-        StdRng::from_entropy()
-    }
-
     #[test]
     fn test_convert_to_iris_code_party_shares() {
-        let [l, r] = create_iris_code_and_mask_shares_for_both_eyes();
+        // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
+        let mut rng = StdRng::from_entropy();
+        let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
         let _ = to_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
@@ -115,7 +102,9 @@ mod tests {
 
     #[test]
     fn test_convert_to_iris_code_shares_json() {
-        let [l, r] = create_iris_code_and_mask_shares_for_both_eyes();
+        // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
+        let mut rng = StdRng::from_entropy();
+        let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
         let _ = to_iris_code_shares_json(l_code, l_mask, r_code, r_mask);
@@ -123,12 +112,13 @@ mod tests {
 
     #[test]
     fn test_to_iris_party_shares_for_s3() {
-        let [l, r] = create_iris_code_and_mask_shares_for_both_eyes();
+        // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
+        let mut rng = StdRng::from_entropy();
+        let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
         let shares = to_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
         let keys = create_public_keys_for_encryption();
-
         let _ = to_iris_party_shares_for_s3(&shares, &keys);
     }
 }

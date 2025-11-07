@@ -2,6 +2,7 @@ use aws_config::SdkConfig;
 use aws_sdk_sqs::config::Region;
 
 use super::constants::AWS_REGION;
+use crate::constants::N_PARTIES;
 use iris_mpc_common::config::Config as NodeConfig;
 
 /// Encpasulates AWS service client configuration.
@@ -25,6 +26,9 @@ pub struct AwsClientConfig {
     /// Associated AWS SDK configuration.
     sdk: SdkConfig,
 }
+
+// Network wide configuration set.
+pub type NetAwsClientConfig = [AwsClientConfig; N_PARTIES];
 
 impl AwsClientConfig {
     pub async fn new(
@@ -104,10 +108,11 @@ async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AwsClientConfig, AWS_PUBLICKEY_BASE_URL, AWS_REGION, AWS_REQUESTS_BUCKET_NAME,
-        AWS_REQUESTS_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
+    use super::super::constants::{
+        AWS_PUBLIC_KEY_BASE_URL, AWS_REGION, AWS_REQUESTS_BUCKET_NAME, AWS_REQUESTS_TOPIC_ARN,
+        AWS_RESPONSE_QUEUE_URL,
     };
+    use super::AwsClientConfig;
     use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
 
     async fn create_config() -> AwsClientConfig {
@@ -115,10 +120,10 @@ mod tests {
 
         AwsClientConfig::new(
             node_config,
-            AWS_PUBLICKEY_BASE_URL.to_string(),
-            AWS_REQUESTS_BUCKET_NAME,
-            AWS_REQUESTS_TOPIC_ARN,
-            AWS_RESPONSE_QUEUE_URL,
+            AWS_PUBLIC_KEY_BASE_URL.to_string(),
+            AWS_REQUESTS_BUCKET_NAME.to_string(),
+            AWS_REQUESTS_TOPIC_ARN.to_string(),
+            AWS_RESPONSE_QUEUE_URL.to_string(),
         )
         .await
     }

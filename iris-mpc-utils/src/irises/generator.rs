@@ -9,7 +9,7 @@ use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::Galois
 use crate::{constants::N_PARTIES, types::IrisCodeAndMaskShares};
 
 /// Returns generated iris code shares over both eyes.
-pub fn generate_iris_code_and_mask_shares_for_both_eyes<R: Rng + CryptoRng>(
+pub fn generate_iris_code_and_mask_shares_both_eyes<R: Rng + CryptoRng>(
     rng: &mut R,
 ) -> BothEyes<IrisCodeAndMaskShares> {
     [
@@ -36,7 +36,7 @@ pub fn generate_iris_code_and_mask_shares<R: Rng + CryptoRng>(
 }
 
 /// Returns generated iris shares from an iris code using local randomness alongside its mirrored component.
-pub fn generate_shared_iris_locally<R: Rng + CryptoRng>(
+pub fn generate_iris_shares_locally<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
 ) -> [GaloisRingSharedIris; N_PARTIES] {
@@ -46,24 +46,24 @@ pub fn generate_shared_iris_locally<R: Rng + CryptoRng>(
     [
         // Party 1.
         GaloisRingSharedIris {
-            code: code_shares[0].clone(),
+            code: code_shares[0].to_owned(),
             mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[0]),
         },
         // Party 2.
         GaloisRingSharedIris {
-            code: code_shares[1].clone(),
+            code: code_shares[1].to_owned(),
             mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[1]),
         },
         // Party 3.
         GaloisRingSharedIris {
-            code: code_shares[2].clone(),
+            code: code_shares[2].to_owned(),
             mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[2]),
         },
     ]
 }
 
 /// Returns generated iris shares from an iris code using local randomness alongside its mirrored component.
-pub fn generate_shared_iris_locally_mirrored<R: Rng + CryptoRng>(
+pub fn generate_iris_shares_locally_mirrored<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
 ) -> [GaloisRingSharedIris; N_PARTIES] {
@@ -81,17 +81,17 @@ pub fn generate_shared_iris_locally_mirrored<R: Rng + CryptoRng>(
     [
         // Party 1.
         GaloisRingSharedIris {
-            code: code_shares_mirrored[0].clone(),
+            code: code_shares_mirrored[0].to_owned(),
             mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[0]),
         },
         // Party 2.
         GaloisRingSharedIris {
-            code: code_shares_mirrored[1].clone(),
+            code: code_shares_mirrored[1].to_owned(),
             mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[1]),
         },
         // Party 3.
         GaloisRingSharedIris {
-            code: code_shares_mirrored[2].clone(),
+            code: code_shares_mirrored[2].to_owned(),
             mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[2]),
         },
     ]
@@ -100,8 +100,8 @@ pub fn generate_shared_iris_locally_mirrored<R: Rng + CryptoRng>(
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_iris_code_and_mask_shares, generate_iris_code_and_mask_shares_for_both_eyes,
-        generate_shared_iris_locally, generate_shared_iris_locally_mirrored, IrisCode,
+        generate_iris_code_and_mask_shares, generate_iris_code_and_mask_shares_both_eyes,
+        generate_iris_shares_locally, generate_iris_shares_locally_mirrored, IrisCode,
     };
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn test_can_generate_iris_code_shares() {
         let mut rng = create_rng();
-        let _ = generate_iris_code_and_mask_shares_for_both_eyes(&mut rng);
+        let _ = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
     }
 
     #[test]
@@ -129,14 +129,14 @@ mod tests {
     #[test]
     fn test_can_generate_shared_iris_locally() {
         let mut rng = create_rng();
-        let _ = generate_shared_iris_locally(&mut rng, None);
-        let _ = generate_shared_iris_locally(&mut rng, Some(create_iris_code()));
+        let _ = generate_iris_shares_locally(&mut rng, None);
+        let _ = generate_iris_shares_locally(&mut rng, Some(create_iris_code()));
     }
 
     #[test]
     fn test_can_generate_shared_iris_locally_mirrored() {
         let mut rng = create_rng();
-        let _ = generate_shared_iris_locally_mirrored(&mut rng, None);
-        let _ = generate_shared_iris_locally_mirrored(&mut rng, Some(create_iris_code()));
+        let _ = generate_iris_shares_locally_mirrored(&mut rng, None);
+        let _ = generate_iris_shares_locally_mirrored(&mut rng, Some(create_iris_code()));
     }
 }
