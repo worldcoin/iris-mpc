@@ -11,14 +11,11 @@ pub struct NodeAwsClientConfig {
     /// Associated node configuration.
     node: NodeConfig,
 
-    /// Base URL for downloading node encryption public keys.
-    public_key_base_url: String,
-
     /// System request ingress queue URL.
-    requests_bucket_name: String,
+    request_bucket_name: String,
 
     /// System request ingress queue topic.
-    requests_topic_arn: String,
+    request_topic_arn: String,
 
     /// System response eqgress queue URL.
     response_queue_url: String,
@@ -31,18 +28,40 @@ pub struct NodeAwsClientConfig {
 pub type NetAwsClientConfig = [NodeAwsClientConfig; N_PARTIES];
 
 impl NodeAwsClientConfig {
+    pub fn environment(&self) -> &String {
+        &self.node().environment
+    }
+
+    pub fn node(&self) -> &NodeConfig {
+        &self.node
+    }
+
+    pub fn request_bucket_name(&self) -> &String {
+        &self.request_bucket_name
+    }
+
+    pub fn request_topic_arn(&self) -> &String {
+        &self.request_topic_arn
+    }
+
+    pub fn response_queue_url(&self) -> &String {
+        &self.response_queue_url
+    }
+
+    pub fn sdk(&self) -> &SdkConfig {
+        &self.sdk
+    }
+
     pub async fn new(
         node_config: NodeConfig,
-        public_key_base_url: String,
-        requests_bucket_name: String,
-        requests_topic_arn: String,
+        request_bucket_name: String,
+        request_topic_arn: String,
         response_queue_url: String,
     ) -> Self {
         Self {
             node: node_config.to_owned(),
-            public_key_base_url,
-            requests_bucket_name,
-            requests_topic_arn,
+            request_bucket_name,
+            request_topic_arn,
             response_queue_url,
             sdk: get_sdk_config(&node_config).await,
         }
@@ -53,42 +72,11 @@ impl Clone for NodeAwsClientConfig {
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
-            public_key_base_url: self.public_key_base_url.clone(),
-            requests_bucket_name: self.requests_bucket_name.clone(),
-            requests_topic_arn: self.requests_topic_arn.clone(),
+            request_bucket_name: self.request_bucket_name.clone(),
+            request_topic_arn: self.request_topic_arn.clone(),
             response_queue_url: self.response_queue_url.clone(),
             sdk: self.sdk.clone(),
         }
-    }
-}
-
-impl NodeAwsClientConfig {
-    pub fn environment(&self) -> &String {
-        &self.node().environment
-    }
-
-    pub fn node(&self) -> &NodeConfig {
-        &self.node
-    }
-
-    pub fn public_key_base_url(&self) -> &String {
-        &self.public_key_base_url
-    }
-
-    pub fn requests_bucket_name(&self) -> &String {
-        &self.requests_bucket_name
-    }
-
-    pub fn requests_topic_arn(&self) -> &String {
-        &self.requests_topic_arn
-    }
-
-    pub fn response_queue_url(&self) -> &String {
-        &self.response_queue_url
-    }
-
-    pub fn sdk(&self) -> &SdkConfig {
-        &self.sdk
     }
 }
 
@@ -109,8 +97,7 @@ async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
 #[cfg(test)]
 mod tests {
     use super::super::constants::{
-        AWS_PUBLIC_KEY_BASE_URL, AWS_REGION, AWS_REQUESTS_BUCKET_NAME, AWS_REQUESTS_TOPIC_ARN,
-        AWS_RESPONSE_QUEUE_URL,
+        AWS_REGION, AWS_REQUEST_BUCKET_NAME, AWS_REQUEST_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
     };
     use super::NodeAwsClientConfig;
     use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
@@ -120,9 +107,8 @@ mod tests {
 
         NodeAwsClientConfig::new(
             node_config,
-            AWS_PUBLIC_KEY_BASE_URL.to_string(),
-            AWS_REQUESTS_BUCKET_NAME.to_string(),
-            AWS_REQUESTS_TOPIC_ARN.to_string(),
+            AWS_REQUEST_BUCKET_NAME.to_string(),
+            AWS_REQUEST_TOPIC_ARN.to_string(),
             AWS_RESPONSE_QUEUE_URL.to_string(),
         )
         .await

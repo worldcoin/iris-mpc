@@ -53,7 +53,6 @@ pub fn create_iris_code_shares_json(
 }
 
 /// Converts iris code shares into a JSON representation.
-#[allow(dead_code)]
 pub fn create_iris_party_shares_for_s3(
     shares: &IrisCodePartyShares,
     encryption_public_keys: &[PublicKey; N_PARTIES],
@@ -94,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_to_iris_code_party_shares() {
+    fn test_create_iris_code_party_shares() {
         // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
         let mut rng = StdRng::from_entropy();
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
@@ -104,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_to_iris_code_shares_json() {
+    fn test_create_iris_code_shares_json() {
         // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
         let mut rng = StdRng::from_entropy();
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
@@ -114,7 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_iris_party_shares_for_s3() {
+    fn test_create_party_shares_for_s3() {
         // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
         let mut rng = StdRng::from_entropy();
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);

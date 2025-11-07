@@ -2,10 +2,10 @@ use rand::rngs::StdRng;
 
 use crate::aws::{NetAwsClientConfig, NodeAwsClient};
 
-pub use components::RequestEnqueuer;
-pub use components::RequestGenerator;
-pub use components::ResponseCorrelator;
-pub use components::ResponseDequeuer;
+use components::RequestEnqueuer;
+use components::RequestGenerator;
+use components::ResponseCorrelator;
+use components::ResponseDequeuer;
 pub use types::{
     Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData, RequestDataUniqueness,
 };
@@ -15,25 +15,52 @@ mod types;
 
 #[derive(Debug)]
 pub struct Client {
+    // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
+
+    // Component that generates system requests.
     request_generator: RequestGenerator,
+
+    // Component that correlates system requests & responses.
     #[allow(dead_code)]
     response_correlator: ResponseCorrelator,
+
+    // Component that dequeues system responses from system egress queues.
     #[allow(dead_code)]
     response_dequeuer: ResponseDequeuer,
 }
 
 impl Client {
-    pub fn new(
+    pub async fn new(
         net_aws_client_config: NetAwsClientConfig,
+        net_public_key_base_url: String,
+        batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
-        n_batches: usize,
         rng_seed: StdRng,
     ) -> Self {
+        let net_encryption_public_keys =
+            NodeAwsClient::download_net_encryption_public_keys(net_public_key_base_url.as_str())
+                .await
+                .unwrap();
+        let net_aws_clients = [
+            NodeAwsClient::new(
+                net_aws_client_config[0].to_owned(),
+                net_encryption_public_keys,
+            ),
+            NodeAwsClient::new(
+                net_aws_client_config[1].to_owned(),
+                net_encryption_public_keys,
+            ),
+            NodeAwsClient::new(
+                net_aws_client_config[2].to_owned(),
+                net_encryption_public_keys,
+            ),
+        ];
+
         Self {
-            request_enqueuer: RequestEnqueuer::new(net_aws_client_config.map(NodeAwsClient::new)),
-            request_generator: RequestGenerator::new(batch_kind, batch_size, n_batches, rng_seed),
+            request_enqueuer: RequestEnqueuer::new(net_aws_clients),
+            request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count, rng_seed),
             response_correlator: ResponseCorrelator::default(),
             response_dequeuer: ResponseDequeuer::default(),
         }

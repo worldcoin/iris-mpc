@@ -57,7 +57,7 @@ impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "request: {}::{}::{}",
+            "request: batch-id={} item-id={} type={}",
             self.batch_idx, self.batch_item_idx, self.data
         )
     }
@@ -127,7 +127,17 @@ pub enum RequestData {
 
 #[derive(Debug, Clone)]
 pub struct RequestDataUniqueness {
-    pub iris_shares: BothEyes<IrisCodeAndMaskShares>,
+    shares: BothEyes<IrisCodeAndMaskShares>,
+}
+
+impl RequestDataUniqueness {
+    pub fn iris_code_and_mask_shares_both_eyes(&self) -> &BothEyes<IrisCodeAndMaskShares> {
+        &self.shares
+    }
+
+    pub fn new(shares: BothEyes<IrisCodeAndMaskShares>) -> Self {
+        Self { shares }
+    }
 }
 
 impl fmt::Display for RequestData {

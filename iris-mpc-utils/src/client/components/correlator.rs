@@ -10,7 +10,10 @@ impl ResponseCorrelator {
     }
 
     pub async fn correlate(&self, batch: &RequestBatch) {
-        println!("TODO: correlate requests with responses: {}", batch);
+        println!(
+            "TODO: correlate enqueued requests with dequeued responses: {}",
+            batch
+        );
     }
 }
 

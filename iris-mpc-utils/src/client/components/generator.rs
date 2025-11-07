@@ -66,7 +66,7 @@ impl RequestGenerator {
         let mut batch = RequestBatch::new(batch_idx, batch_size);
         for item_idx in 1..(batch_size + 1) {
             let item = self.generate_request(batch_idx, item_idx);
-            println!("Generated request: {}", item,);
+            println!("Generated {}", item,);
             batch.requests_mut().push(item);
         }
         self.batch_count += 1;
@@ -87,11 +87,11 @@ impl RequestGenerator {
                     REAUTH_MESSAGE_TYPE => RequestData::Reauthorisation,
                     RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck,
                     RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate,
-                    UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness(RequestDataUniqueness {
-                        iris_shares: generate_iris_code_and_mask_shares_both_eyes(
-                            self.rng_seed_mut(),
-                        ),
-                    }),
+                    UNIQUENESS_MESSAGE_TYPE => {
+                        let iris_shares =
+                            generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut());
+                        RequestData::Uniqueness(RequestDataUniqueness::new(iris_shares))
+                    }
                     _ => panic!("Unsupported request kind: {}", kind),
                 },
             },

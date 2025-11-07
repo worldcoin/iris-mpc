@@ -27,7 +27,7 @@ pub struct NodeAwsClient {
     config: NodeAwsClientConfig,
 
     /// Encryption public key set ... one per MPC node.
-    encryption_keys: Option<NetEncryptionPublicKeys>,
+    encryption_keys: NetEncryptionPublicKeys,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -50,6 +50,10 @@ impl NodeAwsClient {
         &self.config
     }
 
+    pub fn encryption_keys(&self) -> &NetEncryptionPublicKeys {
+        &self.encryption_keys
+    }
+
     pub fn s3(&self) -> &S3Client {
         &self.s3
     }
@@ -66,10 +70,10 @@ impl NodeAwsClient {
         &self.sqs
     }
 
-    pub fn new(config: NodeAwsClientConfig) -> Self {
+    pub fn new(config: NodeAwsClientConfig, encryption_keys: NetEncryptionPublicKeys) -> Self {
         Self {
             config: config.to_owned(),
-            encryption_keys: None,
+            encryption_keys,
             s3: S3Client::from(&config),
             secrets_manager: SecretsManagerClient::from(&config),
             sqs: SQSClient::from(&config),
@@ -83,14 +87,6 @@ impl NodeAwsClient {
 
     pub(super) fn log_info(&self, msg: &str) {
         log_info(COMPONENT, msg);
-    }
-
-    pub async fn set_encryption_keys(&mut self) {
-        self.encryption_keys = Some(
-            Self::download_net_encryption_public_keys(self.config.public_key_base_url())
-                .await
-                .unwrap(),
-        );
     }
 
     pub async fn upload_to_s3(
@@ -189,8 +185,8 @@ mod tests {
         NodeAwsClientConfig::new(
             node_config,
             constants::AWS_PUBLIC_KEY_BASE_URL.to_string(),
-            constants::AWS_REQUESTS_BUCKET_NAME.to_string(),
-            constants::AWS_REQUESTS_TOPIC_ARN.to_string(),
+            constants::AWS_REQUEST_BUCKET_NAME.to_string(),
+            constants::AWS_REQUEST_TOPIC_ARN.to_string(),
             constants::AWS_RESPONSE_QUEUE_URL.to_string(),
         )
         .await

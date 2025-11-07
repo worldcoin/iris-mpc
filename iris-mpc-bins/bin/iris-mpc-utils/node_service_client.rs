@@ -8,8 +8,8 @@ use rand::{rngs::StdRng, SeedableRng};
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_utils::{
     aws::{
-        NetAwsClientConfig, NodeAwsClientConfig, AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME,
-        AWS_REQUESTS_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
+        NetAwsClientConfig, NodeAwsClientConfig, AWS_PUBLIC_KEY_BASE_URL, AWS_REQUEST_BUCKET_NAME,
+        AWS_REQUEST_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
     },
     client::{Client, RequestBatchKind, RequestBatchSize},
     constants::NODE_CONFIG_KIND_MAIN,
@@ -19,13 +19,13 @@ use iris_mpc_utils::{
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
+    println!("Options: instantiating ...");
     let options = CliOptions::parse();
-    println!("Instantiated options: {:?}", &options);
 
+    println!("Client: instantiating ...");
     let mut client = Client::async_from(options.clone()).await;
-    println!("Instantiated client");
 
-    println!("Running client ...");
+    println!("Client: running ...");
     client.run().await;
 
     Ok(())
@@ -37,25 +37,17 @@ struct CliOptions {
     #[clap(long)]
     aws_public_key_base_url: Option<String>,
 
+    /// AWS: system request ingress queue URL.
+    #[clap(long)]
+    aws_request_bucket_name: Option<String>,
+
     /// AWS: system request ingress queue topic.
     #[clap(long)]
     aws_request_topic_arn: Option<String>,
 
-    /// AWS: system request ingress queue URL.
-    #[clap(long)]
-    aws_requests_bucket_name: Option<String>,
-
     /// AWS: system response egress queue URL.
     #[clap(long)]
     aws_response_queue_url: Option<String>,
-
-    /// Maximum size of each request batch.
-    #[clap(long, default_value = "500")]
-    batch_size: usize,
-
-    /// Number of request batches to process.
-    #[clap(long, default_value = "1")]
-    n_batches: usize,
 
     /// Path to SMPC node-0 configuration file.
     #[clap(long)]
@@ -68,6 +60,14 @@ struct CliOptions {
     /// Path to SMPC node-0 configuration file.
     #[clap(long)]
     path_to_node_2_config: Option<String>,
+
+    /// Number of request batches to process.
+    #[clap(long, default_value = "1")]
+    request_batch_count: usize,
+
+    /// Maximum size of each request batch.
+    #[clap(long, default_value = "500")]
+    request_batch_size: usize,
 
     /// A random number generator seed for upstream entropy.
     #[clap(long)]
@@ -82,17 +82,17 @@ impl CliOptions {
             .to_string()
     }
 
-    fn aws_requests_bucket_name(&self) -> String {
-        self.aws_requests_bucket_name
+    fn aws_request_bucket_name(&self) -> String {
+        self.aws_request_bucket_name
             .as_deref()
-            .unwrap_or(AWS_REQUESTS_BUCKET_NAME)
+            .unwrap_or(AWS_REQUEST_BUCKET_NAME)
             .to_string()
     }
 
     fn aws_request_topic_arn(&self) -> String {
         self.aws_request_topic_arn
             .as_deref()
-            .unwrap_or(AWS_REQUESTS_TOPIC_ARN)
+            .unwrap_or(AWS_REQUEST_TOPIC_ARN)
             .to_string()
     }
 
@@ -122,9 +122,8 @@ impl CliOptions {
     }
 
     fn request_batch_size(&self) -> RequestBatchSize {
-        // Currently defaults to static batches of 500 requests.
-        // TODO: parse from env | command line | file.
-        RequestBatchSize::Static(500)
+        // Currently defaults to static batches.
+        RequestBatchSize::Static(self.request_batch_size)
     }
 
     #[allow(dead_code)]
@@ -153,21 +152,13 @@ impl AsyncFrom<CliOptions> for Client {
     async fn async_from(options: CliOptions) -> Self {
         Client::new(
             NetAwsClientConfig::async_from(options.clone()).await,
+            options.aws_public_key_base_url(),
+            options.request_batch_count,
             options.request_batch_kind(),
             options.request_batch_size(),
-            options.n_batches,
             options.rng_seed(),
         )
-    }
-}
-
-impl From<CliOptions> for NetNodeConfig {
-    fn from(options: CliOptions) -> Self {
-        [
-            fsys::read_node_config(&options.path_to_node_0_config()).unwrap(),
-            fsys::read_node_config(options.path_to_node_1_config().as_path()).unwrap(),
-            fsys::read_node_config(options.path_to_node_2_config().as_path()).unwrap(),
-        ]
+        .await
     }
 }
 
@@ -179,28 +170,35 @@ impl AsyncFrom<CliOptions> for NetAwsClientConfig {
         [
             NodeAwsClientConfig::new(
                 node_configs[0].to_owned(),
-                options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
-                options.aws_requests_bucket_name(),
+                options.aws_request_bucket_name(),
                 options.aws_response_queue_url(),
             )
             .await,
             NodeAwsClientConfig::new(
                 node_configs[1].to_owned(),
-                options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
-                options.aws_requests_bucket_name(),
+                options.aws_request_bucket_name(),
                 options.aws_response_queue_url(),
             )
             .await,
             NodeAwsClientConfig::new(
                 node_configs[2].to_owned(),
-                options.aws_public_key_base_url(),
                 options.aws_request_topic_arn(),
-                options.aws_requests_bucket_name(),
+                options.aws_request_bucket_name(),
                 options.aws_response_queue_url(),
             )
             .await,
+        ]
+    }
+}
+
+impl From<CliOptions> for NetNodeConfig {
+    fn from(options: CliOptions) -> Self {
+        [
+            fsys::read_node_config(&options.path_to_node_0_config()).unwrap(),
+            fsys::read_node_config(&options.path_to_node_1_config()).unwrap(),
+            fsys::read_node_config(&options.path_to_node_2_config()).unwrap(),
         ]
     }
 }
