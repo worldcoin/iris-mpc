@@ -8,16 +8,13 @@ use rand::{rngs::StdRng, SeedableRng};
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_utils::{
     aws::{
-        NetAwsClient, NetAwsClientConfig, NodeAwsClient, NodeAwsClientConfig,
-        AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME, AWS_REQUESTS_TOPIC_ARN,
-        AWS_RESPONSE_QUEUE_URL,
+        NetAwsClientConfig, NodeAwsClientConfig, AWS_PUBLIC_KEY_BASE_URL, AWS_REQUESTS_BUCKET_NAME,
+        AWS_REQUESTS_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
     },
-    client::{
-        self, Client, RequestBatchKind, RequestBatchSize, RequestDispatcher, RequestGenerator,
-    },
+    client::{Client, RequestBatchKind, RequestBatchSize},
     constants::NODE_CONFIG_KIND_MAIN,
     fsys,
-    types::{NetEncryptionPublicKeys, NetNodeConfig},
+    types::NetNodeConfig,
 };
 
 #[tokio::main]
@@ -118,6 +115,18 @@ impl CliOptions {
         Self::get_path_to_node_config(&self.path_to_node_2_config, 2)
     }
 
+    fn request_batch_kind(&self) -> RequestBatchKind {
+        // Currently defaults to sets of uniqueness requests.
+        // TODO: parse from env | command line | file.
+        RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE)
+    }
+
+    fn request_batch_size(&self) -> RequestBatchSize {
+        // Currently defaults to static batches of 500 requests.
+        // TODO: parse from env | command line | file.
+        RequestBatchSize::Static(500)
+    }
+
     #[allow(dead_code)]
     fn rng_seed(&self) -> StdRng {
         if self.rng_seed.is_some() {
@@ -142,20 +151,13 @@ impl CliOptions {
 #[async_from::async_trait]
 impl AsyncFrom<CliOptions> for Client {
     async fn async_from(options: CliOptions) -> Self {
-        // let _ = NetEncryptionPublicKeys::async_from(options.clone()).await;
         Client::new(
-            RequestDispatcher::async_from(options.clone()).await,
-            RequestGenerator::from(&options),
+            NetAwsClientConfig::async_from(options.clone()).await,
+            options.request_batch_kind(),
+            options.request_batch_size(),
+            options.n_batches,
+            options.rng_seed(),
         )
-    }
-}
-
-#[async_from::async_trait]
-impl AsyncFrom<CliOptions> for NetEncryptionPublicKeys {
-    async fn async_from(options: CliOptions) -> Self {
-        NodeAwsClient::download_net_encryption_public_keys(&options.aws_public_key_base_url())
-            .await
-            .unwrap()
     }
 }
 
@@ -166,15 +168,6 @@ impl From<CliOptions> for NetNodeConfig {
             fsys::read_node_config(options.path_to_node_1_config().as_path()).unwrap(),
             fsys::read_node_config(options.path_to_node_2_config().as_path()).unwrap(),
         ]
-    }
-}
-
-#[async_from::async_trait]
-impl AsyncFrom<CliOptions> for NetAwsClient {
-    async fn async_from(options: CliOptions) -> Self {
-        NetAwsClientConfig::async_from(options)
-            .await
-            .map(|x| NodeAwsClient::new(x))
     }
 }
 
@@ -209,27 +202,5 @@ impl AsyncFrom<CliOptions> for NetAwsClientConfig {
             )
             .await,
         ]
-    }
-}
-
-#[async_from::async_trait]
-impl AsyncFrom<CliOptions> for RequestDispatcher {
-    async fn async_from(options: CliOptions) -> Self {
-        Self::new(NetAwsClient::async_from(options).await)
-    }
-}
-
-impl From<&CliOptions> for client::RequestGenerator {
-    fn from(options: &CliOptions) -> Self {
-        // Currently defaults to static batches of uniqueness requests.
-        let batch_kind = RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE);
-        let batch_size = RequestBatchSize::Static(options.batch_size);
-
-        Self::new(
-            batch_kind,
-            batch_size,
-            options.n_batches,
-            options.rng_seed(),
-        )
     }
 }

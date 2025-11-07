@@ -5,7 +5,7 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::types::{
+use super::super::types::{
     Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData, RequestDataUniqueness,
 };
 use crate::irises::generate_iris_code_and_mask_shares_both_eyes;

@@ -14,6 +14,7 @@ use super::config::NodeAwsClientConfig;
 use crate::{
     constants::N_PARTIES,
     misc::{log_error, log_info},
+    types::NetEncryptionPublicKeys,
 };
 
 /// Component name for logging purposes.
@@ -24,6 +25,9 @@ const COMPONENT: &str = "State-AWS";
 pub struct NodeAwsClient {
     /// Associated configuration.
     config: NodeAwsClientConfig,
+
+    /// Encryption public key set ... one per MPC node.
+    encryption_keys: Option<NetEncryptionPublicKeys>,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -65,6 +69,7 @@ impl NodeAwsClient {
     pub fn new(config: NodeAwsClientConfig) -> Self {
         Self {
             config: config.to_owned(),
+            encryption_keys: None,
             s3: S3Client::from(&config),
             secrets_manager: SecretsManagerClient::from(&config),
             sqs: SQSClient::from(&config),
@@ -78,6 +83,14 @@ impl NodeAwsClient {
 
     pub(super) fn log_info(&self, msg: &str) {
         log_info(COMPONENT, msg);
+    }
+
+    pub async fn set_encryption_keys(&mut self) {
+        self.encryption_keys = Some(
+            Self::download_net_encryption_public_keys(self.config.public_key_base_url())
+                .await
+                .unwrap(),
+        );
     }
 
     pub async fn upload_to_s3(
@@ -97,6 +110,7 @@ impl Clone for NodeAwsClient {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
+            encryption_keys: self.encryption_keys,
             sqs: self.sqs.clone(),
             sns: self.sns.clone(),
             s3: self.s3.clone(),
