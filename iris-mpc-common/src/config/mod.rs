@@ -526,7 +526,7 @@ impl Config {
 
         let mut config: Config = settings.try_deserialize::<Config>()?;
 
-        // If service_outbound_ports is not explicitly set but service_ports is,
+        // If service_outbound_ports is not explicitly set,
         // copy service_ports to service_outbound_ports
         if config.service_outbound_ports.is_empty() {
             config.service_outbound_ports = config.service_ports.clone();
