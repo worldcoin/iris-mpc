@@ -149,33 +149,31 @@ impl From<&AwsClientConfig> for SQSClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::config::AwsClientConfig, AwsClient};
-    use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
+    use super::super::{constants, AwsClient, AwsClientConfig};
+    use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys};
 
     fn assert_clients(clients: &AwsClient) {
-        let client = clients.s3();
-        assert!(client.config().region().is_some());
-
-        let client = clients.secrets_manager();
-        assert!(client.config().region().is_some());
-
-        let client = clients.sns();
-        assert!(client.config().region().is_some());
-
-        let client = clients.sqs();
-        assert!(client.config().region().is_some());
+        assert!(clients.s3().config().region().is_some());
+        assert!(clients.secrets_manager().config().region().is_some());
+        assert!(clients.sns().config().region().is_some());
+        assert!(clients.sqs().config().region().is_some());
     }
 
     async fn create_clients() -> AwsClient {
-        let config = create_config().await;
-
-        AwsClient::new(config)
+        AwsClient::new(create_config().await)
     }
 
     async fn create_config() -> AwsClientConfig {
-        let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
+        let node_config = fsys::local::read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
 
-        AwsClientConfig::new(node_config).await
+        AwsClientConfig::new(
+            node_config,
+            constants::AWS_PUBLIC_KEY_BASE_URL.to_string(),
+            constants::AWS_REQUESTS_BUCKET_NAME.to_string(),
+            constants::AWS_REQUESTS_TOPIC_ARN.to_string(),
+            constants::AWS_RESPONSE_QUEUE_URL.to_string(),
+        )
+        .await
     }
 
     #[tokio::test]

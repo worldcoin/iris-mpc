@@ -1,6 +1,3 @@
-/// AWS default settings.
-pub const DEFAULT_AWS_REGION: &str = "us-east-1";
-
 /// Test graph sizes.
 pub const GRAPH_SIZE_RANGE: [usize; 8] = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 2_000_000];
 

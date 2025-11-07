@@ -1,2 +1,4 @@
 pub mod local;
-pub mod reader;
+mod reader;
+
+pub use reader::read_node_config;

@@ -7,4 +7,4 @@ mod types;
 pub use client::Client;
 pub use request_dispatcher::AwsRequestDispatcher;
 pub use request_generator::RequestGenerator;
-pub use types::{BatchKind, BatchSize};
+pub use types::{BatchKind, BatchSize, RequestDispatcher, RequestIterator};
