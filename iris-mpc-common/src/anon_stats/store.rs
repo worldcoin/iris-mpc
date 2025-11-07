@@ -251,6 +251,12 @@ impl AnonStatsStore {
         anon_stats: &[(i64, T)],
         origin: AnonStatsOrigin,
     ) -> Result<()> {
+        tracing::info!(
+            "Inserting {} anon stats into table {}",
+            anon_stats.len(),
+            table_name
+        );
+
         if anon_stats.is_empty() {
             return Ok(());
         }

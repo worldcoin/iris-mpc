@@ -227,9 +227,6 @@ impl AnonStatsWriter {
     }
 
     fn insert_1d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle1D)>) {
-        if data.is_empty() {
-            return;
-        }
         let store = self.store.clone();
         let count = data.len();
         let task_origin = origin;
@@ -3392,12 +3389,20 @@ impl ServerActor {
         orientation: Orientation,
         caches: &[OneSidedDistanceCache],
     ) {
+        tracing::info!(
+            "Persisting one-sided anon stats caches for eye {:?} and orientation {:?}",
+            eye,
+            orientation
+        );
         if orientation != Orientation::Normal {
             return;
         }
         let writer = match &self.anon_stats_writer {
             Some(writer) => writer,
-            None => return,
+            None => {
+                tracing::info!("No writer configured for anon stats caches");
+                return;
+            }
         };
 
         let origin = AnonStatsOrigin {
@@ -3438,11 +3443,13 @@ impl ServerActor {
         }
 
         if !bundles.is_empty() {
+            tracing::info!("Inserting {} anon stats bundles", bundles.len());
             writer.insert_1d(origin, bundles);
         }
     }
 
     fn persist_two_sided_caches(&self, caches: &[TwoSidedDistanceCache]) {
+        tracing::info!("Persisting two-sided anon stats caches");
         let writer = match &self.anon_stats_writer {
             Some(writer) => writer,
             None => return,
