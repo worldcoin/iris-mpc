@@ -1,7 +1,7 @@
 mod client;
 mod config;
 mod constants;
-mod convertor;
+mod factory;
 mod ops;
 
 pub use client::{NetAwsClient, NodeAwsClient};

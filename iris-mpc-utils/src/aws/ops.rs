@@ -8,7 +8,7 @@ use sodiumoxide::crypto::box_::PublicKey;
 use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
-use super::{client::NodeAwsClient, convertor};
+use super::{client::NodeAwsClient, factory};
 use crate::{constants::N_PARTIES, types::NetEncryptionPublicKeys};
 
 impl NodeAwsClient {
@@ -79,7 +79,7 @@ impl NodeAwsClient {
         shares: &IrisCodePartyShares,
         encryption_public_keys: &[PublicKey; N_PARTIES],
     ) -> Result<()> {
-        let s3_shares = convertor::to_iris_party_shares_for_s3(shares, encryption_public_keys);
+        let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_public_keys);
         let s3_payload = serde_json::to_vec(&s3_shares)?;
         let s3_bucket = self.config().requests_bucket_name();
         let s3_key = shares.signup_id.as_str();

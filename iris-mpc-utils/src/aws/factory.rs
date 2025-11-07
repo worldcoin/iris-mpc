@@ -18,9 +18,9 @@ use crate::constants::N_PARTIES;
 const IRIS_VERSION: &str = "1.0";
 const IRIS_SHARES_VERSION: &str = "1.3";
 
-/// Converts iris code shares into a JSON representation.
+/// Converts iris code shares into a representation to be dispatched to an S3 bucket.
 #[allow(dead_code)]
-pub fn to_iris_code_party_shares(
+pub fn create_iris_code_party_shares(
     l_code: [GaloisRingIrisCodeShare; N_PARTIES],
     l_mask: [GaloisRingIrisCodeShare; N_PARTIES],
     r_code: [GaloisRingIrisCodeShare; N_PARTIES],
@@ -31,12 +31,12 @@ pub fn to_iris_code_party_shares(
 
     IrisCodePartyShares::new(
         signup_id,
-        to_iris_code_shares_json(l_code, l_mask, r_code, r_mask).to_vec(),
+        create_iris_code_shares_json(l_code, l_mask, r_code, r_mask).to_vec(),
     )
 }
 
 /// Converts iris code shares into a JSON representation.
-pub fn to_iris_code_shares_json(
+pub fn create_iris_code_shares_json(
     l_code: [GaloisRingIrisCodeShare; N_PARTIES],
     l_mask: [GaloisRingIrisCodeShare; N_PARTIES],
     r_code: [GaloisRingIrisCodeShare; N_PARTIES],
@@ -54,7 +54,7 @@ pub fn to_iris_code_shares_json(
 
 /// Converts iris code shares into a JSON representation.
 #[allow(dead_code)]
-pub fn to_iris_party_shares_for_s3(
+pub fn create_iris_party_shares_for_s3(
     shares: &IrisCodePartyShares,
     encryption_public_keys: &[PublicKey; N_PARTIES],
 ) -> SharesS3Object {
@@ -81,7 +81,10 @@ pub fn to_iris_party_shares_for_s3(
 
 #[cfg(test)]
 mod tests {
-    use super::{to_iris_code_party_shares, to_iris_code_shares_json, to_iris_party_shares_for_s3};
+    use super::{
+        create_iris_code_party_shares, create_iris_code_shares_json,
+        create_iris_party_shares_for_s3,
+    };
     use crate::{constants::N_PARTIES, irises::generate_iris_code_and_mask_shares_both_eyes};
     use rand::{rngs::StdRng, SeedableRng};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
@@ -97,7 +100,7 @@ mod tests {
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
-        let _ = to_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
+        let _ = create_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
     }
 
     #[test]
@@ -107,7 +110,7 @@ mod tests {
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
-        let _ = to_iris_code_shares_json(l_code, l_mask, r_code, r_mask);
+        let _ = create_iris_code_shares_json(l_code, l_mask, r_code, r_mask);
     }
 
     #[test]
@@ -117,8 +120,8 @@ mod tests {
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
-        let shares = to_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
+        let shares = create_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
         let keys = create_public_keys_for_encryption();
-        let _ = to_iris_party_shares_for_s3(&shares, &keys);
+        let _ = create_iris_party_shares_for_s3(&shares, &keys);
     }
 }
