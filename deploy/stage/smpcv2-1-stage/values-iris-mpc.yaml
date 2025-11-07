@@ -32,6 +32,21 @@ env:
   - name: SMPC__DATABASE__LOAD_PARALLELISM
     value: "8"
 
+  - name: SMPC__ANON_STATS_DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+
+  - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+    value: "true"
+
+  - name: SMPC__ANON_STATS_DATABASE__CREATE
+    value: "true"
+
+  - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
+    value: "8"
+
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
