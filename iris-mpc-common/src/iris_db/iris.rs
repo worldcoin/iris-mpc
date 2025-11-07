@@ -526,7 +526,7 @@ impl IrisCode {
         target_distance: (u16, u16),
     ) -> IrisCode {
         let mut visible_bits = (0..IRIS_CODE_LENGTH)
-            .filter_map(|i| self.mask.get_bit(i).then_some(i))
+            .filter(|i| self.mask.get_bit(*i))
             .collect::<Vec<_>>();
 
         visible_bits.shuffle(rng);
