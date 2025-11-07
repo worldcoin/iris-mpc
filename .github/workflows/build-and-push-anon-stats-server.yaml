@@ -8,6 +8,7 @@ on:
     paths:
       - Dockerfile.anon-stats-server
       - iris-mpc-anon-stats-server/**
+      - iris-mpc-common/**
       - .github/workflows/build-and-push-anon-stats-server.yaml
 
   release:
