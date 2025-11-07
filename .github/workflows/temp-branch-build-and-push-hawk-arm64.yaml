@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "dev"
+      - "feat/anon_stats_service"
     paths-ignore:
       - "deploy/**"
 
