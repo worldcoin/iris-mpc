@@ -57,12 +57,11 @@ use std::{
     collections::{HashMap, HashSet},
     convert::TryFrom,
     fmt, mem,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Instant,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
 
 macro_rules! record_stream_time {
     ($manager:expr, $streams:expr, $map:expr, $label:expr, $enable_timing:expr, $block:block) => {{
@@ -204,63 +203,35 @@ type DistanceBundle2D = (DistanceBundle1D, DistanceBundle1D);
 struct AnonStatsWriter {
     store: AnonStatsStore,
     runtime: Handle,
-    tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl AnonStatsWriter {
     fn new(store: AnonStatsStore, runtime: Handle) -> Self {
-        Self {
-            store,
-            runtime,
-            tasks: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn spawn_background<F>(&self, future: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let handle = self.runtime.spawn(future);
-        let mut tasks = self.tasks.lock().expect("anon stats spawn lock poisoned");
-        tasks.retain(|handle| !handle.is_finished());
-        tasks.push(handle);
+        Self { store, runtime }
     }
 
     fn insert_1d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle1D)>) {
-        let store = self.store.clone();
-        let count = data.len();
-        let task_origin = origin;
-        let task = async move {
-            if let Err(err) = store.insert_anon_stats_batch_1d(&data, task_origin).await {
-                tracing::warn!(
-                    ?err,
-                    origin = ?task_origin,
-                    count,
-                    "Failed to persist 1D anon stats batch"
-                );
-            }
-        };
-        self.spawn_background(task);
+        if data.is_empty() {
+            return;
+        }
+        if let Err(err) = self
+            .runtime
+            .block_on(self.store.insert_anon_stats_batch_1d(&data, origin))
+        {
+            tracing::warn!(?err, ?origin, "Failed to persist 1D anon stats batch");
+        }
     }
 
     fn insert_2d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle2D)>) {
         if data.is_empty() {
             return;
         }
-        let store = self.store.clone();
-        let count = data.len();
-        let task_origin = origin;
-        let task = async move {
-            if let Err(err) = store.insert_anon_stats_batch_2d(&data, task_origin).await {
-                tracing::warn!(
-                    ?err,
-                    origin = ?task_origin,
-                    count,
-                    "Failed to persist 2D anon stats batch"
-                );
-            }
-        };
-        self.spawn_background(task);
+        if let Err(err) = self
+            .runtime
+            .block_on(self.store.insert_anon_stats_batch_2d(&data, origin))
+        {
+            tracing::warn!(?err, ?origin, "Failed to persist 2D anon stats batch");
+        }
     }
 }
 

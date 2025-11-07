@@ -750,6 +750,7 @@ pub struct CommonConfig {
     schema_name: String,
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
+    anon_stats_schema_name: String,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
@@ -779,7 +780,7 @@ impl From<Config> for CommonConfig {
             database: _,     // database is different for each server
             cpu_database: _, // cpu database is different for each server
             anon_stats_database: _,
-            anon_stats_schema_name: _,
+            anon_stats_schema_name,
             aws: _, // aws is different for each server
             processing_timeout_secs,
             startup_sync_timeout_secs,
@@ -912,6 +913,7 @@ impl From<Config> for CommonConfig {
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
+            anon_stats_schema_name,
             hawk_server_resets_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,

@@ -2666,6 +2666,7 @@ dependencies = [
  "iris-mpc-upgrade",
  "iris-mpc-upgrade-hawk",
  "itertools 0.13.0",
+ "log",
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
  "rand",
