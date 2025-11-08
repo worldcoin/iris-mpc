@@ -9,16 +9,15 @@ use aws_sdk_sqs::{
     Client as SQSClient,
 };
 
-use iris_mpc_common::config::{Config as NodeConfig, ENV_PROD, ENV_STAGE};
+use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 
-use super::constants::AWS_REGION;
 use crate::constants::N_PARTIES;
 
 /// Encpasulates AWS service client configuration.
 #[derive(Debug)]
 pub struct NodeAwsClientConfig {
-    /// Associated node configuration.
-    node: NodeConfig,
+    /// Execution environment.
+    environment: String,
 
     /// Cloud region.
     region: String,
@@ -34,6 +33,9 @@ pub struct NodeAwsClientConfig {
 
     /// Associated AWS SDK configuration.
     sdk: SdkConfig,
+
+    /// Polling interval between AWS SQS interactions.
+    sqs_long_poll_wait_time: usize,
 }
 
 // Network wide configuration set.
@@ -41,11 +43,7 @@ pub type NetAwsClientConfig = [NodeAwsClientConfig; N_PARTIES];
 
 impl NodeAwsClientConfig {
     pub fn environment(&self) -> &String {
-        &self.node().environment
-    }
-
-    pub fn node(&self) -> &NodeConfig {
-        &self.node
+        &self.environment
     }
 
     pub fn region(&self) -> &String {
@@ -68,20 +66,26 @@ impl NodeAwsClientConfig {
         &self.sdk
     }
 
+    pub fn sqs_long_poll_wait_time(&self) -> usize {
+        self.sqs_long_poll_wait_time
+    }
+
     pub async fn new(
-        node_config: NodeConfig,
+        environment: String,
         region: String,
         request_bucket_name: String,
         request_topic_arn: String,
         response_queue_url: String,
+        sqs_long_poll_wait_time: usize,
     ) -> Self {
         Self {
-            node: node_config.to_owned(),
+            environment: environment.to_owned(),
             region: region.to_owned(),
             request_bucket_name,
             request_topic_arn,
             response_queue_url,
             sdk: get_sdk_config(region).await,
+            sqs_long_poll_wait_time,
         }
     }
 }
@@ -89,12 +93,13 @@ impl NodeAwsClientConfig {
 impl Clone for NodeAwsClientConfig {
     fn clone(&self) -> Self {
         Self {
-            node: self.node.clone(),
+            environment: self.environment.clone(),
             region: self.region.clone(),
             request_bucket_name: self.request_bucket_name.clone(),
             request_topic_arn: self.request_topic_arn.clone(),
             response_queue_url: self.response_queue_url.clone(),
             sdk: self.sdk.clone(),
+            sqs_long_poll_wait_time: self.sqs_long_poll_wait_time,
         }
     }
 }
@@ -130,7 +135,7 @@ impl From<&NodeAwsClientConfig> for SQSClient {
                 .timeout_config(
                     TimeoutConfig::builder()
                         .operation_attempt_timeout(Duration::from_secs(
-                            (config.node().sqs_long_poll_wait_time + 2) as u64,
+                            (config.sqs_long_poll_wait_time + 2) as u64,
                         ))
                         .build(),
                 )
@@ -152,20 +157,17 @@ async fn get_sdk_config(region: String) -> aws_config::SdkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::super::constants::{
-        AWS_REGION, AWS_REQUEST_BUCKET_NAME, AWS_REQUEST_TOPIC_ARN, AWS_RESPONSE_QUEUE_URL,
-    };
     use super::NodeAwsClientConfig;
-    use crate::{constants::NODE_CONFIG_KIND_MAIN, fsys::local::read_node_config};
+    use crate::constants;
 
     async fn create_config() -> NodeAwsClientConfig {
-        let node_config = read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
-
         NodeAwsClientConfig::new(
-            node_config,
-            AWS_REQUEST_BUCKET_NAME.to_string(),
-            AWS_REQUEST_TOPIC_ARN.to_string(),
-            AWS_RESPONSE_QUEUE_URL.to_string(),
+            constants::DEFAULT_ENV.to_string(),
+            constants::AWS_REGION.to_string(),
+            constants::AWS_REQUEST_BUCKET_NAME.to_string(),
+            constants::AWS_REQUEST_TOPIC_ARN.to_string(),
+            constants::AWS_RESPONSE_QUEUE_URL.to_string(),
+            constants::AWS_SQS_LONG_POLL_WAIT_TIME,
         )
         .await
     }
@@ -175,6 +177,9 @@ mod tests {
         let config = create_config().await;
         // TODO: check why this assert fails.
         // assert!(config.sdk().endpoint_url().is_some());
-        assert_eq!(config.sdk().region().unwrap().as_ref(), AWS_REGION);
+        assert_eq!(
+            config.sdk().region().unwrap().as_ref(),
+            constants::AWS_REGION
+        );
     }
 }

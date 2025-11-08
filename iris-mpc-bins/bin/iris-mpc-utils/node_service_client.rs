@@ -1,5 +1,4 @@
 use std::fmt;
-use std::path::PathBuf;
 
 use async_from::{self, AsyncFrom};
 use clap::Parser;
@@ -10,9 +9,7 @@ use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_utils::{
     aws::{NetAwsClientConfig, NodeAwsClientConfig},
     client::{Client, RequestBatchKind, RequestBatchSize},
-    constants::NODE_CONFIG_KIND_MAIN,
-    fsys,
-    types::NetNodeConfig,
+    constants::N_PARTIES,
 };
 
 #[tokio::main]
@@ -50,17 +47,12 @@ struct CliOptions {
     #[clap(long)]
     aws_response_queue_url: String,
 
-    /// Path to SMPC node-0 configuration file.
-    #[clap(long)]
-    path_to_node_0_config: Option<String>,
+    /// AWS: polling interval between AWS SQS interactions.
+    #[clap(long, default_value = "10")]
+    aws_sqs_long_poll_wait_time: usize,
 
-    /// Path to SMPC node-0 configuration file.
     #[clap(long)]
-    path_to_node_1_config: Option<String>,
-
-    /// Path to SMPC node-0 configuration file.
-    #[clap(long)]
-    path_to_node_2_config: Option<String>,
+    environment: String,
 
     /// Number of request batches to process.
     #[clap(long, default_value = "1")]
@@ -76,18 +68,6 @@ struct CliOptions {
 }
 
 impl CliOptions {
-    fn path_to_node_0_config(&self) -> PathBuf {
-        Self::get_path_to_node_config(&self.path_to_node_0_config, 0)
-    }
-
-    fn path_to_node_1_config(&self) -> PathBuf {
-        Self::get_path_to_node_config(&self.path_to_node_1_config, 1)
-    }
-
-    fn path_to_node_2_config(&self) -> PathBuf {
-        Self::get_path_to_node_config(&self.path_to_node_2_config, 2)
-    }
-
     fn request_batch_kind(&self) -> RequestBatchKind {
         // Currently defaults to sets of uniqueness requests.
         // TODO: parse from env | command line | file.
@@ -107,17 +87,6 @@ impl CliOptions {
             StdRng::from_entropy()
         }
     }
-
-    /// Returns path to a node's config file - read locally if necessary.
-    fn get_path_to_node_config(path: &Option<String>, party_idx: usize) -> PathBuf {
-        path.clone()
-            .unwrap_or_else(|| {
-                fsys::local::get_path_to_node_config(NODE_CONFIG_KIND_MAIN, 0, &party_idx)
-                    .to_string_lossy()
-                    .to_string()
-            })
-            .into()
-    }
 }
 
 impl fmt::Display for CliOptions {
@@ -136,6 +105,8 @@ Node Service Client Options:
         {}
     aws_response_queue_url
         {}
+    environment
+        {}
     request_batch_count
         {}
     request_batch_kind
@@ -150,6 +121,7 @@ Node Service Client Options:
             self.aws_request_bucket_name,
             self.aws_request_topic_arn,
             self.aws_response_queue_url,
+            self.environment,
             self.request_batch_count,
             self.request_batch_kind(),
             self.request_batch_size(),
@@ -176,27 +148,18 @@ impl AsyncFrom<CliOptions> for Client<StdRng> {
 #[async_from::async_trait]
 impl AsyncFrom<CliOptions> for NetAwsClientConfig {
     async fn async_from(options: CliOptions) -> Self {
-        let node_configs = NetNodeConfig::from(options.clone());
-        let configs = node_configs.iter().map(|node_config| {
+        futures::future::join_all((0..N_PARTIES).map(|_| {
             NodeAwsClientConfig::new(
-                node_config.to_owned(),
+                options.environment.clone(),
                 options.aws_region.clone(),
                 options.aws_request_bucket_name.clone(),
                 options.aws_request_topic_arn.clone(),
                 options.aws_response_queue_url.clone(),
+                options.aws_sqs_long_poll_wait_time.clone(),
             )
-        });
-
-        futures::future::join_all(configs).await.try_into().unwrap()
-    }
-}
-
-impl From<CliOptions> for NetNodeConfig {
-    fn from(options: CliOptions) -> Self {
-        [
-            fsys::read_node_config(&options.path_to_node_0_config()).unwrap(),
-            fsys::read_node_config(&options.path_to_node_1_config()).unwrap(),
-            fsys::read_node_config(&options.path_to_node_2_config()).unwrap(),
-        ]
+        }))
+        .await
+        .try_into()
+        .unwrap()
     }
 }

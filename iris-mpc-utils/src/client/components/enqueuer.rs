@@ -74,7 +74,7 @@ impl RequestEnqueuer {
 
         // Step 3: Set request payload.
         // TODO: use batch size ando ther fields from request
-        let request_payload = UniquenessRequest {
+        let _request_payload = UniquenessRequest {
             batch_size: Some(1),
             signup_id: shares.signup_id.clone(),
             s3_key: s3_bucket,

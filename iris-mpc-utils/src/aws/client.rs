@@ -119,11 +119,8 @@ pub enum NodeAwsClientError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{constants, NodeAwsClient, NodeAwsClientConfig};
-    use crate::{
-        constants::{NODE_CONFIG_KIND_MAIN, N_PARTIES},
-        fsys,
-    };
+    use super::super::{NodeAwsClient, NodeAwsClientConfig};
+    use crate::constants::{self, N_PARTIES};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
 
     fn assert_clients(clients: &NodeAwsClient) {
@@ -142,14 +139,13 @@ mod tests {
     }
 
     async fn create_config() -> NodeAwsClientConfig {
-        let node_config = fsys::local::read_node_config(NODE_CONFIG_KIND_MAIN, 0, &0).unwrap();
-
         NodeAwsClientConfig::new(
-            node_config,
+            constants::DEFAULT_ENV.to_string(),
             constants::AWS_REGION.to_string(),
             constants::AWS_REQUEST_BUCKET_NAME.to_string(),
             constants::AWS_REQUEST_TOPIC_ARN.to_string(),
             constants::AWS_RESPONSE_QUEUE_URL.to_string(),
+            constants::AWS_SQS_LONG_POLL_WAIT_TIME,
         )
         .await
     }

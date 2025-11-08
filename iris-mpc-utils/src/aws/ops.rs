@@ -77,9 +77,9 @@ impl NodeAwsClient {
     pub async fn upload_iris_party_shares(
         &self,
         shares: &IrisCodePartyShares,
-        encryption_public_keys: &[PublicKey; N_PARTIES],
+        encryption_keys: &[PublicKey; N_PARTIES],
     ) -> Result<String> {
-        let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_public_keys);
+        let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
         let s3_payload = serde_json::to_vec(&s3_shares)?;
         let s3_bucket = self.config().request_bucket_name();
         let s3_key = shares.signup_id.as_str();

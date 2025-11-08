@@ -55,7 +55,7 @@ pub fn create_iris_code_shares_json(
 /// Converts iris code shares into a JSON representation.
 pub fn create_iris_party_shares_for_s3(
     shares: &IrisCodePartyShares,
-    encryption_public_keys: &[PublicKey; N_PARTIES],
+    encryption_keys: &[PublicKey; N_PARTIES],
 ) -> SharesS3Object {
     let mut hash_set: [String; N_PARTIES] = Default::default();
     let mut content_set: [String; N_PARTIES] = Default::default();
@@ -63,7 +63,7 @@ pub fn create_iris_party_shares_for_s3(
         let as_json = serde_json::to_string(shares.party(i))
             .expect("Serialization failed")
             .clone();
-        let as_bytes = sealedbox::seal(as_json.as_bytes(), &encryption_public_keys[i]);
+        let as_bytes = sealedbox::seal(as_json.as_bytes(), &encryption_keys[i]);
         content_set[i] = b64.encode(&as_bytes);
         hash_set[i] = sha256_as_hex_string(&as_json);
     }
