@@ -1,6 +1,6 @@
 use rand::{CryptoRng, Rng};
 
-use crate::aws::{NetAwsClientConfig, NodeAwsClient};
+use crate::aws::{AwsClient, AwsClientConfig};
 
 use components::RequestEnqueuer;
 use components::RequestGenerator;
@@ -32,7 +32,7 @@ pub struct Client<R: Rng + CryptoRng> {
 
 impl<R: Rng + CryptoRng> Client<R> {
     pub async fn new(
-        net_aws_client_config: NetAwsClientConfig,
+        aws_client_config: AwsClientConfig,
         net_public_key_base_url: &str,
         batch_count: usize,
         batch_kind: RequestBatchKind,
@@ -40,26 +40,13 @@ impl<R: Rng + CryptoRng> Client<R> {
         rng_seed: R,
     ) -> Self {
         let net_encryption_public_keys =
-            NodeAwsClient::download_net_encryption_public_keys(net_public_key_base_url)
+            AwsClient::download_net_encryption_public_keys(net_public_key_base_url)
                 .await
                 .unwrap();
-        let net_aws_clients = [
-            NodeAwsClient::new(
-                net_aws_client_config[0].to_owned(),
-                net_encryption_public_keys,
-            ),
-            NodeAwsClient::new(
-                net_aws_client_config[1].to_owned(),
-                net_encryption_public_keys,
-            ),
-            NodeAwsClient::new(
-                net_aws_client_config[2].to_owned(),
-                net_encryption_public_keys,
-            ),
-        ];
+        let aws_client = AwsClient::new(aws_client_config, net_encryption_public_keys);
 
         Self {
-            request_enqueuer: RequestEnqueuer::new(net_aws_clients),
+            request_enqueuer: RequestEnqueuer::new(aws_client),
             request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count, rng_seed),
             response_correlator: ResponseCorrelator::default(),
             response_dequeuer: ResponseDequeuer::default(),

@@ -8,14 +8,14 @@ use sodiumoxide::crypto::box_::PublicKey;
 use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
-use super::{client::NodeAwsClient, factory};
-use crate::{constants::N_PARTIES, types::NetEncryptionPublicKeys};
+use super::{client::AwsClient, factory};
+use crate::{constants::N_PARTIES, types::NetworkEncryptionPublicKeys};
 
-impl NodeAwsClient {
+impl AwsClient {
     /// Downloads network wide set of node encryption public keys.
     pub async fn download_net_encryption_public_keys(
         public_key_base_url: &str,
-    ) -> Result<NetEncryptionPublicKeys> {
+    ) -> Result<NetworkEncryptionPublicKeys> {
         async fn get_public_key(party_idx: usize, public_key_base_url: &str) -> PublicKey {
             let pbk_raw =
                 download_public_key(public_key_base_url.to_string(), party_idx.to_string())

@@ -7,9 +7,8 @@ use rand::{rngs::StdRng, SeedableRng};
 
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_utils::{
-    aws::{NetAwsClientConfig, NodeAwsClientConfig},
+    aws::AwsClientConfig,
     client::{Client, RequestBatchKind, RequestBatchSize},
-    constants::N_PARTIES,
 };
 
 #[tokio::main]
@@ -94,7 +93,7 @@ impl fmt::Display for CliOptions {
         write!(
             f,
             "
-Node Service Client Options:
+Iris-MPC Service Client Options:
     aws_public_key_base_url
         {}
     aws_region
@@ -134,7 +133,7 @@ Node Service Client Options:
 impl AsyncFrom<CliOptions> for Client<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
         Client::new(
-            NetAwsClientConfig::async_from(options.clone()).await,
+            AwsClientConfig::async_from(options.clone()).await,
             options.aws_public_key_base_url.as_str(),
             options.request_batch_count,
             options.request_batch_kind(),
@@ -146,20 +145,16 @@ impl AsyncFrom<CliOptions> for Client<StdRng> {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for NetAwsClientConfig {
+impl AsyncFrom<CliOptions> for AwsClientConfig {
     async fn async_from(options: CliOptions) -> Self {
-        futures::future::join_all((0..N_PARTIES).map(|_| {
-            NodeAwsClientConfig::new(
-                options.environment.clone(),
-                options.aws_region.clone(),
-                options.aws_request_bucket_name.clone(),
-                options.aws_request_topic_arn.clone(),
-                options.aws_response_queue_url.clone(),
-                options.aws_sqs_long_poll_wait_time.clone(),
-            )
-        }))
+        AwsClientConfig::new(
+            options.environment,
+            options.aws_region,
+            options.aws_request_bucket_name,
+            options.aws_request_topic_arn,
+            options.aws_response_queue_url,
+            options.aws_sqs_long_poll_wait_time,
+        )
         .await
-        .try_into()
-        .unwrap()
     }
 }

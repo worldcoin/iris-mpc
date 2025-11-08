@@ -12,10 +12,10 @@ use super::constants::N_PARTIES;
 pub type IrisCodeAndMaskShares = [[GaloisRingIrisCodeShare; N_PARTIES]; 2];
 
 // Network wide node configuration set.
-pub type NetNodeConfig = [NodeConfig; N_PARTIES];
+pub type NetworkNodeConfig = [NodeConfig; N_PARTIES];
 
 // Network wide node encryption public keys.
-pub type NetEncryptionPublicKeys = [PublicKey; N_PARTIES];
+pub type NetworkEncryptionPublicKeys = [PublicKey; N_PARTIES];
 
 /// Set of node execution hosts.
 #[derive(Debug, Clone, Copy)]

@@ -6,11 +6,11 @@ use thiserror::Error;
 
 use iris_mpc_common::helpers::sqs_s3_helper;
 
-use super::config::NodeAwsClientConfig;
+use super::config::AwsClientConfig;
 use crate::{
     constants::N_PARTIES,
     misc::{log_error, log_info},
-    types::NetEncryptionPublicKeys,
+    types::NetworkEncryptionPublicKeys,
 };
 
 /// Component name for logging purposes.
@@ -18,12 +18,12 @@ const COMPONENT: &str = "State-AWS";
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
-pub struct NodeAwsClient {
+pub struct AwsClient {
     /// Associated configuration.
-    config: NodeAwsClientConfig,
+    config: AwsClientConfig,
 
     /// Encryption public key set ... one per MPC node.
-    encryption_keys: NetEncryptionPublicKeys,
+    encryption_keys: NetworkEncryptionPublicKeys,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -39,14 +39,14 @@ pub struct NodeAwsClient {
 }
 
 // Network wide node AWS service clients.
-pub type NetAwsClient = [NodeAwsClient; N_PARTIES];
+pub type NetworkAwsClient = [AwsClient; N_PARTIES];
 
-impl NodeAwsClient {
-    pub fn config(&self) -> &NodeAwsClientConfig {
+impl AwsClient {
+    pub fn config(&self) -> &AwsClientConfig {
         &self.config
     }
 
-    pub fn encryption_keys(&self) -> &NetEncryptionPublicKeys {
+    pub fn encryption_keys(&self) -> &NetworkEncryptionPublicKeys {
         &self.encryption_keys
     }
 
@@ -66,7 +66,7 @@ impl NodeAwsClient {
         &self.sqs
     }
 
-    pub fn new(config: NodeAwsClientConfig, encryption_keys: NetEncryptionPublicKeys) -> Self {
+    pub fn new(config: AwsClientConfig, encryption_keys: NetworkEncryptionPublicKeys) -> Self {
         Self {
             config: config.to_owned(),
             encryption_keys,
@@ -98,7 +98,7 @@ impl NodeAwsClient {
     }
 }
 
-impl Clone for NodeAwsClient {
+impl Clone for AwsClient {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -119,27 +119,27 @@ pub enum NodeAwsClientError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{NodeAwsClient, NodeAwsClientConfig};
+    use super::super::{AwsClient, AwsClientConfig};
     use crate::constants::{self, N_PARTIES};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
 
-    fn assert_clients(clients: &NodeAwsClient) {
+    fn assert_clients(clients: &AwsClient) {
         assert!(clients.s3().config().region().is_some());
         assert!(clients.secrets_manager().config().region().is_some());
         assert!(clients.sns().config().region().is_some());
         assert!(clients.sqs().config().region().is_some());
     }
 
-    async fn create_client() -> NodeAwsClient {
-        NodeAwsClient::new(create_config().await, create_public_keys_for_encryption())
+    async fn create_client() -> AwsClient {
+        AwsClient::new(create_config().await, create_public_keys_for_encryption())
     }
 
     fn create_public_keys_for_encryption() -> [PublicKey; N_PARTIES] {
         std::array::from_fn(|_| gen_keypair().0)
     }
 
-    async fn create_config() -> NodeAwsClientConfig {
-        NodeAwsClientConfig::new(
+    async fn create_config() -> AwsClientConfig {
+        AwsClientConfig::new(
             constants::DEFAULT_ENV.to_string(),
             constants::AWS_REGION.to_string(),
             constants::AWS_REQUEST_BUCKET_NAME.to_string(),

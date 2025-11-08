@@ -15,7 +15,7 @@ use crate::constants::N_PARTIES;
 
 /// Encpasulates AWS service client configuration.
 #[derive(Debug)]
-pub struct NodeAwsClientConfig {
+pub struct AwsClientConfig {
     /// Execution environment.
     environment: String,
 
@@ -39,9 +39,9 @@ pub struct NodeAwsClientConfig {
 }
 
 // Network wide configuration set.
-pub type NetAwsClientConfig = [NodeAwsClientConfig; N_PARTIES];
+pub type NetAwsClientConfig = [AwsClientConfig; N_PARTIES];
 
-impl NodeAwsClientConfig {
+impl AwsClientConfig {
     pub fn environment(&self) -> &String {
         &self.environment
     }
@@ -90,7 +90,7 @@ impl NodeAwsClientConfig {
     }
 }
 
-impl Clone for NodeAwsClientConfig {
+impl Clone for AwsClientConfig {
     fn clone(&self) -> Self {
         Self {
             environment: self.environment.clone(),
@@ -104,20 +104,20 @@ impl Clone for NodeAwsClientConfig {
     }
 }
 
-impl From<&NodeAwsClientConfig> for SecretsManagerClient {
-    fn from(config: &NodeAwsClientConfig) -> Self {
+impl From<&AwsClientConfig> for SecretsManagerClient {
+    fn from(config: &AwsClientConfig) -> Self {
         SecretsManagerClient::new(config.sdk())
     }
 }
 
-impl From<&NodeAwsClientConfig> for SNSClient {
-    fn from(config: &NodeAwsClientConfig) -> Self {
+impl From<&AwsClientConfig> for SNSClient {
+    fn from(config: &AwsClientConfig) -> Self {
         SNSClient::new(config.sdk())
     }
 }
 
-impl From<&NodeAwsClientConfig> for S3Client {
-    fn from(config: &NodeAwsClientConfig) -> Self {
+impl From<&AwsClientConfig> for S3Client {
+    fn from(config: &AwsClientConfig) -> Self {
         let force_path_style =
             config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
         let config_builder = S3ConfigBuilder::from(config.sdk())
@@ -128,8 +128,8 @@ impl From<&NodeAwsClientConfig> for S3Client {
     }
 }
 
-impl From<&NodeAwsClientConfig> for SQSClient {
-    fn from(config: &NodeAwsClientConfig) -> Self {
+impl From<&AwsClientConfig> for SQSClient {
+    fn from(config: &AwsClientConfig) -> Self {
         SQSClient::from_conf(
             Builder::from(config.sdk())
                 .timeout_config(
@@ -157,11 +157,11 @@ async fn get_sdk_config(region: String) -> aws_config::SdkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::NodeAwsClientConfig;
+    use super::AwsClientConfig;
     use crate::constants;
 
-    async fn create_config() -> NodeAwsClientConfig {
-        NodeAwsClientConfig::new(
+    async fn create_config() -> AwsClientConfig {
+        AwsClientConfig::new(
             constants::DEFAULT_ENV.to_string(),
             constants::AWS_REGION.to_string(),
             constants::AWS_REQUEST_BUCKET_NAME.to_string(),

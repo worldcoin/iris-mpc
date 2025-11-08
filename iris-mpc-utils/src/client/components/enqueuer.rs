@@ -13,9 +13,9 @@ use iris_mpc_common::helpers::{
 
 use super::super::types::{RequestBatch, RequestData};
 use crate::{
-    aws::{create_iris_code_party_shares, NetAwsClient},
+    aws::{create_iris_code_party_shares, AwsClient},
     client::types::{Request, RequestDataUniqueness},
-    types::NetEncryptionPublicKeys,
+    types::NetworkEncryptionPublicKeys,
 };
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -24,17 +24,16 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 #[derive(Debug)]
 pub struct RequestEnqueuer {
     /// A client for interacting with any node's AWS service.
-    #[allow(dead_code)]
-    net_aws_client: NetAwsClient,
+    aws_client: AwsClient,
 }
 
 impl RequestEnqueuer {
-    fn encryption_keys(&self) -> &NetEncryptionPublicKeys {
-        self.net_aws_client[0].encryption_keys()
+    fn encryption_keys(&self) -> &NetworkEncryptionPublicKeys {
+        self.aws_client.encryption_keys()
     }
 
-    pub fn new(net_aws_client: NetAwsClient) -> Self {
-        Self { net_aws_client }
+    pub fn new(aws_client: AwsClient) -> Self {
+        Self { aws_client }
     }
 
     /// Enqueues a batch of system requests upon each node's ingress queue.
@@ -70,7 +69,8 @@ impl RequestEnqueuer {
         );
 
         // Step 2: Upload encrypted shares to an S3 bucket.
-        let s3_bucket = match self.net_aws_client[0]
+        let s3_bucket = match self
+            .aws_client
             .upload_iris_party_shares(&shares, self.encryption_keys())
             .await
         {
@@ -122,11 +122,11 @@ impl RequestEnqueuer {
         println!("{} :: Uniqueness request headers instantatiated", request);
 
         // Step 5: Enqueue system request.
-        self.net_aws_client[0]
+        self.aws_client
             .sns()
             .clone()
             .publish()
-            .topic_arn(self.net_aws_client[0].config().request_topic_arn())
+            .topic_arn(self.aws_client.config().request_topic_arn())
             .message_group_id(ENROLLMENT_REQUEST_TYPE)
             .message(serde_json::to_string(&request_payload).unwrap())
             .set_message_attributes(Some(message_attributes))
