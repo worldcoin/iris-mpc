@@ -78,7 +78,7 @@ impl NodeAwsClient {
         &self,
         shares: &IrisCodePartyShares,
         encryption_public_keys: &[PublicKey; N_PARTIES],
-    ) -> Result<()> {
+    ) -> Result<String> {
         let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_public_keys);
         let s3_payload = serde_json::to_vec(&s3_shares)?;
         let s3_bucket = self.config().request_bucket_name();
@@ -94,9 +94,9 @@ impl NodeAwsClient {
                     )
                     .as_str(),
                 );
-                eyre!("Failed to upload Iris shares to S3")
+                eyre!("S3 upload failure :: {}", err)
             })?;
 
-        Ok(())
+        Ok(s3_bucket.clone())
     }
 }

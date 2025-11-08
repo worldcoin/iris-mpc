@@ -1,13 +1,9 @@
-use std::time::Duration;
-
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{config::Builder, Client as SQSClient};
+use aws_sdk_sqs::Client as SQSClient;
 use thiserror::Error;
 
-use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 use iris_mpc_common::helpers::sqs_s3_helper;
 
 use super::config::NodeAwsClientConfig;
@@ -121,48 +117,6 @@ pub enum NodeAwsClientError {
     S3UploadFailed,
 }
 
-impl From<&NodeAwsClientConfig> for S3Client {
-    fn from(config: &NodeAwsClientConfig) -> Self {
-        let force_path_style =
-            config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
-
-        S3Client::from_conf(
-            S3ConfigBuilder::from(config.sdk())
-                .force_path_style(force_path_style)
-                .retry_config(RetryConfig::standard().with_max_attempts(5))
-                .build(),
-        )
-    }
-}
-
-impl From<&NodeAwsClientConfig> for SecretsManagerClient {
-    fn from(config: &NodeAwsClientConfig) -> Self {
-        SecretsManagerClient::new(config.sdk())
-    }
-}
-
-impl From<&NodeAwsClientConfig> for SNSClient {
-    fn from(config: &NodeAwsClientConfig) -> Self {
-        SNSClient::new(config.sdk())
-    }
-}
-
-impl From<&NodeAwsClientConfig> for SQSClient {
-    fn from(config: &NodeAwsClientConfig) -> Self {
-        SQSClient::from_conf(
-            Builder::from(config.sdk())
-                .timeout_config(
-                    TimeoutConfig::builder()
-                        .operation_attempt_timeout(Duration::from_secs(
-                            (config.node().sqs_long_poll_wait_time + 2) as u64,
-                        ))
-                        .build(),
-                )
-                .build(),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::{constants, NodeAwsClient, NodeAwsClientConfig};
@@ -192,6 +146,7 @@ mod tests {
 
         NodeAwsClientConfig::new(
             node_config,
+            constants::AWS_REGION.to_string(),
             constants::AWS_REQUEST_BUCKET_NAME.to_string(),
             constants::AWS_REQUEST_TOPIC_ARN.to_string(),
             constants::AWS_RESPONSE_QUEUE_URL.to_string(),

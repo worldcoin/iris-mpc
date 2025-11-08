@@ -1,6 +1,10 @@
+use uuid::Uuid;
+
+use iris_mpc_common::helpers::smpc_request::UniquenessRequest;
+
 use super::super::types::{RequestBatch, RequestData};
 use crate::{
-    aws::{create_iris_code_party_shares, create_iris_party_shares_for_s3, NetAwsClient},
+    aws::{create_iris_code_party_shares, NetAwsClient},
     client::types::{Request, RequestDataUniqueness},
     types::NetEncryptionPublicKeys,
 };
@@ -34,14 +38,55 @@ impl RequestEnqueuer {
         }
     }
 
+    /// Enqueues a uniqueness request.  This is a two stage process as encrypted shares are first
+    /// uploaded to AWS S3 prior to actual enqueuing.
     async fn enqueue_uniqueness_request(&self, request: &Request, data: &RequestDataUniqueness) {
-        // Step 1: Upload to an S3 bucket encrypted share set.
-        let [[l_code, l_mask], [r_code, r_mask]] =
-            data.iris_code_and_mask_shares_both_eyes().clone();
-        let signup_id = None;
-        let shares = create_iris_code_party_shares(l_code, l_mask, r_code, r_mask, signup_id);
-        let _shares_s3 = create_iris_party_shares_for_s3(&shares, &self.encryption_keys());
+        // Step 0: Set signup identifier.
+        let signup_id = Uuid::new_v4();
 
-        println!("Enqueueing {}", request);
+        // Step 1: Set S3 shares.
+        let [[l_code, l_mask], [r_code, r_mask]] = data.shares().clone();
+        let shares = create_iris_code_party_shares(
+            l_code,
+            l_mask,
+            r_code,
+            r_mask,
+            signup_id.to_string().into(),
+        );
+        println!(
+            "{} :: S3 shares created :: signup_id={}",
+            request, signup_id
+        );
+
+        // Step 2: Upload encrypted shares to an S3 bucket.
+        let s3_bucket = match self.net_aws_client[0]
+            .upload_iris_party_shares(&shares, &self.encryption_keys())
+            .await
+        {
+            Err(report) => {
+                panic!("{} :: {}", request, report);
+            }
+            Ok(s3_bucket) => {
+                println!("{} :: S3 shares uploaded :: {}", request, s3_bucket);
+                s3_bucket
+            }
+        };
+
+        // Step 3: Set request payload.
+        // TODO: use batch size ando ther fields from request
+        let request_payload = UniquenessRequest {
+            batch_size: Some(1),
+            signup_id: shares.signup_id.clone(),
+            s3_key: s3_bucket,
+            or_rule_serial_ids: None,
+            skip_persistence: None,
+            full_face_mirror_attacks_detection_enabled: Some(true),
+            disable_anonymized_stats: None,
+        };
+        println!("{} :: Uniqueness payload instantatiated", request);
+
+        // Step 4: Enqueue on AWS SNS.
+
+        println!("{} :: Enqueueing", request);
     }
 }

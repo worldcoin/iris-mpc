@@ -1,5 +1,5 @@
 /// Default AWS region.
-pub const AWS_REGION: &str = "us-east-1";
+pub const AWS_REGION: &str = "eu-central-1";
 
 /// Base URL for downloading node encryption public keys.
 pub const AWS_PUBLIC_KEY_BASE_URL: &str = "http://localhost:4566/wf-dev-public-keys";

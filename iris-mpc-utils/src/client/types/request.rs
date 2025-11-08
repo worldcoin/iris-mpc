@@ -57,7 +57,7 @@ impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "request: batch-id={} item-id={} type={}",
+            "Request :: {:04}.{:04} [{}]",
             self.batch_idx, self.batch_item_idx, self.data
         )
     }
@@ -131,7 +131,7 @@ pub struct RequestDataUniqueness {
 }
 
 impl RequestDataUniqueness {
-    pub fn iris_code_and_mask_shares_both_eyes(&self) -> &BothEyes<IrisCodeAndMaskShares> {
+    pub fn shares(&self) -> &BothEyes<IrisCodeAndMaskShares> {
         &self.shares
     }
 
@@ -144,19 +144,19 @@ impl fmt::Display for RequestData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::IdentityDeletion => {
-                write!(f, "AMPC.IdentityDeletion")
+                write!(f, "IdentityDeletion")
             }
             RequestData::Reauthorisation => {
-                write!(f, "AMPC.Reauthorisation")
+                write!(f, "Reauthorisation")
             }
             RequestData::ResetCheck => {
-                write!(f, "AMPC.ResetCheck")
+                write!(f, "ResetCheck")
             }
             RequestData::ResetUpdate => {
-                write!(f, "AMPC.ResetUpdate")
+                write!(f, "ResetUpdate")
             }
             RequestData::Uniqueness(_) => {
-                write!(f, "AMPC.Uniqueness")
+                write!(f, "Uniqueness")
             }
         }
     }

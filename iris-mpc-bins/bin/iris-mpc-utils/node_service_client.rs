@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 
 use async_from::{self, AsyncFrom};
@@ -16,8 +17,8 @@ use iris_mpc_utils::{
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    println!("Options: instantiating ...");
     let options = CliOptions::parse();
+    println!("{}", options);
 
     println!("Client: instantiating ...");
     let mut client = Client::async_from(options.clone()).await;
@@ -33,6 +34,9 @@ struct CliOptions {
     /// AWS: base URL for downloading node encryption public keys.
     #[clap(long)]
     aws_public_key_base_url: String,
+
+    #[arg(long, env = "AWS_REGION", required = true)]
+    aws_region: String,
 
     /// AWS: system request ingress queue URL.
     #[clap(long)]
@@ -116,6 +120,44 @@ impl CliOptions {
     }
 }
 
+impl fmt::Display for CliOptions {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "
+Node Service Client Options:
+    aws_public_key_base_url
+        {}
+    aws_region
+        {}
+    aws_request_bucket_name
+        {}
+    aws_request_topic_arn
+        {}
+    aws_response_queue_url
+        {}
+    request_batch_count
+        {}
+    request_batch_kind
+        {:?}
+    request_batch_size
+        {:?}
+    rng_seed
+        {:?}
+                ",
+            self.aws_public_key_base_url,
+            self.aws_region,
+            self.aws_request_bucket_name,
+            self.aws_request_topic_arn,
+            self.aws_response_queue_url,
+            self.request_batch_count,
+            self.request_batch_kind(),
+            self.request_batch_size(),
+            self.rng_seed,
+        )
+    }
+}
+
 #[async_from::async_trait]
 impl AsyncFrom<CliOptions> for Client<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
@@ -138,8 +180,9 @@ impl AsyncFrom<CliOptions> for NetAwsClientConfig {
         let configs = node_configs.iter().map(|node_config| {
             NodeAwsClientConfig::new(
                 node_config.to_owned(),
-                options.aws_request_topic_arn.clone(),
+                options.aws_region.clone(),
                 options.aws_request_bucket_name.clone(),
+                options.aws_request_topic_arn.clone(),
                 options.aws_response_queue_url.clone(),
             )
         });

@@ -1,15 +1,27 @@
-use aws_config::SdkConfig;
-use aws_sdk_sqs::config::Region;
+use std::time::Duration;
+
+use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
+use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
+use aws_sdk_secretsmanager::Client as SecretsManagerClient;
+use aws_sdk_sns::Client as SNSClient;
+use aws_sdk_sqs::{
+    config::{Builder, Region},
+    Client as SQSClient,
+};
+
+use iris_mpc_common::config::{Config as NodeConfig, ENV_PROD, ENV_STAGE};
 
 use super::constants::AWS_REGION;
 use crate::constants::N_PARTIES;
-use iris_mpc_common::config::Config as NodeConfig;
 
 /// Encpasulates AWS service client configuration.
 #[derive(Debug)]
 pub struct NodeAwsClientConfig {
     /// Associated node configuration.
     node: NodeConfig,
+
+    /// Cloud region.
+    region: String,
 
     /// System request ingress queue URL.
     request_bucket_name: String,
@@ -36,6 +48,10 @@ impl NodeAwsClientConfig {
         &self.node
     }
 
+    pub fn region(&self) -> &String {
+        &self.region
+    }
+
     pub fn request_bucket_name(&self) -> &String {
         &self.request_bucket_name
     }
@@ -54,16 +70,18 @@ impl NodeAwsClientConfig {
 
     pub async fn new(
         node_config: NodeConfig,
+        region: String,
         request_bucket_name: String,
         request_topic_arn: String,
         response_queue_url: String,
     ) -> Self {
         Self {
             node: node_config.to_owned(),
+            region: region.to_owned(),
             request_bucket_name,
             request_topic_arn,
             response_queue_url,
-            sdk: get_sdk_config(&node_config).await,
+            sdk: get_sdk_config(region).await,
         }
     }
 }
@@ -72,6 +90,7 @@ impl Clone for NodeAwsClientConfig {
     fn clone(&self) -> Self {
         Self {
             node: self.node.clone(),
+            region: self.region.clone(),
             request_bucket_name: self.request_bucket_name.clone(),
             request_topic_arn: self.request_topic_arn.clone(),
             response_queue_url: self.response_queue_url.clone(),
@@ -80,16 +99,53 @@ impl Clone for NodeAwsClientConfig {
     }
 }
 
+impl From<&NodeAwsClientConfig> for SecretsManagerClient {
+    fn from(config: &NodeAwsClientConfig) -> Self {
+        SecretsManagerClient::new(config.sdk())
+    }
+}
+
+impl From<&NodeAwsClientConfig> for SNSClient {
+    fn from(config: &NodeAwsClientConfig) -> Self {
+        SNSClient::new(config.sdk())
+    }
+}
+
+impl From<&NodeAwsClientConfig> for S3Client {
+    fn from(config: &NodeAwsClientConfig) -> Self {
+        let force_path_style =
+            config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
+        let config_builder = S3ConfigBuilder::from(config.sdk())
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            .force_path_style(force_path_style);
+
+        S3Client::from_conf(config_builder.build())
+    }
+}
+
+impl From<&NodeAwsClientConfig> for SQSClient {
+    fn from(config: &NodeAwsClientConfig) -> Self {
+        SQSClient::from_conf(
+            Builder::from(config.sdk())
+                .timeout_config(
+                    TimeoutConfig::builder()
+                        .operation_attempt_timeout(Duration::from_secs(
+                            (config.node().sqs_long_poll_wait_time + 2) as u64,
+                        ))
+                        .build(),
+                )
+                .build(),
+        )
+    }
+}
+
 /// Returns AWS SDK configuration from a node configuration instance.
-async fn get_sdk_config(node_config: &NodeConfig) -> aws_config::SdkConfig {
+async fn get_sdk_config(region: String) -> aws_config::SdkConfig {
+    let region = Region::new(region);
+    let retry_config = RetryConfig::standard().with_max_attempts(20);
     aws_config::from_env()
-        .region(Region::new(
-            node_config
-                .clone()
-                .aws
-                .and_then(|aws| aws.region)
-                .unwrap_or_else(|| AWS_REGION.to_string()),
-        ))
+        .region(region)
+        .retry_config(retry_config)
         .load()
         .await
 }
