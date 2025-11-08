@@ -1,6 +1,15 @@
+use aws_sdk_sns::types::MessageAttributeValue;
+use serde_json;
 use uuid::Uuid;
 
-use iris_mpc_common::helpers::smpc_request::UniquenessRequest;
+use iris_mpc_common::helpers::{
+    aws::{
+        NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+        TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+    },
+    smpc_request::{UniquenessRequest, UNIQUENESS_MESSAGE_TYPE},
+    smpc_response::create_message_type_attribute_map,
+};
 
 use super::super::types::{RequestBatch, RequestData};
 use crate::{
@@ -8,6 +17,8 @@ use crate::{
     client::types::{Request, RequestDataUniqueness},
     types::NetEncryptionPublicKeys,
 };
+
+const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 /// A component responsible for enqueuing system requests upon network ingress queues.
 #[derive(Debug)]
@@ -60,7 +71,7 @@ impl RequestEnqueuer {
 
         // Step 2: Upload encrypted shares to an S3 bucket.
         let s3_bucket = match self.net_aws_client[0]
-            .upload_iris_party_shares(&shares, &self.encryption_keys())
+            .upload_iris_party_shares(&shares, self.encryption_keys())
             .await
         {
             Err(report) => {
@@ -74,7 +85,7 @@ impl RequestEnqueuer {
 
         // Step 3: Set request payload.
         // TODO: use batch size ando ther fields from request
-        let _request_payload = UniquenessRequest {
+        let request_payload = UniquenessRequest {
             batch_size: Some(1),
             signup_id: shares.signup_id.clone(),
             s3_key: s3_bucket,
@@ -83,10 +94,45 @@ impl RequestEnqueuer {
             full_face_mirror_attacks_detection_enabled: Some(true),
             disable_anonymized_stats: None,
         };
-        println!("{} :: Uniqueness payload instantatiated", request);
+        println!("{} :: Uniqueness request payload instantatiated", request);
 
-        // Step 4: Enqueue on AWS SNS.
+        // Step 5:
+        let message_attributes = {
+            let mut attrs = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+            attrs.extend(
+                [
+                    TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+                    SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+                    NODE_ID_MESSAGE_ATTRIBUTE_NAME,
+                ]
+                .iter()
+                .map(|key| {
+                    (
+                        key.to_string(),
+                        MessageAttributeValue::builder()
+                            .data_type("String")
+                            .string_value("TEST")
+                            .build()
+                            .unwrap(),
+                    )
+                }),
+            );
+            attrs
+        };
+        println!("{} :: Uniqueness request headers instantatiated", request);
 
-        println!("{} :: Enqueueing", request);
+        // Step 5: Enqueue system request.
+        self.net_aws_client[0]
+            .sns()
+            .clone()
+            .publish()
+            .topic_arn(self.net_aws_client[0].config().request_topic_arn())
+            .message_group_id(ENROLLMENT_REQUEST_TYPE)
+            .message(serde_json::to_string(&request_payload).unwrap())
+            .set_message_attributes(Some(message_attributes))
+            .send()
+            .await
+            .unwrap();
+        println!("{} :: Enqueueing uniqueness request", request);
     }
 }
