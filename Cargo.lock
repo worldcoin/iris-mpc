@@ -2937,6 +2937,7 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "rand",
+ "rayon",
  "serde",
  "serde_json",
  "sodiumoxide",

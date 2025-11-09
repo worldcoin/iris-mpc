@@ -24,6 +24,7 @@ iris-mpc-cpu = { path = "../iris-mpc-cpu" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 rand.workspace = true
+rayon.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json.workspace = true
 sodiumoxide.workspace = true

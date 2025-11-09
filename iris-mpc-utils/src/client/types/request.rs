@@ -2,39 +2,26 @@ use std::fmt;
 
 use uuid;
 
-use iris_mpc_cpu::execution::hawk_main::BothEyes;
-
-use crate::types::IrisCodeAndMaskShares;
+use super::request_data::RequestData;
 
 /// Encapsualates information to dispatch a system service request.
 #[derive(Debug)]
 pub struct Request {
     /// Batch ordinal identifier.
-    #[allow(dead_code)]
     batch_idx: usize,
 
     /// Batch item ordinal identifier.
-    #[allow(dead_code)]
     batch_item_idx: usize,
+
+    /// Unique request identifier for correlation purposes.
+    identifier: uuid::Uuid,
 
     /// Associated request payload.
     #[allow(dead_code)]
     data: RequestData,
-
-    /// Unique request identifier for correlation purposes.
-    #[allow(dead_code)]
-    identifier: uuid::Uuid,
 }
 
 impl Request {
-    pub fn batch_idx(&self) -> &usize {
-        &self.batch_idx
-    }
-
-    pub fn batch_item_idx(&self) -> &usize {
-        &self.batch_item_idx
-    }
-
     pub fn data(&self) -> &RequestData {
         &self.data
     }
@@ -57,8 +44,8 @@ impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Request :: {:04}.{:04} [{}]",
-            self.batch_idx, self.batch_item_idx, self.data
+            "Request:{:03}.{:03}.{}::[{}]",
+            self.batch_idx, self.batch_item_idx, self.identifier, self.data
         )
     }
 }
@@ -107,6 +94,14 @@ pub enum RequestBatchKind {
     Simple(&'static str),
 }
 
+impl fmt::Display for RequestBatchKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Simple(kind) => write!(f, "{}", kind),
+        }
+    }
+}
+
 /// Encapsulates inputs used to compute size of a request batch.
 #[derive(Debug, Clone)]
 pub enum RequestBatchSize {
@@ -114,50 +109,10 @@ pub enum RequestBatchSize {
     Static(usize),
 }
 
-/// Enumeration over data associated with a request.
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum RequestData {
-    IdentityDeletion,
-    Reauthorisation,
-    ResetCheck,
-    ResetUpdate,
-    Uniqueness(RequestDataUniqueness),
-}
-
-#[derive(Debug, Clone)]
-pub struct RequestDataUniqueness {
-    shares: BothEyes<IrisCodeAndMaskShares>,
-}
-
-impl RequestDataUniqueness {
-    pub fn shares(&self) -> &BothEyes<IrisCodeAndMaskShares> {
-        &self.shares
-    }
-
-    pub fn new(shares: BothEyes<IrisCodeAndMaskShares>) -> Self {
-        Self { shares }
-    }
-}
-
-impl fmt::Display for RequestData {
+impl fmt::Display for RequestBatchSize {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::IdentityDeletion => {
-                write!(f, "IdentityDeletion")
-            }
-            RequestData::Reauthorisation => {
-                write!(f, "Reauthorisation")
-            }
-            RequestData::ResetCheck => {
-                write!(f, "ResetCheck")
-            }
-            RequestData::ResetUpdate => {
-                write!(f, "ResetUpdate")
-            }
-            RequestData::Uniqueness(_) => {
-                write!(f, "Uniqueness")
-            }
+            Self::Static(size) => write!(f, "{}", size),
         }
     }
 }

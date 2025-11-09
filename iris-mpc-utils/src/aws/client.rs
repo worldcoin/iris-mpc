@@ -1,10 +1,15 @@
-use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::{
+    primitives::{ByteStream, SdkBody},
+    Client as S3Client,
+};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client as SQSClient;
+use serde::ser::Serialize;
+use serde_json;
 use thiserror::Error;
 
-use iris_mpc_common::helpers::sqs_s3_helper;
+use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
 use super::config::AwsClientConfig;
 use crate::{
@@ -12,9 +17,6 @@ use crate::{
     misc::{log_error, log_info},
     types::NetworkEncryptionPublicKeys,
 };
-
-/// Component name for logging purposes.
-const COMPONENT: &str = "State-AWS";
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
@@ -78,22 +80,65 @@ impl AwsClient {
     }
 
     pub(super) fn log_error(&self, msg: &str) {
-        log_error(COMPONENT, msg);
+        log_error("Utils-AWS", msg);
     }
 
     pub(super) fn log_info(&self, msg: &str) {
-        log_info(COMPONENT, msg);
+        log_info("Utils-AWS", msg);
     }
 
+    /// Enqueues a message upon an AWS SNS service topic.
+    pub async fn publish_to_sns<T>(
+        &self,
+        message_type: &str,
+        message_group_id: &str,
+        message_payload: T,
+    ) -> Result<(), AwsClientError>
+    where
+        T: Sized + Serialize,
+    {
+        match self
+            .sns()
+            .clone()
+            .publish()
+            .topic_arn(self.config().request_topic_arn())
+            .message_group_id(message_group_id)
+            .message(serde_json::to_string(&message_payload).unwrap())
+            .set_message_attributes(Some(create_sns_message_attributes(message_type)))
+            .send()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::error!("Failed to publish data to SNS: {:?}", e);
+                return Err(AwsClientError::SnsPublishError);
+            }
+        }
+    }
+
+    /// Enqueues data to an S3 bucket.
     pub async fn upload_to_s3(
         &self,
-        bucket: &str,
-        key: &str,
+        s3_bucket: &str,
+        s3_key: &str,
         payload: &[u8],
-    ) -> Result<(), NodeAwsClientError> {
-        match sqs_s3_helper::upload_file_to_s3(bucket, key, self.s3().clone(), payload).await {
-            Err(_) => Err(NodeAwsClientError::S3UploadFailed),
+    ) -> Result<(), AwsClientError> {
+        match self
+            .s3()
+            .put_object()
+            .bucket(s3_bucket)
+            .key(s3_key)
+            .body(ByteStream::new(SdkBody::from(payload)))
+            .send()
+            .await
+        {
             Ok(_) => Ok(()),
+            Err(e) => {
+                return Err(AwsClientError::S3UploadError {
+                    key: s3_key.to_string(),
+                    error: e.to_string(),
+                });
+            }
         }
     }
 }
@@ -112,9 +157,12 @@ impl Clone for AwsClient {
 }
 
 #[derive(Error, Debug)]
-pub enum NodeAwsClientError {
-    #[error("AWS S3 file upload error")]
-    S3UploadFailed,
+pub enum AwsClientError {
+    #[error("AWS SNS publish error")]
+    SnsPublishError,
+
+    #[error("AWS S3 upload error: key={}: error={}", .key, .error)]
+    S3UploadError { key: String, error: String },
 }
 
 #[cfg(test)]

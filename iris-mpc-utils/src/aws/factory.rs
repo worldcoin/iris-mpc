@@ -21,18 +21,15 @@ const IRIS_SHARES_VERSION: &str = "1.3";
 /// Converts iris code shares into a representation to be dispatched to an S3 bucket.
 #[allow(dead_code)]
 pub fn create_iris_code_party_shares(
+    signup_id: Uuid,
     l_code: [GaloisRingIrisCodeShare; N_PARTIES],
     l_mask: [GaloisRingIrisCodeShare; N_PARTIES],
     r_code: [GaloisRingIrisCodeShare; N_PARTIES],
     r_mask: [GaloisRingIrisCodeShare; N_PARTIES],
-    signup_id: Option<String>,
 ) -> IrisCodePartyShares {
-    let signup_id = signup_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let parties = create_iris_code_shares_json(l_code, l_mask, r_code, r_mask);
 
-    IrisCodePartyShares::new(
-        signup_id,
-        create_iris_code_shares_json(l_code, l_mask, r_code, r_mask).to_vec(),
-    )
+    IrisCodePartyShares::new(signup_id.to_string(), parties.to_vec())
 }
 
 /// Converts iris code shares into a JSON representation.
@@ -87,6 +84,7 @@ mod tests {
     use crate::{constants::N_PARTIES, irises::generate_iris_code_and_mask_shares_both_eyes};
     use rand::{rngs::StdRng, SeedableRng};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
+    use uuid::Uuid;
 
     fn create_public_keys_for_encryption() -> [PublicKey; N_PARTIES] {
         std::array::from_fn(|_| gen_keypair().0)
@@ -99,7 +97,8 @@ mod tests {
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
-        let _ = create_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
+        let signup_id = Uuid::new_v4();
+        let _ = create_iris_code_party_shares(signup_id, l_code, l_mask, r_code, r_mask);
     }
 
     #[test]
@@ -119,7 +118,8 @@ mod tests {
         let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
-        let shares = create_iris_code_party_shares(l_code, l_mask, r_code, r_mask, None);
+        let signup_id = Uuid::new_v4();
+        let shares = create_iris_code_party_shares(signup_id, l_code, l_mask, r_code, r_mask);
         let keys = create_public_keys_for_encryption();
         let _ = create_iris_party_shares_for_s3(&shares, &keys);
     }

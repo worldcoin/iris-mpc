@@ -5,9 +5,7 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::super::types::{
-    Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData, RequestDataUniqueness,
-};
+use super::super::types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
 use crate::irises::generate_iris_code_and_mask_shares_both_eyes;
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -66,7 +64,6 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         let mut batch = RequestBatch::new(batch_idx, batch_size);
         for item_idx in 1..(batch_size + 1) {
             let item = self.generate_request(batch_idx, item_idx);
-            println!("{} :: Generated", item,);
             batch.requests_mut().push(item);
         }
         self.batch_count += 1;
@@ -87,11 +84,9 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
                     REAUTH_MESSAGE_TYPE => RequestData::Reauthorisation,
                     RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck,
                     RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate,
-                    UNIQUENESS_MESSAGE_TYPE => {
-                        let iris_shares =
-                            generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut());
-                        RequestData::Uniqueness(RequestDataUniqueness::new(iris_shares))
-                    }
+                    UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
+                        shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut()),
+                    },
                     _ => panic!("Unsupported request kind: {}", kind),
                 },
             },

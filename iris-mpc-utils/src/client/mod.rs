@@ -40,7 +40,7 @@ impl<R: Rng + CryptoRng> Client<R> {
         rng_seed: R,
     ) -> Self {
         let net_encryption_public_keys =
-            AwsClient::download_net_encryption_public_keys(net_public_key_base_url)
+            AwsClient::download_encryption_public_keys(net_public_key_base_url)
                 .await
                 .unwrap();
         let aws_client = AwsClient::new(aws_client_config, net_encryption_public_keys);

@@ -9,11 +9,11 @@ use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
 use super::{client::AwsClient, factory};
-use crate::{constants::N_PARTIES, types::NetworkEncryptionPublicKeys};
+use crate::types::NetworkEncryptionPublicKeys;
 
 impl AwsClient {
-    /// Downloads network wide set of node encryption public keys.
-    pub async fn download_net_encryption_public_keys(
+    /// Downloads MPC encryption public keys.
+    pub async fn download_encryption_public_keys(
         public_key_base_url: &str,
     ) -> Result<NetworkEncryptionPublicKeys> {
         async fn get_public_key(party_idx: usize, public_key_base_url: &str) -> PublicKey {
@@ -33,7 +33,24 @@ impl AwsClient {
         ])
     }
 
-    /// Uploads a set of Iris serial identifiers to be marked as deleted.
+    /// Encrypts and uploads Iris shares.
+    pub async fn encrypt_and_upload_iris_shares(
+        &self,
+        shares: &IrisCodePartyShares,
+    ) -> Result<String> {
+        let s3_bucket = self.config().request_bucket_name();
+        let s3_key = shares.signup_id.as_str();
+        let s3_shares = factory::create_iris_party_shares_for_s3(shares, self.encryption_keys());
+        let s3_payload = serde_json::to_vec(&s3_shares)?;
+
+        self.upload_to_s3(s3_bucket, s3_key, &s3_payload)
+            .await
+            .map_err(|err| eyre!("{}", err))?;
+
+        Ok(s3_bucket.clone())
+    }
+
+    /// Uploads Iris serial identifiers marked for deletion.
     pub async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()> {
         #[derive(Serialize, Debug, Clone)]
         struct Payload {
@@ -71,32 +88,5 @@ impl AwsClient {
             })?;
 
         Ok(())
-    }
-
-    /// Uploads Iris shares for subsequent request processing.
-    pub async fn upload_iris_party_shares(
-        &self,
-        shares: &IrisCodePartyShares,
-        encryption_keys: &[PublicKey; N_PARTIES],
-    ) -> Result<String> {
-        let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
-        let s3_payload = serde_json::to_vec(&s3_shares)?;
-        let s3_bucket = self.config().request_bucket_name();
-        let s3_key = shares.signup_id.as_str();
-
-        self.upload_to_s3(s3_bucket, s3_key, &s3_payload)
-            .await
-            .map_err(|err| {
-                self.log_error(
-                    format!(
-                        "Failed to upload iris party shares to S3: {} :: {}",
-                        shares.signup_id, err
-                    )
-                    .as_str(),
-                );
-                eyre!("S3 upload failure :: {}", err)
-            })?;
-
-        Ok(s3_bucket.clone())
     }
 }

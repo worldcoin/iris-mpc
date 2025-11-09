@@ -7,6 +7,7 @@ use iris_mpc_common::{
 };
 use rand::rngs::StdRng;
 use serde::Deserialize;
+use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use uuid::Uuid;
@@ -47,6 +48,12 @@ impl IrisCodePartyShares {
 
     pub fn create_duplicate_party_shares(&self, signup_id: String) -> IrisCodePartyShares {
         IrisCodePartyShares::new(signup_id, self.parties.clone())
+    }
+}
+
+impl fmt::Display for IrisCodePartyShares {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.signup_id)
     }
 }
 
