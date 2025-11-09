@@ -65,6 +65,7 @@ pub fn create_iris_party_shares_for_s3(
         hash_set[i] = sha256_as_hex_string(&as_json);
     }
 
+    // TODO: review use of clones.
     SharesS3Object {
         iris_share_0: content_set[0].clone(),
         iris_share_1: content_set[1].clone(),

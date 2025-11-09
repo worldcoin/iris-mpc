@@ -16,7 +16,6 @@ use iris_mpc_utils::{
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    println!("Init tracing");
     let _ = match initialize_tracing(None) {
         Ok(handle) => handle,
         Err(e) => {

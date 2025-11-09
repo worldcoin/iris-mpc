@@ -7,11 +7,10 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client as SQSClient;
 use serde::ser::Serialize;
 use serde_json;
-use thiserror::Error;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
-use super::config::AwsClientConfig;
+use super::{config::AwsClientConfig, error::AwsClientError};
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
@@ -85,9 +84,12 @@ impl AwsClient {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => Err(AwsClientError::SnsPublishError {
-                error: e.to_string(),
-            }),
+            Err(e) => {
+                tracing::error!("SNS publish error: {}", e);
+                Err(AwsClientError::SnsPublishError {
+                    error: e.to_string(),
+                })
+            }
         }
     }
 
@@ -95,9 +97,12 @@ impl AwsClient {
     pub async fn sqs_purge_queue(&self, queue_url: &String) -> Result<(), AwsClientError> {
         match self.sqs().purge_queue().queue_url(queue_url).send().await {
             Ok(_) => Ok(()),
-            Err(e) => Err(AwsClientError::SqsPurgeQueueError {
-                error: e.to_string(),
-            }),
+            Err(e) => {
+                tracing::error!("SQS queue purge error: {}", e);
+                Err(AwsClientError::SqsPurgeQueueError {
+                    error: e.to_string(),
+                })
+            }
         }
     }
 
@@ -118,10 +123,13 @@ impl AwsClient {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => Err(AwsClientError::S3UploadError {
-                key: s3_key.to_string(),
-                error: e.to_string(),
-            }),
+            Err(e) => {
+                tracing::error!("S3 upload error: {}", e);
+                Err(AwsClientError::S3UploadError {
+                    key: s3_key.to_string(),
+                    error: e.to_string(),
+                })
+            }
         }
     }
 }
@@ -136,19 +144,6 @@ impl Clone for AwsClient {
             secrets_manager: self.secrets_manager.clone(),
         }
     }
-}
-
-#[derive(Error, Debug)]
-#[allow(clippy::enum_variant_names)]
-pub enum AwsClientError {
-    #[error("AWS SQS purge queue error: {}", .error)]
-    SqsPurgeQueueError { error: String },
-
-    #[error("AWS SNS publish error")]
-    SnsPublishError { error: String },
-
-    #[error("AWS S3 upload error: key={}: error={}", .key, .error)]
-    S3UploadError { key: String, error: String },
 }
 
 #[cfg(test)]

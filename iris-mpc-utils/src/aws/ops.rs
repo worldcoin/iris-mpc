@@ -1,6 +1,5 @@
 use aws_sdk_s3::primitives::ByteStream as S3_ByteStream;
 use base64::{engine::general_purpose, Engine};
-use eyre::{eyre, Result};
 use serde::Serialize;
 use serde_json;
 use sodiumoxide::crypto::box_::PublicKey;
@@ -8,28 +7,50 @@ use sodiumoxide::crypto::box_::PublicKey;
 use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
-use super::{client::AwsClient, factory};
+use super::{client::AwsClient, error::AwsClientError, factory};
 use crate::types::EncryptionPublicKeyset;
 
 impl AwsClient {
+    /// Downloads a party's encryption public key.
+    pub async fn download_encryption_public_key(
+        public_key_base_url: String,
+        party_idx: usize,
+    ) -> Result<PublicKey, AwsClientError> {
+        match download_public_key(public_key_base_url.to_string(), party_idx.to_string()).await {
+            Ok(pbk_raw) => {
+                tracing::info!("Downloaded public key of MPC party {}.", party_idx);
+                Ok(
+                    PublicKey::from_slice(&general_purpose::STANDARD.decode(pbk_raw).unwrap())
+                        .unwrap(),
+                )
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Encryption keys of party {} download error: {}",
+                    party_idx,
+                    e
+                );
+                Err(AwsClientError::EncryptionKeysDownloadError {
+                    error: e.to_string(),
+                })
+            }
+        }
+    }
+
     /// Downloads MPC encryption public keys.
     pub async fn download_encryption_public_keys(
         public_key_base_url: String,
-    ) -> Result<EncryptionPublicKeyset> {
-        async fn get_public_key(party_idx: usize, public_key_base_url: &str) -> PublicKey {
-            let pbk_raw =
-                download_public_key(public_key_base_url.to_string(), party_idx.to_string())
-                    .await
-                    .unwrap();
-            let pbk_bytes = general_purpose::STANDARD.decode(pbk_raw).unwrap();
-
-            PublicKey::from_slice(&pbk_bytes).unwrap()
-        }
-
+    ) -> Result<EncryptionPublicKeyset, AwsClientError> {
         Ok([
-            get_public_key(0, public_key_base_url.as_str()).await,
-            get_public_key(1, public_key_base_url.as_str()).await,
-            get_public_key(2, public_key_base_url.as_str()).await,
+            Self::download_encryption_public_key(public_key_base_url.clone(), 0)
+                .await
+                .unwrap(),
+            Self::download_encryption_public_key(public_key_base_url.clone(), 1)
+                .await
+                .unwrap(),
+            Self::download_encryption_public_key(public_key_base_url.clone(), 2)
+                .await
+                .unwrap(),
         ])
     }
 
@@ -38,21 +59,25 @@ impl AwsClient {
         &self,
         encryption_keys: &EncryptionPublicKeyset,
         shares: &IrisCodePartyShares,
-    ) -> Result<String> {
+    ) -> Result<String, AwsClientError> {
         let s3_bucket = self.config().s3_request_bucket_name();
         let s3_key = shares.signup_id.as_str();
         let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
-        let s3_payload = serde_json::to_vec(&s3_shares)?;
+        let s3_payload = serde_json::to_vec(&s3_shares).unwrap();
 
-        self.s3_upload(s3_bucket, s3_key, &s3_payload)
-            .await
-            .map_err(|err| eyre!("{}", err))?;
-
-        Ok(s3_bucket.clone())
+        match self.s3_upload(s3_bucket, s3_key, &s3_payload).await {
+            Ok(_) => Ok(s3_bucket.clone()),
+            Err(e) => {
+                tracing::error!("SNS publish error: {}", e);
+                Err(AwsClientError::IrisSharesEncryptAndUploadError {
+                    error: e.to_string(),
+                })
+            }
+        }
     }
 
     /// Uploads Iris serial identifiers marked for deletion.
-    pub async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<()> {
+    pub async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<(), AwsClientError> {
         #[derive(Serialize, Debug, Clone)]
         struct Payload {
             deleted_serial_ids: Vec<IrisSerialId>,
@@ -68,15 +93,22 @@ impl AwsClient {
             .into_bytes(),
         );
 
-        self.s3()
+        match self
+            .s3()
             .put_object()
             .bucket(s3_bucket)
             .key(s3_key)
             .body(s3_payload)
             .send()
             .await
-            .map_err(|err| eyre!("S3 upload failure: {}", err))?;
-
-        Ok(())
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::error!("SNS publish error: {}", e);
+                Err(AwsClientError::IrisDeletionsUploadError {
+                    error: e.to_string(),
+                })
+            }
+        }
     }
 }
