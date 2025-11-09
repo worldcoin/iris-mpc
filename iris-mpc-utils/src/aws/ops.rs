@@ -68,14 +68,6 @@ impl AwsClient {
             .into_bytes(),
         );
 
-        self.log_info(
-            format!(
-                "Uploading deleted serial ids to S3 bucket: {}, key: {}",
-                s3_bucket, s3_key
-            )
-            .as_str(),
-        );
-
         self.s3()
             .put_object()
             .bucket(s3_bucket)
@@ -83,10 +75,7 @@ impl AwsClient {
             .body(s3_payload)
             .send()
             .await
-            .map_err(|err| {
-                self.log_error(format!("Failed to upload file to S3: {}", err).as_str());
-                eyre!("Failed to upload Iris deletions to S3")
-            })?;
+            .map_err(|err| eyre!("S3 upload failure: {}", err))?;
 
         Ok(())
     }

@@ -64,14 +64,6 @@ impl AwsClient {
         }
     }
 
-    pub(super) fn log_error(&self, msg: &str) {
-        log_error("Utils-AWS", msg);
-    }
-
-    pub(super) fn log_info(&self, msg: &str) {
-        log_info("Utils-AWS", msg);
-    }
-
     /// Enqueues a message upon an AWS SNS service topic.
     pub async fn sns_publish<T>(
         &self,
