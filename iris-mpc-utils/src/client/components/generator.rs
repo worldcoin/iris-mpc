@@ -62,11 +62,14 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         let batch_idx = self.batch_count + 1;
         let batch_size = self.batch_size();
         let mut batch = RequestBatch::new(batch_idx, batch_size);
+        println!("{} :: Instantiated", batch);
+
         for item_idx in 1..(batch_size + 1) {
             let request = self.generate_request(batch_idx, item_idx);
             println!("{} :: Generated", request);
             batch.requests_mut().push(request);
         }
+
         self.batch_count += 1;
 
         Some(batch)

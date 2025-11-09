@@ -57,6 +57,7 @@ impl<R: Rng + CryptoRng> Client<R> {
 
     /// Executor.
     pub async fn exec(&mut self) {
+        println!("Executing ...");
         while let Some(batch) = self.request_generator.next().await {
             self.request_enqueuer.enqueue(&batch).await;
             // TODO await responses & correlate.

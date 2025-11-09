@@ -82,7 +82,7 @@ impl RequestBatch {
 
 impl fmt::Display for RequestBatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "batch-id={}", self.batch_idx)
+        write!(f, "Request-Batch:{:03}", self.batch_idx)
     }
 }
 
