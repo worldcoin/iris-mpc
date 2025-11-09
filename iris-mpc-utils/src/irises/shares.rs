@@ -1,4 +1,3 @@
-use crate::misc::log_info;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
@@ -7,9 +6,6 @@ use iris_mpc_cpu::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 use std::{fs::File, io::BufReader, path::PathBuf};
-
-/// Component name for logging purposes.
-const COMPONENT: &str = "SystemState-PgresIrises";
 
 /// Number of MPC parties.
 const N_PARTIES: usize = 3;
@@ -21,14 +17,6 @@ pub fn read_irises_from_ndjson(
     ndjson_path: PathBuf,
     num_pairs: usize,
 ) -> Result<Vec<(IrisCode, IrisCode)>> {
-    log_info(
-        COMPONENT,
-        &format!(
-            "Reading {num_pairs} iris code pairs from file {}",
-            ndjson_path.display()
-        ),
-    );
-
     let file = File::open(ndjson_path.as_path())?;
     let reader = BufReader::new(file);
 

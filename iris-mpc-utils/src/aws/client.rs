@@ -12,7 +12,6 @@ use thiserror::Error;
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
 use super::config::AwsClientConfig;
-use crate::misc::{log_error, log_info};
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
