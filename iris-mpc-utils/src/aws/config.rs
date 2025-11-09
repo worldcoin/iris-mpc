@@ -8,8 +8,6 @@ use aws_sdk_sqs::{config::Builder, Client as SQSClient};
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 
-use crate::constants::N_PARTIES;
-
 /// Encpasulates AWS service client configuration.
 #[derive(Debug)]
 pub struct AwsClientConfig {
@@ -31,9 +29,6 @@ pub struct AwsClientConfig {
     /// System response eqgress queue URL.
     sqs_response_queue_url: String,
 }
-
-// Network wide configuration set.
-pub type NetAwsClientConfig = [AwsClientConfig; N_PARTIES];
 
 impl AwsClientConfig {
     pub fn environment(&self) -> &String {

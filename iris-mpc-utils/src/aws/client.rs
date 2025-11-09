@@ -12,10 +12,7 @@ use thiserror::Error;
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
 use super::config::AwsClientConfig;
-use crate::{
-    constants::N_PARTIES,
-    misc::{log_error, log_info},
-};
+use crate::misc::{log_error, log_info};
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
@@ -35,9 +32,6 @@ pub struct AwsClient {
     /// Client for Amazon Simple Queue Service.
     sqs: SQSClient,
 }
-
-// Network wide node AWS service clients.
-pub type NetworkAwsClient = [AwsClient; N_PARTIES];
 
 impl AwsClient {
     pub fn config(&self) -> &AwsClientConfig {
