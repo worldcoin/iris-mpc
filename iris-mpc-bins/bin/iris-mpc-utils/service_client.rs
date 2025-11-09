@@ -5,7 +5,10 @@ use clap::Parser;
 use eyre::Result;
 use rand::{rngs::StdRng, SeedableRng};
 
-use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
+use iris_mpc_common::{
+    helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, tracing::initialize_tracing,
+};
+
 use iris_mpc_utils::{
     aws::AwsClientConfig,
     client::{Client, RequestBatchKind, RequestBatchSize},
@@ -13,17 +16,26 @@ use iris_mpc_utils::{
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    println!("Options: parsing ...");
-    let options = CliOptions::parse();
-    println!("{}", options);
+    println!("Init tracing");
+    let _ = match initialize_tracing(None) {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("Failed to initialize tracing: {:?}", e);
+            return Err(e);
+        }
+    };
 
-    println!("Client: instantiating ...");
+    tracing::info!("Parsing CLI options ...");
+    let options = CliOptions::parse();
+    tracing::info!("{}", options);
+
+    tracing::info!("Instantiating service client");
     let mut client = Client::async_from(options.clone()).await;
 
-    println!("Client: initialising ...");
+    tracing::info!("Initialising service client");
     client.init(options.aws_public_key_base_url).await;
 
-    println!("Client: executing ...");
+    tracing::info!("Executing service client ...");
     client.exec().await;
 
     Ok(())

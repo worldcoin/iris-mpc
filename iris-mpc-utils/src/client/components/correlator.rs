@@ -16,7 +16,7 @@ impl ResponseCorrelator {
 
     /// Initializer.
     pub async fn init(&self) {
-        println!("Purging SQS response queue ...");
+        tracing::info!("Purging SQS response queue ...");
         self.aws_client
             .sqs_purge_queue(self.aws_client.config().sqs_response_queue_url())
             .await
@@ -25,7 +25,7 @@ impl ResponseCorrelator {
 
     #[allow(dead_code)]
     pub async fn correlate(&self, batch: &RequestBatch) {
-        println!(
+        tracing::info!(
             "TODO: correlate enqueued requests with dequeued responses: {}",
             batch
         );

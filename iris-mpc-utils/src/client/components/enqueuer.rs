@@ -38,7 +38,7 @@ impl RequestEnqueuer {
 
     /// Initializer.
     pub async fn init(&mut self, public_key_base_url: String) {
-        println!("Downloading public keys for encryption ...");
+        tracing::info!("Downloading public keys for encryption ...");
         self.encryption_keys = Some(
             AwsClient::download_encryption_public_keys(public_key_base_url)
                 .await
@@ -82,7 +82,7 @@ impl RequestEnqueuer {
                 panic!("{} :: {}", request, report);
             }
             Ok(s3_key) => {
-                println!("{} :: Shares encrypted and uploaded to S3", request);
+                tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
                 s3_key
             }
         };
@@ -109,6 +109,6 @@ impl RequestEnqueuer {
             .await
             .unwrap();
 
-        println!("{} :: Enqueued via AWS SNS", request);
+        tracing::info!("{} :: Enqueued to AWS-SNS topic", request);
     }
 }
