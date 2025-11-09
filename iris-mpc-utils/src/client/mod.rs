@@ -11,10 +11,12 @@ pub use types::{
 };
 
 mod components;
+mod errors;
 mod types;
 
+/// A utility for correlating enqueued system requests with system responses.
 #[derive(Debug)]
-pub struct Client<R: Rng + CryptoRng> {
+pub struct ServiceClient<R: Rng + CryptoRng> {
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
@@ -30,7 +32,7 @@ pub struct Client<R: Rng + CryptoRng> {
     response_dequeuer: ResponseDequeuer,
 }
 
-impl<R: Rng + CryptoRng> Client<R> {
+impl<R: Rng + CryptoRng> ServiceClient<R> {
     /// Constructor.
     pub async fn new(
         aws_client_config: AwsClientConfig,
@@ -45,21 +47,24 @@ impl<R: Rng + CryptoRng> Client<R> {
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
             request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count, rng_seed),
             response_correlator: ResponseCorrelator::new(aws_client.clone()),
-            response_dequeuer: ResponseDequeuer::default(),
+            response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
 
     /// Initializer.
     pub async fn init(&mut self, public_key_base_url: String) {
-        self.request_enqueuer.init(public_key_base_url).await;
-        self.response_correlator.init().await;
+        self.request_enqueuer
+            .init(public_key_base_url)
+            .await
+            .unwrap();
+        self.response_correlator.init().await.unwrap();
     }
 
     /// Executor.
     pub async fn exec(&mut self) {
         tracing::info!("Executing ...");
-        while let Some(batch) = self.request_generator.next().await {
-            self.request_enqueuer.enqueue(&batch).await;
+        while let Some(batch) = self.request_generator.next().await.unwrap() {
+            self.request_enqueuer.enqueue(&batch).await.unwrap();
             // TODO await responses & correlate.
         }
     }

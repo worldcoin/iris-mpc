@@ -10,7 +10,7 @@ use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
-use super::{config::AwsClientConfig, error::AwsClientError};
+use super::{config::AwsClientConfig, errors::AwsClientError};
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]

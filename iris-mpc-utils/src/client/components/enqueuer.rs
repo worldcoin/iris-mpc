@@ -1,7 +1,10 @@
 use iris_mpc_common::helpers::smpc_request::{UniquenessRequest, UNIQUENESS_MESSAGE_TYPE};
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
-use super::super::types::{RequestBatch, RequestData};
+use super::super::{
+    errors::ServiceClientError,
+    types::{RequestBatch, RequestData},
+};
 use crate::{
     aws::{create_iris_code_party_shares, AwsClient},
     client::types::Request,
@@ -37,17 +40,24 @@ impl RequestEnqueuer {
     }
 
     /// Initializer.
-    pub async fn init(&mut self, public_key_base_url: String) {
+    pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
         tracing::info!("Downloading public keys for encryption ...");
-        self.encryption_keys = Some(
-            AwsClient::download_encryption_public_keys(public_key_base_url)
-                .await
-                .unwrap(),
-        );
+        match AwsClient::download_encryption_public_keys(public_key_base_url).await {
+            Ok(keys) => {
+                self.encryption_keys = Some(keys);
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Encryption public keys download error: {}", e);
+                Err(ServiceClientError::ComponentInitialisationError {
+                    error: e.to_string(),
+                })
+            }
+        }
     }
 
     /// Enqueues a batch of system requests upon each node's ingress queue.
-    pub async fn enqueue(&self, batch: &RequestBatch) {
+    pub async fn enqueue(&self, batch: &RequestBatch) -> Result<(), ServiceClientError> {
         for request in batch.requests() {
             match request.data() {
                 RequestData::Uniqueness { shares } => {
@@ -56,6 +66,8 @@ impl RequestEnqueuer {
                 _ => panic!("Unsupported request type"),
             }
         }
+
+        Ok(())
     }
 
     /// Enqueues a uniqueness request.  This is a two stage process as encrypted shares are first

@@ -5,7 +5,10 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::super::types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
+use super::super::{
+    errors::ServiceClientError,
+    types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData},
+};
 use crate::irises::generate_iris_code_and_mask_shares_both_eyes;
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -54,9 +57,9 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
     }
 
     /// Generates batches of request until exhausted.
-    pub async fn next(&mut self) -> Option<RequestBatch> {
+    pub async fn next(&mut self) -> Result<Option<RequestBatch>, ServiceClientError> {
         if self.batch_count == self.n_batches {
-            return None;
+            return Ok(None);
         }
 
         let batch_idx = self.batch_count + 1;
@@ -74,7 +77,7 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
 
         self.batch_count += 1;
 
-        Some(batch)
+        Ok(Some(batch))
     }
 
     fn generate_request(&mut self, batch_idx: usize, item_idx: usize) -> Request {

@@ -7,7 +7,7 @@ use sodiumoxide::crypto::box_::PublicKey;
 use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
-use super::{client::AwsClient, error::AwsClientError, factory};
+use super::{client::AwsClient, errors::AwsClientError, factory};
 use crate::types::EncryptionPublicKeyset;
 
 impl AwsClient {

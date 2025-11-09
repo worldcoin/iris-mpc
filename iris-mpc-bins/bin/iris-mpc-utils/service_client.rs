@@ -11,7 +11,7 @@ use iris_mpc_common::{
 
 use iris_mpc_utils::{
     aws::AwsClientConfig,
-    client::{Client, RequestBatchKind, RequestBatchSize},
+    client::{RequestBatchKind, RequestBatchSize, ServiceClient},
 };
 
 #[tokio::main]
@@ -29,7 +29,7 @@ pub async fn main() -> Result<()> {
     tracing::info!("{}", options);
 
     tracing::info!("Instantiating service client");
-    let mut client = Client::async_from(options.clone()).await;
+    let mut client = ServiceClient::async_from(options.clone()).await;
 
     tracing::info!("Initialising service client");
     client.init(options.aws_public_key_base_url).await;
@@ -142,9 +142,9 @@ Iris-MPC Service Client Options:
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for Client<StdRng> {
+impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
-        Client::new(
+        ServiceClient::new(
             AwsClientConfig::async_from(options.clone()).await,
             options.request_batch_count,
             options.request_batch_kind(),
