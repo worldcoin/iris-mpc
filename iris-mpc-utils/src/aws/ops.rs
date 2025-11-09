@@ -39,7 +39,7 @@ impl AwsClient {
         encryption_keys: &EncryptionPublicKeyset,
         shares: &IrisCodePartyShares,
     ) -> Result<String> {
-        let s3_bucket = self.config().request_bucket_name();
+        let s3_bucket = self.config().s3_request_bucket_name();
         let s3_key = shares.signup_id.as_str();
         let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
         let s3_payload = serde_json::to_vec(&s3_shares)?;

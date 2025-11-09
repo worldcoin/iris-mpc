@@ -92,7 +92,7 @@ impl AwsClient {
             .sns()
             .clone()
             .publish()
-            .topic_arn(self.config().request_topic_arn())
+            .topic_arn(self.config().sns_request_topic_arn())
             .message_group_id(message_group_id)
             .message(serde_json::to_string(&message_payload).unwrap())
             .set_message_attributes(Some(create_sns_message_attributes(message_type)))
@@ -189,11 +189,10 @@ mod tests {
     async fn create_config() -> AwsClientConfig {
         AwsClientConfig::new(
             constants::DEFAULT_ENV.to_string(),
-            constants::AWS_REGION.to_string(),
-            constants::AWS_REQUEST_BUCKET_NAME.to_string(),
-            constants::AWS_REQUEST_TOPIC_ARN.to_string(),
-            constants::AWS_RESPONSE_QUEUE_URL.to_string(),
+            constants::AWS_S3_REQUEST_BUCKET_NAME.to_string(),
+            constants::AWS_SQS_RESPONSE_QUEUE_URL.to_string(),
             constants::AWS_SQS_LONG_POLL_WAIT_TIME,
+            constants::AWS_SNS_REQUEST_TOPIC_ARN.to_string(),
         )
         .await
     }

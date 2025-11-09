@@ -18,7 +18,7 @@ impl ResponseCorrelator {
     pub async fn init(&self) {
         println!("Purging SQS response queue ...");
         self.aws_client
-            .sqs_purge_queue(self.aws_client.config().response_queue_url())
+            .sqs_purge_queue(self.aws_client.config().sqs_response_queue_url())
             .await
             .unwrap();
     }

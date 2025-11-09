@@ -187,8 +187,8 @@ path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
 # ---------------------
 
 [[bin]]
-name = "node-service-client"
-path = "bin/iris-mpc-utils/node_service_client.rs"
+name = "service-client"
+path = "bin/iris-mpc-utils/service_client.rs"
 
 [[bin]]
 name = "write-node-config-toml"
