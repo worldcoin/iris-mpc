@@ -15,7 +15,6 @@ use super::config::AwsClientConfig;
 use crate::{
     constants::N_PARTIES,
     misc::{log_error, log_info},
-    types::NetworkEncryptionPublicKeys,
 };
 
 /// Encpasulates access to a node's set of AWS service clients.
@@ -23,9 +22,6 @@ use crate::{
 pub struct AwsClient {
     /// Associated configuration.
     config: AwsClientConfig,
-
-    /// Encryption public key set ... one per MPC node.
-    encryption_keys: NetworkEncryptionPublicKeys,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -48,10 +44,6 @@ impl AwsClient {
         &self.config
     }
 
-    pub fn encryption_keys(&self) -> &NetworkEncryptionPublicKeys {
-        &self.encryption_keys
-    }
-
     pub fn s3(&self) -> &S3Client {
         &self.s3
     }
@@ -68,10 +60,9 @@ impl AwsClient {
         &self.sqs
     }
 
-    pub fn new(config: AwsClientConfig, encryption_keys: NetworkEncryptionPublicKeys) -> Self {
+    pub fn new(config: AwsClientConfig) -> Self {
         Self {
             config: config.to_owned(),
-            encryption_keys,
             s3: S3Client::from(&config),
             secrets_manager: SecretsManagerClient::from(&config),
             sqs: SQSClient::from(&config),
@@ -88,7 +79,7 @@ impl AwsClient {
     }
 
     /// Enqueues a message upon an AWS SNS service topic.
-    pub async fn publish_to_sns<T>(
+    pub async fn sns_publish<T>(
         &self,
         message_type: &str,
         message_group_id: &str,
@@ -111,13 +102,26 @@ impl AwsClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 tracing::error!("Failed to publish data to SNS: {:?}", e);
-                return Err(AwsClientError::SnsPublishError);
+                Err(AwsClientError::SnsPublishError)
+            }
+        }
+    }
+
+    /// Purges an SQS queue.
+    pub async fn sqs_purge_queue(&self, queue_url: &String) -> Result<(), AwsClientError> {
+        match self.sqs().purge_queue().queue_url(queue_url).send().await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::error!("SQS queue purge failure: {:?}", e);
+                Err(AwsClientError::SqsPurgeQueueError {
+                    error: e.to_string(),
+                })
             }
         }
     }
 
     /// Enqueues data to an S3 bucket.
-    pub async fn upload_to_s3(
+    pub async fn s3_upload(
         &self,
         s3_bucket: &str,
         s3_key: &str,
@@ -133,12 +137,10 @@ impl AwsClient {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => {
-                return Err(AwsClientError::S3UploadError {
-                    key: s3_key.to_string(),
-                    error: e.to_string(),
-                });
-            }
+            Err(e) => Err(AwsClientError::S3UploadError {
+                key: s3_key.to_string(),
+                error: e.to_string(),
+            }),
         }
     }
 }
@@ -147,7 +149,6 @@ impl Clone for AwsClient {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
-            encryption_keys: self.encryption_keys,
             sqs: self.sqs.clone(),
             sns: self.sns.clone(),
             s3: self.s3.clone(),
@@ -157,7 +158,11 @@ impl Clone for AwsClient {
 }
 
 #[derive(Error, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum AwsClientError {
+    #[error("AWS SQS purge queue error: {}", .error)]
+    SqsPurgeQueueError { error: String },
+
     #[error("AWS SNS publish error")]
     SnsPublishError,
 
@@ -168,8 +173,7 @@ pub enum AwsClientError {
 #[cfg(test)]
 mod tests {
     use super::super::{AwsClient, AwsClientConfig};
-    use crate::constants::{self, N_PARTIES};
-    use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
+    use crate::constants::{self};
 
     fn assert_clients(clients: &AwsClient) {
         assert!(clients.s3().config().region().is_some());
@@ -179,11 +183,7 @@ mod tests {
     }
 
     async fn create_client() -> AwsClient {
-        AwsClient::new(create_config().await, create_public_keys_for_encryption())
-    }
-
-    fn create_public_keys_for_encryption() -> [PublicKey; N_PARTIES] {
-        std::array::from_fn(|_| gen_keypair().0)
+        AwsClient::new(create_config().await)
     }
 
     async fn create_config() -> AwsClientConfig {

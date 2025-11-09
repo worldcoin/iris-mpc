@@ -31,33 +31,35 @@ pub struct Client<R: Rng + CryptoRng> {
 }
 
 impl<R: Rng + CryptoRng> Client<R> {
+    /// Constructor.
     pub async fn new(
         aws_client_config: AwsClientConfig,
-        net_public_key_base_url: &str,
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
         rng_seed: R,
     ) -> Self {
-        let net_encryption_public_keys =
-            AwsClient::download_encryption_public_keys(net_public_key_base_url)
-                .await
-                .unwrap();
-        let aws_client = AwsClient::new(aws_client_config, net_encryption_public_keys);
+        let aws_client = AwsClient::new(aws_client_config);
 
         Self {
-            request_enqueuer: RequestEnqueuer::new(aws_client),
+            request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
             request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count, rng_seed),
-            response_correlator: ResponseCorrelator::default(),
+            response_correlator: ResponseCorrelator::new(aws_client.clone()),
             response_dequeuer: ResponseDequeuer::default(),
         }
     }
 
-    pub async fn run(&mut self) {
+    /// Initializer.
+    pub async fn init(&mut self, public_key_base_url: String) {
+        self.request_enqueuer.init(public_key_base_url).await;
+        self.response_correlator.init().await;
+    }
+
+    /// Executor.
+    pub async fn exec(&mut self) {
         while let Some(batch) = self.request_generator.next().await {
             self.request_enqueuer.enqueue(&batch).await;
-            self.response_dequeuer.dequeue(&batch).await;
-            self.response_correlator.correlate(&batch).await;
+            // TODO await responses & correlate.
         }
     }
 }

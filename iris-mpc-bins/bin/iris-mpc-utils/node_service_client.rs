@@ -13,14 +13,18 @@ use iris_mpc_utils::{
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
+    println!("Options: parsing ...");
     let options = CliOptions::parse();
     println!("{}", options);
 
     println!("Client: instantiating ...");
     let mut client = Client::async_from(options.clone()).await;
 
-    println!("Client: running ...");
-    client.run().await;
+    println!("Client: initialising ...");
+    client.init(options.aws_public_key_base_url).await;
+
+    println!("Client: executing ...");
+    client.exec().await;
 
     Ok(())
 }
@@ -134,7 +138,6 @@ impl AsyncFrom<CliOptions> for Client<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
         Client::new(
             AwsClientConfig::async_from(options.clone()).await,
-            options.aws_public_key_base_url.as_str(),
             options.request_batch_count,
             options.request_batch_kind(),
             options.request_batch_size(),

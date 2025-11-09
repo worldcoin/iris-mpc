@@ -10,7 +10,7 @@ use std::{
 
 /// Returns a message for logging.
 fn get_log_message(component: &str, msg: String) -> String {
-    format!("HNSW-UTILS :: {} :: {}", component, msg)
+    format!("AMPC-UTILS :: {} :: {}", component, msg)
 }
 
 /// Returns a boxed iterator over the first `limit` elements of `iter`.

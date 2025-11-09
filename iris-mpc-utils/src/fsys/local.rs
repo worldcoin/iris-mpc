@@ -1,7 +1,7 @@
 use super::reader;
 use crate::{
     constants::PARTY_INDICES,
-    types::{NetworkNodeConfig, NodeExecutionHost, PartyIdx},
+    types::{NodeConfigSet, NodeExecutionHost, PartyIdx},
 };
 use iris_mpc_common::config::Config as NodeConfig;
 use std::{
@@ -50,8 +50,8 @@ pub fn read_node_config(
     reader::read_node_config(&path_to_config)
 }
 
-/// Returns network configuration deserialized from a toml file.
-pub fn read_net_config(config_kind: &str, config_idx: usize) -> Result<NetworkNodeConfig, Error> {
+/// Returns network wide configuration deserialized from a set of toml files.
+pub fn read_node_config_set(config_kind: &str, config_idx: usize) -> Result<NodeConfigSet, Error> {
     Ok(PARTY_INDICES
         .iter()
         .map(|party_idx| read_node_config(config_kind, config_idx, party_idx).unwrap())
@@ -74,7 +74,7 @@ impl NodeExecutionHost {
 mod tests {
     use super::{
         get_path_to_assets, get_path_to_node_config, get_path_to_root, get_path_to_subdir,
-        read_net_config, read_node_config,
+        read_node_config, read_node_config_set,
     };
     use crate::constants::{NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, N_PARTIES, PARTY_INDICES};
 
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_read_net_config() {
-        let net_config = read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
+        let net_config = read_node_config_set(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
         assert!(net_config.len() == N_PARTIES);
         for (party_idx, node_config) in net_config.iter().enumerate() {
             assert!(node_config.party_id == party_idx);

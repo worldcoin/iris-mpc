@@ -10,6 +10,7 @@ impl ResponseDequeuer {
     }
 
     /// Dequeues system responses from network egress queues.
+    #[allow(dead_code)]
     pub async fn dequeue(&self, batch: &RequestBatch) {
         println!("TODO: dequeue responses: {}", batch);
     }

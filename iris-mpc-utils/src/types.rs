@@ -8,14 +8,14 @@ use iris_mpc_common::{
 
 use super::constants::N_PARTIES;
 
+// MPC party encryption public keys.
+pub type EncryptionPublicKeyset = [PublicKey; N_PARTIES];
+
 // Iris code and mask galois shares.
 pub type IrisCodeAndMaskShares = [[GaloisRingIrisCodeShare; N_PARTIES]; 2];
 
 // Network wide node configuration set.
-pub type NetworkNodeConfig = [NodeConfig; N_PARTIES];
-
-// Network wide node encryption public keys.
-pub type NetworkEncryptionPublicKeys = [PublicKey; N_PARTIES];
+pub type NodeConfigSet = [NodeConfig; N_PARTIES];
 
 /// Set of node execution hosts.
 #[derive(Debug, Clone, Copy)]

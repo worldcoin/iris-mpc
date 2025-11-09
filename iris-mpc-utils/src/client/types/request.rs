@@ -17,7 +17,6 @@ pub struct Request {
     identifier: uuid::Uuid,
 
     /// Associated request payload.
-    #[allow(dead_code)]
     data: RequestData,
 }
 

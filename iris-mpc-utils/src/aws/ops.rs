@@ -9,13 +9,13 @@ use iris_mpc::client::iris_data::IrisCodePartyShares;
 use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
 
 use super::{client::AwsClient, factory};
-use crate::types::NetworkEncryptionPublicKeys;
+use crate::types::EncryptionPublicKeyset;
 
 impl AwsClient {
     /// Downloads MPC encryption public keys.
     pub async fn download_encryption_public_keys(
-        public_key_base_url: &str,
-    ) -> Result<NetworkEncryptionPublicKeys> {
+        public_key_base_url: String,
+    ) -> Result<EncryptionPublicKeyset> {
         async fn get_public_key(party_idx: usize, public_key_base_url: &str) -> PublicKey {
             let pbk_raw =
                 download_public_key(public_key_base_url.to_string(), party_idx.to_string())
@@ -27,23 +27,24 @@ impl AwsClient {
         }
 
         Ok([
-            get_public_key(0, public_key_base_url).await,
-            get_public_key(1, public_key_base_url).await,
-            get_public_key(2, public_key_base_url).await,
+            get_public_key(0, public_key_base_url.as_str()).await,
+            get_public_key(1, public_key_base_url.as_str()).await,
+            get_public_key(2, public_key_base_url.as_str()).await,
         ])
     }
 
     /// Encrypts and uploads Iris shares.
     pub async fn encrypt_and_upload_iris_shares(
         &self,
+        encryption_keys: &EncryptionPublicKeyset,
         shares: &IrisCodePartyShares,
     ) -> Result<String> {
         let s3_bucket = self.config().request_bucket_name();
         let s3_key = shares.signup_id.as_str();
-        let s3_shares = factory::create_iris_party_shares_for_s3(shares, self.encryption_keys());
+        let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
         let s3_payload = serde_json::to_vec(&s3_shares)?;
 
-        self.upload_to_s3(s3_bucket, s3_key, &s3_payload)
+        self.s3_upload(s3_bucket, s3_key, &s3_payload)
             .await
             .map_err(|err| eyre!("{}", err))?;
 
