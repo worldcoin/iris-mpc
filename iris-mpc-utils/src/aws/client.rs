@@ -100,10 +100,9 @@ impl AwsClient {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => {
-                tracing::error!("Failed to publish data to SNS: {:?}", e);
-                Err(AwsClientError::SnsPublishError)
-            }
+            Err(e) => Err(AwsClientError::SnsPublishError {
+                error: e.to_string(),
+            }),
         }
     }
 
@@ -111,12 +110,9 @@ impl AwsClient {
     pub async fn sqs_purge_queue(&self, queue_url: &String) -> Result<(), AwsClientError> {
         match self.sqs().purge_queue().queue_url(queue_url).send().await {
             Ok(_) => Ok(()),
-            Err(e) => {
-                tracing::error!("SQS queue purge failure: {:?}", e);
-                Err(AwsClientError::SqsPurgeQueueError {
-                    error: e.to_string(),
-                })
-            }
+            Err(e) => Err(AwsClientError::SqsPurgeQueueError {
+                error: e.to_string(),
+            }),
         }
     }
 
@@ -164,7 +160,7 @@ pub enum AwsClientError {
     SqsPurgeQueueError { error: String },
 
     #[error("AWS SNS publish error")]
-    SnsPublishError,
+    SnsPublishError { error: String },
 
     #[error("AWS S3 upload error: key={}: error={}", .key, .error)]
     S3UploadError { key: String, error: String },
