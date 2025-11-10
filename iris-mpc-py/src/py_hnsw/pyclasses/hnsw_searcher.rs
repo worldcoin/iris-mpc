@@ -2,6 +2,7 @@ use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::P
 use iris_mpc_cpu::{
     hnsw::searcher::{HnswParams, HnswSearcher, N_PARAM_LAYERS},
     py_bindings,
+    utils::serialization::{read_json, write_json},
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
 
@@ -118,13 +119,12 @@ impl PyHnswSearcher {
 
     #[staticmethod]
     pub fn read_from_json(filename: String) -> PyResult<Self> {
-        let result = py_bindings::io::read_json(&filename)
-            .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
+        let result =
+            read_json(&filename).map_err(|_| PyIOError::new_err("Unable to read from file"))?;
         Ok(Self(result))
     }
 
     pub fn write_to_json(&self, filename: String) -> PyResult<()> {
-        py_bindings::io::write_json(&self.0, &filename)
-            .map_err(|_| PyIOError::new_err("Unable to write to file"))
+        write_json(&self.0, &filename).map_err(|_| PyIOError::new_err("Unable to write to file"))
     }
 }
