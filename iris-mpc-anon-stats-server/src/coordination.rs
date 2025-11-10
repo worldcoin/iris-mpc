@@ -4,7 +4,7 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{
-    helpers::task_monitor::TaskMonitor,
+    helpers::{shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor},
     server_coordination::{self, CoordinationSettings},
 };
 use std::sync::{
@@ -30,6 +30,7 @@ impl CoordinationHandles {
     }
 
     pub fn mark_shutting_down(&self) {
+        self.ready_flag.store(false, Ordering::SeqCst);
         self.shutting_down_flag.store(true, Ordering::SeqCst);
     }
 
@@ -51,9 +52,14 @@ pub fn start_coordination_server(
         Arc::new(Uuid::new_v4().to_string()),
     );
 
-    let port = config.healthcheck_ports[config.party_id].clone();
+    let port = config
+        .healthcheck_ports
+        .get(config.party_id)
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
+    let port_string = port.to_string();
     task_monitor.spawn(async move {
-        if let Err(err) = spawn_healthcheck_server_with_state(port, state).await {
+        if let Err(err) = spawn_healthcheck_server_with_state(port_string, state).await {
             warn!(error = ?err, "Healthcheck server terminated with error");
         }
         Ok::<(), eyre::Report>(())
@@ -75,6 +81,20 @@ pub async fn wait_for_others_ready(config: &AnonStatsServerConfig) -> Result<()>
     server_coordination::wait_for_others_ready_with_settings(&settings).await
 }
 
+pub async fn init_heartbeat_task(
+    config: &AnonStatsServerConfig,
+    task_monitor: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<()> {
+    let settings = build_coordination_settings(config);
+    server_coordination::init_heartbeat_task_with_settings(
+        &settings,
+        task_monitor,
+        shutdown_handler,
+    )
+    .await
+}
+
 fn build_coordination_settings(config: &AnonStatsServerConfig) -> CoordinationSettings<'_> {
     CoordinationSettings {
         party_id: config.party_id,
@@ -83,5 +103,7 @@ fn build_coordination_settings(config: &AnonStatsServerConfig) -> CoordinationSe
         image_name: &config.image_name,
         http_query_retry_delay_ms: config.http_query_retry_delay_ms,
         startup_sync_timeout_secs: config.startup_sync_timeout_secs,
+        heartbeat_interval_secs: config.heartbeat_interval_secs,
+        heartbeat_initial_retries: config.heartbeat_initial_retries,
     }
 }

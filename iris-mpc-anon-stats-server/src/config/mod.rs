@@ -79,6 +79,15 @@ pub struct AnonStatsServerConfig {
 
     #[serde(default = "default_startup_sync_timeout_secs")]
     pub startup_sync_timeout_secs: u64,
+
+    #[serde(default = "default_heartbeat_interval_secs")]
+    pub heartbeat_interval_secs: u64,
+
+    #[serde(default = "default_heartbeat_initial_retries")]
+    pub heartbeat_initial_retries: u64,
+
+    #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
+    pub shutdown_last_results_sync_timeout_secs: u64,
 }
 
 fn default_n_buckets_1d() -> usize {
@@ -107,6 +116,18 @@ fn default_http_query_retry_delay_ms() -> u64 {
 
 fn default_startup_sync_timeout_secs() -> u64 {
     180
+}
+
+fn default_heartbeat_interval_secs() -> u64 {
+    2
+}
+
+fn default_heartbeat_initial_retries() -> u64 {
+    10
+}
+
+fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
+    10
 }
 
 impl AnonStatsServerConfig {

@@ -19,6 +19,7 @@ use iris_mpc_common::anon_stats::{
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
     helpers::{
+        shutdown_handler::ShutdownHandler,
         smpc_request::{ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE},
         smpc_response::create_message_type_attribute_map,
         statistics::{BucketStatistics, BucketStatistics2D},
@@ -32,7 +33,6 @@ use iris_mpc_cpu::{
     network::tcp::{build_network_handle, NetworkHandleArgs},
 };
 use tokio::time::{interval, MissedTickBehavior};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 const GPU_1D_ORIGINS: [AnonStatsOrigin; 2] = [
@@ -402,12 +402,20 @@ async fn main() -> Result<()> {
 
     let config = Arc::new(config);
 
+    let shutdown_handler = Arc::new(ShutdownHandler::new(
+        config.shutdown_last_results_sync_timeout_secs,
+    ));
+    shutdown_handler.register_signal_handler().await;
+
     let node_addresses: Vec<String> = config
         .node_hostnames
         .iter()
         .zip(config.service_ports.iter())
         .map(|(host, port)| format!("{}:{}", host, port))
         .collect();
+    if node_addresses.is_empty() {
+        bail!("SMPC__NODE_HOSTNAMES and SMPC__SERVICE_PORTS must be provided");
+    }
 
     let _tracing_shutdown_handle =
         initialize_tracing(config.service.clone()).wrap_err("Failed to initialize tracing")?;
@@ -428,14 +436,21 @@ async fn main() -> Result<()> {
     let coordination_handles =
         coordination::start_coordination_server(config.as_ref(), &mut background_tasks);
     background_tasks.check_tasks();
-    info!(
-        "Healthcheck server running on port {}",
-        config.healthcheck_ports[config.party_id].clone()
-    );
+    let health_port = config
+        .healthcheck_ports
+        .get(config.party_id)
+        .cloned()
+        .unwrap_or_else(|| "8080".to_string());
+    info!("Healthcheck server running on port {}", health_port);
 
     coordination::wait_for_others_unready(config.as_ref())
         .await
         .wrap_err("waiting for other anon stats servers to become unready")?;
+
+    coordination::init_heartbeat_task(config.as_ref(), &mut background_tasks, &shutdown_handler)
+        .await
+        .wrap_err("failed to start heartbeat task")?;
+    background_tasks.check_tasks();
 
     let args = NetworkHandleArgs {
         party_index: config.party_id,
@@ -445,7 +460,7 @@ async fn main() -> Result<()> {
         sessions_per_request: 1,
         tls: None,
     };
-    let ct = CancellationToken::new();
+    let ct = shutdown_handler.get_cancellation_token();
 
     let mut networking = build_network_handle(args, ct.child_token()).await?;
     let mut sessions = networking.as_mut().make_sessions().await?;
@@ -465,23 +480,34 @@ async fn main() -> Result<()> {
 
     if let Err(err) = processor.run_iteration(session).await {
         warn!(error = ?err, "Anon stats iteration failed");
+        shutdown_handler.trigger_manual_shutdown();
     }
 
-    loop {
-        tokio::select! {
-            _ = poll_interval.tick() => {
-                if let Err(err) = processor.run_iteration(session).await {
-                    warn!(error = ?err, "Anon stats iteration failed");
-                }
-            }
-            _ = shutdown_signal() => {
-                info!("Shutdown signal received, stopping anon stats processor.");
+    if !shutdown_handler.is_shutting_down() {
+        let shutdown_wait = shutdown_handler.wait_for_shutdown();
+        tokio::pin!(shutdown_wait);
+
+        loop {
+            tokio::select! {
+                _ = poll_interval.tick() => {
+                    if let Err(err) = processor.run_iteration(session).await {
+                        warn!(error = ?err, "Anon stats iteration failed");
+                        shutdown_handler.trigger_manual_shutdown();
                 break;
+                    }
+                }
+                _ = shutdown_wait.as_mut() => {
+                    info!("Shutdown triggered, stopping anon stats processor.");
+                    break;
+                }
             }
         }
     }
 
+    shutdown_handler.wait_for_shutdown().await;
+
     coordination_handles.mark_shutting_down();
+    shutdown_handler.wait_for_pending_batches_completion().await;
     ct.cancel();
     background_tasks.abort_and_wait_for_finish().await;
 
@@ -503,28 +529,4 @@ async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
         }
     }
     Ok(SNSClient::from_conf(sns_config_builder.build()))
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .expect("Failed to install SIGINT handler");
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler");
-
-        tokio::select! {
-            _ = sigint.recv() => {},
-            _ = sigterm.recv() => {},
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl-C handler");
-    }
-
-    info!("Shutdown signal received.");
 }

@@ -50,6 +50,8 @@ pub struct CoordinationSettings<'a> {
     pub image_name: &'a str,
     pub http_query_retry_delay_ms: u64,
     pub startup_sync_timeout_secs: u64,
+    pub heartbeat_interval_secs: u64,
+    pub heartbeat_initial_retries: u64,
 }
 
 impl<'a> CoordinationSettings<'a> {
@@ -61,6 +63,8 @@ impl<'a> CoordinationSettings<'a> {
             image_name: &config.image_name,
             http_query_retry_delay_ms: config.http_query_retry_delay_ms,
             startup_sync_timeout_secs: config.startup_sync_timeout_secs,
+            heartbeat_interval_secs: config.heartbeat_interval_secs,
+            heartbeat_initial_retries: config.heartbeat_initial_retries,
         }
     }
 }
@@ -341,16 +345,28 @@ pub async fn init_heartbeat_task(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<()> {
+    let settings = CoordinationSettings::from_config(config);
+    init_heartbeat_task_with_settings(&settings, task_monitor, shutdown_handler).await
+}
+
+pub async fn init_heartbeat_task_with_settings(
+    settings: &CoordinationSettings<'_>,
+    task_monitor: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<()> {
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
 
-    let all_health_addresses =
-        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "health");
+    let all_health_addresses = get_check_addresses(
+        settings.node_hostnames,
+        settings.healthcheck_ports,
+        "health",
+    );
 
-    let party_id = config.party_id;
-    let image_name = config.image_name.clone();
-    let heartbeat_initial_retries = config.heartbeat_initial_retries;
-    let heartbeat_interval_secs = config.heartbeat_interval_secs;
+    let party_id = settings.party_id;
+    let image_name = settings.image_name.to_string();
+    let heartbeat_initial_retries = settings.heartbeat_initial_retries;
+    let heartbeat_interval_secs = settings.heartbeat_interval_secs;
 
     let heartbeat_shutdown_handler = Arc::clone(shutdown_handler);
     let _heartbeat = task_monitor.spawn(async move {
