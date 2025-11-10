@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use eyre::{ensure, Error, OptionExt as _, Result, WrapErr};
+use eyre::{bail, ensure, Error, OptionExt as _, Result, WrapErr};
 use futures::future::try_join_all;
 use futures::FutureExt as _;
 use itertools::Itertools as _;
@@ -19,8 +19,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Duration as StdDuration;
+use std::time::{Duration, Duration as StdDuration, Instant};
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::sleep as tokio_sleep;
 
@@ -322,19 +321,51 @@ pub async fn wait_for_others_unready_with_settings(
 ) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
 
-    // Check other nodes and wait until all nodes are unready.
-    let connected_but_unready =
-        try_get_endpoint_other_nodes_with_settings(settings, "ready").await?;
+    let endpoints = other_node_endpoints_with_settings(settings, "ready")?;
+    if endpoints.is_empty() {
+        tracing::warn!("No node hostnames configured; skipping initial unready sync");
+        return Ok(());
+    }
 
-    let all_unready = connected_but_unready
-        .iter()
-        .all(|resp| resp.status() == StatusCode::SERVICE_UNAVAILABLE);
+    let retry_delay = Duration::from_millis(settings.http_query_retry_delay_ms.max(1));
+    let timeout = Duration::from_secs(settings.startup_sync_timeout_secs.max(1));
+    let start = Instant::now();
 
-    ensure!(all_unready, "One or more nodes were not unready.");
+    loop {
+        let mut all_unready = true;
 
-    tracing::info!("All nodes are starting up.");
+        for endpoint in &endpoints {
+            match reqwest::get(endpoint).await {
+                Ok(response) if response.status() == StatusCode::SERVICE_UNAVAILABLE => {}
+                Ok(response) => {
+                    tracing::debug!(
+                        url = endpoint,
+                        status = ?response.status(),
+                        "Node reported ready early"
+                    );
+                    all_unready = false;
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        url = endpoint,
+                        error = ?err,
+                        "Failed to query readiness endpoint; treating as unready"
+                    );
+                }
+            }
+        }
 
-    Ok(())
+        if all_unready {
+            tracing::info!("All nodes reported unready; proceeding with startup");
+            return Ok(());
+        }
+
+        if start.elapsed() >= timeout {
+            bail!("Timed out waiting for other nodes to become unready");
+        }
+
+        tokio_sleep(retry_delay).await;
+    }
 }
 
 /// Starts a heartbeat task which periodically polls the "health" endpoints of
