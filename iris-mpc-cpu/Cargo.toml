@@ -64,9 +64,6 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
 
-[build-dependencies]
-
-
 [features]
 db_dependent = []
 networking_metrics = []
