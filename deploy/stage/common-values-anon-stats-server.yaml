@@ -45,8 +45,8 @@ livenessProbe:
     port: health
 
 readinessProbe:
-  periodSeconds: 30
-  failureThreshold: 10
+  periodSeconds: 20
+  failureThreshold: 4
   httpGet:
     path: /health
     port: health
