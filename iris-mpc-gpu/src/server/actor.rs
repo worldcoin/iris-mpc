@@ -211,9 +211,6 @@ impl AnonStatsWriter {
     }
 
     fn insert_1d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle1D)>) {
-        if data.is_empty() {
-            return;
-        }
         if let Err(err) = self
             .runtime
             .block_on(self.store.insert_anon_stats_batch_1d(&data, origin))
@@ -3416,6 +3413,8 @@ impl ServerActor {
         if !bundles.is_empty() {
             tracing::info!("Inserting {} anon stats bundles", bundles.len());
             writer.insert_1d(origin, bundles);
+        } else {
+            tracing::info!("No anon stats bundles to insert");
         }
     }
 
