@@ -119,6 +119,10 @@ pub struct Config {
     )]
     pub service_ports: Vec<String>,
 
+    // should be set to the same as service_ports if not explicitly set.
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub service_outbound_ports: Vec<String>,
+
     #[serde(
         default = "default_healthcheck_ports",
         deserialize_with = "deserialize_yaml_json_string"
@@ -520,7 +524,13 @@ impl Config {
             )
             .build()?;
 
-        let config: Config = settings.try_deserialize::<Config>()?;
+        let mut config: Config = settings.try_deserialize::<Config>()?;
+
+        // If service_outbound_ports is not explicitly set,
+        // copy service_ports to service_outbound_ports
+        if config.service_outbound_ports.is_empty() {
+            config.service_outbound_ports = config.service_ports.clone();
+        }
 
         Ok(config)
     }
@@ -776,6 +786,7 @@ impl From<Config> for CommonConfig {
             enable_debug_timing: _,
             node_hostnames: _,            // Could be different for each server
             service_ports: _,             // Could be different for each server
+            service_outbound_ports: _,    // Could be different for each server
             healthcheck_ports: _,         // Could be different for each server
             http_query_retry_delay_ms: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,

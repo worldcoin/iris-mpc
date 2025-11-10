@@ -4,7 +4,7 @@ use crate::{
     shares::{
         bit::Bit,
         int_ring::IntRing2k,
-        ring_impl::RingElement,
+        ring_impl::{RingElement, VecRingElement},
         share::Share,
         vecshare::{SliceShare, VecShare},
     },
@@ -111,7 +111,7 @@ where
     Standard: Distribution<T>,
 {
     // Caller should ensure that size_hint == a.len() == b.len()
-    let mut shares_a = Vec::with_capacity(size_hint);
+    let mut shares_a = VecRingElement::with_capacity(size_hint);
     for (a_, b_) in a.zip(b) {
         let rand = session.prf.gen_binary_zero_share::<T>();
         let mut c = &a_ & &b_;
@@ -120,14 +120,8 @@ where
     }
 
     let network = &mut session.network_session;
-    let messages = shares_a.clone();
-    let message = if messages.len() == 1 {
-        T::new_network_element(messages[0])
-    } else {
-        T::new_network_vec(messages)
-    };
-    network.send_next(message).await?;
-    Ok(shares_a)
+    network.send_ring_vec_next(&shares_a).await?;
+    Ok(shares_a.0)
 }
 
 async fn and_many_send<T: IntRing2k + NetworkInt>(
@@ -141,7 +135,7 @@ where
     if a.len() != b.len() {
         bail!("InvalidSize in and_many_send");
     }
-    let mut shares_a = Vec::with_capacity(a.len());
+    let mut shares_a = VecRingElement::with_capacity(a.len());
     for (a_, b_) in a.iter().zip(b.iter()) {
         let rand = session.prf.gen_binary_zero_share::<T>();
         let mut c = a_ & b_;
@@ -150,14 +144,8 @@ where
     }
 
     let network = &mut session.network_session;
-    let messages = shares_a.clone();
-    let message = if messages.len() == 1 {
-        T::new_network_element(messages[0])
-    } else {
-        T::new_network_vec(messages)
-    };
-    network.send_next(message).await?;
-    Ok(shares_a)
+    network.send_ring_vec_next(&shares_a).await?;
+    Ok(shares_a.0)
 }
 
 /// Receives a share of the AND of two vectors of bit-sliced shares.

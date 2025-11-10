@@ -230,7 +230,7 @@ mod tests {
         init_iris_db(&mut actor).await?;
         init_graph(&mut actor).await?;
 
-        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+        let sessions = actor.new_sessions().await?;
         HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         let batch_size = 3;
@@ -254,7 +254,7 @@ mod tests {
                 );
             }
         }
-
+        actor.sync_peers().await?;
         Ok(actor)
     }
 }
