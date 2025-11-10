@@ -62,7 +62,7 @@ env:
     value: "10"
 
   - name: MIN_1D_JOB_SIZE
-    value: "256"
+    value: "64"
 
   - name: POLL_INTERVAL_SECS
     value: "10"
