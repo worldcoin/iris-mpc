@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{BufReader, BufWriter},
+    path::Path,
 };
 
 use clap::ValueEnum;
@@ -16,15 +17,17 @@ use crate::{
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
-        graph_v2::{self, read_graph_v2},
-        graph_v3::{self, read_graph_v3},
+        graph_v2::{self, read_graph_v2, GraphV2},
+        graph_v3::{self, read_graph_v3, GraphV3},
     },
 };
 
+/* --------------------- Graph Serialization ------------------------ */
+
 #[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
 pub enum GraphFormat {
-    /// Current format (unstable)
-    GraphMem,
+    /// Designated current stable format for `GraphMem` serialization
+    Current,
 
     /// - Binary format
     /// - Multiple entry-points <-- DIFF with V2
@@ -53,44 +56,64 @@ pub enum GraphFormat {
     /// - No layer checksums
     /// - Edges store VectorIds and cached `(u16, u16)` distances
     V0,
+
+    /// Direct serialization from `GraphMem` derived format. This format type is
+    /// provided for compatibility only -- please prefer use of stable
+    /// serialization formats.
+    Raw,
 }
 
-// Designated method for writing a GraphMem
-// Currently goes through V3
-pub fn write_graph_current<W: std::io::Write>(
-    writer: &mut W,
-    data: GraphMem<IrisVectorId>,
-) -> eyre::Result<()> {
-    bincode::serialize_into::<_, graph_v3::GraphV3>(writer, &(data.into()))?;
-    Ok(())
-}
-
-// Specifically write to file
-pub fn write_graph_to_file<P: AsRef<std::path::Path>>(
-    path: P,
-    data: GraphMem<IrisVectorId>,
-) -> eyre::Result<()> {
-    let file = File::open(path)?;
-    let mut writer = BufWriter::new(file);
-    write_graph_current(&mut writer, data)
-}
-
-// Designated method for reading a GraphMem
-// Currently goes through V3
+/// Designated method for reading a `GraphMem`. Currently goes through the
+/// `GraphV3` serialization type.
 pub fn read_graph_current<R: std::io::Read>(
     reader: &mut R,
 ) -> eyre::Result<GraphMem<IrisVectorId>> {
-    let data = bincode::deserialize_from::<_, graph_v3::GraphV3>(reader)?.into();
+    let data = bincode::deserialize_from::<_, GraphV3>(reader)?.into();
     Ok(data)
 }
 
-pub fn read_graph_from_file<P: AsRef<std::path::Path>>(
+/// Designated method for writing a `GraphMem`. Currently goes through the
+/// `GraphV3` serialization type.
+pub fn write_graph_current<W: std::io::Write>(
+    writer: &mut W,
+    data: GraphMem<IrisVectorId>,
+) -> Result<()> {
+    bincode::serialize_into::<_, GraphV3>(writer, &(data.into()))?;
+    Ok(())
+}
+
+/// Read a serialized `GraphMem` using the derived `Deserialize` trait
+/// implementation.
+///
+/// _Provided for compatibility only_ -- please prefer use of stable serialization
+/// formats.
+pub fn read_graph_raw<R: std::io::Read>(reader: &mut R) -> Result<GraphMem<IrisVectorId>> {
+    let data = bincode::deserialize_from::<_, GraphMem<IrisVectorId>>(reader)?;
+    Ok(data)
+}
+
+/// Write a serialized `GraphMem` using the derived `Serialize` trait
+/// implementation.
+///
+/// _Provided for compatibility only_ -- please prefer use of stable serialization
+/// formats.
+pub fn write_graph_raw<W: std::io::Write>(
+    writer: &mut W,
+    data: GraphMem<IrisVectorId>,
+) -> Result<()> {
+    bincode::serialize_into::<_, GraphMem<IrisVectorId>>(writer, &data)?;
+    Ok(())
+}
+
+/// Read a `GraphMem` from file with a specified serialization format.
+pub fn read_graph_from_file<P: AsRef<Path>>(
     path: P,
     format: GraphFormat,
 ) -> Result<GraphMem<IrisVectorId>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     match format {
+        GraphFormat::Current => read_graph_current(&mut reader),
         GraphFormat::V3 => {
             let graph = read_graph_v3(&mut reader)?;
             Ok(graph.into())
@@ -107,57 +130,110 @@ pub fn read_graph_from_file<P: AsRef<std::path::Path>>(
             let graph = read_graph_v0(&mut reader)?;
             Ok(graph.into())
         }
-        GraphFormat::GraphMem => read_graph_current(&mut reader),
+        GraphFormat::Raw => read_graph_raw(&mut reader),
     }
 }
 
-pub fn read_graph_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(
-    reader: &mut R,
-) -> eyre::Result<[G; 2]> {
+/// Write a `GraphMem` to file using the `GraphFormat::Current` serialization
+/// format, currently `GraphV3`.
+pub fn write_graph_to_file<P: AsRef<Path>>(path: P, data: GraphMem<IrisVectorId>) -> Result<()> {
+    let file = File::open(path)?;
+    let mut writer = BufWriter::new(file);
+    write_graph_current(&mut writer, data)
+}
+
+/* ------------------ Graph Pair Serialization ---------------------- */
+
+/// Method to read a pair of serialized graphs.
+fn read_graph_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(reader: &mut R) -> Result<[G; 2]> {
     let data = bincode::deserialize_from(reader)?;
     Ok(data)
 }
 
+/// Designated method for reading a pair of `GraphMem` structs. Currently goes
+/// through the `GraphV3` serialization type.
+pub fn read_graph_pair_current<R: std::io::Read>(
+    reader: &mut R,
+) -> Result<[GraphMem<IrisVectorId>; 2]> {
+    let data = read_graph_pair::<_, GraphV3>(reader)?.map(|graph| graph.into());
+    Ok(data)
+}
+
+/// Designated method for writing a pair of `GraphMem` structs. Currently goes
+/// through the `GraphV3` serialization type.
 pub fn write_graph_pair_current<W: std::io::Write>(
     writer: &mut W,
     data: [GraphMem<IrisVectorId>; 2],
-) -> eyre::Result<()> {
+) -> Result<()> {
     let data = data.map(|graph| graph.into());
-    bincode::serialize_into::<_, [graph_v3::GraphV3; 2]>(writer, &data)?;
+    bincode::serialize_into::<_, [GraphV3; 2]>(writer, &data)?;
     Ok(())
 }
 
-pub fn read_graph_pair_current<R: std::io::Read>(
+/// Read a serialized pair of serialized `GraphMem` structs using the derived
+/// `Deserialize` trait implementation.
+///
+/// _Provided for compatibility only_ -- please prefer use of stable serialization
+/// formats.
+pub fn read_graph_pair_raw<R: std::io::Read>(
     reader: &mut R,
-) -> eyre::Result<[GraphMem<IrisVectorId>; 2]> {
-    let data = read_graph_pair::<_, graph_v3::GraphV3>(reader)?.map(|graph| graph.into());
+) -> Result<[GraphMem<IrisVectorId>; 2]> {
+    let data = read_graph_pair::<_, GraphMem<IrisVectorId>>(reader)?;
     Ok(data)
 }
-pub fn read_graph_pair_from_file<P: AsRef<std::path::Path>>(
+
+/// Write a pair of serialized `GraphMem` structs using the derived
+/// `Deserialize` trait implementation.
+///
+/// _Provided for compatibility only_ -- please prefer use of stable serialization
+/// formats.
+pub fn write_graph_pair_raw<W: std::io::Write>(
+    writer: &mut W,
+    data: [GraphMem<IrisVectorId>; 2],
+) -> Result<()> {
+    bincode::serialize_into::<_, [GraphMem<IrisVectorId>; 2]>(writer, &data)?;
+    Ok(())
+}
+
+/// Read a pair of `GraphMem` structs from file with a specified graph
+/// serialization format.
+pub fn read_graph_pair_from_file<P: AsRef<Path>>(
     path: P,
     format: GraphFormat,
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     match format {
+        GraphFormat::Current => read_graph_pair_current(&mut reader),
         GraphFormat::V3 => {
-            let graphs = read_graph_pair::<_, graph_v3::GraphV3>(&mut reader)?;
+            let graphs = read_graph_pair::<_, GraphV3>(&mut reader)?;
             Ok(graphs.map(|graph| graph.into()))
         }
         GraphFormat::V2 => {
-            let graphs = read_graph_pair::<_, graph_v2::GraphV2>(&mut reader)?;
+            let graphs = read_graph_pair::<_, GraphV2>(&mut reader)?;
             Ok(graphs.map(|graph| graph.into()))
         }
         GraphFormat::V1 => {
-            let graphs = read_graph_pair::<_, graph_v1::GraphV1>(&mut reader)?;
+            let graphs = read_graph_pair::<_, GraphV1>(&mut reader)?;
             Ok(graphs.map(|graph| graph.into()))
         }
         GraphFormat::V0 => {
-            let graphs = read_graph_pair::<_, graph_v0::GraphV0>(&mut reader)?;
+            let graphs = read_graph_pair::<_, GraphV0>(&mut reader)?;
             Ok(graphs.map(|graph| graph.into()))
         }
-        GraphFormat::GraphMem => read_graph_pair_current(&mut reader),
+        GraphFormat::Raw => read_graph_pair_raw(&mut reader),
     }
+}
+
+/// Write a pair of `GraphMem` structs to file using the `GraphFormat::Current`
+/// graph serialization format, currently `GraphV3`.
+pub fn write_graph_pair_to_file<P: AsRef<Path>>(
+    path: P,
+    data: [GraphMem<IrisVectorId>; 2],
+) -> Result<()> {
+    let file = File::open(path)?;
+    let mut writer = BufWriter::new(file);
+    write_graph_pair_current(&mut writer, data)
 }
 
 /* --------------- Conversion GraphV0 -> GraphMem ------------------- */
