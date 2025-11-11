@@ -277,7 +277,7 @@ impl From<graph_v0::Layer> for Layer<IrisVectorId> {
     }
 }
 
-impl From<GraphV0> for GraphMem<IrisVectorId> {
+impl From<graph_v0::GraphV0> for GraphMem<IrisVectorId> {
     fn from(value: GraphV0) -> Self {
         GraphMem {
             entry_point: value
@@ -323,7 +323,7 @@ impl From<graph_v1::Layer> for Layer<IrisVectorId> {
     }
 }
 
-impl From<GraphV1> for GraphMem<IrisVectorId> {
+impl From<graph_v1::GraphV1> for GraphMem<IrisVectorId> {
     fn from(value: GraphV1) -> Self {
         GraphMem {
             entry_point: value
