@@ -111,14 +111,14 @@ impl AwsClient {
         &self,
         s3_bucket: &str,
         s3_key: &str,
-        payload: &[u8],
+        s3_data: &[u8],
     ) -> Result<(), AwsClientError> {
         match self
             .s3()
             .put_object()
             .bucket(s3_bucket)
             .key(s3_key)
-            .body(ByteStream::new(SdkBody::from(payload)))
+            .body(ByteStream::new(SdkBody::from(s3_data)))
             .send()
             .await
         {

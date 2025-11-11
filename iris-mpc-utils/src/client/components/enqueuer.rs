@@ -44,14 +44,15 @@ impl RequestEnqueuer {
         tracing::info!("Downloading public keys for encryption ...");
         match AwsClient::download_encryption_public_keys(public_key_base_url).await {
             Ok(keys) => {
+                tracing::info!("Downloaded public key of MPC parties");
                 self.encryption_keys = Some(keys);
                 Ok(())
             }
             Err(e) => {
                 tracing::error!("Encryption public keys download error: {}", e);
-                Err(ServiceClientError::ComponentInitialisationError {
-                    error: e.to_string(),
-                })
+                Err(ServiceClientError::ComponentInitialisationError(
+                    e.to_string(),
+                ))
             }
         }
     }
@@ -61,9 +62,20 @@ impl RequestEnqueuer {
         for request in batch.requests() {
             match request.data() {
                 RequestData::Uniqueness { shares } => {
-                    self.enqueue_uniqueness_request(request, shares).await
+                    match self.enqueue_uniqueness_request(request, shares).await {
+                        Ok(_) => (),
+                        Err(e) => {
+                            return Err(ServiceClientError::EnqueueUniquenessRequestError(
+                                e.to_string(),
+                            ))
+                        }
+                    }
                 }
-                _ => panic!("Unsupported request type"),
+                _ => {
+                    return Err(ServiceClientError::UnsupportedRequestType(
+                        request.data().to_string(),
+                    ))
+                }
             }
         }
 
@@ -76,31 +88,29 @@ impl RequestEnqueuer {
         &self,
         request: &Request,
         shares: &BothEyes<IrisCodeAndMaskShares>,
-    ) {
+    ) -> Result<(), ServiceClientError> {
         // Step 0: Set sign-up id so that it matches request id.
         let signup_id = request.identifier();
 
-        // Step 1: Set encrypted shares.
+        // Step 1: Upload encrypted shares to S3.
         let [[l_code, l_mask], [r_code, r_mask]] = shares.clone();
         let shares = create_iris_code_party_shares(*signup_id, l_code, l_mask, r_code, r_mask);
-
-        // Step 2: Upload encrypted shares to S3.
         let s3_key = match self
             .aws_client
             .encrypt_and_upload_iris_shares(&self.encryption_keys(), &shares)
             .await
         {
-            Err(report) => {
-                panic!("{} :: {}", request, report);
-            }
             Ok(s3_key) => {
                 tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
                 s3_key
             }
+            Err(e) => return Err(ServiceClientError::AwsServiceError(e.to_string())),
         };
 
-        // Step 3: Set system request payload.
-        let payload = UniquenessRequest {
+        // Step 2: Enqueue system request.
+        let sns_message_type = UNIQUENESS_MESSAGE_TYPE;
+        let sns_message_group_id = ENROLLMENT_REQUEST_TYPE;
+        let sns_message_payload = UniquenessRequest {
             batch_size: Some(1),
             signup_id: shares.signup_id.clone(),
             s3_key,
@@ -109,18 +119,20 @@ impl RequestEnqueuer {
             full_face_mirror_attacks_detection_enabled: Some(true),
             disable_anonymized_stats: None,
         };
-
-        // Step 4: Enqueue system request.
-        // TODO: handle enqueue error.
-        self.aws_client
+        match self
+            .aws_client
             .sns_publish::<UniquenessRequest>(
-                UNIQUENESS_MESSAGE_TYPE,
-                ENROLLMENT_REQUEST_TYPE,
-                payload,
+                sns_message_type,
+                sns_message_group_id,
+                sns_message_payload,
             )
             .await
-            .unwrap();
-
-        tracing::info!("{} :: Enqueued to AWS-SNS topic", request);
+        {
+            Ok(()) => {
+                tracing::info!("{} :: Enqueued to AWS-SNS topic", request);
+                Ok(())
+            }
+            Err(e) => Err(ServiceClientError::AwsServiceError(e.to_string())),
+        }
     }
 }

@@ -63,10 +63,10 @@ impl AwsClient {
         let s3_bucket = self.config().s3_request_bucket_name();
         let s3_key = shares.signup_id.as_str();
         let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
-        let s3_payload = serde_json::to_vec(&s3_shares).unwrap();
+        let s3_data = serde_json::to_vec(&s3_shares).unwrap();
 
-        match self.s3_upload(s3_bucket, s3_key, &s3_payload).await {
-            Ok(_) => Ok(s3_bucket.clone()),
+        match self.s3_upload(s3_bucket, s3_key, &s3_data).await {
+            Ok(_) => Ok(s3_bucket.to_owned()),
             Err(e) => {
                 tracing::error!("SNS publish error: {}", e);
                 Err(AwsClientError::IrisSharesEncryptAndUploadError {
@@ -79,14 +79,14 @@ impl AwsClient {
     /// Uploads Iris serial identifiers marked for deletion.
     pub async fn upload_iris_deletions(&self, data: &[IrisSerialId]) -> Result<(), AwsClientError> {
         #[derive(Serialize, Debug, Clone)]
-        struct Payload {
+        struct S3Data {
             deleted_serial_ids: Vec<IrisSerialId>,
         }
 
         let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", self.config().environment());
         let s3_key = format!("{}_deleted_serial_ids.json", self.config().environment());
-        let s3_payload = S3_ByteStream::from(
-            serde_json::to_string(&Payload {
+        let s3_data = S3_ByteStream::from(
+            serde_json::to_string(&S3Data {
                 deleted_serial_ids: data.to_owned(),
             })
             .unwrap()
@@ -98,7 +98,7 @@ impl AwsClient {
             .put_object()
             .bucket(s3_bucket)
             .key(s3_key)
-            .body(s3_payload)
+            .body(s3_data)
             .send()
             .await
         {

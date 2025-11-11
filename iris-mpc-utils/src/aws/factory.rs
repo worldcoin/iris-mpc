@@ -19,7 +19,6 @@ const IRIS_VERSION: &str = "1.0";
 const IRIS_SHARES_VERSION: &str = "1.3";
 
 /// Converts iris code shares into a representation to be dispatched to an S3 bucket.
-#[allow(dead_code)]
 pub fn create_iris_code_party_shares(
     signup_id: Uuid,
     l_code: [GaloisRingIrisCodeShare; N_PARTIES],
