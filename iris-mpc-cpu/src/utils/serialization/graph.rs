@@ -1,8 +1,6 @@
 use std::{
-    fmt::Display,
     fs::File,
     io::{BufReader, BufWriter},
-    str::FromStr,
 };
 
 use clap::ValueEnum;
@@ -11,12 +9,9 @@ use iris_mpc_common::IrisVectorId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hnsw::{
-        graph::{
-            layered_graph::{self, GraphMem, Layer},
-            neighborhood,
-        },
-        vector_store::Ref,
+    hnsw::graph::{
+        layered_graph::{self, GraphMem, Layer},
+        neighborhood,
     },
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
