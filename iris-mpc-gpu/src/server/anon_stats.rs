@@ -217,7 +217,9 @@ impl DistanceCache {
         ) {
             if new >= max_internal_buffer_size {
                 tracing::info!(
-                    "While saving distances for 2d stats, internal buffer full; skipping."
+                    "While saving distances for 2d stats, internal buffer full; skipping. {}/{}",
+                    new,
+                    max_internal_buffer_size
                 );
                 continue;
             }
@@ -243,9 +245,11 @@ impl DistanceCache {
             entries.sort_by_key(|entry| entry.idx);
 
             for entry in entries {
-                map.entry(entry.idx / ROTATIONS as u64)
-                    .or_insert_with(|| Vec::with_capacity(4))
-                    .push(entry);
+                let vec = map
+                    .entry(entry.idx / ROTATIONS as u64)
+                    .or_insert_with(|| Vec::with_capacity(4));
+                vec.push(entry);
+                vec.sort_by_key(|share| share.idx);
             }
         }
 
