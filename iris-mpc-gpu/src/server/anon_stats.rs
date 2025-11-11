@@ -155,7 +155,7 @@ impl DistanceCache {
         streams: &[CudaStream],
     ) -> Vec<OneSidedDistanceCache> {
         let (codes, masks, counters, indices_gpu) = self.get_buffers(eye);
-        let counters = device_manager
+        let mut counters = device_manager
             .devices()
             .iter()
             .enumerate()
@@ -202,6 +202,7 @@ impl DistanceCache {
             perm.sort_by_key(|&j| indices[i][j]);
 
             indices[i] = perm.iter().map(|&j| indices[i][j]).collect::<Vec<u64>>();
+            counters[i] = perm.iter().map(|&j| counters[j]).sum();
             codes_a[i] = perm.iter().map(|&j| codes_a[i][j]).collect::<Vec<u16>>();
             codes_b[i] = perm.iter().map(|&j| codes_b[i][j]).collect::<Vec<u16>>();
             masks_a[i] = perm.iter().map(|&j| masks_a[i][j]).collect::<Vec<u16>>();
