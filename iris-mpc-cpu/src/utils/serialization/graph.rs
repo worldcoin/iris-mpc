@@ -1,4 +1,9 @@
-use std::{fmt::Display, fs::File, io::BufReader, str::FromStr};
+use std::{
+    fmt::Display,
+    fs::File,
+    io::{BufReader, BufWriter},
+    str::FromStr,
+};
 
 use clap::ValueEnum;
 use eyre::Result;
@@ -55,19 +60,33 @@ pub enum GraphFormat {
     V0,
 }
 
-pub fn read_graph_current<V: Ref + Display + FromStr, R: std::io::Read>(
-    reader: &mut R,
-) -> eyre::Result<GraphMem<V>> {
-    let data = bincode::deserialize_from(reader)?;
-    Ok(data)
+// Designated method for writing a GraphMem
+// Currently goes through V3
+pub fn write_graph_current<W: std::io::Write>(
+    writer: &mut W,
+    data: GraphMem<IrisVectorId>,
+) -> eyre::Result<()> {
+    bincode::serialize_into::<_, graph_v3::GraphV3>(writer, &(data.into()))?;
+    Ok(())
 }
 
-pub fn write_graph_current<V: Ref + Display + FromStr, W: std::io::Write>(
-    writer: &mut W,
-    data: &GraphMem<V>,
+// Specifically write to file
+pub fn write_graph_to_file<P: AsRef<std::path::Path>>(
+    path: P,
+    data: GraphMem<IrisVectorId>,
 ) -> eyre::Result<()> {
-    bincode::serialize_into(writer, data)?;
-    Ok(())
+    let file = File::open(path)?;
+    let mut writer = BufWriter::new(file);
+    write_graph_current(&mut writer, data)
+}
+
+// Designated method for reading a GraphMem
+// Currently goes through V3
+pub fn read_graph_current<R: std::io::Read>(
+    reader: &mut R,
+) -> eyre::Result<GraphMem<IrisVectorId>> {
+    let data = bincode::deserialize_from::<_, graph_v3::GraphV3>(reader)?.into();
+    Ok(data)
 }
 
 pub fn read_graph_from_file<P: AsRef<std::path::Path>>(
@@ -104,14 +123,21 @@ pub fn read_graph_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(
     Ok(data)
 }
 
-pub fn write_graph_pair<W: std::io::Write>(
+pub fn write_graph_pair_current<W: std::io::Write>(
     writer: &mut W,
-    data: &[GraphMem<IrisVectorId>; 2],
+    data: [GraphMem<IrisVectorId>; 2],
 ) -> eyre::Result<()> {
-    bincode::serialize_into(writer, data)?;
+    let data = data.map(|graph| graph.into());
+    bincode::serialize_into::<_, [graph_v3::GraphV3; 2]>(writer, &data)?;
     Ok(())
 }
 
+pub fn read_graph_pair_current<R: std::io::Read>(
+    reader: &mut R,
+) -> eyre::Result<[GraphMem<IrisVectorId>; 2]> {
+    let data = read_graph_pair::<_, graph_v3::GraphV3>(reader)?.map(|graph| graph.into());
+    Ok(data)
+}
 pub fn read_graph_pair_from_file<P: AsRef<std::path::Path>>(
     path: P,
     format: GraphFormat,
@@ -135,7 +161,7 @@ pub fn read_graph_pair_from_file<P: AsRef<std::path::Path>>(
             let graphs = read_graph_pair::<_, graph_v0::GraphV0>(&mut reader)?;
             Ok(graphs.map(|graph| graph.into()))
         }
-        GraphFormat::GraphMem => read_graph_pair::<_, GraphMem<IrisVectorId>>(&mut reader),
+        GraphFormat::GraphMem => read_graph_pair_current(&mut reader),
     }
 }
 
@@ -177,6 +203,19 @@ impl From<graph_v0::Layer> for Layer<IrisVectorId> {
             layer.set_links(point_id.into(), edges.into());
         }
         layer
+    }
+}
+
+impl From<GraphV0> for GraphMem<IrisVectorId> {
+    fn from(value: GraphV0) -> Self {
+        GraphMem {
+            entry_point: value
+                .entry_point
+                .map(|ep| ep.into())
+                .into_iter()
+                .collect::<Vec<_>>(),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+        }
     }
 }
 
@@ -276,19 +315,6 @@ impl From<graph_v2::GraphV2> for GraphMem<IrisVectorId> {
     }
 }
 
-impl From<GraphV0> for GraphMem<IrisVectorId> {
-    fn from(value: GraphV0) -> Self {
-        GraphMem {
-            entry_point: value
-                .entry_point
-                .map(|ep| ep.into())
-                .into_iter()
-                .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-        }
-    }
-}
-
 /* --------------- Conversion GraphV3 -> GraphMem ------------------- */
 
 impl From<graph_v3::VectorId> for IrisVectorId {
@@ -369,6 +395,15 @@ impl From<Layer<IrisVectorId>> for graph_v3::Layer {
             // This is ignored when deserializing
             // But it needs to exist
             set_hash: 0,
+        }
+    }
+}
+
+impl From<GraphMem<IrisVectorId>> for graph_v3::GraphV3 {
+    fn from(value: GraphMem<IrisVectorId>) -> Self {
+        graph_v3::GraphV3 {
+            entry_point: value.entry_point.into_iter().map(|ep| ep.into()).collect(),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
         }
     }
 }
