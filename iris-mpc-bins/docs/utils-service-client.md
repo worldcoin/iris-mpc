@@ -2,7 +2,7 @@
 
 A new tool, named `service-client` has been developed to support end-to-end system testing.  The tool's design intent is to support the dispatch of various traffic patterns into the system.  Such patterns will differ in terms of time (short vs extended bursts) and/or content (different request types).  It is important that the tool is easy to use in an array of environments (local and/or staged).
 
-## Setp 0: Setup Datadog & AWS accounts
+## Step 1: Setup Datadog & AWS accounts
 
 ### DatadogHQ Account
 
@@ -24,7 +24,7 @@ A new tool, named `service-client` has been developed to support end-to-end syst
         - Save: `Access Key`
         - Save: `Secret access key`
 
-## Step 1: Setup AWS credentials
+## Step 2: Setup Local AWS credentials
 
 Copy following to `~/.aws/credentials` & **edit accordingly**.
 
@@ -38,7 +38,7 @@ aws_access_key_id = YOUR-AWS-ACCESS-KEY-ID
 aws_secret_access_key = YOUR-SECRET-AWS-ACCESS-KEY
 ```
 
-### Step 2: Setup AWS Config
+### Step 3: Setup Local AWS Config
 
 Copy following to `~/.aws/config`
 
@@ -69,7 +69,7 @@ role_arn=arn:aws:iam::238407200320:role/ampc-hnsw-developer-role
 output = None
 ```
 
-## Step 3: Setup Environment Variables
+## Step 4: Setup Local Environment Variables
 
 Copy following to `~/.hnsw/envs/dev-staging`.
 
@@ -89,7 +89,7 @@ export AMPC_SQS_RESPONSE_QUEUE_URL="https://sqs.eu-central-1.amazonaws.com/23840
 export AMPC_SNS_REQUEST_TOPIC_ARN=arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo
 ```
 
-## Step 4: Setup Execution Script
+## Step 5: Setup Local Execution Script
 
 Copy following to `~/.hnsw/exec/exec_service_client.sh` & **edit accordingly**.
 
@@ -110,7 +110,7 @@ cargo run --release --bin service-client -- \
 popd
 ```
 
-## Step 5: Execute Client
+## Step 6: Execute Client
 
 ```
 # Activate environment variables.
