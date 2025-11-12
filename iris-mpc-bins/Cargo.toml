@@ -18,6 +18,8 @@ helpers = [
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+async_from = { version = "0.2.0", features = ["full"] }
+async-trait.workspace = true
 axum.workspace = true
 aws-config = { workspace = true, optional = true }
 aws-sdk-kms = { workspace = true, optional = true }
@@ -35,6 +37,8 @@ eyre.workspace = true
 futures.workspace = true
 hkdf.workspace = true
 itertools.workspace = true
+metrics.workspace = true
+metrics-exporter-statsd.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
 ring.workspace = true
@@ -47,8 +51,6 @@ sqlx.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tonic = "0.12.3"
-metrics.workspace = true
-metrics-exporter-statsd.workspace = true
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
     "uuid",
@@ -69,7 +71,7 @@ iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
 iris-mpc-anon-stats-server = { path = "../iris-mpc-anon-stats-server" }
-
+iris-mpc-utils = { path = "../iris-mpc-utils" }
 
 # ---------------------
 # binaries for iris-mpc
@@ -183,6 +185,10 @@ path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
 # ---------------------
 # binaries for iris-mpc-utils
 # ---------------------
+
+[[bin]]
+name = "service-client"
+path = "bin/iris-mpc-utils/service_client.rs"
 
 [[bin]]
 name = "write-node-config-toml"

@@ -237,6 +237,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "async_from"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b397bca84f93309aa3c1f6a8153678bfb260a6749a4be58dc5458d18e1bb517"
+dependencies = [
+ "async-trait",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2455,6 +2464,8 @@ name = "iris-mpc-bins"
 version = "0.1.0"
 dependencies = [
  "aes-prng",
+ "async-trait",
+ "async_from",
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-s3",
@@ -2479,6 +2490,7 @@ dependencies = [
  "iris-mpc-store",
  "iris-mpc-upgrade",
  "iris-mpc-upgrade-hawk",
+ "iris-mpc-utils",
  "itertools 0.13.0",
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
@@ -2715,8 +2727,17 @@ dependencies = [
 name = "iris-mpc-utils"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-rds",
  "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "base64 0.22.1",
  "bincode",
+ "clap",
+ "dotenvy",
  "eyre",
  "iris-mpc",
  "iris-mpc-common",
@@ -2724,10 +2745,17 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "rand",
+ "rayon",
  "serde",
  "serde_json",
+ "sodiumoxide",
  "sqlx",
+ "thiserror 1.0.65",
+ "tokio",
+ "tokio-util",
+ "toml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
