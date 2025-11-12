@@ -1,7 +1,8 @@
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    protocol::shared_iris::GaloisRingSharedIris, py_bindings::plaintext_store::Base64IrisCode,
+    protocol::shared_iris::GaloisRingSharedIris,
+    utils::serialization::types::iris_base64::Base64IrisCode,
 };
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};

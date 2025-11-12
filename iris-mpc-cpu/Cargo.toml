@@ -27,7 +27,6 @@ iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 num-traits.workspace = true
-prost = "0.13"
 rand.workspace = true
 rand_distr = "0.4.3"
 rayon.workspace = true
@@ -42,7 +41,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tokio-util.workspace = true
-tonic = "0.12.3"
 metrics = "0.22.1"
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
@@ -66,9 +64,6 @@ tokio-rustls = { version = "0.26.2" }
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
-
-[build-dependencies]
-tonic-build = "0.12.3"
 
 [features]
 db_dependent = []
