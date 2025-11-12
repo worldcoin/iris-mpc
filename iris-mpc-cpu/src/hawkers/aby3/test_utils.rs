@@ -27,7 +27,7 @@ use crate::{
     shares::{RingElement, Share},
     utils::serialization::{
         graph::{read_graph_from_file, GraphFormat},
-        iris_ndjson::IrisSelection,
+        iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
     },
 };
 
@@ -200,12 +200,11 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
     let generation_comment =
         "Please, generate benchmark data with cargo run --release -p iris-mpc-bins --bin \
                                   generate-benchmark-data.";
-    let plaintext_vector_store = PlaintextStore::from_ndjson_file(
+    let plaintext_vector_store = PlaintextStore::from_irises_iter(irises_from_ndjson_iter(
         Path::new(plainstore_file),
         Some(database_size),
         IrisSelection::All,
-    )
-    .map_err(|e| eyre::eyre!("Cannot find store: {e}. {generation_comment}"))?;
+    )?);
     let plaintext_graph_store: GraphMem<PlaintextVectorRef> =
         read_graph_from_file(Path::new(plaingraph_file), GraphFormat::Raw)
             .map_err(|e| eyre::eyre!("Cannot find graph: {e}. {generation_comment}"))?;

@@ -522,32 +522,6 @@ impl IrisCode {
         res
     }
 
-    pub fn get_graded_similar_iris<R: Clone + Rng>(
-        &self,
-        rng: &R,
-        target_distance: (u16, u16),
-    ) -> IrisCode {
-        let mut rng = rng.clone();
-
-        let mut visible_bits = (0..IRIS_CODE_LENGTH)
-            .filter(|i| self.mask.get_bit(*i))
-            .collect::<Vec<_>>();
-
-        visible_bits.shuffle(&mut rng);
-
-        // Compute the ideal number of differing bits in the result
-        let (num, denom) = target_distance;
-        let neq_cnt =
-            ((num as usize) * visible_bits.len() + (denom / 2) as usize) / (denom as usize);
-
-        let mut result = self.clone();
-        for i in visible_bits.iter().take(neq_cnt) {
-            result.code.flip_bit(*i);
-        }
-
-        result
-    }
-
     pub fn mirrored(&self) -> IrisCode {
         let mut mirrored = IrisCode::default();
         for i in 0..IrisCode::IRIS_CODE_SIZE {
@@ -638,8 +612,7 @@ pub struct IrisMutationFamily {
 }
 
 impl IrisMutationFamily {
-    #[allow(dead_code)]
-    fn new<R: Rng>(iris: &IrisCode, rng: &mut R) -> Self {
+    pub fn new<R: Rng>(iris: &IrisCode, rng: &mut R) -> Self {
         let mut visible_bits = (0..IRIS_CODE_LENGTH)
             .filter(|i| iris.mask.get_bit(*i))
             .collect::<Vec<_>>();

@@ -2,7 +2,8 @@ use std::{path::Path, sync::Arc};
 
 use super::iris_code::PyIrisCode;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore, utils::serialization::iris_ndjson::IrisSelection,
+    hawkers::plaintext_store::PlaintextStore,
+    utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
 
@@ -53,9 +54,11 @@ impl PyPlaintextStore {
     #[staticmethod]
     #[pyo3(signature = (filename, len=None))]
     pub fn read_from_ndjson(filename: String, len: Option<usize>) -> PyResult<Self> {
-        let result =
-            PlaintextStore::from_ndjson_file(Path::new(&filename), len, IrisSelection::All)
-                .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
+        let result = PlaintextStore::from_irises_iter(
+            irises_from_ndjson_iter(Path::new(&filename), len, IrisSelection::All)
+                .map_err(|_| PyIOError::new_err("Unable to read from file"))?,
+        );
+
         Ok(Self(result))
     }
 

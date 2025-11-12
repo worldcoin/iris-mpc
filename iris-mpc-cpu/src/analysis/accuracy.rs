@@ -6,12 +6,15 @@ use crate::{
     hnsw::{GraphMem, HnswSearcher},
     utils::serialization::{
         graph::{read_graph_from_file, GraphFormat},
-        iris_ndjson::IrisSelection,
+        iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
     },
 };
 use eyre::{bail, eyre, Result};
 use futures::future::JoinAll;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId, IrisVectorId as VectorId};
+use iris_mpc_common::{
+    iris_db::iris::{IrisCode, IrisMutationFamily},
+    IrisSerialId, IrisVectorId as VectorId,
+};
 use itertools::izip;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -43,7 +46,7 @@ pub struct AnalysisConfig {
     /// Range of relative rotations to test (e.g., [-3, -2, -1, 0, 1, 2, 3]).
     pub rotations: Range<isize>,
     /// List of mutation amounts
-    pub mutations: Vec<u64>,
+    pub mutations: Vec<f64>,
 }
 
 impl AnalysisConfig {
@@ -60,8 +63,7 @@ impl AnalysisConfig {
 #[derive(Debug, Serialize)]
 pub struct AnalysisResult {
     id: IrisSerialId,
-    mutation_num: u16,
-    mutation_denom: u16,
+    mutation: f64,
     rotation: isize,
     found: bool,
 }
@@ -110,8 +112,10 @@ pub async fn run_analysis(
             .ok_or_else(|| eyre!("Sampled ID {} not found in store", target_id))?
             .clone();
 
+        let mutation_family = IrisMutationFamily::new(&target_code, rng);
+
         for &mutation in &config.mutations {
-            let mutated_code = Arc::new(target_code.get_graded_similar_iris(rng, mutation));
+            let mutated_code = Arc::new(mutation_family.get_graded_similar_iris(mutation));
 
             let rotations = mutated_code.rotations_from_range(config.rotations.clone());
             let mut futures = Vec::new();
@@ -130,8 +134,7 @@ pub async fn run_analysis(
 
                     Ok(AnalysisResult {
                         id: target_id.serial_id(),
-                        mutation_num: mutation.0,
-                        mutation_denom: mutation.1,
+                        mutation,
                         rotation: ri,
                         found,
                     })
@@ -165,117 +168,119 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
     match config.output_format.as_str() {
         "full_csv" => {
             // Option 3: Full output of individual results
-            wtr.write_record(&["id", "mutation_num", "mutation_denom", "rotation", "found"])?;
+            wtr.write_record(&["id", "mutation", "rotation", "found"])?;
             for res in results {
                 wtr.serialize(res)?;
             }
         }
         "rate" => {
-            // Option 1: Success rate for each (rotation, mutation) pair
-            wtr.write_record(&["mutation", "rotation", "success_rate", "hits", "total"])?;
-            // (mutation, rotation) -> (hits, total)
-            let mut rate_map: HashMap<((u16, u16), isize), (u32, u32)> = HashMap::new();
+            unimplemented!();
+            // // Option 1: Success rate for each (rotation, mutation) pair
+            // wtr.write_record(&["mutation", "rotation", "success_rate", "hits", "total"])?;
+            // // (mutation, rotation) -> (hits, total)
+            // let mut rate_map: HashMap<(f64, isize), (u32, u32)> = HashMap::new();
 
-            for res in &results {
-                let key = ((res.mutation_num, res.mutation_denom), res.rotation);
-                let entry = rate_map.entry(key).or_default();
-                if res.found {
-                    entry.0 += 1;
-                }
-                entry.1 += 1;
-            }
+            // for res in &results {
+            //     let key = (res.mutation, res.rotation);
+            //     let entry = rate_map.entry(key).or_default();
+            //     if res.found {
+            //         entry.0 += 1;
+            //     }
+            //     entry.1 += 1;
+            // }
 
-            let mut sorted_keys: Vec<_> = rate_map.keys().collect();
-            // Sort by rotation, then by mutation amount (n/d)
-            sorted_keys.sort_by_key(|(mutation, rot)| {
-                (
-                    *rot,
-                    (mutation.0 as f64 / mutation.1 as f64 * 1000000.0) as u32,
-                )
-            });
+            // let mut sorted_keys: Vec<_> = rate_map.keys().collect();
+            // // Sort by rotation, then by mutation amount (n/d)
+            // sorted_keys.sort_by_key(|(mutation, rot)| {
+            //     (
+            //         *rot,
+            //         (mutation.0 as f64 / mutation.1 as f64 * 1000000.0) as u32,
+            //     )
+            // });
 
-            for key in sorted_keys {
-                let (hits, total) = rate_map[key];
-                let rate = hits as f64 / total as f64;
-                let mutation_str = format!("{}/{}", key.0 .0, key.0 .1);
-                wtr.write_record(&[
-                    mutation_str,
-                    key.1.to_string(),
-                    rate.to_string(),
-                    hits.to_string(),
-                    total.to_string(),
-                ])?;
-            }
+            // for key in sorted_keys {
+            //     let (hits, total) = rate_map[key];
+            //     let rate = hits as f64 / total as f64;
+            //     let mutation_str = format!("{}/{}", key.0 .0, key.0 .1);
+            //     wtr.write_record(&[
+            //         mutation_str,
+            //         key.1.to_string(),
+            //         rate.to_string(),
+            //         hits.to_string(),
+            //         total.to_string(),
+            //     ])?;
+            // }
         }
         "histogram" => {
+            unimplemented!();
             // Option 2: Histogram of minimum mutation amount where a match was NOT found
-            wtr.write_record(&["rotation", "min_fail_mutation", "count"])?;
+            // wtr.write_record(&["rotation", "min_fail_mutation", "count"])?;
 
-            // (id, rotation) -> Vec<(mutation_float, found, mutation_tuple)>
-            let mut grouped_results: HashMap<(IrisSerialId, isize), Vec<(f64, bool, (u16, u16))>> =
-                HashMap::new();
-            for res in &results {
-                let mutation_tuple = (res.mutation_num, res.mutation_denom);
-                let mutation_float = res.mutation_num as f64 / res.mutation_denom as f64;
-                grouped_results
-                    .entry((res.id, res.rotation))
-                    .or_default()
-                    .push((mutation_float, res.found, mutation_tuple));
-            }
+            // // (id, rotation) -> Vec<(mutation_float, found, mutation_tuple)>
+            // let mut grouped_results: HashMap<(IrisSerialId, isize), Vec<(f64, bool, (u16, u16))>> =
+            //     HashMap::new();
+            // for res in &results {
+            //     let mutation_tuple = (res.mutation_num, res.mutation_denom);
+            //     let mutation_float = res.mutation_num as f64 / res.mutation_denom as f64;
+            //     grouped_results
+            //         .entry((res.id, res.rotation))
+            //         .or_default()
+            //         .push((mutation_float, res.found, mutation_tuple));
+            // }
 
-            // (rotation) -> (mutation_level_tuple) -> count
-            let mut hist_map: HashMap<isize, HashMap<(u16, u16), u32>> = HashMap::new();
-            // Special bucket for (id, rotation) pairs that never failed
-            let never_failed_key = (0, 0);
+            // // (rotation) -> (mutation_level_tuple) -> count
+            // let mut hist_map: HashMap<isize, HashMap<(u16, u16), u32>> = HashMap::new();
+            // // Special bucket for (id, rotation) pairs that never failed
+            // let never_failed_key = (0, 0);
 
-            for ((_id, rotation), mut res_list) in grouped_results {
-                // Sort by mutation amount (float)
-                res_list.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            // for ((_id, rotation), mut res_list) in grouped_results {
+            //     // Sort by mutation amount (float)
+            //     res_list.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-                // Find the first mutation that failed
-                let min_fail_mutation = res_list.iter().find(|(_f, found, _t)| !*found);
+            //     // Find the first mutation that failed
+            //     let min_fail_mutation = res_list.iter().find(|(_f, found, _t)| !*found);
 
-                if let Some((_f, _found, mutation_tuple)) = min_fail_mutation {
-                    // Increment the count for this rotation and mutation level
-                    *hist_map
-                        .entry(rotation)
-                        .or_default()
-                        .entry(*mutation_tuple)
-                        .or_default() += 1;
-                } else {
-                    // This (id, rotation) pair *never* failed.
-                    *hist_map
-                        .entry(rotation)
-                        .or_default()
-                        .entry(never_failed_key)
-                        .or_default() += 1;
-                }
-            }
+            //     if let Some((_f, _found, mutation_tuple)) = min_fail_mutation {
+            //         // Increment the count for this rotation and mutation level
+            //         *hist_map
+            //             .entry(rotation)
+            //             .or_default()
+            //             .entry(*mutation_tuple)
+            //             .or_default() += 1;
+            //     } else {
+            //         // This (id, rotation) pair *never* failed.
+            //         *hist_map
+            //             .entry(rotation)
+            //             .or_default()
+            //             .entry(never_failed_key)
+            //             .or_default() += 1;
+            //     }
+            // }
 
-            let mut sorted_rotations: Vec<_> = hist_map.keys().cloned().collect();
-            sorted_rotations.sort();
+            // let mut sorted_rotations: Vec<_> = hist_map.keys().cloned().collect();
+            // sorted_rotations.sort();
 
-            for rotation in sorted_rotations {
-                let mut sorted_mutations: Vec<_> = hist_map[&rotation].keys().cloned().collect();
-                sorted_mutations.sort_by(|a, b| {
-                    let mut_a = a.0 as f64 / a.1 as f64;
-                    let mut_b = b.0 as f64 / b.1 as f64;
-                    mut_a
-                        .partial_cmp(&mut_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+            // for rotation in sorted_rotations {
+            //     let mut sorted_mutations: Vec<_> = hist_map[&rotation].keys().cloned().collect();
+            //     sorted_mutations.sort_by(|a, b| {
+            //         let mut_a = a.0 as f64 / a.1 as f64;
+            //         let mut_b = b.0 as f64 / b.1 as f64;
+            //         mut_a
+            //             .partial_cmp(&mut_b)
+            //             .unwrap_or(std::cmp::Ordering::Equal)
+            //     });
 
-                for mutation in sorted_mutations {
-                    let count = hist_map[&rotation][&mutation];
-                    let mut_str = if mutation == never_failed_key {
-                        "Never_Failed".to_string()
-                    } else {
-                        // Print as decimal (e.g., 0.125)
-                        format!("{:.2}", mutation.0 as f64 / mutation.1 as f64)
-                    };
-                    wtr.write_record(&[rotation.to_string(), mut_str, count.to_string()])?;
-                }
-            }
+            //     for mutation in sorted_mutations {
+            //         let count = hist_map[&rotation][&mutation];
+            //         let mut_str = if mutation == never_failed_key {
+            //             "Never_Failed".to_string()
+            //         } else {
+            //             // Print as decimal (e.g., 0.125)
+            //             format!("{:.2}", mutation.0 as f64 / mutation.1 as f64)
+            //         };
+            //         wtr.write_record(&[rotation.to_string(), mut_str, count.to_string()])?;
+            //     }
+            // }
         }
         _ => bail!("Unknown output_format: {}", config.output_format),
     }
@@ -329,46 +334,32 @@ pub struct HnswConfig {
 /// Loads iris codes into a `PlaintextStore` based on `IrisesInit` config.
 /// Returns the store and an RNG for use in later steps.
 pub async fn load_iris_store(
-    config: &IrisesInit,
+    config: IrisesInit,
     rng: &mut StdRng,
     distance_fn: DistanceFn,
 ) -> Result<PlaintextStore> {
-    // This RNG is for graph building and analysis, seeded by the *analysis* seed.
-
-    let store = match config {
+    let irises = match config {
         IrisesInit::Random { number, seed } => {
             println!("Generating {} random iris codes...", number);
-            // This RNG is just for iris generation, seeded by the *iris* seed.
-            let mut store = PlaintextStore::new_with_distance_fn(distance_fn);
-            for i in 0..*number {
-                let iris = IrisCode::random_rng(rng);
-                // Use insert_with_id for deterministic IDs
-                store.insert_with_id(VectorId::from_0_index(i as u32), Arc::new(iris));
-            }
-            store
+            (0..number)
+                .map(|_| IrisCode::random_rng(rng))
+                .collect::<Vec<_>>()
         }
         IrisesInit::NdjsonFile {
             path,
             limit,
             selection,
         } => {
-            let mut path = path.clone();
-            if path.is_relative() {
-                if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-                    path = Path::new(&manifest_dir).join(path);
-                }
-            }
             println!("Loading irises from NDJSON file: {}", path.display());
-            let mut temp = PlaintextStore::from_ndjson_file(
-                &path,
-                *limit,
-                selection.unwrap_or(IrisSelection::All),
-            )?;
-            // Override distance_fn
-            temp.distance_fn = distance_fn;
-            temp
+            irises_from_ndjson_iter(&path, limit, selection.unwrap_or(IrisSelection::All))?
+                .collect::<Vec<_>>()
         }
     };
+
+    let mut store = PlaintextStore::from_irises_iter(irises.into_iter());
+    // Override distance_fn;
+    // This is safe, because store initialization doesn't depend on distance
+    store.distance_fn = distance_fn;
 
     Ok(store)
 }

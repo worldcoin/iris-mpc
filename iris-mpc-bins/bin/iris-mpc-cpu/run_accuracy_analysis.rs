@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     let mut rng = rand::SeedableRng::seed_from_u64(config.analysis.seed.unwrap_or(0));
 
     let mut store =
-        load_iris_store(&config.irises, &mut rng, config.analysis.get_distance_fn()?).await?;
+        load_iris_store(config.irises, &mut rng, config.analysis.get_distance_fn()?).await?;
     println!(
         "Loaded {} iris codes into PlaintextStore with distance_fn = {:?}.",
         store.len(),

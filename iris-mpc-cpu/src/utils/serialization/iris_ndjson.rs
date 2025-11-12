@@ -98,23 +98,6 @@ pub fn irises_from_ndjson(
 }
 
 impl PlaintextStore {
-    pub fn from_ndjson_file(
-        path: &Path,
-        limit: Option<usize>,
-        selection: IrisSelection,
-    ) -> Result<PlaintextStore> {
-        let stream_iterator = irises_from_ndjson_iter(path, limit, selection)?;
-
-        // Iterate over each deserialized object
-        let mut vector = PlaintextStore::new();
-        for (idx, iris) in stream_iterator.enumerate() {
-            let id = IrisVectorId::from_0_index(idx as u32);
-            vector.insert_with_id(id, Arc::new(iris));
-        }
-
-        Ok(vector)
-    }
-
     pub fn to_ndjson_file(&self, path: &Path) -> Result<()> {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
