@@ -235,10 +235,10 @@ pub mod test_helper_1d {
         pub fn generate_ground_truth_input(
             rng: &mut impl rand::Rng,
             num_bundles: usize,
-            max_rotations: usize,
+            max_rotaions: usize,
         ) -> TestDistances {
             let sizes = (0..num_bundles)
-                .map(|_| rng.gen_range(1..=max_rotations))
+                .map(|_| rng.gen_range(1..=max_rotaions))
                 .collect_vec();
             let flat_size = sizes.iter().sum::<usize>();
 
@@ -413,10 +413,10 @@ pub mod test_helper_2d {
         pub fn generate_ground_truth_input(
             rng: &mut impl rand::Rng,
             num_bundles: usize,
-            max_rotations: usize,
+            max_rotaions: usize,
         ) -> TestDistances {
             let sizes = (0..num_bundles)
-                .map(|_| rng.gen_range(1..=max_rotations))
+                .map(|_| rng.gen_range(1..=max_rotaions))
                 .collect_vec();
             let flat_size = sizes.iter().sum::<usize>();
 

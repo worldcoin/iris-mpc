@@ -154,47 +154,59 @@ impl DistanceCache {
         max_internal_buffer_size: usize,
         streams: &[CudaStream],
     ) -> Vec<OneSidedDistanceCache> {
-        let (codes, masks, counters_gpu, indices_gpu) = self.get_buffers(eye);
+        let (codes, masks, counters, indices_gpu) = self.get_buffers(eye);
         let counters = device_manager
             .devices()
             .iter()
             .enumerate()
-            .map(|(i, device)| device.dtoh_sync_copy(&counters_gpu[i]).unwrap()[0] as usize)
+            .map(|(i, device)| device.dtoh_sync_copy(&counters[i]).unwrap()[0] as usize)
             .collect::<Vec<_>>();
-        let indices: Vec<Vec<u64>> = indices_gpu
+        let mut indices: Vec<Vec<u64>> = indices_gpu
             .iter()
             .enumerate()
             .map(|(i, x)| dtoh_on_stream_sync(x, &device_manager.device(i), &streams[i]).unwrap())
             .collect::<Vec<Vec<u64>>>();
 
-        let codes_a: Vec<Vec<u16>> = codes
+        let mut codes_a: Vec<Vec<u16>> = codes
             .iter()
             .enumerate()
             .map(|(i, x)| {
                 dtoh_on_stream_sync(&x.a, &device_manager.device(i), &streams[i]).unwrap()
             })
             .collect::<Vec<Vec<u16>>>();
-        let codes_b: Vec<Vec<u16>> = codes
+        let mut codes_b: Vec<Vec<u16>> = codes
             .iter()
             .enumerate()
             .map(|(i, x)| {
                 dtoh_on_stream_sync(&x.b, &device_manager.device(i), &streams[i]).unwrap()
             })
             .collect::<Vec<Vec<u16>>>();
-        let masks_a: Vec<Vec<u16>> = masks
+        let mut masks_a: Vec<Vec<u16>> = masks
             .iter()
             .enumerate()
             .map(|(i, x)| {
                 dtoh_on_stream_sync(&x.a, &device_manager.device(i), &streams[i]).unwrap()
             })
             .collect::<Vec<Vec<u16>>>();
-        let masks_b: Vec<Vec<u16>> = masks
+        let mut masks_b: Vec<Vec<u16>> = masks
             .iter()
             .enumerate()
             .map(|(i, x)| {
                 dtoh_on_stream_sync(&x.b, &device_manager.device(i), &streams[i]).unwrap()
             })
             .collect::<Vec<Vec<u16>>>();
+
+        // Stable permutation based on indices
+        for i in 0..indices.len() {
+            let mut perm: Vec<usize> = (0..indices[i].len()).collect();
+            perm.sort_by_key(|&j| indices[i][j]);
+
+            indices[i] = perm.iter().map(|&j| indices[i][j]).collect::<Vec<u64>>();
+            codes_a[i] = perm.iter().map(|&j| codes_a[i][j]).collect::<Vec<u16>>();
+            codes_b[i] = perm.iter().map(|&j| codes_b[i][j]).collect::<Vec<u16>>();
+            masks_a[i] = perm.iter().map(|&j| masks_a[i][j]).collect::<Vec<u16>>();
+            masks_b[i] = perm.iter().map(|&j| masks_b[i][j]).collect::<Vec<u16>>();
+        }
 
         let mut maps = old_counters
             .iter()
@@ -205,26 +217,23 @@ impl DistanceCache {
             })
             .collect_vec();
 
-        for (map, ind, code_a_v, code_b_v, mask_a_v, mask_b_v, &old, &new) in izip!(
+        for (map, ind, code_a_v, code_b_v, mask_a_v, mask_b_v, old, new) in izip!(
             &mut maps,
             &indices,
             &codes_a,
             &codes_b,
             &masks_a,
             &masks_b,
-            &old_counters,
-            &counters
+            old_counters.into_iter(),
+            counters.into_iter()
         ) {
             if new >= max_internal_buffer_size {
                 tracing::info!(
-                    "While saving distances for 2d stats, internal buffer full; skipping. {}/{}",
-                    new,
-                    max_internal_buffer_size
+                    "While saving distances for 2d stats, internal buffer full; skipping."
                 );
                 continue;
             }
-
-            let mut entries = izip!(
+            for (&idx, &c_a, &c_b, &m_a, &m_b) in izip!(
                 ind.iter(),
                 code_a_v.iter(),
                 code_b_v.iter(),
@@ -233,23 +242,16 @@ impl DistanceCache {
             )
             .skip(old)
             .take(new - old)
-            .map(|(idx, c_a, c_b, m_a, m_b)| CpuDistanceShare {
-                idx: *idx,
-                code_a: *c_a,
-                code_b: *c_b,
-                mask_a: *m_a,
-                mask_b: *m_b,
-            })
-            .collect::<Vec<_>>();
-
-            entries.sort_by_key(|entry| entry.idx);
-
-            for entry in entries {
-                let vec = map
-                    .entry(entry.idx / ROTATIONS as u64)
-                    .or_insert_with(|| Vec::with_capacity(4));
-                vec.push(entry);
-                vec.sort_by_key(|share| share.idx);
+            {
+                map.entry(idx / ROTATIONS as u64)
+                    .or_insert_with(|| Vec::with_capacity(4))
+                    .push(CpuDistanceShare {
+                        idx,
+                        code_a: c_a,
+                        code_b: c_b,
+                        mask_a: m_a,
+                        mask_b: m_b,
+                    });
             }
         }
 
