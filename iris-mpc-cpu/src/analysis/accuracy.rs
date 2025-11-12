@@ -42,8 +42,8 @@ pub struct AnalysisConfig {
     pub output_path: PathBuf,
     /// Range of relative rotations to test (e.g., [-3, -2, -1, 0, 1, 2, 3]).
     pub rotations: Range<isize>,
-    /// Range of mutation amounts as (numerator, denominator).
-    pub mutations: Vec<(u16, u16)>,
+    /// List of mutation amounts
+    pub mutations: Vec<u64>,
 }
 
 impl AnalysisConfig {
@@ -330,19 +330,18 @@ pub struct HnswConfig {
 /// Returns the store and an RNG for use in later steps.
 pub async fn load_iris_store(
     config: &IrisesInit,
-    seed: Option<u64>,
-) -> Result<(PlaintextStore, StdRng)> {
+    rng: &mut StdRng,
+    distance_fn: DistanceFn,
+) -> Result<PlaintextStore> {
     // This RNG is for graph building and analysis, seeded by the *analysis* seed.
-    let rng = seed.map_or_else(StdRng::from_entropy, StdRng::seed_from_u64);
 
     let store = match config {
         IrisesInit::Random { number, seed } => {
             println!("Generating {} random iris codes...", number);
             // This RNG is just for iris generation, seeded by the *iris* seed.
-            let mut iris_rng = seed.map_or_else(StdRng::from_entropy, StdRng::seed_from_u64);
-            let mut store = PlaintextStore::new();
+            let mut store = PlaintextStore::new_with_distance_fn(distance_fn);
             for i in 0..*number {
-                let iris = IrisCode::random_rng(&mut iris_rng);
+                let iris = IrisCode::random_rng(rng);
                 // Use insert_with_id for deterministic IDs
                 store.insert_with_id(VectorId::from_0_index(i as u32), Arc::new(iris));
             }
@@ -360,15 +359,18 @@ pub async fn load_iris_store(
                 }
             }
             println!("Loading irises from NDJSON file: {}", path.display());
-            PlaintextStore::from_ndjson_file(
+            let mut temp = PlaintextStore::from_ndjson_file(
                 &path,
                 *limit,
                 selection.unwrap_or(IrisSelection::All),
-            )?
+            )?;
+            // Override distance_fn
+            temp.distance_fn = distance_fn;
+            temp
         }
     };
 
-    Ok((store, rng))
+    Ok(store)
 }
 
 /// Loads or builds the HNSW graph.

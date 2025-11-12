@@ -15,7 +15,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{aby3::aby3_store::DistanceFn, plaintext_store::PlaintextStore},
     utils::serialization::types::iris_base64::{
         read_from_iris_ndjson, write_to_iris_ndjson, Base64IrisCode,
     },

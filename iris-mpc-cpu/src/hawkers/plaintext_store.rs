@@ -54,6 +54,13 @@ impl PlaintextStore {
         Default::default()
     }
 
+    pub fn new_with_distance_fn(distance_fn: DistanceFn) -> Self {
+        Self {
+            storage: PlaintextSharedIrises::default(),
+            distance_fn,
+        }
+    }
+
     pub fn with_storage(storage: PlaintextSharedIrises) -> Self {
         Self {
             storage,
