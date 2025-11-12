@@ -1,14 +1,32 @@
 # Running Service Client Utility
 
-TODO: overview
+A new tool, named `service-client` has been developed to support end-to-end system testing.  The tool's design intent is to support the dispatch of various traffic patterns into the system.  Such patterns will differ in terms of time (short vs extended bursts) and/or content (different request types).  It is important that the tool is easy to use in an array of environments (local and/or staged).
 
-## Prerequisites
+## Setp 0: Setup Datadog & AWS accounts
 
-TODO
+### DatadogHQ Account
+
+- Obtain credentials from TFH
+- Verify credentials @ Datadog login page
+    - [https://app.datadoghq.com/account/login](https://app.datadoghq.com/account/login?redirect=f)
+
+### AWS Management Console Account
+
+- Obtain credentials from TFH
+- Login to AWS Management Console
+    - https://aws.amazon.com/console/
+- Create Access Key
+    - Open “I AM” page
+    - Click tab: `Security credentials`
+    - Click button: `Create access key`
+    - Click option: `Command Line Interface (CLI)`
+    - Follow instructions to create access key and:
+        - Save: `Access Key`
+        - Save: `Secret access key`
 
 ## Step 1: Setup AWS credentials
 
-Copy following to `~/.aws/credentials` & edit accordingly.
+Copy following to `~/.aws/credentials` & **edit accordingly**.
 
 ```
 [default]
@@ -53,7 +71,7 @@ output = None
 
 ## Step 3: Setup Environment Variables
 
-Copy following to `~/.hnsw/envs/dev-staging`
+Copy following to `~/.hnsw/envs/dev-staging`.
 
 ```
 # AWS: Force usage of ~/.aws/config & ~/.aws/credentials.
@@ -73,10 +91,11 @@ export AMPC_SNS_REQUEST_TOPIC_ARN=arn:aws:sns:eu-central-1:238407200320:iris-mpc
 
 ## Step 4: Setup Execution Script
 
-Copy following to `~/.hnsw/exec/exec_service_client.sh`
+Copy following to `~/.hnsw/exec/exec_service_client.sh` & **edit accordingly**.
 
 ```
-pushd "${IRIS_MPC_HOME}/iris-mpc-bins"
+pushd "YOUR-WORKING-DIRECTORY/iris-mpc/iris-mpc-bins"
+
 cargo run --release --bin service-client -- \
     --aws-public-key-base-url "${AMPC_PUBLIC_KEY_BASE_URL}" \
     --aws-s3-request-bucket-name "${AMPC_S3_REQUEST_BUCKET}" \
@@ -87,6 +106,7 @@ cargo run --release --bin service-client -- \
     --request-batch-count 5 \
     --request-batch-size 10 \
     --rng-seed 42
+
 popd
 ```
 
