@@ -1,9 +1,11 @@
 use crate::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
+use crate::IRIS_CODE_LENGTH;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bytemuck::cast_slice;
 use eyre::bail;
 use eyre::Result;
 use itertools::izip;
+use rand::seq::SliceRandom;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -589,12 +591,50 @@ impl Iterator for Bits<'_> {
 
 impl ExactSizeIterator for Bits<'_> {}
 
+pub struct IrisMutationFamily {
+    iris: IrisCode,
+    // Random permutation of visible bits
+    vsb_perm: Vec<usize>,
+}
+
+impl IrisMutationFamily {
+    #[allow(dead_code)]
+    fn new<R: Rng>(iris: &IrisCode, rng: &mut R) -> Self {
+        let mut visible_bits = (0..IRIS_CODE_LENGTH)
+            .filter(|i| iris.mask.get_bit(*i))
+            .collect::<Vec<_>>();
+        visible_bits.shuffle(rng);
+
+        Self {
+            iris: iris.clone(),
+            vsb_perm: visible_bits,
+        }
+    }
+
+    pub fn get_graded_similar_iris(&self, target_distance: f64) -> IrisCode {
+        // Compute the ideal number of differing bits in the result
+        let neq_cnt = (target_distance * self.vsb_perm.len() as f64).round() as usize;
+
+        let mut result = self.iris.clone();
+        for i in self.vsb_perm.iter().take(neq_cnt) {
+            result.code.flip_bit(*i);
+        }
+
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::iris_db::iris::IrisMutationFamily;
+
     use super::{IrisCode, IrisCodeArray};
     use eyre::Result;
     use eyre::{Context, ContextCompat};
     use float_eq::assert_float_eq;
+    use rand::rngs::SmallRng;
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
     use std::cmp::min;
     use std::collections::HashMap;
 
@@ -795,5 +835,44 @@ mod tests {
                 assert_eq!(standard_result, rotation_result);
             }
         }
+    }
+
+    #[test]
+    fn test_get_graded_similar_iris() {
+        let mut base_rng = SmallRng::seed_from_u64(42);
+        let mut iris_a = IrisCode::random_rng(&mut base_rng);
+
+        // Start with full mask and flip 1200 bits
+        iris_a.mask = IrisCodeArray::ONES;
+        let mut indices = (0..(IrisCode::IRIS_CODE_SIZE / 2))
+            .take(600)
+            .collect::<Vec<_>>();
+        indices.shuffle(&mut base_rng);
+        for &i in indices.iter() {
+            iris_a.mask.flip_bit(2 * i);
+            iris_a.mask.flip_bit(2 * i + 1);
+        }
+
+        let dist_b_target = 0.125;
+        let dist_c_target = 0.25;
+
+        let a_family = IrisMutationFamily::new(&iris_a, &mut base_rng);
+
+        let iris_b = a_family.get_graded_similar_iris(dist_b_target);
+        let iris_c = a_family.get_graded_similar_iris(dist_c_target);
+
+        let dist_a_b = iris_a.get_distance(&iris_b);
+
+        assert_float_eq!(dist_a_b, dist_b_target, abs <= 1e-5);
+
+        let dist_a_c = iris_a.get_distance(&iris_c);
+        assert_float_eq!(dist_a_c, dist_c_target, abs <= 1e-5);
+
+        let dist_b_c = iris_b.get_distance(&iris_c);
+        let expected_dist_b_c = dist_c_target - dist_b_target;
+        assert_float_eq!(dist_b_c, expected_dist_b_c, abs <= 1e-5);
+
+        assert_eq!(iris_a.mask, iris_b.mask);
+        assert_eq!(iris_a.mask, iris_c.mask);
     }
 }

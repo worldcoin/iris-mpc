@@ -1,11 +1,11 @@
-use bincode;
 use eyre::Result;
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json;
-use std::{
-    fs::File,
-    io::{BufReader, BufWriter},
-};
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+
+pub mod graph;
+pub mod iris_ndjson;
+pub mod types;
 
 pub fn write_bin<T: Serialize>(data: &T, filename: &str) -> Result<()> {
     let file = File::create(filename)?;
