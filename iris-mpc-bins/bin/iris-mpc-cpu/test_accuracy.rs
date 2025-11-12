@@ -1,36 +1,19 @@
 use clap::Parser;
-use eyre::{bail, eyre, Result};
-use futures::future::JoinAll;
-use iris_mpc_common::{IrisSerialId, IrisVectorId as VectorId};
+use eyre::{bail, Result};
+use iris_mpc_common::IrisVectorId as VectorId;
 use iris_mpc_cpu::analysis::accuracy::{process_results, run_analysis, AnalysisConfig};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::DistanceFn;
-use iris_mpc_cpu::hawkers::plaintext_store::{PlaintextStore, SharedPlaintextStore};
+use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::{GraphMem, HnswSearcher};
 use iris_mpc_cpu::utils::serialization::graph::{read_graph_from_file, GraphFormat};
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
-use itertools::izip;
-use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::ops::Range;
+use iris_mpc_cpu::utils::serialization::load_toml;
+use rand::{rngs::StdRng, SeedableRng};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio;
-use tokio::task::JoinError;
 
 // --- CLI and Configuration ---
-
-/// Helper function to load and parse the TOML config file.
-fn load_toml<'a, T, P>(path: P) -> Result<T>
-where
-    T: Deserialize<'a>,
-    P: AsRef<Path>,
-{
-    let text = std::fs::read_to_string(path)?;
-    let de = toml::de::Deserializer::new(&text);
-    let t = serde_path_to_error::deserialize(de)?;
-    Ok(t)
-}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
