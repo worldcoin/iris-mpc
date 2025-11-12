@@ -1,14 +1,26 @@
 use crate::{
-    hawkers::plaintext_store::{PlaintextStore, SharedPlaintextStore},
+    hawkers::{
+        aby3::aby3_store::DistanceFn,
+        plaintext_store::{PlaintextStore, SharedPlaintextStore},
+    },
     hnsw::{GraphMem, HnswSearcher},
+    utils::serialization::{
+        graph::{read_graph_from_file, GraphFormat},
+        iris_ndjson::IrisSelection,
+    },
 };
 use eyre::{bail, eyre, Result};
 use futures::future::JoinAll;
-use iris_mpc_common::{IrisSerialId, IrisVectorId as VectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId, IrisVectorId as VectorId};
 use itertools::izip;
-use rand::{rngs::StdRng, seq::SliceRandom};
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::task::JoinError;
 
 /// Configuration for the accuracy analysis run.
@@ -32,6 +44,16 @@ pub struct AnalysisConfig {
     pub rotations: Range<isize>,
     /// Range of mutation amounts as (numerator, denominator).
     pub mutations: Vec<(u16, u16)>,
+}
+
+impl AnalysisConfig {
+    pub fn get_distance_fn(&self) -> Result<DistanceFn> {
+        match self.distance_fn.as_str() {
+            "fhd" => Ok(DistanceFn::FHD),
+            "min_fhd" => Ok(DistanceFn::MinFHD),
+            _ => bail!("Unknown distance_fn: {}", self.distance_fn),
+        }
+    }
 }
 
 /// Struct to hold a single search result for analysis.
@@ -260,4 +282,132 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
 
     wtr.flush()?;
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    pub irises: IrisesInit,
+    pub graph: GraphInit,
+    pub analysis: AnalysisConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "option")]
+pub enum IrisesInit {
+    /// Generate N random iris codes.
+    Random { number: usize, seed: Option<u64> },
+    /// Load iris codes from a .ndjson file.
+    NdjsonFile {
+        path: PathBuf,
+        limit: Option<usize>,
+        selection: Option<IrisSelection>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "option")]
+pub enum GraphInit {
+    /// Build a new graph from the loaded iris codes.
+    GenerateDynamic {
+        size: usize,
+        hnsw_params: HnswConfig,
+    },
+    /// Load a pre-built graph from a binary file.
+    BinFile { path: PathBuf, format: GraphFormat },
+}
+
+/// HNSW parameters for graph construction.
+#[derive(Debug, Deserialize)]
+pub struct HnswConfig {
+    pub ef_construction: usize,
+    pub ef_search: usize,
+    pub m: usize,
+}
+
+// --- Helper Functions ---
+
+/// Loads iris codes into a `PlaintextStore` based on `IrisesInit` config.
+/// Returns the store and an RNG for use in later steps.
+pub async fn load_iris_store(
+    config: &IrisesInit,
+    seed: Option<u64>,
+) -> Result<(PlaintextStore, StdRng)> {
+    // This RNG is for graph building and analysis, seeded by the *analysis* seed.
+    let rng = seed.map_or_else(StdRng::from_entropy, StdRng::seed_from_u64);
+
+    let store = match config {
+        IrisesInit::Random { number, seed } => {
+            println!("Generating {} random iris codes...", number);
+            // This RNG is just for iris generation, seeded by the *iris* seed.
+            let mut iris_rng = seed.map_or_else(StdRng::from_entropy, StdRng::seed_from_u64);
+            let mut store = PlaintextStore::new();
+            for i in 0..*number {
+                let iris = IrisCode::random_rng(&mut iris_rng);
+                // Use insert_with_id for deterministic IDs
+                store.insert_with_id(VectorId::from_0_index(i as u32), Arc::new(iris));
+            }
+            store
+        }
+        IrisesInit::NdjsonFile {
+            path,
+            limit,
+            selection,
+        } => {
+            let mut path = path.clone();
+            if path.is_relative() {
+                if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+                    path = Path::new(&manifest_dir).join(path);
+                }
+            }
+            println!("Loading irises from NDJSON file: {}", path.display());
+            PlaintextStore::from_ndjson_file(
+                &path,
+                *limit,
+                selection.unwrap_or(IrisSelection::All),
+            )?
+        }
+    };
+
+    Ok((store, rng))
+}
+
+/// Loads or builds the HNSW graph.
+pub async fn load_graph(
+    config: &GraphInit,
+    store: &mut PlaintextStore,
+    rng: &mut StdRng,
+) -> Result<(GraphMem<VectorId>, HnswSearcher)> {
+    match config {
+        GraphInit::BinFile { path, format } => {
+            println!("Loading graph from binary file: {}", path.display());
+            let graph = read_graph_from_file(path, *format)?;
+            // Params aren't stored in the graph file, so we create a default searcher.
+            // The `ef_search` for the *analysis* will be set later.
+            let searcher = HnswSearcher::new_with_test_parameters();
+            Ok((graph, searcher))
+        }
+        GraphInit::GenerateDynamic { size, hnsw_params } => {
+            println!(
+                "Building new graph (size={}, M={}, ef_constr={})...",
+                size, hnsw_params.m, hnsw_params.ef_construction
+            );
+            if *size > store.len() {
+                bail!(
+                    "GraphInit size ({}) is larger than loaded iris count ({})",
+                    size,
+                    store.len()
+                );
+            }
+            let searcher = HnswSearcher::new(
+                hnsw_params.ef_construction,
+                hnsw_params.ef_search,
+                hnsw_params.m,
+            );
+
+            // This method builds a graph on the first `size` entries in the store.
+            let graph = store.generate_graph(rng, *size, &searcher).await?;
+
+            Ok((graph, searcher))
+        }
+    }
 }

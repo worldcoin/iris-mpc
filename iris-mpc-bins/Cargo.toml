@@ -154,8 +154,8 @@ name = "construct-graph-ptxt"
 path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
 
 [[bin]]
-name = "test-accuracy"
-path = "bin/iris-mpc-cpu/test_accuracy.rs"
+name = "run-accuracy-analysis"
+path = "bin/iris-mpc-cpu/run_accuracy_analysis.rs"
 
 # ---------------------
 # binaries for iris-mpc-gpu
