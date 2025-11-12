@@ -2624,7 +2624,7 @@ dependencies = [
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
- "metrics 0.22.3",
+ "metrics 0.24.2",
  "metrics-logger",
  "num-traits",
  "num_cpus",
@@ -3091,6 +3091,16 @@ name = "metrics"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "884adb57038347dfbaf2d5065887b6cf4312330dc8e94bc30a1a839bd79d3261"
+dependencies = [
+ "ahash",
+ "portable-atomic",
+]
+
+[[package]]
+name = "metrics"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25dea7ac8057892855ec285c440160265225438c3c45072613c25a4b26e98ef5"
 dependencies = [
  "ahash",
  "portable-atomic",

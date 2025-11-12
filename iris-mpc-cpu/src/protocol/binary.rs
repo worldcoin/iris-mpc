@@ -121,11 +121,15 @@ where
 
     let network = &mut session.network_session;
     let messages = shares_a.clone();
+    #[cfg(feature = "networking_metrics")]
+    let num_ring_elems = messages.len() as u64;
     let message = if messages.len() == 1 {
         T::new_network_element(messages[0])
     } else {
         T::new_network_vec(messages)
     };
+    #[cfg(feature = "networking_metrics")]
+    metrics::counter!("network.num_and_ops").increment(num_ring_elems);
     network.send_next(message).await?;
     Ok(shares_a)
 }
@@ -151,11 +155,15 @@ where
 
     let network = &mut session.network_session;
     let messages = shares_a.clone();
+    #[cfg(feature = "networking_metrics")]
+    let num_ring_elems = messages.len() as u64;
     let message = if messages.len() == 1 {
         T::new_network_element(messages[0])
     } else {
         T::new_network_vec(messages)
     };
+    #[cfg(feature = "networking_metrics")]
+    metrics::counter!("network.num_and_ops").increment(num_ring_elems);
     network.send_next(message).await?;
     Ok(shares_a)
 }
@@ -591,12 +599,12 @@ pub(crate) async fn lift(session: &mut Session, shares: VecShare<u16>) -> Result
     Ok(x_a)
 }
 
-/// Returns the MSB of the sum of three 32-bit integers using the binary ripple-carry adder.
+/// Returns the MSB of the sum of three integers using the binary ripple-carry adder.
 /// Input integers are given in binary form.
 ///
 /// NOTE: This adder has a linear multiplicative depth, which is way worse than the logarithmic depth of the parallel prefix adder below.
 /// However, its throughput is almost two times better.
-#[allow(dead_code)]
+#[cfg(feature = "ripple_carry_adder")]
 async fn binary_add_3_get_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
@@ -615,10 +623,6 @@ where
             x3.len()
         );
     };
-
-    if len < 32 {
-        bail!("Input length should be at least 32: {len}");
-    }
 
     // Let x1, x2, x3 are integers modulo 2^k.
     //
@@ -672,9 +676,10 @@ where
     Ok(s_msb ^ c_msb ^ carry)
 }
 
-/// Returns the MSB of the sum of three 32-bit integers using the binary parallel prefix adder tree.
+/// Returns the MSB of the sum of three integers using the binary parallel prefix adder tree.
 /// Input integers are given in binary form.
-async fn binary_add_3_get_msb_prefix<T: IntRing2k + NetworkInt>(
+#[cfg(not(feature = "ripple_carry_adder"))]
+async fn binary_add_3_get_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -846,8 +851,8 @@ where
         x3.push(x3_);
     }
 
-    // Sum the binary shares using the binary parallel prefix adder and return the MSB
-    binary_add_3_get_msb_prefix(session, x1, x2, x3).await
+    // Sum the binary shares using a binary adder and return the MSB.
+    binary_add_3_get_msb(session, x1, x2, x3).await
 }
 
 /// Extracts the MSBs of the secret shared input values in a bit-sliced form as u64 shares, i.e., the i-th bit of the j-th u64 secret share is the MSB of the (j * 64 + i)-th input value.

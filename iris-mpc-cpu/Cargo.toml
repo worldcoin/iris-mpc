@@ -46,7 +46,7 @@ tokio.workspace = true
 tokio-stream = "0.1"
 tokio-util.workspace = true
 tonic = "0.12.3"
-metrics = "0.22.1"
+metrics = "0.24.2"
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
     "uuid",
@@ -82,6 +82,7 @@ tonic-build = "0.12.3"
 [features]
 db_dependent = []
 networking_metrics = []
+ripple_carry_adder = []
 
 [[bench]]
 name = "hnsw"
