@@ -16,10 +16,9 @@ use iris_mpc_common::{
     IrisSerialId, IrisVectorId as VectorId,
 };
 use itertools::izip;
-use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
@@ -72,7 +71,6 @@ pub async fn run_analysis(
     store: PlaintextStore,
     graph: GraphMem<VectorId>,
     searcher: &HnswSearcher,
-    //TODO: separate analysis rng from iris and graph rng
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
     let mut all_results = Vec::new();
@@ -142,6 +140,9 @@ pub async fn run_analysis(
                 futures.push(future);
                 search_count += 1;
             }
+
+            // TODO: parallelize over all samples * rotations * mutations search queries,
+            // instead of just rotations of some mutation
             let results_for_mutation = futures
                 .into_iter()
                 .map(tokio::spawn)
@@ -300,7 +301,7 @@ pub struct Config {
 #[serde(tag = "option")]
 pub enum IrisesInit {
     /// Generate N random iris codes.
-    Random { number: usize, seed: Option<u64> },
+    Random { number: usize },
     /// Load iris codes from a .ndjson file.
     NdjsonFile {
         path: PathBuf,
@@ -339,7 +340,7 @@ pub async fn load_iris_store(
     distance_fn: DistanceFn,
 ) -> Result<PlaintextStore> {
     let irises = match config {
-        IrisesInit::Random { number, seed } => {
+        IrisesInit::Random { number } => {
             println!("Generating {} random iris codes...", number);
             (0..number)
                 .map(|_| IrisCode::random_rng(rng))
@@ -374,8 +375,6 @@ pub async fn load_graph(
         GraphInit::BinFile { path, format } => {
             println!("Loading graph from binary file: {}", path.display());
             let graph = read_graph_from_file(path, *format)?;
-            // Params aren't stored in the graph file, so we create a default searcher.
-            // The `ef_search` for the *analysis* will be set later.
             let searcher = HnswSearcher::new_with_test_parameters();
             Ok((graph, searcher))
         }
@@ -398,6 +397,7 @@ pub async fn load_graph(
             );
 
             // This method builds a graph on the first `size` entries in the store.
+            // TODO: replace with parallel version
             let graph = store.generate_graph(rng, *size, &searcher).await?;
 
             Ok((graph, searcher))

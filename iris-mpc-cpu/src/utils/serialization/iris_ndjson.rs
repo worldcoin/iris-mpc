@@ -2,20 +2,16 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter, Write},
     path::Path,
-    sync::Arc,
 };
 
 use clap::ValueEnum;
 use eyre::Result;
-use iris_mpc_common::{
-    iris_db::iris::{IrisCode, IrisCodeArray},
-    IrisVectorId,
-};
+use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hawkers::{aby3::aby3_store::DistanceFn, plaintext_store::PlaintextStore},
+    hawkers::plaintext_store::PlaintextStore,
     utils::serialization::types::iris_base64::{
         read_from_iris_ndjson, write_to_iris_ndjson, Base64IrisCode,
     },
@@ -116,5 +112,3 @@ impl PlaintextStore {
         Ok(())
     }
 }
-
-// TODO: refactor into function which write from `Vec<IrisCode>`, plus wrapper which takes a PlaintextStore
