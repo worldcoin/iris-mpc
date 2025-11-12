@@ -12,14 +12,14 @@ pub struct Request {
     /// Batch ordinal identifier.
     batch_idx: usize,
 
-    /// Batch item ordinal identifier.
-    batch_item_idx: usize,
+    /// Associated request payload.
+    data: RequestData,
 
     /// Unique request identifier for correlation purposes.
     identifier: uuid::Uuid,
 
-    /// Associated request payload.
-    data: RequestData,
+    /// Batch item ordinal identifier.
+    item_idx: usize,
 }
 
 impl Request {
@@ -31,10 +31,10 @@ impl Request {
         &self.identifier
     }
 
-    pub fn new(batch_idx: usize, batch_item_idx: usize, data: RequestData) -> Self {
+    pub fn new(batch_idx: usize, item_idx: usize, data: RequestData) -> Self {
         Self {
             batch_idx,
-            batch_item_idx,
+            item_idx,
             data,
             identifier: uuid::Uuid::new_v4(),
         }
@@ -46,7 +46,7 @@ impl fmt::Display for Request {
         write!(
             f,
             "Request:{:03}.{:03}::[{}]",
-            self.batch_idx, self.batch_item_idx, self.data
+            self.batch_idx, self.item_idx, self.data
         )
     }
 }
