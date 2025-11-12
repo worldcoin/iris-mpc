@@ -38,7 +38,7 @@ aws_access_key_id = YOUR-AWS-ACCESS-KEY-ID
 aws_secret_access_key = YOUR-SECRET-AWS-ACCESS-KEY
 ```
 
-### Step 3: Setup Local AWS Config
+## Step 3: Setup Local AWS Config
 
 Copy following to `~/.aws/config`
 
