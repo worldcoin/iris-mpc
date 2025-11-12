@@ -1,7 +1,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use crate::hnsw::graph::neighborhood::SortedEdgeIds;
 use crate::hnsw::{vector_store::Ref, GraphMem};
 
 pub mod explicit;
@@ -23,13 +22,7 @@ pub trait Differ<V: Ref + Display + FromStr> {
     fn start_layer(&mut self, _layer_index: usize) {}
 
     /// Called for each node that exists in both the `lhs` and `rhs` layer.
-    fn diff_neighborhood(
-        &mut self,
-        layer_index: usize,
-        node: &V,
-        lhs: &SortedEdgeIds<V>,
-        rhs: &SortedEdgeIds<V>,
-    );
+    fn diff_neighborhood(&mut self, layer_index: usize, node: &V, lhs: &[V], rhs: &[V]);
 
     /// Called after traversing each layer.
     fn end_layer(&mut self, _layer_index: usize) {}
