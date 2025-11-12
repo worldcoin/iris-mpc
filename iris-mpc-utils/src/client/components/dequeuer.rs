@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::super::{errors::ServiceClientError, types::RequestBatch};
 use crate::aws::AwsClient;
 
@@ -19,5 +21,11 @@ impl ResponseDequeuer {
     #[allow(dead_code)]
     pub async fn dequeue(&self, _batch: &RequestBatch) -> Result<(), ServiceClientError> {
         unimplemented!()
+    }
+}
+
+impl fmt::Display for ResponseDequeuer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ResponseDequeuer",)
     }
 }

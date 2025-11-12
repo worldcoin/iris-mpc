@@ -6,6 +6,7 @@ use components::RequestEnqueuer;
 use components::RequestGenerator;
 use components::ResponseCorrelator;
 use components::ResponseDequeuer;
+pub use errors::ServiceClientError;
 pub use types::{
     Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData, RequestDataUniqueness,
 };
@@ -52,20 +53,31 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     }
 
     /// Initializer.
-    pub async fn init(&mut self, public_key_base_url: String) {
-        self.request_enqueuer
-            .init(public_key_base_url)
-            .await
-            .unwrap();
-        self.response_correlator.init().await.unwrap();
+    pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
+        for initialization_result in [
+            self.request_enqueuer.init(public_key_base_url).await,
+            self.response_correlator.init().await,
+        ] {
+            match initialization_result {
+                Ok(()) => (),
+                Err(e) => {
+                    tracing::error!("Service client: component initialisation failed: {}", e);
+                    return Err(ServiceClientError::InitialisationError(e.to_string()));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Executor.
-    pub async fn exec(&mut self) {
+    pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
             self.request_enqueuer.enqueue(&batch).await.unwrap();
             // TODO await responses & correlate.
         }
+
+        Ok(())
     }
 }

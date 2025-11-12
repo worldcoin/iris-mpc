@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::super::{errors::ServiceClientError, types::RequestBatch};
 use crate::aws::AwsClient;
 
@@ -16,13 +18,20 @@ impl ResponseCorrelator {
 
     /// Initializer.
     pub async fn init(&self) -> Result<(), ServiceClientError> {
-        tracing::info!("Purging SQS response queue ...");
-        self.aws_client
+        tracing::info!("Initialising ...");
+        match self
+            .aws_client
             .sqs_purge_queue(self.aws_client.config().sqs_response_queue_url())
             .await
-            .unwrap();
-
-        Ok(())
+        {
+            Ok(()) => {
+                tracing::info!("Purged SQS response queue");
+                Ok(())
+            }
+            Err(e) => Err(ServiceClientError::ComponentInitialisationError(
+                e.to_string(),
+            )),
+        }
     }
 
     #[allow(dead_code)]
@@ -31,5 +40,11 @@ impl ResponseCorrelator {
             "TODO: correlate enqueued requests with dequeued responses: {}",
             batch
         );
+    }
+}
+
+impl fmt::Display for ResponseCorrelator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ResponseCorrelator",)
     }
 }

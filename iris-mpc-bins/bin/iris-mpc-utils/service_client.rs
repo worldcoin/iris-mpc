@@ -16,26 +16,21 @@ use iris_mpc_utils::{
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let _ = match initialize_tracing(None) {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("Failed to initialize tracing: {:?}", e);
-            return Err(e);
-        }
-    };
+    tracing_subscriber::fmt().init();
 
-    tracing::info!("Parsing CLI options ...");
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    tracing::info!("Instantiating service client");
+    tracing::info!("Initialising ...");
     let mut client = ServiceClient::async_from(options.clone()).await;
-
-    tracing::info!("Initialising service client");
-    client.init(options.aws_public_key_base_url).await;
-
-    tracing::info!("Executing service client ...");
-    client.exec().await;
+    match client.init(options.aws_public_key_base_url).await {
+        Ok(()) => {
+            client.exec().await.unwrap();
+        }
+        Err(e) => {
+            tracing::error!("Initialisation failure: {}", e);
+        }
+    };
 
     Ok(())
 }

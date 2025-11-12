@@ -1,3 +1,5 @@
+use std::fmt;
+
 use iris_mpc_common::helpers::smpc_request::{UniquenessRequest, UNIQUENESS_MESSAGE_TYPE};
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
@@ -41,7 +43,7 @@ impl RequestEnqueuer {
 
     /// Initializer.
     pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
-        tracing::info!("Downloading public keys for encryption ...");
+        tracing::info!("Initialising ...");
         match AwsClient::download_encryption_public_keys(public_key_base_url).await {
             Ok(keys) => {
                 tracing::info!("Downloaded public key of MPC parties");
@@ -134,5 +136,11 @@ impl RequestEnqueuer {
             }
             Err(e) => Err(ServiceClientError::AwsServiceError(e.to_string())),
         }
+    }
+}
+
+impl fmt::Display for RequestEnqueuer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "RequestEnqueuer",)
     }
 }

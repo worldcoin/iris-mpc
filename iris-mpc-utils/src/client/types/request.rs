@@ -43,8 +43,8 @@ impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Request:{:03}.{:03}.{}::[{}]",
-            self.batch_idx, self.batch_item_idx, self.identifier, self.data
+            "Request:{:03}.{:03}::[{}]",
+            self.batch_idx, self.batch_item_idx, self.data
         )
     }
 }

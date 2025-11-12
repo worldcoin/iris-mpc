@@ -1,9 +1,8 @@
+use std::fmt;
+
 use rand::{CryptoRng, Rng};
 
-use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
-};
+use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
 use super::super::{
     errors::ServiceClientError,
@@ -81,18 +80,11 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
     }
 
     fn generate_request(&mut self, batch_idx: usize, item_idx: usize) -> Request {
-        // Assume 1 based ordinal identifiers.
-        assert!(batch_idx >= 1 && item_idx >= 1);
-
         Request::new(
             batch_idx,
             item_idx,
             match self.batch_kind {
                 RequestBatchKind::Simple(kind) => match kind {
-                    IDENTITY_DELETION_MESSAGE_TYPE => RequestData::IdentityDeletion,
-                    REAUTH_MESSAGE_TYPE => RequestData::Reauthorisation,
-                    RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck,
-                    RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate,
                     UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
                         shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut()),
                     },
@@ -100,5 +92,11 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
                 },
             },
         )
+    }
+}
+
+impl<R: Rng + CryptoRng> fmt::Display for RequestGenerator<R> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "RequestGenerator",)
     }
 }
