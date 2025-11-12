@@ -86,9 +86,7 @@ impl AwsClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 tracing::error!("SNS publish error: {}", e);
-                Err(AwsClientError::SnsPublishError {
-                    error: e.to_string(),
-                })
+                Err(AwsClientError::SnsPublishError(e.to_string()))
             }
         }
     }
@@ -99,9 +97,7 @@ impl AwsClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 tracing::error!("SQS queue purge error: {}", e);
-                Err(AwsClientError::SqsPurgeQueueError {
-                    error: e.to_string(),
-                })
+                Err(AwsClientError::SqsPurgeQueueError(e.to_string()))
             }
         }
     }
@@ -125,10 +121,10 @@ impl AwsClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 tracing::error!("S3 upload error: {}", e);
-                Err(AwsClientError::S3UploadError {
-                    key: s3_key.to_string(),
-                    error: e.to_string(),
-                })
+                Err(AwsClientError::S3UploadError(
+                    s3_key.to_string(),
+                    e.to_string(),
+                ))
             }
         }
     }

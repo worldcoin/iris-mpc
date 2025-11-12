@@ -30,9 +30,7 @@ impl AwsClient {
                     party_idx,
                     e
                 );
-                Err(AwsClientError::EncryptionKeysDownloadError {
-                    error: e.to_string(),
-                })
+                Err(AwsClientError::EncryptionKeysDownloadError(e.to_string()))
             }
         }
     }
@@ -69,9 +67,9 @@ impl AwsClient {
             Ok(_) => Ok(s3_bucket.to_owned()),
             Err(e) => {
                 tracing::error!("SNS publish error: {}", e);
-                Err(AwsClientError::IrisSharesEncryptAndUploadError {
-                    error: e.to_string(),
-                })
+                Err(AwsClientError::IrisSharesEncryptAndUploadError(
+                    e.to_string(),
+                ))
             }
         }
     }
@@ -105,9 +103,7 @@ impl AwsClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 tracing::error!("SNS publish error: {}", e);
-                Err(AwsClientError::IrisDeletionsUploadError {
-                    error: e.to_string(),
-                })
+                Err(AwsClientError::IrisDeletionsUploadError(e.to_string()))
             }
         }
     }
