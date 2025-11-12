@@ -2636,6 +2636,7 @@ dependencies = [
  "core_affinity",
  "criterion",
  "crossbeam",
+ "csv",
  "dashmap",
  "eyre",
  "futures",
