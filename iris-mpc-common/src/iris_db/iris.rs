@@ -631,8 +631,43 @@ impl Iterator for Bits<'_> {
 
 impl ExactSizeIterator for Bits<'_> {}
 
+pub struct IrisMutationFamily {
+    iris: IrisCode,
+    // Random permutation of visible bits
+    vsb_perm: Vec<usize>,
+}
+
+impl IrisMutationFamily {
+    #[allow(dead_code)]
+    fn new<R: Rng>(iris: &IrisCode, rng: &mut R) -> Self {
+        let mut visible_bits = (0..IRIS_CODE_LENGTH)
+            .filter(|i| iris.mask.get_bit(*i))
+            .collect::<Vec<_>>();
+        visible_bits.shuffle(rng);
+
+        Self {
+            iris: iris.clone(),
+            vsb_perm: visible_bits,
+        }
+    }
+
+    pub fn get_graded_similar_iris(&self, target_distance: f64) -> IrisCode {
+        // Compute the ideal number of differing bits in the result
+        let neq_cnt = (target_distance * self.vsb_perm.len() as f64).round() as usize;
+
+        let mut result = self.iris.clone();
+        for i in self.vsb_perm.iter().take(neq_cnt) {
+            result.code.flip_bit(*i);
+        }
+
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::iris_db::iris::IrisMutationFamily;
+
     use super::{IrisCode, IrisCodeArray};
     use eyre::Result;
     use eyre::{Context, ContextCompat};
@@ -858,26 +893,23 @@ mod tests {
             iris_a.mask.flip_bit(2 * i + 1);
         }
 
-        let dist_b_target = (1, 8);
-        let dist_c_target = (1, 4);
+        let dist_b_target = 0.125;
+        let dist_c_target = 0.25;
 
-        let mut rng_for_b = base_rng.clone();
-        let mut rng_for_c = base_rng.clone();
+        let a_family = IrisMutationFamily::new(&iris_a, &mut base_rng);
 
-        let iris_b = iris_a.get_graded_similar_iris(&mut rng_for_b, dist_b_target);
-        let iris_c = iris_a.get_graded_similar_iris(&mut rng_for_c, dist_c_target);
+        let iris_b = a_family.get_graded_similar_iris(dist_b_target);
+        let iris_c = a_family.get_graded_similar_iris(dist_c_target);
 
         let dist_a_b = iris_a.get_distance(&iris_b);
-        let expected_dist_b = dist_b_target.0 as f64 / dist_b_target.1 as f64;
 
-        assert_float_eq!(dist_a_b, expected_dist_b, abs <= 1e-5);
+        assert_float_eq!(dist_a_b, dist_b_target, abs <= 1e-5);
 
         let dist_a_c = iris_a.get_distance(&iris_c);
-        let expected_dist_c = dist_c_target.0 as f64 / dist_c_target.1 as f64;
-        assert_float_eq!(dist_a_c, expected_dist_c, abs <= 1e-5);
+        assert_float_eq!(dist_a_c, dist_c_target, abs <= 1e-5);
 
         let dist_b_c = iris_b.get_distance(&iris_c);
-        let expected_dist_b_c = expected_dist_c - expected_dist_b;
+        let expected_dist_b_c = dist_c_target - dist_b_target;
         assert_float_eq!(dist_b_c, expected_dist_b_c, abs <= 1e-5);
 
         assert_eq!(iris_a.mask, iris_b.mask);

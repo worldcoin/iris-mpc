@@ -207,7 +207,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
     )
     .map_err(|e| eyre::eyre!("Cannot find store: {e}. {generation_comment}"))?;
     let plaintext_graph_store: GraphMem<PlaintextVectorRef> =
-        read_graph_from_file(Path::new(plaingraph_file), GraphFormat::GraphMem)
+        read_graph_from_file(Path::new(plaingraph_file), GraphFormat::Raw)
             .map_err(|e| eyre::eyre!("Cannot find graph: {e}. {generation_comment}"))?;
 
     let protocol_stores =
