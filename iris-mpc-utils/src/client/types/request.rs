@@ -2,7 +2,9 @@ use std::fmt;
 
 use uuid;
 
-use super::request_data::RequestData;
+use iris_mpc_cpu::execution::hawk_main::BothEyes;
+
+use crate::types::IrisCodeAndMaskShares;
 
 /// Encapsualates information to dispatch a system service request.
 #[derive(Debug)]
@@ -112,6 +114,41 @@ impl fmt::Display for RequestBatchSize {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Static(size) => write!(f, "{}", size),
+        }
+    }
+}
+
+/// Enumeration over data associated with a request.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum RequestData {
+    IdentityDeletion,
+    Reauthorisation,
+    ResetCheck,
+    ResetUpdate,
+    Uniqueness {
+        shares: BothEyes<IrisCodeAndMaskShares>,
+    },
+}
+
+impl fmt::Display for RequestData {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::IdentityDeletion => {
+                write!(f, "IdentityDeletion")
+            }
+            RequestData::Reauthorisation => {
+                write!(f, "Reauthorisation")
+            }
+            RequestData::ResetCheck => {
+                write!(f, "ResetCheck")
+            }
+            RequestData::ResetUpdate => {
+                write!(f, "ResetUpdate")
+            }
+            RequestData::Uniqueness { shares: _ } => {
+                write!(f, "Uniqueness")
+            }
         }
     }
 }

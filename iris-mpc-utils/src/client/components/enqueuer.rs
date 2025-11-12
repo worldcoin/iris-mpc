@@ -1,5 +1,3 @@
-use std::fmt;
-
 use iris_mpc_common::helpers::smpc_request::{UniquenessRequest, UNIQUENESS_MESSAGE_TYPE};
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
@@ -106,7 +104,7 @@ impl RequestEnqueuer {
                 tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
                 s3_key
             }
-            Err(e) => return Err(ServiceClientError::AwsServiceError(e.to_string())),
+            Err(e) => return Err(ServiceClientError::AwsServiceError(e)),
         };
 
         // Step 2: Enqueue system request.
@@ -134,13 +132,7 @@ impl RequestEnqueuer {
                 tracing::info!("{} :: Enqueued to AWS-SNS topic", request);
                 Ok(())
             }
-            Err(e) => Err(ServiceClientError::AwsServiceError(e.to_string())),
+            Err(e) => Err(ServiceClientError::AwsServiceError(e)),
         }
-    }
-}
-
-impl fmt::Display for RequestEnqueuer {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "RequestEnqueuer",)
     }
 }

@@ -5,9 +5,7 @@ use clap::Parser;
 use eyre::Result;
 use rand::{rngs::StdRng, SeedableRng};
 
-use iris_mpc_common::{
-    helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, tracing::initialize_tracing,
-};
+use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
 use iris_mpc_utils::{
     aws::AwsClientConfig,

@@ -7,9 +7,7 @@ use components::RequestGenerator;
 use components::ResponseCorrelator;
 use components::ResponseDequeuer;
 pub use errors::ServiceClientError;
-pub use types::{
-    Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData, RequestDataUniqueness,
-};
+pub use types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
 
 mod components;
 mod errors;

@@ -1,5 +1,3 @@
-use std::fmt;
-
 use super::super::{errors::ServiceClientError, types::RequestBatch};
 use crate::aws::AwsClient;
 
@@ -40,11 +38,5 @@ impl ResponseCorrelator {
             "TODO: correlate enqueued requests with dequeued responses: {}",
             batch
         );
-    }
-}
-
-impl fmt::Display for ResponseCorrelator {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ResponseCorrelator",)
     }
 }

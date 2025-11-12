@@ -1,5 +1,3 @@
-use std::fmt;
-
 use rand::{CryptoRng, Rng};
 
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
@@ -92,11 +90,5 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
                 },
             },
         )
-    }
-}
-
-impl<R: Rng + CryptoRng> fmt::Display for RequestGenerator<R> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "RequestGenerator",)
     }
 }
