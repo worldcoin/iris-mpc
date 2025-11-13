@@ -10,12 +10,22 @@ use crate::{
     hnsw::{
         searcher::{ConnectPlan, ConnectPlanLayer},
         vector_store::Ref,
+        HnswSearcher,
     },
 };
+
+use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, iter::once, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+    iter::once,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -161,14 +171,13 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
 
 impl GraphMem<IrisVectorId> {
     pub fn ideal_from_irises(
-        irises: &Vec<IrisCode>,
-        entry_point: Option<(IrisVectorId, usize)>,
-        nodes_for_nonzero_layers: Vec<Vec<IrisVectorId>>,
+        irises: Vec<IrisCode>,
+        prf_seed: &[u8; 16],
         filepath: PathBuf, // File containing KNN results for layer 0
         k: usize,
         echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
         num_threads: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         let zero_layer = {
             let results = read_knn_results_from_file(filepath).unwrap();
             let results = results
@@ -179,18 +188,41 @@ impl GraphMem<IrisVectorId> {
             Layer::from_knn_results(results, irises.len())
         };
 
-        let nonzero_layers = nodes_for_nonzero_layers.into_iter().map(|nodes| {
-            let iris_data = nodes
-                .iter()
-                // note 0-indexing of irises (contrast to store usage)
-                .map(|node| (*node, irises[((*node).serial_id() - 1) as usize].clone()))
-                .collect::<Vec<_>>();
-            Layer::ideal_from_irises(iris_data, k, echoice, num_threads)
+        let irises_with_vector_ids =
+            izip!(zero_layer.links.keys().cloned(), irises.into_iter(),).collect::<Vec<_>>();
+
+        //TODO: change
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        // Collect nodes for each non-zero layer
+        let mut layer_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> = BTreeMap::new();
+        for (vector_id, iris) in irises_with_vector_ids.into_iter() {
+            let layer = searcher.select_layer_prf(prf_seed, &vector_id)?;
+            if layer > 0 {
+                layer_map.entry(layer).or_default().push((vector_id, iris));
+            }
+        }
+
+        // nodes_for_nonzero_layers[i] = nodes in layer i + 1
+        let nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> = layer_map
+            .into_iter()
+            .map(|(_, nodes)| nodes)
+            .collect::<Vec<Vec<_>>>();
+
+        // Choose first node in top layer as the entry point
+        let entry_point = nodes_for_nonzero_layers
+            .last()
+            .unwrap_or(&vec![])
+            .first()
+            .map(|(v, _)| (v.clone(), nodes_for_nonzero_layers.len()));
+
+        let nonzero_layers = nodes_for_nonzero_layers.into_iter().map(|layer_iris_data| {
+            Layer::ideal_from_irises(layer_iris_data, k, echoice, num_threads)
         });
-        GraphMem::from_precomputed(
+        Ok(GraphMem::from_precomputed(
             entry_point,
             once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
-        )
+        ))
     }
 }
 
@@ -335,6 +367,7 @@ mod tests {
     use rand::seq::SliceRandom;
     use rand::{RngCore, SeedableRng};
     use serde_json::Deserializer;
+    use std::collections::BTreeMap;
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {

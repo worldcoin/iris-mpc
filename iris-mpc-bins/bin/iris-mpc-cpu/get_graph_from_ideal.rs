@@ -28,33 +28,13 @@ async fn main() {
     let irises = stream.map(|e| (&e.unwrap()).into()).collect::<Vec<_>>();
 
     assert!(n == irises.len());
-    // First layer: 1000 random serial ids from 1 to n
-    let mut rng = rand::thread_rng();
-    let mut layer1: Vec<IrisVectorId> = (1..=(n as u32))
-        .map(|serial_id| IrisVectorId::from_serial_id(serial_id))
-        .collect();
-    layer1.shuffle(&mut rng);
-    let layer1 = layer1.into_iter().take(layer1_len).collect::<Vec<_>>();
-
-    // Second layer: 100 random samples from the first layer
-    let mut layer2 = layer1.clone();
-    layer2.shuffle(&mut rng);
-    let layer2 = layer2.into_iter().take(layer2_len).collect::<Vec<_>>();
-    let entry = layer2[0];
-
-    let nodes_for_nonzero_layers = vec![layer1, layer2];
-    let entry_point = Some((entry, 2));
     let filepath = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("results.txt");
 
-    let graph = GraphMem::ideal_from_irises(
-        &irises,
-        entry_point,
-        nodes_for_nonzero_layers,
-        filepath,
-        k,
-        echoice,
-        num_threads,
-    );
+    let prf_seed = [0u8; 16];
+
+    let graph =
+        GraphMem::ideal_from_irises(irises.clone(), &prf_seed, filepath, k, echoice, num_threads)
+            .unwrap();
 
     dbg!(graph.layers[0].links.len());
     assert!(graph.layers[0].links.len() == n);
