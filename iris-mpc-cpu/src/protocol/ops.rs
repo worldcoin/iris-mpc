@@ -9,14 +9,14 @@ use crate::{
         NetworkValue::{self},
     },
     protocol::{
-        binary::extract_msb_u16_batch,
+        binary::{and_product, extract_msb_u16_batch},
         prf::{Prf, PrfSeed},
         shared_iris::ArcIris,
     },
     shares::{
         bit::Bit,
         ring_impl::{RingElement, VecRingElement},
-        share::{DistanceShare, Share},
+        share::{reconstruct_distance_vector, DistanceShare, Share},
         vecshare::VecShare,
         IntRing2k,
     },
@@ -28,7 +28,7 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use std::{array, ops::Not, time::Instant};
+use std::{array, cmp::Ordering, ops::Not, time::Instant};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -710,7 +710,7 @@ pub(crate) async fn oblivious_cross_compare_lifted(
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn min_of_pair_batch(
+pub(crate) async fn min_of_pair_batch(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<DistanceShare<u32>>> {
@@ -718,6 +718,155 @@ pub async fn min_of_pair_batch(
     let bits = oblivious_cross_compare_lifted(session, distances).await?;
 
     conditionally_select_distance(session, distances, bits.as_slice()).await
+}
+
+/// Given a flattened array of distance shares arranged in batches,
+/// this function computes the minimum distance share within each batch via the round-robin method.
+///
+/// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
+/// then the input distance shares are arranged as follows:
+/// `[
+///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
+///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
+///     ...,
+///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
+/// ]`
+///
+/// The round-robin method computes all pairwise "less-than" relations within each batch,
+/// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
+///  
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 | b10| 1  | b12| b13|
+/// d2 | b20| b21| 1  | b23|
+/// d3 | b30| b31| b32| 1  |
+///
+/// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
+/// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
+/// that turns the comparison table into
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 |!b01| 1  | b12| b13|
+/// d2 |!b02|!b12| 1  | b23|
+/// d3 |!b03|!b13|!b23| 1  |
+///
+/// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
+/// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
+/// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
+/// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
+/// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
+pub(crate) async fn min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<u32>>> {
+    if distances.is_empty() {
+        eyre::bail!("Expected at least one distance share");
+    }
+    if distances.len() % batch_size != 0 {
+        eyre::bail!("Distances length must be a multiple of batch size");
+    }
+
+    // Within each batch, compute all the pairwise comparisons in a round-robin fashion.
+    // The resulting comparison table looks like
+    //
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | -  | b01| b02| b03|
+    // d1 |    | -  | b12| b13|
+    // d2 |    |    | -  | b23|
+    // d3 |    |    |    | -  |
+    //
+    // where `bij` is the bit corresponding to `di < dj`.
+    // Comparison bits are arranged in a flat vector as
+    // `[b01, b02, b03, b12, b13, b23]`.
+    let num_batches = distances.len() / batch_size;
+    let mut pairs = Vec::with_capacity(num_batches * (batch_size * (batch_size - 1) / 2));
+    for i_batch in 0..num_batches {
+        for i in 0..batch_size {
+            for j in (i + 1)..batch_size {
+                let distance_i = distances[i * num_batches + i_batch].clone();
+                let distance_j = distances[j * num_batches + i_batch].clone();
+                pairs.push((distance_i, distance_j));
+            }
+        }
+    }
+    let comparison_bits = oblivious_cross_compare(session, &pairs).await?;
+    // Fill in the rest of the comparison table by setting diagonal bits to 1 and negating the bits above the diagonal.
+    // In other words, the `[i][j]`-th value of the table is equal to the bit
+    // - `di < dj` if `i < j`, or
+    // - `di <= dj` if `i >= j`.
+    //
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | 1  | b01| b02| b03|
+    // d1 |!b01| 1  | b12| b13|
+    // d2 |!b02|!b12| 1  | b23|
+    // d3 |!b03|!b13|!b23| 1  |
+    //
+    // Extract this table column-wise as `batch_matrix` to AND them element-wise.
+    // Group jth columns together, i.e., return a matrix `batch_selection_bits`, where `batch_selection_bits[j]` contains the comparison bits
+    // between distance `j` of every batch and all the other distances within the same batch.
+    let mut batch_selection_bits = (0..batch_size)
+        .map(|_| VecShare::with_capacity(num_batches * batch_size))
+        .collect_vec();
+    for batch in comparison_bits.chunks(batch_size * (batch_size - 1) / 2) {
+        let mut batch_matrix = (0..batch_size)
+            .map(|_| VecShare::with_capacity(batch_size))
+            .collect_vec();
+        let mut batch_counter = 0;
+        for i in 0..batch_size {
+            for j in 0..batch_size {
+                let value = match i.cmp(&j) {
+                    Ordering::Less => {
+                        batch_counter += 1;
+                        batch[batch_counter - 1].clone()
+                    }
+                    Ordering::Equal => Share::from_const(Bit::new(true), session.own_role()),
+                    Ordering::Greater => batch_matrix[i].get_at(j).not(),
+                };
+                batch_matrix[j].push(value);
+            }
+        }
+        for (j, column_bits) in batch_matrix.into_iter().enumerate() {
+            batch_selection_bits[j].extend(column_bits);
+        }
+    }
+    // Compute the AND of each row in the `batch_selection_bits` matrix.
+    // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
+    let selection_bits =
+        and_product(session, batch_selection_bits, num_batches * batch_size).await?;
+    // The resulting bits are bit injected into u32.
+    let selection_bits: VecShare<u32> = bit_inject_ot_2round(session, selection_bits).await?;
+    // Multiply distance shares with selection bits to zero out non-minimum distances.
+    let selected_distances = {
+        let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
+        for i_batch in 0..num_batches {
+            for i in 0..batch_size {
+                let distance = &distances[i * num_batches + i_batch];
+                let b = &selection_bits.shares[i_batch * batch_size + i];
+                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
+                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
+                shares_a.push(code_a);
+                shares_a.push(mask_a);
+            }
+        }
+
+        let network = &mut session.network_session;
+        network.send_ring_vec_next(&shares_a).await?;
+        let shares_b = network.receive_ring_vec_prev().await?;
+        reconstruct_distance_vector(shares_a, shares_b)
+    };
+    // Now sum up the selected distances within each batch.
+    // Only one distance per batch is non-zero, so this gives us the minimum distance per batch.
+    let res = selected_distances
+        .chunks(batch_size)
+        .map(|chunk| chunk.iter().cloned().reduce(|acc, a| acc + a).unwrap())
+        .collect_vec();
+    Ok(res)
 }
 
 use std::cell::RefCell;
