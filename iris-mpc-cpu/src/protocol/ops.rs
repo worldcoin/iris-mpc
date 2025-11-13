@@ -742,8 +742,8 @@ pub(crate) async fn min_of_pair_batch(
 /// d2 | b20| b21| 1  | b23|
 /// d3 | b30| b31| b32| 1  |
 ///
-/// where bij is the bit corresponding to di < dj if i < j, and bij is the bit di <= dj if i > j.
-/// The latter bits are in fact negations of the former bits, i.e., if i > j, bij = !(di > dj) = !bji,
+/// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
+/// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
 /// that turns the comparison table into
 ///
 ///    | d0 | d1 | d2 | d3 |
@@ -756,7 +756,7 @@ pub(crate) async fn min_of_pair_batch(
 /// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
 /// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
 /// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
-/// To see that, take such a minimum distance dj. For any di = dj, i < j, which means that bij = 0 and bji = 1.
+/// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
 /// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
 pub(crate) async fn min_round_robin_batch(
     session: &mut Session,
@@ -772,15 +772,17 @@ pub(crate) async fn min_round_robin_batch(
 
     // Within each batch, compute all the pairwise comparisons in a round-robin fashion.
     // The resulting comparison table looks like
+    //
     //    | d0 | d1 | d2 | d3 |
     // ------------------------
     // d0 | -  | b01| b02| b03|
     // d1 |    | -  | b12| b13|
     // d2 |    |    | -  | b23|
     // d3 |    |    |    | -  |
-    // where bij is the bit corresponding to di < dj.
+    //
+    // where `bij` is the bit corresponding to `di < dj`.
     // Comparison bits are arranged in a flat vector as
-    // [b01, b02, b03, b12, b13, b23]
+    // `[b01, b02, b03, b12, b13, b23]`.
     let num_batches = distances.len() / batch_size;
     let mut pairs = Vec::with_capacity(num_batches * (batch_size * (batch_size - 1) / 2));
     for i_batch in 0..num_batches {
@@ -794,17 +796,20 @@ pub(crate) async fn min_round_robin_batch(
     }
     let comparison_bits = oblivious_cross_compare(session, &pairs).await?;
     // Fill in the rest of the comparison table by setting diagonal bits to 1 and negating the bits above the diagonal.
-    // In other words, batch_selection_bits[i][j] = (d_i < d_j) if i < j,
-    // batch_selection_bits[i][j] = (d_i <= d_j) if i >= j.
+    // In other words, the `[i][j]`-th value of the table is equal to the bit
+    // - `di < dj` if `i < j`, or
+    // - `di <= dj` if `i >= j`.
+    //
     //    | d0 | d1 | d2 | d3 |
     // ------------------------
     // d0 | 1  | b01| b02| b03|
     // d1 |!b01| 1  | b12| b13|
     // d2 |!b02|!b12| 1  | b23|
     // d3 |!b03|!b13|!b23| 1  |
-    // Extract this table column-wise to AND them element-wise.
-    // Group jth columns together, i.e., return a matrix M, where M[j] contains the comparison bits
-    // between distance j of every batch and all the other distances within the same batch.
+    //
+    // Extract this table column-wise as `batch_matrix` to AND them element-wise.
+    // Group jth columns together, i.e., return a matrix `batch_selection_bits`, where `batch_selection_bits[j]` contains the comparison bits
+    // between distance `j` of every batch and all the other distances within the same batch.
     let mut batch_selection_bits = (0..batch_size)
         .map(|_| Vec::with_capacity(num_batches * batch_size))
         .collect_vec();
@@ -830,7 +835,7 @@ pub(crate) async fn min_round_robin_batch(
             batch_selection_bits[j].extend(column_bits);
         }
     }
-    // Compute the AND of each row in the batch_selection_bits matrix.
+    // Compute the AND of each row in the `batch_selection_bits` matrix.
     // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
     while batch_selection_bits.len() > 1 {
         // if the length is odd, we save the last column to add it back later
