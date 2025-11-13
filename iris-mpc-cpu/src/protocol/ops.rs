@@ -720,6 +720,44 @@ pub(crate) async fn min_of_pair_batch(
     conditionally_select_distance(session, distances, bits.as_slice()).await
 }
 
+/// Given a flattened array of distance shares arranged in batches,
+/// this function computes the minimum distance share within each batch via the round-robin method.
+///
+/// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
+/// then the input distance shares are arranged as follows:
+/// `[
+///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
+///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
+///     ...,
+///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
+/// ]`
+///
+/// The round-robin method computes all pairwise "less-than" relations within each batch,
+/// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
+///  
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 | b10| 1  | b12| b13|
+/// d2 | b20| b21| 1  | b23|
+/// d3 | b30| b31| b32| 1  |
+///
+/// where bij is the bit corresponding to di < dj if i < j, and bij is the bit di <= dj if i > j.
+/// The latter bits are in fact negations of the former bits, i.e., if i > j, bij = !(di > dj) = !bji,
+/// that turns the comparison table into
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 |!b01| 1  | b12| b13|
+/// d2 |!b02|!b12| 1  | b23|
+/// d3 |!b03|!b13|!b23| 1  |
+///
+/// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
+/// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
+/// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
+/// To see that, take such a minimum distance dj. For any di = dj, i < j, which means that bij = 0 and bji = 1.
+/// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
 pub(crate) async fn min_round_robin_batch(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
