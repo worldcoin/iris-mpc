@@ -1,4 +1,3 @@
-use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
@@ -20,7 +19,7 @@ use tokio::sync::mpsc;
 pub struct RowLinks {
     serial_id: i64,
     version_id: i16,
-    // this is a serialized SortedEdgeIds<VectorId> (using bincode)
+    // this is a serialized Vec<VectorId> (using bincode)
     links: Vec<u8>,
     layer: i16,
 }
@@ -377,7 +376,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         &mut self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> Result<SortedEdgeIds<V::VectorRef>> {
+    ) -> Result<Vec<V::VectorRef>> {
         let table = self.links_table();
         let opt = sqlx::query(&format!(
             "
@@ -397,7 +396,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
             let links: Vec<u8> = row.get("links");
             bincode::deserialize(&links).map_err(|e| eyre!("Failed to deserialize links: {e}"))
         } else {
-            Ok(SortedEdgeIds::default())
+            Ok(Vec::default())
         }
     }
 
@@ -418,7 +417,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
-        links: SortedEdgeIds<V::VectorRef>,
+        links: Vec<V::VectorRef>,
         lc: usize,
     ) -> Result<()> {
         let links =
@@ -516,8 +515,7 @@ where
         );
 
         // Create channel for sending data from partitions to main task
-        let (tx, mut rx) =
-            mpsc::channel::<(V::VectorRef, SortedEdgeIds<V::VectorRef>, usize)>(1024);
+        let (tx, mut rx) = mpsc::channel::<(V::VectorRef, Vec<V::VectorRef>, usize)>(1024);
 
         // Calculate partition size and create partition tasks
         let partition_size = total_rows.div_ceil(parallelism).max(1);
@@ -750,7 +748,7 @@ mod tests {
                 }
             }
             let links = links.edge_ids();
-            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
             let links2 = graph_ops.get_links(&vectors[i], 0).await?;
             assert_eq!(*links, *links2);
         }
@@ -822,7 +820,7 @@ mod tests {
             }
             let links = links.edge_ids();
 
-            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
 
             let links2 = graph_ops.get_links(&vectors[i], 0).await?;
             assert_eq!(*links, *links2);

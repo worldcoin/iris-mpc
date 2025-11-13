@@ -232,10 +232,10 @@ pub enum SetEntryPoint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectPlanLayer<Vector> {
     /// The neighbors of the inserted vector
-    pub neighbors: SortedEdgeIds<Vector>,
+    pub neighbors: Vec<Vector>,
 
     /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
-    pub nb_links: Vec<SortedEdgeIds<Vector>>,
+    pub nb_links: Vec<Vec<Vector>>,
 }
 
 /// Represents the search mode for top layers of the HNSW graph.
@@ -916,7 +916,7 @@ impl HnswSearcher {
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
-            let mut nbhd = graph.get_links(&init_nodes[open_idx], lc).await.0;
+            let mut nbhd = graph.get_links(&init_nodes[open_idx], lc).await;
             nbhd.retain(|x| !init_nodes.contains(x));
             nbhd = store.only_valid_vectors(nbhd).await;
 
@@ -1157,7 +1157,6 @@ impl HnswSearcher {
         let neighbors = graph.get_links(node, lc).await;
 
         let unvisited_neighbors: Vec<_> = neighbors
-            .0
             .into_iter()
             .filter(|e| visited.insert(e.clone()))
             .collect();
@@ -1196,7 +1195,6 @@ impl HnswSearcher {
             let neighbors = graph.get_links(node, lc).await;
 
             let unvisited_neighbors: Vec<_> = neighbors
-                .0
                 .into_iter()
                 .filter(|e| visited.insert(e.clone()))
                 .collect();
@@ -1379,7 +1377,7 @@ impl HnswSearcher {
             let mut l_neighbors = Vec::with_capacity(l_links.len());
             for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
                 let nb_links = graph.get_links(nb, lc).await;
-                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links.0).await);
+                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links).await);
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
@@ -1450,8 +1448,8 @@ impl HnswSearcher {
             .into_iter()
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
-                neighbors: l_links.edge_ids(),
-                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
+                neighbors: l_links.vectors_cloned(),
+                nb_links: l_neighbors.into_iter().map(|n| n.nb_links.0).collect_vec(),
             })
             .collect();
 

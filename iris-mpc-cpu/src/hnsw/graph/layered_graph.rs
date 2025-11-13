@@ -3,7 +3,6 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::state_check::SetHash,
     hnsw::{
@@ -171,13 +170,13 @@ impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
         self.entry_point = vec![EntryPoint { point, layer }];
     }
 
-    pub async fn get_links(&self, base: &V, lc: usize) -> SortedEdgeIds<V> {
+    pub async fn get_links(&self, base: &V, lc: usize) -> Vec<V> {
         let layer = &self.layers[lc];
         layer.get_links(base).unwrap_or_default()
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
-    pub async fn set_links(&mut self, base: V, links: SortedEdgeIds<V>, lc: usize) {
+    pub async fn set_links(&mut self, base: V, links: Vec<V>, lc: usize) {
         if self.layers.len() < lc + 1 {
             self.layers.resize(lc + 1, Layer::new());
         }
@@ -204,7 +203,7 @@ impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
 pub struct Layer<V: Ref + Display + FromStr + cmp::Ord> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    pub links: HashMap<V, SortedEdgeIds<V>>,
+    pub links: HashMap<V, Vec<V>>,
     set_hash: SetHash,
 }
 
@@ -225,11 +224,11 @@ impl<V: Ref + Display + FromStr + cmp::Ord> Layer<V> {
         }
     }
 
-    pub fn get_links(&self, from: &V) -> Option<SortedEdgeIds<V>> {
+    pub fn get_links(&self, from: &V) -> Option<Vec<V>> {
         self.links.get(from).cloned()
     }
 
-    pub fn set_links(&mut self, from: V, links: SortedEdgeIds<V>) {
+    pub fn set_links(&mut self, from: V, links: Vec<V>) {
         self.set_hash.add_unordered((&from, &links));
 
         let previous = self.links.insert(from.clone(), links);
@@ -239,7 +238,7 @@ impl<V: Ref + Display + FromStr + cmp::Ord> Layer<V> {
         }
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V, SortedEdgeIds<V>> {
+    pub fn get_links_map(&self) -> &HashMap<V, Vec<V>> {
         &self.links
     }
 }
@@ -273,10 +272,7 @@ where
         .map(|v| {
             let mut layer = Layer::new();
             for (from, nbhd) in v.links.into_iter() {
-                layer.set_links(
-                    vector_map(from),
-                    SortedEdgeIds::from_ascending_vec(nbhd.0.into_iter().map(vector_map).collect()),
-                );
+                layer.set_links(vector_map(from), nbhd.into_iter().map(vector_map).collect());
             }
             layer
         })
