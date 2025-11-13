@@ -74,7 +74,7 @@ impl DbContext {
             layers,
         } = graph;
 
-        if let Some(EntryPoint { point, layer }) = entry_point {
+        if let Some(EntryPoint { point, layer }) = entry_point.first().cloned() {
             let mut graph_ops = graph_tx.with_graph(side);
             graph_ops.set_entry_point(point, layer).await?;
         }

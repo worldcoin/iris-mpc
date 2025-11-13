@@ -12,7 +12,7 @@ use crate::{
         vector_store::Ref,
     },
 };
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display, iter::once, path::PathBuf, str::FromStr, sync::Arc};
@@ -35,7 +35,7 @@ pub struct EntryPoint<VectorRef> {
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct GraphMem<V: Ref + Display + FromStr> {
     /// Starting vector and layer for HNSW search
-    pub entry_point: Option<EntryPoint<V>>,
+    pub entry_point: Vec<EntryPoint<V>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
@@ -55,7 +55,7 @@ impl<V: Ref + Display + FromStr> Clone for GraphMem<V> {
 impl<V: Ref + Display + FromStr> GraphMem<V> {
     pub fn new() -> Self {
         GraphMem {
-            entry_point: None,
+            entry_point: vec![],
             layers: vec![],
         }
     }
@@ -66,10 +66,14 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
 
     pub fn from_precomputed(entry_point: Option<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
         GraphMem {
-            entry_point: entry_point.map(|ep| EntryPoint {
-                point: ep.0,
-                layer: ep.1,
-            }),
+            entry_point: entry_point
+                .map(|ep| {
+                    vec![EntryPoint {
+                        point: ep.0,
+                        layer: ep.1,
+                    }]
+                })
+                .unwrap_or_default(),
             layers,
         }
     }
@@ -108,12 +112,12 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
 
     pub async fn get_entry_point(&self) -> Option<(V, usize)> {
         self.entry_point
-            .as_ref()
+            .first()
             .map(|ep| (ep.point.clone(), ep.layer))
     }
 
     pub async fn set_entry_point(&mut self, point: V, layer: usize) {
-        if let Some(previous) = self.entry_point.as_ref() {
+        if let Some(previous) = self.entry_point.first() {
             assert!(
                 previous.layer < layer,
                 "A new entry point should be on a higher layer than before."
@@ -124,7 +128,7 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
             self.layers.resize(layer + 1, Layer::new());
         }
 
-        self.entry_point = Some(EntryPoint { point, layer });
+        self.entry_point = vec![EntryPoint { point, layer }];
     }
 
     pub async fn get_links(&self, base: &V, lc: usize) -> SortedEdgeIds<V> {
@@ -279,10 +283,16 @@ where
     V: Ref + Display + FromStr,
     VecMap: Fn(U) -> V + Copy,
 {
-    let new_entry_point = graph.entry_point.map(|ep| EntryPoint {
-        point: vector_map(ep.point),
-        layer: ep.layer,
-    });
+    let new_entry_point = graph
+        .entry_point
+        .first()
+        .map(|ep| {
+            vec![EntryPoint {
+                point: vector_map(ep.point.clone()),
+                layer: ep.layer,
+            }]
+        })
+        .unwrap_or_default();
 
     let new_layers: Vec<_> = graph
         .layers
@@ -318,7 +328,6 @@ mod tests {
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             VectorStore,
         },
-        py_bindings::plaintext_store::Base64IrisCode,
     };
     use aes_prng::AesRng;
     use eyre::Result;
@@ -366,14 +375,6 @@ mod tests {
             let vector_0 = self.points[query].data;
             let vector_1 = self.points[vector].data;
             Ok(hamming_distance(vector_0, vector_1))
-        }
-
-        async fn eval_minimal_rotation_distance_batch(
-            &mut self,
-            _query: &Self::QueryRef,
-            _vectors: &[Self::VectorRef],
-        ) -> Result<Vec<Self::DistanceRef>> {
-            unimplemented!()
         }
 
         async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {

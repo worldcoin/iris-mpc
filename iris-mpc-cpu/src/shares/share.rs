@@ -361,6 +361,13 @@ impl<T: IntRing2k> Add<Self> for DistanceShare<T> {
     }
 }
 
+impl<T: IntRing2k> AddAssign<&Self> for DistanceShare<T> {
+    fn add_assign(&mut self, rhs: &Self) {
+        self.code_dot += &rhs.code_dot;
+        self.mask_dot += &rhs.mask_dot;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::shares::bit::Bit;

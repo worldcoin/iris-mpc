@@ -29,7 +29,6 @@ mod bench_utils;
 use bench_utils::create_random_sharing;
 
 const DEFAULT_CONNECTION_PARALLELISM: usize = 1;
-const DEFAULT_STREAM_PARALLELISM: usize = 1;
 const DEFAULT_REQUEST_PARALLELISM: usize = 1;
 
 fn bench_plaintext_hnsw(c: &mut Criterion) {
@@ -95,9 +94,8 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let sessions = LocalRuntime::mock_sessions_with_grpc(
+            let sessions = LocalRuntime::mock_sessions_with_tcp(
                 DEFAULT_CONNECTION_PARALLELISM,
-                DEFAULT_STREAM_PARALLELISM,
                 DEFAULT_REQUEST_PARALLELISM,
             )
             .await
@@ -141,9 +139,8 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let sessions = LocalRuntime::mock_sessions_with_grpc(
+            let sessions = LocalRuntime::mock_sessions_with_tcp(
                 DEFAULT_CONNECTION_PARALLELISM,
-                DEFAULT_STREAM_PARALLELISM,
                 DEFAULT_REQUEST_PARALLELISM,
             )
             .await
@@ -201,7 +198,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
 /// To run this benchmark, you need to generate the data first by running the
 /// following commands:
 ///
-/// cargo run --release --bin generate-benchmark-data
+/// cargo run --release -p iris-mpc-bins --bin generate-benchmark-data
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);
@@ -215,8 +212,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
         let secret_searcher = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
             lazy_setup_from_files_with_grpc(
-                "./data/store.ndjson",
-                &format!("./data/graph_{}.dat", database_size),
+                "../iris-mpc-bins/data/store.ndjson",
+                &format!("../iris-mpc-bins/data/graph_{}.dat", database_size),
                 &mut rng,
                 database_size,
             )

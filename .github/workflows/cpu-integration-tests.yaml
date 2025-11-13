@@ -17,6 +17,7 @@ jobs:
       labels: ubuntu-22.04-16core
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
@@ -48,6 +49,7 @@ jobs:
           key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             rust-build-${{ runner.os }}-
+
       - name: Set up QEMU
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
@@ -55,6 +57,20 @@ jobs:
       - name: Set up Docker Buildx
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+
+      - name: Configure AWS credentials
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+        with:
+          registry-type: public
 
       - name: Log in to the Container registry
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -79,6 +95,10 @@ jobs:
       - name: Run docker compose
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
+        continue-on-error: false
+        env:
+          COMPOSE_PROGRESS: plain          # no fancy TTY bars
+          COMPOSE_HTTP_TIMEOUT: 600        # bump timeout
         with:
           compose-file: "./docker-compose.test.yaml"
 

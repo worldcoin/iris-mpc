@@ -49,7 +49,7 @@ env:
     value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "32"
+    value: "96"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -58,7 +58,7 @@ env:
     value: "1800"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "32"
+    value: "96"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "8"
@@ -181,9 +181,6 @@ env:
 
   - name: SMPC__TLS__ROOT_CERTS
     value: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
-
-  - name: SMPC__TLS__WITH_NGINX_SIDECAR
-    value: "false"
 
   - name: SMPC__TLS__CLIENT_ONLY_TLS
     value: "false"
