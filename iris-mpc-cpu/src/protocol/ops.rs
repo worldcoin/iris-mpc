@@ -803,7 +803,8 @@ pub(crate) async fn min_round_robin_batch(
     // d2 |!b02|!b12| 1  | b23|
     // d3 |!b03|!b13|!b23| 1  |
     // Extract this table column-wise to AND them element-wise.
-    // Group ith columns together, i.e., return a matrix M, where M[i] contains the comparison bits between distance i of every batch and all the other distances within the same batch.
+    // Group jth columns together, i.e., return a matrix M, where M[j] contains the comparison bits
+    // between distance j of every batch and all the other distances within the same batch.
     let mut batch_selection_bits = (0..batch_size)
         .map(|_| Vec::with_capacity(num_batches * batch_size))
         .collect_vec();
@@ -825,8 +826,8 @@ pub(crate) async fn min_round_robin_batch(
                 batch_matrix[j].push(value);
             }
         }
-        for (i, column_bits) in batch_matrix.into_iter().enumerate() {
-            batch_selection_bits[i].extend(column_bits);
+        for (j, column_bits) in batch_matrix.into_iter().enumerate() {
+            batch_selection_bits[j].extend(column_bits);
         }
     }
     // Compute the AND of each row in the batch_selection_bits matrix.
