@@ -114,7 +114,7 @@ env:
     value: "100000" # "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "1"
+    value: "64"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
     value: "200"
