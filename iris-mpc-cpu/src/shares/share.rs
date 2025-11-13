@@ -1,5 +1,6 @@
 use super::{int_ring::IntRing2k, ring_impl::RingElement};
-use crate::execution::player::Role;
+use crate::{execution::player::Role, shares::ring_impl::VecRingElement};
+use itertools::{izip, Itertools};
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use std::ops::{
@@ -371,6 +372,31 @@ impl<T: IntRing2k> AddAssign<&Self> for DistanceShare<T> {
         self.code_dot += &rhs.code_dot;
         self.mask_dot += &rhs.mask_dot;
     }
+}
+
+pub(crate) fn reconstruct_id_distance_vector(
+    a: VecRingElement<u32>,
+    b: VecRingElement<u32>,
+) -> Vec<(Share<u32>, DistanceShare<u32>)> {
+    izip!(a.0, b.0)
+        .map(|(a, b)| Share::new(a, b))
+        .tuples()
+        .map(|(id, code_dot, mask_dot)| {
+            let dist_share = DistanceShare::new(code_dot, mask_dot);
+            (id, dist_share)
+        })
+        .collect_vec()
+}
+
+pub(crate) fn reconstruct_distance_vector(
+    a: VecRingElement<u32>,
+    b: VecRingElement<u32>,
+) -> Vec<DistanceShare<u32>> {
+    izip!(a.0, b.0)
+        .map(|(a, b)| Share::new(a, b))
+        .tuples()
+        .map(|(code_dot, mask_dot)| DistanceShare::new(code_dot, mask_dot))
+        .collect_vec()
 }
 
 #[cfg(test)]

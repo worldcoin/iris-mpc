@@ -16,12 +16,12 @@ use crate::{
     shares::{
         bit::Bit,
         ring_impl::{RingElement, VecRingElement},
-        share::{DistanceShare, Share},
+        share::{reconstruct_distance_vector, DistanceShare, Share},
         vecshare::VecShare,
         IntRing2k,
     },
 };
-use eyre::{bail, eyre, Result};
+use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::{
     fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
@@ -863,12 +863,12 @@ pub(crate) async fn min_round_robin_batch(
     // The resulting bits are bit injected into u32.
     let selection_bits: VecShare<u32> = bit_inject_ot_2round(
         session,
-        VecShare::new_vec(batch_selection_bits.pop().unwrap()),
+        VecShare::new_vec(batch_selection_bits.pop().ok_or_eyre("Shouldn't be here")?),
     )
     .await?;
     // Multiply distance shares with selection bits to zero out non-minimum distances.
     let selected_distances = {
-        let mut shares_a = Vec::with_capacity(2 * distances.len());
+        let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
         for i_batch in 0..num_batches {
             for i in 0..batch_size {
                 let distance = &distances[i * num_batches + i_batch];
@@ -881,37 +881,15 @@ pub(crate) async fn min_round_robin_batch(
         }
 
         let network = &mut session.network_session;
-        let message = if shares_a.len() == 1 {
-            NetworkValue::RingElement32(shares_a[0])
-        } else {
-            NetworkValue::VecRing32(shares_a.clone())
-        };
-        network.send_next(message).await?;
-        let shares_b = match network.receive_prev().await {
-            Ok(NetworkValue::RingElement32(element)) => vec![element],
-            Ok(NetworkValue::VecRing32(elements)) => elements,
-            _ => bail!("Could not deserialize network value"),
-        };
-        izip!(shares_a.into_iter(), shares_b.into_iter())
-            // combine a and b part into shares
-            .map(|(a, b)| Share::new(a, b))
-            .tuples()
-            .map(|(code, mask)| DistanceShare::new(code, mask))
-            .collect_vec()
+        network.send_ring_vec_next(&shares_a).await?;
+        let shares_b = network.receive_ring_vec_prev().await?;
+        reconstruct_distance_vector(shares_a, shares_b)
     };
     // Now sum up the selected distances within each batch.
     // Only one distance per batch is non-zero, so this gives us the minimum distance per batch.
     let res = selected_distances
         .chunks(batch_size)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .cloned()
-                .reduce(|acc, a| {
-                    DistanceShare::new(acc.code_dot + a.code_dot, acc.mask_dot + a.mask_dot)
-                })
-                .unwrap()
-        })
+        .map(|chunk| chunk.iter().cloned().reduce(|acc, a| acc + a).unwrap())
         .collect_vec();
     Ok(res)
 }
