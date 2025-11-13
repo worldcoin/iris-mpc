@@ -67,12 +67,8 @@ async fn create_graph_from_plain_dbs(
         .collect();
     let right_storage = SharedIrises::new(right_points, Default::default());
 
-    let mut left_store = PlaintextStore {
-        storage: left_storage,
-    };
-    let mut right_store = PlaintextStore {
-        storage: right_storage,
-    };
+    let mut left_store = PlaintextStore::with_storage(left_storage);
+    let mut right_store = PlaintextStore::with_storage(right_storage);
 
     let searcher = HnswSearcher {
         params: params.clone(),
@@ -199,7 +195,8 @@ async fn e2e_anon_stats_test() -> Result<()> {
 
     let args0 = HawkArgs {
         party_index: 0,
-        addresses,
+        addresses: addresses.clone(),
+        outbound_addrs: addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
         hnsw_param_ef_constr: HNSW_EF_CONSTR,

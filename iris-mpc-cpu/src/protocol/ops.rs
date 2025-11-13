@@ -14,7 +14,7 @@ use crate::{
     },
     shares::{
         bit::Bit,
-        ring_impl::RingElement,
+        ring_impl::{RingElement, VecRingElement},
         share::{DistanceShare, Share},
         vecshare::VecShare,
         IntRing2k,
@@ -262,7 +262,7 @@ pub(crate) async fn cross_mul(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<Share<u32>>> {
-    let res_a: Vec<RingElement<u32>> = distances
+    let res_a: VecRingElement<u32> = distances
         .iter()
         .map(|(d1, d2)| {
             session.prf.gen_zero_share() + &d2.code_dot * &d1.mask_dot - &d1.code_dot * &d2.mask_dot
@@ -271,21 +271,10 @@ pub(crate) async fn cross_mul(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
-        .map(|(a, b)| Share::new(a, b))
-        .collect())
+    let res_b = network.receive_ring_vec_prev().await?;
+    Ok(izip!(res_a, res_b).map(|(a, b)| Share::new(a, b)).collect())
 }
 
 /// Conditionally selects equally-sized slices of input shares based on control bits.
@@ -311,7 +300,7 @@ async fn select_shared_slices_by_bits(
     // If control bit is 1, select left_value, else select right_value.
     // res = c * (left_value - right_value) + right_value
     // Compute c * (left_value - right_value)
-    let res_a: Vec<RingElement<u32>> = izip!(
+    let res_a: VecRingElement<u32> = izip!(
         left_values.chunks(slice_size),
         right_values.chunks(slice_size),
         control_bits.iter()
@@ -330,22 +319,13 @@ async fn select_shared_slices_by_bits(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // Pack networking messages into shares and
     // compute the result by adding the right shares
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+    Ok(izip!(res_a, res_b)
         .map(|(a, b)| Share::new(a, b))
         .zip(right_values.iter())
         .map(|(res, right)| res + right)
@@ -372,7 +352,7 @@ async fn conditionally_select_distance(
     // We need to do it for both code_dot and mask_dot.
 
     // we start with the mult of c and d1-d2
-    let res_a: Vec<RingElement<u32>> = distances
+    let res_a: VecRingElement<u32> = distances
         .iter()
         .zip(control_bits.iter())
         .flat_map(|((d1, d2), c)| {
@@ -388,21 +368,12 @@ async fn conditionally_select_distance(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // finally compute the result by adding the d2 shares
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+    Ok(izip!(res_a, res_b)
         // combine a and b part into shares
         .map(|(a, b)| Share::new(a, b))
         // combine the code and mask parts into DistanceShare
@@ -611,7 +582,7 @@ pub async fn conditionally_swap_distances(
     // We need to do it for ids, code_dot and mask_dot.
 
     // Compute c * (d1-d2)
-    let res_a: Vec<RingElement<u32>> = indices
+    let res_a: VecRingElement<u32> = indices
         .iter()
         .zip(swap_bits_u32.iter())
         .flat_map(|((idx1, idx2), sb)| {
@@ -627,18 +598,9 @@ pub async fn conditionally_swap_distances(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // Finally compute the swapped tuples.
     let swapped_distances = izip!(res_a, res_b)
@@ -851,6 +813,13 @@ where
         metric_per_pair_duration.record(duration);
     });
     additive_shares
+}
+
+pub fn non_existent_distance() -> Vec<RingElement<u16>> {
+    vec![
+        RingElement(SHARE_OF_MAX_DISTANCE.0),
+        RingElement(SHARE_OF_MAX_DISTANCE.1),
+    ]
 }
 
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by

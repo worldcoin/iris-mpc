@@ -29,7 +29,6 @@ mod bench_utils;
 use bench_utils::create_random_sharing;
 
 const DEFAULT_CONNECTION_PARALLELISM: usize = 1;
-const DEFAULT_STREAM_PARALLELISM: usize = 1;
 const DEFAULT_REQUEST_PARALLELISM: usize = 1;
 
 fn bench_plaintext_hnsw(c: &mut Criterion) {
@@ -95,9 +94,8 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let sessions = LocalRuntime::mock_sessions_with_grpc(
+            let sessions = LocalRuntime::mock_sessions_with_tcp(
                 DEFAULT_CONNECTION_PARALLELISM,
-                DEFAULT_STREAM_PARALLELISM,
                 DEFAULT_REQUEST_PARALLELISM,
             )
             .await
@@ -141,9 +139,8 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let sessions = LocalRuntime::mock_sessions_with_grpc(
+            let sessions = LocalRuntime::mock_sessions_with_tcp(
                 DEFAULT_CONNECTION_PARALLELISM,
-                DEFAULT_STREAM_PARALLELISM,
                 DEFAULT_REQUEST_PARALLELISM,
             )
             .await
