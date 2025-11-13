@@ -240,6 +240,7 @@ pub enum ReRandomizeDbSubCommand {
     KeyGen(KeyGenConfig),
     RerandomizeDb(ReRandomizeConfig),
     KeyCleanup(KeyCleanupConfig),
+    RerandomizeCheck(ReRandomizeCheckConfig),
 }
 
 #[derive(Args)]
@@ -258,11 +259,11 @@ pub struct ReRandomizeConfig {
 
     /// The base URL where the tripartite ECDH public keys are hosted
     #[clap(long, env = "PUBLIC_KEY_BASE_URL")]
-    pub public_key_base_url: String,
+    pub public_key_base_url: Option<String>,
 
     /// The name of the S3 bucket where the tripartite ECDH public keys are stored (used for local testing)
     #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
-    pub public_key_bucket_name: String,
+    pub public_key_bucket_name: Option<String>,
 
     /// The DB connection URL to store rerandomized iris codes to
     #[clap(long, env = "DB_URL_DEST")]
@@ -310,4 +311,43 @@ pub struct KeyCleanupConfig {
 
     #[clap(long, env = "ENVIRONMENT")]
     pub env: String,
+}
+
+#[derive(Args)]
+pub struct ReRandomizeCheckConfig {
+    #[clap(long, env = "OLD_DB_URL_PARTY_0")]
+    pub old_db_url_party_0: String,
+
+    #[clap(long, env = "OLD_DB_URL_PARTY_1")]
+    pub old_db_url_party_1: String,
+
+    #[clap(long, env = "OLD_DB_URL_PARTY_2")]
+    pub old_db_url_party_2: String,
+
+    #[clap(long, env = "OLD_SCHEMA_NAME_PARTY_0")]
+    pub old_schema_name_party_0: String,
+
+    #[clap(long, env = "OLD_SCHEMA_NAME_PARTY_1")]
+    pub old_schema_name_party_1: String,
+
+    #[clap(long, env = "OLD_SCHEMA_NAME_PARTY_2")]
+    pub old_schema_name_party_2: String,
+
+    #[clap(long, env = "NEW_DB_URL_PARTY_0")]
+    pub new_db_url_party_0: String,
+
+    #[clap(long, env = "NEW_DB_URL_PARTY_1")]
+    pub new_db_url_party_1: String,
+
+    #[clap(long, env = "NEW_DB_URL_PARTY_2")]
+    pub new_db_url_party_2: String,
+
+    #[clap(long, env = "NEW_SCHEMA_NAME_PARTY_0")]
+    pub new_schema_name_party_0: String,
+
+    #[clap(long, env = "NEW_SCHEMA_NAME_PARTY_1")]
+    pub new_schema_name_party_1: String,
+
+    #[clap(long, env = "NEW_SCHEMA_NAME_PARTY_2")]
+    pub new_schema_name_party_2: String,
 }
