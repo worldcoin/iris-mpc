@@ -2643,6 +2643,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "aws-smithy-types",
  "axum",
  "base64 0.22.1",
  "blake3",
