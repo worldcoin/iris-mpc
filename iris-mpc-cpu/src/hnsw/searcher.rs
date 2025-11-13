@@ -1317,12 +1317,23 @@ impl HnswSearcher {
         // We inserted top-down, so reverse to match the layer indices (bottom=0)
         links.reverse();
 
+        let capped_insertion_layer = if let TopLayerSearchMode::LinearScan(max_layer) =
+            self.params.top_layer_mode
+            && insertion_layer == max_layer
+        {
+            // in this search mode, no graph edges should be constructed for the top layer because
+            // the top layer is contained not in the graph but in the EntryPoints list.
+            insertion_layer.saturating_sub(1)
+        } else {
+            insertion_layer
+        };
+
         // If query is to be inserted at a new highest layer as a new entry
         // point, insert additional empty neighborhoods for any new layers
-        for _ in links.len()..insertion_layer + 1 {
+        for _ in links.len()..capped_insertion_layer + 1 {
             links.push(SortedNeighborhood::new());
         }
-        debug_assert!(links.len() == insertion_layer + 1);
+        debug_assert!(links.len() == capped_insertion_layer + 1);
 
         Ok((links, set_ep))
     }
