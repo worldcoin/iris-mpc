@@ -35,7 +35,7 @@ struct Args {
     num_threads: usize,
 
     /// Path to the iris codes file
-    #[arg(long, default_value = "iris-mpc-bins/data/store.ndjson")]
+    #[arg(long, default_value = "data/store.ndjson")]
     path_to_iris_codes: PathBuf,
 
     /// The k for k-NN

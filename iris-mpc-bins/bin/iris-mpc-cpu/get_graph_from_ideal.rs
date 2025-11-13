@@ -19,9 +19,7 @@ async fn main() {
     let file = std::fs::File::open(path).unwrap();
     let reader = BufReader::new(file);
 
-    let n = 6000;
-    let layer1_len = 1000;
-    let layer2_len = 500;
+    let n = 1000;
     let stream = Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
         .take(n);
@@ -36,14 +34,13 @@ async fn main() {
         GraphMem::ideal_from_irises(irises.clone(), &prf_seed, filepath, k, echoice, num_threads)
             .unwrap();
 
-    dbg!(graph.layers[0].links.len());
     assert!(graph.layers[0].links.len() == n);
-    assert!(graph.layers[1].links.len() == layer1_len);
-    assert!(graph.layers[2].links.len() == layer2_len);
+    dbg!(graph.layers[1].links.len());
+    dbg!(graph.layers[2].links.len());
 
     for layer in graph.layers.iter() {
         for value in layer.links.values() {
-            assert_eq!(value.len(), k);
+            assert_eq!(value.len(), k.min(layer.links.len() - 1));
         }
     }
 

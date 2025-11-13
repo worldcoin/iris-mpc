@@ -180,11 +180,15 @@ impl GraphMem<IrisVectorId> {
     ) -> Result<Self> {
         let zero_layer = {
             let results = read_knn_results_from_file(filepath).unwrap();
+            // Some sanity checks that the ideal knn file corresponds to the irises argument
+            assert_eq!(results.len(), irises.len());
             let results = results
                 .into_iter()
-                .map(|result| result.map(|serial_id| IrisVectorId::from_serial_id(serial_id)))
+                .map(|result| {
+                    assert_eq!(result.neighbors.len(), k);
+                    result.map(|serial_id| IrisVectorId::from_serial_id(serial_id))
+                })
                 .collect::<Vec<_>>();
-            assert_eq!(results.len(), k);
             Layer::from_knn_results(results, irises.len())
         };
 
@@ -288,6 +292,8 @@ impl<V: Ref + Display + FromStr> Layer<V> {
     ) -> Self {
         let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
         let n = irises.len();
+        let k = k.min(n - 1);
+
         // Initialize the KNN algorithm;
         let mut engine = Engine::init(echoice, irises, k, 1, num_threads);
         // Run the entire computation
