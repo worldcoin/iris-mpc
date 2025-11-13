@@ -266,7 +266,8 @@ impl Aby3Store {
         // Handle plain ids first
         let mut plain_res = distances
             .iter()
-            .map(|(id, distance)| (id.serial_id(), distance.clone()))
+            .enumerate()
+            .map(|(id, (_, distance))| (id as u32, distance.clone()))
             .collect_vec();
         let plain_maybe_last_distance = if plain_res.len() % 2 == 1 {
             plain_res.pop()
@@ -325,7 +326,7 @@ impl Aby3Store {
             .ok_or_eyre("Shouldn't be here: results are empty")?;
         // open the id
         let id = open_ring(&mut self.session, &[shared_id]).await?[0];
-        let res = (Aby3VectorRef::from_serial_id(id), dist);
+        let res = (distances[id as usize].0, dist);
         Ok(res)
     }
 
