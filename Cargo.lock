@@ -2746,6 +2746,7 @@ dependencies = [
  "aws-sdk-s3",
  "backon",
  "bincode",
+ "blake3",
  "bytemuck",
  "bytes",
  "clap",

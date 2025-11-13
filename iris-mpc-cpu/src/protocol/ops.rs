@@ -9,6 +9,7 @@ use crate::{
         NetworkValue::{self},
     },
     protocol::{
+        binary::extract_msb_u16_batch,
         prf::{Prf, PrfSeed},
         shared_iris::ArcIris,
     },
@@ -893,6 +894,31 @@ pub async fn open_ring<T: IntRing2k + NetworkInt>(
     izip!(shares.iter(), c.iter())
         .map(|(s, c)| Ok((s.a + s.b + c).convert()))
         .collect::<Result<Vec<_>>>()
+}
+
+/// Compares the given distances to zero and reveal the bit "less than zero".
+pub async fn lt_zero_and_open_u16(
+    session: &mut Session,
+    distances: &[Share<u16>],
+) -> Result<Vec<bool>> {
+    let bits = extract_msb_u16_batch(session, distances).await?;
+    open_bin(session, &bits)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert()).collect())
+}
+
+/// Subtracts a public ring element from a secret-shared ring element in-place.
+pub fn sub_pub<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    share: &mut Share<T>,
+    rhs: RingElement<T>,
+) {
+    match session.own_role().index() {
+        0 => share.a -= rhs,
+        1 => share.b -= rhs,
+        2 => {}
+        _ => unreachable!(),
+    }
 }
 
 #[cfg(test)]
