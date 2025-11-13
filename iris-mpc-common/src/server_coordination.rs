@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use eyre::{ensure, Error, OptionExt as _, Result, WrapErr};
+use eyre::{bail, ensure, Error, OptionExt as _, Result, WrapErr};
 use futures::future::try_join_all;
 use futures::FutureExt as _;
 use itertools::Itertools as _;
@@ -19,8 +19,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Duration as StdDuration;
+use std::time::{Duration, Duration as StdDuration, Instant};
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::sleep as tokio_sleep;
 
@@ -40,6 +39,33 @@ struct BatchSyncQuery {
 pub struct BatchSyncSharedState {
     pub batch_id: u64,
     pub messages_to_poll: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CoordinationSettings<'a> {
+    pub party_id: usize,
+    pub node_hostnames: &'a [String],
+    pub healthcheck_ports: &'a [String],
+    pub image_name: &'a str,
+    pub http_query_retry_delay_ms: u64,
+    pub startup_sync_timeout_secs: u64,
+    pub heartbeat_interval_secs: u64,
+    pub heartbeat_initial_retries: u64,
+}
+
+impl<'a> CoordinationSettings<'a> {
+    pub fn from_config(config: &'a Config) -> Self {
+        Self {
+            party_id: config.party_id,
+            node_hostnames: &config.node_hostnames,
+            healthcheck_ports: &config.healthcheck_ports,
+            image_name: &config.image_name,
+            http_query_retry_delay_ms: config.http_query_retry_delay_ms,
+            startup_sync_timeout_secs: config.startup_sync_timeout_secs,
+            heartbeat_interval_secs: config.heartbeat_interval_secs,
+            heartbeat_initial_retries: config.heartbeat_initial_retries,
+        }
+    }
 }
 
 // Returns a new task monitor.
@@ -287,20 +313,59 @@ where
 ///
 /// Note: The response to this query is expected initially to be `503 Service Unavailable`.
 pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
+    wait_for_others_unready_with_settings(&CoordinationSettings::from_config(config)).await
+}
+
+pub async fn wait_for_others_unready_with_settings(
+    settings: &CoordinationSettings<'_>,
+) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
 
-    // Check other nodes and wait until all nodes are unready.
-    let connected_but_unready = try_get_endpoint_other_nodes(config, "ready").await?;
+    let endpoints = other_node_endpoints_with_settings(settings, "ready")?;
+    if endpoints.is_empty() {
+        tracing::warn!("No node hostnames configured; skipping initial unready sync");
+        return Ok(());
+    }
 
-    let all_unready = connected_but_unready
-        .iter()
-        .all(|resp| resp.status() == StatusCode::SERVICE_UNAVAILABLE);
+    let retry_delay = Duration::from_millis(settings.http_query_retry_delay_ms.max(1));
+    let timeout = Duration::from_secs(settings.startup_sync_timeout_secs.max(1));
+    let start = Instant::now();
 
-    ensure!(all_unready, "One or more nodes were not unready.");
+    loop {
+        let mut all_unready = true;
 
-    tracing::info!("All nodes are starting up.");
+        for endpoint in &endpoints {
+            match reqwest::get(endpoint).await {
+                Ok(response) if response.status() == StatusCode::SERVICE_UNAVAILABLE => {}
+                Ok(response) => {
+                    tracing::debug!(
+                        url = endpoint,
+                        status = ?response.status(),
+                        "Node reported ready early"
+                    );
+                    all_unready = false;
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        url = endpoint,
+                        error = ?err,
+                        "Failed to query readiness endpoint; treating as unready"
+                    );
+                }
+            }
+        }
 
-    Ok(())
+        if all_unready {
+            tracing::info!("All nodes reported unready; proceeding with startup");
+            return Ok(());
+        }
+
+        if start.elapsed() >= timeout {
+            bail!("Timed out waiting for other nodes to become unready");
+        }
+
+        tokio_sleep(retry_delay).await;
+    }
 }
 
 /// Starts a heartbeat task which periodically polls the "health" endpoints of
@@ -311,16 +376,28 @@ pub async fn init_heartbeat_task(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<()> {
+    let settings = CoordinationSettings::from_config(config);
+    init_heartbeat_task_with_settings(&settings, task_monitor, shutdown_handler).await
+}
+
+pub async fn init_heartbeat_task_with_settings(
+    settings: &CoordinationSettings<'_>,
+    task_monitor: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<()> {
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
 
-    let all_health_addresses =
-        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "health");
+    let all_health_addresses = get_check_addresses(
+        settings.node_hostnames,
+        settings.healthcheck_ports,
+        "health",
+    );
 
-    let party_id = config.party_id;
-    let image_name = config.image_name.clone();
-    let heartbeat_initial_retries = config.heartbeat_initial_retries;
-    let heartbeat_interval_secs = config.heartbeat_interval_secs;
+    let party_id = settings.party_id;
+    let image_name = settings.image_name.to_string();
+    let heartbeat_initial_retries = settings.heartbeat_initial_retries;
+    let heartbeat_interval_secs = settings.heartbeat_interval_secs;
 
     let heartbeat_shutdown_handler = Arc::clone(shutdown_handler);
     let _heartbeat = task_monitor.spawn(async move {
@@ -483,12 +560,19 @@ pub fn set_node_ready(is_ready_flag: Arc<AtomicBool>) {
 /// Awaits until other MPC nodes respond to "ready" queries
 /// indicating readiness to execute the main server loop.
 pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
+    wait_for_others_ready_with_settings(&CoordinationSettings::from_config(config)).await
+}
+
+pub async fn wait_for_others_ready_with_settings(
+    settings: &CoordinationSettings<'_>,
+) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be ready");
 
     // Check other nodes and wait until all nodes are ready.
     'outer: loop {
         'retry: {
-            let connected_and_ready_res = try_get_endpoint_other_nodes(config, "ready").await;
+            let connected_and_ready_res =
+                try_get_endpoint_other_nodes_with_settings(settings, "ready").await;
 
             if connected_and_ready_res.is_err() {
                 break 'retry;
@@ -509,6 +593,8 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
 
     tracing::info!("All nodes are ready.");
 
+    validate_peer_health_with_settings(settings).await?;
+
     Ok(())
 }
 
@@ -520,11 +606,22 @@ pub async fn try_get_endpoint_other_nodes(
     config: &Config,
     endpoint: &str,
 ) -> Result<Vec<Response>> {
+    try_get_endpoint_other_nodes_with_settings(&CoordinationSettings::from_config(config), endpoint)
+        .await
+}
+
+pub async fn try_get_endpoint_other_nodes_with_settings(
+    settings: &CoordinationSettings<'_>,
+    endpoint: &str,
+) -> Result<Vec<Response>> {
     const NODE_COUNT: usize = 3;
-    let full_urls =
-        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, endpoint);
+    let full_urls = get_check_addresses(
+        settings.node_hostnames,
+        settings.healthcheck_ports,
+        endpoint,
+    );
     let node_urls = (1..NODE_COUNT)
-        .map(|j| (config.party_id + j) % NODE_COUNT)
+        .map(|j| (settings.party_id + j) % NODE_COUNT)
         .map(|i| (i, full_urls[i].to_owned()))
         .sorted_by(|a, b| Ord::cmp(&a.0, &b.0))
         .map(|(_i, full_url)| full_url);
@@ -532,7 +629,7 @@ pub async fn try_get_endpoint_other_nodes(
     let mut handles = Vec::with_capacity(NODE_COUNT - 1);
     let mut rxs = Vec::with_capacity(NODE_COUNT - 1);
 
-    let retry_duration = Duration::from_millis(config.http_query_retry_delay_ms);
+    let retry_duration = Duration::from_millis(settings.http_query_retry_delay_ms);
     for node_url in node_urls {
         let (tx, rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
@@ -551,7 +648,7 @@ pub async fn try_get_endpoint_other_nodes(
     // Wait until timeout
     let all_handles = try_join_all(handles);
     let _all_handles_with_timeout = tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
+        Duration::from_secs(settings.startup_sync_timeout_secs),
         all_handles,
     )
     .await;
@@ -564,4 +661,89 @@ pub async fn try_get_endpoint_other_nodes(
             tracing::error!("{}: {}", msg, err);
         })
         .wrap_err(msg)
+}
+
+fn other_node_endpoints_with_settings(
+    settings: &CoordinationSettings<'_>,
+    endpoint: &str,
+) -> Result<Vec<String>> {
+    if settings.node_hostnames.is_empty() || settings.healthcheck_ports.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    ensure!(
+        settings.node_hostnames.len() == settings.healthcheck_ports.len(),
+        "node_hostnames and healthcheck_ports must have the same length"
+    );
+    ensure!(
+        settings.party_id < settings.node_hostnames.len(),
+        "party_id {} out of bounds for node hostnames length {}",
+        settings.party_id,
+        settings.node_hostnames.len()
+    );
+
+    let endpoints = settings
+        .node_hostnames
+        .iter()
+        .zip(settings.healthcheck_ports.iter())
+        .enumerate()
+        .filter(|(idx, _)| *idx != settings.party_id)
+        .map(|(_, (host, port))| format!("http://{}:{}/{}", host, port, endpoint))
+        .collect();
+
+    Ok(endpoints)
+}
+async fn validate_peer_health_with_settings(settings: &CoordinationSettings<'_>) -> Result<()> {
+    let endpoints = other_node_endpoints_with_settings(settings, "health")?;
+    if endpoints.is_empty() {
+        return Ok(());
+    }
+
+    for endpoint in endpoints {
+        match reqwest::get(&endpoint).await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<ReadyProbeResponse>().await {
+                    Ok(probe) => {
+                        if !settings.image_name.is_empty()
+                            && !probe.image_name.is_empty()
+                            && settings.image_name != probe.image_name
+                        {
+                            tracing::warn!(
+                                url = endpoint,
+                                remote_image = probe.image_name,
+                                local_image = %settings.image_name,
+                                "Peer is running a different image"
+                            );
+                        }
+                        if probe.shutting_down {
+                            tracing::warn!(url = endpoint, "Peer is reporting shutdown state");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            url = endpoint,
+                            error = ?err,
+                            "Failed to parse ReadyProbeResponse"
+                        );
+                    }
+                }
+            }
+            Ok(response) => {
+                tracing::warn!(
+                    url = endpoint,
+                    status = ?response.status(),
+                    "Unexpected status from peer health endpoint"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    url = endpoint,
+                    error = ?err,
+                    "Failed to query peer health endpoint"
+                );
+            }
+        }
+    }
+
+    Ok(())
 }

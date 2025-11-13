@@ -433,7 +433,7 @@ pub struct ServerJobResult<A = ()> {
     pub full_face_mirror_attack_detected: Vec<bool>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
 pub enum Eye {
     #[default]
     Left,

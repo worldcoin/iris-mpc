@@ -23,6 +23,7 @@ pub enum NetworkValue {
     NetworkVec(Vec<Self>),
     // used to verify that the PRFs aren't out of sync
     PrfCheck(RingElement<u128>),
+    Bytes(Vec<u8>),
 }
 
 #[repr(u8)]
@@ -41,10 +42,11 @@ pub enum DescriptorByte {
     // this is used by the TCP framing protocol.
     NetworkVec = 0x0A,
     PrfCheck = 0x0B,
+    Bytes = 0x0C,
 }
 
 impl DescriptorByte {
-    // warning: the Vec* variants (including NetworkVec) have a len field which needs to be parsed to get the total len.
+    // warning: the Vec* variants (including NetworkVec and Bytes) have a len field which needs to be parsed to get the total len.
     pub fn base_len(&self) -> usize {
         match self {
             DescriptorByte::PrfKey => 1 + PRF_KEY_SIZE,
@@ -56,6 +58,7 @@ impl DescriptorByte {
             DescriptorByte::StateChecksum => 1 + 8 + 8,
             DescriptorByte::NetworkVec => 5,
             DescriptorByte::PrfCheck => 1 + size_of::<u128>(),
+            DescriptorByte::Bytes => 5,
         }
     }
 }
@@ -96,6 +99,7 @@ impl NetworkValue {
             NetworkValue::StateChecksum(_) => DescriptorByte::StateChecksum,
             NetworkValue::NetworkVec(_) => DescriptorByte::NetworkVec,
             NetworkValue::PrfCheck(_) => DescriptorByte::PrfCheck,
+            NetworkValue::Bytes(_) => DescriptorByte::Bytes,
         };
         descriptor_byte.into()
     }
@@ -110,6 +114,7 @@ impl NetworkValue {
             NetworkValue::VecRing32(v) => base_len + size_of::<u32>() * v.len(),
             NetworkValue::VecRing64(v) => base_len + size_of::<u64>() * v.len(),
             NetworkValue::NetworkVec(v) => base_len + v.iter().map(|x| x.byte_len()).sum::<usize>(),
+            NetworkValue::Bytes(v) => base_len + v.len(),
             _ => base_len,
         }
     }
@@ -173,6 +178,10 @@ impl NetworkValue {
                 res.extend_from_slice(&u64::to_le_bytes(checksums.irises));
                 res.extend_from_slice(&u64::to_le_bytes(checksums.graph));
             }
+            NetworkValue::Bytes(v) => {
+                res.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                res.extend_from_slice(v);
+            }
             NetworkValue::NetworkVec(_v) => unreachable!(),
         }
     }
@@ -218,7 +227,8 @@ impl NetworkValue {
                 DescriptorByte::RingElement64 => 9,
                 DescriptorByte::VecRing16
                 | DescriptorByte::VecRing32
-                | DescriptorByte::VecRing64 => {
+                | DescriptorByte::VecRing64
+                | DescriptorByte::Bytes => {
                     if end_idx < idx + 5 {
                         bail!("Invalid length for VecRing: can't parse vector length");
                     }
@@ -316,6 +326,20 @@ impl NetworkValue {
                     irises: u64::from_le_bytes(<[u8; 8]>::try_from(&serialized[a..b])?),
                     graph: u64::from_le_bytes(<[u8; 8]>::try_from(&serialized[b..c])?),
                 }))
+            }
+            DescriptorByte::Bytes => {
+                if serialized.len() < 5 {
+                    bail!("Invalid length for Bytes: too short: {}", serialized.len());
+                }
+                let len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[1..5])?) as usize;
+                if serialized.len() != 5 + len {
+                    bail!(
+                        "Invalid length for Bytes: length mismatch {} but expected {}",
+                        serialized.len(),
+                        5 + len
+                    );
+                }
+                Ok(NetworkValue::Bytes(serialized[5..5 + len].to_vec()))
             }
             _ => Err(eyre!("Invalid network value type")),
         }

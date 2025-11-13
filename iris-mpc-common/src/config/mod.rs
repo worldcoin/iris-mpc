@@ -56,6 +56,12 @@ pub struct Config {
     pub cpu_database: Option<DbConfig>,
 
     #[serde(default)]
+    pub anon_stats_database: Option<DbConfig>,
+
+    #[serde(default = "default_anon_stats_schema_name")]
+    pub anon_stats_schema_name: String,
+
+    #[serde(default)]
     pub aws: Option<AwsConfig>,
 
     #[serde(default = "default_processing_timeout_secs")]
@@ -364,6 +370,10 @@ fn default_schema_name() -> String {
     "SMPC".to_string()
 }
 
+fn default_anon_stats_schema_name() -> String {
+    "anon_stats_mpc".to_string()
+}
+
 fn default_db_load_safety_overlap_seconds() -> i64 {
     60
 }
@@ -549,6 +559,17 @@ impl Config {
     /// Returns the url for connecting to a node's cpu database.
     pub fn get_cpu_db_url(&self) -> Option<String> {
         self.cpu_database.as_ref().map(|x| x.url.clone())
+    }
+
+    pub fn get_anon_stats_db_url(&self) -> Option<String> {
+        self.anon_stats_database
+            .as_ref()
+            .map(|x| x.url.clone())
+            .or_else(|| self.cpu_database.as_ref().map(|x| x.url.clone()))
+    }
+
+    pub fn get_anon_stats_db_schema(&self) -> String {
+        self.anon_stats_schema_name.clone()
     }
 
     /// Returns the name of a database schema for connecting to a node's gpu dB.
@@ -757,7 +778,9 @@ impl From<Config> for CommonConfig {
             service: _,
             database: _,     // database is different for each server
             cpu_database: _, // cpu database is different for each server
-            aws: _,          // aws is different for each server
+            anon_stats_database: _,
+            anon_stats_schema_name: _,
+            aws: _, // aws is different for each server
             processing_timeout_secs,
             startup_sync_timeout_secs,
             public_key_base_url,
