@@ -74,6 +74,7 @@ impl Engine {
         next_id: IrisSerialId,
         num_threads: usize,
     ) -> Self {
+        assert!(k < irises.len());
         match which {
             EngineChoice::NaiveFHD => {
                 Self::NaiveFHD(NaiveNormalDistKNN::init(irises, k, next_id, num_threads))
@@ -84,6 +85,7 @@ impl Engine {
         }
     }
 
+    // TODO refactor this using the new distance_fn object (?)
     pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
         match self {
             Self::NaiveFHD(engine) => engine.compute_chunk(chunk_size),
@@ -140,12 +142,18 @@ impl KNNEngine for NaiveNormalDistKNN {
                                 .then_some((j + 1, current_iris.get_distance_fraction(other_iris)))
                         })
                         .collect::<Vec<_>>();
-                    neighbors.select_nth_unstable_by(self.k - 1, |lhs, rhs| {
-                        fraction_ordering(&lhs.1, &rhs.1)
-                    });
+
+                    // Only select if k != 0
+                    if self.k >= 1 {
+                        neighbors.select_nth_unstable_by(self.k - 1, |lhs, rhs| {
+                            fraction_ordering(&lhs.1, &rhs.1)
+                        });
+                    }
+
                     let mut neighbors = neighbors.drain(0..self.k).collect::<Vec<_>>();
                     neighbors.shrink_to_fit(); // just to make sure
                     neighbors.sort_by(|lhs, rhs| fraction_ordering(&lhs.1, &rhs.1));
+
                     let neighbors = neighbors
                         .into_iter()
                         .map(|(i, _)| i as IrisSerialId)
@@ -218,19 +226,24 @@ impl KNNEngine for NaiveMinFHDKNN {
                             })
                         })
                         .collect::<Vec<_>>();
-                    neighbors.select_nth_unstable_by(
-                        self.k - 1,
-                        |lhs, rhs| match fraction_ordering(&lhs.1, &rhs.1) {
-                            Ordering::Equal => lhs.0.cmp(&rhs.0),
-                            other => other,
-                        },
-                    );
+
+                    // Only select if k != 0
+                    if self.k >= 1 {
+                        neighbors.select_nth_unstable_by(self.k - 1, |lhs, rhs| {
+                            match fraction_ordering(&lhs.1, &rhs.1) {
+                                Ordering::Equal => lhs.0.cmp(&rhs.0),
+                                other => other,
+                            }
+                        });
+                    }
+
                     let mut neighbors = neighbors.drain(0..self.k).collect::<Vec<_>>();
                     neighbors.shrink_to_fit(); // just to make sure
                     neighbors.sort_by(|lhs, rhs| match fraction_ordering(&lhs.1, &rhs.1) {
                         Ordering::Equal => lhs.0.cmp(&rhs.0),
                         other => other,
                     });
+
                     let neighbors = neighbors
                         .into_iter()
                         .map(|(i, _)| i as IrisSerialId)

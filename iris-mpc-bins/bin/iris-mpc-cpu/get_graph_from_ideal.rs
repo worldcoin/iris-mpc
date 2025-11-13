@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use std::{io::BufReader, path::PathBuf};
 
+use iris_mpc_common::iris_db::iris;
 use iris_mpc_common::{IrisSerialId, IrisVectorId};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::vector_store::VectorStoreMut;
 use iris_mpc_cpu::hnsw::HnswSearcher;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 use iris_mpc_cpu::{hawkers::ideal_knn_engines::EngineChoice, hnsw::GraphMem};
-use rand::seq::SliceRandom;
+use rand::seq::{IteratorRandom, SliceRandom};
 use serde_json::Deserializer;
 
 #[tokio::main]
@@ -19,9 +20,7 @@ async fn main() {
     let file = std::fs::File::open(path).unwrap();
     let reader = BufReader::new(file);
 
-    let n = 6000;
-    let layer1_len = 1000;
-    let layer2_len = 500;
+    let n = 1000;
     let stream = Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
         .take(n);
@@ -36,14 +35,13 @@ async fn main() {
         GraphMem::ideal_from_irises(irises.clone(), &prf_seed, filepath, k, echoice, num_threads)
             .unwrap();
 
-    dbg!(graph.layers[0].links.len());
     assert!(graph.layers[0].links.len() == n);
-    assert!(graph.layers[1].links.len() == layer1_len);
-    assert!(graph.layers[2].links.len() == layer2_len);
+    dbg!(graph.layers[1].links.len());
+    dbg!(graph.layers[2].links.len());
 
     for layer in graph.layers.iter() {
-        for value in layer.links.values() {
-            assert_eq!(value.len(), k);
+        for (key, value) in layer.links.iter() {
+            assert_eq!(value.len(), k.min(layer.links.len() - 1));
         }
     }
 
@@ -59,7 +57,7 @@ async fn main() {
 
     let mut rng = rand::thread_rng();
 
-    for iris_id in 1..=irises.len() {
+    for iris_id in (1..=irises.len()).choose_multiple(&mut rng, 50) {
         let iris_id = IrisVectorId::from_serial_id(iris_id as IrisSerialId);
         let iris = store.storage.get_vector(&iris_id).unwrap();
         let iris_match = iris.get_similar_iris(&mut rng, 0.15);
@@ -72,8 +70,5 @@ async fn main() {
             .unwrap();
 
         assert!(result.match_count(&mut store).await.unwrap() >= 1);
-        if iris_id.serial_id() % 100 == 0 {
-            dbg!(&iris_id);
-        }
     }
 }

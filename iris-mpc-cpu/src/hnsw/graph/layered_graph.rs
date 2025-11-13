@@ -180,11 +180,15 @@ impl GraphMem<IrisVectorId> {
     ) -> Result<Self> {
         let zero_layer = {
             let results = read_knn_results_from_file(filepath).unwrap();
+            // Some sanity checks that the ideal knn file corresponds to the irises argument
+            assert_eq!(results.len(), irises.len());
             let results = results
                 .into_iter()
-                .map(|result| result.map(|serial_id| IrisVectorId::from_serial_id(serial_id)))
+                .map(|result| {
+                    assert_eq!(result.neighbors.len(), k);
+                    result.map(|serial_id| IrisVectorId::from_serial_id(serial_id))
+                })
                 .collect::<Vec<_>>();
-            assert_eq!(results.len(), k);
             Layer::from_knn_results(results, irises.len())
         };
 
@@ -288,12 +292,15 @@ impl<V: Ref + Display + FromStr> Layer<V> {
     ) -> Self {
         let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
         let n = irises.len();
+        let k = k.min(n - 1);
+
         // Initialize the KNN algorithm;
         let mut engine = Engine::init(echoice, irises, k, 1, num_threads);
         // Run the entire computation
         let results = engine
             .compute_chunk(n)
             .into_iter()
+            // remap from engine 1-based indices to original vector ids
             .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
             .collect::<Vec<_>>();
 
@@ -349,13 +356,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, io::BufReader, path::PathBuf, sync::Arc};
+    use std::{collections::HashMap, sync::Arc};
 
     use crate::{
-        hawkers::{
-            ideal_knn_engines::EngineChoice,
-            plaintext_store::{PlaintextStore, PlaintextVectorRef},
-        },
+        hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             VectorStore,
@@ -363,11 +367,11 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId, IrisSerialId};
-    use rand::seq::SliceRandom;
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
+    
     use rand::{RngCore, SeedableRng};
-    use serde_json::Deserializer;
-    use std::collections::BTreeMap;
+    
+    
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
