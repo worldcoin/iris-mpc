@@ -9,7 +9,7 @@ use crate::{
         NetworkValue::{self},
     },
     protocol::{
-        binary::and_many,
+        binary::and_product,
         prf::{Prf, PrfSeed},
         shared_iris::ArcIris,
     },
@@ -21,7 +21,7 @@ use crate::{
         IntRing2k,
     },
 };
-use eyre::{bail, eyre, OptionExt, Result};
+use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
@@ -811,12 +811,12 @@ pub(crate) async fn min_round_robin_batch(
     // Group jth columns together, i.e., return a matrix `batch_selection_bits`, where `batch_selection_bits[j]` contains the comparison bits
     // between distance `j` of every batch and all the other distances within the same batch.
     let mut batch_selection_bits = (0..batch_size)
-        .map(|_| Vec::with_capacity(num_batches * batch_size))
+        .map(|_| VecShare::with_capacity(num_batches * batch_size))
         .collect_vec();
     for batch in comparison_bits.chunks(batch_size * (batch_size - 1) / 2) {
-        let mut batch_matrix: Vec<Vec<Share<Bit>>> = (0..batch_size)
-            .map(|_| Vec::with_capacity(batch_size))
-            .collect();
+        let mut batch_matrix = (0..batch_size)
+            .map(|_| VecShare::with_capacity(batch_size))
+            .collect_vec();
         let mut batch_counter = 0;
         for i in 0..batch_size {
             for j in 0..batch_size {
@@ -826,7 +826,7 @@ pub(crate) async fn min_round_robin_batch(
                         batch[batch_counter - 1].clone()
                     }
                     Ordering::Equal => Share::from_const(Bit::new(true), session.own_role()),
-                    Ordering::Greater => batch_matrix[i][j].not(),
+                    Ordering::Greater => batch_matrix[i].get_at(j).not(),
                 };
                 batch_matrix[j].push(value);
             }
@@ -837,40 +837,10 @@ pub(crate) async fn min_round_robin_batch(
     }
     // Compute the AND of each row in the `batch_selection_bits` matrix.
     // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
-    while batch_selection_bits.len() > 1 {
-        // if the length is odd, we save the last column to add it back later
-        let maybe_last_column = if batch_selection_bits.len() % 2 == 1 {
-            batch_selection_bits.pop()
-        } else {
-            None
-        };
-        let half_len = batch_selection_bits.len() / 2;
-        let left_bits: VecShare<u64> = VecShare::new_vec(
-            batch_selection_bits
-                .drain(..half_len)
-                .flatten()
-                .collect_vec(),
-        )
-        .pack();
-        let right_bits: VecShare<u64> =
-            VecShare::new_vec(batch_selection_bits.drain(..).flatten().collect_vec()).pack();
-        let and_bits = and_many(session, left_bits.as_slice(), right_bits.as_slice()).await?;
-        let mut and_bits = and_bits.convert_to_bits();
-        let num_and_bits = half_len * num_batches * batch_size;
-        and_bits.truncate(num_and_bits);
-        batch_selection_bits = and_bits
-            .inner()
-            .chunks(num_batches * batch_size)
-            .map(|chunk| chunk.to_vec())
-            .collect_vec();
-        batch_selection_bits.extend(maybe_last_column);
-    }
+    let selection_bits =
+        and_product(session, batch_selection_bits, num_batches * batch_size).await?;
     // The resulting bits are bit injected into u32.
-    let selection_bits: VecShare<u32> = bit_inject_ot_2round(
-        session,
-        VecShare::new_vec(batch_selection_bits.pop().ok_or_eyre("Shouldn't be here")?),
-    )
-    .await?;
+    let selection_bits: VecShare<u32> = bit_inject_ot_2round(session, selection_bits).await?;
     // Multiply distance shares with selection bits to zero out non-minimum distances.
     let selected_distances = {
         let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
