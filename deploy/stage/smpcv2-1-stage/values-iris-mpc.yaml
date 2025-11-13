@@ -108,7 +108,7 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1000" # "1200000"
+    value: "0" # "1200000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "100000" # "1300000"
@@ -120,7 +120,7 @@ env:
     value: "200"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "256"
+    value: "64"
 
   - name: SMPC__N_BUCKETS
     value: "10"
