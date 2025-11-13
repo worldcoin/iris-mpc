@@ -16,7 +16,6 @@ use iris_mpc_common::galois::degree4::GaloisRingElement;
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
-use iris_mpc_common::helpers::key_pair::SharesDecodingError;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::id::PartyID;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
