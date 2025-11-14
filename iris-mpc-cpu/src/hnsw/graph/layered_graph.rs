@@ -5,14 +5,26 @@
 
 use crate::{
     execution::hawk_main::state_check::SetHash,
+    hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
         searcher::{ConnectPlan, ConnectPlanLayer},
         vector_store::Ref,
+        HnswSearcher,
     },
 };
+
+use eyre::Result;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+    iter::once,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -156,6 +168,67 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
     }
 }
 
+impl GraphMem<IrisVectorId> {
+    pub fn ideal_from_irises(
+        irises: Vec<IrisCode>,
+        prf_seed: &[u8; 16],
+        filepath: PathBuf, // File containing KNN results for layer 0
+        k: usize,
+        echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
+        num_threads: usize,
+    ) -> Result<Self> {
+        let zero_layer = {
+            let results = read_knn_results_from_file(filepath).unwrap();
+            // Some sanity checks that the ideal knn file corresponds to the irises argument
+            assert_eq!(results.len(), irises.len());
+            let results = results
+                .into_iter()
+                .map(|result| {
+                    assert_eq!(result.neighbors.len(), k);
+                    result.map(|serial_id| IrisVectorId::from_serial_id(serial_id))
+                })
+                .collect::<Vec<_>>();
+            Layer::from_knn_results(results, irises.len())
+        };
+
+        let irises_with_vector_ids =
+            izip!(zero_layer.links.keys().cloned(), irises.into_iter(),).collect::<Vec<_>>();
+
+        //TODO: change
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        // Collect nodes for each non-zero layer
+        let mut layer_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> = BTreeMap::new();
+        for (vector_id, iris) in irises_with_vector_ids.into_iter() {
+            let layer = searcher.select_layer_prf(prf_seed, &vector_id)?;
+            if layer > 0 {
+                layer_map.entry(layer).or_default().push((vector_id, iris));
+            }
+        }
+
+        // nodes_for_nonzero_layers[i] = nodes in layer i + 1
+        let nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> = layer_map
+            .into_iter()
+            .map(|(_, nodes)| nodes)
+            .collect::<Vec<Vec<_>>>();
+
+        // Choose first node in top layer as the entry point
+        let entry_point = nodes_for_nonzero_layers
+            .last()
+            .unwrap_or(&vec![])
+            .first()
+            .map(|(v, _)| (v.clone(), nodes_for_nonzero_layers.len()));
+
+        let nonzero_layers = nodes_for_nonzero_layers.into_iter().map(|layer_iris_data| {
+            Layer::ideal_from_irises(layer_iris_data, k, echoice, num_threads)
+        });
+        Ok(GraphMem::from_precomputed(
+            entry_point,
+            once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
+        ))
+    }
+}
+
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct Layer<V: Ref + Display + FromStr> {
@@ -198,6 +271,38 @@ impl<V: Ref + Display + FromStr> Layer<V> {
 
     pub fn get_links_map(&self) -> &HashMap<V, Vec<V>> {
         &self.links
+    }
+
+    fn from_knn_results(results: Vec<KNNResult<V>>, n: usize) -> Self {
+        let mut ret = Layer::new();
+        for KNNResult { node, neighbors } in results.into_iter().take(n) {
+            ret.set_links(node, SortedEdgeIds(neighbors));
+        }
+        ret
+    }
+
+    /// Constructs a Layer from pairs of (vectorRef, iris) by computing
+    /// the ideal K-nearest neighbors for each such entry.
+    fn ideal_from_irises(
+        iris_data: Vec<(V, IrisCode)>,
+        k: usize,
+        echoice: EngineChoice,
+        num_threads: usize,
+    ) -> Self {
+        let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
+        let n = irises.len();
+        let k = k.min(n - 1);
+
+        // Initialize the KNN algorithm;
+        let mut engine = Engine::init(echoice, irises, k, 1, num_threads);
+        // Run the entire computation
+        let results = engine
+            .compute_chunk(n)
+            .into_iter()
+            .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
+            .collect::<Vec<_>>();
+
+        Layer::from_knn_results(results, n)
     }
 }
 
@@ -246,10 +351,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, io::BufReader, path::PathBuf, sync::Arc};
 
     use crate::{
-        hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        hawkers::{
+            ideal_knn_engines::EngineChoice,
+            plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        },
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             VectorStore,
@@ -257,8 +365,11 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId, IrisSerialId};
+    use rand::seq::SliceRandom;
     use rand::{RngCore, SeedableRng};
+    use serde_json::Deserializer;
+    use std::collections::BTreeMap;
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {

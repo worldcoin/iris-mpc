@@ -150,6 +150,10 @@ path = "bin/iris-mpc-cpu/generate_ideal_neighborhoods.rs"
 name = "construct-graph-ptxt"
 path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
 
+[[bin]]
+name = "get_graph_from_ideal"
+path = "bin/iris-mpc-cpu/get_graph_from_ideal.rs"
+
 # ---------------------
 # binaries for iris-mpc-gpu
 # ---------------------
