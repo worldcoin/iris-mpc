@@ -430,7 +430,6 @@ pub async fn cross_compare(
                 let bits = extract_msb_u32_batch_fss(session, &diff).await? //;
             );
 
-            //let opened_b =
             crate::perf_time_expr_for_party!(
                 "cross_compare.fss.open_bin",
                 session.own_role().index(),
@@ -462,7 +461,7 @@ pub async fn cross_compare(
         }
     };
 
-    // Open the MSB
+    // Open the MSB (FSS vs RSS is handled above)
     // let opened_b = open_bin(session, &bits).await?;
     // let opened_b = open_bin_fss(session, &bits).await?;
 
