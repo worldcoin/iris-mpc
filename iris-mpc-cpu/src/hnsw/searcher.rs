@@ -30,7 +30,7 @@ use tracing::{debug, instrument, trace_span, Instrument};
 /// The number of explicitly provided parameters for different layers of HNSW
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
-const M_MAX_MULTIPLIER: f64 = 1.1;
+const M_MAX_MULTIPLIER: f64 = 1.0;
 
 /// Struct specifying general parameters for HNSW search.
 ///
