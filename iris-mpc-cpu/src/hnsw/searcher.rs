@@ -239,7 +239,7 @@ pub struct ConnectPlanLayer<Vector> {
 }
 
 /// Represents the search mode for top layers of the HNSW graph.
-#[derive(PartialEq, Clone, Copy, Serialize, Deserialize)]
+#[derive(PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum TopLayerSearchMode {
     /// Use the default search as in other layer.
     Default,
@@ -1298,25 +1298,6 @@ impl HnswSearcher {
             .search_init(store, graph, query, insertion_layer)
             .await?;
 
-        // Search from the top layer down to layer 0
-        for lc in (0..n_layers).rev() {
-            let ef = if lc > insertion_layer {
-                self.params.get_ef_constr_search(lc)
-            } else {
-                self.params.get_ef_constr_insert(lc)
-            };
-
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
-
-            // Save links in output only for layers in which query is inserted
-            if lc <= insertion_layer {
-                links.push(W.clone());
-            }
-        }
-
-        // We inserted top-down, so reverse to match the layer indices (bottom=0)
-        links.reverse();
-
         let capped_insertion_layer = match self.params.top_layer_mode {
             TopLayerSearchMode::LinearScan(max_layer) if insertion_layer == max_layer => {
                 // in this search mode, no graph edges should be constructed for the top layer because
@@ -1326,12 +1307,32 @@ impl HnswSearcher {
             _ => insertion_layer,
         };
 
+        // Search from the top layer down to layer 0
+        for lc in (0..n_layers).rev() {
+            let ef = if lc > capped_insertion_layer {
+                self.params.get_ef_constr_search(lc)
+            } else {
+                self.params.get_ef_constr_insert(lc)
+            };
+
+            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+
+            // Save links in output only for layers in which query is inserted
+            if lc <= capped_insertion_layer {
+                links.push(W.clone());
+            }
+        }
+
+        // We inserted top-down, so reverse to match the layer indices (bottom=0)
+        links.reverse();
+
         // If query is to be inserted at a new highest layer as a new entry
         // point, insert additional empty neighborhoods for any new layers
         for _ in links.len()..capped_insertion_layer + 1 {
             links.push(SortedNeighborhood::new());
         }
-        debug_assert!(links.len() == capped_insertion_layer + 1);
+
+        assert_eq!(links.len(), capped_insertion_layer + 1);
 
         Ok((links, set_ep))
     }
@@ -1598,269 +1599,85 @@ mod tests {
     async fn test_search_to_insert_different_layers() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(42);
         let iris_db = IrisDB::new_random_rng(10, &mut rng);
-        let queries: Vec<_> = iris_db.db.into_iter().map(Arc::new).collect();
 
+        let mut queries = iris_db.db.into_iter().map(Arc::new);
+        // Duplicate queries for the linear mode tests
+        let mut queries_copy = queries.clone();
+
+        // Default mode
         let searcher_default = HnswSearcher::new_with_test_parameters();
         let vector_store_default = &mut PlaintextStore::new();
         let graph_store_default = &mut GraphMem::new();
 
+        for (insertion_layer, expected_nb_len, expected_set_ep) in [
+            (0, 1, SetEntryPoint::NewLayer),
+            (0, 1, SetEntryPoint::False),
+            (1, 2, SetEntryPoint::NewLayer),
+            (1, 2, SetEntryPoint::False),
+            (2, 3, SetEntryPoint::NewLayer),
+            (2, 3, SetEntryPoint::False),
+        ] {
+            let query = queries.next().unwrap();
+
+            let (neighbors, set_ep) = searcher_default
+                .search_to_insert(
+                    vector_store_default,
+                    graph_store_default,
+                    &query,
+                    insertion_layer,
+                )
+                .await?;
+
+            assert_eq!(neighbors.len(), expected_nb_len);
+            assert_eq!(set_ep, expected_set_ep);
+
+            searcher_default
+                .insert(
+                    vector_store_default,
+                    graph_store_default,
+                    &query,
+                    insertion_layer,
+                )
+                .await?;
+        }
+
+        // Linear-scan mode
         let searcher_linear = HnswSearcher::new_with_test_parameters_and_linear_scan();
         let vector_store_linear = &mut PlaintextStore::new();
         let graph_store_linear = &mut GraphMem::new();
 
-        let mut queries = queries.into_iter();
+        for (insertion_layer, expected_nb_len, expected_set_ep) in [
+            (0, 1, SetEntryPoint::False),
+            (0, 1, SetEntryPoint::False),
+            (1, 2, SetEntryPoint::False),
+            (1, 2, SetEntryPoint::False),
+            (2, 2, SetEntryPoint::AddToLayer),
+            (2, 2, SetEntryPoint::AddToLayer),
+        ] {
+            // Same queries used above
+            let query = queries_copy.next().unwrap();
 
-        // layer 0 - new layer
-        let query = queries.next().unwrap();
-        let insertion_layer = 0;
+            let (neighbors, set_ep) = searcher_linear
+                .search_to_insert(
+                    vector_store_linear,
+                    graph_store_linear,
+                    &query,
+                    insertion_layer,
+                )
+                .await?;
 
-        let (neighbors, set_ep) = searcher_default
-            .search_to_insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighbors.len(), 1);
-        assert_eq!(set_ep, SetEntryPoint::NewLayer);
-        searcher_default
-            .insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
+            assert_eq!(neighbors.len(), expected_nb_len);
+            assert_eq!(set_ep, expected_set_ep);
 
-        let (neighborhoods, set_ep) = searcher_linear
-            .search_to_insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 1);
-        assert_eq!(set_ep, SetEntryPoint::False);
-        searcher_linear
-            .insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        // layer 0 - not new layer
-        let query = queries.next().unwrap();
-        let insertion_layer = 0;
-
-        let (neighborhoods, set_ep) = searcher_default
-            .search_to_insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 1);
-        assert_eq!(set_ep, SetEntryPoint::False);
-        searcher_default
-            .insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        let (neighborhoods, set_ep) = searcher_linear
-            .search_to_insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 1);
-        assert_eq!(set_ep, SetEntryPoint::False);
-        searcher_linear
-            .insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        // layer 1 - new layer
-        let query = queries.next().unwrap();
-        let insertion_layer = 1;
-
-        let (neighborhoods, set_ep) = searcher_default
-            .search_to_insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 2);
-        assert_eq!(set_ep, SetEntryPoint::NewLayer);
-        searcher_default
-            .insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        let (neighborhoods, set_ep) = searcher_linear
-            .search_to_insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 2);
-        assert_eq!(set_ep, SetEntryPoint::False);
-        searcher_linear
-            .insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        // layer 1 - not new layer
-        let query = queries.next().unwrap();
-        let insertion_layer = 1;
-
-        let (neighborhoods, set_ep) = searcher_default
-            .search_to_insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 2);
-        assert_eq!(set_ep, SetEntryPoint::False);
-        searcher_default
-            .insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        let (neighborhoods, set_ep) = searcher_linear
-            .search_to_insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 2);
-        assert_eq!(set_ep, SetEntryPoint::False);
-        searcher_linear
-            .insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        // layer 2 - new layer
-        let query = queries.next().unwrap();
-        let insertion_layer = 2;
-
-        let (neighborhoods, set_ep) = searcher_default
-            .search_to_insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 3);
-        assert_eq!(set_ep, SetEntryPoint::NewLayer);
-        searcher_default
-            .insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        let (neighborhoods, set_ep) = searcher_linear
-            .search_to_insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 2);
-        assert_eq!(set_ep, SetEntryPoint::AddToLayer);
-        searcher_linear
-            .insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        // layer 2 - not new layer
-        let query = queries.next().unwrap();
-        let insertion_layer = 2;
-
-        let (neighborhoods, set_ep) = searcher_default
-            .search_to_insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 3);
-        assert_eq!(set_ep, SetEntryPoint::False);
-        searcher_default
-            .insert(
-                vector_store_default,
-                graph_store_default,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-
-        let (neighborhoods, set_ep) = searcher_linear
-            .search_to_insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
-        assert_eq!(neighborhoods.len(), 2);
-        assert_eq!(set_ep, SetEntryPoint::AddToLayer);
-        searcher_linear
-            .insert(
-                vector_store_linear,
-                graph_store_linear,
-                &query,
-                insertion_layer,
-            )
-            .await?;
+            searcher_linear
+                .insert(
+                    vector_store_linear,
+                    graph_store_linear,
+                    &query,
+                    insertion_layer,
+                )
+                .await?;
+        }
 
         Ok(())
     }
