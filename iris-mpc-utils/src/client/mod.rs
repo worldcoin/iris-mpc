@@ -54,11 +54,11 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
 
     /// Initializer.
     pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
-        for initialization_result in [
+        for initializer in [
             self.request_enqueuer.init(public_key_base_url).await,
             self.response_correlator.init().await,
         ] {
-            match initialization_result {
+            match initializer {
                 Ok(()) => (),
                 Err(e) => {
                     tracing::error!("Service client: component initialisation failed: {}", e);

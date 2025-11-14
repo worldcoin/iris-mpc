@@ -14,6 +14,9 @@ pub struct AwsClientConfig {
     /// Execution environment.
     environment: String,
 
+    /// Base URL for downloading node encryption public keys.
+    public_key_base_url: String,
+
     /// S3: request ingress queue URL.
     s3_request_bucket_name: String,
 
@@ -38,6 +41,10 @@ impl AwsClientConfig {
         &self.environment
     }
 
+    pub(super) fn public_key_base_url(&self) -> &String {
+        &self.public_key_base_url
+    }
+
     pub(super) fn s3_request_bucket_name(&self) -> &String {
         &self.s3_request_bucket_name
     }
@@ -60,6 +67,7 @@ impl AwsClientConfig {
 
     pub async fn new(
         environment: String,
+        public_key_base_url: String,
         s3_request_bucket_name: String,
         sns_request_topic_arn: String,
         sqs_long_poll_wait_time: usize,
@@ -67,7 +75,8 @@ impl AwsClientConfig {
         sqs_wait_time_seconds: usize,
     ) -> Self {
         Self {
-            environment: environment.to_owned(),
+            environment,
+            public_key_base_url,
             s3_request_bucket_name,
             sdk: get_sdk_config().await,
             sns_request_topic_arn,
@@ -91,6 +100,7 @@ impl Clone for AwsClientConfig {
     fn clone(&self) -> Self {
         Self {
             environment: self.environment.clone(),
+            public_key_base_url: self.public_key_base_url.clone(),
             s3_request_bucket_name: self.s3_request_bucket_name.clone(),
             sns_request_topic_arn: self.sns_request_topic_arn.clone(),
             sqs_response_queue_url: self.sqs_response_queue_url.clone(),
@@ -148,6 +158,7 @@ impl AwsClientConfig {
         use crate::constants;
 
         let environment = String::from(constants::DEFAULT_ENV);
+        let public_key_base_url = String::from(constants::AWS_PUBLIC_KEY_BASE_URL);
         let s3_request_bucket_name = String::from(constants::AWS_S3_REQUEST_BUCKET_NAME);
         let sns_request_topic_arn = String::from(constants::AWS_SNS_REQUEST_TOPIC_ARN);
         let sqs_long_poll_wait_time = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
@@ -156,6 +167,7 @@ impl AwsClientConfig {
 
         AwsClientConfig::new(
             environment,
+            public_key_base_url,
             s3_request_bucket_name,
             sns_request_topic_arn,
             sqs_long_poll_wait_time,

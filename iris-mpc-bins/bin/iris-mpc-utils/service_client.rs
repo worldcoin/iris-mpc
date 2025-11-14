@@ -157,6 +157,7 @@ impl AsyncFrom<CliOptions> for AwsClientConfig {
     async fn async_from(options: CliOptions) -> Self {
         AwsClientConfig::new(
             options.environment,
+            options.aws_public_key_base_url,
             options.aws_s3_request_bucket_name,
             options.aws_sns_request_topic_arn,
             options.aws_sqs_long_poll_wait_time,
