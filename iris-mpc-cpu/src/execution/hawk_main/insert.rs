@@ -155,7 +155,7 @@ async fn trim_neighborhoods<V: VectorStoreMut>(
                     let r = neighborhood_compaction(
                         store,
                         layer.neighbors[idx].clone(),
-                        &neighborhood,
+                        neighborhood,
                         max_links,
                     )
                     .await?;
@@ -470,9 +470,9 @@ mod tests {
         let mut ret = Layer::new();
         for i in 0..nodes.len() {
             let mut neighbors = Vec::new();
-            for j in 0..nodes.len() {
+            for (j, node) in nodes.iter().enumerate() {
                 if i != j {
-                    neighbors.push(nodes[j].clone());
+                    neighbors.push(node.clone());
                 }
             }
             ret.set_links(nodes[i].clone(), neighbors);
@@ -537,7 +537,7 @@ mod tests {
         let l2 = make_layer::<SharedPlaintextStore>(&vector_ids[..searcher.params.get_M_max(2)]);
 
         let max_size = l0.links.len();
-        let query_vector_id = vector_ids[max_size].clone();
+        let query_vector_id = vector_ids[max_size];
 
         // save these for later
         let distances = vector_store
@@ -547,7 +547,7 @@ mod tests {
             )
             .await?;
 
-        let new_l0: Vec<_> = (&vector_ids[..max_size + 1]).iter().cloned().collect();
+        let new_l0: Vec<_> = vector_ids[..max_size + 1].to_vec();
         let compacted1 = neighborhood_compaction(
             &mut vector_store,
             query_vector_id,
@@ -568,10 +568,7 @@ mod tests {
         // pick neighbors for the vector at each layer
         let nbs: Vec<SortedNeighborhood<_, _>> = (0..3)
             .map(|idx| {
-                SortedNeighborhood::from_ascending_vec(vec![(
-                    vector_ids[idx].clone(),
-                    distances[idx].clone(),
-                )])
+                SortedNeighborhood::from_ascending_vec(vec![(vector_ids[idx], distances[idx])])
             })
             .collect();
 
@@ -579,7 +576,7 @@ mod tests {
             .insert_prepare(
                 &mut vector_store,
                 &graph_store,
-                query_vector_id.clone(),
+                query_vector_id,
                 nbs,
                 SetEntryPoint::False,
             )
@@ -595,19 +592,19 @@ mod tests {
         assert_eq!(connect_plans.layers[1].neighbors.len(), 1);
         assert_eq!(connect_plans.layers[2].neighbors.len(), 1);
 
-        let mut nb_l0: Vec<_> = (&vector_ids[1..searcher.params.get_M_max(0)]).to_vec(); // removes idx 0
-        nb_l0.push(query_vector_id.clone());
+        let mut nb_l0: Vec<_> = vector_ids[1..searcher.params.get_M_max(0)].to_vec(); // removes idx 0
+        nb_l0.push(query_vector_id);
         assert_eq!(nb_l0.len(), 16);
         assert_eq!(connect_plans.layers[0].nb_links[0], nb_l0);
 
         let mut nb_l1: Vec<_> = vector_ids[0..searcher.params.get_M_max(1)].to_vec();
         nb_l1.remove(1); // removes idx 1
-        nb_l1.push(query_vector_id.clone());
+        nb_l1.push(query_vector_id);
         assert_eq!(connect_plans.layers[1].nb_links[0], nb_l1);
 
         let mut nb_l2: Vec<_> = vector_ids[0..searcher.params.get_M_max(2)].to_vec();
         nb_l2.remove(2); // removes idx 2
-        nb_l2.push(query_vector_id.clone());
+        nb_l2.push(query_vector_id);
         assert_eq!(connect_plans.layers[2].nb_links[0], nb_l2);
 
         let connect_plans = vec![Some(connect_plans)];
