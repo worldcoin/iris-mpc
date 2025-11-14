@@ -72,8 +72,18 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
-            self.request_enqueuer.enqueue(&batch).await.unwrap();
-            self.response_dequeuer.dequeue(&batch).await.unwrap();
+            for batch_processing_result in [
+                self.request_enqueuer.enqueue(&batch).await,
+                self.response_dequeuer.dequeue(&batch).await,
+            ] {
+                match batch_processing_result {
+                    Ok(()) => (),
+                    Err(e) => {
+                        tracing::error!("Service client: batch processing error: {}", e);
+                        return Err(ServiceClientError::BatchProcessingError(e.to_string()));
+                    }
+                }
+            }
         }
 
         Ok(())

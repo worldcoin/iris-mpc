@@ -7,13 +7,16 @@ pub enum ServiceClientError {
     #[error("An AWS service error has occured: {0}")]
     AwsServiceError(#[from] AwsClientError),
 
+    #[error("Batch processing error: {0}")]
+    BatchProcessingError(String),
+
     #[error("Component initialisation error: {0}")]
     ComponentInitialisationError(String),
 
     #[error("Enqueue uniqueness request error: {0}")]
     EnqueueUniquenessRequestError(String),
 
-    #[error("Service client initialisation error: {0}")]
+    #[error("Initialisation error: {0}")]
     InitialisationError(String),
 
     #[error("Enqueue uniqueness pre-enqueue setup error: {0}")]
