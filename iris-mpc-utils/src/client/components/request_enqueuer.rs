@@ -11,7 +11,7 @@ use super::super::{
 use crate::{
     aws::{create_iris_code_party_shares, AwsClient},
     client::types::Request,
-    types::{EncryptionPublicKeyset, IrisCodeAndMaskShares},
+    types::IrisCodeAndMaskShares,
 };
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -21,48 +21,22 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 pub struct RequestEnqueuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
-
-    /// Encryption public key set ... one per MPC node.
-    encryption_keys: Option<EncryptionPublicKeyset>,
 }
 
 impl RequestEnqueuer {
-    fn encryption_keys(&self) -> EncryptionPublicKeyset {
-        match self.encryption_keys {
-            Some(keys) => keys,
-            _ => unreachable!("Encryption public keys must be downloaded."),
-        }
-    }
-
-    /// Constructor.
     pub fn new(aws_client: AwsClient) -> Self {
-        Self {
-            aws_client,
-            encryption_keys: None,
-        }
+        Self { aws_client }
     }
 }
 
 #[async_trait]
 impl ComponentInitializer for RequestEnqueuer {
     async fn init(&mut self) -> Result<(), ServiceClientError> {
-        tracing::info!("Initialising ...");
-        match AwsClient::download_encryption_public_keys(
-            self.aws_client.config().public_key_base_url().clone(),
-        )
-        .await
-        {
-            Ok(keys) => {
-                tracing::info!("Downloaded public key of MPC parties");
-                self.encryption_keys = Some(keys);
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Encryption public keys download error: {}", e);
-                Err(ServiceClientError::ComponentInitialisationError(
-                    e.to_string(),
-                ))
-            }
+        match self.aws_client.set_public_keyset().await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(ServiceClientError::ComponentInitialisationError(
+                e.to_string(),
+            )),
         }
     }
 }
@@ -110,7 +84,7 @@ impl RequestEnqueuer {
         let shares = create_iris_code_party_shares(*signup_id, l_code, l_mask, r_code, r_mask);
         let s3_key = match self
             .aws_client
-            .encrypt_and_upload_iris_shares(&self.encryption_keys(), &shares)
+            .encrypt_and_upload_iris_shares(&shares)
             .await
         {
             Ok(s3_key) => {

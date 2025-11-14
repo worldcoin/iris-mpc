@@ -3,8 +3,8 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[allow(clippy::enum_variant_names)]
 pub enum AwsClientError {
-    #[error("Download encryption keys error: {0}")]
-    EncryptionKeysDownloadError(String),
+    #[error("Download public key set error: {0}")]
+    PublicKeysetDownloadError(String),
 
     #[error("Iris shares encrypt and upload error: {0}")]
     IrisSharesEncryptAndUploadError(String),

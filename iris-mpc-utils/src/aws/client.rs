@@ -10,13 +10,17 @@ use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
-use super::{config::AwsClientConfig, errors::AwsClientError};
+use super::{config::AwsClientConfig, errors::AwsClientError, keys::download_public_keyset};
+use crate::types::PublicKeyset;
 
 /// Encpasulates access to a node's set of AWS service clients.
 #[derive(Debug)]
 pub struct AwsClient {
     /// Associated configuration.
     config: AwsClientConfig,
+
+    /// Encryption public key set ... one per MPC node.
+    public_keyset: Option<PublicKeyset>,
 
     /// Client for Amazon Simple Storage Service.
     s3: S3Client,
@@ -36,16 +40,29 @@ impl AwsClient {
         &self.config
     }
 
+    /// Resturns set of MPC party public keys.
+    pub(crate) fn public_keyset(&self) -> PublicKeyset {
+        match self.public_keyset {
+            Some(keys) => keys,
+            _ => unreachable!(
+                "Encryption public keys must be downloaded.  Use set_public_keyset function."
+            ),
+        }
+    }
+
     pub fn new(config: AwsClientConfig) -> Self {
         Self {
             config: config.to_owned(),
+            public_keyset: None,
             s3: S3Client::from(&config),
             secrets_manager: SecretsManagerClient::from(&config),
             sqs: SQSClient::from(&config),
             sns: SNSClient::from(&config),
         }
     }
+}
 
+impl AwsClient {
     /// Enqueues data to an S3 bucket.
     pub async fn s3_put_object(
         &self,
@@ -71,6 +88,24 @@ impl AwsClient {
                 ))
             }
         }
+    }
+
+    /// Downloads & assigns encryption keys.
+    pub(crate) async fn set_public_keyset(&mut self) -> Result<(), AwsClientError> {
+        self.public_keyset = Some(
+            match download_public_keyset(self.config.public_key_base_url()).await {
+                Ok(keys) => {
+                    tracing::info!("MPC parties public encryption keys downloaded");
+                    keys
+                }
+                Err(e) => {
+                    tracing::error!("MPC parties public encryption keys download error: {}", e);
+                    return Err(AwsClientError::PublicKeysetDownloadError(e.to_string()));
+                }
+            },
+        );
+
+        Ok(())
     }
 
     /// Enqueues a message upon an AWS SNS service topic.
@@ -163,6 +198,7 @@ impl Clone for AwsClient {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
+            public_keyset: None,
             sqs: self.sqs.clone(),
             sns: self.sns.clone(),
             s3: self.s3.clone(),

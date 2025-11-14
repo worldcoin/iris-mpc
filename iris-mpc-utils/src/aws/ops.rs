@@ -1,65 +1,20 @@
-use base64::{engine::general_purpose, Engine};
 use serde::Serialize;
 use serde_json;
-use sodiumoxide::crypto::box_::PublicKey;
 
 use iris_mpc::client::iris_data::IrisCodePartyShares;
-use iris_mpc_common::{helpers::key_pair::download_public_key, IrisSerialId};
+use iris_mpc_common::IrisSerialId;
 
 use super::{client::AwsClient, errors::AwsClientError, factory};
-use crate::types::EncryptionPublicKeyset;
 
 impl AwsClient {
-    /// Downloads a party's encryption public key.
-    pub async fn download_encryption_public_key(
-        public_key_base_url: String,
-        party_idx: usize,
-    ) -> Result<PublicKey, AwsClientError> {
-        match download_public_key(public_key_base_url.to_string(), party_idx.to_string()).await {
-            Ok(pbk_raw) => {
-                tracing::info!("Downloaded public key of MPC party {}.", party_idx);
-                Ok(
-                    PublicKey::from_slice(&general_purpose::STANDARD.decode(pbk_raw).unwrap())
-                        .unwrap(),
-                )
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Encryption keys of party {} download error: {}",
-                    party_idx,
-                    e
-                );
-                Err(AwsClientError::EncryptionKeysDownloadError(e.to_string()))
-            }
-        }
-    }
-
-    /// Downloads MPC encryption public keys.
-    pub async fn download_encryption_public_keys(
-        public_key_base_url: String,
-    ) -> Result<EncryptionPublicKeyset, AwsClientError> {
-        Ok([
-            Self::download_encryption_public_key(public_key_base_url.clone(), 0)
-                .await
-                .unwrap(),
-            Self::download_encryption_public_key(public_key_base_url.clone(), 1)
-                .await
-                .unwrap(),
-            Self::download_encryption_public_key(public_key_base_url.clone(), 2)
-                .await
-                .unwrap(),
-        ])
-    }
-
     /// Encrypts and uploads Iris shares.
     pub async fn encrypt_and_upload_iris_shares(
         &self,
-        encryption_keys: &EncryptionPublicKeyset,
         shares: &IrisCodePartyShares,
     ) -> Result<String, AwsClientError> {
         let s3_bucket = self.config().s3_request_bucket_name();
         let s3_key = shares.signup_id.as_str();
-        let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
+        let s3_shares = factory::create_iris_party_shares_for_s3(shares, &self.public_keyset());
         let s3_body = serde_json::to_vec(&s3_shares).unwrap();
 
         match self.s3_put_object(s3_bucket, s3_key, &s3_body).await {
