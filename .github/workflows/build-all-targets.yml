@@ -116,4 +116,4 @@ jobs:
 
       - name: Build All Targets
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: cargo build --release --all-features --lib --bins --benches --examples
+        run: cargo build --release --all-features --workspace --lib --bins --benches --examples
