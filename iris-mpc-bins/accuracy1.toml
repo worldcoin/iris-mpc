@@ -1,0 +1,28 @@
+[irises]
+option = "NdjsonFile"
+path = "data/store.ndjson"
+limit = 1000
+selection = "All"
+
+[graph]
+option = "GenerateDynamic"
+size = 1000 
+
+[graph.hnsw_params]
+ef_construction = 128
+ef_search = 64
+m = 32
+
+[analysis]
+sample_size = 50
+seed = 123 
+ef_search = 64
+distance_fn = "min_fhd"  # Must be "fhd" or "min_fhd"
+k_neighbors = 5
+output_format = "histogram"   # Must be "full_csv", "rate" or "histogram"
+output_path = "accuracy_results.csv"
+mutations = [0.125, 0.33, 0.50]
+
+[analysis.rotations]
+start = -3
+end = 4

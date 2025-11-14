@@ -2,15 +2,11 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter, Write},
     path::Path,
-    sync::Arc,
 };
 
 use clap::ValueEnum;
 use eyre::Result;
-use iris_mpc_common::{
-    iris_db::iris::{IrisCode, IrisCodeArray},
-    IrisVectorId,
-};
+use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
@@ -98,23 +94,6 @@ pub fn irises_from_ndjson(
 }
 
 impl PlaintextStore {
-    pub fn from_ndjson_file(
-        path: &Path,
-        limit: Option<usize>,
-        selection: IrisSelection,
-    ) -> Result<PlaintextStore> {
-        let stream_iterator = irises_from_ndjson_iter(path, limit, selection)?;
-
-        // Iterate over each deserialized object
-        let mut vector = PlaintextStore::new();
-        for (idx, iris) in stream_iterator.enumerate() {
-            let id = IrisVectorId::from_0_index(idx as u32);
-            vector.insert_with_id(id, Arc::new(iris));
-        }
-
-        Ok(vector)
-    }
-
     pub fn to_ndjson_file(&self, path: &Path) -> Result<()> {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
@@ -133,5 +112,3 @@ impl PlaintextStore {
         Ok(())
     }
 }
-
-// TODO: refactor into function which write from `Vec<IrisCode>`, plus wrapper which takes a PlaintextStore

@@ -1,3 +1,4 @@
+pub mod accuracy;
 pub mod graph_store;
 pub mod hnsw_searcher;
 pub mod iris_code;
