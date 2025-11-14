@@ -1,7 +1,7 @@
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        searcher::{ConnectPlanLayerV, ConnectPlanV},
+        searcher::{ConnectPlanLayerV, ConnectPlanV, SetEntryPoint},
         GraphMem, VectorStore,
     },
 };
@@ -254,10 +254,17 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
         // If required, set vector as new entry point
-        if plan.set_ep {
-            let insertion_layer = plan.layers.len() - 1;
-            self.set_entry_point(plan.inserted_vector, insertion_layer)
-                .await?;
+        let insertion_layer = plan.layers.len() - 1;
+        match plan.set_ep {
+            SetEntryPoint::False => {}
+            SetEntryPoint::NewLayer => {
+                self.set_entry_point(plan.inserted_vector, insertion_layer)
+                    .await?;
+            }
+            SetEntryPoint::AddToLayer => {
+                self.add_entry_point(plan.inserted_vector, insertion_layer)
+                    .await?;
+            }
         }
 
         // Connect the new vector to its neighbors in each layer.
@@ -288,6 +295,13 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     }
 
     pub async fn get_entry_point(&mut self) -> Result<Option<(V::VectorRef, usize)>> {
+        Ok(self
+            .get_entry_points()
+            .await?
+            .and_then(|(mut points, layer)| points.pop().map(|p| (p, layer))))
+    }
+
+    pub async fn get_entry_points(&mut self) -> Result<Option<(Vec<V::VectorRef>, usize)>> {
         let table = self.entry_table();
         let rows = sqlx::query(&format!(
             "SELECT serial_id, version_id, layer FROM {table} WHERE graph_id = $1"
@@ -300,56 +314,60 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         if rows.is_empty() {
             Ok(None)
         } else {
+            // ensure all entrypoints are on the same layer
+            let mut expected_layer = None;
             let mut points = Vec::with_capacity(rows.len());
-            let mut max_layer = 0;
             for row in rows {
                 let serial_id = row.get::<i64, &str>("serial_id") as u32;
                 let version_id: i16 = row.get("version_id");
                 let row_layer = row.get::<i16, &str>("layer") as usize;
-                if row_layer > max_layer {
-                    max_layer = row_layer;
-                    points.clear();
+
+                if expected_layer.is_none() {
+                    expected_layer.replace(row_layer);
                 }
-                if row_layer != max_layer {
-                    continue;
-                }
+
+                // if this fails, then add_entry_point() was used incorrectly.
+                assert_eq!(Some(row_layer), expected_layer);
+
                 points.push(VectorId::new(serial_id, version_id));
             }
-            // todo: return the entire list of entry points once supported
-            // by the rest of the codebase.
-            Ok(points.pop().map(|x| (x, max_layer)))
+
+            Ok(Some((points, expected_layer.unwrap())))
         }
     }
 
     pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
-        // todo: delete this once set_entry_point() receives a list of points.
-        let points = vec![point];
         let table = self.entry_table();
 
-        // Clear existing entry points for this graph
         sqlx::query(&format!("DELETE FROM {table} WHERE graph_id = $1"))
             .bind(self.graph_id())
             .execute(self.tx())
             .await
             .map_err(|e| eyre!("Failed to clear entry points: {e}"))?;
 
-        // Insert each point as a new entry point for this graph and layer
-        for point in points {
-            sqlx::query(&format!(
-                "
+        self.add_entry_point(point, layer).await?;
+
+        Ok(())
+    }
+
+    pub async fn add_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
+        let table = self.entry_table();
+
+        // insert the point into the table
+        sqlx::query(&format!(
+            "
                 INSERT INTO {table} (graph_id, serial_id, version_id, layer)
                 VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, serial_id, layer)
                 DO UPDATE SET version_id = EXCLUDED.version_id
                 "
-            ))
-            .bind(self.graph_id())
-            .bind(point.serial_id() as i64)
-            .bind(point.version_id())
-            .bind(layer as i16)
-            .execute(self.tx())
-            .await
-            .map_err(|e| eyre!("Failed to insert entry point: {e}"))?;
-        }
+        ))
+        .bind(self.graph_id())
+        .bind(point.serial_id() as i64)
+        .bind(point.version_id())
+        .bind(layer as i16)
+        .execute(self.tx())
+        .await
+        .map_err(|e| eyre!("Failed to insert entry point: {e}"))?;
 
         Ok(())
     }
@@ -477,9 +495,9 @@ where
         let schema_name = self.tx.schema_name.clone();
         let graph_id = self.graph_id();
 
-        let ep = self.get_entry_point().await?;
-        if let Some((point, layer)) = ep {
-            graph_mem.set_entry_point(point, layer).await;
+        let ep = self.get_entry_points().await?;
+        if let Some((points, layer)) = ep {
+            graph_mem.init_entry_points(points, layer).await;
         }
 
         let total_rows = self.get_total_row_count().await?;

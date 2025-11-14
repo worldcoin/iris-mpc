@@ -6,13 +6,13 @@
 use crate::{
     execution::hawk_main::state_check::SetHash,
     hnsw::{
-        searcher::{ConnectPlan, ConnectPlanLayer},
+        searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
         vector_store::Ref,
     },
 };
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{cmp, collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -30,7 +30,7 @@ pub struct EntryPoint<VectorRef> {
 /// An in-memory implementation of an HNSW hierarchical graph.
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
-pub struct GraphMem<V: Ref + Display + FromStr> {
+pub struct GraphMem<V: Ref + Display + FromStr + cmp::Ord> {
     /// Starting vector and layer for HNSW search
     pub entry_point: Vec<EntryPoint<V>>,
 
@@ -40,7 +40,7 @@ pub struct GraphMem<V: Ref + Display + FromStr> {
     pub layers: Vec<Layer<V>>,
 }
 
-impl<V: Ref + Display + FromStr> Clone for GraphMem<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> Clone for GraphMem<V> {
     fn clone(&self) -> Self {
         GraphMem {
             entry_point: self.entry_point.clone(),
@@ -49,7 +49,7 @@ impl<V: Ref + Display + FromStr> Clone for GraphMem<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr> GraphMem<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
     pub fn new() -> Self {
         GraphMem {
             entry_point: vec![],
@@ -79,14 +79,42 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         self.layers.clone()
     }
 
+    pub fn get_num_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    pub fn get_temp_ep(&self) -> Option<(V, usize)> {
+        self.layers
+            .iter()
+            .enumerate()
+            .last()
+            .and_then(|(idx, x)| x.links.keys().min().map(|x| (x.clone(), idx)))
+    }
+
+    pub fn get_ep_layer(&self) -> Option<Vec<V>> {
+        let v: Vec<_> = self.entry_point.iter().map(|ep| ep.point.clone()).collect();
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    }
+
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
+        let insertion_layer = plan.layers.len() - 1;
         // If required, set vector as new entry point
-        if plan.set_ep {
-            let insertion_layer = plan.layers.len() - 1;
-            self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
-                .await;
+        match plan.set_ep {
+            SetEntryPoint::False => {}
+            SetEntryPoint::NewLayer => {
+                self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                    .await;
+            }
+            SetEntryPoint::AddToLayer => {
+                self.add_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                    .await;
+            }
         }
 
         // Connect the new vector to its neighbors in each layer.
@@ -111,6 +139,20 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         self.entry_point
             .first()
             .map(|ep| (ep.point.clone(), ep.layer))
+    }
+
+    pub async fn init_entry_points(&mut self, points: Vec<V>, layer: usize) {
+        self.entry_point = points
+            .into_iter()
+            .map(|point| EntryPoint { point, layer })
+            .collect()
+    }
+
+    pub async fn add_entry_point(&mut self, point: V, layer: usize) {
+        if let Some(previous) = self.entry_point.first() {
+            assert!(previous.layer == layer, "add_entry_point: layer mismatch");
+        }
+        self.entry_point.push(EntryPoint { point, layer });
     }
 
     pub async fn set_entry_point(&mut self, point: V, layer: usize) {
@@ -158,14 +200,14 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
 
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
-pub struct Layer<V: Ref + Display + FromStr> {
+pub struct Layer<V: Ref + Display + FromStr + cmp::Ord> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
     pub links: HashMap<V, Vec<V>>,
     set_hash: SetHash,
 }
 
-impl<V: Ref + Display + FromStr> Clone for Layer<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> Clone for Layer<V> {
     fn clone(&self) -> Self {
         Layer {
             links: self.links.clone(),
@@ -174,7 +216,7 @@ impl<V: Ref + Display + FromStr> Clone for Layer<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr> Layer<V> {
+impl<V: Ref + Display + FromStr + cmp::Ord> Layer<V> {
     pub fn new() -> Self {
         Layer {
             links: HashMap::new(),
@@ -211,20 +253,18 @@ impl<V: Ref + Display + FromStr> Layer<V> {
 /// - vector ids are re-mapped to remove blank entries left by deletions
 pub fn migrate<U, V, VecMap>(graph: GraphMem<U>, vector_map: VecMap) -> GraphMem<V>
 where
-    U: Ref + Display + FromStr,
-    V: Ref + Display + FromStr,
+    U: Ref + Display + FromStr + cmp::Ord,
+    V: Ref + Display + FromStr + cmp::Ord,
     VecMap: Fn(U) -> V + Copy,
 {
     let new_entry_point = graph
         .entry_point
-        .first()
-        .map(|ep| {
-            vec![EntryPoint {
-                point: vector_map(ep.point.clone()),
-                layer: ep.layer,
-            }]
+        .iter()
+        .map(|ep| EntryPoint {
+            point: vector_map(ep.point.clone()),
+            layer: ep.layer,
         })
-        .unwrap_or_default();
+        .collect();
 
     let new_layers: Vec<_> = graph
         .layers
