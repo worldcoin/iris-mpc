@@ -1,6 +1,11 @@
 use crate::{
     execution::session::{Session, SessionHandles},
     network::value::{NetworkInt, NetworkValue},
+    // load fss
+    protocol::binary_fss::{
+        add_3_get_msb_fss_batch_parallel_threshold,
+        add_3_get_msb_fss_batch_parallel_threshold_timers,
+    },
     shares::{
         bit::Bit,
         int_ring::IntRing2k,
@@ -1566,12 +1571,22 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     // }
 
     let batch_size: usize = 64;
+    let parallel_thresh = 8;
+    pub const USE_PARALLEL_THRESH: bool = true;
 
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
+
     for batch in x.chunks(batch_size) {
-        let batch_out = add_3_get_msb_fss_batch(session, batch).await?;
+        let batch_out = if USE_PARALLEL_THRESH {
+            add_3_get_msb_fss_batch_parallel_threshold_timers(session, batch, parallel_thresh)
+                .await?
+        } else {
+            add_3_get_msb_fss_batch(session, batch).await?
+        };
+
         vec_of_msb_shares.extend(batch_out);
     }
+
     Ok(vec_of_msb_shares)
 }
 

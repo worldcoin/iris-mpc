@@ -70,6 +70,9 @@ rustls = "0.21.12"
 x509-parser = "0.17.0"
 anyhow = "1.0.93"
 ark-std = {version = "0.5.0"}#, features=["print-trace"]}
+# Optional rayon uses the workspace version; only compiled when a feature enables it
+rayon = { workspace = true, optional = true }
+
 
 ### for perf stats
 # dashmap = "5" ### already imported
@@ -89,6 +92,8 @@ tonic-build = "0.12.3"
 [features]
 db_dependent = []
 networking_metrics = []
+# Enable parallel code paths in binary_fss.rs; pulls in optional rayon
+parallel-msb = ["dep:rayon"]
 
 [[bench]]
 name = "hnsw"
