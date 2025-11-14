@@ -27,7 +27,9 @@ aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+aws-smithy-types = "1.2.9"
 base64.workspace = true
+blake3 = "1.8.2"
 cudarc.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -173,6 +175,12 @@ path = "bin/iris-mpc-upgrade/reshare-server.rs"
 [[bin]]
 name = "reshare-client"
 path = "bin/iris-mpc-upgrade/reshare-client.rs"
+
+[[bin]]
+name = "rerandomize-db"
+path = "bin/iris-mpc-upgrade/rerandomize_db.rs"
+
+
 
 # ---------------------
 # binaries for iris-mpc-upgrade-hawk

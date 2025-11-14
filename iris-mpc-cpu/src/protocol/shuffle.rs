@@ -1,10 +1,13 @@
 use eyre::Result;
-use itertools::{izip, Itertools};
 use rand::Rng;
 
 use crate::{
     execution::session::{Session, SessionHandles},
-    shares::{ring_impl::VecRingElement, share::DistanceShare, RingElement, Share},
+    shares::{
+        ring_impl::VecRingElement,
+        share::{reconstruct_id_distance_vector, DistanceShare},
+        RingElement, Share,
+    },
     utils::constants::N_PARTIES,
 };
 
@@ -12,31 +15,6 @@ use crate::{
 /// Each party holds two out of three shares of the permutation pi(x) = pi_12(pi_20(pi_01(x))),
 /// i.e., party i holds pi_{i,i+1} and pi_{i-1,i} (indices modulo 3)
 pub type Permutation = (Vec<u32>, Vec<u32>);
-
-fn reconstruct_distances(
-    a: VecRingElement<u32>,
-    b: VecRingElement<u32>,
-) -> Vec<(Share<u32>, DistanceShare<u32>)> {
-    izip!(a.0, b.0)
-        .tuples()
-        .map(
-            |((id_a, id_b), (code_dot_a, code_dot_b), (mask_dot_a, mask_dot_b))| {
-                let id_share = Share { a: id_a, b: id_b };
-                let dist_share = DistanceShare {
-                    code_dot: Share {
-                        a: code_dot_a,
-                        b: code_dot_b,
-                    },
-                    mask_dot: Share {
-                        a: mask_dot_a,
-                        b: mask_dot_b,
-                    },
-                };
-                (id_share, dist_share)
-            },
-        )
-        .collect_vec()
-}
 
 fn batch_shuffle(
     perm: Vec<u32>,
@@ -148,7 +126,7 @@ async fn shuffle_party_0(
     let (tilde_b, tilde_a) = (0..(3 * n))
         .map(|_| prf.gen_rands::<RingElement<u32>>())
         .unzip();
-    Ok(reconstruct_distances(tilde_b, tilde_a))
+    Ok(reconstruct_id_distance_vector(tilde_b, tilde_a))
 }
 
 async fn shuffle_party_1(
@@ -204,7 +182,7 @@ async fn shuffle_party_1(
     let tilde_c = (tilde_c1 + tilde_c2)?;
 
     // Reconstruct shares using tilde_C and tilde_B
-    Ok(reconstruct_distances(tilde_c, tilde_b))
+    Ok(reconstruct_id_distance_vector(tilde_c, tilde_b))
 }
 
 async fn shuffle_party_2(
@@ -248,11 +226,12 @@ async fn shuffle_party_2(
     let tilde_c = (tilde_c1 + tilde_c2)?;
 
     // Reconstruct shares using tilde_A and tilde_C
-    Ok(reconstruct_distances(tilde_a, tilde_c))
+    Ok(reconstruct_id_distance_vector(tilde_a, tilde_c))
 }
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use num_traits::Zero;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
