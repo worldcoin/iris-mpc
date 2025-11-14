@@ -6,13 +6,10 @@
 
 use super::{
     graph::neighborhood::SortedNeighborhoodV,
-    sorting::{binary_search::BinarySearch, swap_network::apply_swap_network, tree_min::tree_min},
+    sorting::{swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
-use crate::hnsw::{
-    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, SortedNeighborhood,
-    VectorStore,
-};
+use crate::hnsw::{metrics::ops_counter::Operation, SortedNeighborhood, VectorStore};
 
 use crate::hnsw::GraphMem;
 
@@ -33,6 +30,7 @@ use tracing::{debug, instrument, trace_span, Instrument};
 /// The number of explicitly provided parameters for different layers of HNSW
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
+const M_MAX_MULTIPLIER: f64 = 1.1;
 
 /// Struct specifying general parameters for HNSW search.
 ///
@@ -48,6 +46,10 @@ pub struct HnswParams {
 
     /// Maximum number of neighbors allowed per graph node
     pub M_max: [usize; N_PARAM_LAYERS],
+
+    /// The real maximum, at which point the neighborhood should
+    /// be reduced to M_max.
+    pub M_max_extra: [usize; N_PARAM_LAYERS],
 
     /// Exploration factor `ef` for search layers during construction
     pub ef_constr_search: [usize; N_PARAM_LAYERS],
@@ -81,6 +83,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
+        let M_max_extra = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
         let ef_constr_search_arr = [1usize; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef_construction; N_PARAM_LAYERS];
         let mut ef_search_arr = [1usize; N_PARAM_LAYERS];
@@ -90,6 +93,7 @@ impl HnswParams {
         Self {
             M: M_arr,
             M_max: M_max_arr,
+            M_max_extra,
             ef_constr_search: ef_constr_search_arr,
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
@@ -104,6 +108,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
+        let M_max_extra = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
         let ef_constr_search_arr = [ef; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef; N_PARAM_LAYERS];
         let ef_search_arr = [ef; N_PARAM_LAYERS];
@@ -112,6 +117,7 @@ impl HnswParams {
         Self {
             M: M_arr,
             M_max: M_max_arr,
+            M_max_extra,
             ef_constr_search: ef_constr_search_arr,
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
@@ -142,6 +148,10 @@ impl HnswParams {
 
     pub fn get_M_max(&self, lc: usize) -> usize {
         Self::get_val(&self.M_max, lc)
+    }
+
+    pub fn get_M_extra(&self, lc: usize) -> usize {
+        Self::get_val(&self.M_max_extra, lc)
     }
 
     pub fn get_ef_constr_search(&self, lc: usize) -> usize {
@@ -1349,7 +1359,8 @@ impl HnswSearcher {
     /// This function call does *not* update `graph`.
     pub async fn insert_prepare<V: VectorStore>(
         &self,
-        store: &mut V,
+        // this may be used in the future to trim l_links
+        _store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         mut links: Vec<SortedNeighborhoodV<V>>,
@@ -1361,107 +1372,36 @@ impl HnswSearcher {
             set_ep,
         };
 
-        // Truncate search results to size M before insertion
+        // todo: re-evaluate this. perhaps add a shuffle afterwards.
         for (lc, l_links) in links.iter_mut().enumerate() {
             let M = self.params.get_M(lc);
             l_links.trim_to_k_nearest(M);
         }
 
-        struct NeighborUpdate<Query, Vector, Distance> {
-            /// The distance between the vector being inserted to a base vector.
-            nb_dist: Distance,
-            /// The base vector that we connect to. It is in "query" form to compare to `nb_links`.
-            nb_query: Query,
-            /// The neighborhood of the base vector.
-            nb_links: SortedEdgeIds<Vector>,
-            /// The current state of the search.
-            search: BinarySearch,
-        }
+        let mut neighborhoods_per_layer = vec![];
+        let mut neighbors_per_layer = vec![];
+        for (lc, l_links) in links.iter_mut().enumerate() {
+            let neighbors = l_links.vectors_cloned();
+            neighbors_per_layer.push(neighbors.clone());
 
-        // Collect current neighborhoods of new neighbors in each layer and
-        // initialize binary search
-        let mut neighbors = Vec::new();
-        for (lc, l_links) in links.iter().enumerate() {
-            let nb_queries = store.vectors_as_queries(l_links.vectors_cloned()).await;
-
-            let mut l_neighbors = Vec::with_capacity(l_links.len());
-            for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
-                let nb_links = graph.get_links(nb, lc).await;
-                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links).await);
-                let search = BinarySearch {
-                    left: 0,
-                    right: nb_links.len(),
-                };
-                let neighbor = NeighborUpdate {
-                    nb_dist: nb_dist.clone(),
-                    nb_query,
-                    nb_links,
-                    search,
-                };
-                l_neighbors.push(neighbor);
+            let mut neighbors_neighborhoods = vec![];
+            for neighbor in neighbors.into_iter() {
+                let mut new_neighborhood = graph.get_links(&neighbor, lc).await;
+                new_neighborhood.push(inserted_vector.clone());
+                neighbors_neighborhoods.push(new_neighborhood);
             }
-            neighbors.push(l_neighbors);
+            neighborhoods_per_layer.push(neighbors_neighborhoods);
         }
 
-        // Run searches until completion, executing comparisons in batches
-        let mut searches_ongoing: Vec<_> = neighbors
-            .iter_mut()
-            .flatten()
-            .filter(|n| !n.search.is_finished())
-            .collect();
-
-        while !searches_ongoing.is_empty() {
-            // Find the next batch of distances to evaluate.
-            // This is each base neighbor versus the next search position in its neighborhood.
-            let dist_batch = searches_ongoing
-                .iter()
-                .map(|n| {
-                    let cmp_idx = n.search.next().ok_or(eyre!("No next index found"))?;
-                    Ok((n.nb_query.clone(), n.nb_links[cmp_idx].clone()))
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            // Compute the distances.
-            let link_distances = store.eval_distance_pairs(&dist_batch).await?;
-
-            // Prepare a batch of less_than.
-            // This is |inserted--base| versus |base--neighborhood|.
-            let lt_batch = izip!(&searches_ongoing, link_distances)
-                .map(|(n, link_dist)| (n.nb_dist.clone(), link_dist))
-                .collect_vec();
-
-            // Compute the less_than.
-            let results = store.less_than_batch(&lt_batch).await?;
-
-            searches_ongoing
-                .iter_mut()
-                .zip(results)
-                .for_each(|(n, res)| {
-                    n.search.update(res);
-                });
-
-            searches_ongoing.retain(|n| !n.search.is_finished());
-        }
-
-        // Directly insert new vector into neighborhoods from search results
-        for (lc, l_neighbors) in neighbors.iter_mut().enumerate() {
-            let max_links = self.params.get_M_max(lc);
-            for n in l_neighbors.iter_mut() {
-                let insertion_idx = n.search.result().ok_or(eyre!("No insertion index found"))?;
-                n.nb_links.insert(insertion_idx, inserted_vector.clone());
-                n.nb_links.trim_to_k_nearest(max_links);
-            }
-        }
-
-        // Generate ConnectPlanLayer structs
-        plan.layers = links
-            .into_iter()
-            .zip(neighbors)
-            .map(|(l_links, l_neighbors)| ConnectPlanLayer {
-                neighbors: l_links.vectors_cloned(),
-                nb_links: l_neighbors.into_iter().map(|n| n.nb_links.0).collect_vec(),
-            })
-            .collect();
+        plan.layers = izip!(
+            neighbors_per_layer.into_iter(),
+            neighborhoods_per_layer.into_iter()
+        )
+        .map(|(neighbors, nb_links)| ConnectPlanLayer {
+            neighbors,
+            nb_links,
+        })
+        .collect();
 
         Ok(plan)
     }
