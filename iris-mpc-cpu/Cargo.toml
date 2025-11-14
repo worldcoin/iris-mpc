@@ -71,6 +71,11 @@ x509-parser = "0.17.0"
 anyhow = "1.0.93"
 ark-std = {version = "0.5.0"}#, features=["print-trace"]}
 
+### for perf stats
+# dashmap = "5" ### already imported
+once_cell = "1"
+humantime = "2"
+
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
