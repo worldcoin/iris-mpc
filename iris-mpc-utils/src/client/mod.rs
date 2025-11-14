@@ -7,7 +7,7 @@ use components::RequestGenerator;
 use components::ResponseCorrelator;
 use components::ResponseDequeuer;
 pub use errors::ServiceClientError;
-use traits::RequestBatchProcesser;
+use traits::{ComponentInitializer, RequestBatchProcesser};
 pub use types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
 
 mod components;
@@ -53,12 +53,12 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     }
 
     /// Initializer.
-    pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
+    pub async fn init(&mut self) -> Result<(), ServiceClientError> {
         for initializer in [
-            self.request_enqueuer.init(public_key_base_url).await,
-            self.response_correlator.init().await,
+            self.request_enqueuer.init(),
+            self.response_correlator.init(),
         ] {
-            match initializer {
+            match initializer.await {
                 Ok(()) => (),
                 Err(e) => {
                     tracing::error!("Service client: component initialisation failed: {}", e);

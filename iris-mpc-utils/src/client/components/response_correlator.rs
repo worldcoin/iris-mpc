@@ -1,4 +1,6 @@
-use super::super::{errors::ServiceClientError, types::RequestBatch};
+use async_trait::async_trait;
+
+use super::super::{errors::ServiceClientError, traits::ComponentInitializer, types::RequestBatch};
 use crate::aws::AwsClient;
 
 /// A component responsible for correlating system requests with system responses.
@@ -14,8 +16,18 @@ impl ResponseCorrelator {
         Self { aws_client }
     }
 
-    /// Initializer.
-    pub async fn init(&self) -> Result<(), ServiceClientError> {
+    #[allow(dead_code)]
+    pub async fn correlate(&self, batch: &RequestBatch) {
+        tracing::info!(
+            "TODO: correlate enqueued requests with dequeued responses: {}",
+            batch
+        );
+    }
+}
+
+#[async_trait]
+impl ComponentInitializer for ResponseCorrelator {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
         tracing::info!("Initialising ...");
         match self.aws_client.sqs_purge_queue().await {
             Ok(()) => {
@@ -26,13 +38,5 @@ impl ResponseCorrelator {
                 e.to_string(),
             )),
         }
-    }
-
-    #[allow(dead_code)]
-    pub async fn correlate(&self, batch: &RequestBatch) {
-        tracing::info!(
-            "TODO: correlate enqueued requests with dequeued responses: {}",
-            batch
-        );
     }
 }

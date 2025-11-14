@@ -41,7 +41,7 @@ impl AwsClientConfig {
         &self.environment
     }
 
-    pub(super) fn public_key_base_url(&self) -> &String {
+    pub(crate) fn public_key_base_url(&self) -> &String {
         &self.public_key_base_url
     }
 

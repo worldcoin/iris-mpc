@@ -5,7 +5,7 @@ use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use super::super::{
     errors::ServiceClientError,
-    traits::RequestBatchProcesser,
+    traits::{ComponentInitializer, RequestBatchProcesser},
     types::{RequestBatch, RequestData},
 };
 use crate::{
@@ -41,11 +41,17 @@ impl RequestEnqueuer {
             encryption_keys: None,
         }
     }
+}
 
-    /// Initializer.
-    pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
+#[async_trait]
+impl ComponentInitializer for RequestEnqueuer {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
         tracing::info!("Initialising ...");
-        match AwsClient::download_encryption_public_keys(public_key_base_url).await {
+        match AwsClient::download_encryption_public_keys(
+            self.aws_client.config().public_key_base_url().clone(),
+        )
+        .await
+        {
             Ok(keys) => {
                 tracing::info!("Downloaded public key of MPC parties");
                 self.encryption_keys = Some(keys);

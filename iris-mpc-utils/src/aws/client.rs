@@ -32,7 +32,7 @@ pub struct AwsClient {
 }
 
 impl AwsClient {
-    pub(super) fn config(&self) -> &AwsClientConfig {
+    pub(crate) fn config(&self) -> &AwsClientConfig {
         &self.config
     }
 

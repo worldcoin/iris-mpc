@@ -21,8 +21,9 @@ pub async fn main() -> Result<()> {
 
     tracing::info!("Initialising ...");
     let mut client = ServiceClient::async_from(options.clone()).await;
-    match client.init(options.aws_public_key_base_url).await {
+    match client.init().await {
         Ok(()) => {
+            tracing::info!("Executing ...");
             client.exec().await.unwrap();
         }
         Err(e) => {
