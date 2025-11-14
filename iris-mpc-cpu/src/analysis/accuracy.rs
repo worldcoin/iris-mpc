@@ -10,7 +10,6 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
-use futures::future::JoinAll;
 use iris_mpc_common::{
     iris_db::iris::{IrisCode, IrisMutationFamily},
     IrisSerialId, IrisVectorId as VectorId,
@@ -24,7 +23,6 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tokio::task::JoinError;
 
 /// Configuration for the accuracy analysis run.
 #[derive(Debug, Deserialize)]
@@ -67,6 +65,7 @@ pub struct AnalysisResult {
     rotation: isize,
     found: bool,
 }
+
 pub async fn run_analysis(
     config: &AnalysisConfig,
     store: PlaintextStore,
@@ -74,8 +73,6 @@ pub async fn run_analysis(
     searcher: &HnswSearcher,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
-    let mut all_results = Vec::new();
-
     // Get all valid VectorIds from the store.
     let all_ids: Vec<VectorId> = store
         .storage
@@ -87,7 +84,6 @@ pub async fn run_analysis(
         bail!("No iris codes found in store to sample from.");
     }
 
-    // 1. Sample target codes
     let sampled_ids: Vec<VectorId> = all_ids
         .choose_multiple(rng, config.sample_size)
         .cloned()
@@ -98,12 +94,16 @@ pub async fn run_analysis(
     let store = SharedPlaintextStore::from(store);
 
     let mut analysis_searcher = searcher.clone();
-    analysis_searcher.params.ef_search[0] = config.ef_search; // Set layer 0 `ef_search`
+    analysis_searcher.params.ef_search[0] = config.ef_search;
 
-    let mut search_count = 0;
     let k_neighbors = config.k_neighbors;
+    let mut futures = Vec::new();
 
-    for target_id in sampled_ids {
+    let total_queries =
+        config.sample_size * config.mutations.len() * config.rotations.clone().count();
+    println!("Preparing {} search queries...", total_queries);
+
+    for &target_id in &sampled_ids {
         let target_code = store
             .storage
             .get_vector(&target_id)
@@ -117,48 +117,48 @@ pub async fn run_analysis(
             let mutated_code = Arc::new(mutation_family.get_graded_similar_iris(mutation));
 
             let rotations = mutated_code.rotations_from_range(config.rotations.clone());
-            let mut futures = Vec::new();
+
             for (ri, query_code_inner) in izip!(config.rotations.clone(), rotations) {
                 let query_ref = Arc::new(query_code_inner);
-                let analysis_searcher = analysis_searcher.clone();
-                let mut store = store.clone();
-                let graph = Arc::clone(&graph);
+                let analysis_searcher_clone = analysis_searcher.clone();
+                let mut store_clone = store.clone();
+                let graph_clone = Arc::clone(&graph);
 
                 let future = async move {
-                    let neighbors = analysis_searcher
-                        .search(&mut store, &graph, &query_ref, k_neighbors)
+                    let neighbors = analysis_searcher_clone
+                        .search(&mut store_clone, &graph_clone, &query_ref, k_neighbors)
                         .await?;
 
                     let found = neighbors.edges.iter().any(|(id, _dist)| *id == target_id);
 
-                    Ok(AnalysisResult {
+                    eyre::Ok(AnalysisResult {
                         id: target_id.serial_id(),
                         mutation,
                         rotation: ri,
                         found,
                     })
                 };
-                futures.push(future);
-                search_count += 1;
+                futures.push(tokio::spawn(future));
             }
-
-            // TODO: parallelize over all samples * rotations * mutations search queries,
-            // instead of just rotations of some mutation
-            let results_for_mutation = futures
-                .into_iter()
-                .map(tokio::spawn)
-                .collect::<JoinAll<_>>()
-                .await
-                .into_iter()
-                .collect::<Result<Result<Vec<_>>, JoinError>>()?;
-
-            all_results.extend(results_for_mutation?);
-            search_count = all_results.len();
-        }
-        if search_count % 1000 == 0 && search_count > 0 {
-            println!("... performed {} searches", search_count);
         }
     }
+
+    println!(
+        "... {} total queries prepared. Executing all searches in parallel...",
+        futures.len()
+    );
+
+    // Wait for all tasks to complete
+    let join_results = futures::future::join_all(futures).await;
+
+    let mut all_results = Vec::with_capacity(total_queries);
+    // Collect results, propagating any errors
+    for join_result in join_results {
+        let analysis_result = join_result??;
+        all_results.push(analysis_result);
+    }
+
+    println!("... all {} searches complete.", all_results.len());
 
     Ok(all_results)
 }
@@ -203,7 +203,6 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
         }
         "histogram" => {
             // Option 2: For each rotation amount, output a histogram of "minimum mutation amount for which match was not found in search results"
-
             let mut min_failure_map: HashMap<(IrisSerialId, isize), usize> = HashMap::new();
 
             for res in results.iter() {
@@ -352,10 +351,7 @@ pub async fn load_graph(
                 hnsw_params.m,
             );
 
-            // This method builds a graph on the first `size` entries in the store.
-            // TODO: replace with parallel version
             let graph = store.generate_graph(rng, *size, &searcher).await?;
-
             Ok((graph, searcher))
         }
     }

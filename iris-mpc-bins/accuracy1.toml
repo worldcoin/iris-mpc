@@ -1,12 +1,12 @@
 [irises]
 option = "NdjsonFile"
 path = "data/store.ndjson"
-limit = 500
+limit = 1000
 selection = "All"
 
 [graph]
 option = "GenerateDynamic"
-size = 500 
+size = 1000 
 
 [graph.hnsw_params]
 ef_construction = 128
@@ -14,7 +14,7 @@ ef_search = 64
 m = 32
 
 [analysis]
-sample_size = 5
+sample_size = 50
 seed = 123 
 ef_search = 64
 distance_fn = "min_fhd"  # Must be "fhd" or "min_fhd"
