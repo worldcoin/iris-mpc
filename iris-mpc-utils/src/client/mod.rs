@@ -7,10 +7,12 @@ use components::RequestGenerator;
 use components::ResponseCorrelator;
 use components::ResponseDequeuer;
 pub use errors::ServiceClientError;
+use traits::RequestBatchProcesser;
 pub use types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
 
 mod components;
 mod errors;
+mod traits;
 mod types;
 
 /// A utility for correlating enqueued system requests with system responses.
@@ -72,11 +74,11 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
-            for batch_processing_result in [
-                self.request_enqueuer.enqueue(&batch).await,
-                self.response_dequeuer.dequeue(&batch).await,
+            for processor in [
+                self.request_enqueuer.process_batch(&batch),
+                self.response_dequeuer.process_batch(&batch),
             ] {
-                match batch_processing_result {
+                match processor.await {
                     Ok(()) => (),
                     Err(e) => {
                         tracing::error!("Service client: batch processing error: {}", e);

@@ -1,8 +1,11 @@
+use async_trait::async_trait;
+
 use iris_mpc_common::helpers::smpc_request::{UniquenessRequest, UNIQUENESS_MESSAGE_TYPE};
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use super::super::{
     errors::ServiceClientError,
+    traits::RequestBatchProcesser,
     types::{RequestBatch, RequestData},
 };
 use crate::{
@@ -56,9 +59,11 @@ impl RequestEnqueuer {
             }
         }
     }
+}
 
-    /// Enqueues requests upon system ingress queues.
-    pub async fn enqueue(&self, batch: &RequestBatch) -> Result<(), ServiceClientError> {
+#[async_trait]
+impl RequestBatchProcesser for RequestEnqueuer {
+    async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ServiceClientError> {
         for request in batch.requests() {
             match request.data() {
                 RequestData::Uniqueness { shares } => {
@@ -81,7 +86,9 @@ impl RequestEnqueuer {
 
         Ok(())
     }
+}
 
+impl RequestEnqueuer {
     /// Enqueues a uniqueness request.  This is a two stage process as encrypted shares are first
     /// uploaded to AWS S3 prior to actual enqueuing.
     async fn enqueue_uniqueness_request(
