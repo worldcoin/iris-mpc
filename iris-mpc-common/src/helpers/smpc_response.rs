@@ -2,6 +2,10 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::aws::{
+    NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+};
+
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
 // Error Reasons
 pub const ERROR_FAILED_TO_PROCESS_IRIS_SHARES: &str = "failed_to_process_iris_shares";
@@ -256,4 +260,28 @@ pub fn create_message_type_attribute_map(
         .unwrap();
     message_attributes_map.insert(SMPC_MESSAGE_TYPE_ATTRIBUTE.to_string(), message_type_value);
     message_attributes_map
+}
+
+pub fn create_sns_message_attributes(message_type: &str) -> HashMap<String, MessageAttributeValue> {
+    let mut attrs = create_message_type_attribute_map(message_type);
+    attrs.extend(
+        [
+            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+            SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+            NODE_ID_MESSAGE_ATTRIBUTE_NAME,
+        ]
+        .iter()
+        .map(|key| {
+            (
+                key.to_string(),
+                MessageAttributeValue::builder()
+                    .data_type("String")
+                    .string_value("TEST")
+                    .build()
+                    .unwrap(),
+            )
+        }),
+    );
+
+    attrs
 }
