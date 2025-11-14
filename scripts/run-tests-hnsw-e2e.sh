@@ -9,7 +9,7 @@ function _main()
     _log "Executing end to end tests"
 
     pushd "$(_get_path_to_monorepo)/iris-mpc-upgrade-hawk" || exit
-    cargo test --test e2e_genesis -- --include-ignored
+    cargo test --release --test e2e_genesis -- --include-ignored
     popd || exit
 }
 

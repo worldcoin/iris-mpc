@@ -4,7 +4,7 @@ use crate::{
     shares::{
         bit::Bit,
         int_ring::IntRing2k,
-        ring_impl::RingElement,
+        ring_impl::{RingElement, VecRingElement},
         share::Share,
         vecshare::{SliceShare, VecShare},
     },
@@ -111,7 +111,7 @@ where
     Standard: Distribution<T>,
 {
     // Caller should ensure that size_hint == a.len() == b.len()
-    let mut shares_a = Vec::with_capacity(size_hint);
+    let mut shares_a = VecRingElement::with_capacity(size_hint);
     for (a_, b_) in a.zip(b) {
         let rand = session.prf.gen_binary_zero_share::<T>();
         let mut c = &a_ & &b_;
@@ -120,14 +120,8 @@ where
     }
 
     let network = &mut session.network_session;
-    let messages = shares_a.clone();
-    let message = if messages.len() == 1 {
-        T::new_network_element(messages[0])
-    } else {
-        T::new_network_vec(messages)
-    };
-    network.send_next(message).await?;
-    Ok(shares_a)
+    network.send_ring_vec_next(&shares_a).await?;
+    Ok(shares_a.0)
 }
 
 async fn and_many_send<T: IntRing2k + NetworkInt>(
@@ -141,7 +135,7 @@ where
     if a.len() != b.len() {
         bail!("InvalidSize in and_many_send");
     }
-    let mut shares_a = Vec::with_capacity(a.len());
+    let mut shares_a = VecRingElement::with_capacity(a.len());
     for (a_, b_) in a.iter().zip(b.iter()) {
         let rand = session.prf.gen_binary_zero_share::<T>();
         let mut c = a_ & b_;
@@ -150,14 +144,8 @@ where
     }
 
     let network = &mut session.network_session;
-    let messages = shares_a.clone();
-    let message = if messages.len() == 1 {
-        T::new_network_element(messages[0])
-    } else {
-        T::new_network_vec(messages)
-    };
-    network.send_next(message).await?;
-    Ok(shares_a)
+    network.send_ring_vec_next(&shares_a).await?;
+    Ok(shares_a.0)
 }
 
 /// Receives a share of the AND of two vectors of bit-sliced shares.
@@ -176,7 +164,7 @@ async fn and_many_receive<T: IntRing2k + NetworkInt>(
 }
 
 /// Low-level SMPC protocol to compute the AND of two vectors of bit-sliced shares.
-async fn and_many<T: IntRing2k + NetworkInt>(
+pub(crate) async fn and_many<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
@@ -188,6 +176,46 @@ where
     let shares_b = and_many_receive(session).await?;
     let complete_shares = VecShare::from_ab(shares_a, shares_b);
     Ok(complete_shares)
+}
+
+/// Reduce the given vector of bit-vector shares by computing their element-wise AND.
+///
+/// Each vector in `v` is expected to have `len` bits.
+pub(crate) async fn and_product(
+    session: &mut Session,
+    v: Vec<VecShare<Bit>>,
+    len: usize,
+) -> Result<VecShare<Bit>, Error> {
+    if v.is_empty() {
+        bail!("Input vector is empty");
+    }
+    for vec_share in &v {
+        if vec_share.len() != len {
+            bail!("Input vector shares have different lengths");
+        }
+    }
+
+    let mut res = v;
+    while res.len() > 1 {
+        // if the length is odd, we save the last column to add it back later
+        let maybe_last_column = if res.len() % 2 == 1 { res.pop() } else { None };
+        let half_len = res.len() / 2;
+        let left_bits: VecShare<u64> =
+            VecShare::new_vec(res.drain(..half_len).flatten().collect_vec()).pack();
+        let right_bits: VecShare<u64> =
+            VecShare::new_vec(res.drain(..).flatten().collect_vec()).pack();
+        let and_bits = and_many(session, left_bits.as_slice(), right_bits.as_slice()).await?;
+        let mut and_bits = and_bits.convert_to_bits();
+        let num_and_bits = half_len * len;
+        and_bits.truncate(num_and_bits);
+        res = and_bits
+            .inner()
+            .chunks(len)
+            .map(|chunk| VecShare::new_vec(chunk.to_vec()))
+            .collect_vec();
+        res.extend(maybe_last_column);
+    }
+    res.pop().ok_or(eyre!("Not enough elements"))
 }
 
 /// Computes binary AND of two vectors of bit-sliced shares.

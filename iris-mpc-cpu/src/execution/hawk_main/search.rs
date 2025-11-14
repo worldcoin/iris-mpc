@@ -9,7 +9,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{GraphMem, HnswSearcher},
+    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
@@ -37,7 +37,6 @@ pub async fn search<ROT>(
 where
     ROT: Rotations,
 {
-    let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -70,9 +69,6 @@ where
 
     let results = schedule.organize_results(collect_results(rx).await?)?;
 
-    if ROT::N_ROTATIONS > 1 {
-        metrics::histogram!("search_duration").record(start.elapsed().as_secs_f64());
-    }
     Ok(results)
 }
 
@@ -181,7 +177,7 @@ async fn per_search_query(
         plan: InsertPlanV {
             query,
             links,
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         },
         match_count,
     })
@@ -234,7 +230,7 @@ mod tests {
         init_iris_db(&mut actor).await?;
         init_graph(&mut actor).await?;
 
-        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+        let sessions = actor.new_sessions().await?;
         HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         let batch_size = 3;
@@ -258,7 +254,7 @@ mod tests {
                 );
             }
         }
-
+        actor.sync_peers().await?;
         Ok(actor)
     }
 }

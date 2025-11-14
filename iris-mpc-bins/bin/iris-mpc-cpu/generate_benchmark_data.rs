@@ -4,7 +4,7 @@ use iris_mpc_common::iris_db::iris::IrisCodeBase64;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{HnswParams, HnswSearcher},
-    py_bindings::io::write_bin,
+    utils::serialization::write_bin,
 };
 use rand::SeedableRng;
 use std::{

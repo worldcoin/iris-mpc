@@ -8,7 +8,10 @@ use tracing::info;
 use iris_mpc_cpu::{
     hawkers::build_plaintext::plaintext_parallel_batch_insert,
     hnsw::HnswParams,
-    py_bindings::{io::write_bin, plaintext_store::irises_from_ndjson_file},
+    utils::serialization::{
+        iris_ndjson::{irises_from_ndjson, IrisSelection},
+        write_bin,
+    },
 };
 
 #[allow(non_snake_case)]
@@ -69,9 +72,10 @@ async fn main() -> Result<()> {
     let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
 
     info!("Reading iris codes from file");
-    let irises = irises_from_ndjson_file(
-        args.iris_codes_path.as_os_str().to_str().unwrap(),
+    let irises = irises_from_ndjson(
+        args.iris_codes_path.as_path(),
         args.graph_size,
+        IrisSelection::All,
     )?;
     let irises = irises
         .into_iter()

@@ -1,7 +1,11 @@
 use crate::{
     execution::player::{Identity, Role},
-    network::{value::NetworkValue, Networking},
+    network::{
+        value::{NetworkInt, NetworkValue},
+        Networking,
+    },
     protocol::prf::Prf,
+    shares::ring_impl::VecRingElement,
 };
 use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
@@ -66,6 +70,52 @@ impl NetworkSession {
     pub async fn receive_prev(&mut self) -> Result<NetworkValue> {
         let prev_identity = self.prev_identity()?;
         self.receive(&prev_identity).await
+    }
+}
+
+// Helper methods for sending and receiving VecRingElement<T>.
+impl NetworkSession {
+    async fn send_ring_vec<T: NetworkInt>(
+        &mut self,
+        data: &VecRingElement<T>,
+        receiver: &Identity,
+    ) -> Result<()> {
+        let message = if data.len() == 1 {
+            T::new_network_element(data.0[0])
+        } else {
+            T::new_network_vec(data.0.clone())
+        };
+        self.send(message, receiver).await
+    }
+
+    pub async fn send_ring_vec_next<T: NetworkInt>(
+        &mut self,
+        data: &VecRingElement<T>,
+    ) -> Result<()> {
+        self.send_ring_vec(data, &self.next_identity()?).await
+    }
+
+    pub async fn send_ring_vec_prev<T: NetworkInt>(
+        &mut self,
+        data: &VecRingElement<T>,
+    ) -> Result<()> {
+        self.send_ring_vec(data, &self.prev_identity()?).await
+    }
+
+    async fn receive_ring_vec<T: NetworkInt>(
+        &mut self,
+        receiver: &Identity,
+    ) -> Result<VecRingElement<T>> {
+        let m = self.receive(receiver).await?;
+        Ok(T::into_vec(m)?.into())
+    }
+
+    pub async fn receive_ring_vec_next<T: NetworkInt>(&mut self) -> Result<VecRingElement<T>> {
+        self.receive_ring_vec(&self.next_identity()?).await
+    }
+
+    pub async fn receive_ring_vec_prev<T: NetworkInt>(&mut self) -> Result<VecRingElement<T>> {
+        self.receive_ring_vec(&self.prev_identity()?).await
     }
 }
 

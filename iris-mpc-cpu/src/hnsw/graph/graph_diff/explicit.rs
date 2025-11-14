@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{jaccard::JaccardState, Differ};
-use crate::hnsw::{graph::neighborhood::SortedEdgeIds, vector_store::Ref};
+use crate::hnsw::vector_store::Ref;
 
 #[derive(Debug, Clone)]
 pub enum SortBy {
@@ -85,15 +85,9 @@ impl<V: Ref + Display + FromStr + Ord> Differ<V> for ExplicitNeighborhoodDiffer<
         self.current_layer_diffs.clear();
     }
 
-    fn diff_neighborhood(
-        &mut self,
-        _layer_index: usize,
-        node: &V,
-        lhs: &SortedEdgeIds<V>,
-        rhs: &SortedEdgeIds<V>,
-    ) {
-        let lhs_set: HashSet<_> = lhs.0.iter().cloned().collect();
-        let rhs_set: HashSet<_> = rhs.0.iter().cloned().collect();
+    fn diff_neighborhood(&mut self, _layer_index: usize, node: &V, lhs: &[V], rhs: &[V]) {
+        let lhs_set: HashSet<_> = lhs.iter().cloned().collect();
+        let rhs_set: HashSet<_> = rhs.iter().cloned().collect();
 
         let only_in_lhs: HashSet<_> = lhs_set.difference(&rhs_set).cloned().collect();
         let only_in_rhs: HashSet<_> = rhs_set.difference(&lhs_set).cloned().collect();

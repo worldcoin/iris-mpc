@@ -39,6 +39,7 @@ pub async fn search_to_reset(
         do_match: false,
     };
 
+    // Search the central rotation to determine how to insert the reset vectors.
     let search_results = search::search::<CenterOnly>(
         sessions,
         &updates.queries,
