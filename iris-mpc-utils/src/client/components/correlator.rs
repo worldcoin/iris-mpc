@@ -17,11 +17,7 @@ impl ResponseCorrelator {
     /// Initializer.
     pub async fn init(&self) -> Result<(), ServiceClientError> {
         tracing::info!("Initialising ...");
-        match self
-            .aws_client
-            .sqs_purge_queue(self.aws_client.config().sqs_response_queue_url())
-            .await
-        {
+        match self.aws_client.sqs_purge_queue().await {
             Ok(()) => {
                 tracing::info!("Purged SQS response queue");
                 Ok(())

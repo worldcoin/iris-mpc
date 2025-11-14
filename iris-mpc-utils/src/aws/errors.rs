@@ -3,15 +3,6 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[allow(clippy::enum_variant_names)]
 pub enum AwsClientError {
-    #[error("AWS SQS purge queue error: {0}")]
-    SqsPurgeQueueError(String),
-
-    #[error("AWS SNS publish error: {0}")]
-    SnsPublishError(String),
-
-    #[error("AWS S3 upload error: key={0}: error={0}")]
-    S3UploadError(String, String),
-
     #[error("Download encryption keys error: {0}")]
     EncryptionKeysDownloadError(String),
 
@@ -20,4 +11,19 @@ pub enum AwsClientError {
 
     #[error("Iris deletions upload error: {0}")]
     IrisDeletionsUploadError(String),
+
+    #[error("AWS S3 upload error: key={0}: error={0}")]
+    S3UploadError(String, String),
+
+    #[error("AWS SNS publish error: {0}")]
+    SnsPublishError(String),
+
+    #[error("AWS SQS delete message from queue error: {0}")]
+    SqsDeleteMessageError(String),
+
+    #[error("AWS SQS purge queue error: {0}")]
+    SqsPurgeQueueError(String),
+
+    #[error("AWS SQS receive message from queue error: {0}")]
+    SqsReceiveMessageError(String),
 }

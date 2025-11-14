@@ -57,7 +57,7 @@ impl RequestEnqueuer {
         }
     }
 
-    /// Enqueues a batch of system requests upon each node's ingress queue.
+    /// Enqueues requests upon system ingress queues.
     pub async fn enqueue(&self, batch: &RequestBatch) -> Result<(), ServiceClientError> {
         for request in batch.requests() {
             match request.data() {
@@ -110,7 +110,7 @@ impl RequestEnqueuer {
         // Step 2: Enqueue system request.
         let sns_message_type = UNIQUENESS_MESSAGE_TYPE;
         let sns_message_group_id = ENROLLMENT_REQUEST_TYPE;
-        let sns_message_payload = UniquenessRequest {
+        let sns_message_body = UniquenessRequest {
             batch_size: Some(1),
             signup_id: shares.signup_id.clone(),
             s3_key,
@@ -124,7 +124,7 @@ impl RequestEnqueuer {
             .sns_publish::<UniquenessRequest>(
                 sns_message_type,
                 sns_message_group_id,
-                sns_message_payload,
+                sns_message_body,
             )
             .await
         {

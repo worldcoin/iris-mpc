@@ -18,6 +18,9 @@ pub struct Request {
     /// Unique request identifier for correlation purposes.
     identifier: uuid::Uuid,
 
+    /// A unique identifier assigned by remote service upon being enqueed.
+    message_id: Option<uuid::Uuid>,
+
     /// Batch item ordinal identifier.
     item_idx: usize,
 }
@@ -31,13 +34,22 @@ impl Request {
         &self.identifier
     }
 
+    pub fn message_id(&self) -> &Option<uuid::Uuid> {
+        &self.message_id
+    }
+
     pub fn new(batch_idx: usize, item_idx: usize, data: RequestData) -> Self {
         Self {
             batch_idx,
             item_idx,
             data,
             identifier: uuid::Uuid::new_v4(),
+            message_id: None,
         }
+    }
+
+    pub fn set_message_id(&mut self, message_id: uuid::Uuid) {
+        self.message_id = Some(message_id);
     }
 }
 

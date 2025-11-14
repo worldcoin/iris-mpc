@@ -32,24 +32,8 @@ pub struct AwsClient {
 }
 
 impl AwsClient {
-    pub fn config(&self) -> &AwsClientConfig {
+    pub(super) fn config(&self) -> &AwsClientConfig {
         &self.config
-    }
-
-    pub fn s3(&self) -> &S3Client {
-        &self.s3
-    }
-
-    pub fn secrets_manager(&self) -> &SecretsManagerClient {
-        &self.secrets_manager
-    }
-
-    pub fn sns(&self) -> &SNSClient {
-        &self.sns
-    }
-
-    pub fn sqs(&self) -> &SQSClient {
-        &self.sqs
     }
 
     pub fn new(config: AwsClientConfig) -> Self {
@@ -62,69 +46,114 @@ impl AwsClient {
         }
     }
 
+    /// Enqueues data to an S3 bucket.
+    pub async fn s3_put_object(
+        &self,
+        s3_bucket: &str,
+        s3_key: &str,
+        s3_body: &[u8],
+    ) -> Result<(), AwsClientError> {
+        match self
+            .s3
+            .put_object()
+            .bucket(s3_bucket)
+            .key(s3_key)
+            .body(ByteStream::new(SdkBody::from(s3_body)))
+            .send()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::error!("AWS-S3 upload error: {}", e);
+                Err(AwsClientError::S3UploadError(
+                    String::from(s3_key),
+                    e.to_string(),
+                ))
+            }
+        }
+    }
+
     /// Enqueues a message upon an AWS SNS service topic.
     pub async fn sns_publish<T>(
         &self,
         message_type: &str,
         message_group_id: &str,
-        message_payload: T,
+        message_body: T,
     ) -> Result<(), AwsClientError>
     where
         T: Sized + Serialize,
     {
         match self
-            .sns()
-            .clone()
+            .sns
             .publish()
             .topic_arn(self.config().sns_request_topic_arn())
             .message_group_id(message_group_id)
-            .message(serde_json::to_string(&message_payload).unwrap())
+            .message(serde_json::to_string(&message_body).unwrap())
             .set_message_attributes(Some(create_sns_message_attributes(message_type)))
             .send()
             .await
         {
             Ok(_) => Ok(()),
             Err(e) => {
-                tracing::error!("SNS publish error: {}", e);
+                tracing::error!("AWS-SNS publish error: {}", e);
                 Err(AwsClientError::SnsPublishError(e.to_string()))
             }
         }
     }
 
-    /// Purges an SQS queue.
-    pub async fn sqs_purge_queue(&self, queue_url: &String) -> Result<(), AwsClientError> {
-        match self.sqs().purge_queue().queue_url(queue_url).send().await {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                tracing::error!("SQS queue purge error: {}", e);
-                Err(AwsClientError::SqsPurgeQueueError(e.to_string()))
-            }
-        }
-    }
-
-    /// Enqueues data to an S3 bucket.
-    pub async fn s3_upload(
+    /// Delete a message from an SQS queue.
+    pub async fn sqs_delete_message(
         &self,
-        s3_bucket: &str,
-        s3_key: &str,
-        s3_data: &[u8],
+        sqs_receipt_handle: String,
     ) -> Result<(), AwsClientError> {
         match self
-            .s3()
-            .put_object()
-            .bucket(s3_bucket)
-            .key(s3_key)
-            .body(ByteStream::new(SdkBody::from(s3_data)))
+            .sqs
+            .delete_message()
+            .queue_url(self.config().sqs_response_queue_url())
+            .receipt_handle(sqs_receipt_handle)
             .send()
             .await
         {
             Ok(_) => Ok(()),
             Err(e) => {
-                tracing::error!("S3 upload error: {}", e);
-                Err(AwsClientError::S3UploadError(
-                    s3_key.to_string(),
-                    e.to_string(),
-                ))
+                tracing::error!("AWS-SQS delete message from queue error: {}", e);
+                Err(AwsClientError::SqsDeleteMessageError(e.to_string()))
+            }
+        }
+    }
+
+    /// Dequeues a message from an SQS queue.
+    pub async fn sqs_receive_message(&self) -> Result<(), AwsClientError> {
+        match self
+            .sqs
+            .receive_message()
+            .queue_url(self.config().sqs_response_queue_url())
+            .wait_time_seconds(self.config().sqs_wait_time_seconds() as i32)
+            .max_number_of_messages(1)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::error!("AWS-SQS receive message from queue error: {}", e);
+                Err(AwsClientError::SqsReceiveMessageError(e.to_string()))
+            }
+        }
+    }
+
+    /// Purges an SQS queue.
+    pub async fn sqs_purge_queue(&self) -> Result<(), AwsClientError> {
+        match self
+            .sqs
+            .purge_queue()
+            .queue_url(self.config().sqs_response_queue_url())
+            .send()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::error!("AWS-SQS queue purge error: {}", e);
+                Err(AwsClientError::SqsPurgeQueueError(e.to_string()))
             }
         }
     }
@@ -145,39 +174,27 @@ impl Clone for AwsClient {
 #[cfg(test)]
 mod tests {
     use super::super::{AwsClient, AwsClientConfig};
-    use crate::constants::{self};
 
-    fn assert_clients(clients: &AwsClient) {
-        assert!(clients.s3().config().region().is_some());
-        assert!(clients.secrets_manager().config().region().is_some());
-        assert!(clients.sns().config().region().is_some());
-        assert!(clients.sqs().config().region().is_some());
-    }
+    impl AwsClient {
+        fn assert_instance(&self) {
+            assert!(self.s3.config().region().is_some());
+            assert!(self.secrets_manager.config().region().is_some());
+            assert!(self.sns.config().region().is_some());
+            assert!(self.sqs.config().region().is_some());
+        }
 
-    async fn create_client() -> AwsClient {
-        AwsClient::new(create_config().await)
-    }
-
-    async fn create_config() -> AwsClientConfig {
-        AwsClientConfig::new(
-            constants::DEFAULT_ENV.to_string(),
-            constants::AWS_S3_REQUEST_BUCKET_NAME.to_string(),
-            constants::AWS_SQS_RESPONSE_QUEUE_URL.to_string(),
-            constants::AWS_SQS_LONG_POLL_WAIT_TIME,
-            constants::AWS_SNS_REQUEST_TOPIC_ARN.to_string(),
-        )
-        .await
+        async fn new_1() -> Self {
+            Self::new(AwsClientConfig::new_1().await)
+        }
     }
 
     #[tokio::test]
     async fn test_client_new() {
-        let clients = create_client().await;
-        assert_clients(&clients);
+        AwsClient::new_1().await.assert_instance();
     }
 
     #[tokio::test]
-    async fn test_client_clone() {
-        let clients = create_client().await.clone();
-        assert_clients(&clients);
+    async fn test_client_new_and_clone() {
+        AwsClient::new_1().await.clone().assert_instance();
     }
 }

@@ -55,6 +55,10 @@ struct CliOptions {
     #[clap(long)]
     aws_sqs_response_queue_url: String,
 
+    /// AWS: polling interval between AWS SQS receive message operations.
+    #[clap(long, default_value = "2")]
+    aws_sqs_wait_time_seconds: usize,
+
     #[clap(long)]
     environment: String,
 
@@ -157,6 +161,7 @@ impl AsyncFrom<CliOptions> for AwsClientConfig {
             options.aws_sns_request_topic_arn,
             options.aws_sqs_long_poll_wait_time,
             options.aws_sqs_response_queue_url,
+            options.aws_sqs_wait_time_seconds,
         )
         .await
     }

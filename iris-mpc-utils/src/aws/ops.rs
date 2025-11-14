@@ -1,4 +1,3 @@
-use aws_sdk_s3::primitives::ByteStream as S3_ByteStream;
 use base64::{engine::general_purpose, Engine};
 use serde::Serialize;
 use serde_json;
@@ -61,9 +60,9 @@ impl AwsClient {
         let s3_bucket = self.config().s3_request_bucket_name();
         let s3_key = shares.signup_id.as_str();
         let s3_shares = factory::create_iris_party_shares_for_s3(shares, encryption_keys);
-        let s3_data = serde_json::to_vec(&s3_shares).unwrap();
+        let s3_body = serde_json::to_vec(&s3_shares).unwrap();
 
-        match self.s3_upload(s3_bucket, s3_key, &s3_data).await {
+        match self.s3_put_object(s3_bucket, s3_key, &s3_body).await {
             Ok(_) => Ok(s3_bucket.to_owned()),
             Err(e) => {
                 tracing::error!("SNS publish error: {}", e);
@@ -83,28 +82,17 @@ impl AwsClient {
 
         let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", self.config().environment());
         let s3_key = format!("{}_deleted_serial_ids.json", self.config().environment());
-        let s3_data = S3_ByteStream::from(
-            serde_json::to_string(&S3Data {
-                deleted_serial_ids: data.to_owned(),
-            })
-            .unwrap()
-            .into_bytes(),
-        );
+        let s3_data = S3Data {
+            deleted_serial_ids: data.to_owned(),
+        };
+        let s3_body = serde_json::to_string(&s3_data).unwrap().into_bytes();
 
         match self
-            .s3()
-            .put_object()
-            .bucket(s3_bucket)
-            .key(s3_key)
-            .body(s3_data)
-            .send()
+            .s3_put_object(s3_bucket.as_str(), s3_key.as_str(), s3_body.as_slice())
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => {
-                tracing::error!("SNS publish error: {}", e);
-                Err(AwsClientError::IrisDeletionsUploadError(e.to_string()))
-            }
+            Err(e) => Err(AwsClientError::IrisDeletionsUploadError(e.to_string())),
         }
     }
 }

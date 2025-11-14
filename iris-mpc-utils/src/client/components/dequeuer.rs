@@ -5,7 +5,6 @@ use crate::aws::AwsClient;
 #[derive(Debug)]
 pub struct ResponseDequeuer {
     /// A client for interacting with system AWS services.
-    #[allow(dead_code)]
     aws_client: AwsClient,
 }
 
@@ -15,9 +14,11 @@ impl ResponseDequeuer {
         Self { aws_client }
     }
 
-    /// Dequeues system responses from network egress queues.
-    #[allow(dead_code)]
+    /// Dequeues responses from system egress queues.
     pub async fn dequeue(&self, _batch: &RequestBatch) -> Result<(), ServiceClientError> {
-        unimplemented!()
+        let msg = self.aws_client.sqs_receive_message().await;
+        println!("AWS-SQS receive message event: {:?}", msg);
+
+        Ok(())
     }
 }

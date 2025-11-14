@@ -73,7 +73,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
         tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
             self.request_enqueuer.enqueue(&batch).await.unwrap();
-            // TODO await responses & correlate.
+            self.response_dequeuer.dequeue(&batch).await.unwrap();
         }
 
         Ok(())
