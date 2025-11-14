@@ -31,6 +31,29 @@ pub(crate) const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 
+// A flag to control the use of FSS in the following functions:
+// 1) greater_than_threshold
+// 2) cross_compare
+// 3) cross_compare_and_swap
+// 4) lte_threshold_and_open
+pub const USE_FSS: bool = true;
+
+// Measure calls of cross_compare
+use std::sync::atomic::{AtomicU64, Ordering};
+/// --- count calls of cross_compare --- ///
+pub static CROSS_COMPARE_CALLS_FSS: AtomicU64 = AtomicU64::new(0);
+pub static CROSS_COMPARE_CALLS_RSS: AtomicU64 = AtomicU64::new(0);
+
+// get the number of cross_compare calls
+#[inline]
+pub fn cross_compare_calls_fss() -> u64 {
+    CROSS_COMPARE_CALLS_FSS.load(Ordering::Relaxed)
+}
+#[inline]
+pub fn cross_compare_calls_rss() -> u64 {
+    CROSS_COMPARE_CALLS_RSS.load(Ordering::Relaxed)
+}
+
 /// Setup the PRF seeds in the replicated protocol.
 /// Each party sends to the next party a random seed.
 /// At the end, each party will hold two seeds which are the basis of the
@@ -96,8 +119,11 @@ pub async fn greater_than_threshold(
         })
         .collect();
 
-    // extract_msb_u32_batch(session, &diffs).await
-    extract_msb_u32_batch_fss(session, &diffs).await
+    if USE_FSS {
+        extract_msb_u32_batch_fss(session, &diffs).await
+    } else {
+        extract_msb_u32_batch(session, &diffs).await
+    }
 }
 
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
@@ -370,15 +396,76 @@ pub async fn cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<bool>> {
+    // the upper bound for the bucket size for perf statistics
+    let bucket_bound = 1;
+
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
+
     // Compute the MSB of the above
     let bits = extract_msb_u32_batch_fss(session, &diff).await?;
     // let bits = extract_msb_u32_batch(session, &diff).await?;
 
+    let opened_b = {
+        // timer
+        let _tt = crate::perf_scoped_for_party!(
+            "cross_compare.extract_open",
+            session.own_role().index(),
+            diff.len(),
+            bucket_bound
+        );
+
+        if USE_FSS {
+            // count the number of calls for one party only
+            if session.own_role().index() == 0 {
+                // count how many times this function was called
+                CROSS_COMPARE_CALLS_FSS.fetch_add(1, Ordering::Relaxed);
+            }
+
+            crate::perf_time_let_for_party!(
+            "cross_compare.fss.extract",
+            session.own_role().index(),
+            diff.len(),
+            bucket_bound,
+                let bits = extract_msb_u32_batch_fss(session, &diff).await? //;
+            );
+
+            //let opened_b =
+            crate::perf_time_expr_for_party!(
+                "cross_compare.fss.open_bin",
+                session.own_role().index(),
+                diff.len(),
+                bucket_bound,
+                open_bin_fss(session, &bits).await?
+            )
+        } else {
+            if session.own_role().index() == 0 {
+                // count the number of calls for one party only
+                CROSS_COMPARE_CALLS_RSS.fetch_add(1, Ordering::Relaxed);
+            }
+
+            crate::perf_time_let_for_party!(
+            "cross_compare.rss.extract",
+            session.own_role().index(),
+            diff.len(),
+            bucket_bound,
+                let bits = extract_msb_u32_batch(session, &diff).await? //;
+            );
+
+            crate::perf_time_expr_for_party!(
+                "cross_compare.rss.open_bin",
+                session.own_role().index(),
+                diff.len(),
+                bucket_bound,
+                open_bin(session, &bits).await?
+            )
+        }
+    };
+
     // Open the MSB
     // let opened_b = open_bin(session, &bits).await?;
-    let opened_b = open_bin_fss(session, &bits).await?;
+    // let opened_b = open_bin_fss(session, &bits).await?;
+
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
@@ -392,8 +479,14 @@ pub async fn cross_compare_and_swap(
 ) -> Result<Vec<DistanceShare<u32>>> {
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
+
     // Compute the MSB of the above
-    let bits = extract_msb_u32_batch(session, &diff).await?;
+    let bits = if USE_FSS {
+        extract_msb_u32_batch_fss(session, &diff).await?
+    } else {
+        extract_msb_u32_batch(session, &diff).await?
+    };
+
     // let bits = extract_msb_u32_batch_fss(session, &diff).await?;
     // inject bits to u32 shares
     let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
@@ -499,12 +592,16 @@ pub async fn lte_threshold_and_open(
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<bool>> {
     let bits = greater_than_threshold(session, distances).await?;
-    // open_bin(session, &bits)
-    //     .await
-    //     .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
-    open_bin_fss(session, &bits)
-        .await
-        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+
+    if USE_FSS {
+        open_bin_fss(session, &bits)
+            .await
+            .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+    } else {
+        open_bin(session, &bits)
+            .await
+            .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+    }
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
