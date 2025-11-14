@@ -13,6 +13,7 @@ ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-trait = "~0.1"
 aws-sdk-s3.workspace = true
+blake3 = "1"
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
@@ -70,6 +71,7 @@ num_cpus = "1.16.0"
 [features]
 db_dependent = []
 networking_metrics = []
+chacha_prf = []
 
 [[bench]]
 name = "hnsw"

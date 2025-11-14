@@ -18,10 +18,7 @@ use crate::{
         plaintext_store::{PlaintextStore, PlaintextVectorRef},
         TEST_DISTANCE_FN,
     },
-    hnsw::{
-        graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
-        GraphMem, HnswSearcher, VectorStore,
-    },
+    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, VectorStore},
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     shares::{RingElement, Share},
@@ -171,7 +168,7 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextVectorRef>) -> GraphMe
             for target_v in queue.iter() {
                 shared_queue.push(*target_v);
             }
-            shared_layer.set_links(*source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
+            shared_layer.set_links(*source_v, shared_queue);
         }
         shared_layers.push(shared_layer);
     }
