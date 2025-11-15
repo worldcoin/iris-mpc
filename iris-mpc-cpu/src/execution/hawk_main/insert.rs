@@ -39,54 +39,14 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
     }
 }
 
-pub async fn insert<V: VectorStoreMut>(
-    store: &mut V,
-    graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
-    searcher: &HnswSearcher,
-    plans: VecRequests<Option<InsertPlanV<V>>>,
-    ids: &VecRequests<Option<V::VectorRef>>,
-) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
-    let mut connect_plans = insert_prepare(store, graph, searcher, plans, ids).await?;
-    trim_neighborhoods(&searcher.params, store, &mut connect_plans).await?;
-    insert_finalize::<V>(graph, &connect_plans).await?;
-    Ok(connect_plans)
-}
-
-pub async fn insert_hawk(
-    sessions: &[HawkSession],
-    searcher: &HnswSearcher,
-    plans: VecRequests<Option<InsertPlanV<Aby3Store>>>,
-    ids: &VecRequests<Option<<Aby3Store as VectorStore>::VectorRef>>,
-) -> Result<VecRequests<Option<ConnectPlanV<Aby3Store>>>> {
-    let session = &sessions[0];
-
-    let mut connect_plans = {
-        let mut store = session.aby3_store.write().await;
-        let mut graph = session.graph_store.write().await;
-        insert_prepare(&mut (*store), &mut (*graph), searcher, plans, ids).await
-    }?;
-
-    trim_neighborhoods_par(&searcher.params, sessions, &mut connect_plans).await?;
-
-    let mut graph = session.graph_store.write().await;
-    insert_finalize::<Aby3Store>(&mut (*graph), &connect_plans).await?;
-
-    Ok(connect_plans)
-}
-
-/// for each insertion, determines the node's neighbors at each layer, and the neighbors' neighbors,
-/// which will now include the new node.
+/// Insert a collection `plans` of `InsertPlanV` structs into the graph and vector store,
+/// adjusting the insertion plans as needed to repair any conflict from parallel searches.
 ///
 /// The `ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the associated
 /// plan is to be inserted with a specific identifier (e.g. for updates or for insertions
 /// which need to parallel an existing iris code database), and `None` if the associated plan
 /// is to be inserted at the next available serial ID, with version 0.
-///
-/// This is the first step in the three-phase insertion process:
-/// 1. `insert_prepare`
-/// 2. `trim_neighborhoods`
-/// 3. `insert_finalize`
-async fn insert_prepare<V: VectorStoreMut>(
+pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
     graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
     searcher: &HnswSearcher,
@@ -115,13 +75,61 @@ async fn insert_prepare<V: VectorStoreMut>(
                 }
             };
 
-            *cp = {
-                let connect_plan = searcher
-                    .insert_prepare(store, graph, inserted, extended_links, set_ep)
-                    .await?;
-                inserted_ids.push(connect_plan.inserted_vector.clone());
-                Some(connect_plan)
-            };
+            let mut connect_plan = searcher
+                .insert_prepare(store, graph, inserted, extended_links, set_ep)
+                .await?;
+            trim_neighborhoods(&searcher.params, store, &mut connect_plan).await?;
+            graph.insert_apply(connect_plan.clone()).await;
+            inserted_ids.push(connect_plan.inserted_vector.clone());
+            cp.replace(connect_plan);
+        }
+    }
+
+    Ok(connect_plans)
+}
+
+pub async fn insert_hawk(
+    sessions: &[HawkSession],
+    searcher: &HnswSearcher,
+    plans: VecRequests<Option<InsertPlanV<Aby3Store>>>,
+    ids: &VecRequests<Option<<Aby3Store as VectorStore>::VectorRef>>,
+) -> Result<VecRequests<Option<ConnectPlanV<Aby3Store>>>> {
+    let insert_plans = join_plans(plans);
+    let mut connect_plans = vec![None; insert_plans.len()];
+    let mut inserted_ids = vec![];
+    let m = searcher.params.get_M(0);
+
+    for (plan, update_id, cp) in izip!(insert_plans, ids, &mut connect_plans) {
+        if let Some(InsertPlanV {
+            query,
+            links,
+            set_ep,
+        }) = plan
+        {
+            let mut connect_plan = {
+                let mut store = sessions[0].aby3_store.write().await;
+                let graph = sessions[0].graph_store.write().await;
+
+                let extended_links =
+                    add_batch_neighbors(&mut *store, &query, links, &inserted_ids, m).await?;
+
+                let inserted = {
+                    match update_id {
+                        None => store.insert(&query).await,
+                        Some(id) => store.insert_at(id, &query).await?,
+                    }
+                };
+
+                searcher
+                    .insert_prepare(&mut *store, &*graph, inserted, extended_links, set_ep)
+                    .await
+            }?;
+
+            trim_neighborhoods_par(&searcher.params, sessions, &mut connect_plan).await?;
+            let mut graph = sessions[0].graph_store.write().await;
+            graph.insert_apply(connect_plan.clone()).await;
+            inserted_ids.push(connect_plan.inserted_vector.clone());
+            cp.replace(connect_plan);
         }
     }
 
@@ -129,61 +137,26 @@ async fn insert_prepare<V: VectorStoreMut>(
 }
 
 /// enforce neighborhood size constraints on the connect plans
-///
-/// Examines each layer of each connection plan and trims neighborhoods that have grown
-/// beyond the optimal size (110% of max_links) down to the maximum allowed connections.
-///
-/// This is the second step in the three-phase insertion process:
-/// 1. `insert_prepare`
-/// 2. `trim_neighborhoods`
-/// 3. `insert_finalize`
 async fn trim_neighborhoods<V: VectorStoreMut>(
     params: &HnswParams,
     store: &mut V,
-    connect_plans: &mut VecRequests<Option<ConnectPlanV<V>>>,
+    connect_plan: &mut ConnectPlanV<V>,
 ) -> Result<()> {
-    for cp in connect_plans.iter_mut() {
-        let Some(connect_plan) = cp.as_mut() else {
-            continue;
-        };
-
-        for (lc, layer) in connect_plan.layers.iter_mut().enumerate() {
-            let max_links = params.get_M_max(lc);
-            let max_extra = params.get_M_extra(lc);
-            for (idx, neighborhood) in layer.nb_links.iter_mut().enumerate() {
-                if neighborhood.len() > max_extra {
-                    let r = neighborhood_compaction(
-                        store,
-                        layer.neighbors[idx].clone(),
-                        neighborhood,
-                        max_links,
-                    )
-                    .await?;
-                    *neighborhood = r;
-                }
+    for (lc, layer) in connect_plan.layers.iter_mut().enumerate() {
+        let max_links = params.get_M_max(lc);
+        let max_extra = params.get_M_extra(lc);
+        for (idx, neighborhood) in layer.nb_links.iter_mut().enumerate() {
+            if neighborhood.len() > max_extra {
+                let r = neighborhood_compaction(
+                    store,
+                    layer.neighbors[idx].clone(),
+                    neighborhood,
+                    max_links,
+                )
+                .await?;
+                *neighborhood = r;
             }
         }
-    }
-
-    Ok(())
-}
-
-/// Finalize the insertion process by applying connection plans to the HNSW graph.
-///
-/// This is the final step in the three-phase insertion process:
-/// 1. `insert_prepare`
-/// 2. `trim_neighborhoods`
-/// 3. `insert_finalize`
-async fn insert_finalize<V: VectorStoreMut>(
-    graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
-    connect_plans: &VecRequests<Option<ConnectPlanV<V>>>,
-) -> Result<()> {
-    for cp in connect_plans.iter() {
-        let Some(connect_plan) = cp.as_ref() else {
-            continue;
-        };
-
-        graph.insert_apply(connect_plan.clone()).await;
     }
 
     Ok(())
@@ -219,23 +192,21 @@ async fn neighborhood_compaction<V: VectorStore>(
 async fn trim_neighborhoods_par(
     params: &HnswParams,
     sessions: &[HawkSession],
-    connect_plans: &mut VecRequests<Option<ConnectPlanV<Aby3Store>>>,
+    connect_plan: &mut ConnectPlanV<Aby3Store>,
 ) -> Result<()> {
     let sessions: Vec<Arc<RwLock<Aby3Store>>> =
         sessions.iter().map(|s| s.aby3_store.clone()).collect();
     let (session_tasks, mut result_rx) =
-        trim_neighborhoods_generic::<Aby3Store>(params, sessions, connect_plans).await?;
+        trim_neighborhoods_generic::<Aby3Store>(params, sessions, connect_plan).await?;
 
     // Run all session tasks in parallel and collect results
     let _ = parallelize(session_tasks.into_iter()).await?;
 
     // Apply all the trimmed neighborhoods back to the connect plans
     while let Some(trim_result) = result_rx.recv().await {
-        if let Some(connect_plan) = connect_plans[trim_result.plan_idx].as_mut() {
-            if let Some(layer) = connect_plan.layers.get_mut(trim_result.layer_idx) {
-                if let Some(neighborhood) = layer.nb_links.get_mut(trim_result.neighborhood_idx) {
-                    *neighborhood = trim_result.neighborhood;
-                }
+        if let Some(layer) = connect_plan.layers.get_mut(trim_result.layer_idx) {
+            if let Some(neighborhood) = layer.nb_links.get_mut(trim_result.neighborhood_idx) {
+                *neighborhood = trim_result.neighborhood;
             }
         }
     }
@@ -246,8 +217,6 @@ async fn trim_neighborhoods_par(
 /// Result of a trimming job
 #[derive(Debug)]
 struct TrimResult<V: VectorStore> {
-    /// Index of the connect plan in the original vector
-    plan_idx: usize,
     /// Layer index within the connect plan
     layer_idx: usize,
     /// Neighborhood index within the layer
@@ -260,7 +229,7 @@ struct TrimResult<V: VectorStore> {
 async fn trim_neighborhoods_generic<V: VectorStore>(
     params: &HnswParams,
     sessions: Vec<Arc<RwLock<V>>>,
-    connect_plans: &mut VecRequests<Option<ConnectPlanV<V>>>,
+    connect_plan: &mut ConnectPlanV<V>,
 ) -> Result<(
     Vec<impl Future<Output = Result<()>>>,
     mpsc::UnboundedReceiver<TrimResult<V>>,
@@ -268,8 +237,6 @@ async fn trim_neighborhoods_generic<V: VectorStore>(
     /// Job representing a neighborhood trimming task
     #[derive(Debug)]
     struct Job<V: VectorStore> {
-        /// Index of the connect plan in the original vector
-        plan_idx: usize,
         /// Layer index within the connect plan
         layer_idx: usize,
         /// Neighborhood index within the layer
@@ -285,27 +252,20 @@ async fn trim_neighborhoods_generic<V: VectorStore>(
     // Collect all neighborhoods that need trimming
     let mut jobs = Vec::new();
 
-    for (plan_idx, cp) in connect_plans.iter_mut().enumerate() {
-        let Some(connect_plan) = cp.as_mut() else {
-            continue;
-        };
+    for (layer_idx, layer) in connect_plan.layers.iter_mut().enumerate() {
+        let max_links = params.get_M_max(layer_idx);
+        let max_extra = params.get_M_extra(layer_idx);
 
-        for (layer_idx, layer) in connect_plan.layers.iter_mut().enumerate() {
-            let max_links = params.get_M_max(layer_idx);
-            let max_extra = params.get_M_extra(layer_idx);
-
-            for (neighborhood_idx, neighborhood) in layer.nb_links.iter_mut().enumerate() {
-                if neighborhood.len() > max_extra {
-                    let nb = std::mem::take(neighborhood);
-                    jobs.push(Job {
-                        plan_idx,
-                        layer_idx,
-                        neighborhood_idx,
-                        neighbor: layer.neighbors[neighborhood_idx].clone(),
-                        neighborhood: nb,
-                        max_links,
-                    });
-                }
+        for (neighborhood_idx, neighborhood) in layer.nb_links.iter_mut().enumerate() {
+            if neighborhood.len() > max_extra {
+                let nb = std::mem::take(neighborhood);
+                jobs.push(Job {
+                    layer_idx,
+                    neighborhood_idx,
+                    neighbor: layer.neighbors[neighborhood_idx].clone(),
+                    neighborhood: nb,
+                    max_links,
+                });
             }
         }
     }
@@ -362,7 +322,6 @@ async fn trim_neighborhoods_generic<V: VectorStore>(
 
                     // Send the result back
                     let result = TrimResult {
-                        plan_idx: job.plan_idx,
                         layer_idx: job.layer_idx,
                         neighborhood_idx: job.neighborhood_idx,
                         neighborhood: trimmed_neighborhood,
@@ -484,10 +443,10 @@ mod tests {
     async fn trim_neighborhoods_test(
         params: &HnswParams,
         sessions: Vec<Arc<RwLock<SharedPlaintextStore>>>,
-        connect_plans: &mut VecRequests<Option<ConnectPlanV<SharedPlaintextStore>>>,
+        connect_plan: &mut ConnectPlanV<SharedPlaintextStore>,
     ) -> Result<()> {
         let (session_tasks, mut result_rx) =
-            trim_neighborhoods_generic::<SharedPlaintextStore>(params, sessions, connect_plans)
+            trim_neighborhoods_generic::<SharedPlaintextStore>(params, sessions, connect_plan)
                 .await?;
 
         // Run all session tasks in parallel and collect results
@@ -495,12 +454,9 @@ mod tests {
 
         // Apply all the trimmed neighborhoods back to the connect plans
         while let Some(trim_result) = result_rx.recv().await {
-            if let Some(connect_plan) = connect_plans[trim_result.plan_idx].as_mut() {
-                if let Some(layer) = connect_plan.layers.get_mut(trim_result.layer_idx) {
-                    if let Some(neighborhood) = layer.nb_links.get_mut(trim_result.neighborhood_idx)
-                    {
-                        *neighborhood = trim_result.neighborhood;
-                    }
+            if let Some(layer) = connect_plan.layers.get_mut(trim_result.layer_idx) {
+                if let Some(neighborhood) = layer.nb_links.get_mut(trim_result.neighborhood_idx) {
+                    *neighborhood = trim_result.neighborhood;
                 }
             }
         }
@@ -607,8 +563,6 @@ mod tests {
         nb_l2.push(query_vector_id);
         assert_eq!(connect_plans.layers[2].nb_links[0], nb_l2);
 
-        let connect_plans = vec![Some(connect_plans)];
-
         // call trim when neighbors = M_max and M_max_extra
         let mut trim_nb_plans = connect_plans.clone();
         trim_neighborhoods(&searcher.params, &mut vector_store, &mut trim_nb_plans).await?;
@@ -633,10 +587,7 @@ mod tests {
 
         assert_ne!(trim_nb_plans, connect_plans);
         // layer 1 was unchanged
-        assert_eq!(
-            trim_nb_plans[0].as_ref().unwrap().layers[1],
-            connect_plans[0].as_ref().unwrap().layers[1]
-        );
+        assert_eq!(trim_nb_plans.layers[1], connect_plans.layers[1]);
         assert_eq!(trim_nb_plans, trim_nb_plans_par);
 
         Ok(())
