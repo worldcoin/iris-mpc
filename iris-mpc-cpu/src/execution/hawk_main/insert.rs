@@ -128,7 +128,7 @@ pub async fn insert_hawk(
             trim_neighborhoods_par(&searcher.params, sessions, &mut connect_plan).await?;
             let mut graph = sessions[0].graph_store.write().await;
             graph.insert_apply(connect_plan.clone()).await;
-            inserted_ids.push(connect_plan.inserted_vector.clone());
+            inserted_ids.push(connect_plan.inserted_vector);
             cp.replace(connect_plan);
         }
     }
