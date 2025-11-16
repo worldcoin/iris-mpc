@@ -1,6 +1,6 @@
 use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::PyPlaintextStore};
 use iris_mpc_cpu::{
-    hnsw::searcher::{HnswParams, HnswSearcher, N_PARAM_LAYERS},
+    hnsw::searcher::{HnswParams, HnswSearcher, LayerDistribution, LayerMode, N_PARAM_LAYERS},
     py_bindings,
     utils::serialization::{read_json, write_json},
 };
@@ -26,14 +26,19 @@ impl PyHnswSearcher {
 
     #[staticmethod]
     pub fn new_standard(M: usize, ef_constr: usize, ef_search: usize) -> Self {
-        let params = HnswParams::new(ef_constr, ef_search, M);
-        Self(HnswSearcher { params })
+        Self(HnswSearcher::new_standard(ef_constr, ef_search, M))
     }
 
     #[staticmethod]
     pub fn new_uniform(M: usize, ef: usize) -> Self {
         let params = HnswParams::new_uniform(ef, M);
-        Self(HnswSearcher { params })
+        let layer_mode = LayerMode::Standard;
+        let layer_distribution = LayerDistribution::new_geometric_from_M(M);
+        Self(HnswSearcher {
+            params,
+            layer_mode,
+            layer_distribution,
+        })
     }
 
     /// Construct `HnswSearcher` with fully general parameters, specifying the
@@ -54,10 +59,14 @@ impl PyHnswSearcher {
             ef_constr_search,
             ef_constr_insert,
             ef_search,
-            layer_probability,
-            top_layer_mode: iris_mpc_cpu::hnsw::searcher::TopLayerSearchMode::Default,
         };
-        Self(HnswSearcher { params })
+        let layer_mode = LayerMode::Standard;
+        let layer_distribution = LayerDistribution::Geometric { layer_probability };
+        Self(HnswSearcher {
+            params,
+            layer_mode,
+            layer_distribution,
+        })
     }
 
     pub fn insert(

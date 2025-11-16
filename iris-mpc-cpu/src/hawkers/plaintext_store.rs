@@ -1,5 +1,3 @@
-use std::{cmp::Ordering, sync::Arc};
-
 use crate::{
     hawkers::{
         aby3::aby3_store::DistanceFn,
@@ -25,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use eyre::{bail, Result};
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 pub type PlaintextVectorRef = <PlaintextStore as VectorStore>::VectorRef;
 pub type PlaintextStoredIris = Arc<IrisCode>;
@@ -116,7 +114,7 @@ impl PlaintextStore {
                 .unwrap()
                 .clone();
             let query_id = VectorId::from_serial_id(serial_id);
-            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
+            let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;

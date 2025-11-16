@@ -156,7 +156,7 @@ pub async fn eval_vector_distance(
 /// via trivial shares,
 /// i.e., the sharing of a value x is a triple (x, 0, 0).
 async fn graph_from_plain(graph_store: &GraphMem<PlaintextVectorRef>) -> GraphMem<Aby3VectorRef> {
-    let ep = graph_store.get_entry_point().await;
+    let ep = graph_store.get_first_entry_point().await;
     let layers = graph_store.get_layers();
 
     let mut shared_layers = vec![];
@@ -356,7 +356,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
                 let searcher = HnswSearcher::new_with_test_parameters();
                 // insert queries
                 for query in queries.iter() {
-                    let insertion_layer = searcher.select_layer_rng(&mut rng_searcher)?;
+                    let insertion_layer = searcher.gen_layer_rng(&mut rng_searcher)?;
                     searcher
                         .insert(&mut *store_lock, &mut graph_store, query, insertion_layer)
                         .await?;

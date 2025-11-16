@@ -95,7 +95,7 @@ async fn per_session<ROT>(
             let layer_selection_value = (query_uuid, side);
             let insertion_layer = search_params
                 .hnsw
-                .select_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
+                .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
             per_insert_query(
                 query,
                 search_params,
@@ -196,7 +196,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     let mut store = session.aby3_store.write().await;
     let graph = session.graph_store.clone().read_owned().await;
 
-    let insertion_layer = searcher.select_layer_prf(&session.hnsw_prf_key, identifier)?;
+    let insertion_layer = searcher.gen_layer_prf(&session.hnsw_prf_key, identifier)?;
 
     let (links, set_ep) = searcher
         .search_to_insert(&mut *store, &graph, &query, insertion_layer)

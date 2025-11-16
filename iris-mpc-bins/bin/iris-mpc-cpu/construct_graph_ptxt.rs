@@ -7,7 +7,7 @@ use tracing::info;
 
 use iris_mpc_cpu::{
     hawkers::build_plaintext::plaintext_parallel_batch_insert,
-    hnsw::HnswParams,
+    hnsw::{searcher::LayerDistribution, HnswSearcher},
     utils::serialization::{
         iris_ndjson::{irises_from_ndjson, IrisSelection},
         write_bin,
@@ -65,10 +65,13 @@ async fn main() -> Result<()> {
     info!("Parsing CLI arguments");
     let args = Args::parse();
 
-    let mut params = HnswParams::new(args.ef, args.ef, args.M);
+    let mut searcher = HnswSearcher::new_standard(args.ef, args.ef, args.M);
     if let Some(q) = args.layer_probability {
-        params.layer_probability = q;
+        match &mut searcher.layer_distribution {
+            LayerDistribution::Geometric { layer_probability } => *layer_probability = q,
+        }
     }
+
     let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
 
     info!("Reading iris codes from file");
@@ -85,7 +88,7 @@ async fn main() -> Result<()> {
 
     info!("Building HNSW graph over iris codes...");
     let (graph, _) =
-        plaintext_parallel_batch_insert(None, None, irises, params, 1, &prf_seed).await?;
+        plaintext_parallel_batch_insert(None, None, irises, &searcher, 1, &prf_seed).await?;
 
     info!("Persisting HNSW graph to file");
     write_bin(&graph, args.graph_path.as_os_str().to_str().unwrap())?;
