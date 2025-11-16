@@ -59,7 +59,7 @@ pub struct HnswParams {
     pub ef_search: [usize; N_PARAM_LAYERS],
 }
 
-#[allow(non_snake_case, clippy::too_many_arguments)]
+#[allow(non_snake_case)]
 impl HnswParams {
     /// Construct a `Params` object corresponding to parameter configuration providing the
     /// functionality described in the original HNSW paper of Malkov and Yashunin:
@@ -136,6 +136,86 @@ impl HnswParams {
     }
 }
 
+/// Struct specifies how layers are handled by an `HnswSearcher`.`
+#[derive(PartialEq, Clone, Serialize, Deserialize)]
+pub enum LayerMode {
+    /// Standard operation: maintains single entry point and updates it when a
+    /// new node is inserted as the first item in a new highest layer.
+    ///
+    /// Graph search starts at the unique entry point.
+    Standard,
+
+    /// Bounded standard operation: maintains a single entry point and updates
+    /// it when a new node is inserted as the first item in a new highest layer.
+    /// Node insertion is bounded at a fixed maximum layer height.
+    ///
+    /// Graph search starts at the unique entry point.
+    Bounded {
+        /// Maximum layer for node insertion
+        max_graph_layer: usize,
+    },
+
+    /// Nodes are inserted at up to a maximum layer height, and any node which
+    /// would be inserted at a higher layer than this is added to an ongoing
+    /// list of entry points.
+    ///
+    /// Graph search starts in the top layer, at a node of minimal distance from
+    /// the query among the entry points, calculated by a direct linear scan of
+    /// the entry points list.
+    LinearScan {
+        /// Maximum layer for node insertion
+        max_graph_layer: usize,
+    },
+}
+
+/// Struct specifies the probability distribution used to generate insertion
+/// layers for new nodes in an HNSW graph.
+#[derive(Clone, Serialize, Deserialize)]
+pub enum LayerDistribution {
+    Geometric {
+        /// Probability `q = 1-p` for geometric distribution of layer densities
+        layer_probability: f64,
+    },
+}
+
+#[allow(non_snake_case)]
+impl LayerDistribution {
+    pub fn new_geometric_from_M(M: usize) -> Self {
+        let layer_probability = (M as f64).recip();
+        LayerDistribution::Geometric { layer_probability }
+    }
+
+    /// Generate a random layer based on the specified `LayerDistribution` enum
+    /// variant.
+    pub fn gen_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
+        match self {
+            LayerDistribution::Geometric { layer_probability } => {
+                let p_geom = 1f64 - layer_probability;
+                let geom_distr = Geometric::new(p_geom)?;
+
+                let layer = geom_distr.sample(rng) as usize;
+                Ok(layer)
+            }
+        }
+    }
+
+    /// Compute the parameter m_L associated with a geometric distribution
+    /// parameter q describing the random layer of newly inserted graph nodes.
+    ///
+    /// E.g. for graph hierarchy where each layer has a factor of 32 fewer
+    /// entries than the last, the `layer_probability` input is 1/32.
+    pub fn m_L_from_layer_probability(layer_probability: f64) -> f64 {
+        -layer_probability.ln().recip()
+    }
+
+    /// Compute the parameter q for the geometric distribution used to select
+    /// the insertion layer for newly inserted graph nodes, from the parameter
+    /// m_L of the original HNSW paper.
+    pub fn layer_probability_from_m_L(m_L: f64) -> f64 {
+        (-m_L.recip()).exp()
+    }
+}
+
 /// An implementation of the HNSW approximate k-nearest neighbors algorithm, based on "Efficient and
 /// robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs" by
 /// Malkov and Yashunin, 2020.
@@ -181,18 +261,6 @@ pub struct ConnectPlan<Vector> {
     pub set_ep: SetEntryPoint,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SetEntryPoint {
-    /// Do not update entry points based on inserted vector
-    False,
-
-    /// On new layer, clear the existing entry point before inserting
-    NewLayer,
-
-    /// On the top layer, add to the list of entry points
-    AddToLayer,
-}
-
 /// Represents the state updates required for insertion of a new node into a single layer of
 /// an HNSW hierarchical graph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,100 +272,16 @@ pub struct ConnectPlanLayer<Vector> {
     pub nb_links: Vec<Vec<Vector>>,
 }
 
-/// Represents the search mode for top layers of the HNSW graph.
-#[derive(PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
-pub enum TopLayerSearchMode {
-    /// Use the default search as in other layer.
-    Default,
-    /// Use linear scan to find the nearest neighbor.
-    /// usize is the entry point layer (zero indexed)
-    LinearScan(usize),
-}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SetEntryPoint {
+    /// Do not update entry points based on inserted vector
+    False,
 
-impl TopLayerSearchMode {
-    pub fn get_ep_layer(&self) -> Option<usize> {
-        match self {
-            Self::Default => None,
-            Self::LinearScan(r) => Some(*r),
-        }
-    }
-}
+    /// On new layer, clear the existing entry point before inserting
+    NewLayer,
 
-#[derive(PartialEq, Clone, Serialize, Deserialize)]
-pub enum LayerMode {
-    /// Standard operation: maintains single entry point and updates it when a
-    /// new node is inserted as the first item in a new highest layer.
-    ///
-    /// Graph search starts at the unique entry point.
-    Standard,
-
-    /// Bounded standard operation: maintains a single entry point and updates
-    /// it when a new node is inserted as the first item in a new highest layer.
-    /// Node insertion is bounded at a fixed maximum layer height.
-    ///
-    /// Graph search starts at the unique entry point.
-    Bounded {
-        /// Maximum layer for node insertion
-        max_graph_layer: usize,
-    },
-
-    /// Nodes are inserted at up to a maximum layer height, and any node which
-    /// would be inserted at a higher layer than this is added to an ongoing
-    /// list of entry points.
-    ///
-    /// Graph search starts in the top layer, at a node of minimal distance from
-    /// the query among the entry points, calculated by a direct linear scan of
-    /// the entry points list.
-    LinearScan {
-        /// Maximum layer for node insertion
-        max_graph_layer: usize,
-    },
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum LayerDistribution {
-    Geometric {
-        /// Probability `q = 1-p` for geometric distribution of layer densities
-        layer_probability: f64,
-    },
-}
-
-#[allow(non_snake_case)]
-impl LayerDistribution {
-    pub fn new_geometric_from_M(M: usize) -> Self {
-        let layer_probability = (M as f64).recip();
-        LayerDistribution::Geometric { layer_probability }
-    }
-
-    /// Generate a random layer based on the specified `LayerDistribution` enum
-    /// variant.
-    pub fn gen_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
-        match self {
-            LayerDistribution::Geometric { layer_probability } => {
-                let p_geom = 1f64 - layer_probability;
-                let geom_distr = Geometric::new(p_geom)?;
-
-                let layer = geom_distr.sample(rng) as usize;
-                Ok(layer)
-            }
-        }
-    }
-
-    /// Compute the parameter m_L associated with a geometric distribution
-    /// parameter q describing the random layer of newly inserted graph nodes.
-    ///
-    /// E.g. for graph hierarchy where each layer has a factor of 32 fewer
-    /// entries than the last, the `layer_probability` input is 1/32.
-    pub fn m_L_from_layer_probability(layer_probability: f64) -> f64 {
-        -layer_probability.ln().recip()
-    }
-
-    /// Compute the parameter q for the geometric distribution used to select
-    /// the insertion layer for newly inserted graph nodes, from the parameter
-    /// m_L of the original HNSW paper.
-    pub fn layer_probability_from_m_L(m_L: f64) -> f64 {
-        (-m_L.recip()).exp()
-    }
+    /// On the top layer, add to the list of entry points
+    AddToLayer,
 }
 
 #[allow(non_snake_case)]
