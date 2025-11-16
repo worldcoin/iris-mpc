@@ -335,8 +335,22 @@ impl HawkActor {
             params: search_params,
         });
 
-        let network_args =
-            NetworkHandleArgs::from_hawk(args, SessionGroups::N_SESSIONS_PER_REQUEST);
+        let network_args = NetworkHandleArgs {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+            tls: args
+                .tls
+                .as_ref()
+                .map(|t| ampc_actor_utils::network::tcp::TlsConfig {
+                    private_key: t.private_key.clone(),
+                    leaf_cert: t.leaf_cert.clone(),
+                    root_certs: t.root_certs.clone(),
+                }),
+        };
         let networking = build_network_handle(network_args, shutdown_ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);

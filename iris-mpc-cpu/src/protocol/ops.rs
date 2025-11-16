@@ -21,9 +21,9 @@ use crate::{
         IntRing2k,
     },
 };
+use ampc_actor_utils::fast_metrics::FastHistogram;
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
-    fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
     ROTATIONS,
 };
@@ -702,7 +702,7 @@ pub(crate) async fn oblivious_cross_compare_lifted(
     // compute the secret-shared bits d1 < d2
     let bits = oblivious_cross_compare(session, distances).await?;
     // inject bits to T shares
-    Ok(bit_inject_ot_2round(session, VecShare { shares: bits })
+    Ok(bit_inject_ot_2round(session, VecShare::new_vec(bits))
         .await?
         .inner())
 }
@@ -734,7 +734,7 @@ pub(crate) async fn min_of_pair_batch(
 ///
 /// The round-robin method computes all pairwise "less-than" relations within each batch,
 /// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
-///  
+///
 ///    | d0 | d1 | d2 | d3 |
 /// ------------------------
 /// d0 | 1  | b01| b02| b03|
@@ -847,7 +847,7 @@ pub(crate) async fn min_round_robin_batch(
         for i_batch in 0..num_batches {
             for i in 0..batch_size {
                 let distance = &distances[i * num_batches + i_batch];
-                let b = &selection_bits.shares[i_batch * batch_size + i];
+                let b = &selection_bits.shares()[i_batch * batch_size + i];
                 let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
                 let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
                 shares_a.push(code_a);
