@@ -1,8 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 pub mod config;
 pub mod error;
-pub mod fast_metrics;
-pub mod galois;
 pub mod galois_engine;
 pub mod helpers;
 pub mod id;
@@ -32,6 +30,7 @@ pub type IrisCodeDb = (Vec<u16>, Vec<u16>);
 /// Borrowed version of iris database; .0 = iris code, .1 = mask
 pub type IrisCodeDbSlice<'a> = (&'a [u16], &'a [u16]);
 
+pub use ampc_secret_sharing::galois;
 pub use vector_id::SerialId as IrisSerialId;
 pub use vector_id::VectorId as IrisVectorId;
 pub use vector_id::VersionId as IrisVersionId;

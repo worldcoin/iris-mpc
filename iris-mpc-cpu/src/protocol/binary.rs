@@ -9,8 +9,8 @@ use crate::{
         vecshare::{SliceShare, VecShare},
     },
 };
+use ampc_actor_utils::fast_metrics::FastHistogram;
 use eyre::{bail, eyre, Error, Result};
-use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
