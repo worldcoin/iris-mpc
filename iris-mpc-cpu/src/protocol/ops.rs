@@ -1,83 +1,36 @@
-use super::binary::{
-    bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
-    single_extract_msb_u32,
-};
 use crate::{
-    execution::session::{NetworkSession, Session, SessionHandles},
-    network::value::{
-        NetworkInt,
-        NetworkValue::{self},
-    },
-    protocol::{
-        binary::{and_product, extract_msb_u16_batch},
-        prf::{Prf, PrfSeed},
-        shared_iris::ArcIris,
-    },
+    execution::session::{Session, SessionHandles},
+    protocol::shared_iris::ArcIris,
     shares::{
         bit::Bit,
         ring_impl::{RingElement, VecRingElement},
         share::{reconstruct_distance_vector, DistanceShare, Share},
         vecshare::VecShare,
-        IntRing2k,
     },
 };
 use ampc_actor_utils::fast_metrics::FastHistogram;
+use ampc_actor_utils::protocol::binary::{
+    and_product, bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
+    single_extract_msb_u32,
+};
+// Import non-iris-specific protocol operations from ampc-common
+pub use ampc_actor_utils::protocol::ops::{
+    galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
+    sub_pub,
+};
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use std::{array, cmp::Ordering, ops::Not, time::Instant};
+use std::{cmp::Ordering, ops::Not, time::Instant};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
-
-/// Setup the PRF seeds in the replicated protocol.
-/// Each party sends to the next party a random seed.
-/// At the end, each party will hold two seeds which are the basis of the
-/// replicated protocols.
-#[instrument(
-    level = "trace",
-    target = "searcher::network",
-    fields(party = ?session.own_role),
-    skip_all
-)]
-pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<Prf> {
-    // send my_seed to the next party
-    session.send_next(NetworkValue::PrfKey(my_seed)).await?;
-    // deserializing received seed.
-    let other_seed = match session.receive_prev().await {
-        Ok(NetworkValue::PrfKey(seed)) => seed,
-        _ => bail!("Could not deserialize PrfKey"),
-    };
-    // creating the two PRFs
-    Ok(Prf::new(my_seed, other_seed))
-}
-
-/// Setup an RNG common between all parties, for use in stochastic algorithms (e.g. HNSW layer selection).
-pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<PrfSeed> {
-    let my_msg = NetworkValue::PrfKey(my_seed);
-
-    let decode = |msg| match msg {
-        Ok(NetworkValue::PrfKey(seed)) => Ok(seed),
-        _ => Err(eyre!("Could not deserialize PrfKey")),
-    };
-
-    // Round 1: Send to the next party and receive from the previous party.
-    session.send_next(my_msg.clone()).await?;
-    let prev_seed = decode(session.receive_prev().await)?;
-
-    // Round 2: Send/receive in the opposite direction.
-    session.send_prev(my_msg).await?;
-    let next_seed = decode(session.receive_next().await)?;
-
-    let shared_seed = array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]);
-    Ok(shared_seed)
-}
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
@@ -972,40 +925,6 @@ pub fn non_existent_distance() -> Vec<RingElement<u16>> {
     ]
 }
 
-/// Converts additive sharing (from trick_dot output) to a replicated sharing by
-/// masking it with a zero sharing
-pub async fn galois_ring_to_rep3(
-    session: &mut Session,
-    items: Vec<RingElement<u16>>,
-) -> Result<Vec<Share<u16>>> {
-    let network = &mut session.network_session;
-
-    // make sure we mask the input with a zero sharing
-    let masked_items: Vec<_> = items
-        .iter()
-        .map(|x| session.prf.gen_zero_share() + x)
-        .collect();
-
-    // sending to the next party
-    network
-        .send_next(NetworkValue::VecRing16(masked_items.clone()))
-        .await?;
-
-    // receiving from previous party
-    let shares_b = {
-        match network.receive_prev().await {
-            Ok(NetworkValue::VecRing16(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in galois_ring_to_rep3 operation")),
-        }
-    }?;
-    let res: Vec<Share<u16>> = masked_items
-        .into_iter()
-        .zip(shares_b)
-        .map(|(a, b)| Share::new(a, b))
-        .collect();
-    Ok(res)
-}
-
 /// Compares the given distance to a threshold and reveal the bit "less than or equal".
 pub async fn lte_threshold_and_open(
     session: &mut Session,
@@ -1017,69 +936,17 @@ pub async fn lte_threshold_and_open(
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
 
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_ring<T: IntRing2k + NetworkInt>(
-    session: &mut Session,
-    shares: &[Share<T>],
-) -> Result<Vec<T>> {
-    let network = &mut session.network_session;
-    let message = if shares.len() == 1 {
-        T::new_network_element(shares[0].b)
-    } else {
-        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
-        T::new_network_vec(shares)
-    };
-
-    network.send_next(message).await?;
-
-    // receiving from previous party
-    let c = network
-        .receive_prev()
-        .await
-        .and_then(|v| T::into_vec(v))
-        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
-
-    // ADD shares with the received shares
-    izip!(shares.iter(), c.iter())
-        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
-        .collect::<Result<Vec<_>>>()
-}
-
-/// Compares the given distances to zero and reveal the bit "less than zero".
-pub async fn lt_zero_and_open_u16(
-    session: &mut Session,
-    distances: &[Share<u16>],
-) -> Result<Vec<bool>> {
-    let bits = extract_msb_u16_batch(session, distances).await?;
-    open_bin(session, &bits)
-        .await
-        .map(|v| v.into_iter().map(|x| x.convert()).collect())
-}
-
-/// Subtracts a public ring element from a secret-shared ring element in-place.
-pub fn sub_pub<T: IntRing2k + NetworkInt>(
-    session: &mut Session,
-    share: &mut Share<T>,
-    rhs: RingElement<T>,
-) {
-    match session.own_role().index() {
-        0 => share.a -= rhs,
-        1 => share.b -= rhs,
-        2 => {}
-        _ => unreachable!(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
-        network::value::NetworkInt,
-        protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
+        network::value::{NetworkInt, NetworkValue},
+        protocol::shared_iris::GaloisRingSharedIris,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
+    use ampc_actor_utils::protocol::prf::Prf;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
@@ -1088,6 +955,7 @@ mod tests {
     use std::{array, collections::HashMap, sync::Arc};
     use tokio::{sync::Mutex, task::JoinSet};
     use tracing::trace;
+    use NetworkValue::RingElement32;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_single(session: &mut Session, x: Share<u32>) -> Result<RingElement<u32>> {
