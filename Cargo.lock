@@ -85,6 +85,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "bytes",
+ "clap",
  "dashmap",
  "eyre",
  "futures",
@@ -2729,6 +2730,7 @@ dependencies = [
 name = "iris-mpc-common"
 version = "0.1.0"
 dependencies = [
+ "ampc-actor-utils",
  "ampc-secret-sharing",
  "aws-config",
  "aws-credential-types",

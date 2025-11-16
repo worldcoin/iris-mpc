@@ -1,9 +1,10 @@
 use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
+use ampc_actor_utils::network::config::deserialize_yaml_json_string;
+use ampc_actor_utils::network::config::TlsConfig;
 use clap::Parser;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
-
 pub mod json_wrapper;
 
 pub const ENV_DEV: &str = "dev";
@@ -649,31 +650,6 @@ pub struct MetricsConfig {
     pub queue_size: usize,
     pub buffer_size: usize,
     pub prefix: String,
-}
-
-// #[clap(flatten)] makes arguments required. this is problematic
-// when the flattened struct is wrapped in an option. to allow the
-// absence of these fields to make the arg None, each field needs
-// 'required = false'
-#[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
-#[group(requires_all = ["private_key", "leaf_cert", "root_certs"])]
-pub struct TlsConfig {
-    #[arg(required = false)]
-    pub private_key: Option<String>,
-    // used by a peer to identify itself
-    #[arg(required = false)]
-    pub leaf_cert: Option<String>,
-    // used by the client to make them trust the server certs
-    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
-    pub root_certs: Vec<String>,
-}
-
-fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: String = Deserialize::deserialize(deserializer)?;
-    serde_json::from_str(&value).map_err(serde::de::Error::custom)
 }
 
 fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>
