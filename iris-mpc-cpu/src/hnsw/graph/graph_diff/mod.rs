@@ -1,3 +1,4 @@
+use std::cmp;
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -11,7 +12,7 @@ pub mod node_equiv;
 ///
 /// A `Differ` implementation can maintain internal state and update it as the
 /// `run_diff` function traverses the layers and nodes of the graphs.
-pub trait Differ<V: Ref + Display + FromStr> {
+pub trait Differ<V: Ref + Display + FromStr + std::cmp::Ord> {
     /// The final output type of the diffing operation.
     type Output: Display;
 
@@ -37,7 +38,7 @@ pub trait Differ<V: Ref + Display + FromStr> {
 /// to ensure the graphs have a comparable structure.
 pub fn run_diff<V, D>(lhs: &GraphMem<V>, rhs: &GraphMem<V>, mut differ: D) -> D::Output
 where
-    V: Ref + Display + FromStr,
+    V: Ref + Display + FromStr + cmp::Ord,
     D: Differ<V>,
 {
     differ.start_graph();

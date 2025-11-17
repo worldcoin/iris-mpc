@@ -1,6 +1,7 @@
 use eyre::{OptionExt, Result};
 use serde::Serialize;
 use std::{
+    cmp,
     fmt::{Debug, Display},
     hash::Hash,
     str::FromStr,
@@ -32,7 +33,7 @@ pub trait VectorStore: Debug {
     /// Opaque reference to a stored vector.
     ///
     /// Example: a vector ID.
-    type VectorRef: Ref + Display + FromStr;
+    type VectorRef: Ref + Display + FromStr + cmp::Ord;
 
     /// Opaque reference to a distance metric.
     ///

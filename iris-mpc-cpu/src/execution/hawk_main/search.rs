@@ -9,7 +9,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{GraphMem, HnswSearcher},
+    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
@@ -177,7 +177,7 @@ async fn per_search_query(
         plan: InsertPlanV {
             query,
             links,
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         },
         match_count,
     })
