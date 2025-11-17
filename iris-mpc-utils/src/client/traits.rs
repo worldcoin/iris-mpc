@@ -10,6 +10,6 @@ pub trait ComponentInitializer {
 
 /// Implemented by components within batch processing pipeline.
 #[async_trait]
-pub trait RequestBatchProcesser {
+pub trait ProcessRequestBatch {
     async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ServiceClientError>;
 }

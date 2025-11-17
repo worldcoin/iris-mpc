@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 
-use super::super::{
-    errors::ServiceClientError, traits::RequestBatchProcesser, types::RequestBatch,
-};
+use super::super::{errors::ServiceClientError, traits::ProcessRequestBatch, types::RequestBatch};
 use crate::aws::AwsClient;
 
 /// A component responsible for dequeuing system responses from network egress queues.
@@ -20,7 +18,7 @@ impl ResponseDequeuer {
 }
 
 #[async_trait]
-impl RequestBatchProcesser for ResponseDequeuer {
+impl ProcessRequestBatch for ResponseDequeuer {
     async fn process_batch(&self, _batch: &RequestBatch) -> Result<(), ServiceClientError> {
         let msg = self.aws_client.sqs_receive_message().await;
         println!("AWS-SQS receive message event: {:?}", msg);

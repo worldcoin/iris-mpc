@@ -10,7 +10,12 @@ use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
-use super::{config::AwsClientConfig, errors::AwsClientError, keys::download_public_keyset};
+use super::{
+    config::AwsClientConfig,
+    errors::AwsClientError,
+    keys::download_public_keyset,
+    types::{S3ObjectInfo, SnsMessageInfo},
+};
 use crate::types::PublicKeyset;
 
 /// Encpasulates access to a node's set of AWS service clients.
@@ -64,18 +69,15 @@ impl AwsClient {
 
 impl AwsClient {
     /// Enqueues data to an S3 bucket.
-    pub async fn s3_put_object(
-        &self,
-        s3_bucket: &str,
-        s3_key: &str,
-        s3_body: &[u8],
-    ) -> Result<(), AwsClientError> {
+    pub async fn s3_put_object(&self, s3_obj_info: &S3ObjectInfo) -> Result<(), AwsClientError> {
         match self
             .s3
             .put_object()
-            .bucket(s3_bucket)
-            .key(s3_key)
-            .body(ByteStream::new(SdkBody::from(s3_body)))
+            .bucket(s3_obj_info.bucket())
+            .key(s3_obj_info.key())
+            .body(ByteStream::new(SdkBody::from(
+                s3_obj_info.body().as_slice(),
+            )))
             .send()
             .await
         {
@@ -83,7 +85,7 @@ impl AwsClient {
             Err(e) => {
                 tracing::error!("AWS-S3 upload error: {}", e);
                 Err(AwsClientError::S3UploadError(
-                    String::from(s3_key),
+                    s3_obj_info.key().clone(),
                     e.to_string(),
                 ))
             }
@@ -108,12 +110,10 @@ impl AwsClient {
         Ok(())
     }
 
-    /// Enqueues a message upon an AWS SNS service topic.
-    pub async fn sns_publish<T>(
+    /// Enqueues a message upon an AWS SNS service topic.  The message body is JSON encodeable.
+    pub async fn sns_publish_json<T>(
         &self,
-        message_type: &str,
-        message_group_id: &str,
-        message_body: T,
+        sns_msg_info: SnsMessageInfo<T>,
     ) -> Result<(), AwsClientError>
     where
         T: Sized + Serialize,
@@ -122,9 +122,9 @@ impl AwsClient {
             .sns
             .publish()
             .topic_arn(self.config().sns_request_topic_arn())
-            .message_group_id(message_group_id)
-            .message(serde_json::to_string(&message_body).unwrap())
-            .set_message_attributes(Some(create_sns_message_attributes(message_type)))
+            .message_group_id(sns_msg_info.group_id())
+            .message(serde_json::to_string(sns_msg_info.body()).unwrap())
+            .set_message_attributes(Some(create_sns_message_attributes(sns_msg_info.kind())))
             .send()
             .await
         {

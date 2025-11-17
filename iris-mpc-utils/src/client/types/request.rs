@@ -135,7 +135,7 @@ impl fmt::Display for RequestBatchSize {
 #[allow(clippy::large_enum_variant)]
 pub enum RequestData {
     IdentityDeletion,
-    Reauthorisation,
+    Reauthorization,
     ResetCheck,
     ResetUpdate,
     Uniqueness {
@@ -149,7 +149,7 @@ impl fmt::Display for RequestData {
             Self::IdentityDeletion => {
                 write!(f, "IdentityDeletion")
             }
-            RequestData::Reauthorisation => {
+            RequestData::Reauthorization => {
                 write!(f, "Reauthorisation")
             }
             RequestData::ResetCheck => {

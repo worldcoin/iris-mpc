@@ -1,17 +1,24 @@
 use async_trait::async_trait;
+use serde::Serialize;
 
-use iris_mpc_common::helpers::smpc_request::{UniquenessRequest, UNIQUENESS_MESSAGE_TYPE};
-use iris_mpc_cpu::execution::hawk_main::BothEyes;
+use iris_mpc_common::helpers::smpc_request::{
+    IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest,
+    UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+};
 
 use super::super::{
     errors::ServiceClientError,
-    traits::{ComponentInitializer, RequestBatchProcesser},
+    traits::{ComponentInitializer, ProcessRequestBatch},
     types::{RequestBatch, RequestData},
 };
 use crate::{
-    aws::{create_iris_code_party_shares, AwsClient},
+    aws::{
+        create_iris_code_party_shares, create_iris_party_shares_for_s3,
+        types::{S3ObjectInfo, SnsMessageInfo},
+        AwsClient,
+    },
     client::types::Request,
-    types::IrisCodeAndMaskShares,
 };
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -42,26 +49,20 @@ impl ComponentInitializer for RequestEnqueuer {
 }
 
 #[async_trait]
-impl RequestBatchProcesser for RequestEnqueuer {
+impl ProcessRequestBatch for RequestEnqueuer {
     async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ServiceClientError> {
         for request in batch.requests() {
             match request.data() {
-                RequestData::Uniqueness { shares } => {
-                    match self.enqueue_uniqueness_request(request, shares).await {
-                        Ok(_) => (),
-                        Err(e) => {
-                            return Err(ServiceClientError::EnqueueUniquenessRequestError(
-                                e.to_string(),
-                            ))
-                        }
-                    }
+                RequestData::IdentityDeletion { .. } => {
+                    self.enqueue_identity_deletion(request).await
                 }
-                _ => {
-                    return Err(ServiceClientError::UnsupportedRequestType(
-                        request.data().to_string(),
-                    ))
-                }
+                RequestData::Reauthorization { .. } => self.enqueue_reauthorization(request).await,
+                RequestData::ResetCheck { .. } => self.enqueue_reset_check(request).await,
+                RequestData::ResetUpdate { .. } => self.enqueue_reset_update(request).await,
+                RequestData::Uniqueness { .. } => self.enqueue_uniqueness_request(request).await,
             }
+            .map_err(|e| ServiceClientError::EnqueueRequestError(e.to_string()))?;
+            tracing::info!("{} :: Enqueued to AWS-SNS topic", request);
         }
 
         Ok(())
@@ -69,57 +70,168 @@ impl RequestBatchProcesser for RequestEnqueuer {
 }
 
 impl RequestEnqueuer {
+    /// Enqueues a system request by dispatching a notification to AWS-SNS.
+    async fn enqueue<T>(&self, data: T) -> Result<(), ServiceClientError>
+    where
+        T: Sized + Serialize,
+        SnsMessageInfo<T>: From<T>,
+    {
+        match self
+            .aws_client
+            .sns_publish_json(SnsMessageInfo::from(data))
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(e) => Err(ServiceClientError::AwsServiceError(e)),
+        }
+    }
+
     /// Enqueues a uniqueness request.  This is a two stage process as encrypted shares are first
     /// uploaded to AWS S3 prior to actual enqueuing.
     async fn enqueue_uniqueness_request(
         &self,
         request: &Request,
-        shares: &BothEyes<IrisCodeAndMaskShares>,
     ) -> Result<(), ServiceClientError> {
-        // Step 0: Set sign-up id so that it matches request id.
-        let signup_id = request.identifier();
+        // Destructure generated data.
+        let shares = match request.data() {
+            RequestData::Uniqueness { shares } => shares,
+            _ => unreachable!(),
+        };
 
-        // Step 1: Upload encrypted shares to S3.
+        // Set signup id.
+        let signup_id = request.identifier().clone();
+
+        // Set AWS-S3 JSON compatible shares.
         let [[l_code, l_mask], [r_code, r_mask]] = shares.clone();
-        let shares = create_iris_code_party_shares(*signup_id, l_code, l_mask, r_code, r_mask);
-        let s3_key = match self
-            .aws_client
-            .encrypt_and_upload_iris_shares(&shares)
-            .await
-        {
-            Ok(s3_key) => {
+        let shares = create_iris_party_shares_for_s3(
+            &create_iris_code_party_shares(
+                signup_id.clone(),
+                l_code.to_owned(),
+                l_mask.to_owned(),
+                r_code.to_owned(),
+                r_mask.to_owned(),
+            ),
+            &self.aws_client.public_keyset(),
+        );
+
+        // Upload to AWS-S3.
+        let s3_bucket = self.aws_client.config().s3_request_bucket_name();
+        let s3_key = signup_id.to_string();
+        let s3_obj_info = S3ObjectInfo::new_from_jsonic(&s3_bucket, &s3_key, &shares);
+        match self.aws_client.s3_put_object(&s3_obj_info).await {
+            Ok(_) => {
                 tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
-                s3_key
             }
             Err(e) => return Err(ServiceClientError::AwsServiceError(e)),
         };
 
-        // Step 2: Enqueue system request.
-        let sns_message_type = UNIQUENESS_MESSAGE_TYPE;
-        let sns_message_group_id = ENROLLMENT_REQUEST_TYPE;
-        let sns_message_body = UniquenessRequest {
+        // Enqueue to AWS-SNS.
+        self.enqueue(UniquenessRequest {
             batch_size: Some(1),
-            signup_id: shares.signup_id.clone(),
+            signup_id: signup_id.to_string(),
             s3_key,
             or_rule_serial_ids: None,
             skip_persistence: None,
             full_face_mirror_attacks_detection_enabled: Some(true),
             disable_anonymized_stats: None,
-        };
-        match self
-            .aws_client
-            .sns_publish::<UniquenessRequest>(
-                sns_message_type,
-                sns_message_group_id,
-                sns_message_body,
-            )
-            .await
-        {
-            Ok(()) => {
-                tracing::info!("{} :: Enqueued to AWS-SNS topic", request);
-                Ok(())
-            }
-            Err(e) => Err(ServiceClientError::AwsServiceError(e)),
-        }
+        })
+        .await
+    }
+
+    /// Enqueues an identity deletion request.
+    async fn enqueue_identity_deletion(
+        &self,
+        _request: &Request,
+    ) -> Result<(), ServiceClientError> {
+        // TODO: hydrate correctly.
+        self.enqueue(IdentityDeletionRequest {
+            serial_id: u32::MIN,
+        })
+        .await
+    }
+
+    /// Enqueues a reauthorization request.
+    async fn enqueue_reauthorization(&self, _request: &Request) -> Result<(), ServiceClientError> {
+        // TODO: hydrate correctly.
+        self.enqueue(ReAuthRequest {
+            reauth_id: "reauth_id".to_string(),
+            batch_size: None,
+            s3_key: "s3_key".to_string(),
+            serial_id: u32::MIN,
+            use_or_rule: false,
+        })
+        .await
+    }
+
+    /// Enqueues a reset check request.
+    async fn enqueue_reset_check(&self, _request: &Request) -> Result<(), ServiceClientError> {
+        // TODO: hydrate correctly.
+        self.enqueue(ResetCheckRequest {
+            reset_id: "reset_id".to_string(),
+            batch_size: None,
+            s3_key: "s3_key".to_string(),
+        })
+        .await
+    }
+
+    /// Enqueues a reset update request.
+    async fn enqueue_reset_update(&self, _request: &Request) -> Result<(), ServiceClientError> {
+        // TODO: hydrate correctly.
+        self.enqueue(ResetUpdateRequest {
+            reset_id: "reset_id".to_string(),
+            serial_id: u32::MIN,
+            s3_key: "s3_key".to_string(),
+        })
+        .await
+    }
+}
+
+impl From<IdentityDeletionRequest> for SnsMessageInfo<IdentityDeletionRequest> {
+    fn from(body: IdentityDeletionRequest) -> Self {
+        SnsMessageInfo::<IdentityDeletionRequest>::new(
+            body,
+            String::from(ENROLLMENT_REQUEST_TYPE),
+            String::from(IDENTITY_DELETION_MESSAGE_TYPE),
+        )
+    }
+}
+
+impl From<ReAuthRequest> for SnsMessageInfo<ReAuthRequest> {
+    fn from(body: ReAuthRequest) -> Self {
+        SnsMessageInfo::<ReAuthRequest>::new(
+            body,
+            String::from(ENROLLMENT_REQUEST_TYPE),
+            String::from(REAUTH_MESSAGE_TYPE),
+        )
+    }
+}
+
+impl From<ResetCheckRequest> for SnsMessageInfo<ResetCheckRequest> {
+    fn from(body: ResetCheckRequest) -> Self {
+        SnsMessageInfo::<ResetCheckRequest>::new(
+            body,
+            String::from(ENROLLMENT_REQUEST_TYPE),
+            String::from(RESET_CHECK_MESSAGE_TYPE),
+        )
+    }
+}
+
+impl From<ResetUpdateRequest> for SnsMessageInfo<ResetUpdateRequest> {
+    fn from(body: ResetUpdateRequest) -> Self {
+        SnsMessageInfo::<ResetUpdateRequest>::new(
+            body,
+            String::from(ENROLLMENT_REQUEST_TYPE),
+            String::from(RESET_UPDATE_MESSAGE_TYPE),
+        )
+    }
+}
+
+impl From<UniquenessRequest> for SnsMessageInfo<UniquenessRequest> {
+    fn from(body: UniquenessRequest) -> Self {
+        SnsMessageInfo::<UniquenessRequest>::new(
+            body,
+            String::from(ENROLLMENT_REQUEST_TYPE),
+            String::from(UNIQUENESS_MESSAGE_TYPE),
+        )
     }
 }

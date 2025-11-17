@@ -37,7 +37,7 @@ pub struct AwsClientConfig {
 }
 
 impl AwsClientConfig {
-    pub(super) fn environment(&self) -> &String {
+    pub(crate) fn environment(&self) -> &String {
         &self.environment
     }
 
@@ -45,7 +45,7 @@ impl AwsClientConfig {
         &self.public_key_base_url
     }
 
-    pub(super) fn s3_request_bucket_name(&self) -> &String {
+    pub(crate) fn s3_request_bucket_name(&self) -> &String {
         &self.s3_request_bucket_name
     }
 
@@ -53,15 +53,15 @@ impl AwsClientConfig {
         &self.sdk
     }
 
-    pub(super) fn sns_request_topic_arn(&self) -> &String {
+    pub(crate) fn sns_request_topic_arn(&self) -> &String {
         &self.sns_request_topic_arn
     }
 
-    pub(super) fn sqs_response_queue_url(&self) -> &String {
+    pub(crate) fn sqs_response_queue_url(&self) -> &String {
         &self.sqs_response_queue_url
     }
 
-    pub(super) fn sqs_wait_time_seconds(&self) -> usize {
+    pub(crate) fn sqs_wait_time_seconds(&self) -> usize {
         self.sqs_wait_time_seconds
     }
 

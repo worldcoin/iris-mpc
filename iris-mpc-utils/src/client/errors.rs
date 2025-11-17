@@ -13,8 +13,8 @@ pub enum ServiceClientError {
     #[error("Component initialisation error: {0}")]
     ComponentInitialisationError(String),
 
-    #[error("Enqueue uniqueness request error: {0}")]
-    EnqueueUniquenessRequestError(String),
+    #[error("Enqueue request error: {0}")]
+    EnqueueRequestError(String),
 
     #[error("Initialisation error: {0}")]
     InitialisationError(String),
