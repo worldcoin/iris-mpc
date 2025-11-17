@@ -17,8 +17,8 @@ use crate::hnsw::{
 use crate::hnsw::GraphMem;
 
 use aes_prng::AesRng;
+use ampc_actor_utils::fast_metrics::FastHistogram;
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};

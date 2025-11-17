@@ -65,7 +65,8 @@ metrics-exporter-statsd = "0.7"
 num_cpus = "1.17.0"
 futures.workspace = true
 pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
-
+ampc-secret-sharing.workspace = true
+ampc-actor-utils.workspace = true
 
 [dev-dependencies]
 float_eq = "1"
