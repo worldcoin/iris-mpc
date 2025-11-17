@@ -1997,7 +1997,10 @@ mod tests {
 #[cfg(feature = "db_dependent")]
 mod tests_db {
     use super::*;
-    use crate::hnsw::{graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV};
+    use crate::hnsw::{
+        graph::graph_store::test_utils::TestGraphPg,
+        searcher::{ConnectPlanLayerV, SetEntryPoint},
+    };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]
@@ -2017,7 +2020,11 @@ mod tests_db {
                         neighbors: vec![vectors[side]],
                         nb_links: vec![vec![*vector]],
                     }],
-                    set_ep: i == side,
+                    set_ep: if i == side {
+                        SetEntryPoint::NewLayer
+                    } else {
+                        SetEntryPoint::False
+                    },
                 })
                 .map(Some)
                 .collect_vec()
@@ -2095,7 +2102,7 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::ConnectPlanLayerV;
+    use crate::hnsw::searcher::{ConnectPlanLayerV, SetEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
@@ -2107,7 +2114,7 @@ mod hawk_mutation_tests {
                 neighbors: vec![vector_id],
                 nb_links: vec![vec![vector_id]],
             }],
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         }
     }
 
