@@ -15,10 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
-    hnsw::{
-        graph::neighborhood::SortedEdgeIds,
-        searcher::{ConnectPlan, ConnectPlanLayer},
-    },
+    hnsw::searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
     protocol::shared_iris::GaloisRingSharedIris,
     utils::constants::N_PARTIES,
 };
@@ -78,7 +75,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
 
     let id = |i: usize| VectorId::from_0_index(i as u32);
     let next = |i: usize| (i + 1) % db_size;
-    let edges = |i: usize| SortedEdgeIds::from_ascending_vec(vec![id(next(i))]);
+    let edges = |i: usize| vec![id(next(i))];
 
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
@@ -89,7 +86,11 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                     neighbors: edges(i),
                     nb_links: vec![edges(next(i))],
                 }],
-                set_ep: i == 0,
+                set_ep: if i == 0 {
+                    SetEntryPoint::NewLayer
+                } else {
+                    SetEntryPoint::False
+                },
             };
             graph.insert_apply(plan).await;
         }

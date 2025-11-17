@@ -271,7 +271,10 @@ impl From<graph_v0::Layer> for Layer<IrisVectorId> {
     fn from(value: graph_v0::Layer) -> Self {
         let mut layer = Layer::new();
         for (point_id, edges) in value.links.into_iter() {
-            layer.set_links(point_id.into(), edges.into());
+            layer.set_links(
+                point_id.into(),
+                edges.0.into_iter().map(|x| x.0.into()).collect(),
+            );
         }
         layer
     }
@@ -317,7 +320,12 @@ impl From<graph_v1::Layer> for Layer<IrisVectorId> {
     fn from(value: graph_v1::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.into());
+            layer.set_links(
+                IrisVectorId::new(v.0, 1),
+                nb.0.into_iter()
+                    .map(|x| IrisVectorId::new(x.0, 1))
+                    .collect(),
+            );
         }
         layer
     }
@@ -366,7 +374,7 @@ impl From<graph_v2::Layer> for Layer<IrisVectorId> {
         // value.set_hash is ignored;
         // instead the set_hash is recomputed implicitly in the set_links calls
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.into());
+            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
         }
         layer
     }
@@ -413,7 +421,7 @@ impl From<graph_v3::Layer> for Layer<IrisVectorId> {
     fn from(value: graph_v3::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.into());
+            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
         }
         layer
     }
@@ -461,7 +469,12 @@ impl From<Layer<IrisVectorId>> for graph_v3::Layer {
             links: value
                 .links
                 .into_iter()
-                .map(|(v, nb)| (v.into(), nb.into()))
+                .map(|(v, nb)| {
+                    (
+                        v.into(),
+                        graph_v3::EdgeIds(nb.into_iter().map(|x| x.into()).collect()),
+                    )
+                })
                 .collect(),
             // This is ignored when deserializing
             // But it needs to exist

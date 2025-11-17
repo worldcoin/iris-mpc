@@ -1998,8 +1998,8 @@ mod tests {
 mod tests_db {
     use super::*;
     use crate::hnsw::{
-        graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
-        searcher::ConnectPlanLayerV,
+        graph::graph_store::test_utils::TestGraphPg,
+        searcher::{ConnectPlanLayerV, SetEntryPoint},
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -2017,10 +2017,14 @@ mod tests_db {
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
                     layers: vec![ConnectPlanLayer {
-                        neighbors: SortedEdgeIds::from_ascending_vec(vec![vectors[side]]),
-                        nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
+                        neighbors: vec![vectors[side]],
+                        nb_links: vec![vec![*vector]],
                     }],
-                    set_ep: i == side,
+                    set_ep: if i == side {
+                        SetEntryPoint::NewLayer
+                    } else {
+                        SetEntryPoint::False
+                    },
                 })
                 .map(Some)
                 .collect_vec()
@@ -2084,7 +2088,7 @@ mod tests_db {
 
             let links = graph.read().await.get_links(&vectors[2], 0).await;
             assert_eq!(
-                links.0,
+                links,
                 vec![expected_ep],
                 "vec_2 connects to the entry point"
             );
@@ -2098,7 +2102,7 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
+    use crate::hnsw::searcher::{ConnectPlanLayerV, SetEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
@@ -2107,10 +2111,10 @@ mod hawk_mutation_tests {
         ConnectPlan {
             inserted_vector: vector_id,
             layers: vec![ConnectPlanLayer {
-                neighbors: SortedEdgeIds::from_ascending_vec(vec![vector_id]),
-                nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
+                neighbors: vec![vector_id],
+                nb_links: vec![vec![vector_id]],
             }],
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         }
     }
 
