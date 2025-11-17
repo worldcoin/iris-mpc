@@ -31,16 +31,25 @@ async fn main() {
 
     let prf_seed = [0u8; 16];
 
-    let graph =
-        GraphMem::ideal_from_irises(irises.clone(), &prf_seed, filepath, k, echoice, num_threads)
-            .unwrap();
+    let mut searcher = HnswSearcher::new(320, 64, 160);
+    searcher.params.layer_probability = 0.20;
+
+    let graph = GraphMem::ideal_from_irises(
+        irises.clone(),
+        filepath,
+        &searcher,
+        prf_seed,
+        echoice,
+        num_threads,
+    )
+    .unwrap();
 
     assert!(graph.layers[0].links.len() == n);
     dbg!(graph.layers[1].links.len());
     dbg!(graph.layers[2].links.len());
 
     for layer in graph.layers.iter() {
-        for (key, value) in layer.links.iter() {
+        for (_, value) in layer.links.iter() {
             assert_eq!(value.len(), k.min(layer.links.len() - 1));
         }
     }
@@ -62,7 +71,6 @@ async fn main() {
         let iris = store.storage.get_vector(&iris_id).unwrap();
         let iris_match = iris.get_similar_iris(&mut rng, 0.15);
         let query = Arc::new(iris_match);
-        let searcher = HnswSearcher::new(320, 64, 256);
 
         let result = searcher
             .search(&mut store, &graph, &query, 1)

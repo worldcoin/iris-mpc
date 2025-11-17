@@ -172,9 +172,9 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
 impl GraphMem<IrisVectorId> {
     pub fn ideal_from_irises(
         irises: Vec<IrisCode>,
-        prf_seed: &[u8; 16],
         filepath: PathBuf, // File containing KNN results for layer 0
-        k: usize,
+        searcher: &HnswSearcher,
+        prf_seed: [u8; 16],
         echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
         num_threads: usize,
     ) -> Result<Self> {
@@ -185,7 +185,7 @@ impl GraphMem<IrisVectorId> {
             let results = results
                 .into_iter()
                 .map(|result| {
-                    assert_eq!(result.neighbors.len(), k);
+                    assert_eq!(result.neighbors.len(), searcher.params.get_M_max(0));
                     result.map(|serial_id| IrisVectorId::from_serial_id(serial_id))
                 })
                 .collect::<Vec<_>>();
@@ -195,13 +195,10 @@ impl GraphMem<IrisVectorId> {
         let irises_with_vector_ids =
             izip!(zero_layer.links.keys().cloned(), irises.into_iter(),).collect::<Vec<_>>();
 
-        //TODO: change
-        let searcher = HnswSearcher::new_with_test_parameters();
-
         // Collect nodes for each non-zero layer
         let mut layer_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> = BTreeMap::new();
         for (vector_id, iris) in irises_with_vector_ids.into_iter() {
-            let layer = searcher.select_layer_prf(prf_seed, &vector_id)?;
+            let layer = searcher.select_layer_prf(&prf_seed, &vector_id)?;
             if layer > 0 {
                 layer_map.entry(layer).or_default().push((vector_id, iris));
             }
@@ -220,9 +217,18 @@ impl GraphMem<IrisVectorId> {
             .first()
             .map(|(v, _)| (v.clone(), nodes_for_nonzero_layers.len()));
 
-        let nonzero_layers = nodes_for_nonzero_layers.into_iter().map(|layer_iris_data| {
-            Layer::ideal_from_irises(layer_iris_data, k, echoice, num_threads)
-        });
+        let nonzero_layers =
+            nodes_for_nonzero_layers
+                .into_iter()
+                .enumerate()
+                .map(|(i, layer_iris_data)| {
+                    Layer::ideal_from_irises(
+                        layer_iris_data,
+                        searcher.params.get_M_max(i + 1),
+                        echoice,
+                        num_threads,
+                    )
+                });
         Ok(GraphMem::from_precomputed(
             entry_point,
             once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
@@ -368,10 +374,8 @@ mod tests {
     use aes_prng::AesRng;
     use eyre::Result;
     use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
-    
+
     use rand::{RngCore, SeedableRng};
-    
-    
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
