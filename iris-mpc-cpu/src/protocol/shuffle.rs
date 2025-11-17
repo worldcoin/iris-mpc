@@ -17,20 +17,23 @@ use crate::{
 /// i.e., party i holds pi_{i,i+1} and pi_{i-1,i} (indices modulo 3)
 pub type Permutation = (Vec<u32>, Vec<u32>);
 
-fn batch_shuffle(
-    perm: &[u32],
-    data: &[RingElement<u32>],
-    batch_size: usize,
-) -> Vec<RingElement<u32>> {
-    let mut res = Vec::with_capacity(data.len());
-    for i in perm {
-        let start = (*i as usize) * batch_size;
-        let end = start + batch_size;
-        res.extend_from_slice(&data[start..end]);
-    }
-    res
-}
-
+/// Shuffle batches of triplets according to the given permutation.
+/// In particular, the input data is organized as a sequence of triplets
+/// (
+///     a_11, b_11, c_11,
+///     a_12, b_12, c_12,
+///     ...,
+///     a_1n, b_1n, c_1n,
+///     ...,
+///     a_k1, b_k1, c_k1,
+///     a_k2, b_k2, c_k2,
+///     ...,
+///     a_kn, b_kn, c_kn,
+/// ),
+/// i.e., each batch of `k` batches contains `n = batch_size` consecutive triplets `(a_i, b_i, c_i)`.
+///
+/// The permutation `perm` is applied to each batch of triplets independently,
+/// resulting in the output data where each i-th triplet in each batch is equal to `a_{perm(i)}, b_{perm(i)}, c_{perm(i)}`.
 fn shuffle_triplets(
     perm: Vec<u32>,
     data: VecRingElement<u32>,
@@ -38,7 +41,11 @@ fn shuffle_triplets(
 ) -> VecRingElement<u32> {
     let mut res = VecRingElement::with_capacity(data.len());
     for batch in data.0.chunks(batch_size * 3) {
-        res.extend(batch_shuffle(&perm, batch, 3));
+        for i in perm.iter() {
+            let start = (*i as usize) * 3;
+            let end = start + 3;
+            res.0.extend_from_slice(&batch[start..end]);
+        }
     }
     res
 }
