@@ -78,6 +78,51 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=6ab6cfc7c76bc1890c009fe73d42271ccdb4d102#6ab6cfc7c76bc1890c009fe73d42271ccdb4d102"
+dependencies = [
+ "aes-prng",
+ "ampc-secret-sharing",
+ "async-channel",
+ "async-trait",
+ "blake3",
+ "bytes",
+ "clap",
+ "dashmap",
+ "eyre",
+ "futures",
+ "itertools 0.13.0",
+ "metrics 0.22.3",
+ "num-traits",
+ "num_enum",
+ "rand",
+ "rand_chacha",
+ "rand_distr",
+ "serde",
+ "serde_json",
+ "socket2 0.6.0",
+ "tokio",
+ "tokio-rustls 0.26.2",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "ampc-secret-sharing"
+version = "0.1.0"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=6ab6cfc7c76bc1890c009fe73d42271ccdb4d102#6ab6cfc7c76bc1890c009fe73d42271ccdb4d102"
+dependencies = [
+ "aes-prng",
+ "bytemuck",
+ "eyre",
+ "itertools 0.13.0",
+ "num-traits",
+ "rand",
+ "serde",
+]
+
+[[package]]
+name = "ampc-actor-utils"
+version = "0.1.0"
 source = "git+https://github.com/worldcoin/ampc-common.git?rev=78f72cb74b19a47e5a553273dd63898cf8496782#78f72cb74b19a47e5a553273dd63898cf8496782"
 dependencies = [
  "aes-prng",
