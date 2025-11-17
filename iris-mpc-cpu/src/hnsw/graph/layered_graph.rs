@@ -207,6 +207,14 @@ impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
 }
 
 impl GraphMem<IrisVectorId> {
+    /// Builds an idealized GraphMem, where all nearest-neighborhoods are exact.
+    /// Layer 0 is built directly from a file (which generally is expensive to produce).
+    /// Higher layers are built from brute-force pairwise computations among all resident nodes
+    ///
+    /// It is asserted that `searcher.params.get_M_max(0) == k`, where `k` is the neighborhood size
+    /// of a node in the provided file. Moreover, nodes in higher layers will have `searcher.get_M_max(layer)` neighbors.
+    /// The searcher also computes the insertion layers for all nodes (using `prf_seed` for reproducibility).
+    /// The engine choice specifies the used distance (FHD or MinFHD).
     pub fn ideal_from_irises(
         irises: Vec<IrisCode>,
         filepath: PathBuf, // File containing KNN results for layer 0
