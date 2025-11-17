@@ -587,6 +587,7 @@ impl HnswSearcher {
             if W.len() < ef && !c_links.is_empty() {
                 let n_insert = c_links.len().min(ef - W.len());
                 let batch: Vec<_> = c_links.drain(0..n_insert).collect();
+                // TODO: collect and only call insert_batch once
                 W.insert_batch_and_retain_k(store, &batch, Some(ef))
                     .instrument(insert_span.clone())
                     .await?;
