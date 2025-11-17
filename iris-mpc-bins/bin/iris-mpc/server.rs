@@ -1,5 +1,8 @@
 #![allow(clippy::needless_range_loop, unused)]
 
+use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
+use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
+use ampc_anon_stats::AnonStatsStore;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
@@ -18,7 +21,6 @@ use iris_mpc::services::processors::modifications_sync::{
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
-use iris_mpc_common::anon_stats::AnonStatsStore;
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
@@ -1307,9 +1309,10 @@ async fn server_main(config: Config) -> Result<()> {
     let runtime_handle = tokio::runtime::Handle::current();
     let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
-        let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
-        let store = AnonStatsStore::new(&client).await?;
-        Some((store, runtime_handle.clone()))
+        let anon_client =
+            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+        let anon_store = AnonStatsStore::new(&anon_client).await?;
+        Some((anon_store, runtime_handle.clone()))
     } else {
         tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
         None
