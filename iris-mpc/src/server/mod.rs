@@ -6,9 +6,11 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
+use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
+use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
+use ampc_anon_stats::AnonStatsStore;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::anon_stats::AnonStatsStore;
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
@@ -136,7 +138,8 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
-        let anon_client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        let anon_client =
+            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
         let anon_store = AnonStatsStore::new(&anon_client).await?;
         hawk_actor.set_anon_stats_store(Some(anon_store));
     } else {

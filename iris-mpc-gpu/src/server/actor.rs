@@ -20,6 +20,8 @@ use crate::{
     },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
+use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
+use ampc_server_utils::{BucketStatistics, BucketStatistics2D, Eye};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -30,9 +32,6 @@ use cudarc::{
 };
 use eyre::{bail, eyre, Result};
 use futures::{Future, FutureExt};
-use iris_mpc_common::anon_stats::{
-    AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
-};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
@@ -41,10 +40,9 @@ use iris_mpc_common::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::{BucketStatistics, BucketStatistics2D},
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
-    job::{Eye, JobSubmissionHandle, ServerJobResult},
+    job::{JobSubmissionHandle, ServerJobResult},
     vector_id::VectorId,
 };
 use iris_mpc_cpu::shares::{

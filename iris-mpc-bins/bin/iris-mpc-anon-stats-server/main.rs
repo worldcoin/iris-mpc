@@ -8,14 +8,6 @@ use std::{
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
 use clap::Parser;
 use eyre::{bail, eyre, Context, Result};
-use iris_mpc_anon_stats_server::{
-    anon_stats::{self, DistanceBundle1D, LiftedDistanceBundle1D},
-    config::{AnonStatsServerConfig, Opt},
-    coordination, sync,
-};
-use iris_mpc_common::anon_stats::{
-    AnonStatsContext, AnonStatsMapping, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
-};
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
     helpers::{

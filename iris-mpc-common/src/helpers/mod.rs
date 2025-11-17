@@ -20,7 +20,6 @@ pub mod smpc_response;
 pub mod sqs;
 #[cfg(feature = "helpers")]
 pub mod sqs_s3_helper;
-pub mod statistics;
 pub mod sync;
 #[cfg(feature = "helpers")]
 pub mod task_monitor;

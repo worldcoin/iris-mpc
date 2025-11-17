@@ -731,6 +731,8 @@ pub(crate) async fn min_round_robin_batch(
     Ok(res)
 }
 
+use ampc_actor_utils::network::value::NetworkInt;
+use ampc_secret_sharing::IntRing2k;
 use std::cell::RefCell;
 
 thread_local! {
@@ -846,34 +848,6 @@ pub async fn lte_threshold_and_open(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_ring<T: IntRing2k + NetworkInt>(
-    session: &mut Session,
-    shares: &[Share<T>],
-) -> Result<Vec<T>> {
-    let network = &mut session.network_session;
-    let message = if shares.len() == 1 {
-        T::new_network_element(shares[0].b)
-    } else {
-        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
-        T::new_network_vec(shares)
-    };
-
-    network.send_next(message).await?;
-
-    // receiving from previous party
-    let c = network
-        .receive_prev()
-        .await
-        .and_then(|v| T::into_vec(v))
-        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
-
-    // ADD shares with the received shares
-    izip!(shares.iter(), c.iter())
-        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
-        .collect::<Result<Vec<_>>>()
-}
-
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
 /// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
 /// each party needs to send its entire share to the next and previous party.
 pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
@@ -906,31 +880,6 @@ pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
     izip!(shares.iter(), b.iter(), c.iter())
         .map(|(a, b, c)| Ok((*a + *b + *c).convert()))
         .collect::<Result<Vec<_>>>()
-}
-
-/// Compares the given distances to zero and reveal the bit "less than zero".
-pub async fn lt_zero_and_open_u16(
-    session: &mut Session,
-    distances: &[Share<u16>],
-) -> Result<Vec<bool>> {
-    let bits = extract_msb_u16_batch(session, distances).await?;
-    open_bin(session, &bits)
-        .await
-        .map(|v| v.into_iter().map(|x| x.convert()).collect())
-}
-
-/// Subtracts a public ring element from a secret-shared ring element in-place.
-pub fn sub_pub<T: IntRing2k + NetworkInt>(
-    session: &mut Session,
-    share: &mut Share<T>,
-    rhs: RingElement<T>,
-) {
-    match session.own_role().index() {
-        0 => share.a -= rhs,
-        1 => share.b -= rhs,
-        2 => {}
-        _ => unreachable!(),
-    }
 }
 
 #[cfg(test)]

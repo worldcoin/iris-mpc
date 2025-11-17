@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
+use ampc_server_utils::Eye;
 use cudarc::driver::{result::memset_d8_sync, CudaSlice, CudaStream, DevicePtr, DeviceSlice};
-use iris_mpc_common::{job::Eye, ROTATIONS};
+use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
 
 use crate::{
