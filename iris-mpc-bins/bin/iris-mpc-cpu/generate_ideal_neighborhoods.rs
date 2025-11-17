@@ -30,10 +30,6 @@ struct Args {
     #[arg(long, default_value_t = 1000)]
     num_irises: usize,
 
-    /// Number of threads to use
-    #[arg(long, default_value_t = 1)]
-    num_threads: usize,
-
     /// Path to the iris codes file
     #[arg(long, default_value = "data/store.ndjson")]
     path_to_iris_codes: PathBuf,
@@ -57,7 +53,6 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-
     let (num_already_processed, nodes) = match File::open(&args.results_file) {
         Ok(file) => {
             let reader = BufReader::new(file);
@@ -192,7 +187,6 @@ async fn main() {
         irises,
         args.k,
         num_already_processed + 1,
-        args.num_threads,
     );
 
     let chunk_size = 2000;

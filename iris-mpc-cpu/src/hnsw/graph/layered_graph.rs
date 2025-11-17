@@ -176,7 +176,6 @@ impl GraphMem<IrisVectorId> {
         searcher: &HnswSearcher,
         prf_seed: [u8; 16],
         echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
-        num_threads: usize,
     ) -> Result<Self> {
         let zero_layer = {
             let results = read_knn_results_from_file(filepath).unwrap();
@@ -186,7 +185,7 @@ impl GraphMem<IrisVectorId> {
                 .into_iter()
                 .map(|result| {
                     assert_eq!(result.neighbors.len(), searcher.params.get_M_max(0));
-                    result.map(|serial_id| IrisVectorId::from_serial_id(serial_id))
+                    result.map(IrisVectorId::from_serial_id)
                 })
                 .collect::<Vec<_>>();
             Layer::from_knn_results(results, irises.len())
@@ -205,17 +204,15 @@ impl GraphMem<IrisVectorId> {
         }
 
         // nodes_for_nonzero_layers[i] = nodes in layer i + 1
-        let nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> = layer_map
-            .into_iter()
-            .map(|(_, nodes)| nodes)
-            .collect::<Vec<Vec<_>>>();
+        let nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> =
+            layer_map.into_values().collect::<Vec<Vec<_>>>();
 
         // Choose first node in top layer as the entry point
         let entry_point = nodes_for_nonzero_layers
             .last()
             .unwrap_or(&vec![])
             .first()
-            .map(|(v, _)| (v.clone(), nodes_for_nonzero_layers.len()));
+            .map(|(v, _)| (*v, nodes_for_nonzero_layers.len()));
 
         let nonzero_layers =
             nodes_for_nonzero_layers
@@ -226,7 +223,6 @@ impl GraphMem<IrisVectorId> {
                         layer_iris_data,
                         searcher.params.get_M_max(i + 1),
                         echoice,
-                        num_threads,
                     )
                 });
         Ok(GraphMem::from_precomputed(
@@ -290,18 +286,13 @@ impl<V: Ref + Display + FromStr> Layer<V> {
 
     /// Constructs a Layer from pairs of (vectorRef, iris) by computing
     /// the ideal K-nearest neighbors for each such entry.
-    fn ideal_from_irises(
-        iris_data: Vec<(V, IrisCode)>,
-        k: usize,
-        echoice: EngineChoice,
-        num_threads: usize,
-    ) -> Self {
+    fn ideal_from_irises(iris_data: Vec<(V, IrisCode)>, k: usize, echoice: EngineChoice) -> Self {
         let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
         let n = irises.len();
         let k = k.min(n - 1);
 
         // Initialize the KNN algorithm;
-        let mut engine = Engine::init(echoice, irises, k, 1, num_threads);
+        let mut engine = Engine::init(echoice, irises, k, 1);
         // Run the entire computation
         let results = engine
             .compute_chunk(n)

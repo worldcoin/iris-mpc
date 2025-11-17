@@ -1,21 +1,19 @@
 use std::sync::Arc;
 use std::{io::BufReader, path::PathBuf};
 
-use iris_mpc_common::iris_db::iris;
 use iris_mpc_common::{IrisSerialId, IrisVectorId};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::vector_store::VectorStoreMut;
 use iris_mpc_cpu::hnsw::HnswSearcher;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 use iris_mpc_cpu::{hawkers::ideal_knn_engines::EngineChoice, hnsw::GraphMem};
-use rand::seq::{IteratorRandom, SliceRandom};
+use rand::seq::IteratorRandom;
 use serde_json::Deserializer;
 
 #[tokio::main]
 async fn main() {
     let k = 320;
     let echoice = EngineChoice::NaiveFHD;
-    let num_threads = 3;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/store.ndjson");
     let file = std::fs::File::open(path).unwrap();
     let reader = BufReader::new(file);
@@ -34,15 +32,8 @@ async fn main() {
     let mut searcher = HnswSearcher::new(320, 64, 160);
     searcher.params.layer_probability = 0.20;
 
-    let graph = GraphMem::ideal_from_irises(
-        irises.clone(),
-        filepath,
-        &searcher,
-        prf_seed,
-        echoice,
-        num_threads,
-    )
-    .unwrap();
+    let graph = GraphMem::ideal_from_irises(irises.clone(), filepath, &searcher, prf_seed, echoice)
+        .unwrap();
 
     assert!(graph.layers[0].links.len() == n);
     dbg!(graph.layers[1].links.len());

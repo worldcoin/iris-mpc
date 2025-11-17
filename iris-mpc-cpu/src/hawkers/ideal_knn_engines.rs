@@ -52,7 +52,7 @@ pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResul
 }
 
 pub trait KNNEngine {
-    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId, num_threads: usize) -> Self;
+    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId) -> Self;
     fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>>;
 }
 
@@ -72,15 +72,12 @@ impl Engine {
         irises: Vec<IrisCode>,
         k: usize,
         next_id: IrisSerialId,
-        num_threads: usize,
     ) -> Self {
         assert!(k < irises.len());
         match which {
-            EngineChoice::NaiveFHD => {
-                Self::NaiveFHD(NaiveNormalDistKNN::init(irises, k, next_id, num_threads))
-            }
+            EngineChoice::NaiveFHD => Self::NaiveFHD(NaiveNormalDistKNN::init(irises, k, next_id)),
             EngineChoice::NaiveMinFHD => {
-                Self::NaiveMinFHD(NaiveMinFHDKNN::init(irises, k, next_id, num_threads))
+                Self::NaiveMinFHD(NaiveMinFHDKNN::init(irises, k, next_id))
             }
         }
     }
@@ -110,15 +107,12 @@ pub struct NaiveNormalDistKNN {
 }
 
 impl KNNEngine for NaiveNormalDistKNN {
-    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId, num_threads: usize) -> Self {
+    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId) -> Self {
         NaiveNormalDistKNN {
             irises,
             k,
             next_id,
-            pool: ThreadPoolBuilder::new()
-                .num_threads(num_threads)
-                .build()
-                .unwrap(),
+            pool: ThreadPoolBuilder::new().build().unwrap(),
         }
     }
 
@@ -176,11 +170,8 @@ pub struct NaiveMinFHDKNN {
 }
 
 impl KNNEngine for NaiveMinFHDKNN {
-    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId, num_threads: usize) -> Self {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .unwrap();
+    fn init(irises: Vec<IrisCode>, k: usize, next_id: IrisSerialId) -> Self {
+        let pool = ThreadPoolBuilder::new().build().unwrap();
         NaiveMinFHDKNN {
             irises,
             k,
