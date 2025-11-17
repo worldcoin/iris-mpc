@@ -3,14 +3,14 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{AllRotations, VecRotationSupport},
+            rot::{CenterOnly, Rotations, VecRotationSupport},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef,
+            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef, DistanceFn,
         },
         shared_irises::SharedIrises,
     },
@@ -24,6 +24,7 @@ use crate::{
         shared_iris::GaloisRingSharedIris,
     },
 };
+use ampc_actor_utils::network::config::TlsConfig;
 use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::{future::try_join_all, try_join};
@@ -33,19 +34,18 @@ use iris_mpc_common::anon_stats::{
 };
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
-    config::TlsConfig,
+    helpers::inmemory_store::InMemoryStore,
+    job::{BatchQuery, JobSubmissionHandle},
+    ROTATIONS,
+};
+use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
+use iris_mpc_common::{
     helpers::{
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::{BucketStatistics, BucketStatistics2D},
     },
     vector_id::VectorId,
 };
-use iris_mpc_common::{
-    helpers::inmemory_store::InMemoryStore,
-    job::{BatchQuery, JobSubmissionHandle},
-    ROTATIONS,
-};
-use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
@@ -94,7 +94,13 @@ use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
 /// The master switch to enable search-per-rotation or search-center-only.
-pub type SearchRotations = AllRotations;
+pub type SearchRotations = CenterOnly;
+/// The choice of distance function to use in the Aby3Store.
+pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
+    DistanceFn::MinimalRotation
+} else {
+    DistanceFn::Simple
+};
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
@@ -106,6 +112,11 @@ pub struct HawkArgs {
 
     #[clap(short, long, value_delimiter = ',')]
     pub addresses: Vec<String>,
+
+    // address to connect to. allows for inserting
+    // a proxy between MPC parties for testing purposes.
+    #[clap(short, long, value_delimiter = ',')]
+    pub outbound_addrs: Vec<String>,
 
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
@@ -168,6 +179,7 @@ pub struct HawkActor {
 
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
+    error_ct: CancellationToken,
     party_id: usize,
 }
 
@@ -308,10 +320,10 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            ct,
+            shutdown_ct,
             [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
@@ -320,7 +332,7 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        ct: CancellationToken,
+        shutdown_ct: CancellationToken,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
@@ -333,9 +345,16 @@ impl HawkActor {
             params: search_params,
         });
 
-        let network_args =
-            NetworkHandleArgs::from_hawk(args, SessionGroups::N_SESSIONS_PER_REQUEST);
-        let networking = build_network_handle(network_args, ct).await?;
+        let network_args = NetworkHandleArgs {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+            tls: args.tls.clone(),
+        };
+        let networking = build_network_handle(network_args, shutdown_ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -366,6 +385,7 @@ impl HawkActor {
             anon_stats_store: None,
             networking,
             party_id: args.party_index,
+            error_ct: CancellationToken::new(),
             workers_handle,
         })
     }
@@ -443,7 +463,8 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
-        let mut network_sessions = self.networking.make_network_sessions().await?;
+        let (mut network_sessions, ct) = self.networking.make_network_sessions().await?;
+        self.error_ct = ct;
         let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
 
         // todo: replace this with array_chunks::<2>() once that feature
@@ -474,6 +495,10 @@ impl HawkActor {
         Ok([l, r])
     }
 
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        self.networking.sync_peers().await
+    }
+
     fn create_session(
         &self,
         store_id: StoreId,
@@ -488,14 +513,15 @@ impl HawkActor {
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
-            let aby3_store = Aby3Store {
-                session: Session {
+            let aby3_store = Aby3Store::new(
+                storage,
+                Session {
                     network_session,
                     prf,
                 },
-                storage,
                 workers,
-            };
+                DISTANCE_FN,
+            );
 
             let hawk_session = HawkSession {
                 aby3_store: Arc::new(RwLock::new(aby3_store)),
@@ -824,6 +850,7 @@ pub struct HawkRequest {
 // TODO: Unify `BatchQuery` and `HawkRequest`.
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<BatchQuery> for HawkRequest {
+    #[allow(clippy::iter_skip_zero)]
     fn from(batch: BatchQuery) -> Self {
         let n_queries = batch.request_ids.len();
 
@@ -872,17 +899,10 @@ impl From<BatchQuery> for HawkRequest {
                     .map(|chunk| {
                         // Collect the rotations for one request.
                         chunk
+                            .skip(SearchRotations::N_SKIP)
+                            .take(SearchRotations::N_ROTATIONS)
                             .map(|(code, mask, code_proc, mask_proc)| {
-                                // Convert to the query type of Aby3Store
-                                let iris = Arc::new(GaloisRingSharedIris {
-                                    code: code.clone(),
-                                    mask: mask.clone(),
-                                });
-                                let iris_proc = Arc::new(GaloisRingSharedIris {
-                                    code: code_proc.clone(),
-                                    mask: mask_proc.clone(),
-                                });
-                                Aby3Query { iris, iris_proc }
+                                Aby3Query::from_processed(code, mask, code_proc, mask_proc)
                             })
                             .collect_vec()
                             .into()
@@ -1410,8 +1430,12 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result =
-                    Self::handle_job(&mut hawk_actor, &mut sessions, job.request).await;
+                // check if there was a networking error
+                let error_ct = hawk_actor.error_ct.clone();
+                let job_result = tokio::select! {
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request) => r,
+                    _ = error_ct.cancelled() => Err(eyre!("networking error")),
+                };
 
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
@@ -1691,6 +1715,7 @@ impl HawkHandle {
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
+            tracing::error!("job failed. recreating sessions");
             // There is some error so the sessions may be somehow invalid. Make new ones.
             *sessions = hawk_actor.new_session_groups().await?;
         }
@@ -1743,6 +1768,8 @@ mod tests {
                 let args = HawkArgs::parse_from([
                     "hawk_main",
                     "--addresses",
+                    &addresses.join(","),
+                    "--outbound-addrs",
                     &addresses.join(","),
                     "--party-index",
                     &index.to_string(),
@@ -2038,8 +2065,8 @@ mod tests {
 mod tests_db {
     use super::*;
     use crate::hnsw::{
-        graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
-        searcher::ConnectPlanLayerV,
+        graph::graph_store::test_utils::TestGraphPg,
+        searcher::{ConnectPlanLayerV, SetEntryPoint},
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -2057,10 +2084,14 @@ mod tests_db {
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
                     layers: vec![ConnectPlanLayer {
-                        neighbors: SortedEdgeIds::from_ascending_vec(vec![vectors[side]]),
-                        nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
+                        neighbors: vec![vectors[side]],
+                        nb_links: vec![vec![*vector]],
                     }],
-                    set_ep: i == side,
+                    set_ep: if i == side {
+                        SetEntryPoint::NewLayer
+                    } else {
+                        SetEntryPoint::False
+                    },
                 })
                 .map(Some)
                 .collect_vec()
@@ -2088,10 +2119,16 @@ mod tests_db {
             graph_tx.tx.commit().await?;
         }
 
+        let addresses = vec![
+            "0.0.0.0:1234".to_string(),
+            "0.0.0.0:1235".to_string(),
+            "0.0.0.0:1236".to_string(),
+        ];
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
             party_index: 0,
-            addresses: vec!["0.0.0.0:1234".to_string()],
+            addresses: addresses.clone(),
+            outbound_addrs: addresses,
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
@@ -2118,7 +2155,7 @@ mod tests_db {
 
             let links = graph.read().await.get_links(&vectors[2], 0).await;
             assert_eq!(
-                links.0,
+                links,
                 vec![expected_ep],
                 "vec_2 connects to the entry point"
             );
@@ -2132,7 +2169,7 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
+    use crate::hnsw::searcher::{ConnectPlanLayerV, SetEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
@@ -2141,10 +2178,10 @@ mod hawk_mutation_tests {
         ConnectPlan {
             inserted_vector: vector_id,
             layers: vec![ConnectPlanLayer {
-                neighbors: SortedEdgeIds::from_ascending_vec(vec![vector_id]),
-                nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
+                neighbors: vec![vector_id],
+                nb_links: vec![vec![vector_id]],
             }],
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         }
     }
 

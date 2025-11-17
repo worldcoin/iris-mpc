@@ -1,9 +1,10 @@
 use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
+use ampc_actor_utils::network::config::deserialize_yaml_json_string;
+use ampc_actor_utils::network::config::TlsConfig;
 use clap::Parser;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
-
 pub mod json_wrapper;
 
 pub const ENV_DEV: &str = "dev";
@@ -124,6 +125,10 @@ pub struct Config {
         deserialize_with = "deserialize_yaml_json_string"
     )]
     pub service_ports: Vec<String>,
+
+    // should be set to the same as service_ports if not explicitly set.
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub service_outbound_ports: Vec<String>,
 
     #[serde(
         default = "default_healthcheck_ports",
@@ -530,7 +535,13 @@ impl Config {
             )
             .build()?;
 
-        let config: Config = settings.try_deserialize::<Config>()?;
+        let mut config: Config = settings.try_deserialize::<Config>()?;
+
+        // If service_outbound_ports is not explicitly set,
+        // copy service_ports to service_outbound_ports
+        if config.service_outbound_ports.is_empty() {
+            config.service_outbound_ports = config.service_ports.clone();
+        }
 
         Ok(config)
     }
@@ -662,31 +673,6 @@ pub struct MetricsConfig {
     pub prefix: String,
 }
 
-// #[clap(flatten)] makes arguments required. this is problematic
-// when the flattened struct is wrapped in an option. to allow the
-// absence of these fields to make the arg None, each field needs
-// 'required = false'
-#[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
-#[group(requires_all = ["private_key", "leaf_cert", "root_certs"])]
-pub struct TlsConfig {
-    #[arg(required = false)]
-    pub private_key: Option<String>,
-    // used by a peer to identify itself
-    #[arg(required = false)]
-    pub leaf_cert: Option<String>,
-    // used by the client to make them trust the server certs
-    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
-    pub root_certs: Vec<String>,
-}
-
-fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: String = Deserialize::deserialize(deserializer)?;
-    serde_json::from_str(&value).map_err(serde::de::Error::custom)
-}
-
 fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>
 where
     D: Deserializer<'de>,
@@ -799,6 +785,7 @@ impl From<Config> for CommonConfig {
             enable_debug_timing: _,
             node_hostnames: _,            // Could be different for each server
             service_ports: _,             // Could be different for each server
+            service_outbound_ports: _,    // Could be different for each server
             healthcheck_ports: _,         // Could be different for each server
             http_query_retry_delay_ms: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,

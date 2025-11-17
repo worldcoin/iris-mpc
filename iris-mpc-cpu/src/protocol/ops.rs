@@ -1,83 +1,36 @@
-use super::binary::{
-    bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
-    single_extract_msb_u32,
-};
 use crate::{
-    execution::session::{NetworkSession, Session, SessionHandles},
-    network::value::{
-        NetworkInt,
-        NetworkValue::{self},
-    },
-    protocol::{
-        binary::extract_msb_u16_batch,
-        prf::{Prf, PrfSeed},
-        shared_iris::ArcIris,
-    },
+    execution::session::{Session, SessionHandles},
+    protocol::shared_iris::ArcIris,
     shares::{
         bit::Bit,
-        ring_impl::RingElement,
-        share::{DistanceShare, Share},
+        ring_impl::{RingElement, VecRingElement},
+        share::{reconstruct_distance_vector, DistanceShare, Share},
         vecshare::VecShare,
-        IntRing2k,
     },
+};
+use ampc_actor_utils::fast_metrics::FastHistogram;
+use ampc_actor_utils::protocol::binary::{
+    and_product, bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
+    single_extract_msb_u32,
+};
+// Import non-iris-specific protocol operations from ampc-common
+pub use ampc_actor_utils::protocol::ops::{
+    galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
+    sub_pub,
 };
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
-    fast_metrics::FastHistogram,
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use std::{array, ops::Not, time::Instant};
+use std::{cmp::Ordering, ops::Not, time::Instant};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
-
-/// Setup the PRF seeds in the replicated protocol.
-/// Each party sends to the next party a random seed.
-/// At the end, each party will hold two seeds which are the basis of the
-/// replicated protocols.
-#[instrument(
-    level = "trace",
-    target = "searcher::network",
-    fields(party = ?session.own_role),
-    skip_all
-)]
-pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<Prf> {
-    // send my_seed to the next party
-    session.send_next(NetworkValue::PrfKey(my_seed)).await?;
-    // deserializing received seed.
-    let other_seed = match session.receive_prev().await {
-        Ok(NetworkValue::PrfKey(seed)) => seed,
-        _ => bail!("Could not deserialize PrfKey"),
-    };
-    // creating the two PRFs
-    Ok(Prf::new(my_seed, other_seed))
-}
-
-/// Setup an RNG common between all parties, for use in stochastic algorithms (e.g. HNSW layer selection).
-pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<PrfSeed> {
-    let my_msg = NetworkValue::PrfKey(my_seed);
-
-    let decode = |msg| match msg {
-        Ok(NetworkValue::PrfKey(seed)) => Ok(seed),
-        _ => Err(eyre!("Could not deserialize PrfKey")),
-    };
-
-    // Round 1: Send to the next party and receive from the previous party.
-    session.send_next(my_msg.clone()).await?;
-    let prev_seed = decode(session.receive_prev().await)?;
-
-    // Round 2: Send/receive in the opposite direction.
-    session.send_prev(my_msg).await?;
-    let next_seed = decode(session.receive_next().await)?;
-
-    let shared_seed = array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]);
-    Ok(shared_seed)
-}
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
@@ -172,7 +125,7 @@ pub(crate) async fn cross_mul(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<Share<u32>>> {
-    let res_a: Vec<RingElement<u32>> = distances
+    let res_a: VecRingElement<u32> = distances
         .iter()
         .map(|(d1, d2)| {
             session.prf.gen_zero_share() + &d2.code_dot * &d1.mask_dot - &d1.code_dot * &d2.mask_dot
@@ -181,21 +134,10 @@ pub(crate) async fn cross_mul(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
-        .map(|(a, b)| Share::new(a, b))
-        .collect())
+    let res_b = network.receive_ring_vec_prev().await?;
+    Ok(izip!(res_a, res_b).map(|(a, b)| Share::new(a, b)).collect())
 }
 
 /// Conditionally selects equally-sized slices of input shares based on control bits.
@@ -221,7 +163,7 @@ async fn select_shared_slices_by_bits(
     // If control bit is 1, select left_value, else select right_value.
     // res = c * (left_value - right_value) + right_value
     // Compute c * (left_value - right_value)
-    let res_a: Vec<RingElement<u32>> = izip!(
+    let res_a: VecRingElement<u32> = izip!(
         left_values.chunks(slice_size),
         right_values.chunks(slice_size),
         control_bits.iter()
@@ -240,22 +182,13 @@ async fn select_shared_slices_by_bits(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // Pack networking messages into shares and
     // compute the result by adding the right shares
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+    Ok(izip!(res_a, res_b)
         .map(|(a, b)| Share::new(a, b))
         .zip(right_values.iter())
         .map(|(res, right)| res + right)
@@ -282,7 +215,7 @@ async fn conditionally_select_distance(
     // We need to do it for both code_dot and mask_dot.
 
     // we start with the mult of c and d1-d2
-    let res_a: Vec<RingElement<u32>> = distances
+    let res_a: VecRingElement<u32> = distances
         .iter()
         .zip(control_bits.iter())
         .flat_map(|((d1, d2), c)| {
@@ -298,21 +231,12 @@ async fn conditionally_select_distance(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // finally compute the result by adding the d2 shares
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+    Ok(izip!(res_a, res_b)
         // combine a and b part into shares
         .map(|(a, b)| Share::new(a, b))
         // combine the code and mask parts into DistanceShare
@@ -521,7 +445,7 @@ pub async fn conditionally_swap_distances(
     // We need to do it for ids, code_dot and mask_dot.
 
     // Compute c * (d1-d2)
-    let res_a: Vec<RingElement<u32>> = indices
+    let res_a: VecRingElement<u32> = indices
         .iter()
         .zip(swap_bits_u32.iter())
         .flat_map(|((idx1, idx2), sb)| {
@@ -537,18 +461,9 @@ pub async fn conditionally_swap_distances(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // Finally compute the swapped tuples.
     let swapped_distances = izip!(res_a, res_b)
@@ -649,7 +564,7 @@ pub(crate) async fn oblivious_cross_compare_lifted(
     // compute the secret-shared bits d1 < d2
     let bits = oblivious_cross_compare(session, distances).await?;
     // inject bits to T shares
-    Ok(bit_inject_ot_2round(session, VecShare { shares: bits })
+    Ok(bit_inject_ot_2round(session, VecShare::new_vec(bits))
         .await?
         .inner())
 }
@@ -657,7 +572,7 @@ pub(crate) async fn oblivious_cross_compare_lifted(
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn min_of_pair_batch(
+pub(crate) async fn min_of_pair_batch(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<DistanceShare<u32>>> {
@@ -665,6 +580,155 @@ pub async fn min_of_pair_batch(
     let bits = oblivious_cross_compare_lifted(session, distances).await?;
 
     conditionally_select_distance(session, distances, bits.as_slice()).await
+}
+
+/// Given a flattened array of distance shares arranged in batches,
+/// this function computes the minimum distance share within each batch via the round-robin method.
+///
+/// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
+/// then the input distance shares are arranged as follows:
+/// `[
+///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
+///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
+///     ...,
+///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
+/// ]`
+///
+/// The round-robin method computes all pairwise "less-than" relations within each batch,
+/// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 | b10| 1  | b12| b13|
+/// d2 | b20| b21| 1  | b23|
+/// d3 | b30| b31| b32| 1  |
+///
+/// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
+/// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
+/// that turns the comparison table into
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 |!b01| 1  | b12| b13|
+/// d2 |!b02|!b12| 1  | b23|
+/// d3 |!b03|!b13|!b23| 1  |
+///
+/// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
+/// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
+/// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
+/// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
+/// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
+pub(crate) async fn min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<u32>>> {
+    if distances.is_empty() {
+        eyre::bail!("Expected at least one distance share");
+    }
+    if distances.len() % batch_size != 0 {
+        eyre::bail!("Distances length must be a multiple of batch size");
+    }
+
+    // Within each batch, compute all the pairwise comparisons in a round-robin fashion.
+    // The resulting comparison table looks like
+    //
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | -  | b01| b02| b03|
+    // d1 |    | -  | b12| b13|
+    // d2 |    |    | -  | b23|
+    // d3 |    |    |    | -  |
+    //
+    // where `bij` is the bit corresponding to `di < dj`.
+    // Comparison bits are arranged in a flat vector as
+    // `[b01, b02, b03, b12, b13, b23]`.
+    let num_batches = distances.len() / batch_size;
+    let mut pairs = Vec::with_capacity(num_batches * (batch_size * (batch_size - 1) / 2));
+    for i_batch in 0..num_batches {
+        for i in 0..batch_size {
+            for j in (i + 1)..batch_size {
+                let distance_i = distances[i * num_batches + i_batch].clone();
+                let distance_j = distances[j * num_batches + i_batch].clone();
+                pairs.push((distance_i, distance_j));
+            }
+        }
+    }
+    let comparison_bits = oblivious_cross_compare(session, &pairs).await?;
+    // Fill in the rest of the comparison table by setting diagonal bits to 1 and negating the bits above the diagonal.
+    // In other words, the `[i][j]`-th value of the table is equal to the bit
+    // - `di < dj` if `i < j`, or
+    // - `di <= dj` if `i >= j`.
+    //
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | 1  | b01| b02| b03|
+    // d1 |!b01| 1  | b12| b13|
+    // d2 |!b02|!b12| 1  | b23|
+    // d3 |!b03|!b13|!b23| 1  |
+    //
+    // Extract this table column-wise as `batch_matrix` to AND them element-wise.
+    // Group jth columns together, i.e., return a matrix `batch_selection_bits`, where `batch_selection_bits[j]` contains the comparison bits
+    // between distance `j` of every batch and all the other distances within the same batch.
+    let mut batch_selection_bits = (0..batch_size)
+        .map(|_| VecShare::with_capacity(num_batches * batch_size))
+        .collect_vec();
+    for batch in comparison_bits.chunks(batch_size * (batch_size - 1) / 2) {
+        let mut batch_matrix = (0..batch_size)
+            .map(|_| VecShare::with_capacity(batch_size))
+            .collect_vec();
+        let mut batch_counter = 0;
+        for i in 0..batch_size {
+            for j in 0..batch_size {
+                let value = match i.cmp(&j) {
+                    Ordering::Less => {
+                        batch_counter += 1;
+                        batch[batch_counter - 1].clone()
+                    }
+                    Ordering::Equal => Share::from_const(Bit::new(true), session.own_role()),
+                    Ordering::Greater => batch_matrix[i].get_at(j).not(),
+                };
+                batch_matrix[j].push(value);
+            }
+        }
+        for (j, column_bits) in batch_matrix.into_iter().enumerate() {
+            batch_selection_bits[j].extend(column_bits);
+        }
+    }
+    // Compute the AND of each row in the `batch_selection_bits` matrix.
+    // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
+    let selection_bits =
+        and_product(session, batch_selection_bits, num_batches * batch_size).await?;
+    // The resulting bits are bit injected into u32.
+    let selection_bits: VecShare<u32> = bit_inject_ot_2round(session, selection_bits).await?;
+    // Multiply distance shares with selection bits to zero out non-minimum distances.
+    let selected_distances = {
+        let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
+        for i_batch in 0..num_batches {
+            for i in 0..batch_size {
+                let distance = &distances[i * num_batches + i_batch];
+                let b = &selection_bits.shares()[i_batch * batch_size + i];
+                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
+                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
+                shares_a.push(code_a);
+                shares_a.push(mask_a);
+            }
+        }
+
+        let network = &mut session.network_session;
+        network.send_ring_vec_next(&shares_a).await?;
+        let shares_b = network.receive_ring_vec_prev().await?;
+        reconstruct_distance_vector(shares_a, shares_b)
+    };
+    // Now sum up the selected distances within each batch.
+    // Only one distance per batch is non-zero, so this gives us the minimum distance per batch.
+    let res = selected_distances
+        .chunks(batch_size)
+        .map(|chunk| chunk.iter().cloned().reduce(|acc, a| acc + a).unwrap())
+        .collect_vec();
+    Ok(res)
 }
 
 use std::cell::RefCell;
@@ -763,38 +827,11 @@ where
     additive_shares
 }
 
-/// Converts additive sharing (from trick_dot output) to a replicated sharing by
-/// masking it with a zero sharing
-pub async fn galois_ring_to_rep3(
-    session: &mut Session,
-    items: Vec<RingElement<u16>>,
-) -> Result<Vec<Share<u16>>> {
-    let network = &mut session.network_session;
-
-    // make sure we mask the input with a zero sharing
-    let masked_items: Vec<_> = items
-        .iter()
-        .map(|x| session.prf.gen_zero_share() + x)
-        .collect();
-
-    // sending to the next party
-    network
-        .send_next(NetworkValue::VecRing16(masked_items.clone()))
-        .await?;
-
-    // receiving from previous party
-    let shares_b = {
-        match network.receive_prev().await {
-            Ok(NetworkValue::VecRing16(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in galois_ring_to_rep3 operation")),
-        }
-    }?;
-    let res: Vec<Share<u16>> = masked_items
-        .into_iter()
-        .zip(shares_b)
-        .map(|(a, b)| Share::new(a, b))
-        .collect();
-    Ok(res)
+pub fn non_existent_distance() -> Vec<RingElement<u16>> {
+    vec![
+        RingElement(SHARE_OF_MAX_DISTANCE.0),
+        RingElement(SHARE_OF_MAX_DISTANCE.1),
+    ]
 }
 
 /// Compares the given distance to a threshold and reveal the bit "less than or equal".
@@ -901,11 +938,12 @@ mod tests {
     use super::*;
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
-        network::value::NetworkInt,
-        protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
+        network::value::{NetworkInt, NetworkValue},
+        protocol::shared_iris::GaloisRingSharedIris,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
+    use ampc_actor_utils::protocol::prf::Prf;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
@@ -914,6 +952,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
     use tokio::{sync::Mutex, task::JoinSet};
     use tracing::trace;
+    use NetworkValue::RingElement32;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_single(session: &mut Session, x: Share<u32>) -> Result<RingElement<u32>> {

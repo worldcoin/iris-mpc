@@ -405,16 +405,24 @@ async fn init_hawk_actor(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
-    let node_addresses: Vec<String> = config
+    let node_inbound_addresses: Vec<String> = config
         .node_hostnames
         .iter()
         .zip(config.service_ports.iter())
         .map(|(host, port)| format!("{}:{}", host, port))
         .collect();
 
+    let node_outbound_addresses: Vec<String> = config
+        .node_hostnames
+        .iter()
+        .zip(config.service_outbound_ports.iter())
+        .map(|(host, port)| format!("{}:{}", host, port))
+        .collect();
+
     let hawk_args = HawkArgs {
         party_index: config.party_id,
-        addresses: node_addresses.clone(),
+        addresses: node_inbound_addresses.clone(),
+        outbound_addrs: node_outbound_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
@@ -429,9 +437,10 @@ async fn init_hawk_actor(
     };
 
     tracing::info!(
-        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+       "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outobund addresses: {:?}",
         hawk_args.party_index,
-        node_addresses
+        node_inbound_addresses,
+        node_outbound_addresses
     );
 
     HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await

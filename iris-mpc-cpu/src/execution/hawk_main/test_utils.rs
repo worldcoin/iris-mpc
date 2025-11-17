@@ -15,10 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
-    hnsw::{
-        graph::neighborhood::SortedEdgeIds,
-        searcher::{ConnectPlan, ConnectPlanLayer},
-    },
+    hnsw::searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
     protocol::shared_iris::GaloisRingSharedIris,
     utils::constants::N_PARTIES,
 };
@@ -34,6 +31,8 @@ pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
             let args = HawkArgs::parse_from([
                 "hawk_main",
                 "--addresses",
+                &addresses.join(","),
+                "--outbound-addrs",
                 &addresses.join(","),
                 "--party-index",
                 &index.to_string(),
@@ -76,7 +75,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
 
     let id = |i: usize| VectorId::from_0_index(i as u32);
     let next = |i: usize| (i + 1) % db_size;
-    let edges = |i: usize| SortedEdgeIds::from_ascending_vec(vec![id(next(i))]);
+    let edges = |i: usize| vec![id(next(i))];
 
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
@@ -87,7 +86,11 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                     neighbors: edges(i),
                     nb_links: vec![edges(next(i))],
                 }],
-                set_ep: i == 0,
+                set_ep: if i == 0 {
+                    SetEntryPoint::NewLayer
+                } else {
+                    SetEntryPoint::False
+                },
             };
             graph.insert_apply(plan).await;
         }
@@ -116,8 +119,8 @@ pub fn make_request_intra_match(batch_size: usize, party_id: usize) -> HawkReque
         &mut my_batch.right_iris_interpolated_requests,
     ] {
         // Whichever rotation of the last request <-- center from the first request.
-        x.code[len - 1] = x.code[ROTATIONS / 2].clone();
-        x.mask[len - 1] = x.mask[ROTATIONS / 2].clone();
+        x.code[len - 1 - ROTATIONS / 2] = x.code[ROTATIONS / 2].clone();
+        x.mask[len - 1 - ROTATIONS / 2] = x.mask[ROTATIONS / 2].clone();
     }
 
     HawkRequest::from(my_batch)

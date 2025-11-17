@@ -1,8 +1,7 @@
-use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        searcher::{ConnectPlanLayerV, ConnectPlanV},
+        searcher::{ConnectPlanLayerV, ConnectPlanV, SetEntryPoint},
         GraphMem, VectorStore,
     },
 };
@@ -20,7 +19,7 @@ use tokio::sync::mpsc;
 pub struct RowLinks {
     serial_id: i64,
     version_id: i16,
-    // this is a serialized SortedEdgeIds<VectorId> (using bincode)
+    // this is a serialized Vec<VectorId> (using bincode)
     links: Vec<u8>,
     layer: i16,
 }
@@ -255,10 +254,17 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
         // If required, set vector as new entry point
-        if plan.set_ep {
-            let insertion_layer = plan.layers.len() - 1;
-            self.set_entry_point(plan.inserted_vector, insertion_layer)
-                .await?;
+        let insertion_layer = plan.layers.len() - 1;
+        match plan.set_ep {
+            SetEntryPoint::False => {}
+            SetEntryPoint::NewLayer => {
+                self.set_entry_point(plan.inserted_vector, insertion_layer)
+                    .await?;
+            }
+            SetEntryPoint::AddToLayer => {
+                self.add_entry_point(plan.inserted_vector, insertion_layer)
+                    .await?;
+            }
         }
 
         // Connect the new vector to its neighbors in each layer.
@@ -289,37 +295,71 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     }
 
     pub async fn get_entry_point(&mut self) -> Result<Option<(V::VectorRef, usize)>> {
+        Ok(self
+            .get_entry_points()
+            .await?
+            .and_then(|(mut points, layer)| points.pop().map(|p| (p, layer))))
+    }
+
+    pub async fn get_entry_points(&mut self) -> Result<Option<(Vec<V::VectorRef>, usize)>> {
         let table = self.entry_table();
-        let opt = sqlx::query(&format!(
+        let rows = sqlx::query(&format!(
             "SELECT serial_id, version_id, layer FROM {table} WHERE graph_id = $1"
         ))
         .bind(self.graph_id())
-        .fetch_optional(self.tx())
+        .fetch_all(self.tx())
         .await
         .map_err(|e| eyre!("Failed to fetch entry point: {e}"))?;
 
-        if let Some(row) = opt {
-            let serial_id: i64 = row.get("serial_id");
-            let version_id: i16 = row.get("version_id");
-            let layer: i16 = row.get("layer");
-
-            Ok(Some((
-                VectorId::new(serial_id as u32, version_id),
-                layer as usize,
-            )))
-        } else {
+        if rows.is_empty() {
             Ok(None)
+        } else {
+            // ensure all entrypoints are on the same layer
+            let mut expected_layer = None;
+            let mut points = Vec::with_capacity(rows.len());
+            for row in rows {
+                let serial_id = row.get::<i64, &str>("serial_id") as u32;
+                let version_id: i16 = row.get("version_id");
+                let row_layer = row.get::<i16, &str>("layer") as usize;
+
+                if expected_layer.is_none() {
+                    expected_layer.replace(row_layer);
+                }
+
+                // if this fails, then add_entry_point() was used incorrectly.
+                assert_eq!(Some(row_layer), expected_layer);
+
+                points.push(VectorId::new(serial_id, version_id));
+            }
+
+            Ok(Some((points, expected_layer.unwrap())))
         }
     }
 
     pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
         let table = self.entry_table();
+
+        sqlx::query(&format!("DELETE FROM {table} WHERE graph_id = $1"))
+            .bind(self.graph_id())
+            .execute(self.tx())
+            .await
+            .map_err(|e| eyre!("Failed to clear entry points: {e}"))?;
+
+        self.add_entry_point(point, layer).await?;
+
+        Ok(())
+    }
+
+    pub async fn add_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
+        let table = self.entry_table();
+
+        // insert the point into the table
         sqlx::query(&format!(
             "
-            INSERT INTO {table} (graph_id, serial_id, version_id, layer)
-            VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id)
-            DO UPDATE SET (serial_id, version_id, layer) = (EXCLUDED.serial_id, EXCLUDED.version_id, EXCLUDED.layer)
-            "
+                INSERT INTO {table} (graph_id, serial_id, version_id, layer)
+                VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, serial_id, layer)
+                DO UPDATE SET version_id = EXCLUDED.version_id
+                "
         ))
         .bind(self.graph_id())
         .bind(point.serial_id() as i64)
@@ -327,7 +367,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         .bind(layer as i16)
         .execute(self.tx())
         .await
-        .map_err(|e| eyre!("Failed to set entry point: {e}"))?;
+        .map_err(|e| eyre!("Failed to insert entry point: {e}"))?;
 
         Ok(())
     }
@@ -336,7 +376,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         &mut self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> Result<SortedEdgeIds<V::VectorRef>> {
+    ) -> Result<Vec<V::VectorRef>> {
         let table = self.links_table();
         let opt = sqlx::query(&format!(
             "
@@ -356,7 +396,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
             let links: Vec<u8> = row.get("links");
             bincode::deserialize(&links).map_err(|e| eyre!("Failed to deserialize links: {e}"))
         } else {
-            Ok(SortedEdgeIds::default())
+            Ok(Vec::default())
         }
     }
 
@@ -377,7 +417,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
-        links: SortedEdgeIds<V::VectorRef>,
+        links: Vec<V::VectorRef>,
         lc: usize,
     ) -> Result<()> {
         let links =
@@ -455,9 +495,9 @@ where
         let schema_name = self.tx.schema_name.clone();
         let graph_id = self.graph_id();
 
-        let ep = self.get_entry_point().await?;
-        if let Some((point, layer)) = ep {
-            graph_mem.set_entry_point(point, layer).await;
+        let ep = self.get_entry_points().await?;
+        if let Some((points, layer)) = ep {
+            graph_mem.init_entry_points(points, layer).await;
         }
 
         let total_rows = self.get_total_row_count().await?;
@@ -475,8 +515,7 @@ where
         );
 
         // Create channel for sending data from partitions to main task
-        let (tx, mut rx) =
-            mpsc::channel::<(V::VectorRef, SortedEdgeIds<V::VectorRef>, usize)>(1024);
+        let (tx, mut rx) = mpsc::channel::<(V::VectorRef, Vec<V::VectorRef>, usize)>(1024);
 
         // Calculate partition size and create partition tasks
         let partition_size = total_rows.div_ceil(parallelism).max(1);
@@ -709,7 +748,7 @@ mod tests {
                 }
             }
             let links = links.edge_ids();
-            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
             let links2 = graph_ops.get_links(&vectors[i], 0).await?;
             assert_eq!(*links, *links2);
         }
@@ -781,7 +820,7 @@ mod tests {
             }
             let links = links.edge_ids();
 
-            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
 
             let links2 = graph_ops.get_links(&vectors[i], 0).await?;
             assert_eq!(*links, *links2);
