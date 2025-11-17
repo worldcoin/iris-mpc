@@ -77,8 +77,8 @@ tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
-ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev="699aee2c4ec4a2461a3d8784d5208bb612f37bc8"}
-ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev="699aee2c4ec4a2461a3d8784d5208bb612f37bc8" }
+ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev="6ab6cfc7c76bc1890c009fe73d42271ccdb4d102"}
+ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev="6ab6cfc7c76bc1890c009fe73d42271ccdb4d102" }
 
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.
