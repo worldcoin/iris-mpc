@@ -1,5 +1,4 @@
 #![allow(clippy::needless_range_loop)]
-pub mod anon_stats;
 pub mod config;
 pub mod error;
 pub mod galois_engine;
