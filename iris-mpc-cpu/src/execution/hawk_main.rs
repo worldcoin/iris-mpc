@@ -44,13 +44,6 @@ use iris_mpc_common::{
     vector_id::VectorId,
 };
 use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
-use iris_mpc_common::{
-    helpers::{
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::{BucketStatistics, BucketStatistics2D},
-    },
-    vector_id::VectorId,
-};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
