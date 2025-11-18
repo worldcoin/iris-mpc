@@ -57,7 +57,7 @@ batch_polling_timeout_secs = 1
 sqs_long_poll_wait_time = 10
 batch_sync_polling_timeout_secs = 10
 
-[server_coordinator]
+[server_coordination]
 node_hostnames = '["127.0.0.1", "127.0.0.1", "127.0.0.1"]'
 party_id = 0
 healthcheck_ports = '["3000", "3001", "3002"]'
