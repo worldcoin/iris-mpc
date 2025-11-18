@@ -6,13 +6,17 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
+use ampc_server_utils::shutdown_handler::ShutdownHandler;
+use ampc_server_utils::{
+    get_others_sync_state, init_heartbeat_task, set_node_ready, wait_for_others_ready,
+    wait_for_others_unready, TaskMonitor,
+};
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
-use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
     RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
@@ -21,13 +25,10 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
-use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
-    get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
-    BatchSyncSharedState,
+    build_coordination_config, init_task_monitor, start_coordination_server, BatchSyncSharedState,
 };
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
@@ -89,8 +90,15 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    wait_for_others_unready(&config).await?;
-    init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
+    let server_coordination_config = build_coordination_config(&config);
+
+    wait_for_others_unready(&server_coordination_config).await?;
+    init_heartbeat_task(
+        &server_coordination_config,
+        &mut background_tasks,
+        &shutdown_handler,
+    )
+    .await?;
 
     background_tasks.check_tasks();
 
@@ -158,7 +166,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     background_tasks.check_tasks();
 
     set_node_ready(is_ready_flag);
-    wait_for_others_ready(&config).await?;
+    wait_for_others_ready(&server_coordination_config).await?;
 
     background_tasks.check_tasks();
 
@@ -362,8 +370,9 @@ async fn build_sync_state(
 }
 
 async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
+    let server_coordination_config = build_coordination_config(config);
     let mut all_states = vec![my_state.clone()];
-    all_states.extend(get_others_sync_state(config).await?);
+    all_states.extend(get_others_sync_state(&server_coordination_config).await?);
     let sync_result = SyncResult::new(my_state.clone(), all_states);
     Ok(sync_result)
 }

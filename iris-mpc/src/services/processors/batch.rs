@@ -1,6 +1,7 @@
 use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
+use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
@@ -17,7 +18,6 @@ use iris_mpc_common::helpers::batch_sync::{
     get_batch_sync_states, get_own_batch_sync_state, BatchSyncResult,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
-use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest, SQSMessage,
     UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,

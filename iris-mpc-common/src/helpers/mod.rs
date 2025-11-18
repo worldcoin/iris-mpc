@@ -12,8 +12,6 @@ pub mod kms_dh;
 #[cfg(feature = "helpers")]
 pub mod sha256;
 #[cfg(feature = "helpers")]
-pub mod shutdown_handler;
-#[cfg(feature = "helpers")]
 pub mod smpc_request;
 #[cfg(feature = "helpers")]
 pub mod smpc_response;
@@ -22,5 +20,3 @@ pub mod sqs;
 pub mod sqs_s3_helper;
 pub mod statistics;
 pub mod sync;
-#[cfg(feature = "helpers")]
-pub mod task_monitor;

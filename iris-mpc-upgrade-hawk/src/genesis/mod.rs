@@ -1,3 +1,7 @@
+use ampc_server_utils::{
+    get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
+    wait_for_others_ready, wait_for_others_unready, TaskMonitor,
+};
 use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
@@ -6,13 +10,11 @@ use aws_sdk_s3::{
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::server_coordination::BatchSyncSharedState;
+use iris_mpc_common::server_coordination::{build_coordination_config, BatchSyncSharedState};
+
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
-    helpers::{
-        shutdown_handler::ShutdownHandler, smpc_request, sync::Modification,
-        task_monitor::TaskMonitor,
-    },
+    helpers::{smpc_request, sync::Modification},
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -326,12 +328,18 @@ async fn exec_setup(
     .await;
     task_monitor_bg.check_tasks();
 
-    // Coordinator: await network state = UNREADY.
-    coordinator::wait_for_others_unready(config).await?;
-    log_info(String::from("Network status = UNREADY"));
+    let server_coordination_config = build_coordination_config(config);
 
+    // Coordinator: await network state = UNREADY.
+    wait_for_others_unready(&server_coordination_config).await?;
+    log_info(String::from("Network status = UNREADY"));
     // Coordinator: await network state = HEALTHY.
-    coordinator::init_heartbeat_task(config, &mut task_monitor_bg, &shutdown_handler).await?;
+    init_heartbeat_task(
+        &server_coordination_config,
+        &mut task_monitor_bg,
+        &shutdown_handler,
+    )
+    .await?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = HEALTHY"));
 
@@ -384,11 +392,11 @@ async fn exec_setup(
     log_info(String::from("HNSW graph initialised from store"));
 
     // Coordinator: await network state = ready.
-    coordinator::set_node_ready(is_ready_flag);
+    set_node_ready(is_ready_flag);
     let ct = shutdown_handler.get_cancellation_token();
     tokio::select! {
         _ = ct.cancelled() => Err(eyre!("ready check failed")),
-        r = coordinator::wait_for_others_ready(config) => r
+        r = wait_for_others_ready(&server_coordination_config) => r
     }?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = READY"));
@@ -1194,7 +1202,8 @@ async fn get_sync_result(
     my_state: &GenesisSyncState,
 ) -> Result<GenesisSyncResult> {
     let mut all_states = vec![my_state.clone()];
-    all_states.extend(coordinator::get_others_sync_state(config).await?);
+    let server_coordinator_config = build_coordination_config(config);
+    all_states.extend(get_others_sync_state(&server_coordinator_config).await?);
     let result = GenesisSyncResult::new(my_state.clone(), all_states);
 
     Ok(result)

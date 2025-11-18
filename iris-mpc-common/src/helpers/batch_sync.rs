@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::helpers::sqs::get_approximate_number_of_messages;
 use crate::job::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
-use crate::server_coordination::get_check_addresses;
+use ampc_server_utils::get_check_addresses;
 use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
