@@ -12,7 +12,8 @@ use iris_mpc_cpu::{
         shared_irises::SharedIrises,
     },
     hnsw::{GraphMem, HnswParams, HnswSearcher},
-    protocol::shared_iris::GaloisRingSharedIris,
+    // import FSS flags
+    protocol::{ops::USE_FSS, shared_iris::GaloisRingSharedIris, USE_PARALLEL_THRESH},
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -222,5 +223,73 @@ async fn e2e_test() -> Result<()> {
     // a bit for now
     tokio::time::sleep(Duration::from_secs(5)).await;
 
+    // -- FSS metrics & stats starts -- //
+
+    // Metrics: cross_compare calls
+    let (scheme, calls) = if iris_mpc_cpu::protocol::ops::USE_FSS {
+        (
+            "FSS",
+            iris_mpc_cpu::protocol::ops::cross_compare_calls_fss(),
+        )
+    } else {
+        (
+            "RSS",
+            iris_mpc_cpu::protocol::ops::cross_compare_calls_rss(),
+        )
+    };
+
+    println!("{scheme}: cross_compare was called {calls} times\n");
+
+    // Metrics: total duration per party for cross_compare.extract_open
+    let [p0, p1, p2] =
+        iris_mpc_cpu::protocol::perf_stats::total_duration_per_party("cross_compare.extract_open");
+
+    println!("extract+open_bin totals — p0: {p0:?}, p1: {p1:?}, p2: {p2:?}\n");
+
+    if USE_FSS && USE_PARALLEL_THRESH {
+        // times for FSS evaluation parties
+        println!("\nTimers for parties 0 and 1:");
+
+        let evaluator_stats = vec![
+            (
+                "fss.network.start_recv_keylen",
+                "Start receiving key length",
+            ),
+            ("fss.network.start_recv_keys", "Start receiving keys"),
+            ("fss.network.recon.send", "Reconstruct d+r send"),
+            ("fss.network.recon.recv", "Reconstruct d+r recv"),
+            ("fss.add3.non-parallel", "FSS add3 non-parallel"),
+            ("fss.add3.icf.eval", "FSS add3 ICF eval"),
+            ("fss.network.post-icf.send_prev", "Post-ICF send_prev"),
+            ("fss.network.post-icf.send_next", "Post-ICF send_next"),
+            ("fss.network.post-icf.recv_to_eval", "Post-ICF recv_to_eval"),
+        ];
+
+        for (key, message) in evaluator_stats {
+            let [p0, p1, _] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
+            println!("{} p0: {:?}", message, p0);
+            println!("{} p1: {:?}", message, p1);
+            println!();
+        }
+
+        // times for FSS dealer
+        println!("\nTimers for FSS dealer:");
+
+        let dealer_stats = vec![
+            ("fss.network.dealer.send_P0a", "Dealer send P0a"),
+            ("fss.network.dealer.send_P0b", "Dealer send P0b"),
+            ("fss.network.dealer.send_P1a", "Dealer send P1a"),
+            ("fss.network.dealer.send_P1b", "Dealer send P1b"),
+            ("fss.dealer.genkeys", "Dealer generate keys"),
+        ];
+
+        for (key, label) in dealer_stats {
+            let [_, _, p2] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
+            println!("{}: {:?}", label, p2);
+        }
+        println!("");
+    } // if USE_FSS && USE_PARALLEL_THRESH
+
+    // -- FSS metrics & stats ends -- //
     Ok(())
 }

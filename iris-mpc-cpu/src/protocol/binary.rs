@@ -1,7 +1,7 @@
 use crate::{
     execution::session::{Session, SessionHandles},
     network::value::{NetworkInt, NetworkValue},
-    // load fss
+    // load FSS
     protocol::binary_fss::{
         add_3_get_msb_fss_batch_parallel_threshold,
         add_3_get_msb_fss_batch_parallel_threshold_timers,
@@ -35,6 +35,9 @@ thread_local! {
 
 use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
+
+// Enable/disable the use of parallel FSS
+pub const USE_PARALLEL_THRESH: bool = true;
 
 /// Splits the components of the given arithmetic share into 3 secret shares as described in Section 5.3 of the ABY3 paper.
 ///
@@ -1572,7 +1575,6 @@ pub(crate) async fn extract_msb_u32_batch_fss(
 
     let batch_size: usize = 64;
     let parallel_thresh = 8;
-    pub const USE_PARALLEL_THRESH: bool = true;
 
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
 
