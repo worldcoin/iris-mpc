@@ -16,6 +16,7 @@ use crate::{
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::izip;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp, collections::BTreeMap, collections::HashMap, fmt::Display, iter::once, path::PathBuf,
@@ -208,11 +209,14 @@ impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
 
 impl GraphMem<IrisVectorId> {
     /// Builds an idealized GraphMem, where all nearest-neighborhoods are exact.
-    /// Layer 0 is built directly from a file (which generally is expensive to produce).
-    /// Higher layers are built from brute-force pairwise computations among all resident nodes
     ///
-    /// It is asserted that `searcher.params.get_M_max(0) == k`, where `k` is the neighborhood size
-    /// of a node in the provided file. Moreover, nodes in higher layers will have `searcher.get_M_max(layer)` neighbors.
+    /// Layer 0 is built directly from a file (which generally is expensive to produce).
+    /// Nodes in Layer 0 will have `searcher.params.get_M_max(0)` neighbors, if this value is at
+    /// most equal to the number of neighbors per node found in the target file. Otherwise, the method panics.
+    ///
+    /// Higher layers are built from brute-force pairwise computations among all resident nodes. Layer `lc`
+    /// will have `searcher.params.get_M_max(lc)`, but consider that the graph might have a Linear-Scan layer.
+    ///
     /// The searcher also computes the insertion layers for all nodes (using `prf_seed` for reproducibility).
     /// The engine choice specifies the used distance (FHD or MinFHD).
     pub fn ideal_from_irises(
@@ -223,15 +227,13 @@ impl GraphMem<IrisVectorId> {
         echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
     ) -> Result<Self> {
         let zero_layer = {
-            let results = read_knn_results_from_file(filepath).unwrap();
-            // Some sanity checks that the ideal knn file corresponds to the irises argument
-            assert_eq!(results.len(), irises.len());
+            let mut results = read_knn_results_from_file(filepath).unwrap();
+            for result in results.iter_mut() {
+                result.truncate(searcher.params.get_M_max(0));
+            }
             let results = results
-                .into_iter()
-                .map(|result| {
-                    assert_eq!(result.neighbors.len(), searcher.params.get_M_max(0));
-                    result.map(IrisVectorId::from_serial_id)
-                })
+                .into_par_iter()
+                .map(|result| result.map(IrisVectorId::from_serial_id))
                 .collect::<Vec<_>>();
             Layer::from_knn_results(results, irises.len())
         };

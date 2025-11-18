@@ -33,6 +33,14 @@ impl<U> KNNResult<U> {
     }
 }
 
+impl<V> KNNResult<V> {
+    pub fn truncate(&mut self, k: usize) {
+        assert!(k <= self.neighbors.len(), "k must be <= neighbors.len()");
+        self.neighbors.truncate(k);
+        self.neighbors.shrink_to_fit();
+    }
+}
+
 /// Reads a Vec<KNNResult<u32>> from a file, skipping the first line (header).
 pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult<u32>>> {
     let file = File::open(path)?;
