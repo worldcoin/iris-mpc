@@ -5,10 +5,8 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::super::{
-    errors::ServiceClientError,
-    traits::{Initialize, ProcessRequestBatch},
-    types::{Request, RequestBatch, RequestBody, RequestData},
+use super::super::types::{
+    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestData,
 };
 use crate::aws::{
     create_iris_code_party_shares, create_iris_party_shares_for_s3,
@@ -33,19 +31,17 @@ impl RequestEnqueuer {
 
 #[async_trait]
 impl Initialize for RequestEnqueuer {
-    async fn init(&mut self) -> Result<(), ServiceClientError> {
+    async fn init(&mut self) -> Result<(), ClientError> {
         match self.aws_client.set_public_keyset().await {
             Ok(_) => Ok(()),
-            Err(e) => Err(ServiceClientError::ComponentInitialisationError(
-                e.to_string(),
-            )),
+            Err(e) => Err(ClientError::ComponentInitialisationError(e.to_string())),
         }
     }
 }
 
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
-    async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ServiceClientError> {
+    async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ClientError> {
         for request in batch.requests() {
             match self.get_request_body(request).await {
                 Ok(request_body) => {
@@ -57,7 +53,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
                         Ok(()) => {
                             tracing::info!("{}: Published to AWS-SNS", request);
                         }
-                        Err(e) => return Err(ServiceClientError::AwsServiceError(e)),
+                        Err(e) => return Err(ClientError::AwsServiceError(e)),
                     };
                 }
                 Err(e) => return Err(e),
@@ -70,7 +66,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
 
 impl RequestEnqueuer {
     /// Returns body of message to be enqueued.
-    async fn get_request_body(&self, request: &Request) -> Result<RequestBody, ServiceClientError> {
+    async fn get_request_body(&self, request: &Request) -> Result<RequestBody, ClientError> {
         match request.data() {
             RequestData::IdentityDeletion { .. } => {
                 self.get_request_body_identity_deletion(request).await
@@ -89,35 +85,35 @@ impl RequestEnqueuer {
     async fn get_request_body_identity_deletion(
         &self,
         _request: &Request,
-    ) -> Result<RequestBody, ServiceClientError> {
+    ) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
     async fn get_request_body_reauthorization(
         &self,
         _request: &Request,
-    ) -> Result<RequestBody, ServiceClientError> {
+    ) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
     async fn get_request_body_reset_check(
         &self,
         _request: &Request,
-    ) -> Result<RequestBody, ServiceClientError> {
+    ) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
     async fn get_request_body_reset_update(
         &self,
         _request: &Request,
-    ) -> Result<RequestBody, ServiceClientError> {
+    ) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
     async fn get_request_body_uniqueness_request(
         &self,
         request: &Request,
-    ) -> Result<RequestBody, ServiceClientError> {
+    ) -> Result<RequestBody, ClientError> {
         // Destructure generated data.
         let shares = match request.data() {
             RequestData::Uniqueness { shares } => shares,
@@ -148,7 +144,7 @@ impl RequestEnqueuer {
             Ok(_) => {
                 tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
             }
-            Err(e) => return Err(ServiceClientError::AwsServiceError(e)),
+            Err(e) => return Err(ClientError::AwsServiceError(e)),
         };
 
         Ok(RequestBody::Uniqueness(UniquenessRequest {

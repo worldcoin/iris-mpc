@@ -2,9 +2,8 @@ use rand::{CryptoRng, Rng};
 
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
-use super::super::{
-    errors::ServiceClientError,
-    types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData},
+use super::super::types::{
+    ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData,
 };
 use crate::irises::generate_iris_code_and_mask_shares_both_eyes;
 
@@ -54,7 +53,7 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
     }
 
     /// Generates batches of request until exhausted.
-    pub async fn next(&mut self) -> Result<Option<RequestBatch>, ServiceClientError> {
+    pub async fn next(&mut self) -> Result<Option<RequestBatch>, ClientError> {
         if self.batch_count == self.n_batches {
             return Ok(None);
         }

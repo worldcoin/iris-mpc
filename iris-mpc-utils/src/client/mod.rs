@@ -6,13 +6,12 @@ use components::RequestEnqueuer;
 use components::RequestGenerator;
 use components::ResponseCorrelator;
 use components::ResponseDequeuer;
-pub use errors::ServiceClientError;
-use traits::{Initialize, ProcessRequestBatch};
-pub use types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
+pub use types::{
+    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
+    RequestBatchSize, RequestData,
+};
 
 mod components;
-mod errors;
-mod traits;
 mod types;
 
 /// A utility for correlating enqueued system requests with system responses.
@@ -53,7 +52,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     }
 
     /// Initializer.
-    pub async fn init(&mut self) -> Result<(), ServiceClientError> {
+    pub async fn init(&mut self) -> Result<(), ClientError> {
         for initializer in [
             self.request_enqueuer.init(),
             self.response_correlator.init(),
@@ -62,7 +61,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
                 Ok(()) => (),
                 Err(e) => {
                     tracing::error!("Service client: component initialisation failed: {}", e);
-                    return Err(ServiceClientError::InitialisationError(e.to_string()));
+                    return Err(ClientError::InitialisationError(e.to_string()));
                 }
             }
         }
@@ -71,7 +70,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     }
 
     /// Executor.
-    pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
+    pub async fn exec(&mut self) -> Result<(), ClientError> {
         tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
             for processor in [
@@ -82,7 +81,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
                     Ok(()) => (),
                     Err(e) => {
                         tracing::error!("Service client: batch processing error: {}", e);
-                        return Err(ServiceClientError::BatchProcessingError(e.to_string()));
+                        return Err(ClientError::BatchProcessingError(e.to_string()));
                     }
                 }
             }
