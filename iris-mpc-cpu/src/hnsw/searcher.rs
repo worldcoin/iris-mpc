@@ -41,7 +41,7 @@ pub const N_PARAM_LAYERS: usize = 5;
 /// `N_PARAM_LAYERS - 1`. Layers larger than this use the last set of
 /// parameters.
 #[allow(non_snake_case)]
-#[derive(PartialEq, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Clone, Debug, Serialize, Deserialize)]
 pub struct HnswParams {
     /// The number of neighbors for insertion
     pub M: [usize; N_PARAM_LAYERS],
