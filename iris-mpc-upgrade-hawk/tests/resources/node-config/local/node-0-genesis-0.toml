@@ -16,7 +16,6 @@ disable_persistence = false
 enable_debug_timing = false
 service_ports = '["4000", "4001", "4002"]'
 shutdown_last_results_sync_timeout_secs = 60
-image_name = ""
 enable_s3_importer = false
 db_chunks_bucket_name = ""
 load_chunks_parallelism = 32
