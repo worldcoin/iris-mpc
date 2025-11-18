@@ -2,10 +2,7 @@ use std::fmt;
 
 use uuid;
 
-use iris_mpc_common::helpers::smpc_request::{
-    IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest,
-    UniquenessRequest,
-};
+use iris_mpc_common::helpers::smpc_request;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use crate::types::IrisCodeAndMaskShares;
@@ -19,10 +16,10 @@ pub struct Request {
     /// Associated request payload.
     data: RequestData,
 
-    /// Unique request identifier for correlation purposes.
+    /// An identifier assigned by client for correlation purposes.
     identifier: uuid::Uuid,
 
-    /// A unique identifier assigned by remote service upon being enqueed.
+    /// An identifier assigned by remote service upon being enqueed.
     message_id: Option<uuid::Uuid>,
 
     /// Batch item ordinal identifier.
@@ -134,18 +131,18 @@ impl fmt::Display for RequestBatchSize {
     }
 }
 
-/// Enumeration over the body of a system request.
+/// Enumeration over request body.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestBody {
-    IdentityDeletion(IdentityDeletionRequest),
-    Reauthorization(ReAuthRequest),
-    ResetCheck(ResetCheckRequest),
-    ResetUpdate(ResetUpdateRequest),
-    Uniqueness(UniquenessRequest),
+    IdentityDeletion(smpc_request::IdentityDeletionRequest),
+    Reauthorization(smpc_request::ReAuthRequest),
+    ResetCheck(smpc_request::ResetCheckRequest),
+    ResetUpdate(smpc_request::ResetUpdateRequest),
+    Uniqueness(smpc_request::UniquenessRequest),
 }
 
-/// Enumeration over the data of a system request.
+/// Enumeration over generated request data.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestData {

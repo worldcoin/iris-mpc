@@ -32,10 +32,10 @@ impl RequestEnqueuer {
 #[async_trait]
 impl Initialize for RequestEnqueuer {
     async fn init(&mut self) -> Result<(), ClientError> {
-        match self.aws_client.set_public_keyset().await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(ClientError::ComponentInitialisationError(e.to_string())),
-        }
+        self.aws_client
+            .set_public_keyset()
+            .await
+            .map_err(ClientError::AwsServiceError)
     }
 }
 

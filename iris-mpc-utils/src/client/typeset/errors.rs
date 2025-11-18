@@ -7,21 +7,9 @@ pub enum ClientError {
     #[error("An AWS service error has occured: {0}")]
     AwsServiceError(#[from] AwsClientError),
 
-    #[error("Batch processing error: {0}")]
-    BatchProcessingError(String),
-
-    #[error("Component initialisation error: {0}")]
-    ComponentInitialisationError(String),
-
     #[error("Enqueue request error: {0}")]
     EnqueueRequestError(String),
 
     #[error("Initialisation error: {0}")]
     InitialisationError(String),
-
-    #[error("Enqueue uniqueness pre-enqueue setup error: {0}")]
-    PrequeueUniquenessRequestError(String),
-
-    #[error("Request type is unsupported: {0}")]
-    UnsupportedRequestType(String),
 }

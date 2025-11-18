@@ -81,7 +81,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
                     Ok(()) => (),
                     Err(e) => {
                         tracing::error!("Service client: batch processing error: {}", e);
-                        return Err(ClientError::BatchProcessingError(e.to_string()));
+                        return Err(e);
                     }
                 }
             }
