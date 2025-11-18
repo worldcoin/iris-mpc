@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=6ab6cfc7c76bc1890c009fe73d42271ccdb4d102#6ab6cfc7c76bc1890c009fe73d42271ccdb4d102"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=80883b51ac98f15409361b5d978f5a8390a8c312#80883b51ac98f15409361b5d978f5a8390a8c312"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=6ab6cfc7c76bc1890c009fe73d42271ccdb4d102#6ab6cfc7c76bc1890c009fe73d42271ccdb4d102"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=80883b51ac98f15409361b5d978f5a8390a8c312#80883b51ac98f15409361b5d978f5a8390a8c312"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -121,10 +121,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "android-tzdata"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e999941b234f3131b00bc13c22d06e8c5ff726d1b6318ac7eb276997bbb4fef0"
+name = "ampc-server-utils"
+version = "0.1.0"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=80883b51ac98f15409361b5d978f5a8390a8c312#80883b51ac98f15409361b5d978f5a8390a8c312"
+dependencies = [
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sqs",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "eyre",
+ "futures",
+ "hex",
+ "itertools 0.13.0",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sodiumoxide",
+ "thiserror 2.0.16",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
 
 [[package]]
 name = "android_system_properties"
@@ -1228,17 +1248,16 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.38"
+version = "0.4.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a21f936df1771bf62b77f047b726c4625ff2e8aa607c01ec06e5a05bd8463401"
+checksum = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2"
 dependencies = [
- "android-tzdata",
  "iana-time-zone",
  "js-sys",
  "num-traits",
  "serde",
  "wasm-bindgen",
- "windows-targets 0.52.6",
+ "windows-link",
 ]
 
 [[package]]
@@ -2591,12 +2610,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "indoc"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b248f5224d1d606005e02c97f5aa4e88eeb230488bcc03bc9ca4d7991399f2b5"
-
-[[package]]
 name = "inferno"
 version = "0.11.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2633,6 +2646,7 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 name = "iris-mpc"
 version = "0.1.0"
 dependencies = [
+ "ampc-server-utils",
  "aws-config",
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
@@ -2682,6 +2696,7 @@ name = "iris-mpc-bins"
 version = "0.1.0"
 dependencies = [
  "aes-prng",
+ "ampc-server-utils",
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-s3",
@@ -2735,6 +2750,7 @@ version = "0.1.0"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
+ "ampc-server-utils",
  "aws-config",
  "aws-credential-types",
  "aws-sdk-kms",
@@ -2864,19 +2880,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "iris-mpc-py"
-version = "0.1.0"
-dependencies = [
- "iris-mpc-common",
- "iris-mpc-cpu",
- "pyo3",
- "rand",
-]
-
-[[package]]
 name = "iris-mpc-store"
 version = "0.1.0"
 dependencies = [
+ "ampc-server-utils",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
@@ -2928,6 +2935,7 @@ dependencies = [
 name = "iris-mpc-upgrade-hawk"
 version = "0.1.0"
 dependencies = [
+ "ampc-server-utils",
  "aws-config",
  "aws-sdk-rds",
  "aws-sdk-s3",
@@ -3198,15 +3206,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3f7eed9d3848f8b98834af67102b720745c4ec028fcd0aa0239277e7de374f"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "memoffset"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
-dependencies = [
- "autocfg",
 ]
 
 [[package]]
@@ -4101,69 +4100,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4759aa0d3a6232fb8dbdb97b61de2c20047c68aca932c7ed76da9d788508d670"
 dependencies = [
  "prost 0.13.3",
-]
-
-[[package]]
-name = "pyo3"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17da310086b068fbdcefbba30aeb3721d5bb9af8db4987d6735b2183ca567229"
-dependencies = [
- "cfg-if",
- "indoc",
- "libc",
- "memoffset",
- "once_cell",
- "portable-atomic",
- "pyo3-build-config",
- "pyo3-ffi",
- "pyo3-macros",
- "unindent",
-]
-
-[[package]]
-name = "pyo3-build-config"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e27165889bd793000a098bb966adc4300c312497ea25cf7a690a9f0ac5aa5fc1"
-dependencies = [
- "once_cell",
- "target-lexicon",
-]
-
-[[package]]
-name = "pyo3-ffi"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05280526e1dbf6b420062f3ef228b78c0c54ba94e157f5cb724a609d0f2faabc"
-dependencies = [
- "libc",
- "pyo3-build-config",
-]
-
-[[package]]
-name = "pyo3-macros"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c3ce5686aa4d3f63359a5100c62a127c9f15e8398e5fdeb5deef1fed5cd5f44"
-dependencies = [
- "proc-macro2",
- "pyo3-macros-backend",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "pyo3-macros-backend"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4cf6faa0cbfb0ed08e89beb8103ae9724eb4750e3a78084ba4017cbe94f3855"
-dependencies = [
- "heck",
- "proc-macro2",
- "pyo3-build-config",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -5358,12 +5294,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "target-lexicon"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e502f78cdbb8ba4718f566c418c52bc729126ffd16baee5baa718cf25dd5a69a"
-
-[[package]]
 name = "telemetry-batteries"
 version = "0.1.0"
 source = "git+https://github.com/worldcoin/telemetry-batteries.git?rev=901ea26e478c81e10d5d4355ac628ab7b15afca7#901ea26e478c81e10d5d4355ac628ab7b15afca7"
@@ -5948,12 +5878,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39ec24b3121d976906ece63c9daad25b85969647682eee313cb5779fdd69e14e"
 
 [[package]]
-name = "unindent"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7de7d73e1754487cb58364ee906a499937a0dfabd86bcb980fa99ec8c8fa2ce"
-
-[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6205,6 +6129,12 @@ checksum = "33ab640c8d7e35bf8ba19b884ba838ceb4fba93a4e8c65a9059d08afcfc683d9"
 dependencies = [
  "windows-targets 0.52.6",
 ]
+
+[[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-registry"
