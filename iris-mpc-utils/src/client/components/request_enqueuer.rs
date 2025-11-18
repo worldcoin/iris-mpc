@@ -5,7 +5,7 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::super::types::{
+use super::super::typeset::{
     ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestData,
 };
 use crate::aws::{

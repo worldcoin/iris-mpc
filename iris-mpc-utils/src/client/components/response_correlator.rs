@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::super::types::{Initialize, RequestBatch, ClientError};
+use super::super::typeset::{ClientError, Initialize, RequestBatch};
 use crate::aws::AwsClient;
 
 /// A component responsible for correlating system requests with system responses.
@@ -33,9 +33,7 @@ impl Initialize for ResponseCorrelator {
                 tracing::info!("Purged SQS response queue");
                 Ok(())
             }
-            Err(e) => Err(ClientError::ComponentInitialisationError(
-                e.to_string(),
-            )),
+            Err(e) => Err(ClientError::ComponentInitialisationError(e.to_string())),
         }
     }
 }

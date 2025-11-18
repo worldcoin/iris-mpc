@@ -6,13 +6,13 @@ use components::RequestEnqueuer;
 use components::RequestGenerator;
 use components::ResponseCorrelator;
 use components::ResponseDequeuer;
-pub use types::{
+pub use typeset::{
     ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
     RequestBatchSize, RequestData,
 };
 
 mod components;
-mod types;
+mod typeset;
 
 /// A utility for correlating enqueued system requests with system responses.
 #[derive(Debug)]

@@ -2,7 +2,7 @@ use rand::{CryptoRng, Rng};
 
 use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
-use super::super::types::{
+use super::super::typeset::{
     ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData,
 };
 use crate::irises::generate_iris_code_and_mask_shares_both_eyes;

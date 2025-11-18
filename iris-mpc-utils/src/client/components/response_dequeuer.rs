@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::super::types::{ProcessRequestBatch, RequestBatch, ClientError};
+use super::super::typeset::{ClientError, ProcessRequestBatch, RequestBatch};
 use crate::aws::AwsClient;
 
 /// A component responsible for dequeuing system responses from network egress queues.
