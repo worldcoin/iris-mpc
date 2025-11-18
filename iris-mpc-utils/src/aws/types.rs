@@ -1,10 +1,15 @@
 use serde::ser::Serialize;
 use serde_json;
 
-// Helper type that encpasulates an AWS-SQS message.
+// Helper type encpasulating AWS-S3 object information.
 pub struct S3ObjectInfo {
+    // S3 object data.
     body: Vec<u8>,
+
+    // S3 bucket name.
     bucket: String,
+
+    // S3 key name.
     key: String,
 }
 
@@ -21,37 +26,27 @@ impl S3ObjectInfo {
         &self.key
     }
 
-    pub fn new(bucket: String, key: String, body: Vec<u8>) -> Self {
-        Self { body, bucket, key }
-    }
-
-    pub fn new_from_jsonic<T>(bucket: &String, key: &String, body: &T) -> Self
+    pub fn new<T>(bucket: &String, key: &String, body: &T) -> Self
     where
         T: ?Sized + Serialize,
     {
-        Self::new(
-            bucket.to_owned(),
-            key.to_owned(),
-            serde_json::to_vec(body).unwrap(),
-        )
+        Self {
+            body: serde_json::to_vec(body).unwrap(),
+            bucket: bucket.to_owned(),
+            key: key.to_owned(),
+        }
     }
 }
 
-// Helper type that encpasulates an AWS-SQS message.
-pub struct SnsMessageInfo<T>
-where
-    T: Sized + Serialize,
-{
-    body: T,
+// Helper type encpasulating an AWS-SQS message.
+pub struct SnsMessageInfo {
+    body: Vec<u8>,
     group_id: String,
     kind: String,
 }
 
-impl<T> SnsMessageInfo<T>
-where
-    T: Sized + Serialize,
-{
-    pub fn body(&self) -> &T {
+impl SnsMessageInfo {
+    pub fn body(&self) -> &Vec<u8> {
         &self.body
     }
 
@@ -63,11 +58,14 @@ where
         &self.kind
     }
 
-    pub fn new(body: T, group_id: String, kind: String) -> Self {
+    pub fn new<T>(group_id: &str, kind: &str, body: &T) -> Self
+    where
+        T: ?Sized + Serialize,
+    {
         Self {
-            body,
-            group_id,
-            kind,
+            body: serde_json::to_vec(body).unwrap(),
+            group_id: String::from(group_id),
+            kind: String::from(kind),
         }
     }
 }

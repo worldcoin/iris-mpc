@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::super::{errors::ServiceClientError, traits::ComponentInitializer, types::RequestBatch};
+use super::super::{errors::ServiceClientError, traits::Initialize, types::RequestBatch};
 use crate::aws::AwsClient;
 
 /// A component responsible for correlating system requests with system responses.
@@ -26,7 +26,7 @@ impl ResponseCorrelator {
 }
 
 #[async_trait]
-impl ComponentInitializer for ResponseCorrelator {
+impl Initialize for ResponseCorrelator {
     async fn init(&mut self) -> Result<(), ServiceClientError> {
         match self.aws_client.sqs_purge_queue().await {
             Ok(()) => {

@@ -2,6 +2,10 @@ use std::fmt;
 
 use uuid;
 
+use iris_mpc_common::helpers::smpc_request::{
+    IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest,
+    UniquenessRequest,
+};
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use crate::types::IrisCodeAndMaskShares;
@@ -130,7 +134,18 @@ impl fmt::Display for RequestBatchSize {
     }
 }
 
-/// Enumeration over data associated with a request.
+/// Enumeration over the body of a system request.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum RequestBody {
+    IdentityDeletion(IdentityDeletionRequest),
+    Reauthorization(ReAuthRequest),
+    ResetCheck(ResetCheckRequest),
+    ResetUpdate(ResetUpdateRequest),
+    Uniqueness(UniquenessRequest),
+}
+
+/// Enumeration over the data of a system request.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestData {

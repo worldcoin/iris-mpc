@@ -4,7 +4,7 @@ use super::{errors::ServiceClientError, types::RequestBatch};
 
 /// Implemented by components which expose initialisation functions.
 #[async_trait]
-pub trait ComponentInitializer {
+pub trait Initialize {
     async fn init(&mut self) -> Result<(), ServiceClientError>;
 }
 

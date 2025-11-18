@@ -5,7 +5,6 @@ use aws_sdk_s3::{
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client as SQSClient;
-use serde::ser::Serialize;
 use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
@@ -111,13 +110,10 @@ impl AwsClient {
     }
 
     /// Enqueues a message upon an AWS SNS service topic.  The message body is JSON encodeable.
-    pub async fn sns_publish_json<T>(
+    pub async fn sns_publish_json(
         &self,
-        sns_msg_info: SnsMessageInfo<T>,
-    ) -> Result<(), AwsClientError>
-    where
-        T: Sized + Serialize,
-    {
+        sns_msg_info: SnsMessageInfo,
+    ) -> Result<(), AwsClientError> {
         match self
             .sns
             .publish()
