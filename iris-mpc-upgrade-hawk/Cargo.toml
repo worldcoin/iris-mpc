@@ -35,4 +35,3 @@ serial_test = "3.2.0"
 [features]
 default = []
 db_dependent = []
-
