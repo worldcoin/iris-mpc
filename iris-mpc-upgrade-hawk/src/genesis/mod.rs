@@ -1247,7 +1247,7 @@ async fn init_graph_from_stores(
         .cpu_database
         .as_ref()
         .ok_or(eyre!(
-            "HNSW d GENESIS :: Server :: Missing graph database config"
+            "HNSW GENESIS :: Server :: Missing graph database config"
         ))?
         .load_parallelism;
     log_info(format!(
