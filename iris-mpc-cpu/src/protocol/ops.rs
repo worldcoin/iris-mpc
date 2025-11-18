@@ -402,12 +402,12 @@ pub async fn cross_compare(
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
 
-    // Compute the MSB of the above
-    let bits = extract_msb_u32_batch_fss(session, &diff).await?;
+    // Compute the MSB of the above -- FSS vs RSS is now handled below
+    // let bits = extract_msb_u32_batch_fss(session, &diff).await?;
     // let bits = extract_msb_u32_batch(session, &diff).await?;
 
     let opened_b = {
-        // timer
+        // timer for the entire scope
         let _tt = crate::perf_scoped_for_party!(
             "cross_compare.extract_open",
             session.own_role().index(),
@@ -422,46 +422,54 @@ pub async fn cross_compare(
                 CROSS_COMPARE_CALLS_FSS.fetch_add(1, Ordering::Relaxed);
             }
 
+            // timer for a let statement
             crate::perf_time_let_for_party!(
             "cross_compare.fss.extract",
             session.own_role().index(),
             diff.len(),
             bucket_bound,
+                // the let statement to time
                 let bits = extract_msb_u32_batch_fss(session, &diff).await? //;
             );
 
+            // timer for an expression
             crate::perf_time_expr_for_party!(
                 "cross_compare.fss.open_bin",
                 session.own_role().index(),
                 diff.len(),
                 bucket_bound,
+                // the expression to time
                 open_bin_fss(session, &bits).await?
             )
         } else {
+            // count the number of calls for one party only
             if session.own_role().index() == 0 {
-                // count the number of calls for one party only
                 CROSS_COMPARE_CALLS_RSS.fetch_add(1, Ordering::Relaxed);
             }
 
+            // timer for a let statement
             crate::perf_time_let_for_party!(
             "cross_compare.rss.extract",
             session.own_role().index(),
             diff.len(),
             bucket_bound,
+                // the let statement to time
                 let bits = extract_msb_u32_batch(session, &diff).await? //;
             );
 
+            // timer for an expression
             crate::perf_time_expr_for_party!(
                 "cross_compare.rss.open_bin",
                 session.own_role().index(),
                 diff.len(),
                 bucket_bound,
+                // the expression to time
                 open_bin(session, &bits).await?
             )
         }
     };
 
-    // Open the MSB (FSS vs RSS is handled above)
+    // Open the MSB -- FSS vs RSS is now handled above
     // let opened_b = open_bin(session, &bits).await?;
     // let opened_b = open_bin_fss(session, &bits).await?;
 
