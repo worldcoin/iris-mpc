@@ -1,28 +1,33 @@
-use std::{
-    collections::HashMap,
-    convert::TryFrom,
-    sync::Arc,
-    time::{Duration, Instant},
+use ampc_anon_stats::anon_stats::{DistanceBundle1D, LiftedDistanceBundle1D};
+use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
+use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
+use ampc_anon_stats::{
+    init_heartbeat_task, process_1d_anon_stats_job, process_1d_lifted_anon_stats_job,
+    process_2d_anon_stats_job, start_coordination_server, sync_on_id_hash, sync_on_job_sizes,
+    wait_for_others_ready, wait_for_others_unready, AnonStatsContext, AnonStatsMapping,
+    AnonStatsOrientation, AnonStatsOrigin, AnonStatsServerConfig, AnonStatsStore, Opt,
 };
-
+use ampc_server_utils::{
+    shutdown_handler::ShutdownHandler, BucketStatistics, BucketStatistics2D, Eye, TaskMonitor,
+};
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
-use clap::Parser;
 use eyre::{bail, eyre, Context, Result};
-use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
     helpers::{
-        shutdown_handler::ShutdownHandler,
         smpc_request::{ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE},
         smpc_response::create_message_type_attribute_map,
-        statistics::{BucketStatistics, BucketStatistics2D},
-        task_monitor::TaskMonitor,
     },
-    postgres::{AccessMode, PostgresClient},
     tracing::initialize_tracing,
 };
 use iris_mpc_cpu::{
     execution::session::Session,
     network::tcp::{build_network_handle, NetworkHandleArgs},
+};
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, info, warn};
@@ -141,7 +146,7 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        let min_job_size = sync::sync_on_job_sizes(session, available).await?;
+        let min_job_size = sync_on_job_sizes(session, available).await?;
         if min_job_size < self.config.min_1d_job_size {
             debug!(
                 ?origin,
@@ -170,7 +175,7 @@ impl AnonStatsProcessor {
                 let job_size = job.len();
                 let job_hash = job.get_id_hash();
 
-                if !sync::sync_on_id_hash(session, job_hash).await? {
+                if !sync_on_id_hash(session, job_hash).await? {
                     warn!(
                         ?origin,
                         job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
@@ -180,13 +185,8 @@ impl AnonStatsProcessor {
                 }
 
                 let start = Instant::now();
-                let stats = anon_stats::process_1d_anon_stats_job(
-                    session,
-                    job,
-                    &origin,
-                    self.config.as_ref(),
-                )
-                .await?;
+                let stats =
+                    process_1d_anon_stats_job(session, job, &origin, self.config.as_ref()).await?;
                 info!(
                     ?origin,
                     job_size,
@@ -216,7 +216,7 @@ impl AnonStatsProcessor {
                 let job_size = job.len();
                 let job_hash = job.get_id_hash();
 
-                if !sync::sync_on_id_hash(session, job_hash).await? {
+                if !sync_on_id_hash(session, job_hash).await? {
                     warn!(
                         ?origin,
                         job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
@@ -226,13 +226,9 @@ impl AnonStatsProcessor {
                 }
 
                 let start = Instant::now();
-                let stats = anon_stats::process_1d_lifted_anon_stats_job(
-                    session,
-                    job,
-                    &origin,
-                    self.config.as_ref(),
-                )
-                .await?;
+                let stats =
+                    process_1d_lifted_anon_stats_job(session, job, &origin, self.config.as_ref())
+                        .await?;
                 info!(
                     ?origin,
                     job_size,
@@ -256,7 +252,7 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        let min_job_size = sync::sync_on_job_sizes(session, available).await?;
+        let min_job_size = sync_on_job_sizes(session, available).await?;
         if min_job_size < self.config.min_1d_job_size {
             debug!(
                 ?origin,
@@ -291,7 +287,7 @@ impl AnonStatsProcessor {
         let job_size = job.len();
         let job_hash = job.get_id_hash();
 
-        if !sync::sync_on_id_hash(session, job_hash).await? {
+        if !sync_on_id_hash(session, job_hash).await? {
             warn!(
                 ?origin,
                 job_size, "Mismatched 2D anon stats job hash detected; scheduling recovery"
@@ -301,8 +297,7 @@ impl AnonStatsProcessor {
         }
 
         let start = Instant::now();
-        let stats =
-            anon_stats::process_2d_anon_stats_job(session, job, self.config.as_ref()).await?;
+        let stats = process_2d_anon_stats_job(session, job, self.config.as_ref()).await?;
         info!(
             ?origin,
             job_size,
@@ -413,10 +408,10 @@ async fn main() -> Result<()> {
         initialize_tracing(config.service.clone()).wrap_err("Failed to initialize tracing")?;
 
     info!("Connecting to database");
-    let postgres_client = PostgresClient::new(
+    let postgres_client = AnonStatsPgClient::new(
         &config.db_url,
         &config.db_schema_name,
-        AccessMode::ReadWrite,
+        AnonStatsAccessMode::ReadWrite,
     )
     .await?;
     let anon_stats_store = AnonStatsStore::new(&postgres_client).await?;
@@ -425,8 +420,7 @@ async fn main() -> Result<()> {
 
     info!("Starting anon stats server.");
     let mut background_tasks = TaskMonitor::new();
-    let coordination_handles =
-        coordination::start_coordination_server(config.as_ref(), &mut background_tasks);
+    let coordination_handles = start_coordination_server(config.as_ref(), &mut background_tasks);
     background_tasks.check_tasks();
     let health_port = config
         .healthcheck_ports
@@ -435,11 +429,11 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "8080".to_string());
     info!("Healthcheck server running on port {}", health_port);
 
-    coordination::wait_for_others_unready(config.as_ref())
+    wait_for_others_unready(config.as_ref())
         .await
         .wrap_err("waiting for other anon stats servers to become unready")?;
 
-    coordination::init_heartbeat_task(config.as_ref(), &mut background_tasks, &shutdown_handler)
+    init_heartbeat_task(config.as_ref(), &mut background_tasks, &shutdown_handler)
         .await
         .wrap_err("failed to start heartbeat task")?;
     background_tasks.check_tasks();
@@ -447,6 +441,7 @@ async fn main() -> Result<()> {
     let args = NetworkHandleArgs {
         party_index: config.party_id,
         addresses: node_addresses,
+        outbound_addresses: vec![],
         connection_parallelism: 8,
         request_parallelism: 8,
         sessions_per_request: 1,
@@ -457,13 +452,14 @@ async fn main() -> Result<()> {
     let mut networking = build_network_handle(args, ct.child_token()).await?;
     let mut sessions = networking.as_mut().make_sessions().await?;
     let session = sessions
+        .0
         .get_mut(0)
         .ok_or_else(|| eyre!("expected at least one network session"))?;
 
     let mut processor = AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client);
 
     coordination_handles.set_ready();
-    coordination::wait_for_others_ready(config.as_ref())
+    wait_for_others_ready(config.as_ref())
         .await
         .wrap_err("waiting for other anon stats servers to become ready")?;
 
