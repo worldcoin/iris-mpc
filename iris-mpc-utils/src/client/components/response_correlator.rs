@@ -29,7 +29,7 @@ impl ResponseCorrelator {
 impl Initialize for ResponseCorrelator {
     async fn init(&mut self) -> Result<(), ClientError> {
         self.aws_client
-            .sqs_purge_queue()
+            .sqs_purge_response_queue()
             .await
             .map_err(ClientError::AwsServiceError)
     }
