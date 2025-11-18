@@ -17,5 +17,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-config = { version = "0.15.19", features = ["serde_json"] }
+config = { version = "0.15.19", default-features = false, features = ["json"] }
 dotenvy = "0.15.7"

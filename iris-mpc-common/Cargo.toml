@@ -36,7 +36,6 @@ itertools.workspace = true
 base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
 tokio.workspace = true
 tracing.workspace = true
 tokio-util.workspace = true
@@ -45,8 +44,7 @@ uuid.workspace = true
 sqlx.workspace = true
 telemetry-batteries.workspace = true
 axum.workspace = true
-
-config = { version = "0.15.19", features = ["serde_json"] }
+config = { version = "0.15.19", default-features = false, features = ["json"] }
 chrono = { version = "0.4.38", features = ["serde"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
 sodiumoxide = "0.2.7"
