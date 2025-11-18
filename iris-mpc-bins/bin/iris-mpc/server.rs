@@ -61,7 +61,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
-use itertools::izip;
+use itertools::{cloned, izip};
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -985,16 +985,19 @@ async fn server_main(config: Config) -> Result<()> {
     tracing::info!("Sync state: {:?}", my_state);
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
+    let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
+        panic!("Server coordination config must be provided for healthcheck server");
+    });
 
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
         let ready_probe_response = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
+            image_name: server_coord_config.image_name.clone(),
             shutting_down: false,
             uuid: uuid.clone(),
         };
         let ready_probe_response_shutdown = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
+            image_name: server_coord_config.image_name.clone(),
             shutting_down: true,
             uuid: uuid.clone(),
         };
@@ -1054,7 +1057,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
     let unready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
@@ -1079,7 +1082,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Waiting for all nodes to be unready...");
     match tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
+        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
         unready_check,
     )
     .await
@@ -1096,8 +1099,8 @@ async fn server_main(config: Config) -> Result<()> {
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
-    let all_nodes = config.node_hostnames.clone();
-    let image_name = config.image_name.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
+    let image_name = server_coord_config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
@@ -1113,7 +1116,7 @@ async fn server_main(config: Config) -> Result<()> {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
                     if last_response[i] == String::default()
-                        && retries[i] < config.heartbeat_initial_retries
+                        && retries[i] < server_coord_config.heartbeat_initial_retries
                     {
                         retries[i] += 1;
                         tracing::warn!("Node {} did not respond with success, retrying...", host);
@@ -1192,7 +1195,10 @@ async fn server_main(config: Config) -> Result<()> {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(config.heartbeat_interval_secs)).await;
+            tokio::time::sleep(Duration::from_secs(
+                server_coord_config.heartbeat_interval_secs,
+            ))
+            .await;
         }
     });
 
@@ -1223,7 +1229,7 @@ async fn server_main(config: Config) -> Result<()> {
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-    let all_nodes = config.node_hostnames.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
     let next_node = &all_nodes[(config.party_id + 1) % 3];
     let prev_node = &all_nodes[(config.party_id + 2) % 3];
 
@@ -1952,7 +1958,7 @@ async fn server_main(config: Config) -> Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
     let ready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
@@ -1977,7 +1983,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Waiting for all nodes to be ready...");
     match tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
+        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
         ready_check,
     )
     .await

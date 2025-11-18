@@ -28,7 +28,7 @@ use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
-    build_coordination_config, init_task_monitor, start_coordination_server, BatchSyncSharedState,
+    init_task_monitor, start_coordination_server, BatchSyncSharedState,
 };
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
@@ -90,11 +90,14 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    let server_coordination_config = build_coordination_config(&config);
+    let server_coord_config = &config
+        .server_coordination
+        .clone()
+        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
 
-    wait_for_others_unready(&server_coordination_config).await?;
+    wait_for_others_unready(server_coord_config).await?;
     init_heartbeat_task(
-        &server_coordination_config,
+        server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
     )
@@ -166,7 +169,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     background_tasks.check_tasks();
 
     set_node_ready(is_ready_flag);
-    wait_for_others_ready(&server_coordination_config).await?;
+    wait_for_others_ready(server_coord_config).await?;
 
     background_tasks.check_tasks();
 
@@ -375,9 +378,9 @@ async fn build_sync_state(
 }
 
 async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
-    let server_coordination_config = build_coordination_config(config);
+    let server_coord_config = config.server_coordination.clone().unwrap();
     let mut all_states = vec![my_state.clone()];
-    all_states.extend(get_others_sync_state(&server_coordination_config).await?);
+    all_states.extend(get_others_sync_state(&server_coord_config).await?);
     let sync_result = SyncResult::new(my_state.clone(), all_states);
     Ok(sync_result)
 }
@@ -408,14 +411,16 @@ async fn init_hawk_actor(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
-    let node_inbound_addresses: Vec<String> = config
+    let server_coord_config = config.server_coordination.clone().unwrap();
+
+    let node_inbound_addresses: Vec<String> = server_coord_config
         .node_hostnames
         .iter()
         .zip(config.service_ports.iter())
         .map(|(host, port)| format!("{}:{}", host, port))
         .collect();
 
-    let node_outbound_addresses: Vec<String> = config
+    let node_outbound_addresses: Vec<String> = server_coord_config
         .node_hostnames
         .iter()
         .zip(config.service_outbound_ports.iter())

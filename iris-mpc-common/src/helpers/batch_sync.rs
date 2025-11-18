@@ -141,9 +141,14 @@ pub async fn get_batch_sync_entries(
     config: &Config,
     own_state: Option<BatchSyncEntries>,
 ) -> Result<Vec<BatchSyncEntries>> {
+    let server_coord_config = config
+        .server_coordination
+        .as_ref()
+        .ok_or(eyre!("Missing server coordination config"))?;
+
     let all_batch_size_sync_entries_addresses = get_check_addresses(
-        &config.node_hostnames,
-        &config.healthcheck_ports,
+        &server_coord_config.node_hostnames,
+        &server_coord_config.healthcheck_ports,
         "batch-sync-entries",
     );
 
@@ -233,9 +238,10 @@ pub async fn get_batch_sync_states(
     own_state: Option<&BatchSyncState>,
     current_batch_id: u64,
 ) -> Result<Vec<BatchSyncState>> {
+    let server_coord_config = &config.server_coordination.clone().unwrap();
     let all_batch_size_sync_addresses = get_check_addresses(
-        &config.node_hostnames,
-        &config.healthcheck_ports,
+        &server_coord_config.node_hostnames,
+        &server_coord_config.healthcheck_ports,
         "batch-sync-state",
     );
 

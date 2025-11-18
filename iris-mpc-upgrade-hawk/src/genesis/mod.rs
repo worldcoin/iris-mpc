@@ -10,7 +10,7 @@ use aws_sdk_s3::{
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::server_coordination::{build_coordination_config, BatchSyncSharedState};
+use iris_mpc_common::server_coordination::BatchSyncSharedState;
 
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
@@ -328,18 +328,15 @@ async fn exec_setup(
     .await;
     task_monitor_bg.check_tasks();
 
-    let server_coordination_config = build_coordination_config(config);
-
+    let server_coord_config = &config
+        .server_coordination
+        .clone()
+        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await network state = UNREADY.
-    wait_for_others_unready(&server_coordination_config).await?;
+    wait_for_others_unready(server_coord_config).await?;
     log_info(String::from("Network status = UNREADY"));
     // Coordinator: await network state = HEALTHY.
-    init_heartbeat_task(
-        &server_coordination_config,
-        &mut task_monitor_bg,
-        &shutdown_handler,
-    )
-    .await?;
+    init_heartbeat_task(server_coord_config, &mut task_monitor_bg, &shutdown_handler).await?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = HEALTHY"));
 
@@ -396,7 +393,7 @@ async fn exec_setup(
     let ct = shutdown_handler.get_cancellation_token();
     tokio::select! {
         _ = ct.cancelled() => Err(eyre!("ready check failed")),
-        r = wait_for_others_ready(&server_coordination_config) => r
+        r = wait_for_others_ready(server_coord_config) => r
     }?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = READY"));
@@ -887,7 +884,11 @@ async fn get_hawk_actor(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
-    let node_addresses: Vec<String> = config
+    let server_coord_config = config
+        .server_coordination
+        .as_ref()
+        .ok_or(eyre!("Missing server coordination config"))?;
+    let node_addresses: Vec<String> = server_coord_config
         .node_hostnames
         .iter()
         .zip(config.service_ports.iter())
@@ -1202,8 +1203,12 @@ async fn get_sync_result(
     my_state: &GenesisSyncState,
 ) -> Result<GenesisSyncResult> {
     let mut all_states = vec![my_state.clone()];
-    let server_coordinator_config = build_coordination_config(config);
-    all_states.extend(get_others_sync_state(&server_coordinator_config).await?);
+    let server_coord_config = config
+        .server_coordination
+        .as_ref()
+        .ok_or(eyre!("Missing server coordination config"))?;
+
+    all_states.extend(get_others_sync_state(server_coord_config).await?);
     let result = GenesisSyncResult::new(my_state.clone(), all_states);
 
     Ok(result)
@@ -1242,7 +1247,7 @@ async fn init_graph_from_stores(
         .cpu_database
         .as_ref()
         .ok_or(eyre!(
-            "HNSW GENESIS :: Server :: Missing graph database config"
+            "HNSW d GENESIS :: Server :: Missing graph database config"
         ))?
         .load_parallelism;
     log_info(format!(

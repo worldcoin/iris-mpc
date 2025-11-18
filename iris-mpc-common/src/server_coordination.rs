@@ -1,9 +1,6 @@
 use crate::config::Config;
 use crate::helpers::batch_sync::get_own_batch_sync_entries;
-use ampc_server_utils::{
-    shutdown_handler::ShutdownHandler, ReadyProbeResponse, ServerCoordinationConfig, TaskMonitor,
-};
-
+use ampc_server_utils::{shutdown_handler::ShutdownHandler, ReadyProbeResponse, TaskMonitor};
 use axum::extract::Query;
 use axum::http::header;
 use axum::http::StatusCode;
@@ -125,17 +122,21 @@ where
 
     let health_shutdown_handler = Arc::clone(shutdown_handler);
     let health_check_port = config.hawk_server_healthcheck_port;
+    let server_coord_config = &config
+        .server_coordination
+        .clone()
+        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
 
     let _health_check_abort = task_monitor.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
         let is_ready_flag = Arc::clone(&is_ready_flag);
         let ready_probe_response = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
+            image_name: server_coord_config.image_name.clone(),
             shutting_down: false,
             uuid: uuid.clone(),
         };
         let ready_probe_response_shutdown = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
+            image_name: server_coord_config.image_name.clone(),
             shutting_down: true,
             uuid: uuid.clone(),
         };
@@ -259,17 +260,4 @@ where
     );
 
     is_ready_flag
-}
-
-pub fn build_coordination_config(config: &Config) -> ServerCoordinationConfig {
-    ServerCoordinationConfig {
-        party_id: config.party_id,
-        node_hostnames: config.node_hostnames.clone(),
-        healthcheck_ports: config.healthcheck_ports.clone(),
-        image_name: config.image_name.clone(),
-        http_query_retry_delay_ms: config.http_query_retry_delay_ms,
-        startup_sync_timeout_secs: config.startup_sync_timeout_secs,
-        heartbeat_interval_secs: config.heartbeat_interval_secs,
-        heartbeat_initial_retries: config.heartbeat_initial_retries,
-    }
 }
