@@ -67,7 +67,7 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
 
         for item_idx in 1..(batch_size + 1) {
             let request = self.generate_request(batch_idx, item_idx);
-            tracing::info!("{} :: Generated", request);
+            tracing::info!("{} :: Data generated", request);
             batch.requests_mut().push(request);
         }
 

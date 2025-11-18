@@ -69,8 +69,7 @@ impl AwsClient {
 impl AwsClient {
     /// Enqueues data to an S3 bucket.
     pub async fn s3_put_object(&self, s3_obj_info: &S3ObjectInfo) -> Result<(), AwsClientError> {
-        match self
-            .s3
+        self.s3
             .put_object()
             .bucket(s3_obj_info.bucket())
             .key(s3_obj_info.key())
@@ -79,32 +78,24 @@ impl AwsClient {
             )))
             .send()
             .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
+            .map(|_| ())
+            .map_err(|e| {
                 tracing::error!("AWS-S3 upload error: {}", e);
-                Err(AwsClientError::S3UploadError(
-                    s3_obj_info.key().clone(),
-                    e.to_string(),
-                ))
-            }
-        }
+                AwsClientError::S3UploadError(s3_obj_info.key().clone(), e.to_string())
+            })
     }
 
     /// Downloads & assigns encryption keys.
     pub(crate) async fn set_public_keyset(&mut self) -> Result<(), AwsClientError> {
-        self.public_keyset = Some(
-            match download_public_keyset(self.config.public_key_base_url()).await {
-                Ok(keys) => {
-                    tracing::info!("MPC network public encryption keys downloaded");
-                    keys
-                }
-                Err(e) => {
-                    tracing::error!("MPC network public encryption keys download error: {}", e);
-                    return Err(AwsClientError::PublicKeysetDownloadError(e.to_string()));
-                }
-            },
-        );
+        let keys = download_public_keyset(self.config.public_key_base_url())
+            .await
+            .map_err(|e| {
+                tracing::error!("MPC network public encryption keys download error: {}", e);
+                AwsClientError::PublicKeysetDownloadError(e.to_string())
+            })?;
+
+        self.public_keyset = Some(keys);
+        tracing::info!("MPC network public encryption keys downloaded");
 
         Ok(())
     }
@@ -114,8 +105,7 @@ impl AwsClient {
         &self,
         sns_msg_info: SnsMessageInfo,
     ) -> Result<(), AwsClientError> {
-        match self
-            .sns
+        self.sns
             .publish()
             .topic_arn(self.config().sns_request_topic_arn())
             .message_group_id(sns_msg_info.group_id())
@@ -123,76 +113,62 @@ impl AwsClient {
             .set_message_attributes(Some(create_sns_message_attributes(sns_msg_info.kind())))
             .send()
             .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
+            .map(|_| ())
+            .map_err(|e| {
                 tracing::error!("AWS-SNS publishing error: {}", e);
-                Err(AwsClientError::SnsPublishError(e.to_string()))
-            }
-        }
+                AwsClientError::SnsPublishError(e.to_string())
+            })
     }
 
     /// Delete a message from an SQS queue.
-    pub async fn sqs_delete_message(
-        &self,
-        sqs_receipt_handle: String,
-    ) -> Result<(), AwsClientError> {
-        match self
-            .sqs
+    pub async fn sqs_delete_message(&self, sqs_receipt_handle: &str) -> Result<(), AwsClientError> {
+        let queue_url = self.config().sqs_response_queue_url();
+
+        self.sqs
             .delete_message()
-            .queue_url(self.config().sqs_response_queue_url())
+            .queue_url(queue_url)
             .receipt_handle(sqs_receipt_handle)
             .send()
             .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
+            .map(|_| ())
+            .map_err(|e| {
                 tracing::error!("AWS-SQS delete message from queue error: {}", e);
-                Err(AwsClientError::SqsDeleteMessageError(e.to_string()))
-            }
-        }
+                AwsClientError::SqsDeleteMessageError(e.to_string())
+            })
     }
 
     /// Purges an SQS queue.
     pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
-        match self
-            .sqs
+        let queue_url = self.config().sqs_response_queue_url();
+
+        self.sqs
             .purge_queue()
-            .queue_url(self.config().sqs_response_queue_url())
+            .queue_url(queue_url)
             .send()
             .await
-        {
-            Ok(_) => {
-                tracing::info!(
-                    "AWS-SQS response queue purged: {}",
-                    self.config().sqs_response_queue_url()
-                );
-                Ok(())
-            }
-            Err(e) => {
+            .map(|_| {
+                tracing::info!("AWS-SQS response queue purged: {}", queue_url);
+            })
+            .map_err(|e| {
                 tracing::error!("AWS-SQS queue purge error: {}", e);
-                Err(AwsClientError::SqsPurgeQueueError(e.to_string()))
-            }
-        }
+                AwsClientError::SqsPurgeQueueError(e.to_string())
+            })
     }
 
     /// Dequeues a message from an SQS queue.
     pub async fn sqs_receive_message(&self) -> Result<(), AwsClientError> {
-        match self
-            .sqs
+        self.sqs
             .receive_message()
             .queue_url(self.config().sqs_response_queue_url())
             .wait_time_seconds(self.config().sqs_wait_time_seconds() as i32)
             .max_number_of_messages(1)
             .send()
             .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
+            .map(|_| ())
+            .map_err(|e| {
                 tracing::error!("AWS-SQS receive message from queue error: {}", e);
-                Err(AwsClientError::SqsReceiveMessageError(e.to_string()))
-            }
-        }
+                AwsClientError::SqsReceiveMessageError(e.to_string())
+            })
     }
 }
 

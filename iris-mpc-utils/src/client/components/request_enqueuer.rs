@@ -43,21 +43,12 @@ impl Initialize for RequestEnqueuer {
 impl ProcessRequestBatch for RequestEnqueuer {
     async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ClientError> {
         for request in batch.requests() {
-            match self.get_request_body(request).await {
-                Ok(request_body) => {
-                    match self
-                        .aws_client
-                        .sns_publish_json(SnsMessageInfo::from(request_body))
-                        .await
-                    {
-                        Ok(()) => {
-                            tracing::info!("{}: Published to AWS-SNS", request);
-                        }
-                        Err(e) => return Err(ClientError::AwsServiceError(e)),
-                    };
-                }
-                Err(e) => return Err(e),
-            };
+            let body = self.get_body(request).await?;
+            self.aws_client
+                .sns_publish_json(SnsMessageInfo::from(body))
+                .await
+                .map_err(ClientError::AwsServiceError)?;
+            tracing::info!("{}: Published to AWS-SNS", request);
         }
 
         Ok(())
@@ -66,51 +57,39 @@ impl ProcessRequestBatch for RequestEnqueuer {
 
 impl RequestEnqueuer {
     /// Returns body of message to be enqueued.
-    async fn get_request_body(&self, request: &Request) -> Result<RequestBody, ClientError> {
+    async fn get_body(&self, request: &Request) -> Result<RequestBody, ClientError> {
         match request.data() {
-            RequestData::IdentityDeletion { .. } => {
-                self.get_request_body_identity_deletion(request).await
-            }
-            RequestData::Reauthorization { .. } => {
-                self.get_request_body_reauthorization(request).await
-            }
-            RequestData::ResetCheck { .. } => self.get_request_body_reset_check(request).await,
-            RequestData::ResetUpdate { .. } => self.get_request_body_reset_update(request).await,
-            RequestData::Uniqueness { .. } => {
-                self.get_request_body_uniqueness_request(request).await
-            }
+            RequestData::IdentityDeletion { .. } => self.get_body_identity_deletion(request).await,
+            RequestData::Reauthorization { .. } => self.get_body_reauthorization(request).await,
+            RequestData::ResetCheck { .. } => self.get_body_reset_check(request).await,
+            RequestData::ResetUpdate { .. } => self.get_body_reset_update(request).await,
+            RequestData::Uniqueness { .. } => self.get_body_uniqueness_request(request).await,
         }
     }
 
-    async fn get_request_body_identity_deletion(
+    async fn get_body_identity_deletion(
         &self,
         _request: &Request,
     ) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
-    async fn get_request_body_reauthorization(
+    async fn get_body_reauthorization(
         &self,
         _request: &Request,
     ) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
-    async fn get_request_body_reset_check(
-        &self,
-        _request: &Request,
-    ) -> Result<RequestBody, ClientError> {
+    async fn get_body_reset_check(&self, _request: &Request) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
-    async fn get_request_body_reset_update(
-        &self,
-        _request: &Request,
-    ) -> Result<RequestBody, ClientError> {
+    async fn get_body_reset_update(&self, _request: &Request) -> Result<RequestBody, ClientError> {
         unimplemented!()
     }
 
-    async fn get_request_body_uniqueness_request(
+    async fn get_body_uniqueness_request(
         &self,
         request: &Request,
     ) -> Result<RequestBody, ClientError> {

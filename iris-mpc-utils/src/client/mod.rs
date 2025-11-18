@@ -53,6 +53,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
 
     /// Initializer.
     pub async fn init(&mut self) -> Result<(), ClientError> {
+        tracing::info!("Initializing ...");
         for initializer in [
             self.request_enqueuer.init(),
             self.response_correlator.init(),
@@ -77,13 +78,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
                 self.request_enqueuer.process_batch(&batch),
                 self.response_dequeuer.process_batch(&batch),
             ] {
-                match processor.await {
-                    Ok(()) => (),
-                    Err(e) => {
-                        tracing::error!("Service client: batch processing error: {}", e);
-                        return Err(e);
-                    }
-                }
+                processor.await?
             }
         }
 

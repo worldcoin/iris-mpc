@@ -19,11 +19,9 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    tracing::info!("Initialising ...");
     let mut client = ServiceClient::async_from(options.clone()).await;
     match client.init().await {
         Ok(()) => {
-            tracing::info!("Executing ...");
             client.exec().await.unwrap();
         }
         Err(e) => {
