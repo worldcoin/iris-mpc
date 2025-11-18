@@ -15,7 +15,6 @@ pub mod sha256;
 pub mod smpc_request;
 #[cfg(feature = "helpers")]
 pub mod smpc_response;
-pub mod sqs;
 #[cfg(feature = "helpers")]
 pub mod sqs_s3_helper;
 pub mod statistics;

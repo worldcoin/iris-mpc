@@ -1,7 +1,6 @@
 use crate::config::Config;
-use crate::helpers::sqs::get_approximate_number_of_messages;
 use crate::job::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
-use ampc_server_utils::get_check_addresses;
+use ampc_server_utils::{get_approximate_number_of_messages, get_check_addresses};
 use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
@@ -110,7 +109,7 @@ pub async fn get_own_batch_sync_state(
     current_batch_id: u64,
 ) -> Result<BatchSyncState> {
     let approximate_visible_messages =
-        get_approximate_number_of_messages(config, &sqs_client.clone()).await?;
+        get_approximate_number_of_messages(&sqs_client.clone(), &config.requests_queue_url).await?;
     tracing::info!(
         "fetching approximate_visible_messages: {}",
         approximate_visible_messages

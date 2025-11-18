@@ -1,6 +1,9 @@
 #![allow(clippy::needless_range_loop, unused)]
 
-use ampc_server_utils::{shutdown_handler::ShutdownHandler, ReadyProbeResponse, TaskMonitor};
+use ampc_server_utils::{
+    delete_messages_until_sequence_num, get_next_sns_seq_num, shutdown_handler::ShutdownHandler,
+    ReadyProbeResponse, TaskMonitor,
+};
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
@@ -21,7 +24,6 @@ use iris_mpc::services::processors::result_message::{
 };
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
-use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
@@ -878,7 +880,11 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
-    let next_sns_seq_number_future = get_next_sns_seq_num(&config, &aws_clients.sqs_client);
+    let next_sns_seq_number_future = get_next_sns_seq_num(
+        &aws_clients.sqs_client,
+        &config.requests_queue_url,
+        config.sqs_sync_long_poll_seconds,
+    );
 
     let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
         aws_clients.secrets_manager_client.clone(),
@@ -1256,10 +1262,11 @@ async fn server_main(config: Config) -> Result<()> {
     // sync the queues
     let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
     delete_messages_until_sequence_num(
-        &config,
         &aws_clients.sqs_client,
+        &config.requests_queue_url,
         my_state.next_sns_sequence_num,
         max_sqs_sequence_num,
+        config.sqs_sync_long_poll_seconds,
     )
     .await?;
 

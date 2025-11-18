@@ -8,8 +8,9 @@ use crate::services::processors::modifications_sync::{
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
-    get_others_sync_state, init_heartbeat_task, set_node_ready, wait_for_others_ready,
-    wait_for_others_unready, TaskMonitor,
+    delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
+    init_heartbeat_task, set_node_ready, wait_for_others_ready, wait_for_others_unready,
+    TaskMonitor,
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
@@ -22,7 +23,6 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
-use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
@@ -356,7 +356,12 @@ async fn build_sync_state(
     let modifications = store
         .last_modifications(config.max_modifications_lookback)
         .await?;
-    let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
+    let next_sns_sequence_num = get_next_sns_seq_num(
+        &aws_clients.sqs_client,
+        &config.requests_queue_url,
+        config.sqs_sync_long_poll_seconds,
+    )
+    .await?;
     let common_config = CommonConfig::from(config.clone());
 
     tracing::info!("Database store length is: {}", db_len);
@@ -386,10 +391,11 @@ async fn sync_sqs_queues(
 ) -> Result<()> {
     let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
     delete_messages_until_sequence_num(
-        config,
         &aws_clients.sqs_client,
+        &config.requests_queue_url,
         sync_result.my_state.next_sns_sequence_num,
         max_sqs_sequence_num,
+        config.sqs_sync_long_poll_seconds,
     )
     .await?;
 
