@@ -1,29 +1,21 @@
 schema_name = "SMPC"
 environment = "dev"
-party_id = 0
 requests_queue_url = "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/smpcv2-0-dev.fifo"
 results_topic_arn = "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo"
 kms_key_arns = '["arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000002"]'
 processing_timeout_secs = 60
-startup_sync_timeout_secs = 300
 public_key_base_url = ""
 shares_bucket_name = "wf-smpcv2-dev-sns-requests"
 clear_db_before_init = false
 init_db_size = 0
 max_db_size = 10000
 max_batch_size = 0
-heartbeat_interval_secs = 2
-heartbeat_initial_retries = 10
 fake_db_size = 0
 return_partial_results = false
 disable_persistence = false
 enable_debug_timing = false
-node_hostnames = '["127.0.0.1", "127.0.0.1", "127.0.0.1"]'
 service_ports = '["4000", "4001", "4002"]'
-healthcheck_ports = '["3000", "3001", "3002"]'
-http_query_retry_delay_ms = 1000
 shutdown_last_results_sync_timeout_secs = 60
-image_name = ""
 enable_s3_importer = false
 db_chunks_bucket_name = ""
 load_chunks_parallelism = 32
@@ -64,6 +56,16 @@ full_scan_side_switching_enabled = true
 batch_polling_timeout_secs = 1
 sqs_long_poll_wait_time = 10
 batch_sync_polling_timeout_secs = 10
+
+[server_coordinator]
+node_hostnames = '["127.0.0.1", "127.0.0.1", "127.0.0.1"]'
+party_id = 0
+healthcheck_ports = '["3000", "3001", "3002"]'
+image_name = ""
+heartbeat_interval_secs = 2
+heartbeat_initial_retries = 10
+http_query_retry_delay_ms = 1000
+startup_sync_timeout_secs = 300
 
 [service]
 service_name = "smpcv2-server-dev"
