@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
+        searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint, TopLayerSearchMode},
         vector_store::Ref,
         HnswSearcher,
     },
@@ -15,7 +15,7 @@ use crate::{
 
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
-use itertools::izip;
+use itertools::{izip, Itertools};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -70,16 +70,15 @@ impl<V: Ref + Display + FromStr + cmp::Ord> GraphMem<V> {
         Arc::new(RwLock::new(self))
     }
 
-    pub fn from_precomputed(entry_point: Option<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
+    pub fn from_precomputed(entry_points: Vec<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
         GraphMem {
-            entry_point: entry_point
-                .map(|ep| {
-                    vec![EntryPoint {
-                        point: ep.0,
-                        layer: ep.1,
-                    }]
+            entry_point: entry_points
+                .into_iter()
+                .map(|ep| EntryPoint {
+                    point: ep.0,
+                    layer: ep.1,
                 })
-                .unwrap_or_default(),
+                .collect::<Vec<_>>(),
             layers,
         }
     }
@@ -238,10 +237,13 @@ impl GraphMem<IrisVectorId> {
             Layer::from_knn_results(results, irises.len())
         };
 
-        let irises_with_vector_ids =
-            izip!(zero_layer.links.keys().cloned(), irises.into_iter(),).collect::<Vec<_>>();
+        let irises_with_vector_ids = izip!(
+            zero_layer.links.keys().cloned().sorted(),
+            irises.into_iter(),
+        )
+        .collect::<Vec<_>>();
 
-        // Collect nodes for each non-zero layer
+        // Group nodes by insertion_layer (only if insertion_layer > 0)
         let mut layer_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> = BTreeMap::new();
         for (vector_id, iris) in irises_with_vector_ids.into_iter() {
             let layer = searcher.select_layer_prf(&prf_seed, &vector_id)?;
@@ -250,17 +252,63 @@ impl GraphMem<IrisVectorId> {
             }
         }
 
-        // nodes_for_nonzero_layers[i] = nodes in layer i + 1
-        let nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> =
+        let mut nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> =
             layer_map.into_values().collect::<Vec<Vec<_>>>();
 
-        // Choose first node in top layer as the entry point
+        let len = nodes_for_nonzero_layers.len();
+
+        // Extend each layer with nodes of the immediately above layer, going top to bottom
+        // Note that this is the right thing to do regardless of the top level mode
+        for i in (0..len.saturating_sub(1)).rev() {
+            let (head, tail) = nodes_for_nonzero_layers.split_at_mut(i + 1);
+
+            let current_layer = &mut head[i]; // layer[i]
+            let above_layer = &tail[0]; // layer[i + 1]
+
+            current_layer.extend(above_layer.iter().cloned());
+        }
+
+        let layer_cap = match searcher.params.top_layer_mode {
+            TopLayerSearchMode::Default => None,
+            TopLayerSearchMode::LinearScan(cap) => Some(cap),
+        };
+
+        // Extract nodes in the top/capping layer for LinearScan mode
+        // If the mode is actually Default, this is guaranteed to be empty
+        let top_level_entry_points = nodes_for_nonzero_layers
+            .get(layer_cap.unwrap_or(usize::MAX))
+            .cloned()
+            .unwrap_or(vec![])
+            .into_iter()
+            .map(|(v, _)| (v, layer_cap.unwrap()))
+            .collect::<Vec<_>>();
+
+        // We eliminate the entry point layer from this Vec if mode = LinearScan
+        // At this point, regardless of top-level mode, this Vec contains to-be-connected layers exclusively
+        let nodes_for_nonzero_layers = nodes_for_nonzero_layers
+            .into_iter()
+            .take(layer_cap.unwrap_or(usize::MAX) - 1)
+            .collect::<Vec<_>>();
+
+        // Choose first node in the highest to-be-connected layer as the entry point
+        // If TopLevelMode is Default, this will be the single & final entry point.
+        // If it is LinearScan, this will be the backup point in case the capping layer is empty.
         let entry_point = nodes_for_nonzero_layers
             .last()
             .unwrap_or(&vec![])
             .first()
             .map(|(v, _)| (*v, nodes_for_nonzero_layers.len()));
 
+        // If there are entry_points in the top/capping layer, we are in Linear mode so we return them
+        let entry_points = if !top_level_entry_points.is_empty() {
+            top_level_entry_points
+        } else {
+            // If not, we are either in Default mode, or we are in Linear mode but the top layer is empty
+            // In either case we return the entry point in the highest to-be-connected layer.
+            entry_point.into_iter().collect::<Vec<_>>()
+        };
+
+        // Finally, run brute force algorithms to connect nodes in each layer
         let nonzero_layers =
             nodes_for_nonzero_layers
                 .into_iter()
@@ -272,8 +320,9 @@ impl GraphMem<IrisVectorId> {
                         echoice,
                     )
                 });
+
         Ok(GraphMem::from_precomputed(
-            entry_point,
+            entry_points,
             once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
         ))
     }

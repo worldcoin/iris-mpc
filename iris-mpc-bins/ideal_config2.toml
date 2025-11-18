@@ -12,4 +12,4 @@ ef_constr_search = [320, 320, 320, 320, 320]
 ef_constr_insert = [320, 320, 320, 320, 320]
 ef_search =  [320, 320, 320, 320, 320]
 layer_probability = 0.25
-top_layer_mode = "Default"
+top_layer_mode = { LinearScan = 2}
