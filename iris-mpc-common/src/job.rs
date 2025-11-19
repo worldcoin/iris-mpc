@@ -1,8 +1,5 @@
 use crate::config::Config;
 use crate::galois_engine::degree4::GaloisShares;
-use crate::helpers::batch_sync::{
-    get_batch_sync_entries, get_own_batch_sync_entries, BatchSyncEntriesResult,
-};
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
@@ -11,19 +8,16 @@ use crate::{
     },
     ROTATIONS,
 };
+use ampc_server_utils::batch_sync::get_own_batch_sync_entries;
+use ampc_server_utils::{get_batch_sync_entries, BatchSyncEntriesResult};
 use core::fmt;
 use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{LazyLock, Mutex};
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     future::Future,
 };
-
-pub static CURRENT_BATCH_SHA: LazyLock<Mutex<[u8; 32]>> = LazyLock::new(|| Mutex::new([0; 32]));
-pub static CURRENT_BATCH_VALID_ENTRIES: LazyLock<Mutex<Vec<bool>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
@@ -232,8 +226,9 @@ impl BatchQuery {
 
     pub async fn sync_batch_entries(&mut self, config: &Config) -> Result<(), eyre::Error> {
         let own_sync_state = get_own_batch_sync_entries().await;
+        let server_coord_config = config.server_coordination.as_ref().unwrap();
         let batch_sync_entries =
-            get_batch_sync_entries(config, Some(own_sync_state.clone())).await?;
+            get_batch_sync_entries(server_coord_config, Some(own_sync_state.clone())).await?;
 
         let batch_sync_entries_result =
             BatchSyncEntriesResult::new(own_sync_state.clone(), batch_sync_entries);

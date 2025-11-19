@@ -6,6 +6,7 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
+use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
@@ -25,7 +26,7 @@ use iris_mpc_common::helpers::smpc_request::{
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
-use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
+use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
@@ -77,7 +78,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
-    let server_coord_config = &config
+    let server_coord_config = config
         .server_coordination
         .clone()
         .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
@@ -89,19 +90,18 @@ pub async fn server_main(config: Config) -> Result<()> {
     );
 
     // Start coordination server
-    let is_ready_flag = start_coordination_server(
-        server_coord_config,
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+        &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
-        Some(batch_sync_shared_state.clone()), // No batch sync for now
+        Some(batch_sync_shared_state.clone()),
     )
     .await;
     tracing::info!("Coordination server started");
 
     // Wait for other servers to be un-ready (syncing on startup)
-    wait_for_others_unready(server_coord_config).await?;
-    tracing::info!("All nodes are starting up");
+    wait_for_others_unready(&server_coord_config, &verified_peers, &my_uuid).await?;
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
@@ -165,16 +165,15 @@ pub async fn server_main(config: Config) -> Result<()> {
     .await?;
 
     init_heartbeat_task(
-        server_coord_config,
+        &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
     )
     .await?;
+    background_tasks.check_tasks();
 
-    println!("Is ready flag: {:?}", is_ready_flag.load(Ordering::SeqCst));
-    set_node_ready(is_ready_flag.clone());
-    println!("Is ready flag: {:?}", is_ready_flag.load(Ordering::SeqCst));
-    wait_for_others_ready(server_coord_config).await?;
+    set_node_ready(is_ready_flag);
+    wait_for_others_ready(&server_coord_config).await?;
 
     background_tasks.check_tasks();
 

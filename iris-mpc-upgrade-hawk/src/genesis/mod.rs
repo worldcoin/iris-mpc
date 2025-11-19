@@ -322,7 +322,7 @@ async fn exec_setup(
         .clone()
         .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await server start.
-    let is_ready_flag = start_coordination_server(
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
         server_coord_config,
         &mut task_monitor_bg,
         &shutdown_handler,
@@ -337,7 +337,7 @@ async fn exec_setup(
         .clone()
         .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await network state = UNREADY.
-    wait_for_others_unready(server_coord_config).await?;
+    wait_for_others_unready(server_coord_config, &verified_peers, &my_uuid).await?;
     log_info(String::from("Network status = UNREADY"));
     // Coordinator: await network state = HEALTHY.
     init_heartbeat_task(server_coord_config, &mut task_monitor_bg, &shutdown_handler).await?;
