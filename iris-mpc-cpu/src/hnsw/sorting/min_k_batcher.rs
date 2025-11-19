@@ -4,6 +4,7 @@
 //! Based on the following paper:
 //! - (<https://eprint.iacr.org/2023/852.pdf>) [1]
 
+use eyre::Result;
 use std::{
     cmp,
     collections::{BTreeMap, HashSet},
@@ -11,11 +12,11 @@ use std::{
 
 use crate::hnsw::sorting::swap_network::SwapNetwork;
 
-struct BatcherBuilder {
+struct MinKBatcherBuilder {
     comparators_by_layer: BTreeMap<usize, HashSet<(usize, usize)>>,
 }
 
-impl BatcherBuilder {
+impl MinKBatcherBuilder {
     fn new() -> Self {
         Self {
             comparators_by_layer: BTreeMap::new(),
@@ -84,7 +85,7 @@ fn chunk_size(d: usize, k: usize) -> usize {
 
 /// See Algorithm 2 in [1]
 fn build_recursive_merge(
-    builder: &mut BatcherBuilder,
+    builder: &mut MinKBatcherBuilder,
     x: Vec<usize>,
     y: Vec<usize>,
     k: usize,
@@ -166,7 +167,7 @@ fn build_recursive_merge(
 /// prepending `-inf` to `w_perm` up to length `k`,
 /// and eliminating comparators which involve infinities.
 fn alekseev_merge(
-    builder: &mut BatcherBuilder,
+    builder: &mut MinKBatcherBuilder,
     v_perm: &[usize],
     w_perm: &[usize],
     k: usize,
@@ -197,7 +198,7 @@ fn alekseev_merge(
 
 /// Algorithm 3 in [1]
 fn build_recursive_sort(
-    builder: &mut BatcherBuilder,
+    builder: &mut MinKBatcherBuilder,
     x_indices: Vec<usize>,
     k: usize,
     start_layer: usize,
@@ -236,11 +237,11 @@ fn build_recursive_sort(
 ///
 /// `n`: Total number of input wires.
 /// `k`: The number of smallest elements to find.
-pub fn batcher_sort_network(n: usize, k: usize) -> (SwapNetwork, Vec<usize>) {
-    let mut builder = BatcherBuilder::new();
+pub fn min_k_batcher_sort_network(n: usize, k: usize) -> Result<SwapNetwork> {
+    let mut builder = MinKBatcherBuilder::new();
     let initial_indices: Vec<usize> = (0..n).collect();
 
-    let perm = if k <= n - k {
+    let mut perm = if k <= n - k {
         // Standard Min(k) network construction
         let (perm, _) = build_recursive_sort(
             &mut builder,
@@ -270,33 +271,38 @@ pub fn batcher_sort_network(n: usize, k: usize) -> (SwapNetwork, Vec<usize>) {
         complement
     };
 
-    let swap_network = builder.to_swap_network();
+    // The recursive network-building procedure also returns a list of indices
+    // which will hold the expected results after the swaps are executed.
+    // In general, this list is not a prefix of the original sequence.
+    // To make it a prefix, we map the network with the inverse permutation
+    let mut swap_network = builder.to_swap_network();
 
-    (swap_network, perm)
+    // At this point, `perm` contains at most `k` elements, we complete it
+    // with missing indices, but their order is irelevant.
+    for i in 0..n {
+        if !perm.contains(&i) {
+            perm.push(i);
+        }
+    }
+
+    // Compute inverse permutation.
+    let mut inv_perm = vec![0; n];
+    for (i, &idx) in perm.iter().enumerate() {
+        assert!(idx < n);
+        inv_perm[idx] = i;
+    }
+
+    // Apply inverse permutation on the swap network indices.
+    swap_network.map_indices(|i| Ok(inv_perm[i]))?;
+    // Now the Min-K elements form a prefix of the sequence.
+
+    Ok(swap_network)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::hnsw::sorting::swap_network::SwapNetwork;
-
     use super::*;
     use rand::Rng;
-
-    fn simulate_sort(network: &SwapNetwork, input: &[i32], perm: &[usize]) -> Vec<i32> {
-        let mut data = input.to_vec();
-
-        network.apply(&mut data);
-
-        let tmp = data.clone();
-        for i in 0..data.len() {
-            if i < perm.len() {
-                data[i] = tmp[perm[i]];
-            } else {
-                data[i] = tmp[i];
-            }
-        }
-        data
-    }
 
     #[test]
     // Values from Python experiments:
@@ -312,14 +318,14 @@ mod tests {
             (500, 320, 37, 7374),
             (350, 320, 34, 3054),
         ] {
-            let (network, _) = batcher_sort_network(n, k);
+            let network = min_k_batcher_sort_network(n, k).unwrap();
             assert_eq!(network.num_layers(), expected_depth);
             assert_eq!(network.num_comparisons(), expected_comps);
         }
     }
 
     #[test]
-    fn test_randomized_sorts() {
+    fn test_randomized_inputs() {
         let mut rng = rand::thread_rng();
         let n_tests = 1000;
 
@@ -327,15 +333,16 @@ mod tests {
             let n = rng.gen_range(1..20);
             let k = rng.gen_range(1..=n);
 
-            let (network, perm) = batcher_sort_network(n, k);
+            let network = min_k_batcher_sort_network(n, k).unwrap();
 
-            let input: Vec<i32> = (0..n).map(|_| rng.gen_range(0..30)).collect();
+            let mut input: Vec<i32> = (0..n).map(|_| rng.gen_range(0..30)).collect();
 
             let mut expected_top_k = input.clone();
             expected_top_k.sort();
             expected_top_k.truncate(k);
 
-            let mut output = simulate_sort(&network, &input, &perm);
+            network.apply(&mut input);
+            let mut output = input;
             output.truncate(k);
             output.sort();
 
