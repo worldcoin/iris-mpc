@@ -594,6 +594,14 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             let pairs: Vec<(Vec<u32>, Vec<u32>)> = {
                 #[cfg(feature = "parallel-msb")]
                 {
+                    //metrics: measure the genkeys time
+                    let _tt = crate::perf_scoped_for_party!(
+                        "fss.dealer.genkeys",
+                        role,
+                        n,            // bucket on the items this block processes
+                        bucket_bound  // your desired bucket cap
+                    );
+
                     if n >= parallel_threshold {
                         use rayon::prelude::*;
                         r_in_list
@@ -634,6 +642,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                         tmp
                     }
                 }
+
                 #[cfg(not(feature = "parallel-msb"))]
                 {
                     //metrics: measure the genkeys time
