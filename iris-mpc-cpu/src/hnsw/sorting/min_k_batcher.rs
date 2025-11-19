@@ -31,7 +31,7 @@ impl MinKBatcherBuilder {
     }
 
     /// Converts the internal state into the standard SwapNetwork format.
-    fn to_swap_network(self) -> SwapNetwork {
+    fn to_swap_network(&self) -> SwapNetwork {
         let mut layers = Vec::new();
 
         // If map is empty, return empty network
@@ -70,20 +70,23 @@ impl MinKBatcherBuilder {
 /// Implements the ChunkSize function from Algorithm 3.
 fn chunk_size(d: usize, k: usize) -> usize {
     if k == 0 {
-        return (d + 1) / 2;
+        return d.div_ceil(2);
     }
 
     let mu = if k > 1 { 1 << ((k - 1).ilog2() + 1) } else { 1 };
 
     if d <= mu {
-        (d + 1) / 2
+        d.div_ceil(2)
     } else {
-        let denom = 2 * mu;
-        mu * ((d + denom - 1) / denom)
+        mu * d.div_ceil(2 * mu)
     }
 }
 
-/// See Algorithm 2 in [1]
+/// - See Algorithm 2 in [1]
+/// - Append layers which merge sequences `x` and `y`, assuming that these correspond to sorted values.
+/// Note that `x` and `y` are sequences of indices.
+/// - `start_layer` points to the layer in the global network on top of which this method should build.
+/// - Returns (indices which form the result, total depth of the built network)
 fn build_recursive_merge(
     builder: &mut MinKBatcherBuilder,
     x: Vec<usize>,
@@ -153,19 +156,16 @@ fn build_recursive_merge(
     (z_indices, total_depth)
 }
 
-/// Alekseev's merge for the final top-level step.
-/// Takes two sorted sequences `v_perm` and `w_perm` of length at most `k` and returns
-/// the smallest `min(k, v_perm.len() + w_perm.len()` elements of `v_perm + w_perm` in no particular order.
-/// For correctness:
-/// - First analyze the case where `v_perm.len() == w_perm.len() == k`.
-/// - In this case Alekseev just does `min_swap(v_perm[i], w_perm[k - i - 1])` for `0 <= i < k`.
-/// - Proof by contradiction, assuming there exists some element in post-swaps `w_perm` which is smaller than some
-/// element in post-swaps `v_perm`
-/// - Derive contradiction from inequalities given by sortedness of inputs + inequalities given by execution
-/// of swaps.
-/// - To handle arbitrary `<= k` sizes, imagine appending `+inf` to `v_perm` up to length `k`,
-/// prepending `-inf` to `w_perm` up to length `k`,
-/// and eliminating comparators which involve infinities.
+///  Alekseev's merge for the final top-level step.
+///  Takes two sorted sequences `v_perm` and `w_perm` of length at most `k` and returns
+///  the smallest `min(k, v_perm.len() + w_perm.len()` elements of `v_perm + w_perm` in no particular order.
+
+///  For correctness:
+///  - First analyze the case where `v_perm.len() == w_perm.len() == k`.
+///  - In this case Alekseev just does `min_swap(v_perm[i], w_perm[k - i - 1])` for `0 <= i < k`.
+///  - Proof by contradiction, assuming there exists some element in post-swaps `w_perm` which is smaller than some element in post-swaps `v_perm`
+///  - Derive contradiction from inequalities given by sortedness of inputs + inequalities given by execution of swaps.
+///  - To handle arbitrary `<= k` sizes, imagine appending `+inf` to `v_perm` up to length `k`, prepending `-inf` to `w_perm` up to length `k` and eliminating comparators which involve infinities.
 fn alekseev_merge(
     builder: &mut MinKBatcherBuilder,
     v_perm: &[usize],
@@ -196,7 +196,11 @@ fn alekseev_merge(
     (res_perm, 1)
 }
 
-/// Algorithm 3 in [1]
+/// - Algorithm 3 in [1]
+/// - Builds a network that selects the `k` smallest values corresponding to `x_indices`.
+/// - `start_layer` points to the layer in the global network on top of which this method should build.
+/// - `is_top_level` is tracked so that we can apply Alekseev's merge as an optimization.
+/// - Returns (indices which form the result, total depth of the buitl network)
 fn build_recursive_sort(
     builder: &mut MinKBatcherBuilder,
     x_indices: Vec<usize>,
