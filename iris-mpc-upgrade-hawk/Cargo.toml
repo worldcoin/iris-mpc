@@ -27,6 +27,7 @@ iris-mpc-cpu.workspace = true
 chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }
+ampc-server-utils.workspace = true
 
 [dev-dependencies]
 thiserror.workspace = true

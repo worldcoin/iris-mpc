@@ -77,8 +77,14 @@ env:
         key: KMS_KEYS
         name: application
 
-  - name: SMPC__PARTY_ID
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
     value: "1"
+
+  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+    value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
+
+  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
@@ -165,12 +171,6 @@ env:
 
   - name: SMPC__RETURN_PARTIAL_RESULTS
     value: "true"
-
-  - name: SMPC__NODE_HOSTNAMES
-    value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
-
-  - name: SMPC__IMAGE_NAME
-    value: $(IMAGE_NAME)
 
   - name: SMPC__ENABLE_MODIFICATIONS_SYNC
     value: "true"

@@ -21,6 +21,7 @@ itertools.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 rand.workspace = true
+ampc-server-utils.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
