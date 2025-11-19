@@ -507,7 +507,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             // ===== batched bit-share exchange =====
             // Send our bits to BOTH neighbors as a single vector of u32 (0/1)
 
-            //metrics: measure the network time until exit
+            //metrics: measure the network time
             let _tt_net = crate::perf_scoped_for_party!(
                 "fss.network.post-icf.send_next",
                 role,
@@ -539,7 +539,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             // metrics: stop time
             drop(_tt_net);
 
-            //metrics: measure the network time until exit
+            //metrics: measure the network time
             let _tt_net = crate::perf_scoped_for_party!(
                 "fss.network.post-icf.recv_to_eval",
                 role,
@@ -636,7 +636,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 }
                 #[cfg(not(feature = "parallel-msb"))]
                 {
-                    //metrics: measure the network time until exit
+                    //metrics: measure the genkeys time
                     let _tt = crate::perf_scoped_for_party!(
                         "fss.dealer.genkeys",
                         role,
@@ -1704,6 +1704,15 @@ where
 
             let mut k_fss_0_vec_flat = Vec::with_capacity(batch_size); // to store the fss keys
             let mut k_fss_1_vec_flat = Vec::with_capacity(batch_size);
+
+            //metrics: measure the genkeys time
+            let _tt = crate::perf_scoped_for_party!(
+                "fss.dealer.genkeys",
+                role,
+                n,            // bucket on the items this block processes
+                bucket_bound  // your desired bucket cap
+            );
+
             for _i in 0..batch_size {
                 // Draw r1 + r2 (aka r_in)
                 let (_r2, _r1) = session.prf.gen_rands::<RingElement<u32>>().clone();
@@ -1731,6 +1740,9 @@ where
                 let temp_key1 = k_fss_1_pre_ser.serialize()?;
                 k_fss_1_vec_flat.extend(RingElement::<u32>::convert_vec_rev(temp_key1.clone()));
             }
+
+            // drop timer
+            drop(_tt);
 
             //metrics: measure the network time
             let _tt_net = crate::perf_scoped_for_party!(

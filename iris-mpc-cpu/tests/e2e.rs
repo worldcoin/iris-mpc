@@ -346,6 +346,7 @@ async fn e2e_test() -> Result<()> {
                 "fss.network.dealer.recv_P1",
                 "Dealer receive FSS shares from p1",
             ),
+            ("fss.dealer.genkeys", "Dealer generate keys"),
         ];
 
         for (key, label) in dealer_stats {
