@@ -1,10 +1,10 @@
+use ampc_server_utils::TaskMonitor;
 use axum::{http::StatusCode, routing::get, Router};
 use clap::Parser;
 use eyre::{Context, Result};
 use iris_mpc_anon_stats_server::{
     config::AnonStatsServerConfig, config::Opt, spawn_healthcheck_server,
 };
-use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::tracing::initialize_tracing;
 
 #[tokio::main]

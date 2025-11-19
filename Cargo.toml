@@ -41,7 +41,7 @@ async-trait = "0.1.83"
 axum = "0.7"
 clap = { version = "4", features = ["derive", "env"] }
 cudarc = { version = "0.13.4", features = ["cuda-12020", "nccl"] }
-chrono = "0.4.38"
+chrono = "0.4.42"
 base64 = "0.22.1"
 bytemuck = { version = "1.17", features = ["derive"] }
 data-encoding = "2.6.0"
@@ -77,8 +77,9 @@ tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
-ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev="6ab6cfc7c76bc1890c009fe73d42271ccdb4d102"}
-ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev="6ab6cfc7c76bc1890c009fe73d42271ccdb4d102" }
+ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev= "7d00703270702cddf2bc2daf6a1d3fd7349e56f2"}
+ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev= "7d00703270702cddf2bc2daf6a1d3fd7349e56f2"}
+ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev= "7d00703270702cddf2bc2daf6a1d3fd7349e56f2"}
 
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.

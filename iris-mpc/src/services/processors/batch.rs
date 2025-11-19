@@ -1,6 +1,11 @@
 use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
+use ampc_server_utils::shutdown_handler::ShutdownHandler;
+use ampc_server_utils::{
+    get_approximate_number_of_messages, get_batch_sync_states, BatchSyncResult,
+    BatchSyncSharedState, BatchSyncState,
+};
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
@@ -13,11 +18,7 @@ use iris_mpc_common::galois_engine::degree4::{
 use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
-use iris_mpc_common::helpers::batch_sync::{
-    get_batch_sync_states, get_own_batch_sync_state, BatchSyncResult,
-};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
-use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest, SQSMessage,
     UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -31,7 +32,6 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
-use iris_mpc_common::server_coordination::BatchSyncSharedState;
 use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -242,10 +242,19 @@ impl<'a> BatchProcessor<'a> {
                 );
             }
 
-            let all_states =
-                get_batch_sync_states(self.config, self.client, Some(&own_state), current_batch_id)
-                    .await
-                    .map_err(ReceiveRequestError::BatchSyncError)?;
+            let server_coord_config = self.config.server_coordination.as_ref().ok_or(
+                ReceiveRequestError::BatchSyncError(eyre::eyre!(
+                    "Server coordination config is missing"
+                )),
+            )?;
+
+            let all_states = get_batch_sync_states(
+                server_coord_config,
+                Some(&own_state),
+                self.config.batch_sync_polling_timeout_secs,
+            )
+            .await
+            .map_err(ReceiveRequestError::BatchSyncError)?;
 
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
             let messages_to_poll = batch_sync_result.messages_to_poll();
@@ -942,4 +951,38 @@ async fn persist_modification(
         .insert_modification(serial_id, request_type, s3_url)
         .await
         .expect("Failed to insert modification into store")
+}
+
+pub async fn get_own_batch_sync_state(
+    config: &Config,
+    sqs_client: &Client,
+    current_batch_id: u64,
+) -> Result<BatchSyncState> {
+    let approximate_visible_messages =
+        get_approximate_number_of_messages(&sqs_client.clone(), &config.requests_queue_url).await?;
+    tracing::info!(
+        "fetching approximate_visible_messages: {}",
+        approximate_visible_messages
+    );
+
+    let index = (current_batch_id - 1) as usize;
+
+    let messages_to_poll = if config.predefined_batch_sizes.len() > index {
+        // predefined_batch_sizes are only used in test environments to reproduce specific scenarios
+        tracing::info!(
+            "Using predefined batch size {} for batch ID {}",
+            config.predefined_batch_sizes[index],
+            current_batch_id
+        );
+        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
+    } else {
+        // Use the dynamic batch size calculation based on SQS approximate visible messages
+        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
+    };
+
+    let batch_sync_state = BatchSyncState {
+        messages_to_poll,
+        batch_id: current_batch_id,
+    };
+    Ok(batch_sync_state)
 }
