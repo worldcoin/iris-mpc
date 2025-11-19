@@ -171,14 +171,14 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
     match config.output_format.as_str() {
         "full_csv" => {
             // Option 3: Full output of individual results
-            wtr.write_record(&["id", "mutation", "rotation", "found"])?;
+            wtr.write_record(["id", "mutation", "rotation", "found"])?;
             for res in results {
                 wtr.serialize(res)?;
             }
         }
         "rate" => {
             // Option 1: Success rate for each (rotation, mutation) pair
-            wtr.write_record(&["mutation", "rotation", "success_rate"])?;
+            wtr.write_record(["mutation", "rotation", "success_rate"])?;
             // (mutation, rotation) -> (hits, total)
             let mut rate_map: HashMap<(usize, isize), (u32, u32)> = HashMap::new();
 
@@ -191,8 +191,7 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
                 entry.1 += 1;
             }
 
-            let mut sorted_keys: Vec<_> = rate_map.keys().into_iter().sorted().collect();
-            sorted_keys.sort();
+            let sorted_keys: Vec<_> = rate_map.keys().sorted().collect();
 
             for key in sorted_keys {
                 let (hits, total) = rate_map[key];
@@ -209,7 +208,7 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
                 let mutation_key = (res.mutation * PRECISION).floor() as usize;
                 let key = (res.id, res.rotation);
 
-                if res.found == false {
+                if !res.found {
                     // Update min mutation across failures
                     let entry = min_failure_map.entry(key).or_insert(mutation_key);
                     *entry = (*entry).min(mutation_key);
@@ -229,12 +228,12 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
                 *rotation_hist.entry(min_mutation_key).or_default() += 1;
             }
 
-            wtr.write_record(&["rotation", "min_fail_mutation", "count"])?;
+            wtr.write_record(["rotation", "min_fail_mutation", "count"])?;
 
             for (rotation, rotation_hist) in histogram_map {
                 for (mutation_key, count) in rotation_hist {
                     let mutation_str = format!("{}", (mutation_key as f64 / PRECISION));
-                    wtr.write_record(&[rotation.to_string(), mutation_str, count.to_string()])?;
+                    wtr.write_record([rotation.to_string(), mutation_str, count.to_string()])?;
                 }
             }
         }
