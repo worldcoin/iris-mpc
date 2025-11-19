@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "refactor/use-ampc-common"
+      - "POP-3221-common-coordinator-mechanics"
     paths-ignore:
       - "deploy/**"
 
