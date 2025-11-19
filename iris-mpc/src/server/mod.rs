@@ -9,8 +9,8 @@ use crate::services::processors::modifications_sync::{
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, set_node_ready, wait_for_others_ready, wait_for_others_unready,
-    TaskMonitor,
+    init_heartbeat_task, set_node_ready, start_coordination_server, wait_for_others_ready,
+    wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
@@ -27,9 +27,6 @@ use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_common::server_coordination::{
-    init_task_monitor, start_coordination_server, BatchSyncSharedState,
-};
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
@@ -56,6 +53,7 @@ pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
 pub async fn server_main(config: Config) -> Result<()> {
+    tracing::info!("Starting ampc-hnsw server with configuration: {:?}", config);
     let shutdown_handler = init_shutdown_handler(&config).await;
 
     process_config(&config);
@@ -70,7 +68,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     check_store_consistency(&config, &iris_store).await?;
     let my_state = build_sync_state(&config, &aws_clients, &iris_store).await?;
 
-    let mut background_tasks = init_task_monitor();
+    let mut background_tasks = TaskMonitor::new();
 
     // Initialize shared current_batch_id
     let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
@@ -79,31 +77,31 @@ pub async fn server_main(config: Config) -> Result<()> {
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
-    let is_ready_flag = start_coordination_server(
-        &config,
-        &mut background_tasks,
-        &shutdown_handler,
-        &my_state,
-        batch_sync_shared_state.clone(),
-    )
-    .await;
-
-    background_tasks.check_tasks();
-
     let server_coord_config = &config
         .server_coordination
         .clone()
         .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
 
-    wait_for_others_unready(server_coord_config).await?;
-    init_heartbeat_task(
+    tracing::info!(
+        "Server coordination config loaded: party_id={}, healthcheck_ports={:?}",
+        server_coord_config.party_id,
+        server_coord_config.healthcheck_ports
+    );
+
+    // Start coordination server
+    let is_ready_flag = start_coordination_server(
         server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
+        &my_state,
+        Some(batch_sync_shared_state.clone()), // No batch sync for now
     )
-    .await?;
+    .await;
+    tracing::info!("Coordination server started");
 
-    background_tasks.check_tasks();
+    // Wait for other servers to be un-ready (syncing on startup)
+    wait_for_others_unready(server_coord_config).await?;
+    tracing::info!("All nodes are starting up");
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
@@ -166,9 +164,16 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
-    background_tasks.check_tasks();
+    init_heartbeat_task(
+        server_coord_config,
+        &mut background_tasks,
+        &shutdown_handler,
+    )
+    .await?;
 
-    set_node_ready(is_ready_flag);
+    println!("Is ready flag: {:?}", is_ready_flag.load(Ordering::SeqCst));
+    set_node_ready(is_ready_flag.clone());
+    println!("Is ready flag: {:?}", is_ready_flag.load(Ordering::SeqCst));
     wait_for_others_ready(server_coord_config).await?;
 
     background_tasks.check_tasks();

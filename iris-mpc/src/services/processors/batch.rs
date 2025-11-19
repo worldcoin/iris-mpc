@@ -2,6 +2,7 @@ use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
+use ampc_server_utils::BatchSyncSharedState;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
@@ -31,7 +32,6 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
-use iris_mpc_common::server_coordination::BatchSyncSharedState;
 use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

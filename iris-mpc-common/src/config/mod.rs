@@ -494,6 +494,9 @@ impl Config {
             config.service_outbound_ports = config.service_ports.clone();
         }
 
+        if let Some(service_coordination) = &mut config.server_coordination {
+            config.party_id = service_coordination.party_id;
+        }
         Ok(config)
     }
 
