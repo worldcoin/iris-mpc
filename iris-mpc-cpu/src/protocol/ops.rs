@@ -397,7 +397,7 @@ pub async fn cross_compare(
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<bool>> {
     // the upper bound for the bucket size for perf statistics
-    let bucket_bound = 1;
+    let bucket_bound = 150;
 
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
