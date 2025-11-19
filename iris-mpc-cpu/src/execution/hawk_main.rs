@@ -21,25 +21,25 @@ use crate::{
         shared_iris::GaloisRingSharedIris,
     },
 };
+use ampc_actor_utils::network::config::TlsConfig;
 use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::{future::try_join_all, try_join};
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
-    config::TlsConfig,
+    helpers::inmemory_store::InMemoryStore,
+    job::{BatchQuery, JobSubmissionHandle},
+    ROTATIONS,
+};
+use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
+use iris_mpc_common::{
     helpers::{
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::{BucketStatistics, BucketStatistics2D},
     },
     vector_id::VectorId,
 };
-use iris_mpc_common::{
-    helpers::inmemory_store::InMemoryStore,
-    job::{BatchQuery, JobSubmissionHandle},
-    ROTATIONS,
-};
-use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
@@ -330,8 +330,15 @@ impl HawkActor {
             args.hnsw_param_M,
         ));
 
-        let network_args =
-            NetworkHandleArgs::from_hawk(args, SessionGroups::N_SESSIONS_PER_REQUEST);
+        let network_args = NetworkHandleArgs {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+            tls: args.tls.clone(),
+        };
         let networking = build_network_handle(network_args, shutdown_ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
