@@ -1,6 +1,7 @@
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    wait_for_others_ready, wait_for_others_unready, TaskMonitor,
+    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    BatchSyncSharedState, TaskMonitor,
 };
 use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
@@ -10,13 +11,12 @@ use aws_sdk_s3::{
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::server_coordination::BatchSyncSharedState;
 
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{smpc_request, sync::Modification},
     postgres::{AccessMode, PostgresClient},
-    server_coordination as coordinator, IrisSerialId,
+    IrisSerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
@@ -258,7 +258,7 @@ async fn exec_setup(
     let shutdown_handler = init_shutdown_handler(config).await;
 
     // Set background task monitor.
-    let mut task_monitor_bg = coordinator::init_task_monitor();
+    let mut task_monitor_bg = TaskMonitor::new();
 
     // Set service clients.
     let ((aws_s3_client, aws_rds_client), (iris_store, (hnsw_iris_store, graph_store))) =
@@ -317,13 +317,17 @@ async fn exec_setup(
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
+    let server_coord_config = &config
+        .server_coordination
+        .clone()
+        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await server start.
-    let is_ready_flag = coordinator::start_coordination_server(
-        config,
+    let is_ready_flag = start_coordination_server(
+        server_coord_config,
         &mut task_monitor_bg,
         &shutdown_handler,
         &my_state,
-        batch_sync_shared_state,
+        Some(batch_sync_shared_state),
     )
     .await;
     task_monitor_bg.check_tasks();
