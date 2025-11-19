@@ -210,9 +210,6 @@ pub struct Config {
     #[serde(default = "default_hawk_connection_parallelism")]
     pub hawk_connection_parallelism: usize,
 
-    #[serde(default = "default_hawk_server_healthcheck_port")]
-    pub hawk_server_healthcheck_port: usize,
-
     #[serde(default = "default_hnsw_param_ef_constr")]
     pub hnsw_param_ef_constr: usize,
 
@@ -378,10 +375,6 @@ fn default_hawk_request_parallelism() -> usize {
 
 fn default_hawk_connection_parallelism() -> usize {
     16
-}
-
-fn default_hawk_server_healthcheck_port() -> usize {
-    300
 }
 
 fn default_hnsw_param_ef_constr() -> usize {
@@ -745,7 +738,6 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_request_parallelism,
             hawk_connection_parallelism,
-            hawk_server_healthcheck_port: _, // different for each server
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
