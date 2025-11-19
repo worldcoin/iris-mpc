@@ -8,9 +8,8 @@ use ampc_anon_stats::{
     Opt,
 };
 use ampc_server_utils::{
-    init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler, wait_for_others_ready,
-    wait_for_others_unready, BucketStatistics, BucketStatistics2D, Eye, StartupSyncState,
-    TaskMonitor,
+    init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
+    wait_for_others_unready, BucketStatistics, BucketStatistics2D, Eye, TaskMonitor,
 };
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
 use clap_builder::Parser;
