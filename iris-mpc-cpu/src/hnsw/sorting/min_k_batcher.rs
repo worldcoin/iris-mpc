@@ -1,12 +1,17 @@
-use super::swap_network::{SwapNetwork, SwapNetworkLayer};
-use std::cmp;
-use std::collections::{BTreeMap, HashSet};
-use std::mem::swap;
+//! Implementation of Batcher Odd-Even Swap Network adapted for selecting
+//! the smallest K values (in arbitrary order).
+//!
+//! Based on the following paper:
+//! - (<https://eprint.iacr.org/2023/852.pdf>) [1]
 
-/// A builder struct to mimic the Python class state during recursion.
+use std::{
+    cmp,
+    collections::{BTreeMap, HashSet},
+};
+
+use crate::hnsw::sorting::swap_network::SwapNetwork;
+
 struct BatcherBuilder {
-    /// Maps layer index -> Set of comparators (idx1, idx2).
-    /// Using BTreeMap to keep layers ordered by index.
     comparators_by_layer: BTreeMap<usize, HashSet<(usize, usize)>>,
 }
 
@@ -39,7 +44,6 @@ impl BatcherBuilder {
         for i in 0..=max_layer {
             if let Some(comps) = self.comparators_by_layer.get(&i) {
                 let mut layer_vec: Vec<(usize, usize)> = comps.iter().cloned().collect();
-                // Sort for deterministic output, similar to the Python sorted list
                 layer_vec.sort();
                 layers.push(layer_vec);
             } else {
@@ -65,28 +69,21 @@ impl BatcherBuilder {
 /// Implements the ChunkSize function from Algorithm 3.
 fn chunk_size(d: usize, k: usize) -> usize {
     if k == 0 {
-        return (d + 1) / 2; // ceil(d / 2)
+        return (d + 1) / 2;
     }
 
-    let mu = if k > 1 { 1 << (k - 1).ilog2() } else { 1 };
+    // TODO: test
+    let mu = if k > 1 { 1 << ((k - 1).ilog2()) } else { 1 };
 
     if d <= mu {
-        (d + 1) / 2 // ceil(d / 2)
+        (d + 1) / 2
     } else {
-        // mu * ceil(d / (2 * mu))
-        // ceil(a/b) = (a + b - 1) / b
         let denom = 2 * mu;
         mu * ((d + denom - 1) / denom)
     }
 }
 
-/// Helper to truncate a vector to k elements.
-fn truncate(indices: Vec<usize>, k: usize) -> Vec<usize> {
-    indices.into_iter().take(k).collect()
-}
-
-/// Logic from `BatcherMergeNetwork.py`: `_build_recursive_merge`
-/// Algorithm 2
+/// See Algorithm 2 in [1]
 fn build_recursive_merge(
     builder: &mut BatcherBuilder,
     x: Vec<usize>,
@@ -100,28 +97,27 @@ fn build_recursive_merge(
     if d1 * d2 == 0 {
         let mut combined = x;
         combined.extend(y);
-        return (truncate(combined, k), 0);
+        combined.truncate(k);
+        return (combined, 0);
     }
 
     if d1 * d2 == 1 {
-        let c = (x[0], y[0]);
-        builder.add_comparator(start_layer, c.0, c.1);
+        builder.add_comparator(start_layer, x[0], y[0]);
         let mut combined = vec![x[0], y[0]];
-        return (truncate(combined, k), 1);
+        combined.truncate(k);
+        return (combined, 1);
     }
 
-    // Split even/odd
+    // Split x and y into even/odd indices
     let even_x: Vec<usize> = x.iter().step_by(2).cloned().collect();
     let odd_x: Vec<usize> = x.iter().skip(1).step_by(2).cloned().collect();
 
     let even_y: Vec<usize> = y.iter().step_by(2).cloned().collect();
     let odd_y: Vec<usize> = y.iter().skip(1).step_by(2).cloned().collect();
 
-    let k_v = (k / 2) + 1; // floor(k/2) + 1
-    let k_w = k / 2; // floor(k/2)
-
-    let (v_indices, v_depth) = build_recursive_merge(builder, even_x, even_y, k_v, start_layer);
-    let (w_indices, w_depth) = build_recursive_merge(builder, odd_x, odd_y, k_w, start_layer);
+    let (v_indices, v_depth) =
+        build_recursive_merge(builder, even_x, even_y, (k / 2) + 1, start_layer);
+    let (w_indices, w_depth) = build_recursive_merge(builder, odd_x, odd_y, k / 2, start_layer);
 
     let recursive_depth = cmp::max(v_depth, w_depth);
 
@@ -142,8 +138,6 @@ fn build_recursive_merge(
 
     let final_comp_layer = start_layer + recursive_depth;
 
-    // range(1, len, 2) in Python is indices 1, 3, 5...
-    // We need to compare z[i] and z[i+1]
     let mut i = 1;
     while i < z_indices.len() {
         if i + 1 < z_indices.len() {
@@ -155,10 +149,23 @@ fn build_recursive_merge(
     }
 
     let total_depth = recursive_depth + 1;
-    (truncate(z_indices, k), total_depth)
+    z_indices.truncate(k);
+    (z_indices, total_depth)
 }
 
-/// Optimization: Alekseev's merge for the final top-level step.
+/// Alekseev's merge for the final top-level step.
+/// Takes two sorted sequences `v_perm` and `w_perm` of length at most `k` and returns
+/// the smallest `min(k, v_perm.len() + w_perm.len()` elements of `v_perm + w_perm` in no particular order.
+/// For correctness:
+/// - First analyze the case where `v_perm.len() == w_perm.len() == k`.
+/// - In this case Alekseev just does `min_swap(v_perm[i], w_perm[k - i - 1])` for `0 <= i < k`.
+/// - Proof by contradiction, assuming there exists some element in post-swaps `w_perm` which is smaller than some
+/// element in post-swaps `v_perm`
+/// - Derive contradiction from inequalities given by sortedness of inputs + inequalities given by execution
+/// of swaps.
+/// - To handle arbitrary `<= k` sizes, imagine appending `+inf` to `v_perm` up to length `k`,
+/// prepending `-inf` to `w_perm` up to length `k`,
+/// and eliminating comparators which involve infinities.
 fn alekseev_merge(
     builder: &mut BatcherBuilder,
     v_perm: &[usize],
@@ -169,23 +176,19 @@ fn alekseev_merge(
     let n = v_perm.len();
     let m = w_perm.len();
 
-    // Assertions from python: assert n <= k and m <= k
     assert!(n <= k && m <= k);
 
     let mut res_perm = Vec::new();
 
     for i in 0..k {
-        if i < n && k >= i + 1 && (k - i - 1) < m {
-            // Maps to Python: if i < n and k - i - 1 < m:
+        if i < n && (k - i - 1) < m {
             let idx1 = v_perm[i];
             let idx2 = w_perm[k - i - 1];
             res_perm.push(idx1);
             builder.add_comparator(start_layer, idx1, idx2);
-        } else if i < n && k >= i + 1 && (k - i - 1) >= m {
-            // Maps to Python: elif i < n and k - i - 1 >= m:
+        } else if i < n && (k - i - 1) >= m {
             res_perm.push(v_perm[i]);
-        } else if i >= n && k >= i + 1 && (k - i - 1) < m {
-            // Maps to Python: elif i >= n and k - i - 1 < m:
+        } else if i >= n && (k - i - 1) < m {
             res_perm.push(w_perm[k - i - 1]);
         }
     }
@@ -193,8 +196,7 @@ fn alekseev_merge(
     (res_perm, 1)
 }
 
-/// Logic from `BatcherNetwork.py`: `_build_recursive_sort`
-/// Algorithm 3
+/// Algorithm 3 in [1]
 fn build_recursive_sort(
     builder: &mut BatcherBuilder,
     x_indices: Vec<usize>,
@@ -214,23 +216,17 @@ fn build_recursive_sort(
     let chunk_idx = chunk_size(d, k);
     let (chunk1, chunk2) = x_indices.split_at(chunk_idx);
 
-    let (v_perm, v_depth) = build_recursive_sort(
-        builder,
-        chunk1.to_vec(),
-        k,
-        start_layer,
-        false, // Internal calls are not top level
-    );
-
+    let (v_perm, v_depth) = build_recursive_sort(builder, chunk1.to_vec(), k, start_layer, false);
     let (w_perm, w_depth) = build_recursive_sort(builder, chunk2.to_vec(), k, start_layer, false);
 
     let recursive_depth = cmp::max(v_depth, w_depth);
     let merge_start_layer = start_layer + recursive_depth;
 
+    // Note that Alekseev's merge is only done at the top level
+    // because it does not produce sorted output
     let (final_perm, merge_depth) = if is_top_level {
         alekseev_merge(builder, &v_perm, &w_perm, k, merge_start_layer)
     } else {
-        // Internal steps use the recursive merge (Algorithm 2)
         build_recursive_merge(builder, v_perm, w_perm, k, merge_start_layer)
     };
 
@@ -273,47 +269,24 @@ pub fn batcher_sort_network(n: usize, k: usize) -> (SwapNetwork, Vec<usize>) {
         let perm_set: HashSet<usize> = perm.iter().cloned().collect();
         let complement: Vec<usize> = (0..n).filter(|i| !perm_set.contains(i)).collect();
         complement
-        // Note: The Python code calculates the complementary permutation here
-        // (`self.perm = [i for i in range(N) if i not in set(perm)]`),
-        // but the `SwapNetwork` struct only cares about the wires (comparators),
-        // not which output wires contain the sorted result.
-        // If the caller needs the permutation map, the return type of this function
-        // would need to change to `(SwapNetwork, Vec<usize>)`.
-        // For now, we return just the network as requested.
     };
 
-    let mut swap_network = builder.to_swap_network();
-    // swap_network
-    //     .map_indices(|index| {
-    //         if index < perm.len() {
-    //             Ok(perm[index])
-    //         } else {
-    //             Ok(index)
-    //         }
-    //     })
-    //     .unwrap();
+    let swap_network = builder.to_swap_network();
 
     (swap_network, perm)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::hnsw::sorting::swap_network::SwapNetwork;
+
     use super::*;
-    use rand::seq::SliceRandom;
     use rand::Rng;
 
     fn simulate_sort(network: &SwapNetwork, input: &[i32], perm: &[usize]) -> Vec<i32> {
         let mut data = input.to_vec();
 
-        for layer in &network.layers {
-            for &(i, j) in layer {
-                if i < data.len() && j < data.len() {
-                    if data[i] > data[j] {
-                        data.swap(i, j);
-                    }
-                }
-            }
-        }
+        network.apply(&mut data);
 
         let tmp = data.clone();
         for i in 0..data.len() {
@@ -327,30 +300,47 @@ mod tests {
     }
 
     #[test]
+    // Values from Python experiments:
+    // https://www.notion.so/inversed/Top-K-selection-networks-288a3b540bfe80b7b05fe98b7cae7a89a
+
+    fn test_network_size() {
+        for (n, k, expected_depth, expected_comps) in [
+            (512, 1, 9, 511),
+            (512, 4, 22, 1652),
+            (512, 64, 36, 5944),
+            (512, 256, 37, 7934),
+            (768, 320, 46, 13277),
+            (500, 320, 37, 7374),
+            (350, 320, 34, 3054),
+        ] {
+            let (network, _) = batcher_sort_network(n, k);
+            assert_eq!(network.num_layers(), expected_depth);
+            // assert_eq!(network.num_comparisons(), expected_comps);
+        }
+    }
+
+    #[test]
     fn test_randomized_sorts() {
         let mut rng = rand::thread_rng();
-        let n_tests = 500;
+        let n_tests = 2000000;
 
         for _ in 0..n_tests {
-            let n = rng.gen_range(2..200);
+            let n = rng.gen_range(1..20);
             let k = rng.gen_range(1..=n);
 
             let (network, perm) = batcher_sort_network(n, k);
 
-            let input: Vec<i32> = (0..n).map(|_| rng.gen_range(0..=10000)).collect();
-
-            let output = simulate_sort(&network, &input, &perm);
+            let input: Vec<i32> = (0..n).map(|_| rng.gen_range(0..=1)).collect();
 
             let mut expected_top_k = input.clone();
             expected_top_k.sort();
             expected_top_k.truncate(k);
 
-            let mut output_sorted = output.into_iter().take(k).collect::<Vec<_>>();
-            output_sorted.sort();
-            assert_eq!(
-                output_sorted, expected_top_k,
-                "Output must preserve elements"
-            );
+            let mut output = simulate_sort(&network, &input, &perm);
+            output.truncate(k);
+            output.sort();
+
+            assert_eq!(output, expected_top_k, "Output must preserve elements");
         }
     }
 }
