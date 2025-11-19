@@ -988,52 +988,56 @@ async fn server_main(config: Config) -> Result<()> {
     let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
         panic!("Server coordination config must be provided for healthcheck server");
     });
+    let verified_peers = Arc::new(Mutex::new(HashSet::new()));
+    let uuid = uuid::Uuid::new_v4().to_string();
 
     let _health_check_abort = background_tasks.spawn({
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let ready_probe_response = ReadyProbeResponse {
-            image_name: server_coord_config.image_name.clone(),
+        let uuid = uuid.clone();
+        let is_ready_flag = Arc::clone(&is_ready_flag);
+        let verified_peers = Arc::clone(&verified_peers);
+        let image_name = server_coord_config.image_name.to_string();
+
+        // Pre-calculate parts of the response that don't change
+        let base_response = ReadyProbeResponse {
+            image_name: image_name.clone(),
             shutting_down: false,
             uuid: uuid.clone(),
+            verified_peers: HashSet::new(),
+            is_ready: false,
         };
-        let ready_probe_response_shutdown = ReadyProbeResponse {
-            image_name: server_coord_config.image_name.clone(),
-            shutting_down: true,
-            uuid: uuid.clone(),
-        };
-        let serialized_response = serde_json::to_string(&ready_probe_response)
-            .expect("Serialization to JSON to probe response failed");
-        let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
-            .expect("Serialization to JSON to probe response failed");
-        tracing::info!("Healthcheck probe response: {}", serialized_response);
+
         let my_state = my_state.clone();
         async move {
+            let is_ready_flag_health = Arc::clone(&is_ready_flag);
+            let is_ready_flag_ready = Arc::clone(&is_ready_flag);
             // Generate a random UUID for each run.
             let app = Router::new()
                 .route(
                     "/health",
                     get(move || {
                         let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
+                        let verified_peers_clone = Arc::clone(&verified_peers);
+                        let is_ready_flag_clone = Arc::clone(&is_ready_flag_health);
+                        let mut response = base_response.clone();
                         async move {
-                            if shutdown_handler_clone.is_shutting_down() {
-                                serialized_response_shutdown.clone()
-                            } else {
-                                serialized_response.clone()
-                            }
+                            response.shutting_down = shutdown_handler_clone.is_shutting_down();
+                            response.verified_peers =
+                                verified_peers_clone.lock().expect("Mutex poisoned").clone();
+                            response.is_ready = is_ready_flag_clone.load(Ordering::SeqCst);
+                            let serialized_response = serde_json::to_string(&response)
+                                .expect("Serialization to JSON to probe response failed");
+                            tracing::info!("Healthcheck probe response: {}", serialized_response);
+                            serialized_response
                         }
                     }),
                 )
                 .route(
                     "/ready",
-                    get({
-                        // We are only ready once this flag is set to true.
-                        let is_ready_flag = Arc::clone(&is_ready_flag);
-                        move || async move {
-                            if is_ready_flag.load(Ordering::SeqCst) {
-                                "ready".into_response()
-                            } else {
-                                StatusCode::SERVICE_UNAVAILABLE.into_response()
-                            }
+                    get(move || async move {
+                        if is_ready_flag_ready.load(Ordering::SeqCst) {
+                            "ready".into_response()
+                        } else {
+                            StatusCode::SERVICE_UNAVAILABLE.into_response()
                         }
                     }),
                 )
