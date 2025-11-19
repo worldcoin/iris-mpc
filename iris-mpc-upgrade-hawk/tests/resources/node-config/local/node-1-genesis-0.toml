@@ -1,5 +1,6 @@
 schema_name = "SMPC"
 environment = "dev"
+party_id = 1
 requests_queue_url = "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/smpcv2-1-dev.fifo"
 results_topic_arn = "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo"
 kms_key_arns = '["arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000002"]'
@@ -64,7 +65,7 @@ healthcheck_ports = '["3000", "3001", "3002"]'
 image_name = ""
 heartbeat_interval_secs = 2
 heartbeat_initial_retries = 10
-http_query_retry_delay_ms = 1000
+http_query_retry_delay_ms = 15000
 startup_sync_timeout_secs = 300
 
 [service]
