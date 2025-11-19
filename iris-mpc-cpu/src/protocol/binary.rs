@@ -4,7 +4,7 @@ use crate::{
     // load FSS
     protocol::binary_fss::{
         add_3_get_msb_fss_batch_parallel_threshold,
-        add_3_get_msb_fss_batch_parallel_threshold_timers,
+        add_3_get_msb_fss_batch_parallel_threshold_timers, add_3_get_msb_fss_batch_timers,
     },
     shares::{
         bit::Bit,
@@ -37,7 +37,7 @@ use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
 // Enable/disable the use of parallel FSS
-pub const USE_PARALLEL_THRESH: bool = true;
+pub const USE_PARALLEL_THRESH: bool = false;
 
 /// Splits the components of the given arithmetic share into 3 secret shares as described in Section 5.3 of the ABY3 paper.
 ///
@@ -1583,7 +1583,7 @@ pub(crate) async fn extract_msb_u32_batch_fss(
             add_3_get_msb_fss_batch_parallel_threshold_timers(session, batch, parallel_thresh)
                 .await?
         } else {
-            add_3_get_msb_fss_batch(session, batch).await?
+            add_3_get_msb_fss_batch_timers(session, batch).await?
         };
 
         vec_of_msb_shares.extend(batch_out);

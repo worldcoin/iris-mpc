@@ -19,7 +19,7 @@ use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DB_SIZE: usize = 1000;
+const DB_SIZE: usize = 60;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
@@ -238,7 +238,7 @@ async fn e2e_test() -> Result<()> {
         )
     };
 
-    println!("{scheme}: cross_compare was called {calls} times\n");
+    println!("\n{scheme}: cross_compare was called {calls} times\n");
 
     // Metrics: total duration per party for cross_compare.extract_open
     let [p0, p1, p2] =
@@ -253,9 +253,12 @@ async fn e2e_test() -> Result<()> {
         let evaluator_stats = vec![
             (
                 "fss.network.start_recv_keylen",
-                "Start receiving key length",
+                "Receive key length from the dealer",
             ),
-            ("fss.network.start_recv_keys", "Start receiving keys"),
+            (
+                "fss.network.start_recv_keys",
+                "Receive keys from the dealer",
+            ),
             ("fss.network.recon.send", "Reconstruct d+r send"),
             ("fss.network.recon.recv", "Reconstruct d+r recv"),
             ("fss.add3.non-parallel", "FSS add3 non-parallel"),
@@ -276,10 +279,24 @@ async fn e2e_test() -> Result<()> {
         println!("\nTimers for FSS dealer:");
 
         let dealer_stats = vec![
-            ("fss.network.dealer.send_P0a", "Dealer send P0a"),
-            ("fss.network.dealer.send_P0b", "Dealer send P0b"),
-            ("fss.network.dealer.send_P1a", "Dealer send P1a"),
-            ("fss.network.dealer.send_P1b", "Dealer send P1b"),
+            (
+                "fss.network.dealer.send_P0a",
+                "Dealer send FSS keylen to p0",
+            ),
+            ("fss.network.dealer.send_P0b", "Dealer send FSS keys to p0"),
+            (
+                "fss.network.dealer.send_P1a",
+                "Dealer send FSS keylen to p1",
+            ),
+            ("fss.network.dealer.send_P1b", "Dealer send FSS keys to p1"),
+            (
+                "fss.network.dealer.recv_P0",
+                "Dealer recv FSS shares from p0",
+            ),
+            (
+                "fss.network.dealer.recv_P1",
+                "Dealer recv FSS shares from p1",
+            ),
             ("fss.dealer.genkeys", "Dealer generate keys"),
         ];
 
@@ -290,6 +307,54 @@ async fn e2e_test() -> Result<()> {
         println!("");
     } // if USE_FSS && USE_PARALLEL_THRESH
 
-    // -- FSS metrics & stats ends -- //
+    // Since the code differs between the parallel and non-parallel version,
+    // some timers are the same while the rest differ, but there is a lot of repetition
+    if USE_FSS && !USE_PARALLEL_THRESH {
+        // times for FSS evaluation parties
+        println!("\nTimers for parties 0 and 1:");
+
+        let evaluator_stats = vec![
+            ("fss.network.recon.send", "Reconstruct d+r send"),
+            ("fss.network.recon.recv", "Reconstruct d+r recv"),
+            (
+                "fss.network.start_recv_keys",
+                "Receive FSS keys from the dealer",
+            ),
+            ("fss.network.post-icf.send_next", "Post-ICF send_next"),
+            ("fss.network.post-icf.send_prev", "Post-ICF send_prev"),
+            ("fss.network.post-icf.recv", "Post-ICF recv"),
+        ];
+
+        for (key, message) in evaluator_stats {
+            let [p0, p1, _] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
+            println!("{} p0: {:?}", message, p0);
+            println!("{} p1: {:?}", message, p1);
+            println!();
+        }
+
+        // times for FSS dealer
+        println!("\nTimers for FSS dealer:");
+
+        let dealer_stats = vec![
+            ("fss.network.dealer.send_P0", "Dealer send FSS keys to p0"),
+            ("fss.network.dealer.send_P1", "Dealer send FSS keys to p1"),
+            (
+                "fss.network.dealer.recv_P0",
+                "Dealer receive FSS shares from p0",
+            ),
+            (
+                "fss.network.dealer.recv_P1",
+                "Dealer receive FSS shares from p1",
+            ),
+        ];
+
+        for (key, label) in dealer_stats {
+            let [_, _, p2] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
+            println!("{}: {:?}", label, p2);
+        }
+
+        println!("");
+    } // if USE_FSS && !USE_PARALLEL_THRESH
+
     Ok(())
 }
