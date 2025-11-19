@@ -595,7 +595,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 #[cfg(feature = "parallel-msb")]
                 {
                     //metrics: measure the genkeys time
-                    let _tt = crate::perf_scoped_for_party!(
+                    let _tt_gen = crate::perf_scoped_for_party!(
                         "fss.dealer.genkeys",
                         role,
                         n,            // bucket on the items this block processes
@@ -646,7 +646,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 #[cfg(not(feature = "parallel-msb"))]
                 {
                     //metrics: measure the genkeys time
-                    let _tt = crate::perf_scoped_for_party!(
+                    let _tt_gen = crate::perf_scoped_for_party!(
                         "fss.dealer.genkeys",
                         role,
                         n,            // bucket on the items this block processes
@@ -1715,7 +1715,7 @@ where
             let mut k_fss_1_vec_flat = Vec::with_capacity(batch_size);
 
             //metrics: measure the genkeys time
-            let _tt = crate::perf_scoped_for_party!(
+            let _tt_gen = crate::perf_scoped_for_party!(
                 "fss.dealer.genkeys",
                 role,
                 n,            // bucket on the items this block processes
