@@ -2,7 +2,7 @@ use crate::config::json_wrapper::JsonStrWrapper;
 use ampc_actor_utils::network::config::deserialize_yaml_json_string;
 use ampc_actor_utils::network::config::TlsConfig;
 use ampc_server_utils::statistics::Eye;
-use ampc_server_utils::ServerCoordinationConfig;
+use ampc_server_utils::{AwsConfig, ServerCoordinationConfig, ServiceConfig};
 use clap::Parser;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -600,34 +600,6 @@ impl fmt::Debug for DbConfig {
             .field("create", &self.create)
             .finish()
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AwsConfig {
-    /// Useful when using something like LocalStack
-    pub endpoint: Option<String>,
-
-    #[serde(default)]
-    pub region: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceConfig {
-    // Service name - used for logging, metrics and tracing
-    pub service_name: String,
-    // Traces
-    pub traces_endpoint: Option<String>,
-    // Metrics
-    pub metrics: Option<MetricsConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsConfig {
-    pub host: String,
-    pub port: u16,
-    pub queue_size: usize,
-    pub buffer_size: usize,
-    pub prefix: String,
 }
 
 fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>

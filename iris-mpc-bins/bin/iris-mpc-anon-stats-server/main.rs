@@ -2,15 +2,18 @@ use ampc_anon_stats::anon_stats::{DistanceBundle1D, LiftedDistanceBundle1D};
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::{
-    init_heartbeat_task, process_1d_anon_stats_job, process_1d_lifted_anon_stats_job,
-    process_2d_anon_stats_job, start_coordination_server, sync_on_id_hash, sync_on_job_sizes,
-    wait_for_others_ready, wait_for_others_unready, AnonStatsContext, AnonStatsMapping,
-    AnonStatsOrientation, AnonStatsOrigin, AnonStatsServerConfig, AnonStatsStore, Opt,
+    process_1d_anon_stats_job, process_1d_lifted_anon_stats_job, process_2d_anon_stats_job,
+    start_coordination_server, sync_on_id_hash, sync_on_job_sizes, AnonStatsContext,
+    AnonStatsMapping, AnonStatsOrientation, AnonStatsOrigin, AnonStatsServerConfig, AnonStatsStore,
+    Opt,
 };
 use ampc_server_utils::{
-    shutdown_handler::ShutdownHandler, BucketStatistics, BucketStatistics2D, Eye, TaskMonitor,
+    init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler, wait_for_others_ready,
+    wait_for_others_unready, BucketStatistics, BucketStatistics2D, Eye, StartupSyncState,
+    TaskMonitor,
 };
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
+use clap_builder::Parser;
 use eyre::{bail, eyre, Context, Result};
 use iris_mpc_common::{
     helpers::{
@@ -23,14 +26,17 @@ use iris_mpc_cpu::{
     execution::session::Session,
     network::tcp::{build_network_handle, NetworkHandleArgs},
 };
+use std::collections::HashSet;
 use std::{
     collections::HashMap,
     convert::TryFrom,
     sync::Arc,
     time::{Duration, Instant},
 };
+use tokio::sync::Mutex;
 use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 const GPU_1D_ORIGINS: [AnonStatsOrigin; 2] = [
     AnonStatsOrigin {
@@ -389,12 +395,16 @@ async fn main() -> Result<()> {
 
     let config = Arc::new(config);
 
+    let server_coord_config = config.server_coordination.as_ref().ok_or_else(|| {
+        eyre!("Server coordination configuration must be provided for anon stats server")
+    })?;
+
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.register_signal_handler().await;
 
-    let node_addresses: Vec<String> = config
+    let node_addresses: Vec<String> = server_coord_config
         .node_hostnames
         .iter()
         .zip(config.service_ports.iter())
@@ -420,28 +430,35 @@ async fn main() -> Result<()> {
 
     info!("Starting anon stats server.");
     let mut background_tasks = TaskMonitor::new();
-    let coordination_handles = start_coordination_server(config.as_ref(), &mut background_tasks);
+    let coordination_handles =
+        start_coordination_server(&server_coord_config, &mut background_tasks);
+
     background_tasks.check_tasks();
-    let health_port = config
+    let health_port = server_coord_config
         .healthcheck_ports
         .get(config.party_id)
         .cloned()
         .unwrap_or_else(|| "8080".to_string());
     info!("Healthcheck server running on port {}", health_port);
 
-    wait_for_others_unready(config.as_ref())
-        .await
-        .wrap_err("waiting for other anon stats servers to become unready")?;
+    let verified_peers = Arc::new(Mutex::new(HashSet::new()));
+    let uuid = Uuid::new_v4().to_string();
 
-    init_heartbeat_task(config.as_ref(), &mut background_tasks, &shutdown_handler)
-        .await
-        .wrap_err("failed to start heartbeat task")?;
+    wait_for_others_unready(&server_coord_config, &verified_peers, &uuid).await?;
+
+    init_heartbeat_task(
+        &server_coord_config,
+        &mut background_tasks,
+        &shutdown_handler,
+    )
+    .await
+    .wrap_err("failed to start heartbeat task")?;
     background_tasks.check_tasks();
 
     let args = NetworkHandleArgs {
-        party_index: config.party_id,
-        addresses: node_addresses,
-        outbound_addresses: vec![],
+        party_index: server_coord_config.party_id,
+        addresses: node_addresses.clone(),
+        outbound_addresses: node_addresses,
         connection_parallelism: 8,
         request_parallelism: 8,
         sessions_per_request: 1,
@@ -459,7 +476,7 @@ async fn main() -> Result<()> {
     let mut processor = AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client);
 
     coordination_handles.set_ready();
-    wait_for_others_ready(config.as_ref())
+    wait_for_others_ready(&server_coord_config)
         .await
         .wrap_err("waiting for other anon stats servers to become ready")?;
 
@@ -493,8 +510,6 @@ async fn main() -> Result<()> {
     }
 
     shutdown_handler.wait_for_shutdown().await;
-
-    coordination_handles.mark_shutting_down();
     shutdown_handler.wait_for_pending_batches_completion().await;
     ct.cancel();
     background_tasks.abort_and_wait_for_finish().await;
