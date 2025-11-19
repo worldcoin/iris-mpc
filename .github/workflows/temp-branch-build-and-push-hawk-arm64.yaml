@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "dev"
+      - "POP-3221-common-coordinator-mechanics"
     paths-ignore:
       - "deploy/**"
 

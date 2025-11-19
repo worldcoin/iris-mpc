@@ -2,13 +2,13 @@ use crate::s3_importer::create_db_chunks_s3_client;
 use crate::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
 };
+use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_config::Region;
 use eyre::{bail, Result};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
-use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

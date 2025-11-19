@@ -1,6 +1,6 @@
+use ampc_server_utils::TaskMonitor;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{

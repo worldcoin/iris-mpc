@@ -62,6 +62,8 @@ backon = { version = "1.4.0", default-features = false, features = [
 rand_chacha = { version = "0.3", features = ["serde1"] }
 num_enum = "0.7.3"
 tokio-rustls = { version = "0.26.2" }
+ampc-secret-sharing.workspace = true
+ampc-actor-utils.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }

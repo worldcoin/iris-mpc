@@ -9,11 +9,12 @@ use crate::{
     },
     shares::RingElement,
 };
+use ampc_actor_utils::fast_metrics::FastHistogram;
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId};
+use iris_mpc_common::vector_id::VectorId;
 use std::{
     cmp, iter,
     sync::{

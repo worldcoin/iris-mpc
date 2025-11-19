@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
-    hnsw::searcher::{ConnectPlan, ConnectPlanLayer},
+    hnsw::searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
     protocol::shared_iris::GaloisRingSharedIris,
     utils::constants::N_PARTIES,
 };
@@ -86,7 +86,11 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                     neighbors: edges(i),
                     nb_links: vec![edges(next(i))],
                 }],
-                set_ep: i == 0,
+                set_ep: if i == 0 {
+                    SetEntryPoint::NewLayer
+                } else {
+                    SetEntryPoint::False
+                },
             };
             graph.insert_apply(plan).await;
         }

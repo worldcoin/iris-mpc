@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:68aca5ca94503dd23105e5c20d65ada362af5a6d-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:d865fccfa93e984be158c22b5db9946b7b330add-arm64"
 
 environment: stage
 replicaCount: 1
@@ -56,10 +56,10 @@ startupProbe:
 resources:
   limits:
     cpu: "6.5"
-    memory: 120Gi
+    memory: 100Gi
   requests:
     cpu: "6.5"
-    memory: 120Gi
+    memory: 100Gi
 
 imagePullSecrets:
   - name: github-secret

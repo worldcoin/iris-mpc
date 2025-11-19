@@ -18,9 +18,8 @@ helpers = [
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
-assert_cmd = "*"
-predicates = "*"
-serde_path_to_error = "*"
+
+serde_path_to_error = "0.1.20"
 csv = "1.3"
 axum.workspace = true
 aws-config = { workspace = true, optional = true }
@@ -76,6 +75,7 @@ iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
 iris-mpc-anon-stats-server = { path = "../iris-mpc-anon-stats-server" }
 blake3 = "1.8.2"
 aws-smithy-types = "1.2.9"
+ampc-server-utils.workspace = true
 
 
 # ---------------------
@@ -158,6 +158,10 @@ path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
 [[bin]]
 name = "run-accuracy-analysis"
 path = "bin/iris-mpc-cpu/run_accuracy_analysis.rs"
+
+[[bin]]
+name = "generate_ideal_graph"
+path = "bin/iris-mpc-cpu/generate_ideal_graph.rs"
 
 # ---------------------
 # binaries for iris-mpc-gpu
