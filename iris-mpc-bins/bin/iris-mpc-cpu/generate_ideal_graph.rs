@@ -39,6 +39,17 @@ where
     Ok(t)
 }
 
+/// This binary constructs an idealized HNSW GraphMem
+/// i.e, one where all neighborhoods are exact, instead of approximated.
+/// It depends on an iris file and a pre-computed file which stores the neighborhoods
+/// for layer 0.
+/// The resulting graph is optionally tested by ensuring the correctness
+/// of a randomly selected node's neighborhoods.
+/// It is then serialized in binary format to a specified file.
+///
+/// For more details on the logic of the construction, consult
+/// `GraphMem::ideal_from_irises`
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = env::args().collect();

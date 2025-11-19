@@ -6,8 +6,8 @@ echoice = "NaiveFHD"
 sanity_check = true
 
 [searcher]
-M = [256, 256, 256, 20, 10]
-M_max = [10, 10, 10, 10, 20]
+M = [10, 10, 10, 10, 10]
+M_max = [10, 10, 10, 10, 10]
 ef_constr_search = [320, 320, 320, 320, 320]
 ef_constr_insert = [320, 320, 320, 320, 320]
 ef_search =  [320, 320, 320, 320, 320]
