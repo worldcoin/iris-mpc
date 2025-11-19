@@ -287,7 +287,7 @@ pub enum SetEntryPoint {
 #[allow(non_snake_case)]
 impl HnswSearcher {
     /// Construct an HnswSearcher with specified parameters, constructed to use
-    /// a unique graph entry poin in the dynamic top graph layer.
+    /// a unique graph entry point in the dynamic top graph layer.
     pub fn new_standard(ef_constr: usize, ef_search: usize, M: usize) -> Self {
         Self {
             params: HnswParams::new(ef_constr, ef_search, M),
