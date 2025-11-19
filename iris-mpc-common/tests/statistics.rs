@@ -1,7 +1,7 @@
 mod tests {
+    use ampc_server_utils::statistics::Eye;
     use ampc_server_utils::{
         AnonStatsResultSource, Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D,
-        Eye,
     };
     use chrono::{TimeZone, Utc};
     use serde_json::{json, Value};

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ampc_server_utils::Eye;
+use ampc_server_utils::statistics::Eye;
 use cudarc::driver::{result::memset_d8_sync, CudaSlice, CudaStream, DevicePtr, DeviceSlice};
 use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};

@@ -1,6 +1,6 @@
 #[cfg(feature = "gpu_dependent")]
 mod e2e_test {
-    use ampc_server_utils::Eye;
+    use ampc_server_utils::statistics::Eye;
     use cudarc::nccl::Id;
     use eyre::Result;
     use iris_mpc_common::{

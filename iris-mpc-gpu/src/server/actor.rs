@@ -21,7 +21,8 @@ use crate::{
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
 use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
-use ampc_server_utils::{BucketStatistics, BucketStatistics2D, Eye};
+use ampc_server_utils::statistics::Eye;
+use ampc_server_utils::{BucketStatistics, BucketStatistics2D};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
