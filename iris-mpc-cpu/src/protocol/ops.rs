@@ -494,7 +494,6 @@ pub async fn cross_compare_and_swap(
         extract_msb_u32_batch(session, &diff).await?
     };
 
-    // let bits = extract_msb_u32_batch_fss(session, &diff).await?;
     // inject bits to u32 shares
     let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
         .await?

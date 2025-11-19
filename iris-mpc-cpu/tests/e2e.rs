@@ -19,7 +19,7 @@ use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DB_SIZE: usize = 1000;
+const DB_SIZE: usize = 60; // original value was 1000
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;

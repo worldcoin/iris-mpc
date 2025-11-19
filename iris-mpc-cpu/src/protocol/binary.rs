@@ -37,7 +37,7 @@ use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
 // Choose between the two FSS implementations
-pub const USE_PARALLEL_THRESH: bool = true;
+pub const USE_PARALLEL_THRESH: bool = false;
 
 /// Splits the components of the given arithmetic share into 3 secret shares as described in Section 5.3 of the ABY3 paper.
 ///
