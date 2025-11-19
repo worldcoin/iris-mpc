@@ -36,9 +36,6 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-2"
 
-  - name: SMPC__PARTY_ID
-    value: "2"
-
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
