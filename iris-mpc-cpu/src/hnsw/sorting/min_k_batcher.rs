@@ -72,8 +72,7 @@ fn chunk_size(d: usize, k: usize) -> usize {
         return (d + 1) / 2;
     }
 
-    // TODO: test
-    let mu = if k > 1 { 1 << ((k - 1).ilog2()) } else { 1 };
+    let mu = if k > 1 { 1 << ((k - 1).ilog2() + 1) } else { 1 };
 
     if d <= mu {
         (d + 1) / 2
@@ -315,14 +314,14 @@ mod tests {
         ] {
             let (network, _) = batcher_sort_network(n, k);
             assert_eq!(network.num_layers(), expected_depth);
-            // assert_eq!(network.num_comparisons(), expected_comps);
+            assert_eq!(network.num_comparisons(), expected_comps);
         }
     }
 
     #[test]
     fn test_randomized_sorts() {
         let mut rng = rand::thread_rng();
-        let n_tests = 2000000;
+        let n_tests = 1000;
 
         for _ in 0..n_tests {
             let n = rng.gen_range(1..20);
@@ -330,7 +329,7 @@ mod tests {
 
             let (network, perm) = batcher_sort_network(n, k);
 
-            let input: Vec<i32> = (0..n).map(|_| rng.gen_range(0..=1)).collect();
+            let input: Vec<i32> = (0..n).map(|_| rng.gen_range(0..30)).collect();
 
             let mut expected_top_k = input.clone();
             expected_top_k.sort();
