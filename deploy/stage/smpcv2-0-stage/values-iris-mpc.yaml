@@ -32,6 +32,21 @@ env:
   - name: SMPC__DATABASE__LOAD_PARALLELISM
     value: "8"
 
+  - name: SMPC__ANON_STATS_DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+
+  - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+    value: "true"
+
+  - name: SMPC__ANON_STATS_DATABASE__CREATE
+    value: "true"
+
+  - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
+    value: "8"
+
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
@@ -99,13 +114,16 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1000" # "1200000"
+    value: "0" # "1200000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "100000" # "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "200"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"

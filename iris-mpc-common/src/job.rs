@@ -2,22 +2,15 @@ use crate::config::Config;
 use crate::galois_engine::degree4::GaloisShares;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::{
-        statistics::{BucketStatistics, BucketStatistics2D},
-        sync::{Modification, ModificationKey},
-    },
+    helpers::sync::{Modification, ModificationKey},
     ROTATIONS,
 };
 use ampc_server_utils::batch_sync::get_own_batch_sync_entries;
-use ampc_server_utils::{get_batch_sync_entries, BatchSyncEntriesResult};
-use core::fmt;
-use eyre::{eyre, Result};
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fmt::{Display, Formatter},
-    future::Future,
+use ampc_server_utils::{
+    get_batch_sync_entries, BatchSyncEntriesResult, BucketStatistics, BucketStatistics2D,
 };
+use eyre::{eyre, Result};
+use std::{collections::HashMap, future::Future};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
@@ -428,30 +421,6 @@ pub struct ServerJobResult<A = ()> {
     pub full_face_mirror_attack_detected: Vec<bool>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Eye {
-    #[default]
-    Left,
-    Right,
-}
-
-impl Eye {
-    pub fn other(&self) -> Self {
-        match self {
-            Self::Left => Self::Right,
-            Self::Right => Self::Left,
-        }
-    }
-}
-
-impl Display for Eye {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Left => write!(f, "left"),
-            Self::Right => write!(f, "right"),
-        }
-    }
-}
 pub trait JobSubmissionHandle {
     type A;
 

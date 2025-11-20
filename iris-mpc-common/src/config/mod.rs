@@ -1,12 +1,12 @@
-use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
+use crate::config::json_wrapper::JsonStrWrapper;
 use ampc_actor_utils::network::config::deserialize_yaml_json_string;
 use ampc_actor_utils::network::config::TlsConfig;
-use ampc_server_utils::ServerCoordinationConfig;
+use ampc_server_utils::statistics::Eye;
+use ampc_server_utils::{AwsConfig, ServerCoordinationConfig, ServiceConfig};
 use clap::Parser;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
-
 pub mod json_wrapper;
 
 pub const ENV_DEV: &str = "dev";
@@ -60,6 +60,12 @@ pub struct Config {
 
     #[serde(default)]
     pub cpu_database: Option<DbConfig>,
+
+    #[serde(default)]
+    pub anon_stats_database: Option<DbConfig>,
+
+    #[serde(default = "default_anon_stats_schema_name")]
+    pub anon_stats_schema_name: String,
 
     #[serde(default)]
     pub aws: Option<AwsConfig>,
@@ -335,6 +341,10 @@ fn default_schema_name() -> String {
     "SMPC".to_string()
 }
 
+fn default_anon_stats_schema_name() -> String {
+    "anon_stats_mpc".to_string()
+}
+
 fn default_db_load_safety_overlap_seconds() -> i64 {
     60
 }
@@ -519,6 +529,17 @@ impl Config {
         self.cpu_database.as_ref().map(|x| x.url.clone())
     }
 
+    pub fn get_anon_stats_db_url(&self) -> Option<String> {
+        self.anon_stats_database
+            .as_ref()
+            .map(|x| x.url.clone())
+            .or_else(|| self.cpu_database.as_ref().map(|x| x.url.clone()))
+    }
+
+    pub fn get_anon_stats_db_schema(&self) -> String {
+        self.anon_stats_schema_name.clone()
+    }
+
     /// Returns the name of a database schema for connecting to a node's gpu dB.
     pub fn get_gpu_db_schema(&self) -> String {
         self.format_db_schema(&self.gpu_schema_name_suffix)
@@ -579,34 +600,6 @@ impl fmt::Debug for DbConfig {
             .field("create", &self.create)
             .finish()
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AwsConfig {
-    /// Useful when using something like LocalStack
-    pub endpoint: Option<String>,
-
-    #[serde(default)]
-    pub region: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceConfig {
-    // Service name - used for logging, metrics and tracing
-    pub service_name: String,
-    // Traces
-    pub traces_endpoint: Option<String>,
-    // Metrics
-    pub metrics: Option<MetricsConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsConfig {
-    pub host: String,
-    pub port: u16,
-    pub queue_size: usize,
-    pub buffer_size: usize,
-    pub prefix: String,
 }
 
 fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>
@@ -697,7 +690,9 @@ impl From<Config> for CommonConfig {
             server_coordination: _,
             database: _,     // database is different for each server
             cpu_database: _, // cpu database is different for each server
-            aws: _,          // aws is different for each server
+            anon_stats_database: _,
+            anon_stats_schema_name: _,
+            aws: _, // aws is different for each server
             processing_timeout_secs,
             public_key_base_url,
             shares_bucket_name,

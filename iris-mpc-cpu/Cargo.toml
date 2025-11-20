@@ -61,6 +61,8 @@ num_enum = "0.7.3"
 tokio-rustls = { version = "0.26.2" }
 ampc-secret-sharing.workspace = true
 ampc-actor-utils.workspace = true
+ampc-anon-stats.workspace = true
+ampc-server-utils.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }

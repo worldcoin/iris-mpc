@@ -59,6 +59,7 @@ zeroize = "1.8.1"
 wiremock = "0.6.1"
 bincode.workspace = true
 serde-big-array.workspace = true
+siphasher = "1"
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 num_cpus = "1.17.0"
@@ -67,6 +68,7 @@ pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
 ampc-secret-sharing.workspace = true
 ampc-actor-utils.workspace = true
 ampc-server-utils.workspace = true
+ampc-anon-stats.workspace = true
 
 [dev-dependencies]
 float_eq = "1"

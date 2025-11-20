@@ -17,29 +17,32 @@ use crate::{
     hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
-        ops::{compare_min_threshold_buckets, setup_replicated_prf, setup_shared_seed},
+        ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },
 };
-use ampc_actor_utils::network::config::TlsConfig;
+use ampc_actor_utils::{
+    network::config::TlsConfig, protocol::anon_stats::compare_min_threshold_buckets,
+};
+use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
+use ampc_server_utils::statistics::Eye;
+use ampc_server_utils::{BucketStatistics, BucketStatistics2D};
 use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::{future::try_join_all, try_join};
 use intra_batch::intra_batch_is_match;
-use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
     ROTATIONS,
 };
-use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
 use iris_mpc_common::{
-    helpers::{
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::{BucketStatistics, BucketStatistics2D},
+    helpers::smpc_request::{
+        REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
     },
     vector_id::VectorId,
 };
+use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
@@ -169,6 +172,8 @@ pub struct HawkActor {
     /// In a later step, these distances will be reduced to a single, minimum distance per query.
     distances_cache: BothEyes<DistanceCache>,
 
+    anon_stats_store: Option<AnonStatsStore>,
+
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
     error_ct: CancellationToken,
@@ -177,7 +182,7 @@ pub struct HawkActor {
 
 #[derive(Clone, Default)]
 struct DistanceCache {
-    distances_cache: Vec<Vec<DistanceShare<u32>>>,
+    distances_cache: Vec<(i64, Vec<DistanceShare<u32>>)>,
     total_size: usize,
 }
 
@@ -186,10 +191,10 @@ impl DistanceCache {
         self.total_size
     }
 
-    fn extend(&mut self, other: impl Iterator<Item = Vec<DistanceShare<u32>>>) {
+    fn extend(&mut self, other: impl Iterator<Item = (i64, Vec<DistanceShare<u32>>)>) {
         let mut count = 0;
         self.distances_cache
-            .extend(other.inspect(|v| count += v.len()));
+            .extend(other.inspect(|(_, v)| count += v.len()));
         self.total_size += count;
     }
 
@@ -198,8 +203,12 @@ impl DistanceCache {
         self.total_size = 0;
     }
 
-    fn as_slice(&self) -> &[Vec<DistanceShare<u32>>] {
-        &self.distances_cache
+    fn iter(&self) -> impl Iterator<Item = &(i64, Vec<DistanceShare<u32>>)> {
+        self.distances_cache.iter()
+    }
+
+    fn bundles(&self) -> impl Iterator<Item = &Vec<DistanceShare<u32>>> {
+        self.distances_cache.iter().map(|(_, bundle)| bundle)
     }
 }
 
@@ -367,11 +376,16 @@ impl HawkActor {
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             distances_cache: [Default::default(), Default::default()],
+            anon_stats_store: None,
             networking,
             party_id: args.party_index,
             error_ct: CancellationToken::new(),
             workers_handle,
         })
+    }
+
+    pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
+        self.anon_stats_store = store;
     }
 
     pub fn searcher(&self) -> Arc<HnswSearcher> {
@@ -567,7 +581,7 @@ impl HawkActor {
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRotations<HawkInsertPlan>]) {
         // maps query_id and db_id to a vector of distances.
-        let mut distances_with_ids: BTreeMap<(u32, u32), Vec<DistanceShare<u32>>> = BTreeMap::new();
+        let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
                 let last_layer_insert_plan = match insert_plan.plan.links.first() {
@@ -580,8 +594,9 @@ impl HawkActor {
 
                 for (vector_id, distance) in matches {
                     let distance_share = distance.clone();
+                    let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
-                        .entry((query_idx as u32, vector_id.serial_id()))
+                        .entry(match_id)
                         .or_default()
                         .push(distance_share);
                 }
@@ -594,16 +609,20 @@ impl HawkActor {
             self.distances_cache[side].total_size(),
             self.args.match_distances_buffer_size,
         );
-        self.distances_cache[side].extend(distances_with_ids.into_values());
+        self.distances_cache[side].extend(distances_with_ids.into_iter());
     }
 
     async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
         let start = Instant::now();
         let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
+        let bundles = self.distances_cache[side]
+            .bundles()
+            .cloned()
+            .collect::<Vec<_>>();
         let bucket_result_shares = compare_min_threshold_buckets(
             session,
             translated_thresholds.as_slice(),
-            self.distances_cache[side].as_slice(),
+            bundles.as_slice(),
         )
         .await?;
 
@@ -628,8 +647,48 @@ impl HawkActor {
                 MATCH_THRESHOLD_RATIO,
                 self.anonymized_bucket_statistics[side].next_start_time_utc_timestamp,
             );
+            self.persist_cached_distances(side).await?;
             self.distances_cache[side].clear();
         }
+        Ok(())
+    }
+
+    async fn persist_cached_distances(&self, side: usize) -> Result<()> {
+        let Some(store) = &self.anon_stats_store else {
+            return Ok(());
+        };
+
+        let bundles = self.distances_cache[side]
+            .iter()
+            .filter_map(|(match_id, shares)| {
+                if shares.is_empty() {
+                    None
+                } else {
+                    Some((*match_id, shares.clone()))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if bundles.is_empty() {
+            return Ok(());
+        }
+
+        let eye = match side {
+            LEFT => Eye::Left,
+            RIGHT => Eye::Right,
+            _ => return Err(eyre!("invalid side index {side}")),
+        };
+
+        let origin = AnonStatsOrigin {
+            side: Some(eye),
+            orientation: AnonStatsOrientation::Normal,
+            context: AnonStatsContext::HNSW,
+        };
+
+        store
+            .insert_anon_stats_batch_1d_lifted(&bundles, origin)
+            .await?;
+
         Ok(())
     }
 

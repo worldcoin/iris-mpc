@@ -1,5 +1,8 @@
 #![allow(clippy::needless_range_loop, unused)]
 
+use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
+use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
+use ampc_anon_stats::AnonStatsStore;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, shutdown_handler::ShutdownHandler,
     ReadyProbeResponse, TaskMonitor,
@@ -1318,6 +1321,19 @@ async fn server_main(config: Config) -> Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
+    let runtime_handle = tokio::runtime::Handle::current();
+    let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
+        let schema = config.get_anon_stats_db_schema();
+        let anon_client =
+            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+        let anon_store = AnonStatsStore::new(&anon_client).await?;
+        Some((anon_store, runtime_handle.clone()))
+    } else {
+        tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
+        None
+    };
+    let anon_stats_writer_for_actor = anon_stats_writer.clone();
+
     let (tx, rx) = oneshot::channel();
     let config_clone = config.clone();
     background_tasks.spawn_blocking(move || {
@@ -1341,6 +1357,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.enable_debug_timing,
             config.full_scan_side,
             config.full_scan_side_switching_enabled,
+            anon_stats_writer_for_actor,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");

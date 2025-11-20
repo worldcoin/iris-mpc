@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:9108d1affd585edd789b9f18fb9a70378382ce9f"
+image: "ghcr.io/worldcoin/anon-stats-server:6243a2ebecf5acd5d47534c8155b5da780deb0d3"
 
 environment: stage
 replicaCount: 1
@@ -45,8 +45,8 @@ livenessProbe:
     port: health
 
 readinessProbe:
-  periodSeconds: 30
-  failureThreshold: 10
+  periodSeconds: 20
+  failureThreshold: 4
   httpGet:
     path: /health
     port: health

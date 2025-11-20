@@ -1,25 +1,24 @@
-name: Branch - Hawk Build and push docker image ARM64
+name: Branch - Hawk Upgrade Build and push docker image
 
 on:
   push:
     branches:
       - "dev"
-    paths-ignore:
-      - "deploy/**"
+      - "feat/anon_stats_service"
 
 concurrency:
-  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-cpu
+  IMAGE_NAME: "anon-stats-server"
 
 jobs:
   docker:
     timeout-minutes: 40
     runs-on:
-      labels: arm64-ubuntu-22.04-16core
+      labels: ubuntu-22.04-16core
     permissions:
       packages: write
       contents: read
@@ -28,12 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
-      - name: Install Docker
-        run: |
-          curl -fsSL https://get.docker.com | sh
-          sudo usermod -aG docker $USER
-          sudo apt-get install acl
-          sudo setfacl --modify user:$USER:rw /var/run/docker.sock
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
       - name: Log in to the Container registry
@@ -48,10 +43,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
-          platforms: linux/arm64
-          build-args: |
-            ARCHITECTURE=aarch64
+            ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.arm64.hawk
+          file: Dockerfile.anon-stats-server

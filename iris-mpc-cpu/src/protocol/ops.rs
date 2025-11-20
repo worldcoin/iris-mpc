@@ -66,97 +66,6 @@ pub fn translate_threshold_a(t: f64) -> u32 {
     ((1. - 2. * t) * (B as f64)) as u32
 }
 
-/// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
-/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
-/// The result of the comparisons is then summed up bucket-wise, with each bucket corresponding to a threshold.
-pub async fn compare_threshold_buckets(
-    session: &mut Session,
-    threshold_a_terms: &[u32],
-    distances: &[DistanceShare<u32>],
-) -> Result<Vec<Share<u32>>> {
-    let diffs = threshold_a_terms
-        .iter()
-        .flat_map(|a| {
-            distances.iter().map(|d| {
-                let x = d.mask_dot.clone() * *a;
-                let y = d.code_dot.clone() * B as u32;
-                x - y
-            })
-        })
-        .collect_vec();
-
-    tracing::info!("compare_threshold_buckets diffs length: {}", diffs.len());
-    let msbs = extract_msb_u32_batch(session, &diffs).await?;
-    let msbs = VecShare::new_vec(msbs);
-    tracing::info!("msbs extracted, now bit_injecting");
-    // bit_inject all MSBs into u32 to be able to add them up
-    let sums = bit_inject_ot_2round(session, msbs).await?;
-    tracing::info!("bit_inject done, now summing");
-    // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
-    let buckets = sums
-        .into_iter()
-        .chunks(distances.len())
-        .into_iter()
-        .map(|chunk| chunk.reduce(|a, b| a + b).unwrap_or_default())
-        .collect_vec();
-
-    Ok(buckets)
-}
-
-/// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
-/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
-/// The result of the comparisons is then summed up bucket-wise, with each bucket corresponding to a threshold.
-///
-/// In comparison to `compare_threshold_buckets`, this function takes grouped distances as input, and for each group
-/// only the minimum distance is considered for creating the buckets.
-pub async fn compare_min_threshold_buckets(
-    session: &mut Session,
-    threshold_a_terms: &[u32],
-    distances: &[Vec<DistanceShare<u32>>],
-) -> Result<Vec<Share<u32>>> {
-    // grab the first one of the distance in each group
-    let mut reduced_distances = distances
-        .iter()
-        .map(|group| {
-            group
-                .first()
-                .cloned()
-                .ok_or_else(|| eyre!("Expected at least one distance in the group"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut sizes = distances
-        .iter()
-        .map(|group| group.len() - 1)
-        .collect::<Vec<_>>();
-
-    // This loop is executed at most MAX_ROTATIONS-1 times, which is 30 currently
-    // however, in practice it will probably be executed much less often.
-    while !sizes.iter().all(|&size| size == 0) {
-        // we grab a vector of potential rotations to reduce
-        // If this current group is already reduced to 0, we grab the first element as a dummy copy.
-        let distances_to_reduce: Vec<(DistanceShare<u32>, DistanceShare<u32>)> = distances
-            .iter()
-            .zip(sizes.iter_mut())
-            .map(|(group, size)| {
-                let element_to_reduce = group[*size].clone();
-                if *size > 0 {
-                    *size -= 1;
-                }
-                element_to_reduce
-            })
-            .zip(reduced_distances.iter())
-            .map(|(new, reduced)| (new, reduced.clone()))
-            .collect();
-
-        reduced_distances = min_of_pair_batch(session, &distances_to_reduce).await?;
-    }
-
-    // Now we have a single distance for each group, we can compare it to the thresholds
-    let buckets = compare_threshold_buckets(session, threshold_a_terms, &reduced_distances).await?;
-
-    Ok(buckets)
-}
-
 /// The same as compare_threshold, but the input shares are 16-bit and lifted to
 /// 32-bit before threshold comparison.
 ///
@@ -822,6 +731,8 @@ pub(crate) async fn min_round_robin_batch(
     Ok(res)
 }
 
+use ampc_actor_utils::network::value::NetworkInt;
+use ampc_secret_sharing::IntRing2k;
 use std::cell::RefCell;
 
 thread_local! {
@@ -936,6 +847,41 @@ pub async fn lte_threshold_and_open(
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+/// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
+/// each party needs to send its entire share to the next and previous party.
+pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    shares: &[RingElement<T>],
+) -> Result<Vec<T>> {
+    let network = &mut session.network_session;
+    let message = if shares.len() == 1 {
+        T::new_network_element(shares[0])
+    } else {
+        T::new_network_vec(shares.to_vec())
+    };
+
+    network.send_next(message.clone()).await?;
+    network.send_prev(message).await?;
+
+    // receiving from previous party
+    let b = network
+        .receive_prev()
+        .await
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+    let c = network
+        .receive_next()
+        .await
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+
+    // ADD shares with the received shares
+    izip!(shares.iter(), b.iter(), c.iter())
+        .map(|(a, b, c)| Ok((*a + *b + *c).convert()))
+        .collect::<Result<Vec<_>>>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -952,7 +898,7 @@ mod tests {
     use rand::{Rng, RngCore, SeedableRng};
     use rand_distr::{Distribution, Standard};
     use rstest::rstest;
-    use std::{array, collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, sync::Arc};
     use tokio::{sync::Mutex, task::JoinSet};
     use tracing::trace;
     use NetworkValue::RingElement32;
@@ -1166,243 +1112,6 @@ mod tests {
         // check first party output is equal to the expected result.
         let t = jobs.join_next().await.unwrap().unwrap();
         assert_eq!(t, RingElement(2));
-    }
-
-    #[tokio::test]
-    async fn test_compare_threshold_buckets() {
-        const NUM_BUCKETS: usize = 100;
-        const NUM_ITEMS: usize = 20;
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let items = (0..NUM_ITEMS)
-            .flat_map(|_| {
-                let mask = rng.gen_range(6000u32..12000);
-                let code = rng.gen_range(-12000i16..12000);
-                [code as u16 as u32, mask]
-            })
-            .collect_vec();
-
-        let shares = create_array_sharing(&mut rng, &items);
-
-        let thresholds: [f64; NUM_BUCKETS] =
-            array::from_fn(|i| i as f64 / (NUM_BUCKETS * 2) as f64);
-        let threshold_a_terms = thresholds
-            .iter()
-            .map(|x| translate_threshold_a(*x))
-            .collect_vec();
-
-        let num_parties = 3;
-        let identities = generate_local_identities();
-
-        let share_map = HashMap::from([
-            (identities[0].clone(), shares.p0),
-            (identities[1].clone(), shares.p1),
-            (identities[2].clone(), shares.p2),
-        ]);
-
-        let mut seeds = Vec::new();
-        for i in 0..num_parties {
-            let mut seed = [0_u8; 16];
-            seed[0] = i;
-            seeds.push(seed);
-        }
-        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
-            .await
-            .unwrap();
-
-        let sessions: Vec<Arc<Mutex<Session>>> = runtime
-            .sessions
-            .into_iter()
-            .map(|s| Arc::new(Mutex::new(s)))
-            .collect();
-
-        let mut jobs = JoinSet::new();
-        for session in sessions {
-            let session_lock = session.lock().await;
-            let shares = share_map.get(&session_lock.own_identity()).unwrap().clone();
-            let session = session.clone();
-            let threshold_a_terms = threshold_a_terms.clone();
-            jobs.spawn(async move {
-                let mut session = session.lock().await;
-                let distances = shares[..]
-                    .chunks_exact(2)
-                    .map(|x| DistanceShare {
-                        code_dot: x[0].clone(),
-                        mask_dot: x[1].clone(),
-                    })
-                    .collect_vec();
-
-                let bucket_result_shares =
-                    compare_threshold_buckets(&mut session, &threshold_a_terms, &distances)
-                        .await
-                        .unwrap();
-
-                open_ring(&mut session, &bucket_result_shares)
-                    .await
-                    .unwrap()
-            });
-        }
-        // check first party output is equal to the expected result.
-        let t1 = jobs.join_next().await.unwrap().unwrap();
-        let t2 = jobs.join_next().await.unwrap().unwrap();
-        let t3 = jobs.join_next().await.unwrap().unwrap();
-        let expected = items[..]
-            .chunks_exact(2)
-            .fold([0; NUM_BUCKETS], |mut acc, x| {
-                let code_dist = x[0];
-                let mask_dist = x[1];
-                for (i, &threshold) in thresholds.iter().enumerate() {
-                    let threshold_a = translate_threshold_a(threshold);
-                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
-                    acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
-                }
-                acc
-            });
-        assert_eq!(t1, expected);
-        assert_eq!(t2, expected);
-        assert_eq!(t3, expected);
-    }
-
-    #[tokio::test]
-    async fn test_compare_min_threshold_buckets() {
-        const NUM_BUCKETS: usize = 100;
-        const NUM_ITEMS: usize = 20;
-        const MAX_TEST_ROTATIONS: usize = 15;
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let sizes = (0..NUM_ITEMS)
-            .map(|_| rng.gen_range(1..=MAX_TEST_ROTATIONS))
-            .collect_vec();
-        let flat_size = sizes.iter().sum::<usize>();
-
-        let items = (0..flat_size)
-            .flat_map(|_| {
-                let mask = rng.gen_range(6000u32..12000);
-                let code = rng.gen_range(-12000i16..12000);
-                [code as u16 as u32, mask]
-            })
-            .collect_vec();
-
-        let shares = create_array_sharing(&mut rng, &items);
-
-        let thresholds: [f64; NUM_BUCKETS] =
-            array::from_fn(|i| i as f64 / (NUM_BUCKETS * 2) as f64);
-        let threshold_a_terms = thresholds
-            .iter()
-            .map(|x| translate_threshold_a(*x))
-            .collect_vec();
-
-        let num_parties = 3;
-        let identities = generate_local_identities();
-
-        let share_map = HashMap::from([
-            (identities[0].clone(), shares.p0),
-            (identities[1].clone(), shares.p1),
-            (identities[2].clone(), shares.p2),
-        ]);
-
-        let mut seeds = Vec::new();
-        for i in 0..num_parties {
-            let mut seed = [0_u8; 16];
-            seed[0] = i;
-            seeds.push(seed);
-        }
-        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
-            .await
-            .unwrap();
-
-        let sessions: Vec<Arc<Mutex<Session>>> = runtime
-            .sessions
-            .into_iter()
-            .map(|s| Arc::new(Mutex::new(s)))
-            .collect();
-
-        let mut jobs = JoinSet::new();
-        for session in sessions {
-            let session_lock = session.lock().await;
-            let shares = share_map.get(&session_lock.own_identity()).unwrap().clone();
-            let session = session.clone();
-            let threshold_a_terms = threshold_a_terms.clone();
-            jobs.spawn({
-                let sizes = sizes.clone();
-                async move {
-                    let mut session = session.lock().await;
-                    let mut counter = 0;
-                    let grouped_distances = sizes
-                        .iter()
-                        .map(|&size| {
-                            (0..size)
-                                .map(|_| {
-                                    let code_dot = shares[counter].clone();
-                                    let mask_dot = shares[counter + 1].clone();
-                                    counter += 2;
-                                    DistanceShare { code_dot, mask_dot }
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>();
-
-                    let bucket_result_shares = compare_min_threshold_buckets(
-                        &mut session,
-                        &threshold_a_terms,
-                        &grouped_distances,
-                    )
-                    .await
-                    .unwrap();
-
-                    open_ring(&mut session, &bucket_result_shares)
-                        .await
-                        .unwrap()
-                }
-            });
-        }
-        // check first party output is equal to the expected result.
-        let t1 = jobs.join_next().await.unwrap().unwrap();
-        let t2 = jobs.join_next().await.unwrap().unwrap();
-        let t3 = jobs.join_next().await.unwrap().unwrap();
-
-        let mut counter = 0;
-        let grouped_distances = sizes
-            .iter()
-            .map(|&size| {
-                (0..size)
-                    .map(|_| {
-                        let code_dist = items[counter];
-                        let mask_dist = items[counter + 1];
-                        counter += 2;
-                        (code_dist, mask_dist)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let expected = grouped_distances
-            .iter()
-            .map(|group| {
-                // reduce distances in each group
-                group
-                    .iter()
-                    .reduce(|a, b| {
-                        // plain distance formula is (0.5 - code/2*mask), the below is that multiplied by 2
-                        if (1f64 - a.0 as f64 / a.1 as f64) < (1f64 - b.0 as f64 / b.1 as f64) {
-                            a
-                        } else {
-                            b
-                        }
-                    })
-                    .expect("Expected at least one distance in the group")
-            })
-            .fold([0; NUM_BUCKETS], |mut acc, x| {
-                let code_dist = x.0;
-                let mask_dist = x.1;
-                for (i, &threshold) in thresholds.iter().enumerate() {
-                    let threshold_a = translate_threshold_a(threshold);
-                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
-                    acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
-                }
-                acc
-            });
-        assert_eq!(t1, expected);
-        assert_eq!(t2, expected);
-        assert_eq!(t3, expected);
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]

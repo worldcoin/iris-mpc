@@ -8,10 +8,7 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "anon-stats-server-smpcv2-1"
 
-  - name: SMPC__PARTY_ID
-    value: "1"
-
-  - name: SMPC__CPU_DATABASE__URL
+  - name: SMPC__DB_URL
     valueFrom:
       secretKeyRef:
         key: DATABASE_AURORA_URL
@@ -20,11 +17,14 @@ env:
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
 
-  - name: SMPC__HEALTHCHECK_PORT
-    value: '3000'
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
+    value: "1"
 
-  - name: SMPC__NODE_HOSTNAMES
-    value: '["anon-stats-server.0.stage.smpcv2.worldcoin.dev","0.0.0.0","anon-stats-server.2.stage.smpcv2.worldcoin.dev"]'
+  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+    value: '["anon-stats-server.1.stage.smpcv2.worldcoin.dev","0.0.0.0","anon-stats-server.3.stage.smpcv2.worldcoin.dev"]'
+
+  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
   - name: SMPC__RESULTS_TOPIC_ARN
     valueFrom:
@@ -32,8 +32,20 @@ env:
         key: SNS_RESULTS_ARN
         name: application
 
-  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
-    value: "65"
+  - name: SMPC__AWS__REGION
+    value: "eu-north-1"
+
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES
+    value: "5"
+
+  - name: SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS
+    value: "5000"
+
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS
+    value: "3"
+
+  - name: SMPC__SERVER_COORDINATION__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS
+    value: "10"
 
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
@@ -52,15 +64,14 @@ env:
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "anon-stats-server-smpcv2-1"
 
-  - name: SMPC__IMAGE_NAME
-    value: $(IMAGE_NAME)
+  - name: SMPC__N_BUCKETS_1D
+    value: "375"
 
-  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "64"
+  - name: SMPC__MIN_1D_JOB_SIZE
+    value: "11"
 
-  - name: SMPC__N_BUCKETS
-    value: "10"
-
+  - name: SMPC__POLL_INTERVAL_SECS
+    value: "30"
 
 initContainer:
   enabled: true

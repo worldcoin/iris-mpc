@@ -46,7 +46,7 @@ env:
     value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "32"
+    value: "1"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -101,6 +101,9 @@ env:
 
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_anon_stats_server_test"
 
   - name: SMPC__SERVER_COORDINATION__PARTY_ID
     value: "2"
