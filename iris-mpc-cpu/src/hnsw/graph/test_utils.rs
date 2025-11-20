@@ -311,7 +311,7 @@ impl DbContext {
 
             for j in 4..7 {
                 links
-                    .insert_and_retain_k(&mut vector_store, vectors[j], distances[j], None)
+                    .insert_and_trim(&mut vector_store, vectors[j], distances[j], None)
                     .await?;
             }
             let links = links.edge_ids();

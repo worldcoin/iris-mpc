@@ -30,7 +30,6 @@ impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V> {}
 pub trait Neighborhood: Clone {
     type Vector: Clone;
     type Distance: Clone;
-    type EdgeIds;
 
     fn new() -> Self;
 
@@ -48,7 +47,7 @@ pub trait Neighborhood: Clone {
     /// changes to ensure the neighborhood invariant holds
     /// Note that in general maintaining the invariant may incur significant overhead.
     /// Consult implementer for performance specs
-    async fn insert_batch_and_retain_k<V>(
+    async fn insert_batch_and_trim<V>(
         &mut self,
         store: &mut V,
         vals: &[(Self::Vector, Self::Distance)],
@@ -61,7 +60,7 @@ pub trait Neighborhood: Clone {
     /// By default calls batched version with size 1.
     /// Note that in general maintaining the invariant may incur significant overhead.
     /// Consult implementer for performance specs.
-    async fn insert_and_retain_k<V>(
+    async fn insert_and_trim<V>(
         &mut self,
         store: &mut V,
         to: Self::Vector,
@@ -71,8 +70,7 @@ pub trait Neighborhood: Clone {
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
     {
-        self.insert_batch_and_retain_k(store, &[(to, dist)], k)
-            .await
+        self.insert_batch_and_trim(store, &[(to, dist)], k).await
     }
 
     /// Returns matching records in the neighborhood.
@@ -80,10 +78,6 @@ pub trait Neighborhood: Clone {
     async fn matches<V>(&self, store: &mut V) -> Result<Vec<(Self::Vector, Self::Distance)>>
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
-
-    /// Retains only the vectors of the neighborhood.
-    /// No specific order should be assumed.
-    fn edge_ids(&self) -> Self::EdgeIds;
 
     // Returns a suitable node for opening
     fn get_next_candidate(&self) -> Option<&(Self::Vector, Self::Distance)>;
@@ -207,7 +201,6 @@ where
 {
     type Vector = Vector;
     type Distance = Distance;
-    type EdgeIds = SortedEdgeIds<Vector>;
     /// Insert the element `to` with distance `dist` into the list, maintaining
     /// the ascending order.
     ///
@@ -234,7 +227,7 @@ where
     /// Expected bandwitdh: loglinear in `|self.edges| + |vals|`, but `|vals| log |self.edges|` for small `|vals|`.
     /// Expected rounds: logarithmic in `|self.edges| + |vals|`.
     /// Consult quicksort implementation for details on performance.
-    async fn insert_batch_and_retain_k<V>(
+    async fn insert_batch_and_trim<V>(
         &mut self,
         store: &mut V,
         vals: &[(Self::Vector, Self::Distance)],
@@ -253,10 +246,6 @@ where
         let k = k.unwrap_or(self.edges.len());
         self.edges.truncate(k);
         Ok(())
-    }
-
-    fn edge_ids(&self) -> SortedEdgeIds<Self::Vector> {
-        SortedEdgeIds(self.edges.iter().map(|(v, _)| v.clone()).collect())
     }
 
     fn get_next_candidate(&self) -> Option<&(Self::Vector, Self::Distance)> {
@@ -372,7 +361,6 @@ impl<V: VectorStore> NeighborhoodV<V> for UnsortedNeighborhoodV<V> {}
 impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vector, Distance> {
     type Vector = Vector;
     type Distance = Distance;
-    type EdgeIds = UnsortedEdgeIds<Vector>;
     fn new() -> Self {
         Self {
             edges: Default::default(),
@@ -394,7 +382,7 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
     /// Appends `vals` to the neighborhood, applies quickselect and truncates to length k.
     /// Expected bandwitdh: linear in `|self.edges| + |vals|`
     /// Expected rounds: logarithmic in `|self.edges| + |vals|`
-    async fn insert_batch_and_retain_k<V>(
+    async fn insert_batch_and_trim<V>(
         &mut self,
         store: &mut V,
         vals: &[(Vector, Distance)],
@@ -415,15 +403,6 @@ impl<Vector: Clone, Distance: Clone> Neighborhood for UnsortedNeighborhood<Vecto
             self.quickselect(store, k).await?;
         }
         Ok(())
-    }
-
-    fn edge_ids(&self) -> UnsortedEdgeIds<Vector> {
-        UnsortedEdgeIds(
-            self.edges
-                .iter()
-                .map(|(vector, _)| vector.clone())
-                .collect::<Vec<_>>(),
-        )
     }
 
     fn get_next_candidate(&self) -> Option<&(Self::Vector, Self::Distance)> {
@@ -483,7 +462,7 @@ mod tests {
         }
 
         // This is a bit wasteful but we don't care
-        nbhd.insert_batch_and_retain_k(store, &pairs, None).await?;
+        nbhd.insert_batch_and_trim(store, &pairs, None).await?;
         Ok(())
     }
 
@@ -507,8 +486,7 @@ mod tests {
             &[Arc::new(query.get_similar_iris(&mut rng, 0.18))],
         )
         .await?;
-        nbhd.insert_batch_and_retain_k(&mut store, &[], Some(2))
-            .await?;
+        nbhd.insert_batch_and_trim(&mut store, &[], Some(2)).await?;
         assert_eq!(nbhd.len(), 2);
 
         // We should have exactly one match at this point (almost always :))
@@ -528,8 +506,7 @@ mod tests {
         assert_eq!(nbhd.len(), 3);
 
         // Let's shrink to closest 2
-        nbhd.insert_batch_and_retain_k(&mut store, &[], Some(2))
-            .await?;
+        nbhd.insert_batch_and_trim(&mut store, &[], Some(2)).await?;
         assert_eq!(nbhd.len(), 2);
 
         // We should have exactly two matches at this point
@@ -540,8 +517,7 @@ mod tests {
         assert_eq!(furthest.0, IrisVectorId::from_serial_id(4));
 
         // This should clear
-        nbhd.insert_batch_and_retain_k(&mut store, &[], Some(0))
-            .await?;
+        nbhd.insert_batch_and_trim(&mut store, &[], Some(0)).await?;
 
         assert_eq!(nbhd.len(), 0);
         assert!(nbhd.is_empty());
