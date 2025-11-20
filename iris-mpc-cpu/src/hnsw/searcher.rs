@@ -137,7 +137,7 @@ impl HnswParams {
 }
 
 /// Struct specifies how layers are handled by an `HnswSearcher`.`
-#[derive(PartialEq, Clone, Serialize, Deserialize)]
+#[derive(PartialEq, Clone, Debug, Serialize, Deserialize)]
 pub enum LayerMode {
     /// Standard operation: maintains single entry point and updates it when a
     /// new node is inserted as the first item in a new highest layer.
@@ -170,7 +170,7 @@ pub enum LayerMode {
 
 /// Struct specifies the probability distribution used to generate insertion
 /// layers for new nodes in an HNSW graph.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LayerDistribution {
     Geometric {
         /// Probability `q = 1-p` for geometric distribution of layer densities
@@ -230,7 +230,7 @@ impl LayerDistribution {
 /// between protocol parties can become significant without batching of operations. See in
 /// particular the documentation for the `layer_search_batched` and `layer_search_greedy` functions
 /// for details on these search optimizations.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HnswSearcher {
     /// Parameters specifying the behavior of HNSW search in different layers.
     pub params: HnswParams,
