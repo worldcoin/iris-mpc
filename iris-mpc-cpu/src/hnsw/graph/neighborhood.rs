@@ -43,6 +43,10 @@ pub trait Neighborhood: Clone {
 
     fn iter(&self) -> impl Iterator<Item = &(Self::Vector, Self::Distance)>;
 
+    fn edge_ids(&self) -> Vec<Self::Vector> {
+        self.iter().map(|(v, _)| v.clone()).collect::<Vec<_>>()
+    }
+
     /// Inserts a batch of elements into the neighborhood and applies the necessary
     /// changes to ensure the neighborhood invariant holds
     /// Note that in general maintaining the invariant may incur significant overhead.

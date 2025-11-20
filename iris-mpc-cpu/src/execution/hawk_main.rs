@@ -10,7 +10,8 @@ use crate::{
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef, DistanceFn,
+            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
+            Aby3VectorRef, DistanceFn,
         },
         shared_irises::SharedIrises,
     },

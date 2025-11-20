@@ -1,5 +1,5 @@
 use crate::hnsw::{
-    graph::neighborhood::SortedNeighborhoodV,
+    graph::neighborhood::{Neighborhood, SortedNeighborhoodV},
     searcher::{ConnectPlanV, SetEntryPoint},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,

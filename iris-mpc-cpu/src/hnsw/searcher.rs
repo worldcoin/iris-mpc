@@ -9,7 +9,7 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::{Neighborhood, NeighborhoodV, SortedEdgeIds, SortedNeighborhoodV},
+    graph::neighborhood::{Neighborhood, NeighborhoodV, SortedNeighborhoodV},
     metrics::ops_counter::Operation,
     VectorStore,
 };
@@ -441,8 +441,10 @@ impl HnswSearcher {
                 } else {
                     let nearest_point =
                         Self::linear_search_min_distance(store, query, ep_vectors).await?;
-                    let mut W = SortedNeighborhood::new();
-                    W.edges.push(nearest_point);
+                    let mut W = N::new();
+                    // TODO: make this prettier
+                    W.insert_and_trim(store, nearest_point.0, nearest_point.1, None)
+                        .await?;
 
                     // Entry points are in layer `max_graph_layer`, so number of layers is one more since layers are 0-indexed.
                     let n_layers = max_graph_layer + 1;
@@ -471,12 +473,12 @@ impl HnswSearcher {
     ///
     /// If `ep` is specified as `None` (no entry point available), then returns
     /// an empty neighborhood and `None` for its layer.
-    async fn init_nbhd_from_ep<V: VectorStore>(
+    async fn init_nbhd_from_ep<V: VectorStore, N: NeighborhoodV<V>>(
         &self,
         store: &mut V,
         ep: Option<(V::VectorRef, usize)>,
         query: &V::QueryRef,
-    ) -> Result<(SortedNeighborhoodV<V>, Option<usize>)> {
+    ) -> Result<(N, Option<usize>)> {
         if let Some((entry_point, layer)) = ep {
             let distance = store.eval_distance(query, &entry_point).await?;
 
@@ -1326,9 +1328,9 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         k: usize,
-    ) -> Result<SortedNeighborhoodV<V>> {
+    ) -> Result<N> {
         // insertion layer doesn't matter here because set_ep is ignored
-        let (mut W, n_layers, _, _) = self.search_init(store, graph, query, 0).await?;
+        let (mut W, n_layers, _, _) = self.search_init::<_, N>(store, graph, query, 0).await?;
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
@@ -1391,11 +1393,11 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(Vec<SortedNeighborhoodV<V>>, SetEntryPoint)> {
+    ) -> Result<(Vec<N>, SetEntryPoint)> {
         // Initialize candidate neighborhood, index of highest search layer,
         // finalized layer of node insertion, and entry point update outcome.
         let (mut W, n_layers, insertion_layer, set_ep) = self
-            .search_init(store, graph, query, insertion_layer)
+            .search_init::<_, N>(store, graph, query, insertion_layer)
             .await?;
 
         // Saved links for insertion layers
@@ -1467,7 +1469,7 @@ impl HnswSearcher {
             /// The base vector that we connect to. It is in "query" form to compare to `nb_links`.
             nb_query: Query,
             /// The NeighborhoodV<V> of the base vector.
-            nb_links: SortedEdgeIds<Vector>,
+            nb_links: Vec<Vector>,
             /// The current state of the search.
             search: BinarySearch,
         }
@@ -1482,7 +1484,7 @@ impl HnswSearcher {
             let mut l_neighbors = Vec::with_capacity(l_links.len());
             for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
                 let nb_links = graph.get_links(nb, lc).await;
-                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links).await);
+                let nb_links = store.only_valid_vectors(nb_links).await;
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
@@ -1544,7 +1546,7 @@ impl HnswSearcher {
             for n in l_neighbors.iter_mut() {
                 let insertion_idx = n.search.result().ok_or(eyre!("No insertion index found"))?;
                 n.nb_links.insert(insertion_idx, inserted_vector.clone());
-                n.nb_links.trim_to_k_nearest(max_links);
+                n.nb_links.truncate(max_links);
             }
         }
 
@@ -1553,7 +1555,10 @@ impl HnswSearcher {
             .into_iter()
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
-                neighbors: l_links.into_iter().map(|(v, _)| v).collect::<Vec<_>>(),
+                neighbors: l_links
+                    .into_iter()
+                    .map(|(v, _)| v.clone()) //TODO: why is this clone necessary?
+                    .collect::<Vec<_>>(),
                 nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
             })
             .collect();
@@ -1639,7 +1644,12 @@ mod tests {
         for query in queries1.iter() {
             let insertion_layer = db.gen_layer_rng(rng)?;
             let (neighbors, set_ep) = db
-                .search_to_insert(vector_store, graph_store, query, insertion_layer)
+                .search_to_insert::<_, SortedNeighborhoodV<PlaintextStore>>(
+                    vector_store,
+                    graph_store,
+                    query,
+                    insertion_layer,
+                )
                 .await?;
             assert!(!db.is_match(vector_store, &neighbors).await?);
 
@@ -1718,7 +1728,7 @@ mod tests {
             let query = queries.next().unwrap();
 
             let (neighbors, set_ep) = searcher_default
-                .search_to_insert(
+                .search_to_insert::<_, SortedNeighborhoodV<PlaintextStore>>(
                     vector_store_default,
                     graph_store_default,
                     &query,
@@ -1757,7 +1767,7 @@ mod tests {
             let query = queries_copy.next().unwrap();
 
             let (neighbors, set_ep) = searcher_linear
-                .search_to_insert(
+                .search_to_insert::<_, SortedNeighborhoodV<PlaintextStore>>(
                     vector_store_linear,
                     graph_store_linear,
                     &query,

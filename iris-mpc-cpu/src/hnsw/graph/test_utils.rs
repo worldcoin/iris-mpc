@@ -315,7 +315,7 @@ impl DbContext {
                     .await?;
             }
             let links = links.edge_ids();
-            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
         }
 
         tx.tx.commit().await?;
