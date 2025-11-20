@@ -1338,7 +1338,7 @@ impl HnswSearcher {
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
         }
 
-        W.insert_batch_and_trim(store, &[], Some(k)).await?;
+        W.trim(store, Some(k)).await?;
         Ok(W)
     }
 
@@ -1460,7 +1460,7 @@ impl HnswSearcher {
         // Truncate search results to size M before insertion
         for (lc, l_links) in links.iter_mut().enumerate() {
             let M = self.params.get_M(lc);
-            l_links.insert_batch_and_trim(store, &[], Some(M)).await?;
+            l_links.trim(store, Some(M)).await?;
         }
 
         struct NeighborUpdate<Query, Vector, Distance> {
@@ -1603,10 +1603,10 @@ impl HnswSearcher {
         }
     }
 
-    pub async fn matches<V: VectorStore>(
+    pub async fn matches<V: VectorStore, N: NeighborhoodV<V>>(
         &self,
         store: &mut V,
-        neighbors: &[SortedNeighborhoodV<V>],
+        neighbors: &[N],
     ) -> Result<Vec<(V::VectorRef, V::DistanceRef)>> {
         match neighbors.first() {
             None => Ok(vec![]), // Empty database.

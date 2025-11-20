@@ -15,15 +15,22 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use tracing::debug;
 
+pub trait NeighborhoodV2:
+    Neighborhood<
+    Vector = <<Self as NeighborhoodV2>::V as VectorStore>::VectorRef,
+    Distance = <<Self as NeighborhoodV2>::V as VectorStore>::DistanceRef,
+>
+{
+    type V: VectorStore;
+}
+
 pub trait NeighborhoodV<V: VectorStore>:
     Neighborhood<Vector = V::VectorRef, Distance = V::DistanceRef>
 {
 }
 
-impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V> {}
-
 /// Trait that captures the requirements for an HNSW candidate list container/data-structure.
-/// Implementers should ensure the following post-condition for calls to `..and_retain_k` methods:
+/// Implementers should ensure the following post-condition for calls to `trim` methods:
 /// - The elements in the container are the smallest `container.length` ones among all insertions.
 /// - The last element in the container is the largest one.
 #[allow(async_fn_in_trait)]
@@ -59,6 +66,16 @@ pub trait Neighborhood: Clone {
     ) -> Result<()>
     where
         V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>;
+
+    /// Apply the invariant-maintaining algorithm
+    /// Note that in general maintaining the invariant may incur significant overhead.
+    /// Consult implementer for performance specs.
+    async fn trim<V>(&mut self, store: &mut V, k: Option<usize>) -> Result<()>
+    where
+        V: VectorStore<VectorRef = Self::Vector, DistanceRef = Self::Distance>,
+    {
+        self.insert_batch_and_trim(store, &[], k).await
+    }
 
     /// Inserts a single element into the neighborhood.
     /// By default calls batched version with size 1.
@@ -126,6 +143,14 @@ impl<V> DerefMut for SortedEdgeIds<V> {
 
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+
+struct SortedNeighborhoodV2<V: VectorStore>(SortedNeighborhood<V::VectorRef, V::DistanceRef>);
+
+impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V> {}
+
+// impl<Vector: Clone, Distance: Clone> NeighborhoodV2 for SortedNeighborhood<Vector, Distance> {
+//     type V = W;
+// }
 
 /// SortedNeighborhood maintains a collection of distance-weighted oriented
 /// graph edges for an HNSW graph which are stored in increasing order of edge

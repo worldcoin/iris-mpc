@@ -9,7 +9,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
+    hnsw::{graph::neighborhood::NeighborhoodV, searcher::SetEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
@@ -28,7 +28,7 @@ pub struct SearchParams {
     pub do_match: bool,
 }
 
-pub async fn search<ROT>(
+pub async fn search<ROT, N: NeighborhoodV<Aby3Store>>(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
@@ -72,7 +72,7 @@ where
     Ok(results)
 }
 
-async fn per_session<ROT>(
+async fn per_session<ROT, N: NeighborhoodV<Aby3Store>>(
     session: &HawkSession,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
@@ -115,7 +115,7 @@ async fn per_session<ROT>(
     Ok(())
 }
 
-async fn per_insert_query(
+async fn per_insert_query<N: NeighborhoodV<Aby3Store>>(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store,
@@ -126,7 +126,7 @@ async fn per_insert_query(
 
     let (links, set_ep) = search_params
         .hnsw
-        .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
+        .search_to_insert::<_, N>(aby3_store, graph_store, &query, insertion_layer)
         .await?;
 
     let matches = if search_params.do_match {
