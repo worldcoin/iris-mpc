@@ -32,11 +32,11 @@ async fn main() -> Result<()> {
     );
 
     println!("Initializing graph...");
-    let (graph, searcher) = load_graph(&config.graph, &mut store, &mut rng).await?;
+    let graph = load_graph(&config.graph, &mut store, &mut rng).await?;
     println!("Graph initialized.");
 
     println!("Starting analysis...");
-    let results = run_analysis(&config.analysis, store, graph, &searcher, &mut rng).await?;
+    let results = run_analysis(&config.analysis, store, graph, &mut rng).await?;
     println!("Analysis complete. {} searches performed.", results.len());
 
     process_results(&config.analysis, results)?;

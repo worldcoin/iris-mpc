@@ -3,7 +3,10 @@ use crate::{
         aby3::aby3_store::DistanceFn,
         plaintext_store::{PlaintextStore, SharedPlaintextStore},
     },
-    hnsw::{GraphMem, HnswSearcher},
+    hnsw::{
+        searcher::{LayerDistribution, LayerMode},
+        GraphMem, HnswParams, HnswSearcher,
+    },
     utils::serialization::{
         graph::{read_graph_from_file, GraphFormat},
         iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
@@ -31,8 +34,6 @@ pub struct AnalysisConfig {
     pub sample_size: usize,
     /// Optional seed for reproducible sampling and mutation.
     pub seed: Option<u64>,
-    /// ef_search parameter to use during analysis.
-    pub ef_search: usize,
     /// Distance function: "fhd" (Fractional Hamming) or "min_fhd" (Min-FHD).
     pub distance_fn: String,
     /// Number of neighbors to retrieve in search (k).
@@ -45,6 +46,8 @@ pub struct AnalysisConfig {
     pub rotations: Range<isize>,
     /// List of mutation amounts
     pub mutations: Vec<f64>,
+    /// Config for HNSW searcher to use for search during analysis.
+    pub search_hnsw_config: HnswConfig,
 }
 
 impl AnalysisConfig {
@@ -70,7 +73,6 @@ pub async fn run_analysis(
     config: &AnalysisConfig,
     store: PlaintextStore,
     graph: GraphMem<VectorId>,
-    searcher: &HnswSearcher,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
     // Get all valid VectorIds from the store.
@@ -93,8 +95,7 @@ pub async fn run_analysis(
     // Convert to shared store so we can parallelize searches
     let store = SharedPlaintextStore::from(store);
 
-    let mut analysis_searcher = searcher.clone();
-    analysis_searcher.params.ef_search[0] = config.ef_search;
+    let analysis_searcher: HnswSearcher = (&config.search_hnsw_config).into();
 
     let k_neighbors = config.k_neighbors;
     let mut futures = Vec::new();
@@ -270,7 +271,7 @@ pub enum GraphInit {
     /// Build a new graph from the loaded iris codes.
     GenerateDynamic {
         size: usize,
-        hnsw_params: HnswConfig,
+        gen_hnsw_config: HnswConfig,
     },
     /// Load a pre-built graph from a binary file.
     BinFile { path: PathBuf, format: GraphFormat },
@@ -278,10 +279,26 @@ pub enum GraphInit {
 
 /// HNSW parameters for graph construction.
 #[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
 pub struct HnswConfig {
     pub ef_construction: usize,
     pub ef_search: usize,
-    pub m: usize,
+    pub M: usize,
+    pub layer_mode: LayerMode,
+}
+
+impl From<&HnswConfig> for HnswSearcher {
+    fn from(value: &HnswConfig) -> Self {
+        let params = HnswParams::new(value.ef_construction, value.ef_search, value.M);
+        let layer_mode = value.layer_mode.clone();
+        let layer_distribution = LayerDistribution::new_geometric_from_M(value.M);
+
+        HnswSearcher {
+            params,
+            layer_mode,
+            layer_distribution,
+        }
+    }
 }
 
 // --- Helper Functions ---
@@ -324,18 +341,20 @@ pub async fn load_graph(
     config: &GraphInit,
     store: &mut PlaintextStore,
     rng: &mut StdRng,
-) -> Result<(GraphMem<VectorId>, HnswSearcher)> {
+) -> Result<GraphMem<VectorId>> {
     match config {
         GraphInit::BinFile { path, format } => {
             println!("Loading graph from binary file: {}", path.display());
             let graph = read_graph_from_file(path, *format)?;
-            let searcher = HnswSearcher::new_with_test_parameters();
-            Ok((graph, searcher))
+            Ok(graph)
         }
-        GraphInit::GenerateDynamic { size, hnsw_params } => {
+        GraphInit::GenerateDynamic {
+            size,
+            gen_hnsw_config: config,
+        } => {
             println!(
                 "Building new graph (size={}, M={}, ef_constr={})...",
-                size, hnsw_params.m, hnsw_params.ef_construction
+                size, config.M, config.ef_construction
             );
             if *size > store.len() {
                 bail!(
@@ -344,14 +363,11 @@ pub async fn load_graph(
                     store.len()
                 );
             }
-            let searcher = HnswSearcher::new_standard(
-                hnsw_params.ef_construction,
-                hnsw_params.ef_search,
-                hnsw_params.m,
-            );
 
+            let searcher: HnswSearcher = config.into();
             let graph = store.generate_graph(rng, *size, &searcher).await?;
-            Ok((graph, searcher))
+
+            Ok(graph)
         }
     }
 }
