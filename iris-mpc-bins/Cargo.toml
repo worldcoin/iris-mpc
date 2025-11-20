@@ -155,6 +155,10 @@ name = "construct-graph-ptxt"
 path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
 
 [[bin]]
+name = "run-accuracy-analysis"
+path = "bin/iris-mpc-cpu/run_accuracy_analysis.rs"
+
+[[bin]]
 name = "generate_ideal_graph"
 path = "bin/iris-mpc-cpu/generate_ideal_graph.rs"
 
