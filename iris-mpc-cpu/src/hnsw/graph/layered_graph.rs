@@ -5,14 +5,27 @@
 
 use crate::{
     execution::hawk_main::state_check::SetHash,
+    hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
+        searcher::{ConnectPlan, ConnectPlanLayer, LayerMode, SetEntryPoint},
         vector_store::Ref,
+        HnswSearcher,
     },
 };
-use itertools::izip;
+
+use eyre::Result;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use itertools::{izip, Itertools};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+    iter::once,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -61,16 +74,15 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         Arc::new(RwLock::new(self))
     }
 
-    pub fn from_precomputed(entry_point: Option<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
+    pub fn from_precomputed(entry_points: Vec<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
         GraphMem {
-            entry_points: entry_point
-                .map(|ep| {
-                    vec![EntryPoint {
-                        point: ep.0,
-                        layer: ep.1,
-                    }]
+            entry_points: entry_points
+                .into_iter()
+                .map(|ep| EntryPoint {
+                    point: ep.0,
+                    layer: ep.1,
                 })
-                .unwrap_or_default(),
+                .collect::<Vec<_>>(),
             layers,
         }
     }
@@ -208,6 +220,113 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     }
 }
 
+impl GraphMem<IrisVectorId> {
+    /// Builds an idealized GraphMem, where all nearest-neighborhoods are exact.
+    ///
+    /// Layer 0 is built directly from a file (which generally is expensive to produce).
+    /// Nodes in Layer 0 will have `searcher.params.get_M_max(0)` neighbors, if this value is at
+    /// most equal to the number of neighbors per node found in the target file. Otherwise, the method panics.
+    ///
+    /// Higher layers are built from brute-force pairwise computations among all resident nodes. Layer `lc`
+    /// will have `searcher.params.get_M_max(lc)`, but consider that the graph might have a Linear-Scan layer.
+    ///
+    /// The searcher also computes the insertion layers for all nodes (using `prf_seed` for reproducibility).
+    /// The engine choice specifies the used distance (FHD or MinFHD).
+    pub fn ideal_from_irises(
+        irises: Vec<IrisCode>,
+        filepath: PathBuf, // File containing KNN results for layer 0
+        searcher: &HnswSearcher,
+        prf_seed: [u8; 16],
+        echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
+    ) -> Result<Self> {
+        let zero_layer = {
+            let mut results = read_knn_results_from_file(filepath).unwrap();
+            for result in results.iter_mut() {
+                result.truncate(searcher.params.get_M_max(0));
+            }
+            let results = results
+                .into_par_iter()
+                .map(|result| result.map(IrisVectorId::from_serial_id))
+                .collect::<Vec<_>>();
+            Layer::from_knn_results(results, irises.len())
+        };
+
+        let irises_with_vector_ids = izip!(
+            zero_layer.links.keys().cloned().sorted(),
+            irises.into_iter(),
+        )
+        .collect::<Vec<_>>();
+
+        // Collect nodes into layers they are inserted into (for layers > 0)
+        let mut nonzero_layers_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> =
+            BTreeMap::new();
+        for (vector_id, iris) in irises_with_vector_ids.iter() {
+            let layer = searcher.gen_layer_prf(&prf_seed, &vector_id)?;
+            // Insert node into layers 1 to insertion layer (or not if inserted in layer 0)
+            for l in 1..=layer {
+                nonzero_layers_map
+                    .entry(l)
+                    .or_default()
+                    .push((*vector_id, iris.clone()));
+            }
+        }
+
+        let mut nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> =
+            nonzero_layers_map.into_values().collect::<Vec<Vec<_>>>();
+
+        // Initialize entry points and truncate layers depending on the layer mode
+        let entry_points = match searcher.layer_mode {
+            LayerMode::Standard | LayerMode::Bounded { .. } => {
+                if let LayerMode::Bounded { max_graph_layer } = searcher.layer_mode {
+                    nodes_for_nonzero_layers.truncate(max_graph_layer);
+                }
+
+                // Entry point is the first vector of the highest non-empty layer, or no
+                // entry point if the graph is empty
+                once(&irises_with_vector_ids)
+                    .chain(nodes_for_nonzero_layers.iter())
+                    .last()
+                    .unwrap_or(&vec![])
+                    .first()
+                    .map(|(v, _)| vec![(*v, nodes_for_nonzero_layers.len())])
+                    .unwrap_or_default()
+            }
+            LayerMode::LinearScan { max_graph_layer } => {
+                // Entry points are the nodes inserted at the layer after `max_graph_layer`,
+                // found at index `max_graph_layer` in the list of nonzero layers
+                let entry_points = nodes_for_nonzero_layers
+                    .get(max_graph_layer)
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|(v, _)| (*v, max_graph_layer))
+                    .collect();
+
+                nodes_for_nonzero_layers.truncate(max_graph_layer);
+
+                entry_points
+            }
+        };
+
+        // Finally, run brute force algorithms to connect nodes in each layer
+        let nonzero_layers =
+            nodes_for_nonzero_layers
+                .into_iter()
+                .enumerate()
+                .map(|(i, layer_iris_data)| {
+                    Layer::ideal_from_irises(
+                        layer_iris_data,
+                        searcher.params.get_M_max(i + 1),
+                        echoice,
+                    )
+                });
+
+        Ok(GraphMem::from_precomputed(
+            entry_points,
+            once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
+        ))
+    }
+}
+
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct Layer<V: Ref + Display + FromStr + Ord> {
@@ -250,6 +369,34 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
 
     pub fn get_links_map(&self) -> &HashMap<V, Vec<V>> {
         &self.links
+    }
+
+    fn from_knn_results(results: Vec<KNNResult<V>>, n: usize) -> Self {
+        let mut ret = Layer::new();
+        for KNNResult { node, neighbors } in results.into_iter().take(n) {
+            ret.set_links(node, neighbors);
+        }
+        ret
+    }
+
+    /// Constructs a Layer from pairs of (vectorRef, iris) by computing
+    /// the ideal K-nearest neighbors for each such entry.
+    fn ideal_from_irises(iris_data: Vec<(V, IrisCode)>, k: usize, echoice: EngineChoice) -> Self {
+        let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
+        let n = irises.len();
+        let k = k.min(n - 1);
+
+        // Initialize the KNN algorithm;
+        let mut engine = Engine::init(echoice, irises, k, 1);
+        // Run the entire computation
+        let results = engine
+            .compute_chunk(n)
+            .into_iter()
+            // remap from engine 1-based indices to original vector ids
+            .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
+            .collect::<Vec<_>>();
+
+        Layer::from_knn_results(results, n)
     }
 }
 
@@ -308,6 +455,7 @@ mod tests {
     use aes_prng::AesRng;
     use eyre::Result;
     use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
+
     use rand::{RngCore, SeedableRng};
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]

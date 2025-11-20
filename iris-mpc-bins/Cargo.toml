@@ -41,6 +41,7 @@ ring.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error = "*"
 sha2.workspace = true
 sodiumoxide = "0.2.7"
 sqlx.workspace = true
@@ -71,6 +72,7 @@ iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
 iris-mpc-anon-stats-server = { path = "../iris-mpc-anon-stats-server" }
 blake3 = "1.8.2"
 aws-smithy-types = "1.2.9"
+ampc-server-utils.workspace = true
 
 
 # ---------------------
@@ -149,6 +151,10 @@ path = "bin/iris-mpc-cpu/generate_ideal_neighborhoods.rs"
 [[bin]]
 name = "construct-graph-ptxt"
 path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
+
+[[bin]]
+name = "generate_ideal_graph"
+path = "bin/iris-mpc-cpu/generate_ideal_graph.rs"
 
 # ---------------------
 # binaries for iris-mpc-gpu

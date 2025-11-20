@@ -6,7 +6,6 @@ pub mod helpers;
 pub mod iris_db;
 pub mod job;
 pub mod postgres;
-pub mod server_coordination;
 pub mod shamir;
 #[cfg(feature = "helpers")]
 pub mod test;

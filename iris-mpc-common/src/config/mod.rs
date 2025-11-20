@@ -1,10 +1,12 @@
 use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
 use ampc_actor_utils::network::config::deserialize_yaml_json_string;
 use ampc_actor_utils::network::config::TlsConfig;
+use ampc_server_utils::ServerCoordinationConfig;
 use clap::Parser;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+
 pub mod json_wrapper;
 
 pub const ENV_DEV: &str = "dev";
@@ -51,6 +53,9 @@ pub struct Config {
     pub service: Option<ServiceConfig>,
 
     #[serde(default)]
+    pub server_coordination: Option<ServerCoordinationConfig>,
+
+    #[serde(default)]
     pub database: Option<DbConfig>,
 
     #[serde(default)]
@@ -61,9 +66,6 @@ pub struct Config {
 
     #[serde(default = "default_processing_timeout_secs")]
     pub processing_timeout_secs: u64,
-
-    #[serde(default = "default_startup_sync_timeout_secs")]
-    pub startup_sync_timeout_secs: u64,
 
     #[serde(default)]
     pub public_key_base_url: String,
@@ -93,12 +95,6 @@ pub struct Config {
     )]
     pub predefined_batch_sizes: Vec<usize>,
 
-    #[serde(default = "default_heartbeat_interval_secs")]
-    pub heartbeat_interval_secs: u64,
-
-    #[serde(default = "default_heartbeat_initial_retries")]
-    pub heartbeat_initial_retries: u64,
-
     #[serde(default)]
     pub fake_db_size: usize,
 
@@ -111,9 +107,6 @@ pub struct Config {
     #[serde(default)]
     pub enable_debug_timing: bool,
 
-    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
-    pub node_hostnames: Vec<String>,
-
     #[serde(
         default = "default_service_ports",
         deserialize_with = "deserialize_yaml_json_string"
@@ -124,20 +117,8 @@ pub struct Config {
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub service_outbound_ports: Vec<String>,
 
-    #[serde(
-        default = "default_healthcheck_ports",
-        deserialize_with = "deserialize_yaml_json_string"
-    )]
-    pub healthcheck_ports: Vec<String>,
-
-    #[serde(default = "default_http_query_retry_delay_ms")]
-    pub http_query_retry_delay_ms: u64,
-
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
-
-    #[serde(default)]
-    pub image_name: String,
 
     #[serde(default)]
     pub enable_s3_importer: bool,
@@ -228,9 +209,6 @@ pub struct Config {
 
     #[serde(default = "default_hawk_connection_parallelism")]
     pub hawk_connection_parallelism: usize,
-
-    #[serde(default = "default_hawk_server_healthcheck_port")]
-    pub hawk_server_healthcheck_port: usize,
 
     #[serde(default = "default_hnsw_param_ef_constr")]
     pub hnsw_param_ef_constr: usize,
@@ -333,24 +311,12 @@ fn default_processing_timeout_secs() -> u64 {
     60
 }
 
-fn default_startup_sync_timeout_secs() -> u64 {
-    300
-}
-
 fn default_max_batch_size() -> usize {
     64
 }
 
 fn default_predefined_batch_sizes() -> Vec<usize> {
     Vec::new()
-}
-
-fn default_heartbeat_interval_secs() -> u64 {
-    2
-}
-
-fn default_heartbeat_initial_retries() -> u64 {
-    10
 }
 
 fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
@@ -411,10 +377,6 @@ fn default_hawk_connection_parallelism() -> usize {
     16
 }
 
-fn default_hawk_server_healthcheck_port() -> usize {
-    300
-}
-
 fn default_hnsw_param_ef_constr() -> usize {
     320
 }
@@ -434,14 +396,6 @@ fn default_hawk_numa() -> bool {
 
 fn default_service_ports() -> Vec<String> {
     vec!["4000".to_string(); 3]
-}
-
-fn default_healthcheck_ports() -> Vec<String> {
-    vec!["3000".to_string(); 3]
-}
-
-fn default_http_query_retry_delay_ms() -> u64 {
-    1000
 }
 
 fn default_max_deletions_per_batch() -> usize {
@@ -533,6 +487,9 @@ impl Config {
             config.service_outbound_ports = config.service_ports.clone();
         }
 
+        if let Some(service_coordination) = &mut config.server_coordination {
+            config.party_id = service_coordination.party_id;
+        }
         Ok(config)
     }
 
@@ -668,7 +625,6 @@ pub struct CommonConfig {
     environment: String,
     results_topic_arn: String,
     processing_timeout_secs: u64,
-    startup_sync_timeout_secs: u64,
     public_key_base_url: String,
     shares_bucket_name: String,
     sns_buffer_bucket_name: String,
@@ -678,13 +634,10 @@ pub struct CommonConfig {
     max_batch_size: usize,
     #[serde(default)]
     predefined_batch_sizes: Vec<usize>,
-    heartbeat_interval_secs: u64,
-    heartbeat_initial_retries: u64,
     fake_db_size: usize,
     return_partial_results: bool,
     disable_persistence: bool,
     shutdown_last_results_sync_timeout_secs: u64,
-    image_name: String,
     db_chunks_bucket_region: String,
     fixed_shared_secrets: bool,
     luc_enabled: bool,
@@ -741,11 +694,11 @@ impl From<Config> for CommonConfig {
             kms_key_arns: _, // kms key arns are different for each server
             tls: _,
             service: _,
+            server_coordination: _,
             database: _,     // database is different for each server
             cpu_database: _, // cpu database is different for each server
             aws: _,          // aws is different for each server
             processing_timeout_secs,
-            startup_sync_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
             sns_buffer_bucket_name,
@@ -754,19 +707,13 @@ impl From<Config> for CommonConfig {
             max_db_size,
             max_batch_size,
             predefined_batch_sizes,
-            heartbeat_interval_secs,
-            heartbeat_initial_retries,
             fake_db_size,
             return_partial_results,
             disable_persistence,
             enable_debug_timing: _,
-            node_hostnames: _,            // Could be different for each server
-            service_ports: _,             // Could be different for each server
-            service_outbound_ports: _,    // Could be different for each server
-            healthcheck_ports: _,         // Could be different for each server
-            http_query_retry_delay_ms: _, // Could be different for each server
+            service_ports: _,          // Could be different for each server
+            service_outbound_ports: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,
-            image_name,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers
             db_chunks_bucket_name: _, // different for each server
             db_chunks_bucket_region,
@@ -791,7 +738,6 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_request_parallelism,
             hawk_connection_parallelism,
-            hawk_server_healthcheck_port: _, // different for each server
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
@@ -830,7 +776,6 @@ impl From<Config> for CommonConfig {
             environment,
             results_topic_arn,
             processing_timeout_secs,
-            startup_sync_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
             sns_buffer_bucket_name,
@@ -839,13 +784,10 @@ impl From<Config> for CommonConfig {
             max_db_size,
             predefined_batch_sizes,
             max_batch_size,
-            heartbeat_interval_secs,
-            heartbeat_initial_retries,
             fake_db_size,
             return_partial_results,
             disable_persistence,
             shutdown_last_results_sync_timeout_secs,
-            image_name,
             db_chunks_bucket_region,
             fixed_shared_secrets,
             luc_enabled,

@@ -172,7 +172,7 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextVectorRef>) -> GraphMe
         }
         shared_layers.push(shared_layer);
     }
-    GraphMem::from_precomputed(ep, shared_layers)
+    GraphMem::from_precomputed(ep.into_iter().collect::<Vec<_>>(), shared_layers)
 }
 
 /// Generates 3 pairs of vector stores and graphs from a plaintext
