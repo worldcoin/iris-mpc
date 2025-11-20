@@ -5,8 +5,8 @@ use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
-        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
-        HnswSearcher,
+        graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
+        GraphMem, HnswSearcher,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
     utils::{
@@ -169,15 +169,19 @@ impl Args {
     }
 }
 
-// Convertor: Args -> HnswParams.
-impl From<&Args> for HnswParams {
+// Convertor: Args -> HnswSearcher.
+impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        let mut params = HnswParams::new(args.ef, args.ef, args.M);
+        let mut searcher = HnswSearcher::new_standard(args.ef, args.ef, args.M);
         if let Some(q) = args.layer_probability {
-            params.layer_probability = q;
+            match &mut searcher.layer_distribution {
+                LayerDistribution::Geometric { layer_probability } => {
+                    *layer_probability = q;
+                }
+            }
         }
 
-        params
+        searcher
     }
 }
 
@@ -195,7 +199,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("Parsing CLI arguments");
     let args = Args::parse();
-    let params = HnswParams::from(&args);
+    let searcher = HnswSearcher::from(&args);
 
     tracing::info!("Setting database connections");
     let dbs = init_dbs(&args).await;
@@ -359,12 +363,11 @@ async fn main() -> Result<()> {
         vectors.into_iter(),
         graphs.into_iter(),
     ) {
-        let params = params.clone();
+        let searcher = searcher.clone();
         let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
         let skip_serial_ids = args.skip_insert_serial_ids.clone();
 
         jobs.spawn(async move {
-            let searcher = HnswSearcher { params };
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
@@ -382,7 +385,7 @@ async fn main() -> Result<()> {
                 let inserted_id = IrisVectorId::from_serial_id(serial_id);
                 vector_store.insert_with_id(inserted_id, query.clone());
 
-                let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
+                let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, set_ep) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;

@@ -51,7 +51,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
                 let query = Arc::new(raw_query.clone());
-                let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
+                let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
                 searcher
                     .insert(&mut vector, &mut graph, &query, insertion_layer)
                     .await
@@ -68,7 +68,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                     let query = Arc::new(on_the_fly_query);
-                    let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
+                    let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
                     searcher
                         .insert(&mut db_vectors, &mut graph, &query, insertion_layer)
                         .await
@@ -253,7 +253,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let mut graph_store = graph_store;
                             jobs.spawn(async move {
                                 let mut vector_store = vector_store.lock().await;
-                                let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
+                                let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
                                 searcher
                                     .insert(
                                         &mut *vector_store,

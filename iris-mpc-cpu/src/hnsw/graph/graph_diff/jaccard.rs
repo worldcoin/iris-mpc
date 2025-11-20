@@ -95,7 +95,7 @@ impl<V: Ref + Display> Display for DetailedJaccardReport<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr + std::cmp::Ord> Differ<V> for DetailedJaccardDiffer<V> {
+impl<V: Ref + Display + FromStr + Ord> Differ<V> for DetailedJaccardDiffer<V> {
     type Output = DetailedJaccardReport<V>;
 
     fn start_layer(&mut self, _layer_index: usize) {

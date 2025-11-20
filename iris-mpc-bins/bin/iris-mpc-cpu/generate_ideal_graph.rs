@@ -2,8 +2,8 @@ use eyre::Result;
 use iris_mpc_common::IrisVectorId;
 use iris_mpc_cpu::hawkers::aby3::aby3_store::DistanceFn;
 use iris_mpc_cpu::hawkers::plaintext_store::{fraction_ordering, PlaintextStore};
-use iris_mpc_cpu::hnsw::searcher::TopLayerSearchMode;
-use iris_mpc_cpu::hnsw::{HnswParams, HnswSearcher, VectorStore};
+use iris_mpc_cpu::hnsw::searcher::LayerMode;
+use iris_mpc_cpu::hnsw::{HnswSearcher, VectorStore};
 use iris_mpc_cpu::utils::serialization::graph::write_graph_current;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 use iris_mpc_cpu::{hawkers::ideal_knn_engines::EngineChoice, hnsw::GraphMem};
@@ -22,7 +22,7 @@ struct IdealGraphConfig {
     graph_size: usize,
     irises_path: PathBuf,
     layer0_path: PathBuf,
-    searcher: HnswParams,
+    searcher: HnswSearcher,
     prf_seed: [u8; 16],
     echoice: EngineChoice,
     sanity_check: bool,
@@ -68,16 +68,14 @@ async fn main() {
         .take(n);
     let irises = stream.map(|e| (&e.unwrap()).into()).collect::<Vec<_>>();
 
-    let searcher = HnswSearcher {
-        params: config.searcher,
-    };
+    let searcher = config.searcher;
 
     let graph = GraphMem::ideal_from_irises(
         irises.clone(),
         config.layer0_path.clone(),
         &searcher,
-        config.prf_seed.clone(),
-        config.echoice.clone(),
+        config.prf_seed,
+        config.echoice,
     )
     .unwrap();
 
@@ -90,21 +88,28 @@ async fn main() {
             }
         }
 
-        assert!(!graph.entry_point.is_empty());
-
-        let last_graph_layer = graph.layers.last().unwrap();
-
-        if let TopLayerSearchMode::LinearScan(layer_cap) = searcher.params.top_layer_mode {
-            assert!(graph.layers.len() <= layer_cap);
-
-            // All entry points should exist in the top graph layer as well
-            for entry in &graph.entry_point {
-                assert!(
-                    last_graph_layer.links.contains_key(&entry.point),
-                    "Entry point {:?} not found in last graph layer",
-                    entry
-                );
+        // Check layers and entry points are valid for layer mode
+        match searcher.layer_mode {
+            LayerMode::Standard => {
+                assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
             }
+            LayerMode::Bounded { max_graph_layer } => {
+                assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
+                assert!(graph.num_layers() <= max_graph_layer + 1);
+            }
+            LayerMode::LinearScan { max_graph_layer } => {
+                assert!(graph.num_layers() <= max_graph_layer + 1);
+            }
+        }
+
+        // All entry points should exist in the top graph layer as well
+        let last_graph_layer = graph.layers.last().unwrap();
+        for entry in &graph.entry_points {
+            assert!(
+                last_graph_layer.links.contains_key(&entry.point),
+                "Entry point {:?} not found in last graph layer",
+                entry
+            );
         }
 
         let mut entropy_rng = rand::rngs::StdRng::from_entropy();
@@ -134,29 +139,32 @@ async fn main() {
         for lc in 0..graph.layers.len() {
             let neighbors = graph.layers[lc]
                 .get_links(&sample)
-                .expect(&format!("{}", lc));
+                .unwrap_or_else(|| panic!("{}", lc));
 
             let mut dists = Vec::new();
             for k in graph.layers[lc].links.keys() {
                 if *k != sample {
                     let dist = store.eval_distance(&sample_iris, k).await.unwrap();
-                    dists.push((k.clone(), dist));
+                    dists.push((*k, dist));
                 }
             }
 
-            dists.sort_by(|a, b| fraction_ordering(&a.1, &b.1));
-            dists.truncate(neighbors.len());
-            let kth_dist = dists.last().unwrap().1;
+            if !dists.is_empty() {
+                dists.sort_by(|a, b| fraction_ordering(&a.1, &b.1));
+                dists.truncate(neighbors.len());
+                let kth_dist = dists.last().unwrap().1;
 
-            let count_greater = neighbors
-                .iter()
-                .filter(|n| {
-                    let d = sample_iris.get_distance_fraction(store.storage.get_vector(n).unwrap());
-                    matches!(fraction_ordering(&d, &kth_dist), Ordering::Greater)
-                })
-                .count();
+                let count_greater = neighbors
+                    .iter()
+                    .filter(|n| {
+                        let d =
+                            sample_iris.get_distance_fraction(store.storage.get_vector(n).unwrap());
+                        matches!(fraction_ordering(&d, &kth_dist), Ordering::Greater)
+                    })
+                    .count();
 
-            assert!(count_greater == 0);
+                assert!(count_greater == 0);
+            }
         }
     }
 

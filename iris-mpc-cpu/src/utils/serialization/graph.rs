@@ -283,7 +283,7 @@ impl From<graph_v0::Layer> for Layer<IrisVectorId> {
 impl From<graph_v0::GraphV0> for GraphMem<IrisVectorId> {
     fn from(value: GraphV0) -> Self {
         GraphMem {
-            entry_point: value
+            entry_points: value
                 .entry_point
                 .map(|ep| ep.into())
                 .into_iter()
@@ -334,7 +334,7 @@ impl From<graph_v1::Layer> for Layer<IrisVectorId> {
 impl From<graph_v1::GraphV1> for GraphMem<IrisVectorId> {
     fn from(value: GraphV1) -> Self {
         GraphMem {
-            entry_point: value
+            entry_points: value
                 .entry_point
                 .map(|e| e.into())
                 .into_iter()
@@ -384,7 +384,7 @@ impl From<graph_v2::GraphV2> for GraphMem<IrisVectorId> {
     fn from(value: graph_v2::GraphV2) -> Self {
         GraphMem {
             // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
-            entry_point: value
+            entry_points: value
                 .entry_point
                 .map(|e| e.into())
                 .into_iter()
@@ -431,7 +431,7 @@ impl From<graph_v3::GraphV3> for GraphMem<IrisVectorId> {
     fn from(value: graph_v3::GraphV3) -> Self {
         GraphMem {
             // V3 uses a Vec<EntryPoint>, which matches GraphMem
-            entry_point: value.entry_point.into_iter().map(|e| e.into()).collect(),
+            entry_points: value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
         }
     }
@@ -486,7 +486,7 @@ impl From<Layer<IrisVectorId>> for graph_v3::Layer {
 impl From<GraphMem<IrisVectorId>> for graph_v3::GraphV3 {
     fn from(value: GraphMem<IrisVectorId>) -> Self {
         graph_v3::GraphV3 {
-            entry_point: value.entry_point.into_iter().map(|ep| ep.into()).collect(),
+            entry_point: value.entry_points.into_iter().map(|ep| ep.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
         }
     }

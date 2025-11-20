@@ -11,7 +11,7 @@ use iris_mpc_cpu::{
         plaintext_store::PlaintextStore,
         shared_irises::SharedIrises,
     },
-    hnsw::{GraphMem, HnswParams, HnswSearcher},
+    hnsw::{GraphMem, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{random, rngs::StdRng, SeedableRng};
@@ -48,7 +48,7 @@ async fn create_graph_from_plain_dbs(
     db_seed: u64,
     left_db: &IrisDB,
     right_db: &IrisDB,
-    params: &HnswParams,
+    searcher: &HnswSearcher,
 ) -> Result<([GraphMem<Aby3VectorRef>; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(db_seed);
     let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
@@ -70,14 +70,11 @@ async fn create_graph_from_plain_dbs(
     let mut left_store = PlaintextStore::with_storage(left_storage);
     let mut right_store = PlaintextStore::with_storage(right_storage);
 
-    let searcher = HnswSearcher {
-        params: params.clone(),
-    };
     let left_graph = left_store
-        .generate_graph(&mut rng, DB_SIZE, &searcher)
+        .generate_graph(&mut rng, DB_SIZE, searcher)
         .await?;
     let right_graph = right_store
-        .generate_graph(&mut rng, DB_SIZE, &searcher)
+        .generate_graph(&mut rng, DB_SIZE, searcher)
         .await?;
 
     let left_mpc_graph: GraphMem<Aby3VectorRef> = left_graph;
@@ -137,13 +134,15 @@ async fn start_hawk_node(
 ) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
-    let params = HnswParams::new(
+    let searcher = HnswSearcher::new_standard(
         args.hnsw_param_ef_constr,
         args.hnsw_param_ef_search,
         args.hnsw_param_M,
     );
+
     let (graph, iris_store) =
-        create_graph_from_plain_dbs(args.party_index, db_seed, left_db, right_db, &params).await?;
+        create_graph_from_plain_dbs(args.party_index, db_seed, left_db, right_db, &searcher)
+            .await?;
     let hawk_actor =
         HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
             .await?;

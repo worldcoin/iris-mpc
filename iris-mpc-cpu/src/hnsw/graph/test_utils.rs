@@ -70,7 +70,7 @@ impl DbContext {
         let mut graph_tx = self.graph_pg.tx().await?;
 
         let GraphMem {
-            entry_point,
+            entry_points: entry_point,
             layers,
         } = graph;
 

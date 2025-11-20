@@ -14,9 +14,7 @@ use crate::{
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{
-        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswParams, HnswSearcher, VectorStore,
-    },
+    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{compare_min_threshold_buckets, setup_replicated_prf, setup_shared_seed},
@@ -326,14 +324,11 @@ impl HawkActor {
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        let search_params = HnswParams::new(
+        let searcher = Arc::new(HnswSearcher::new_standard(
             args.hnsw_param_ef_constr,
             args.hnsw_param_ef_search,
             args.hnsw_param_M,
-        );
-        let searcher = Arc::new(HnswSearcher {
-            params: search_params,
-        });
+        ));
 
         let network_args = NetworkHandleArgs {
             party_index: args.party_index,
@@ -2089,7 +2084,7 @@ mod tests_db {
         for (side, graph) in izip!(STORE_IDS, &hawk_actor.graph_store) {
             let side = side as usize; // Find some difference between sides.
 
-            let ep = graph.read().await.get_entry_point().await;
+            let ep = graph.read().await.get_first_entry_point().await;
             let expected_ep = vectors[side];
             assert_eq!(ep, Some((expected_ep, 0)), "Entry point is set");
 
