@@ -4,12 +4,11 @@ on:
   push:
     branches:
       - main
-      - feat/anon_stats_service
-#    paths:
-#      - Dockerfile.anon-stats-server
-#      - iris-mpc-anon-stats-server/**
-#      - iris-mpc-common/**
-#      - .github/workflows/build-and-push-anon-stats-server.yaml
+    paths:
+      - Dockerfile.anon-stats-server
+      - iris-mpc-anon-stats-server/**
+      - iris-mpc-common/**
+      - .github/workflows/build-and-push-anon-stats-server.yaml
 
   release:
     types:
