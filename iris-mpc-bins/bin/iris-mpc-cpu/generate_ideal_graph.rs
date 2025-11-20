@@ -126,8 +126,8 @@ async fn main() {
 
         let mut store = PlaintextStore::new();
         store.distance_fn = match config.echoice {
-            EngineChoice::NaiveFHD => DistanceFn::FHD,
-            EngineChoice::NaiveMinFHD => DistanceFn::MinFHD,
+            EngineChoice::NaiveFHD => DistanceFn::Fhd,
+            EngineChoice::NaiveMinFHD => DistanceFn::MinFhd,
         };
 
         for (i, iris) in irises.into_iter().enumerate() {

@@ -50,8 +50,8 @@ pub struct AnalysisConfig {
 impl AnalysisConfig {
     pub fn get_distance_fn(&self) -> Result<DistanceFn> {
         match self.distance_fn.as_str() {
-            "fhd" => Ok(DistanceFn::FHD),
-            "min_fhd" => Ok(DistanceFn::MinFHD),
+            "fhd" => Ok(DistanceFn::Fhd),
+            "min_fhd" => Ok(DistanceFn::MinFhd),
             _ => bail!("Unknown distance_fn: {}", self.distance_fn),
         }
     }
