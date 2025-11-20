@@ -410,7 +410,7 @@ async fn main() -> Result<()> {
         .map(|(host, port)| format!("{}:{}", host, port))
         .collect();
     if node_addresses.is_empty() {
-        bail!("SMPC__NODE_HOSTNAMES and SMPC__SERVICE_PORTS must be provided");
+        bail!("SMPC__SERVER_COORDINATION__NODE_HOSTNAMES and SMPC__SERVICE_PORTS must be provided");
     }
 
     let _tracing_shutdown_handle =
@@ -429,8 +429,10 @@ async fn main() -> Result<()> {
 
     info!("Starting anon stats server.");
     let mut background_tasks = TaskMonitor::new();
+    let verified_peers = Arc::new(Mutex::new(HashSet::new()));
+    let uuid = Uuid::new_v4().to_string();
     let coordination_handles =
-        start_coordination_server(&server_coord_config, &mut background_tasks);
+        start_coordination_server(&server_coord_config, &mut background_tasks, verified_peers.clone(), uuid.clone());
 
     background_tasks.check_tasks();
     let health_port = server_coord_config
@@ -439,9 +441,6 @@ async fn main() -> Result<()> {
         .cloned()
         .unwrap_or_else(|| "8080".to_string());
     info!("Healthcheck server running on port {}", health_port);
-
-    let verified_peers = Arc::new(Mutex::new(HashSet::new()));
-    let uuid = Uuid::new_v4().to_string();
 
     wait_for_others_unready(&server_coord_config, &verified_peers, &uuid).await?;
 
