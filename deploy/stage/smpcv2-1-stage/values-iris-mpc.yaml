@@ -32,6 +32,21 @@ env:
   - name: SMPC__DATABASE__LOAD_PARALLELISM
     value: "8"
 
+  - name: SMPC__ANON_STATS_DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+
+  - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+    value: "true"
+
+  - name: SMPC__ANON_STATS_DATABASE__CREATE
+    value: "true"
+
+  - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
+    value: "8"
+
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
@@ -62,8 +77,14 @@ env:
         key: KMS_KEYS
         name: application
 
-  - name: SMPC__PARTY_ID
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
     value: "1"
+
+  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+    value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
+
+  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
@@ -93,13 +114,16 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1000" # "1200000"
+    value: "0" # "1200000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "100000" # "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "200"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
@@ -147,12 +171,6 @@ env:
 
   - name: SMPC__RETURN_PARTIAL_RESULTS
     value: "true"
-
-  - name: SMPC__NODE_HOSTNAMES
-    value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
-
-  - name: SMPC__IMAGE_NAME
-    value: $(IMAGE_NAME)
 
   - name: SMPC__ENABLE_MODIFICATIONS_SYNC
     value: "true"

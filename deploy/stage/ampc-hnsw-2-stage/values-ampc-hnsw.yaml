@@ -36,9 +36,6 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-2"
 
-  - name: SMPC__PARTY_ID
-    value: "2"
-
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
@@ -49,7 +46,7 @@ env:
     value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "32"
+    value: "1"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -105,11 +102,17 @@ env:
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
 
-  - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
-    value: '3000'
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_anon_stats_server_test"
 
-  - name: SMPC__NODE_HOSTNAMES
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
+    value: "2"
+
+  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
     value: '["node.0.stage.hnsw.worldcoin.dev","node.1.stage.hnsw.worldcoin.dev","0.0.0.0"]'
+
+  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-smpcv2-stage-sns-requests"

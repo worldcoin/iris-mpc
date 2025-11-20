@@ -24,7 +24,7 @@ pub enum NodeEquivalenceError<V> {
 /// # Returns
 /// - `Ok(())` if the graphs are equivalent in their node and layer structure.
 /// - `Err(NodeEquivalenceError)` if they are not, with a reason for the failure.
-pub fn ensure_node_equivalence<V: Ref + Display + FromStr>(
+pub fn ensure_node_equivalence<V: Ref + Display + FromStr + Ord>(
     lhs: &GraphMem<V>,
     rhs: &GraphMem<V>,
 ) -> Result<(), NodeEquivalenceError<V>> {

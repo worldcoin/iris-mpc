@@ -1,9 +1,9 @@
 mod tests {
-    use chrono::{TimeZone, Utc};
-    use iris_mpc_common::{
-        helpers::statistics::{Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D},
-        job::Eye,
+    use ampc_server_utils::statistics::Eye;
+    use ampc_server_utils::{
+        AnonStatsResultSource, Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D,
     };
+    use chrono::{TimeZone, Utc};
     use serde_json::{json, Value};
 
     #[test]
@@ -28,6 +28,7 @@ mod tests {
             match_distances_buffer_size: 128,
             party_id: 999,
             eye: Eye::Right,
+            source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: known_start_time,
             end_time_utc_timestamp: Some(known_end_time),
             // This field is #[serde(skip_serializing)]
@@ -74,6 +75,7 @@ mod tests {
         assert_eq!(value["n_buckets"], json!(2));
         assert_eq!(value["match_distances_buffer_size"], json!(128));
         assert_eq!(value["is_mirror_orientation"], json!(false));
+        assert_eq!(value["source"], json!("aggregator"));
     }
 
     #[test]
@@ -122,6 +124,7 @@ mod tests {
         assert_eq!(stats.next_start_time_utc_timestamp, None);
 
         assert!(!stats.is_mirror_orientation);
+        assert_eq!(stats.source, AnonStatsResultSource::Legacy);
     }
 
     #[test]
@@ -136,6 +139,7 @@ mod tests {
             match_distances_buffer_size: 42,
             party_id: 777,
             eye: Eye::Right,
+            source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
             end_time_utc_timestamp: Some(
                 Utc.timestamp_opt(1_700_000_000, 0).single().unwrap()
@@ -176,6 +180,8 @@ mod tests {
             roundtrip_stats.end_time_utc_timestamp,
             original_stats.end_time_utc_timestamp
         );
+
+        assert_eq!(roundtrip_stats.source, AnonStatsResultSource::Aggregator);
 
         // next_start_time_utc won't match because it was not serialized
         // So it should come back as None

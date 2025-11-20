@@ -4,24 +4,16 @@ use std::{
     path::PathBuf,
 };
 
-use clap::{Parser, ValueEnum};
-use iris_mpc_common::iris_db::iris::IrisCode;
+use clap::Parser;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use iris_mpc_cpu::{
-    hawkers::naive_knn_plaintext::{Engine, EngineChoice, KNNResult},
-    py_bindings::plaintext_store::Base64IrisCode,
+    hawkers::ideal_knn_engines::{Engine, EngineChoice, KNNResult},
+    utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
 };
 use metrics::IntoF64;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Deserializer;
 use std::time::Instant;
-
-#[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
-enum IrisSelection {
-    All,
-    Even,
-    Odd,
-}
 
 /// A struct to hold the metadata stored in the first line of the results file.
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -38,12 +30,8 @@ struct Args {
     #[arg(long, default_value_t = 1000)]
     num_irises: usize,
 
-    /// Number of threads to use
-    #[arg(long, default_value_t = 1)]
-    num_threads: usize,
-
     /// Path to the iris codes file
-    #[arg(long, default_value = "iris-mpc-bins/data/store.ndjson")]
+    #[arg(long, default_value = "data/store.ndjson")]
     path_to_iris_codes: PathBuf,
 
     /// The k for k-NN
@@ -65,7 +53,6 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-
     let (num_already_processed, nodes) = match File::open(&args.results_file) {
         Ok(file) => {
             let reader = BufReader::new(file);
@@ -115,10 +102,11 @@ async fn main() {
             }
 
             // 3. Process the rest of the lines as KNN results
-            let results: Result<Vec<KNNResult>, _> = lines
+            let results: Result<Vec<KNNResult<IrisSerialId>>, _> = lines
                 .map(|line_result| {
                     let line = line_result.map_err(|e| e.to_string())?;
-                    serde_json::from_str::<KNNResult>(&line).map_err(|e| e.to_string())
+                    serde_json::from_str::<KNNResult<IrisSerialId>>(&line)
+                        .map_err(|e| e.to_string())
                 })
                 .collect();
 
@@ -136,11 +124,11 @@ async fn main() {
                 }
             };
 
-            let nodes: Vec<usize> = deserialized_results
+            let nodes: Vec<IrisSerialId> = deserialized_results
                 .into_iter()
-                .map(|result| result.node as usize)
+                .map(|result| result.node)
                 .collect();
-            (nodes.len(), nodes)
+            (nodes.len() as IrisSerialId, nodes)
         }
         Err(_) => {
             // File doesn't exist, create it and write the header.
@@ -158,7 +146,7 @@ async fn main() {
     };
 
     if num_already_processed > 0 {
-        let expected_nodes: Vec<usize> = (1..num_already_processed + 1).collect();
+        let expected_nodes: Vec<IrisSerialId> = (1..num_already_processed + 1).collect();
         if nodes != expected_nodes {
             eprintln!(
                 "Error: The result nodes in the file are not a contiguous sequence from 1 to N."
@@ -174,38 +162,35 @@ async fn main() {
     let path_to_iris_codes = args.path_to_iris_codes;
     assert!(args.num_irises > args.k);
 
-    let file = File::open(path_to_iris_codes.as_path()).unwrap();
-    let reader = BufReader::new(file);
-
-    let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
     let mut irises: Vec<IrisCode> = Vec::with_capacity(args.num_irises);
 
-    let (limit, skip, step) = match args.irises_selection {
-        IrisSelection::All => (args.num_irises, 0, 1),
-        IrisSelection::Even => (args.num_irises * 2, 0, 2),
-        IrisSelection::Odd => (args.num_irises * 2, 1, 2),
+    let stream_iterator_res = irises_from_ndjson_iter(
+        path_to_iris_codes.as_path(),
+        Some(args.num_irises),
+        args.irises_selection,
+    );
+    let stream_iterator = match stream_iterator_res {
+        Ok(iter) => iter,
+        Err(e) => {
+            eprintln!("Error: Failed to open irises input file.");
+            eprintln!(" -> Error details: {}", e);
+            std::process::exit(1);
+        }
     };
-
-    let stream_iterator = stream
-        .take(limit)
-        .skip(skip)
-        .step_by(step)
-        .map(|json_pt| (&json_pt.unwrap()).into());
 
     irises.extend(stream_iterator);
     assert!(irises.len() == args.num_irises);
 
-    let num_irises = irises.len();
+    let num_irises = irises.len() as IrisSerialId;
     let mut engine = Engine::init(
         args.engine_choice,
         irises,
         args.k,
         num_already_processed + 1,
-        args.num_threads,
     );
 
     let chunk_size = 2000;
-    let mut evaluated_pairs = 0usize;
+    let mut evaluated_pairs = 0u64;
     println!("Starting work at serial id: {}", engine.next_id());
 
     let start_t = Instant::now();
@@ -214,7 +199,7 @@ async fn main() {
         let results = engine.compute_chunk(chunk_size);
         let end = engine.next_id();
 
-        evaluated_pairs += (end - start) * num_irises;
+        evaluated_pairs += ((end - start) as u64) * (num_irises as u64);
 
         let mut file = OpenOptions::new()
             .append(true)

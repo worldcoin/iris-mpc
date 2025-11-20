@@ -74,7 +74,7 @@ $TARGET_DIR/release/rerandomize-db rerandomize-db \
   --range-min 1 \
   --range-max-inclusive 5000
 
-echo "Rerandomizing DB 2 part 1" --range-min 1 
+echo "Rerandomizing DB 2 part 1" --range-min 1
 $TARGET_DIR/release/rerandomize-db rerandomize-db \
   --party-id 2 \
   --source-db-url postgres://postgres:postgres@localhost:6202 \

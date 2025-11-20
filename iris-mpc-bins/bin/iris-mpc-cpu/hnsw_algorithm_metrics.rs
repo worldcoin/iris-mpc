@@ -7,7 +7,8 @@ use iris_mpc_cpu::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
-        GraphMem, HnswParams, HnswSearcher,
+        searcher::LayerDistribution,
+        GraphMem, HnswSearcher,
     },
 };
 use rand::SeedableRng;
@@ -88,16 +89,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = AesRng::seed_from_u64(42_u64);
     let mut vector = PlaintextStore::new();
     let mut graph = GraphMem::new();
-    let mut params = HnswParams::new(ef_constr, ef_search, M);
+    let mut searcher = HnswSearcher::new_standard(ef_constr, ef_search, M);
     if let Some(q) = layer_probability {
-        params.layer_probability = q
+        match &mut searcher.layer_distribution {
+            LayerDistribution::Geometric { layer_probability } => *layer_probability = q,
+        }
     }
-    let searcher = HnswSearcher { params };
 
     for idx in 0..database_size {
         let raw_query = IrisCode::random_rng(&mut rng);
         let query = Arc::new(raw_query.clone());
-        let insertion_layer = searcher.select_layer_rng(&mut rng)?;
+        let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
         searcher
             .insert(&mut vector, &mut graph, &query, insertion_layer)
             .await?;

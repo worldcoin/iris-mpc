@@ -29,9 +29,20 @@ if [ -z "$ENVIRONMENT_NAME" ]; then
     ENVIRONMENT_NAME="stage"
 fi
 
+ARGOCD_APP=$4
+
+# if ARGOCD_APP is not provided, set it to either "iris-mpc" or "ampc-hnsw" based on MPCV2_TYPE, or a custom value
+if [ -z "$ARGOCD_APP" ]; then
+    if [ "$MPCV2_TYPE" == "gpu" ]; then
+        ARGOCD_APP="iris-mpc"
+    else
+        ARGOCD_APP="ampc-hnsw"
+    fi
+fi
+
+
 if [ "$MPCV2_TYPE" == "cpu" ]; then
   CLUSTER_NAME="ampc-hnsw"
-  ARGOCD_APP="ampc-hnsw"
   if [ "$ENVIRONMENT_NAME" == "dev" ]; then
     CLUSTERS=("arn:aws:eks:eu-central-1:004304088310:cluster/$CLUSTER_NAME-0-dev" "arn:aws:eks:eu-central-1:284038850594:cluster/$CLUSTER_NAME-1-dev" "arn:aws:eks:eu-central-1:882222437714:cluster/$CLUSTER_NAME-2-dev")
   else
@@ -47,7 +58,6 @@ elif [ "$MPCV2_TYPE" == "gpu" ]; then
      exit 1
   fi
   CLUSTER_NAME="smpcv2"
-  ARGOCD_APP="iris-mpc"
   CLUSTERS=("arn:aws:eks:eu-north-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-north-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-north-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
   echo "Using GPU cluster name: $CLUSTER_NAME"
   echo "Using GPU argo app: $ARGOCD_APP"

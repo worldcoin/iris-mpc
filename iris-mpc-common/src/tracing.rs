@@ -1,4 +1,4 @@
-use crate::config::ServiceConfig;
+use ampc_server_utils::ServiceConfig;
 use eyre::Result;
 use metrics_exporter_statsd::StatsdBuilder;
 use std::{backtrace::Backtrace, panic};

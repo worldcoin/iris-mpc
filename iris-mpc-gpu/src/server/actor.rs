@@ -20,6 +20,9 @@ use crate::{
     },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
+use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
+use ampc_server_utils::statistics::Eye;
+use ampc_server_utils::{BucketStatistics, BucketStatistics2D};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -38,20 +41,25 @@ use iris_mpc_common::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::{BucketStatistics, BucketStatistics2D},
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
-    job::{Eye, JobSubmissionHandle, ServerJobResult},
+    job::{JobSubmissionHandle, ServerJobResult},
     vector_id::VectorId,
+};
+use iris_mpc_cpu::shares::{
+    share::{DistanceShare, Share},
+    RingElement,
 };
 use itertools::{izip, Itertools};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     collections::{HashMap, HashSet},
+    convert::TryFrom,
     fmt, mem,
     sync::Arc,
     time::Instant,
 };
+use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -183,9 +191,42 @@ pub struct ServerActor {
     full_scan_side_switching_enabled: bool,
     // Per-batch flag propagated from SQS to disable anonymized statistics collection and computation
     disable_anonymized_stats_for_current_batch: bool,
+    anon_stats_writer: Option<AnonStatsWriter>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
+
+type DistanceBundle1D = Vec<DistanceShare<u16>>;
+type DistanceBundle2D = (DistanceBundle1D, DistanceBundle1D);
+
+struct AnonStatsWriter {
+    store: AnonStatsStore,
+    runtime: Handle,
+}
+
+impl AnonStatsWriter {
+    fn new(store: AnonStatsStore, runtime: Handle) -> Self {
+        Self { store, runtime }
+    }
+
+    fn insert_1d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle1D)>) {
+        let store = self.store.clone();
+        self.runtime.spawn(async move {
+            if let Err(err) = store.insert_anon_stats_batch_1d(&data, origin).await {
+                tracing::warn!(?err, ?origin, "Failed to persist 1D anon stats batch");
+            }
+        });
+    }
+
+    fn insert_2d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle2D)>) {
+        let store = self.store.clone();
+        self.runtime.spawn(async move {
+            if let Err(err) = store.insert_anon_stats_batch_2d(&data, origin).await {
+                tracing::warn!(?err, ?origin, "Failed to persist 2D anon stats batch");
+            }
+        });
+    }
+}
 
 impl ServerActor {
     #[allow(clippy::too_many_arguments)]
@@ -204,6 +245,7 @@ impl ServerActor {
         enable_debug_timing: bool,
         full_scan_side: Eye,
         full_scan_side_switching_enabled: bool,
+        anon_stats_writer: Option<(AnonStatsStore, Handle)>,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
@@ -223,6 +265,7 @@ impl ServerActor {
             enable_debug_timing,
             full_scan_side,
             full_scan_side_switching_enabled,
+            anon_stats_writer,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -242,6 +285,7 @@ impl ServerActor {
         enable_debug_timing: bool,
         full_scan_side: Eye,
         full_scan_side_switching_enabled: bool,
+        anon_stats_writer: Option<(AnonStatsStore, Handle)>,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
@@ -263,6 +307,7 @@ impl ServerActor {
             enable_debug_timing,
             full_scan_side,
             full_scan_side_switching_enabled,
+            anon_stats_writer,
         )
     }
 
@@ -284,6 +329,7 @@ impl ServerActor {
         enable_debug_timing: bool,
         full_scan_side: Eye,
         full_scan_side_switching_enabled: bool,
+        anon_stats_writer: Option<(AnonStatsStore, Handle)>,
     ) -> Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -303,6 +349,7 @@ impl ServerActor {
             enable_debug_timing,
             full_scan_side,
             full_scan_side_switching_enabled,
+            anon_stats_writer,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -325,7 +372,10 @@ impl ServerActor {
         enable_debug_timing: bool,
         full_scan_side: Eye,
         full_scan_side_switching_enabled: bool,
+        anon_stats_writer: Option<(AnonStatsStore, Handle)>,
     ) -> Result<Self> {
+        let anon_stats_writer =
+            anon_stats_writer.map(|(store, runtime)| AnonStatsWriter::new(store, runtime));
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, &hex::decode(KDF_SALT)?);
@@ -584,6 +634,7 @@ impl ServerActor {
             both_side_match_distances_buffer,
             anonymized_bucket_statistics_2d,
             disable_anonymized_stats_for_current_batch: false,
+            anon_stats_writer,
         })
     }
 
@@ -1656,6 +1707,8 @@ impl ServerActor {
                     &mut both_side_match_distances_buffer,
                 );
 
+                self.persist_two_sided_caches(&both_side_match_distances_buffer);
+
                 let min_distance_cache = TwoSidedDistanceCache::into_min_distance_cache(
                     both_side_match_distances_buffer,
                     &mut self.phase2_2d_buckets,
@@ -2387,6 +2440,8 @@ impl ServerActor {
             }
         };
 
+        self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
+
         (partial_results_with_rotations, new_partial_match_buffer)
     }
 
@@ -2736,6 +2791,8 @@ impl ServerActor {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
             }
         };
+
+        self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
 
         (partial_results_with_rotations, new_partial_match_buffer)
     }
@@ -3286,6 +3343,138 @@ fn calculate_insertion_indices(
             last_db_index += 1;
         }
         c += 1;
+    }
+}
+
+impl ServerActor {
+    fn persist_one_sided_caches(
+        &self,
+        eye: Eye,
+        orientation: Orientation,
+        caches: &[OneSidedDistanceCache],
+    ) {
+        tracing::info!(
+            "Persisting one-sided anon stats caches for eye {:?} and orientation {:?}",
+            eye,
+            orientation
+        );
+        if orientation != Orientation::Normal {
+            return;
+        }
+        let writer = match &self.anon_stats_writer {
+            Some(writer) => writer,
+            None => {
+                tracing::info!("No writer configured for anon stats caches");
+                return;
+            }
+        };
+
+        let origin = AnonStatsOrigin {
+            side: Some(eye),
+            orientation: AnonStatsOrientation::Normal,
+            context: AnonStatsContext::GPU,
+        };
+
+        let mut bundles = Vec::new();
+        for cache in caches {
+            for (key, values) in cache.iter() {
+                if values.is_empty() {
+                    continue;
+                }
+                let match_id = match i64::try_from(*key) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        tracing::warn!(
+                            match_id = *key,
+                            "Skipping anon stats entry with id exceeding i64"
+                        );
+                        continue;
+                    }
+                };
+                let mut sorted = values.clone();
+                sorted.sort_by_key(|share| share.idx);
+                let distance_bundle = sorted
+                    .into_iter()
+                    .map(|share| {
+                        DistanceShare::new(
+                            Share::new(RingElement(share.code_a), RingElement(share.code_b)),
+                            Share::new(RingElement(share.mask_a), RingElement(share.mask_b)),
+                        )
+                    })
+                    .collect::<DistanceBundle1D>();
+                bundles.push((match_id, distance_bundle));
+            }
+        }
+
+        if !bundles.is_empty() {
+            tracing::info!("Inserting {} anon stats bundles", bundles.len());
+            writer.insert_1d(origin, bundles);
+        } else {
+            tracing::info!("No anon stats bundles to insert");
+        }
+    }
+
+    fn persist_two_sided_caches(&self, caches: &[TwoSidedDistanceCache]) {
+        tracing::info!("Persisting two-sided anon stats caches");
+        let writer = match &self.anon_stats_writer {
+            Some(writer) => writer,
+            None => return,
+        };
+
+        let origin = AnonStatsOrigin {
+            side: None,
+            orientation: AnonStatsOrientation::Normal,
+            context: AnonStatsContext::GPU,
+        };
+
+        let mut bundles = Vec::new();
+        for cache in caches {
+            for (key, (left_values, right_values)) in cache.iter() {
+                if left_values.is_empty() || right_values.is_empty() {
+                    continue;
+                }
+                let match_id = match i64::try_from(*key) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        tracing::warn!(
+                            match_id = *key,
+                            "Skipping 2D anon stats entry with id exceeding i64"
+                        );
+                        continue;
+                    }
+                };
+                let mut left_sorted = left_values.clone();
+                left_sorted.sort_by_key(|share| share.idx);
+                let mut right_sorted = right_values.clone();
+                right_sorted.sort_by_key(|share| share.idx);
+
+                let left_bundle = left_sorted
+                    .into_iter()
+                    .map(|share| {
+                        DistanceShare::new(
+                            Share::new(RingElement(share.code_a), RingElement(share.code_b)),
+                            Share::new(RingElement(share.mask_a), RingElement(share.mask_b)),
+                        )
+                    })
+                    .collect::<DistanceBundle1D>();
+
+                let right_bundle = right_sorted
+                    .into_iter()
+                    .map(|share| {
+                        DistanceShare::new(
+                            Share::new(RingElement(share.code_a), RingElement(share.code_b)),
+                            Share::new(RingElement(share.mask_a), RingElement(share.mask_b)),
+                        )
+                    })
+                    .collect::<DistanceBundle1D>();
+
+                bundles.push((match_id, (left_bundle, right_bundle)));
+            }
+        }
+
+        if !bundles.is_empty() {
+            writer.insert_2d(origin, bundles);
+        }
     }
 }
 

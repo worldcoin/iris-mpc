@@ -6,6 +6,9 @@ use itertools::Itertools;
 pub trait Rotations: Send + Sync + 'static {
     /// The number of rotations.
     const N_ROTATIONS: usize;
+
+    /// The argument of `iter::skip` that selects the requested rotations.
+    const N_SKIP: usize;
 }
 
 #[derive(Clone, Debug)]
@@ -13,6 +16,8 @@ pub struct AllRotations {}
 
 impl Rotations for AllRotations {
     const N_ROTATIONS: usize = ROTATIONS;
+
+    const N_SKIP: usize = 0;
 }
 
 #[derive(Clone, Debug)]
@@ -20,6 +25,8 @@ pub struct CenterOnly {}
 
 impl Rotations for CenterOnly {
     const N_ROTATIONS: usize = 1;
+
+    const N_SKIP: usize = ROTATIONS / 2;
 }
 
 /// VecRotationSupport is an abstraction for functions that work with or without rotations,

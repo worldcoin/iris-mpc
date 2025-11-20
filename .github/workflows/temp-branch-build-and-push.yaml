@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "chore/exclude-sql-files-from-precommit-checks"
+      - "dev"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
