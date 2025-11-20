@@ -1,6 +1,6 @@
 use crate::hnsw::{
-    graph::neighborhood::{Neighborhood, SortedNeighborhoodV},
-    searcher::ConnectPlanV,
+    graph::neighborhood::SortedNeighborhoodV,
+    searcher::{ConnectPlanV, SetEntryPoint},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
@@ -16,7 +16,7 @@ use itertools::{izip, Itertools};
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
     pub links: Vec<SortedNeighborhoodV<V>>,
-    pub set_ep: bool,
+    pub set_ep: SetEntryPoint,
 }
 
 // Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
@@ -26,7 +26,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
         Self {
             query: self.query.clone(),
             links: self.links.clone(),
-            set_ep: self.set_ep,
+            set_ep: self.set_ep.clone(),
         }
     }
 }
@@ -113,28 +113,39 @@ async fn add_batch_neighbors<V: VectorStore>(
 fn join_plans<V: VectorStore>(
     mut plans: Vec<Option<InsertPlanV<V>>>,
 ) -> Vec<Option<InsertPlanV<V>>> {
-    let set_ep = plans.iter().flatten().any(|plan| plan.set_ep);
-    if set_ep {
-        let insertion_layers = plans
-            .iter()
-            .map(|plan| match plan {
-                Some(plan) => plan.links.len(),
-                None => 0,
-            })
-            .collect_vec();
+    let ep_layers: Vec<_> = plans
+        .iter()
+        .flatten()
+        .filter(|plan| plan.set_ep != SetEntryPoint::False)
+        .map(|plan| plan.links.len())
+        .collect();
 
-        let max_insertion_layer = *insertion_layers.iter().max().unwrap();
+    if !ep_layers.is_empty() {
+        let max_insertion_layer = ep_layers.into_iter().max().unwrap_or_default();
 
-        let set_ep_idx = insertion_layers
-            .into_iter()
-            .position(|layer| layer == max_insertion_layer)
-            .unwrap();
+        // for TopLevelSearchMode::Default, SetEntryPoint::NewLayer is used.
+        // for TopLevelSearchMode::LinearScan, SetEntryPoint::AddToLayer is used.
+        // if multiple plans have SetEntryPoint::NewLayer, an arbitrary one is chosen as the entry point.
+        let mut set_ep_new_layer = false;
+        for plan in plans.iter_mut() {
+            let Some(plan) = plan else { continue };
 
-        // Set the entry point to false for all but the first instance of the
-        // highest insertion layer.
-        for (i, plan) in plans.iter_mut().enumerate() {
-            if let Some(plan) = plan {
-                plan.set_ep = i == set_ep_idx;
+            if plan.set_ep == SetEntryPoint::False {
+                continue;
+            }
+
+            let current_layer = plan.links.len();
+            if current_layer < max_insertion_layer {
+                plan.set_ep = SetEntryPoint::False;
+                continue;
+            }
+
+            if plan.set_ep == SetEntryPoint::NewLayer {
+                if !set_ep_new_layer {
+                    set_ep_new_layer = true;
+                } else {
+                    plan.set_ep = SetEntryPoint::False;
+                }
             }
         }
     }

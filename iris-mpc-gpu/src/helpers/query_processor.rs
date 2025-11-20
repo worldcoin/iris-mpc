@@ -8,7 +8,7 @@ use crate::{
 use cudarc::{
     cublas::CudaBlas,
     driver::{
-        result::free_async,
+        result::{free_async, stream},
         sys::{CUdeviceptr, CUstream},
         CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
@@ -62,6 +62,10 @@ impl<T> From<CudaSlice<T>> for StreamAwareCudaSlice<T> {
 impl<T> Drop for StreamAwareCudaSlice<T> {
     fn drop(&mut self) {
         unsafe {
+            // Synchronize the stream to ensure all pending GPU operations on this memory
+            // have completed before freeing. This prevents CUDA_ERROR_ILLEGAL_ADDRESS
+            // that occurs when memory is freed while still being accessed by GPU operations.
+            stream::synchronize(self.stream).unwrap();
             free_async(self.cu_device_ptr, self.stream).unwrap();
         }
     }

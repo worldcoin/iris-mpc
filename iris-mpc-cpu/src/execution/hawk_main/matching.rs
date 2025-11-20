@@ -459,6 +459,7 @@ mod tests {
     use crate::execution::hawk_main::rot::Rotations;
     use crate::execution::hawk_main::{HawkResult, InsertPlanV, SearchRotations, VecRotations};
     use crate::hawkers::aby3::aby3_store::Aby3Query;
+    use crate::hnsw::searcher::SetEntryPoint;
     use crate::hnsw::SortedNeighborhood;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
     use crate::shares::share::DistanceShare;
@@ -709,7 +710,7 @@ mod tests {
                             .map(|v| (v, distance()))
                             .collect_vec(),
                     )],
-                    set_ep: false,
+                    set_ep: SetEntryPoint::False,
                 },
             };
             VecRotations::from(vec![insert_plan; SearchRotations::N_ROTATIONS])

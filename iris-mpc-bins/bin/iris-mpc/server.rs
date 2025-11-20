@@ -1,5 +1,9 @@
 #![allow(clippy::needless_range_loop, unused)]
 
+use ampc_server_utils::{
+    delete_messages_until_sequence_num, get_next_sns_seq_num, shutdown_handler::ShutdownHandler,
+    ReadyProbeResponse, TaskMonitor,
+};
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
@@ -20,11 +24,9 @@ use iris_mpc::services::processors::result_message::{
 };
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
-use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_common::server_coordination::ReadyProbeResponse;
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
     config::{Config, Opt},
@@ -33,7 +35,6 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
-        shutdown_handler::ShutdownHandler,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
@@ -50,7 +51,6 @@ use iris_mpc_common::{
         },
         sqs_s3_helper::upload_file_to_s3,
         sync::{Modification, ModificationKey, SyncResult, SyncState},
-        task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
@@ -61,7 +61,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
-use itertools::izip;
+use itertools::{cloned, izip};
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -880,7 +880,11 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
-    let next_sns_seq_number_future = get_next_sns_seq_num(&config, &aws_clients.sqs_client);
+    let next_sns_seq_number_future = get_next_sns_seq_num(
+        &aws_clients.sqs_client,
+        &config.requests_queue_url,
+        config.sqs_sync_long_poll_seconds,
+    );
 
     let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
         aws_clients.secrets_manager_client.clone(),
@@ -981,52 +985,59 @@ async fn server_main(config: Config) -> Result<()> {
     tracing::info!("Sync state: {:?}", my_state);
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
+    let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
+        panic!("Server coordination config must be provided for healthcheck server");
+    });
+    let verified_peers = Arc::new(Mutex::new(HashSet::new()));
+    let uuid = uuid::Uuid::new_v4().to_string();
 
     let _health_check_abort = background_tasks.spawn({
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let ready_probe_response = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
+        let uuid = uuid.clone();
+        let is_ready_flag = Arc::clone(&is_ready_flag);
+        let verified_peers = Arc::clone(&verified_peers);
+        let image_name = server_coord_config.image_name.to_string();
+
+        // Pre-calculate parts of the response that don't change
+        let base_response = ReadyProbeResponse {
+            image_name: image_name.clone(),
             shutting_down: false,
             uuid: uuid.clone(),
+            verified_peers: HashSet::new(),
+            is_ready: false,
         };
-        let ready_probe_response_shutdown = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
-            shutting_down: true,
-            uuid: uuid.clone(),
-        };
-        let serialized_response = serde_json::to_string(&ready_probe_response)
-            .expect("Serialization to JSON to probe response failed");
-        let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
-            .expect("Serialization to JSON to probe response failed");
-        tracing::info!("Healthcheck probe response: {}", serialized_response);
+
         let my_state = my_state.clone();
         async move {
+            let is_ready_flag_health = Arc::clone(&is_ready_flag);
+            let is_ready_flag_ready = Arc::clone(&is_ready_flag);
             // Generate a random UUID for each run.
             let app = Router::new()
                 .route(
                     "/health",
                     get(move || {
                         let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
+                        let verified_peers_clone = Arc::clone(&verified_peers);
+                        let is_ready_flag_clone = Arc::clone(&is_ready_flag_health);
+                        let mut response = base_response.clone();
                         async move {
-                            if shutdown_handler_clone.is_shutting_down() {
-                                serialized_response_shutdown.clone()
-                            } else {
-                                serialized_response.clone()
-                            }
+                            response.shutting_down = shutdown_handler_clone.is_shutting_down();
+                            response.verified_peers =
+                                verified_peers_clone.lock().expect("Mutex poisoned").clone();
+                            response.is_ready = is_ready_flag_clone.load(Ordering::SeqCst);
+                            let serialized_response = serde_json::to_string(&response)
+                                .expect("Serialization to JSON to probe response failed");
+                            tracing::info!("Healthcheck probe response: {}", serialized_response);
+                            serialized_response
                         }
                     }),
                 )
                 .route(
                     "/ready",
-                    get({
-                        // We are only ready once this flag is set to true.
-                        let is_ready_flag = Arc::clone(&is_ready_flag);
-                        move || async move {
-                            if is_ready_flag.load(Ordering::SeqCst) {
-                                "ready".into_response()
-                            } else {
-                                StatusCode::SERVICE_UNAVAILABLE.into_response()
-                            }
+                    get(move || async move {
+                        if is_ready_flag_ready.load(Ordering::SeqCst) {
+                            "ready".into_response()
+                        } else {
+                            StatusCode::SERVICE_UNAVAILABLE.into_response()
                         }
                     }),
                 )
@@ -1050,7 +1061,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
     let unready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
@@ -1075,7 +1086,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Waiting for all nodes to be unready...");
     match tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
+        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
         unready_check,
     )
     .await
@@ -1092,8 +1103,8 @@ async fn server_main(config: Config) -> Result<()> {
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
-    let all_nodes = config.node_hostnames.clone();
-    let image_name = config.image_name.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
+    let image_name = server_coord_config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
@@ -1109,7 +1120,7 @@ async fn server_main(config: Config) -> Result<()> {
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
                     if last_response[i] == String::default()
-                        && retries[i] < config.heartbeat_initial_retries
+                        && retries[i] < server_coord_config.heartbeat_initial_retries
                     {
                         retries[i] += 1;
                         tracing::warn!("Node {} did not respond with success, retrying...", host);
@@ -1188,7 +1199,10 @@ async fn server_main(config: Config) -> Result<()> {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(config.heartbeat_interval_secs)).await;
+            tokio::time::sleep(Duration::from_secs(
+                server_coord_config.heartbeat_interval_secs,
+            ))
+            .await;
         }
     });
 
@@ -1219,7 +1233,7 @@ async fn server_main(config: Config) -> Result<()> {
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-    let all_nodes = config.node_hostnames.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
     let next_node = &all_nodes[(config.party_id + 1) % 3];
     let prev_node = &all_nodes[(config.party_id + 2) % 3];
 
@@ -1258,10 +1272,11 @@ async fn server_main(config: Config) -> Result<()> {
     // sync the queues
     let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
     delete_messages_until_sequence_num(
-        &config,
         &aws_clients.sqs_client,
+        &config.requests_queue_url,
         my_state.next_sns_sequence_num,
         max_sqs_sequence_num,
+        config.sqs_sync_long_poll_seconds,
     )
     .await?;
 
@@ -1947,7 +1962,7 @@ async fn server_main(config: Config) -> Result<()> {
     is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let all_nodes = config.node_hostnames.clone();
+    let all_nodes = server_coord_config.node_hostnames.clone();
     let ready_check = tokio::spawn(async move {
         let next_node = &all_nodes[(config.party_id + 1) % 3];
         let prev_node = &all_nodes[(config.party_id + 2) % 3];
@@ -1972,7 +1987,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Waiting for all nodes to be ready...");
     match tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
+        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
         ready_check,
     )
     .await

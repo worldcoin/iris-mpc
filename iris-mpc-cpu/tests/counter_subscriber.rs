@@ -22,7 +22,7 @@ use iris_mpc_cpu::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamCounterRef, ParamVertexOpeningsCounter, StaticCounter,
         },
-        GraphMem, HnswParams, HnswSearcher,
+        GraphMem, HnswSearcher,
     },
 };
 use rand::SeedableRng;
@@ -172,9 +172,7 @@ async fn init_hnsw(
     Arc<IrisCode>,
     Arc<IrisCode>,
 )> {
-    let searcher = HnswSearcher {
-        params: HnswParams::new(64, 64, 32),
-    };
+    let searcher = HnswSearcher::new_with_test_parameters();
     let mut vector_store = PlaintextStore::new_random(rng, db_size);
     let graph_store = vector_store.generate_graph(rng, db_size, &searcher).await?;
     let query1 = Arc::new(IrisCode::random_rng(rng));

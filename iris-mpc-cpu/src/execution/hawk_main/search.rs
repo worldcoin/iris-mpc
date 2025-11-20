@@ -9,7 +9,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{GraphMem, HnswSearcher},
+    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
@@ -37,7 +37,6 @@ pub async fn search<ROT>(
 where
     ROT: Rotations,
 {
-    let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -70,9 +69,6 @@ where
 
     let results = schedule.organize_results(collect_results(rx).await?)?;
 
-    if ROT::N_ROTATIONS > 1 {
-        metrics::histogram!("search_duration").record(start.elapsed().as_secs_f64());
-    }
     Ok(results)
 }
 
@@ -99,7 +95,7 @@ async fn per_session<ROT>(
             let layer_selection_value = (query_uuid, side);
             let insertion_layer = search_params
                 .hnsw
-                .select_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
+                .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
             per_insert_query(
                 query,
                 search_params,
@@ -181,7 +177,7 @@ async fn per_search_query(
         plan: InsertPlanV {
             query,
             links,
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         },
         matches,
     })
@@ -200,7 +196,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     let mut store = session.aby3_store.write().await;
     let graph = session.graph_store.clone().read_owned().await;
 
-    let insertion_layer = searcher.select_layer_prf(&session.hnsw_prf_key, identifier)?;
+    let insertion_layer = searcher.gen_layer_prf(&session.hnsw_prf_key, identifier)?;
 
     let (links, set_ep) = searcher
         .search_to_insert(&mut *store, &graph, &query, insertion_layer)
@@ -234,7 +230,7 @@ mod tests {
         init_iris_db(&mut actor).await?;
         init_graph(&mut actor).await?;
 
-        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+        let sessions = actor.new_sessions().await?;
         HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         let batch_size = 3;
@@ -258,7 +254,7 @@ mod tests {
                 );
             }
         }
-
+        actor.sync_peers().await?;
         Ok(actor)
     }
 }

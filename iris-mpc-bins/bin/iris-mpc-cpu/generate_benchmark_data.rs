@@ -2,9 +2,7 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCodeBase64;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore,
-    hnsw::{HnswParams, HnswSearcher},
-    py_bindings::io::write_bin,
+    hawkers::plaintext_store::PlaintextStore, hnsw::HnswSearcher, utils::serialization::write_bin,
 };
 use rand::SeedableRng;
 use std::{
@@ -54,9 +52,7 @@ struct Args {
 // Convertor: Args -> HnswSearcher.
 impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        HnswSearcher {
-            params: HnswParams::new(args.hnsw_ef_construction, args.hnsw_ef_search, args.hnsw_M),
-        }
+        HnswSearcher::new_standard(args.hnsw_ef_construction, args.hnsw_ef_search, args.hnsw_M)
     }
 }
 
