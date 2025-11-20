@@ -71,7 +71,7 @@ env:
     value: "375"
 
   - name: SMPC__MIN_1D_JOB_SIZE
-    value: "93"
+    value: "64"
 
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
