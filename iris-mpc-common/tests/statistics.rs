@@ -206,7 +206,7 @@ mod tests {
         //   [2,3,7] ]
         let buckets_2d_cumulative = vec![1, 1, 2, 1, 2, 4, 2, 3, 7];
 
-        let mut stats = BucketStatistics2D::new(128, n, 42);
+        let mut stats = BucketStatistics2D::new(128, n, 42, AnonStatsResultSource::Legacy);
         stats.fill_buckets(&buckets_2d_cumulative, 1.0, None);
 
         // Expected per-cell histogram H (row-major, skipping zeros in output order):

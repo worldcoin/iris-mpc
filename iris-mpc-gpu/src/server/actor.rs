@@ -22,7 +22,7 @@ use crate::{
 };
 use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
 use ampc_server_utils::statistics::Eye;
-use ampc_server_utils::{BucketStatistics, BucketStatistics2D};
+use ampc_server_utils::{AnonStatsResultSource, BucketStatistics, BucketStatistics2D};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -576,8 +576,12 @@ impl ServerActor {
         let both_side_match_distances_buffer =
             vec![TwoSidedDistanceCache::default(); device_manager.device_count()];
 
-        let anonymized_bucket_statistics_2d =
-            BucketStatistics2D::new(match_distances_2d_buffer_size, n_buckets, party_id);
+        let anonymized_bucket_statistics_2d = BucketStatistics2D::new(
+            match_distances_2d_buffer_size,
+            n_buckets,
+            party_id,
+            AnonStatsResultSource::Legacy,
+        );
 
         Ok(Self {
             party_id,
