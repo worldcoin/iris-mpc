@@ -497,10 +497,18 @@ async fn main() -> Result<()> {
         loop {
             tokio::select! {
                 _ = poll_interval.tick() => {
-                    if let Err(err) = processor.run_iteration(session).await {
-                        warn!(error = ?err, "Anon stats iteration failed");
-                        shutdown_handler.trigger_manual_shutdown();
-                break;
+                    tokio::select! {
+                        res = processor.run_iteration(session) => {
+                             if let Err(err) = res {
+                                warn!(error = ?err, "Anon stats iteration failed");
+                                shutdown_handler.trigger_manual_shutdown();
+                                break;
+                            }
+                        }
+                        _ = ct.cancelled() => {
+                             info!("Shutdown triggered during iteration, stopping.");
+                             break;
+                        }
                     }
                 }
                 _ = shutdown_wait.as_mut() => {
