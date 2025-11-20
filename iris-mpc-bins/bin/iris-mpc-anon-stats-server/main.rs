@@ -431,8 +431,12 @@ async fn main() -> Result<()> {
     let mut background_tasks = TaskMonitor::new();
     let verified_peers = Arc::new(Mutex::new(HashSet::new()));
     let uuid = Uuid::new_v4().to_string();
-    let coordination_handles =
-        start_coordination_server(&server_coord_config, &mut background_tasks, verified_peers.clone(), uuid.clone());
+    let coordination_handles = start_coordination_server(
+        &server_coord_config,
+        &mut background_tasks,
+        verified_peers.clone(),
+        uuid.clone(),
+    );
 
     background_tasks.check_tasks();
     let health_port = server_coord_config
