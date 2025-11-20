@@ -8,6 +8,9 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "anon-stats-server-smpcv2-0"
 
+  - name: SMPC__SNS_BUFFER_BUCKET_NAME
+    value: "wf-smpcv2-stage-sns-buffer"
+
   - name: SMPC__DB_URL
     valueFrom:
       secretKeyRef:
