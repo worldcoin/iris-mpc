@@ -199,30 +199,14 @@ impl DistanceCache {
 
         // Stable permutation based on indices
         for i in 0..indices.len() {
-            let mut combined: Vec<_> = (0..indices[i].len())
-                .map(|j| {
-                    (
-                        indices[i][j],
-                        codes_a[i][j],
-                        codes_b[i][j],
-                        masks_a[i][j],
-                        masks_b[i][j],
-                    )
-                })
-                .collect();
-            combined.sort_by_key(|(idx, _, _, _, _)| *idx);
-            let (sorted_indices, sorted_codes_a, sorted_codes_b, sorted_masks_a, sorted_masks_b): (
-                Vec<_>,
-                Vec<_>,
-                Vec<_>,
-                Vec<_>,
-                Vec<_>,
-            ) = combined.into_iter().multiunzip();
-            indices[i] = sorted_indices;
-            codes_a[i] = sorted_codes_a;
-            codes_b[i] = sorted_codes_b;
-            masks_a[i] = sorted_masks_a;
-            masks_b[i] = sorted_masks_b;
+            let mut perm: Vec<usize> = (0..indices[i].len()).collect();
+            perm.sort_by_key(|&j| indices[i][j]);
+
+            indices[i] = perm.iter().map(|&j| indices[i][j]).collect::<Vec<u64>>();
+            codes_a[i] = perm.iter().map(|&j| codes_a[i][j]).collect::<Vec<u16>>();
+            codes_b[i] = perm.iter().map(|&j| codes_b[i][j]).collect::<Vec<u16>>();
+            masks_a[i] = perm.iter().map(|&j| masks_a[i][j]).collect::<Vec<u16>>();
+            masks_b[i] = perm.iter().map(|&j| masks_b[i][j]).collect::<Vec<u16>>();
         }
 
         let mut maps = old_counters
