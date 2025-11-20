@@ -210,24 +210,21 @@ impl AnonStatsWriter {
     }
 
     fn insert_1d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle1D)>) {
-        if let Err(err) = self
-            .runtime
-            .block_on(self.store.insert_anon_stats_batch_1d(&data, origin))
-        {
-            tracing::warn!(?err, ?origin, "Failed to persist 1D anon stats batch");
-        }
+        let store = self.store.clone();
+        self.runtime.spawn(async move {
+            if let Err(err) = store.insert_anon_stats_batch_1d(&data, origin).await {
+                tracing::warn!(?err, ?origin, "Failed to persist 1D anon stats batch");
+            }
+        });
     }
 
     fn insert_2d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle2D)>) {
-        if data.is_empty() {
-            return;
-        }
-        if let Err(err) = self
-            .runtime
-            .block_on(self.store.insert_anon_stats_batch_2d(&data, origin))
-        {
-            tracing::warn!(?err, ?origin, "Failed to persist 2D anon stats batch");
-        }
+        let store = self.store.clone();
+        self.runtime.spawn(async move {
+            if let Err(err) = store.insert_anon_stats_batch_2d(&data, origin).await {
+                tracing::warn!(?err, ?origin, "Failed to persist 2D anon stats batch");
+            }
+        });
     }
 }
 
