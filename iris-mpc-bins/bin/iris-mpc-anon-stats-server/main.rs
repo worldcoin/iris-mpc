@@ -11,9 +11,14 @@ use ampc_server_utils::{
     init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
     wait_for_others_unready, BucketStatistics, BucketStatistics2D, Eye, TaskMonitor,
 };
+use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
+use aws_smithy_types::retry::RetryConfig;
+use chrono::Utc;
 use clap_builder::Parser;
 use eyre::{bail, eyre, Context, Result};
+use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::{
     helpers::{
         smpc_request::{ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE},
@@ -25,6 +30,7 @@ use iris_mpc_cpu::{
     execution::session::Session,
     network::tcp::{build_network_handle, NetworkHandleArgs},
 };
+use sodiumoxide::hex;
 use std::collections::HashSet;
 use std::{
     collections::HashMap,
@@ -87,6 +93,7 @@ struct AnonStatsProcessor {
     config: Arc<AnonStatsServerConfig>,
     store: AnonStatsStore,
     sns_client: SNSClient,
+    s3_client: S3Client,
     publish: PublishTargets,
     sync_failures: HashMap<AnonStatsOrigin, usize>,
 }
@@ -96,6 +103,7 @@ impl AnonStatsProcessor {
         config: Arc<AnonStatsServerConfig>,
         store: AnonStatsStore,
         sns_client: SNSClient,
+        s3_client: S3Client,
     ) -> Self {
         let publish = PublishTargets {
             topic_arn: config.results_topic_arn.clone(),
@@ -108,6 +116,7 @@ impl AnonStatsProcessor {
             config,
             store,
             sns_client,
+            s3_client,
             publish,
             sync_failures: HashMap::new(),
         }
@@ -324,8 +333,30 @@ impl AnonStatsProcessor {
     }
 
     async fn publish_2d_stats(&self, stats: &BucketStatistics2D) -> Result<()> {
-        let payload =
-            serde_json::to_string(stats).wrap_err("failed to serialize 2D anon stats payload")?;
+        info!("Sending 2D anonymized stats results");
+        let serialized = serde_json::to_string(&stats)
+            .wrap_err("failed to serialize 2D anonymized statistics result")?;
+
+        // offloading 2D anon stats file to s3 to avoid sending large messages to SNS
+        // with 2D stats we were exceeding the SNS message size limit
+        let now_ms = Utc::now().timestamp_millis();
+        let sha = iris_mpc_common::helpers::sha256::sha256_bytes(&serialized);
+        let content_hash = hex::encode(sha);
+        let s3_key = format!("stats2d/{}_{}.json", now_ms, content_hash);
+
+        upload_file_to_s3(
+            &self.config.sns_buffer_bucket_name,
+            &s3_key,
+            self.s3_client.clone(),
+            serialized.as_bytes(),
+        )
+        .await
+        .wrap_err("failed to upload 2D anonymized statistics to s3")?;
+
+        // Publish only the S3 key to SNS
+        let payload = serde_json::to_string(&serde_json::json!({
+            "s3_key": s3_key,
+        }))?;
         self.publish_message(payload, &self.publish.attributes_2d)
             .await
     }
@@ -425,7 +456,8 @@ async fn main() -> Result<()> {
     .await?;
     let anon_stats_store = AnonStatsStore::new(&postgres_client).await?;
 
-    let sns_client = build_sns_client(config.as_ref()).await?;
+    let sns_client = build_sns_client(&config).await?;
+    let s3_client = build_s3_client(&config).await?;
 
     info!("Starting anon stats server.");
     let mut background_tasks = TaskMonitor::new();
@@ -475,7 +507,8 @@ async fn main() -> Result<()> {
         .get_mut(0)
         .ok_or_else(|| eyre!("expected at least one network session"))?;
 
-    let mut processor = AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client);
+    let mut processor =
+        AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client, s3_client);
 
     coordination_handles.set_ready();
     wait_for_others_ready(&server_coord_config)
@@ -542,4 +575,28 @@ async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
         }
     }
     Ok(SNSClient::from_conf(sns_config_builder.build()))
+}
+
+async fn build_s3_client(config: &AnonStatsServerConfig) -> Result<S3Client> {
+    let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
+    let retry_config = RetryConfig::standard().with_max_attempts(5);
+
+    let mut loader = aws_config::from_env();
+    if let Some(aws) = &config.aws {
+        if let Some(region) = &aws.region {
+            loader = loader.region(Region::new(region.clone()));
+        }
+    }
+
+    let shared_config = loader.load().await;
+    let mut s3_config = S3ConfigBuilder::from(&shared_config).retry_config(retry_config.clone());
+    if let Some(aws) = &config.aws {
+        if let Some(endpoint) = &aws.endpoint {
+            s3_config = s3_config.endpoint_url(endpoint);
+        }
+        if force_path_style {
+            s3_config = s3_config.force_path_style(force_path_style);
+        }
+    }
+    Ok(S3Client::from_conf(s3_config.build()))
 }
