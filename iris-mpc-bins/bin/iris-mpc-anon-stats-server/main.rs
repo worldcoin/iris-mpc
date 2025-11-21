@@ -267,12 +267,12 @@ impl AnonStatsProcessor {
         }
 
         let min_job_size = sync_on_job_sizes(session, available).await?;
-        if min_job_size < self.config.min_1d_job_size {
+        if min_job_size < self.config.min_2d_job_size {
             debug!(
                 ?origin,
                 available,
                 min_job_size,
-                required = self.config.min_1d_job_size,
+                required = self.config.min_2d_job_size,
                 "Not enough entries yet for 2D anon stats job"
             );
             return Ok(());
@@ -285,8 +285,9 @@ impl AnonStatsProcessor {
 
         info!(
             ?origin,
-            "Fetched {} anon stats 2D bundles for processing",
-            bundles.len()
+            "Fetched {}/{} anon stats 2D bundles for processing",
+            bundles.len(),
+            self.config.min_2d_job_size,
         );
 
         if bundles.is_empty() {
