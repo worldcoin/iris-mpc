@@ -296,6 +296,28 @@ pub struct ConnectPlanLayer<Vector> {
     pub nb_links: Vec<Vec<Vector>>,
 }
 
+impl<Vector> ConnectPlanLayer<Vector>
+where
+    Vector: Clone,
+{
+    /// ConnectPlanLayer is still used by lots of testing code. ConnectPlan was updated to use a
+    /// Vec<update> instead of Vec<ConnectPlanLayer>. This function makes it easier to update the
+    /// test code
+    pub fn to_updates(
+        self,
+        inserted_vector: Vector,
+        layer: usize,
+    ) -> Vec<(usize, Vector, Vec<Vector>)> {
+        let mut updates = vec![];
+        updates.push((layer, inserted_vector.clone(), self.neighbors.clone()));
+
+        for (nb, nb_nb) in izip!(self.neighbors.into_iter(), self.nb_links.into_iter()) {
+            updates.push((layer, nb, nb_nb));
+        }
+        updates
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SetEntryPoint {
     /// Do not update entry points based on inserted vector

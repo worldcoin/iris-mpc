@@ -82,10 +82,11 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
         for i in 0..db_size {
             let plan = ConnectPlan {
                 inserted_vector: id(i),
-                layers: vec![ConnectPlanLayer {
+                updates: ConnectPlanLayer {
                     neighbors: edges(i),
                     nb_links: vec![edges(next(i))],
-                }],
+                }
+                .to_updates(id(i), 0),
                 set_ep: if i == 0 {
                     SetEntryPoint::NewLayer
                 } else {

@@ -2077,10 +2077,11 @@ mod tests_db {
                 .enumerate()
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
-                    layers: vec![ConnectPlanLayer {
+                    updates: ConnectPlanLayer {
                         neighbors: vec![vectors[side]],
                         nb_links: vec![vec![*vector]],
-                    }],
+                    }
+                    .to_updates(*vector, 0),
                     set_ep: if i == side {
                         SetEntryPoint::NewLayer
                     } else {
@@ -2171,10 +2172,11 @@ mod hawk_mutation_tests {
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
         ConnectPlan {
             inserted_vector: vector_id,
-            layers: vec![ConnectPlanLayer {
+            updates: ConnectPlanLayer {
                 neighbors: vec![vector_id],
                 nb_links: vec![vec![vector_id]],
-            }],
+            }
+            .to_updates(vector_id, 0),
             set_ep: SetEntryPoint::False,
         }
     }
