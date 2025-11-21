@@ -59,6 +59,15 @@ impl PlaintextStore {
         }
     }
 
+    pub fn from_irises_iter(iter: impl Iterator<Item = IrisCode>) -> Self {
+        let mut vector = PlaintextStore::new();
+        for (idx, iris) in iter.enumerate() {
+            let id = VectorId::from_0_index(idx as u32);
+            vector.insert_with_id(id, Arc::new(iris));
+        }
+        vector
+    }
+
     /// Return the size of the underlying set of irises.
     pub fn len(&self) -> usize {
         self.storage.db_size()
