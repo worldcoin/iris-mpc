@@ -1,6 +1,7 @@
+# to be later updated to same release at iris-mpc
 image: "ghcr.io/worldcoin/anon-stats-server:a7e11cb214b2d2c456523370d04b0c2028a8fb8c"
 
-environment: stage
+environment: prod
 replicaCount: 1
 
 strategy:
