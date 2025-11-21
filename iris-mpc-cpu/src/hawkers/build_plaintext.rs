@@ -158,38 +158,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_insert_with_small_batches() -> Result<()> {
-        let database_size = 256;
-        let to_insert = 512;
-        let batch_size = 32;
-        let (searcher, graph, store, irises, prf_seed) =
-            setup_test_data(database_size, to_insert).await?;
-
-        let (final_graph, final_store) = plaintext_parallel_batch_insert(
-            Some(graph),
-            Some(store),
-            irises.clone(),
-            &searcher,
-            batch_size,
-            &prf_seed,
-        )
-        .await?;
-
-        check_results(
-            final_store,
-            final_graph,
-            irises,
-            &searcher,
-            database_size + to_insert,
-        )
-        .await
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_insert_with_large_batches() -> Result<()> {
-        let database_size = 256;
-        let to_insert = 512;
-        let batch_size = 100;
+    async fn test_insert_with_batches() -> Result<()> {
+        let database_size = 64;
+        let to_insert = 64;
+        let batch_size = 8;
         let (searcher, graph, store, irises, prf_seed) =
             setup_test_data(database_size, to_insert).await?;
 

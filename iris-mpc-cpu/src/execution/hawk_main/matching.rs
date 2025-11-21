@@ -88,8 +88,8 @@ impl Step1 {
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
-                for vector_id in rotation.match_ids() {
-                    full_join.entry(vector_id).or_default()[side] = true;
+                for (vector_id, _) in rotation.matches.iter() {
+                    full_join.entry(*vector_id).or_default()[side] = true;
                 }
             }
         }
@@ -701,7 +701,11 @@ mod tests {
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
             let insert_plan = HawkInsertPlan {
-                match_count: match_ids.len(),
+                matches: match_ids
+                    .iter()
+                    .cloned()
+                    .map(|v| (v, distance()))
+                    .collect::<Vec<_>>(),
                 plan: InsertPlanV {
                     query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
                     links: vec![SortedNeighborhood::from_ascending_vec(
