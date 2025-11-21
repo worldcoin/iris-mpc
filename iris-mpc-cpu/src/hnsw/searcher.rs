@@ -1568,7 +1568,7 @@ impl HnswSearcher {
             let layer = updates.0;
             let to_insert = &updates.1;
             let neighborhood = &updates.2;
-            let max_size = self.params.get_M(layer);
+            let max_size = self.params.get_M_max(layer);
             let new_nb =
                 Self::neighborhood_compaction(_store, to_insert.clone(), neighborhood, max_size)
                     .await?;
