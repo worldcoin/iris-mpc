@@ -1524,7 +1524,7 @@ impl HnswSearcher {
     ) -> Result<Vec<ConnectPlanV<V>>> {
         let mut connect_plans = updates
             .iter()
-            .map(|(vec, links, set_ep)| ConnectPlan {
+            .map(|(vec, _links, set_ep)| ConnectPlan {
                 inserted_vector: vec.clone(),
                 updates: vec![],
                 set_ep: set_ep.clone(),
@@ -1565,11 +1565,13 @@ impl HnswSearcher {
         for (plan_idx, update_idx) in keys.into_iter() {
             let updates = &connect_plans[*plan_idx].updates[*update_idx];
             let layer = updates.0;
+            let to_insert = &updates.1;
+            let neighborhood = &updates.2;
             let max_size = self.params.get_M(layer);
             let new_nb =
-                Self::neighborhood_compaction(_store, updates.1.clone(), &updates.2, max_size)
+                Self::neighborhood_compaction(_store, to_insert.clone(), neighborhood, max_size)
                     .await?;
-            let new_update = (layer, updates.1.clone(), new_nb);
+            let new_update = (layer, to_insert.clone(), new_nb);
             connect_plans[*plan_idx].updates[*update_idx] = new_update;
         }
 
