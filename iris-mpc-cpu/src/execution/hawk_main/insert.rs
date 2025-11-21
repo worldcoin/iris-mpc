@@ -51,13 +51,17 @@ pub async fn insert<V: VectorStoreMut>(
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
 
-    for (plan, update_id, cp) in izip!(insert_plans, ids, &mut connect_plans) {
+    let mut update_idxs = vec![];
+    let mut updates: Vec<(_, _, _)> = vec![];
+    for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate() {
         if let Some(InsertPlanV {
             query,
             links,
             set_ep,
         }) = plan
         {
+            update_idxs.push(idx);
+
             let extended_links =
                 add_batch_neighbors(&mut *store, &query, links, &inserted_ids, m).await?;
 
@@ -68,13 +72,24 @@ pub async fn insert<V: VectorStoreMut>(
                 }
             };
 
-            let connect_plan = searcher
-                .insert_prepare(store, graph, inserted, extended_links, set_ep)
-                .await?;
-            graph.insert_apply(connect_plan.clone()).await;
-            inserted_ids.push(connect_plan.inserted_vector.clone());
-            cp.replace(connect_plan);
+            // retaining existing behavior.
+            // not sure why extended_links isn't trimmed in each iteration as that would make the quicksort faster.
+            let mut layers = vec![];
+            let mut nbhds = extended_links.clone();
+            for (lc, nbhd) in nbhds.iter_mut().enumerate() {
+                let M = searcher.params.get_M(lc);
+                nbhd.trim_to_k_nearest(M);
+                layers.push(nbhd.vectors_cloned());
+            }
+            updates.push((inserted.clone(), layers, set_ep));
+            inserted_ids.push(inserted);
         }
+    }
+
+    let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
+    for (cp_idx, plan) in izip!(update_idxs, plans) {
+        // insert_apply was called in insert_prepare_batch
+        connect_plans[cp_idx].replace(plan);
     }
 
     Ok(connect_plans)
