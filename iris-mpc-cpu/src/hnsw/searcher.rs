@@ -1547,6 +1547,7 @@ impl HnswSearcher {
                     let mut nb_nb = graph.get_links(neighbor, lc).await;
                     nb_nb.push(vec.clone());
                     if nb_nb.len() > self.params.get_M_extra(lc) {
+                        // current len will be the idx after it is pushed to updates
                         needs_compaction
                             .insert((idx, connect_plans[idx].updates.len()), nb_nb.clone());
                     }
@@ -1562,8 +1563,8 @@ impl HnswSearcher {
 
         let mut keys: Vec<_> = needs_compaction.keys().collect();
         keys.sort();
-        for (plan_idx, update_idx) in keys.into_iter() {
-            let updates = &connect_plans[*plan_idx].updates[*update_idx];
+        for &(plan_idx, update_idx) in keys.into_iter() {
+            let updates = &connect_plans[plan_idx].updates[update_idx];
             let layer = updates.0;
             let to_insert = &updates.1;
             let neighborhood = &updates.2;
@@ -1572,7 +1573,7 @@ impl HnswSearcher {
                 Self::neighborhood_compaction(_store, to_insert.clone(), neighborhood, max_size)
                     .await?;
             let new_update = (layer, to_insert.clone(), new_nb);
-            connect_plans[*plan_idx].updates[*update_idx] = new_update;
+            connect_plans[plan_idx].updates[update_idx] = new_update;
         }
 
         Ok(connect_plans)
@@ -1812,6 +1813,77 @@ mod tests {
                     insertion_layer,
                 )
                 .await?;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_prepare_batch() -> Result<()> {
+        let mut rng = AesRng::seed_from_u64(42);
+        let iris_db = IrisDB::new_random_rng(10, &mut rng);
+
+        let mut queries = iris_db.db.into_iter().map(Arc::new);
+
+        // Default mode
+        let searcher = HnswSearcher::new_linear_scan(64, 32, 2, 1);
+        let vector_store = &mut PlaintextStore::new();
+        let graph_store = &mut GraphMem::new();
+
+        let mut ids = vec![];
+
+        // Insert 5 queries into the vector store with vector ids 1 to 5
+        for _ in 0..6 {
+            let query = queries.next().unwrap();
+            let id = vector_store.insert(&query).await;
+            ids.push(id);
+        }
+
+        // Insert each vector (0..=5) into the graph with all other vectors as neighbors
+        for (i, &vector_id) in ids[0..=5].iter().enumerate() {
+            let mut nbs = Vec::new();
+
+            // Add all other vectors as neighbors (excluding self)
+            for (j, &neighbor_id) in ids[0..=5].iter().enumerate() {
+                if i != j {
+                    nbs.push(neighbor_id);
+                }
+            }
+
+            // Create connect plan for this vector at layer 0
+            let connect_plan = ConnectPlan {
+                inserted_vector: vector_id,
+                updates: vec![(0, vector_id, nbs)],
+                set_ep: SetEntryPoint::False,
+            };
+
+            // Apply the connect plan to the graph
+            graph_store.insert_apply(connect_plan).await;
+        }
+
+        // Create a vector of neighbors for the new vector (vector id 6)
+        let neighbors = vec![ids[0..5].to_vec()];
+
+        assert_eq!(neighbors[0].len(), 5);
+
+        // Create the update for vector id 6
+        let updates = vec![(ids[5], neighbors, SetEntryPoint::False)];
+
+        // Prepare the batch insertion
+        let connect_plans = searcher
+            .insert_prepare_batch(vector_store, graph_store, updates)
+            .await?;
+
+        // Verify the connect plan was created correctly
+        assert_eq!(connect_plans.len(), 1);
+        let plan = &connect_plans[0];
+        assert_eq!(plan.set_ep, SetEntryPoint::False);
+        assert_eq!(plan.updates.len(), 6); // 1 for vector 6 + 5 for its neighbors
+
+        // Verify that each neighbor's updated neighborhood has exactly 4 elements
+        // (the original 4 neighbors plus the newly inserted vector, trimmed to M=4)
+        for update in &plan.updates[1..] {
+            assert_eq!(update.2.len(), 4);
         }
 
         Ok(())
