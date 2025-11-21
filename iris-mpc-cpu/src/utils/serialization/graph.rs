@@ -1,11 +1,12 @@
 use std::{
+    fmt::Display,
     fs::File,
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Cursor},
     path::Path,
 };
 
 use clap::ValueEnum;
-use eyre::Result;
+use eyre::{bail, Result};
 use iris_mpc_common::IrisVectorId;
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +64,32 @@ pub enum GraphFormat {
     Raw,
 }
 
+/// Array of all concrete graph formats
+pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 5] = [
+    GraphFormat::V3,
+    GraphFormat::V2,
+    GraphFormat::V1,
+    GraphFormat::V0,
+    GraphFormat::Raw,
+];
+
+/// Current standard serialization format
+pub const GRAPH_FORMAT_CURRENT: GraphFormat = GraphFormat::V3;
+
+impl Display for GraphFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            GraphFormat::Current => "Current",
+            GraphFormat::V3 => "V3",
+            GraphFormat::V2 => "V2",
+            GraphFormat::V1 => "V1",
+            GraphFormat::V0 => "V0",
+            GraphFormat::Raw => "Raw",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 /// Designated method for reading a `GraphMem`. Currently goes through the
 /// `GraphV3` serialization type.
 pub fn read_graph_current<R: std::io::Read>(
@@ -105,6 +132,33 @@ pub fn write_graph_raw<W: std::io::Write>(
     Ok(())
 }
 
+/// Read a `GraphMem` with a specified serialization format.
+pub fn read_graph<R: std::io::Read>(
+    reader: &mut R,
+    format: GraphFormat,
+) -> Result<GraphMem<IrisVectorId>> {
+    match format {
+        GraphFormat::Current => read_graph_current(reader),
+        GraphFormat::V3 => {
+            let graph = read_graph_v3(reader)?;
+            Ok(graph.into())
+        }
+        GraphFormat::V2 => {
+            let graph = read_graph_v2(reader)?;
+            Ok(graph.into())
+        }
+        GraphFormat::V1 => {
+            let graph = read_graph_v1(reader)?;
+            Ok(graph.into())
+        }
+        GraphFormat::V0 => {
+            let graph = read_graph_v0(reader)?;
+            Ok(graph.into())
+        }
+        GraphFormat::Raw => read_graph_raw(reader),
+    }
+}
+
 /// Read a `GraphMem` from file with a specified serialization format.
 pub fn read_graph_from_file<P: AsRef<Path>>(
     path: P,
@@ -112,32 +166,47 @@ pub fn read_graph_from_file<P: AsRef<Path>>(
 ) -> Result<GraphMem<IrisVectorId>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
-    match format {
-        GraphFormat::Current => read_graph_current(&mut reader),
-        GraphFormat::V3 => {
-            let graph = read_graph_v3(&mut reader)?;
-            Ok(graph.into())
+    read_graph(&mut reader, format)
+}
+
+/// Read a graph from file with unknown serialization format.  Returns deserialization
+/// results using the most recent graph format for which deserialization is successful,
+/// or an `Err` result if no graph format is valid.
+pub fn try_read_graph_from_file<P: AsRef<Path>>(path: P) -> Result<GraphMem<IrisVectorId>> {
+    let data = std::fs::read(&path)?;
+
+    for format in ALL_CONCRETE_GRAPH_FORMATS {
+        let mut cursor = Cursor::new(&data);
+        let graph_res = read_graph(&mut cursor, format);
+        if graph_res.is_ok() {
+            return graph_res;
         }
-        GraphFormat::V2 => {
-            let graph = read_graph_v2(&mut reader)?;
-            Ok(graph.into())
-        }
-        GraphFormat::V1 => {
-            let graph = read_graph_v1(&mut reader)?;
-            Ok(graph.into())
-        }
-        GraphFormat::V0 => {
-            let graph = read_graph_v0(&mut reader)?;
-            Ok(graph.into())
-        }
-        GraphFormat::Raw => read_graph_raw(&mut reader),
     }
+
+    bail!("Unable to deserialize graph from file");
+}
+
+/// Attempt to deserialize the provided `data` slice into graphs using all
+/// available graph formats, returning a list of formats for which
+/// deserialization was successful.
+pub fn check_valid_graph_formats(data: &[u8]) -> Vec<GraphFormat> {
+    let mut valid_formats = Vec::new();
+
+    for format in ALL_CONCRETE_GRAPH_FORMATS {
+        let mut cursor = Cursor::new(data);
+        let graph_res = read_graph(&mut cursor, format);
+        if graph_res.is_ok() {
+            valid_formats.push(format);
+        }
+    }
+
+    valid_formats
 }
 
 /// Write a `GraphMem` to file using the `GraphFormat::Current` serialization
 /// format, currently `GraphV3`.
 pub fn write_graph_to_file<P: AsRef<Path>>(path: P, data: GraphMem<IrisVectorId>) -> Result<()> {
-    let file = File::open(path)?;
+    let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     write_graph_current(&mut writer, data)
 }
@@ -231,7 +300,7 @@ pub fn write_graph_pair_to_file<P: AsRef<Path>>(
     path: P,
     data: [GraphMem<IrisVectorId>; 2],
 ) -> Result<()> {
-    let file = File::open(path)?;
+    let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
     write_graph_pair_current(&mut writer, data)
 }
