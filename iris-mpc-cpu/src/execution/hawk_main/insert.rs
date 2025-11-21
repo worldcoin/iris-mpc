@@ -1,22 +1,16 @@
-use std::{future::Future, sync::Arc};
 
-use crate::{
-    execution::hawk_main::{scheduler::parallelize, HawkSession},
-    hawkers::aby3::aby3_store::Aby3Store,
-    hnsw::{
+use crate::hnsw::{
         graph::neighborhood::SortedNeighborhoodV,
         searcher::{ConnectPlanV, SetEntryPoint},
         sorting::quickselect::run_quickselect_with_store,
         vector_store::VectorStoreMut,
-        GraphMem, HnswParams, HnswSearcher, VectorStore,
-    },
-};
+        GraphMem, HnswSearcher, VectorStore,
+    };
 
 use super::VecRequests;
 
 use eyre::Result;
 use itertools::{izip, Itertools};
-use tokio::sync::{mpsc, RwLock};
 
 /// InsertPlan specifies where a query may be inserted into the HNSW graph.
 /// That is lists of neighbors for each layer.

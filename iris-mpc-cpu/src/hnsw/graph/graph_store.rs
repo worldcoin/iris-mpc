@@ -1,7 +1,7 @@
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        searcher::{ConnectPlanLayerV, ConnectPlanV, SetEntryPoint},
+        searcher::{ConnectPlanV, SetEntryPoint},
         GraphMem, VectorStore,
     },
 };
@@ -9,7 +9,6 @@ use eyre::{eyre, Result};
 use futures::future::try_join_all;
 use futures::StreamExt;
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
-use itertools::izip;
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{error::BoxDynError, types::Json, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};

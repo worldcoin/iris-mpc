@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        searcher::{ConnectPlan, ConnectPlanLayer, LayerMode, SetEntryPoint},
+        searcher::{ConnectPlan, LayerMode, SetEntryPoint},
         vector_store::Ref,
         HnswSearcher,
     },
