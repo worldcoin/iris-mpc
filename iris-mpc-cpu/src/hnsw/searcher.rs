@@ -6,7 +6,10 @@
 
 use super::{
     graph::neighborhood::SortedNeighborhoodV,
-    sorting::{swap_network::apply_swap_network, tree_min::tree_min},
+    sorting::{
+        quickselect::run_quickselect_with_store, swap_network::apply_swap_network,
+        tree_min::tree_min,
+    },
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{metrics::ops_counter::Operation, SortedNeighborhood, VectorStore};
@@ -1555,7 +1558,44 @@ impl HnswSearcher {
             }
         }
 
-        todo!()
+        // todo: use batch min-k
+
+        let mut keys: Vec<_> = needs_compaction.keys().collect();
+        keys.sort();
+        for (plan_idx, update_idx) in keys.into_iter() {
+            let updates = &connect_plans[*plan_idx].updates[*update_idx];
+            let layer = updates.0;
+            let max_size = self.params.get_M(layer);
+            let new_nb =
+                Self::neighborhood_compaction(_store, updates.1.clone(), &updates.2, max_size)
+                    .await?;
+            let new_update = (layer, updates.1.clone(), new_nb);
+            connect_plans[*plan_idx].updates[*update_idx] = new_update;
+        }
+
+        Ok(connect_plans)
+    }
+
+    // todo: switch with oblivious min-k and random shuffle
+    /// enforce size constraints on the neighborhood in an oblivious manner
+    async fn neighborhood_compaction<V: VectorStore>(
+        store: &mut V,
+        query: V::VectorRef,
+        neighborhood: &[V::VectorRef],
+        max_size: usize,
+    ) -> Result<Vec<V::VectorRef>> {
+        let r = store.vectors_as_queries(vec![query]).await;
+        let query = &r[0];
+        let link_distances = store.eval_distance_batch(query, neighborhood).await?;
+        let sorted_idxs =
+            run_quickselect_with_store(&mut (*store), &link_distances, max_size).await?;
+
+        let trimmed_neighborhood = sorted_idxs
+            .into_iter()
+            .take(max_size)
+            .map(|idx| neighborhood[idx].clone())
+            .collect();
+        Ok(trimmed_neighborhood)
     }
 
     /// Insert a vector using the search results from `search_to_insert`,

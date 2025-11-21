@@ -1,11 +1,10 @@
-
 use crate::hnsw::{
-        graph::neighborhood::SortedNeighborhoodV,
-        searcher::{ConnectPlanV, SetEntryPoint},
-        sorting::quickselect::run_quickselect_with_store,
-        vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, VectorStore,
-    };
+    graph::neighborhood::SortedNeighborhoodV,
+    searcher::{ConnectPlanV, SetEntryPoint},
+    sorting::quickselect::run_quickselect_with_store,
+    vector_store::VectorStoreMut,
+    GraphMem, HnswSearcher, VectorStore,
+};
 
 use super::VecRequests;
 
@@ -79,27 +78,6 @@ pub async fn insert<V: VectorStoreMut>(
     }
 
     Ok(connect_plans)
-}
-
-// todo: switch with oblivious min-k and random shuffle
-/// enforce size constraints on the neighborhood in an oblivious manner
-async fn neighborhood_compaction<V: VectorStore>(
-    store: &mut V,
-    query: V::VectorRef,
-    neighborhood: &[V::VectorRef],
-    max_size: usize,
-) -> Result<Vec<V::VectorRef>> {
-    let r = store.vectors_as_queries(vec![query]).await;
-    let query = &r[0];
-    let link_distances = store.eval_distance_batch(query, neighborhood).await?;
-    let sorted_idxs = run_quickselect_with_store(&mut (*store), &link_distances, max_size).await?;
-
-    let trimmed_neighborhood = sorted_idxs
-        .into_iter()
-        .take(max_size)
-        .map(|idx| neighborhood[idx].clone())
-        .collect();
-    Ok(trimmed_neighborhood)
 }
 
 /// Extends the bottom layer of links with additional vectors in `extra_ids` if there is room.
