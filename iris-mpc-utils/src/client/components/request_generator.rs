@@ -1,6 +1,9 @@
 use rand::{CryptoRng, Rng};
 
-use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
+use iris_mpc_common::helpers::smpc_request::{
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+};
 
 use super::super::typeset::{
     ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData,
@@ -59,16 +62,17 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         }
 
         let batch_idx = self.batch_count + 1;
-        let batch_size = self.batch_size();
-        let mut batch = RequestBatch::new(batch_idx, batch_size);
-        tracing::info!("----------------------------------------------------------------------");
+        let mut batch = RequestBatch::new(batch_idx, self.batch_size());
         tracing::info!("{} :: Instantiated", batch);
-        tracing::info!("----------------------------------------------------------------------");
 
-        for item_idx in 1..(batch_size + 1) {
-            let request = self.generate_request(batch_idx, item_idx);
-            tracing::info!("{} :: Data generated", request);
-            batch.requests_mut().push(request);
+        for item_idx in 1..(self.batch_size() + 1) {
+            batch.requests_mut().push(Request::new(
+                batch_idx,
+                item_idx,
+                match self.batch_kind {
+                    RequestBatchKind::Simple(kind) => self.get_request_data_from_batch_kind(kind),
+                },
+            ));
         }
 
         self.batch_count += 1;
@@ -76,18 +80,18 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         Ok(Some(batch))
     }
 
-    fn generate_request(&mut self, batch_idx: usize, item_idx: usize) -> Request {
-        Request::new(
-            batch_idx,
-            item_idx,
-            match self.batch_kind {
-                RequestBatchKind::Simple(kind) => match kind {
-                    UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
-                        shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut()),
-                    },
-                    _ => panic!("Unsupported request kind: {}", kind),
-                },
+    fn get_request_data_from_batch_kind(&mut self, batch_kind: &'static str) -> RequestData {
+        match batch_kind {
+            IDENTITY_DELETION_MESSAGE_TYPE => RequestData::IdentityDeletion,
+            REAUTH_MESSAGE_TYPE => RequestData::Reauthorization {
+                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut()),
             },
-        )
+            RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck,
+            RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate,
+            UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
+                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut()),
+            },
+            _ => unreachable!(),
+        }
     }
 }

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use iris_mpc_common::helpers::smpc_request::{
-    UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+    ReAuthRequest, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
     RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
@@ -76,9 +76,21 @@ impl RequestEnqueuer {
 
     async fn get_body_reauthorization(
         &self,
-        _request: &Request,
+        request: &Request,
     ) -> Result<RequestBody, ClientError> {
-        unimplemented!()
+        // Destructure generated data.
+        let _shares = match request.data() {
+            RequestData::Reauthorization { shares } => shares,
+            _ => unreachable!(),
+        };
+
+        Ok(RequestBody::Reauthorization(ReAuthRequest {
+            batch_size: None,
+            reauth_id: String::from("reauth_id"),
+            s3_key: String::from("s3_key"),
+            serial_id: u32::default(),
+            use_or_rule: bool::default(),
+        }))
     }
 
     async fn get_body_reset_check(&self, _request: &Request) -> Result<RequestBody, ClientError> {
@@ -99,14 +111,11 @@ impl RequestEnqueuer {
             _ => unreachable!(),
         };
 
-        // Set signup id.
-        let signup_id = *request.identifier();
-
-        // Set AWS-S3 JSON compatible shares.
+        // Set AWS-S3 JSON compatible shares.  Signup id is derived from request id.
         let [[l_code, l_mask], [r_code, r_mask]] = shares.clone();
         let shares = create_iris_party_shares_for_s3(
             &create_iris_code_party_shares(
-                signup_id,
+                request.identifier().clone(),
                 l_code.to_owned(),
                 l_mask.to_owned(),
                 r_code.to_owned(),
@@ -116,10 +125,12 @@ impl RequestEnqueuer {
         );
 
         // Upload to AWS-S3.
-        let s3_bucket = self.aws_client.config().s3_request_bucket_name();
-        let s3_key = signup_id.to_string();
-        let s3_obj_info = S3ObjectInfo::new(s3_bucket, &s3_key, &shares);
-        match self.aws_client.s3_put_object(&s3_obj_info).await {
+        let s3_obj_info = S3ObjectInfo::new(
+            self.aws_client.config().s3_request_bucket_name(),
+            &request.identifier().to_string(),
+            &shares,
+        );
+        match self.aws_client.s3_put_object(s3_obj_info).await {
             Ok(_) => {
                 tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
             }
@@ -128,8 +139,8 @@ impl RequestEnqueuer {
 
         Ok(RequestBody::Uniqueness(UniquenessRequest {
             batch_size: Some(1),
-            signup_id: signup_id.to_string(),
-            s3_key,
+            signup_id: request.identifier().to_string(),
+            s3_key: request.identifier().to_string(),
             or_rule_serial_ids: None,
             skip_persistence: None,
             full_face_mirror_attacks_detection_enabled: Some(true),

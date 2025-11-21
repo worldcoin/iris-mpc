@@ -2,7 +2,7 @@ use std::fmt;
 
 use uuid;
 
-use iris_mpc_common::helpers::smpc_request;
+use iris_mpc_common::helpers::smpc_request::{self, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE};
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use crate::types::IrisCodeAndMaskShares;
@@ -116,6 +116,23 @@ impl fmt::Display for RequestBatchKind {
     }
 }
 
+impl From<&String> for RequestBatchKind {
+    fn from(option: &String) -> Self {
+        let kind = match option.as_str() {
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+            }
+            smpc_request::REAUTH_MESSAGE_TYPE => smpc_request::REAUTH_MESSAGE_TYPE,
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => smpc_request::RESET_CHECK_MESSAGE_TYPE,
+            smpc_request::RESET_UPDATE_MESSAGE_TYPE => smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+            smpc_request::UNIQUENESS_MESSAGE_TYPE => smpc_request::UNIQUENESS_MESSAGE_TYPE,
+            _ => panic!("Unsupported request batch kind"),
+        };
+
+        RequestBatchKind::Simple(kind)
+    }
+}
+
 /// Encapsulates inputs used to compute size of a request batch.
 #[derive(Debug, Clone)]
 pub enum RequestBatchSize {
@@ -147,7 +164,9 @@ pub enum RequestBody {
 #[allow(clippy::large_enum_variant)]
 pub enum RequestData {
     IdentityDeletion,
-    Reauthorization,
+    Reauthorization {
+        shares: BothEyes<IrisCodeAndMaskShares>,
+    },
     ResetCheck,
     ResetUpdate,
     Uniqueness {
@@ -161,7 +180,7 @@ impl fmt::Display for RequestData {
             Self::IdentityDeletion => {
                 write!(f, "IdentityDeletion")
             }
-            RequestData::Reauthorization => {
+            RequestData::Reauthorization { .. } => {
                 write!(f, "Reauthorisation")
             }
             RequestData::ResetCheck => {
@@ -170,7 +189,7 @@ impl fmt::Display for RequestData {
             RequestData::ResetUpdate => {
                 write!(f, "ResetUpdate")
             }
-            RequestData::Uniqueness { shares: _ } => {
+            RequestData::Uniqueness { .. } => {
                 write!(f, "Uniqueness")
             }
         }

@@ -20,14 +20,12 @@ pub async fn main() -> Result<()> {
     tracing::info!("{}", options);
 
     let mut client = ServiceClient::async_from(options.clone()).await;
-    match client.init().await {
-        Ok(()) => {
-            client.exec().await.unwrap();
-        }
-        Err(e) => {
-            tracing::error!("Initialisation failure: {}", e);
-        }
-    };
+    if let Err(e) = client.init().await {
+        tracing::error!("Initialisation failure: {}", e);
+        return Err(e.into());
+    }
+
+    client.exec().await?;
 
     Ok(())
 }
@@ -65,6 +63,10 @@ struct CliOptions {
     #[clap(long, default_value = "5")]
     request_batch_count: usize,
 
+    /// Number of request batches to process.
+    #[clap(long, default_value = UNIQUENESS_MESSAGE_TYPE)]
+    request_batch_kind: String,
+
     /// Maximum size of each request batch.
     #[clap(long, default_value = "10")]
     request_batch_size: usize,
@@ -76,9 +78,7 @@ struct CliOptions {
 
 impl CliOptions {
     fn request_batch_kind(&self) -> RequestBatchKind {
-        // Currently defaults to sets of uniqueness requests.
-        // TODO: parse from env | command line | file.
-        RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE)
+        RequestBatchKind::from(&self.request_batch_kind)
     }
 
     fn request_batch_size(&self) -> RequestBatchSize {
