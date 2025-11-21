@@ -73,7 +73,13 @@ env:
   - name: SMPC__N_BUCKETS_1D
     value: "375"
 
+  - name: SMPC__N_BUCKETS_2D
+    value: "375"
+
   - name: SMPC__MIN_1D_JOB_SIZE
+    value: "64"
+
+  - name: SMPC__MIN_2D_JOB_SIZE
     value: "64"
 
   - name: SMPC__POLL_INTERVAL_SECS
