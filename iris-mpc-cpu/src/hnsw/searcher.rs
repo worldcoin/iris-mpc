@@ -22,7 +22,7 @@ use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
 };
 use tracing::{debug, instrument, trace_span, Instrument};
@@ -262,9 +262,8 @@ pub struct ConnectPlan<Vector> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
-    /// The HNSW graph updates required by insertion. The insertion layer of the new vector
-    /// is `layers.len() - 1`.
-    pub layers: Vec<ConnectPlanLayer<Vector>>,
+    /// Neighborhood updates for (update_layer, update_base_vector, new_neighborhood)
+    pub updates: Vec<(usize, Vector, Vec<Vector>)>,
 
     // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
@@ -1455,50 +1454,71 @@ impl HnswSearcher {
     pub async fn insert_prepare<V: VectorStore>(
         &self,
         // this may be used in the future to trim l_links
-        _store: &mut V,
+        store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         mut links: Vec<SortedNeighborhoodV<V>>,
         set_ep: SetEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
-        let mut plan = ConnectPlan {
-            inserted_vector: inserted_vector.clone(),
-            layers: vec![],
-            set_ep,
-        };
-
+        // this is for insert_prepare_batch
+        // the neighbors of inserted_vector at each layer
+        let mut neighbors = vec![];
         // todo: re-evaluate this. perhaps add a shuffle afterwards.
         for (lc, l_links) in links.iter_mut().enumerate() {
             let M = self.params.get_M(lc);
             l_links.trim_to_k_nearest(M);
+            neighbors.push(l_links.vectors_cloned());
         }
 
-        let mut neighborhoods_per_layer = vec![];
-        let mut neighbors_per_layer = vec![];
-        for (lc, l_links) in links.iter_mut().enumerate() {
-            let neighbors = l_links.vectors_cloned();
-            neighbors_per_layer.push(neighbors.clone());
+        let updates = vec![(inserted_vector, neighbors, set_ep)];
+        let mut r = self.insert_prepare_batch(store, graph, updates).await?;
+        Ok(r.pop().unwrap()) // work-around for odd error
+    }
 
-            let mut neighbors_neighborhoods = vec![];
-            for neighbor in neighbors.into_iter() {
-                let mut new_neighborhood = graph.get_links(&neighbor, lc).await;
-                new_neighborhood.push(inserted_vector.clone());
-                neighbors_neighborhoods.push(new_neighborhood);
+    pub async fn insert_prepare_batch<V: VectorStore>(
+        &self,
+        // this may be used in the future to trim l_links
+        _store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, SetEntryPoint)>,
+    ) -> Result<Vec<ConnectPlanV<V>>> {
+        let mut connect_plans = updates
+            .iter()
+            .map(|(vec, links, set_ep)| ConnectPlan {
+                inserted_vector: vec.clone(),
+                updates: vec![],
+                set_ep: set_ep.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        // todo: shuffle links
+
+        // HashMap connet (plan idx, update idx) -> neighborhood
+        let mut needs_compaction: HashMap<(usize, usize), Vec<_>> = HashMap::new();
+        for (idx, (vec, links, _)) in updates.iter().enumerate() {
+            for (lc, neighbors) in links.iter().enumerate() {
+                // add the inserted node's neighborhood for this layer
+                // these will never be too large because they were previously trimmed.
+                connect_plans[idx]
+                    .updates
+                    .push((lc, vec.clone(), neighbors.clone()));
+                // add the updated neighborhoods of all neighbors
+                for neighbor in neighbors.iter() {
+                    let mut nb_nb = graph.get_links(neighbor, lc).await;
+                    nb_nb.push(vec.clone());
+                    if nb_nb.len() > self.params.get_M_extra(lc) {
+                        needs_compaction
+                            .insert((idx, connect_plans[idx].updates.len()), nb_nb.clone());
+                    }
+                    connect_plans[idx]
+                        .updates
+                        .push((lc, neighbor.clone(), nb_nb)); // todo: insert an empty vec if the
+                                                              // nbhd will be compacted?
+                }
             }
-            neighborhoods_per_layer.push(neighbors_neighborhoods);
         }
 
-        plan.layers = izip!(
-            neighbors_per_layer.into_iter(),
-            neighborhoods_per_layer.into_iter()
-        )
-        .map(|(neighbors, nb_links)| ConnectPlanLayer {
-            neighbors,
-            nb_links,
-        })
-        .collect();
-
-        Ok(plan)
+        todo!()
     }
 
     /// Insert a vector using the search results from `search_to_insert`,

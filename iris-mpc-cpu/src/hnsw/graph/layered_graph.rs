@@ -124,7 +124,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
-        let insertion_layer = plan.layers.len() - 1;
+        let insertion_layer = plan.updates.len() - 1;
 
         // If required, set vector as new entry point
         match plan.set_ep {
@@ -140,21 +140,9 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
 
         // Connect the new vector to its neighbors in each layer.
-        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
-            self.connect_apply(plan.inserted_vector.clone(), lc, layer_plan)
-                .await;
+        for (lc, v, new_nb) in plan.updates.into_iter() {
+            self.set_links(v, new_nb, lc).await;
         }
-    }
-
-    /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
-    async fn connect_apply(&mut self, q: V, lc: usize, plan: ConnectPlanLayer<V>) {
-        // Connect all n -> q.
-        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
-            self.set_links(n.clone(), links, lc).await;
-        }
-
-        // Connect q -> all n.
-        self.set_links(q, plan.neighbors, lc).await;
     }
 
     pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
