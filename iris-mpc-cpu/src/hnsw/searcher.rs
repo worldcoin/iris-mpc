@@ -270,6 +270,21 @@ pub struct ConnectPlan<Vector> {
     pub set_ep: SetEntryPoint,
 }
 
+impl<Vector> ConnectPlan<Vector>
+where
+    Vector: PartialEq + Eq,
+{
+    /// returns the max insertion layer for inserted_vector
+    pub fn get_max_insertion_layer(&self) -> Option<usize> {
+        self.updates
+            .iter()
+            .filter(|(_, v, _)| v == &self.inserted_vector)
+            .map(|(lc, _, _)| lc)
+            .max()
+            .cloned()
+    }
+}
+
 /// Represents the state updates required for insertion of a new node into a single layer of
 /// an HNSW hierarchical graph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

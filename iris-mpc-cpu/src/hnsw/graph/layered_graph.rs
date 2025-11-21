@@ -124,7 +124,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
-        let insertion_layer = plan.updates.len() - 1;
+        let insertion_layer = plan.get_max_insertion_layer().unwrap();
 
         // If required, set vector as new entry point
         match plan.set_ep {

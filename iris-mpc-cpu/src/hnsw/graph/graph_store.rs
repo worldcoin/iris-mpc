@@ -254,7 +254,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
         // If required, set vector as new entry point
-        let insertion_layer = plan.layers.len() - 1;
+        let insertion_layer = plan.get_max_insertion_layer().unwrap();
         match plan.set_ep {
             SetEntryPoint::False => {}
             SetEntryPoint::NewLayer => {
@@ -268,28 +268,9 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         }
 
         // Connect the new vector to its neighbors in each layer.
-        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
-            self.connect_apply(plan.inserted_vector, lc, layer_plan)
-                .await?;
+        for (lc, inserted_vector, neighbors) in plan.updates.into_iter() {
+            self.set_links(inserted_vector, neighbors, lc).await?;
         }
-
-        Ok(())
-    }
-
-    /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
-    async fn connect_apply(
-        &mut self,
-        q: V::VectorRef,
-        lc: usize,
-        plan: ConnectPlanLayerV<V>,
-    ) -> Result<()> {
-        // Connect all n -> q.
-        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
-            self.set_links(*n, links, lc).await?;
-        }
-
-        // Connect q -> all n.
-        self.set_links(q, plan.neighbors, lc).await?;
 
         Ok(())
     }

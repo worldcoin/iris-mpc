@@ -542,10 +542,19 @@ impl HawkActor {
             .map(|id_option| id_option.map(|original_id| original_id.next_version()))
             .collect_vec();
 
-        let connect_plans =
-            insert::insert_hawk(sessions, &self.searcher, plans, &insertion_ids).await?;
+        // Parallel insertions are not supported, so only one session is needed.
+        let session = &sessions[0];
+        let mut store = session.aby3_store.write().await;
+        let mut graph = session.graph_store.write().await;
 
-        Ok(connect_plans)
+        insert::insert(
+            &mut *store,
+            &mut *graph,
+            &self.searcher,
+            plans,
+            &insertion_ids,
+        )
+        .await
     }
 
     async fn update_anon_stats(
