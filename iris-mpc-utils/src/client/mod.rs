@@ -6,12 +6,13 @@ use components::RequestEnqueuer;
 use components::RequestGenerator;
 use components::ResponseCorrelator;
 use components::ResponseDequeuer;
-pub use errors::ServiceClientError;
-pub use types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
+pub use typeset::{
+    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
+    RequestBatchSize, RequestData,
+};
 
 mod components;
-mod errors;
-mod types;
+mod typeset;
 
 /// A utility for correlating enqueued system requests with system responses.
 #[derive(Debug)]
@@ -51,16 +52,17 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     }
 
     /// Initializer.
-    pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
-        for initialization_result in [
-            self.request_enqueuer.init(public_key_base_url).await,
-            self.response_correlator.init().await,
+    pub async fn init(&mut self) -> Result<(), ClientError> {
+        tracing::info!("Initializing ...");
+        for initializer in [
+            self.request_enqueuer.init(),
+            self.response_correlator.init(),
         ] {
-            match initialization_result {
+            match initializer.await {
                 Ok(()) => (),
                 Err(e) => {
                     tracing::error!("Service client: component initialisation failed: {}", e);
-                    return Err(ServiceClientError::InitialisationError(e.to_string()));
+                    return Err(ClientError::InitialisationError(e.to_string()));
                 }
             }
         }
@@ -69,11 +71,15 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     }
 
     /// Executor.
-    pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
+    pub async fn exec(&mut self) -> Result<(), ClientError> {
         tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
-            self.request_enqueuer.enqueue(&batch).await.unwrap();
-            // TODO await responses & correlate.
+            for processor in [
+                self.request_enqueuer.process_batch(&batch),
+                self.response_dequeuer.process_batch(&batch),
+            ] {
+                processor.await?
+            }
         }
 
         Ok(())

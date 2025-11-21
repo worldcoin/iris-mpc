@@ -1,12 +1,13 @@
-use bincode;
-use eyre::Result;
-use serde::{de::DeserializeOwned, Serialize};
-use serde_json;
 use std::{
     fs::File,
     io::{BufReader, BufWriter},
     path::Path,
 };
+
+use bincode;
+use eyre::Result;
+use serde::{de::DeserializeOwned, Serialize};
+use serde_json;
 
 /// Returns a boxed iterator over the first `limit` elements of `iter`.
 pub fn limited_iterator<I>(iter: I, limit: Option<usize>) -> Box<dyn Iterator<Item = I::Item>>

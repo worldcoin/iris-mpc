@@ -2,6 +2,7 @@ use std::fmt;
 
 use uuid;
 
+use iris_mpc_common::helpers::smpc_request;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use crate::types::IrisCodeAndMaskShares;
@@ -15,8 +16,11 @@ pub struct Request {
     /// Associated request payload.
     data: RequestData,
 
-    /// Unique request identifier for correlation purposes.
+    /// An identifier assigned by client for correlation purposes.
     identifier: uuid::Uuid,
+
+    /// An identifier assigned by remote service upon being enqueed.
+    message_id: Option<uuid::Uuid>,
 
     /// Batch item ordinal identifier.
     item_idx: usize,
@@ -31,13 +35,22 @@ impl Request {
         &self.identifier
     }
 
+    pub fn message_id(&self) -> &Option<uuid::Uuid> {
+        &self.message_id
+    }
+
     pub fn new(batch_idx: usize, item_idx: usize, data: RequestData) -> Self {
         Self {
             batch_idx,
             item_idx,
             data,
             identifier: uuid::Uuid::new_v4(),
+            message_id: None,
         }
+    }
+
+    pub fn set_message_id(&mut self, message_id: uuid::Uuid) {
+        self.message_id = Some(message_id);
     }
 }
 
@@ -103,6 +116,23 @@ impl fmt::Display for RequestBatchKind {
     }
 }
 
+impl From<&String> for RequestBatchKind {
+    fn from(option: &String) -> Self {
+        let kind = match option.as_str() {
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+            }
+            smpc_request::REAUTH_MESSAGE_TYPE => smpc_request::REAUTH_MESSAGE_TYPE,
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => smpc_request::RESET_CHECK_MESSAGE_TYPE,
+            smpc_request::RESET_UPDATE_MESSAGE_TYPE => smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+            smpc_request::UNIQUENESS_MESSAGE_TYPE => smpc_request::UNIQUENESS_MESSAGE_TYPE,
+            _ => panic!("Unsupported request batch kind"),
+        };
+
+        RequestBatchKind::Simple(kind)
+    }
+}
+
 /// Encapsulates inputs used to compute size of a request batch.
 #[derive(Debug, Clone)]
 pub enum RequestBatchSize {
@@ -118,12 +148,25 @@ impl fmt::Display for RequestBatchSize {
     }
 }
 
-/// Enumeration over data associated with a request.
+/// Enumeration over request body.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum RequestBody {
+    IdentityDeletion(smpc_request::IdentityDeletionRequest),
+    Reauthorization(smpc_request::ReAuthRequest),
+    ResetCheck(smpc_request::ResetCheckRequest),
+    ResetUpdate(smpc_request::ResetUpdateRequest),
+    Uniqueness(smpc_request::UniquenessRequest),
+}
+
+/// Enumeration over generated request data.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestData {
     IdentityDeletion,
-    Reauthorisation,
+    Reauthorization {
+        shares: BothEyes<IrisCodeAndMaskShares>,
+    },
     ResetCheck,
     ResetUpdate,
     Uniqueness {
@@ -137,7 +180,7 @@ impl fmt::Display for RequestData {
             Self::IdentityDeletion => {
                 write!(f, "IdentityDeletion")
             }
-            RequestData::Reauthorisation => {
+            RequestData::Reauthorization { .. } => {
                 write!(f, "Reauthorisation")
             }
             RequestData::ResetCheck => {
@@ -146,7 +189,7 @@ impl fmt::Display for RequestData {
             RequestData::ResetUpdate => {
                 write!(f, "ResetUpdate")
             }
-            RequestData::Uniqueness { shares: _ } => {
+            RequestData::Uniqueness { .. } => {
                 write!(f, "Uniqueness")
             }
         }
