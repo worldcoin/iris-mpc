@@ -1556,7 +1556,7 @@ impl HnswSearcher {
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
                 neighbors: l_links
-                    .into_iter()
+                    .iter()
                     .map(|(v, _)| v.clone()) //TODO: why is this clone necessary?
                     .collect::<Vec<_>>(),
                 nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),

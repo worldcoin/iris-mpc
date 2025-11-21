@@ -144,8 +144,6 @@ impl<V> DerefMut for SortedEdgeIds<V> {
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
 
-struct SortedNeighborhoodV2<V: VectorStore>(SortedNeighborhood<V::VectorRef, V::DistanceRef>);
-
 impl<V: VectorStore> NeighborhoodV<V> for SortedNeighborhoodV<V> {}
 
 // impl<Vector: Clone, Distance: Clone> NeighborhoodV2 for SortedNeighborhood<Vector, Distance> {

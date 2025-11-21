@@ -9,7 +9,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{graph::neighborhood::NeighborhoodV, searcher::SetEntryPoint, GraphMem, HnswSearcher},
+    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;

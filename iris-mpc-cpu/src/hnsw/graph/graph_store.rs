@@ -684,8 +684,8 @@ mod tests {
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
         hnsw::{
-            graph::layered_graph::EntryPoint, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-            SortedNeighborhood,
+            graph::layered_graph::EntryPoint, graph::neighborhood::Neighborhood,
+            vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood,
         },
     };
     use aes_prng::AesRng;
@@ -743,12 +743,12 @@ mod tests {
             for j in 0..5 {
                 if i != j {
                     links
-                        .insert(&mut vector_store, vectors[j], distances[j])
+                        .insert_and_trim(&mut vector_store, vectors[j], distances[j], None)
                         .await?;
                 }
             }
             let links = links.edge_ids();
-            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
             let links2 = graph_ops.get_links(&vectors[i], 0).await?;
             assert_eq!(*links, *links2);
         }
@@ -815,12 +815,12 @@ mod tests {
 
             for j in 4..7 {
                 links
-                    .insert(&mut vector_store, vectors[j], distances[j])
+                    .insert_and_trim(&mut vector_store, vectors[j], distances[j], None)
                     .await?;
             }
             let links = links.edge_ids();
 
-            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
 
             let links2 = graph_ops.get_links(&vectors[i], 0).await?;
             assert_eq!(*links, *links2);

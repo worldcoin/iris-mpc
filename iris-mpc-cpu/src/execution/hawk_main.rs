@@ -15,11 +15,7 @@ use crate::{
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{
-        graph::{graph_store, neighborhood::Neighborhood},
-        searcher::ConnectPlanV,
-        GraphMem, HnswSearcher, VectorStore,
-    },
+    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
@@ -576,11 +572,6 @@ impl HawkActor {
         let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
-                let last_layer_insert_plan = match insert_plan.plan.links.first() {
-                    Some(neighbors) => neighbors,
-                    None => continue,
-                };
-
                 let matches = insert_plan.matches.clone();
 
                 for (vector_id, distance) in matches {
