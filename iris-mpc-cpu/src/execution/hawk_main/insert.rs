@@ -88,7 +88,7 @@ pub async fn insert<V: VectorStoreMut>(
 
     let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
     for (cp_idx, plan) in izip!(update_idxs, plans) {
-        // insert_apply was called in insert_prepare_batch
+        graph.insert_apply(plan.clone()).await;
         connect_plans[cp_idx].replace(plan);
     }
 

@@ -1557,8 +1557,6 @@ impl HnswSearcher {
                                                               // nbhd will be compacted?
                 }
             }
-            // apply so that get_links works
-            graph.insert_apply(connect_plans[idx].clone()).await;
         }
 
         // todo: use batch min-k
@@ -1576,9 +1574,6 @@ impl HnswSearcher {
                     .await?;
             let new_update = (layer, to_insert.clone(), new_nb.clone());
             connect_plans[plan_idx].updates[update_idx] = new_update;
-
-            // update the graph
-            graph.set_links(to_insert.clone(), new_nb, layer).await;
         }
 
         Ok(connect_plans)
