@@ -9,7 +9,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
+    hnsw::{graph::neighborhood::NeighborhoodV, searcher::SetEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
@@ -129,10 +129,10 @@ async fn per_insert_query(
         .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
         .await?;
 
-    let match_count = if search_params.do_match {
-        search_params.hnsw.match_count(aby3_store, &links).await?
+    let matches = if search_params.do_match {
+        search_params.hnsw.matches(aby3_store, &links).await?
     } else {
-        0
+        vec![]
     };
 
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
@@ -142,7 +142,7 @@ async fn per_insert_query(
             links,
             set_ep,
         },
-        match_count,
+        matches,
     })
 }
 
@@ -166,10 +166,10 @@ async fn per_search_query(
 
     let links = vec![layer_0_neighbors];
 
-    let match_count = if search_params.do_match {
-        search_params.hnsw.match_count(aby3_store, &links).await?
+    let matches = if search_params.do_match {
+        search_params.hnsw.matches(aby3_store, &links).await?
     } else {
-        0
+        vec![]
     };
 
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
@@ -179,7 +179,7 @@ async fn per_search_query(
             links,
             set_ep: SetEntryPoint::False,
         },
-        match_count,
+        matches,
     })
 }
 
@@ -247,7 +247,7 @@ mod tests {
             assert_eq!(side.len(), batch_size);
             for (i, rotations) in side.iter().enumerate() {
                 // Match because i from make_request is the same as i from init_db.
-                assert_eq!(rotations.center().match_count, 1);
+                assert_eq!(rotations.center().matches.len(), 1);
                 assert_eq!(
                     rotations.center().plan.links[0].edges[0].0,
                     VectorId::from_0_index(i as u32)

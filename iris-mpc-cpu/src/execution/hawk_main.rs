@@ -10,11 +10,16 @@ use crate::{
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef, DistanceFn,
+            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
+            Aby3VectorRef, DistanceFn,
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{
+        graph::{graph_store, neighborhood::Neighborhood},
+        searcher::ConnectPlanV,
+        GraphMem, HnswSearcher, VectorStore,
+    },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
@@ -295,26 +300,13 @@ pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef)
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
     pub plan: InsertPlanV<Aby3Store>,
-    pub match_count: usize,
+    pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
 }
 
 /// ConnectPlan specifies how to connect a new node to the HNSW graph.
 /// This includes the updates to the neighbors' own neighbor lists, including
 /// bilateral edges.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
-
-impl HawkInsertPlan {
-    pub fn match_ids(&self) -> Vec<VectorId> {
-        self.plan
-            .links
-            .iter()
-            .take(1)
-            .flat_map(|bottom_layer| bottom_layer.iter())
-            .take(self.match_count)
-            .map(|(id, _)| *id)
-            .collect_vec()
-    }
-}
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -589,8 +581,7 @@ impl HawkActor {
                     None => continue,
                 };
 
-                // only insert_plan.match_count neighbors are actually matches.
-                let matches = last_layer_insert_plan.iter().take(insert_plan.match_count);
+                let matches = insert_plan.matches.clone();
 
                 for (vector_id, distance) in matches {
                     let distance_share = distance.clone();

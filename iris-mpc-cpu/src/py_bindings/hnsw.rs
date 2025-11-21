@@ -1,3 +1,5 @@
+use crate::hnsw::graph::neighborhood::Neighborhood;
+use crate::hnsw::SortedNeighborhood;
 use crate::utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection};
 use crate::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
@@ -21,8 +23,9 @@ pub fn search(
 
     rt.block_on(async move {
         let query = Arc::new(query);
-        let neighbors = searcher.search(vector, graph, &query, 1).await.unwrap();
-        let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
+        let neighbors: SortedNeighborhood<_, _> =
+            searcher.search(vector, graph, &query, 1).await.unwrap();
+        let (nearest, (dist_num, dist_denom)) = neighbors.get_next_candidate().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
     })
 }
