@@ -213,8 +213,8 @@ pub fn write_graph_to_file<P: AsRef<Path>>(path: P, data: GraphMem<IrisVectorId>
 
 /* ------------------ Graph Pair Serialization ---------------------- */
 
-/// Method to read a pair of serialized graphs.
-fn read_graph_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(reader: &mut R) -> Result<[G; 2]> {
+/// Method to read a pair of serialized structs of the same type.
+fn read_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(reader: &mut R) -> Result<[G; 2]> {
     let data = bincode::deserialize_from(reader)?;
     Ok(data)
 }
@@ -224,7 +224,7 @@ fn read_graph_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(reader: &mut R)
 pub fn read_graph_pair_current<R: std::io::Read>(
     reader: &mut R,
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
-    let data = read_graph_pair::<_, GraphV3>(reader)?.map(|graph| graph.into());
+    let data = read_pair::<_, GraphV3>(reader)?.map(|graph| graph.into());
     Ok(data)
 }
 
@@ -247,7 +247,7 @@ pub fn write_graph_pair_current<W: std::io::Write>(
 pub fn read_graph_pair_raw<R: std::io::Read>(
     reader: &mut R,
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
-    let data = read_graph_pair::<_, GraphMem<IrisVectorId>>(reader)?;
+    let data = read_pair::<_, GraphMem<IrisVectorId>>(reader)?;
     Ok(data)
 }
 
@@ -264,6 +264,33 @@ pub fn write_graph_pair_raw<W: std::io::Write>(
     Ok(())
 }
 
+/// Read a pair of `GraphMem` structs with a specified serialization format.
+pub fn read_graph_pair<R: std::io::Read>(
+    reader: &mut R,
+    format: GraphFormat,
+) -> Result<[GraphMem<IrisVectorId>; 2]> {
+    match format {
+        GraphFormat::Current => read_graph_pair_current(reader),
+        GraphFormat::V3 => {
+            let graphs = read_pair::<_, GraphV3>(reader)?;
+            Ok(graphs.map(|graph| graph.into()))
+        }
+        GraphFormat::V2 => {
+            let graphs = read_pair::<_, GraphV2>(reader)?;
+            Ok(graphs.map(|graph| graph.into()))
+        }
+        GraphFormat::V1 => {
+            let graphs = read_pair::<_, GraphV1>(reader)?;
+            Ok(graphs.map(|graph| graph.into()))
+        }
+        GraphFormat::V0 => {
+            let graphs = read_pair::<_, GraphV0>(reader)?;
+            Ok(graphs.map(|graph| graph.into()))
+        }
+        GraphFormat::Raw => read_graph_pair_raw(reader),
+    }
+}
+
 /// Read a pair of `GraphMem` structs from file with a specified graph
 /// serialization format.
 pub fn read_graph_pair_from_file<P: AsRef<Path>>(
@@ -272,26 +299,44 @@ pub fn read_graph_pair_from_file<P: AsRef<Path>>(
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
-    match format {
-        GraphFormat::Current => read_graph_pair_current(&mut reader),
-        GraphFormat::V3 => {
-            let graphs = read_graph_pair::<_, GraphV3>(&mut reader)?;
-            Ok(graphs.map(|graph| graph.into()))
+    read_graph_pair(&mut reader, format)
+}
+
+/// Read a graph pair from file with unknown serialization format.  Returns
+/// deserialization results using the most recent graph format for which
+/// deserialization is successful, or an `Err` result if no graph format is
+/// valid.
+pub fn try_read_graph_pair_from_file<P: AsRef<Path>>(
+    path: P,
+) -> Result<[GraphMem<IrisVectorId>; 2]> {
+    let data = std::fs::read(&path)?;
+
+    for format in ALL_CONCRETE_GRAPH_FORMATS {
+        let mut cursor = Cursor::new(&data);
+        let graph_pair_res = read_graph_pair(&mut cursor, format);
+        if graph_pair_res.is_ok() {
+            return graph_pair_res;
         }
-        GraphFormat::V2 => {
-            let graphs = read_graph_pair::<_, GraphV2>(&mut reader)?;
-            Ok(graphs.map(|graph| graph.into()))
-        }
-        GraphFormat::V1 => {
-            let graphs = read_graph_pair::<_, GraphV1>(&mut reader)?;
-            Ok(graphs.map(|graph| graph.into()))
-        }
-        GraphFormat::V0 => {
-            let graphs = read_graph_pair::<_, GraphV0>(&mut reader)?;
-            Ok(graphs.map(|graph| graph.into()))
-        }
-        GraphFormat::Raw => read_graph_pair_raw(&mut reader),
     }
+
+    bail!("Unable to deserialize graph pair from file");
+}
+
+/// Attempt to deserialize the provided `data` slice into graph pairs using all
+/// available graph formats, returning a list of formats for which
+/// deserialization was successful.
+pub fn check_valid_graph_pair_formats(data: &[u8]) -> Vec<GraphFormat> {
+    let mut valid_formats = Vec::new();
+
+    for format in ALL_CONCRETE_GRAPH_FORMATS {
+        let mut cursor = Cursor::new(data);
+        let graph_res = read_graph_pair(&mut cursor, format);
+        if graph_res.is_ok() {
+            valid_formats.push(format);
+        }
+    }
+
+    valid_formats
 }
 
 /// Write a pair of `GraphMem` structs to file using the `GraphFormat::Current`

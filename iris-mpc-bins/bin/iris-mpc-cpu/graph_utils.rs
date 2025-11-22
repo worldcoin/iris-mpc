@@ -13,8 +13,9 @@ use iris_mpc_cpu::{
         run_diff,
     },
     utils::serialization::graph::{
-        check_valid_graph_formats, read_graph, read_graph_from_file, read_graph_pair_from_file,
-        write_graph_pair_to_file, write_graph_to_file, GraphFormat, GRAPH_FORMAT_CURRENT,
+        check_valid_graph_formats, check_valid_graph_pair_formats, read_graph,
+        read_graph_from_file, read_graph_pair, read_graph_pair_from_file, write_graph_pair_to_file,
+        write_graph_to_file, GraphFormat, GRAPH_FORMAT_CURRENT,
     },
 };
 
@@ -29,14 +30,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Upgrade a graph from an older serialization format to the current stable
-    /// serialization format.  If a specific older format is known, it can be
-    /// specified with the ``--src-format`` flag.  Otherwise, the utility will
-    /// try all known graph serialization formats to find a format which works,
-    /// if any.  If a graph can be deserialized with multiple formats, the
-    /// utility will display which formats are possible and halt.  In this case,
-    /// a specific serialization format must be specified to eliminate the
-    /// ambiguity.
+    /// Upgrade a graph or graph pair from an older serialization format to the
+    /// current stable serialization format.  If a specific older format is
+    /// known, it can be specified with the `--src-format` flag.  Otherwise, the
+    /// utility will try all known graph serialization formats to find a format
+    /// which works, if any.  If a graph (pair) can be deserialized with
+    /// multiple formats, the utility will display which formats are possible
+    /// and halt.  In this case, a specific serialization format must be
+    /// provided to eliminate the ambiguity.
     UpgradeFormat {
         /// Source file
         src_file: PathBuf,
@@ -47,6 +48,10 @@ enum Commands {
 
         /// Destination file
         dst_file: PathBuf,
+
+        /// Flag to upgrade a graph pair
+        #[arg(long)]
+        pair: bool,
     },
     /// Split a serialized graph pair into two individual graphs, and write these to
     /// file.
@@ -140,7 +145,8 @@ fn main() {
             src_file,
             src_format,
             dst_file,
-        } => upgrade_format(src_file, src_format, dst_file),
+            pair,
+        } => upgrade_format(src_file, src_format, dst_file, pair),
         Commands::SplitPair {
             src_file,
             src_format,
@@ -189,19 +195,23 @@ fn upgrade_format(
     src_file: PathBuf,
     src_format: Option<GraphFormat>,
     dst_file: PathBuf,
+    pair: bool,
 ) -> Result<()> {
-    println!(
-        "Reading graph data from file: {} ...",
-        path_string(&src_file)
-    );
+    println!("Reading data from file: {}", path_string(&src_file));
     let data =
         std::fs::read(&src_file).map_err(|e| eyre!("Unable to read source file :: {}", e))?;
+
+    // Identify valid graph data formats
 
     let src_format = match src_format {
         Some(format) => Ok(format),
         None => {
-            println!("Checking for valid graph formats for deserialization...");
-            let valid_formats = check_valid_graph_formats(&data);
+            println!("Checking for valid graph formats for deserialization");
+            let valid_formats = if pair {
+                check_valid_graph_pair_formats(&data)
+            } else {
+                check_valid_graph_formats(&data)
+            };
 
             match valid_formats.len() {
                 0 => Err(eyre!("No graph format succesfully deserializes file data")),
@@ -218,26 +228,47 @@ fn upgrade_format(
         }
     }?;
 
-    println!(
-        "Deserializing graph data with graph format {:?}",
-        src_format
-    );
-    let mut reader = Cursor::new(&data);
-    let graph = read_graph(&mut reader, src_format).map_err(|e| {
-        eyre!(
-            "Unable to deserialize graph using format {} :: {}",
-            src_format,
-            e
-        )
-    })?;
+    // Deserialize and reserialize
 
-    println!(
-        "Writing graph to file using current stable graph format {}: {} ...",
-        GRAPH_FORMAT_CURRENT,
-        path_string(&dst_file)
-    );
-    write_graph_to_file(dst_file, graph)
-        .map_err(|e| eyre!("Unable to write graph to file :: {}", e))?;
+    if pair {
+        println!("Deserializing data with graph format {:?}", src_format);
+        let mut reader = Cursor::new(&data);
+
+        let graph_pair = read_graph_pair(&mut reader, src_format).map_err(|e| {
+            eyre!(
+                "Unable to deserialize graph pair using format {} :: {}",
+                src_format,
+                e
+            )
+        })?;
+
+        println!(
+            "Writing graph pair to file using current stable graph format {}: {}",
+            GRAPH_FORMAT_CURRENT,
+            path_string(&dst_file)
+        );
+        write_graph_pair_to_file(dst_file, graph_pair)
+            .map_err(|e| eyre!("Unable to write graph pair to file :: {}", e))?;
+    } else {
+        println!("Deserializing data with graph format {:?}", src_format);
+        let mut reader = Cursor::new(&data);
+
+        let graph = read_graph(&mut reader, src_format).map_err(|e| {
+            eyre!(
+                "Unable to deserialize graph using format {} :: {}",
+                src_format,
+                e
+            )
+        })?;
+
+        println!(
+            "Writing graph to file using current stable graph format {}: {}",
+            GRAPH_FORMAT_CURRENT,
+            path_string(&dst_file)
+        );
+        write_graph_to_file(dst_file, graph)
+            .map_err(|e| eyre!("Unable to write graph to file :: {}", e))?;
+    }
 
     println!("Done!");
 
@@ -251,10 +282,7 @@ fn split_graph_pair(
     dst_file_left: PathBuf,
     dst_file_right: PathBuf,
 ) -> Result<()> {
-    println!(
-        "Reading graph pair from file: {} ...",
-        path_string(&src_file)
-    );
+    println!("Reading graph pair from file: {}", path_string(&src_file));
     let [graph_left, graph_right] =
         read_graph_pair_from_file(src_file, src_format).map_err(|e| {
             eyre!(
@@ -265,14 +293,14 @@ fn split_graph_pair(
         })?;
 
     println!(
-        "Writing left graph to file: {} ...",
+        "Writing left graph to file: {}",
         path_string(&dst_file_left)
     );
     write_graph_to_file(dst_file_left, graph_left)
         .map_err(|e| eyre!("Unable to write left graph to file :: {}", e))?;
 
     println!(
-        "Writing right graph to file: {} ...",
+        "Writing right graph to file: {}",
         path_string(&dst_file_right)
     );
     write_graph_to_file(dst_file_right, graph_right)
@@ -292,7 +320,7 @@ fn make_graph_pair(
     dst_file: PathBuf,
 ) -> Result<()> {
     println!(
-        "Reading left graph from file: {} ...",
+        "Reading left graph from file: {}",
         path_string(&src_file_left)
     );
     let graph_left = read_graph_from_file(src_file_left, src_format_left).map_err(|e| {
@@ -304,7 +332,7 @@ fn make_graph_pair(
     })?;
 
     println!(
-        "Reading right graph from file: {} ...",
+        "Reading right graph from file: {}",
         path_string(&src_file_right)
     );
     let graph_right = read_graph_from_file(src_file_right, src_format_right).map_err(|e| {
@@ -315,7 +343,7 @@ fn make_graph_pair(
         )
     })?;
 
-    println!("Writing graph pair to file: {} ...", path_string(&dst_file));
+    println!("Writing graph pair to file: {}", path_string(&dst_file));
     write_graph_pair_to_file(dst_file, [graph_left, graph_right])
         .map_err(|e| eyre!("Unable to write graph pair to file :: {}", e))?;
 
@@ -325,7 +353,7 @@ fn make_graph_pair(
 }
 
 fn graph_statistics(src_file: PathBuf, src_format: GraphFormat) -> Result<()> {
-    println!("Reading graph from file: {} ...", path_string(&src_file));
+    println!("Reading graph from file: {}", path_string(&src_file));
     let graph = read_graph_from_file(src_file, src_format).map_err(|e| {
         eyre!(
             "Unable to read graph from file using format {} :: {}",
@@ -378,10 +406,7 @@ fn diff_graphs(
     src_format_2: GraphFormat,
     diff_spec: Option<DiffSpec>,
 ) -> Result<()> {
-    println!(
-        "Reading graph 1 from file: {} ...",
-        path_string(&src_file_1)
-    );
+    println!("Reading graph 1 from file: {}", path_string(&src_file_1));
     let graph_1 = read_graph_from_file(&src_file_1, src_format_1).map_err(|e| {
         eyre!(
             "Unable to read graph 1 from file using format {} :: {}",
@@ -390,10 +415,7 @@ fn diff_graphs(
         )
     })?;
 
-    println!(
-        "Reading graph 2 from file: {} ...",
-        path_string(&src_file_2)
-    );
+    println!("Reading graph 2 from file: {}", path_string(&src_file_2));
     let graph_2 = read_graph_from_file(&src_file_2, src_format_2).map_err(|e| {
         eyre!(
             "Unable to read graph 2 from file using format {} :: {}",
