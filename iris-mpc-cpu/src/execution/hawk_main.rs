@@ -2060,9 +2060,8 @@ mod tests_db {
     use super::*;
     use crate::hnsw::{
         graph::graph_store::test_utils::TestGraphPg,
-        searcher::{ConnectPlanLayerV, SetEntryPoint},
+        searcher::{build_layer_updates, SetEntryPoint},
     };
-    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
@@ -2077,11 +2076,12 @@ mod tests_db {
                 .enumerate()
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
-                    updates: ConnectPlanLayer {
-                        neighbors: vec![vectors[side]],
-                        nb_links: vec![vec![*vector]],
-                    }
-                    .to_updates(*vector, 0),
+                    updates: build_layer_updates(
+                        *vector,
+                        vec![vectors[side]],
+                        vec![vec![*vector]],
+                        0,
+                    ),
                     set_ep: if i == side {
                         SetEntryPoint::NewLayer
                     } else {
@@ -2164,19 +2164,13 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::{ConnectPlanLayerV, SetEntryPoint};
+    use crate::hnsw::searcher::{build_layer_updates, SetEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
-
-    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
         ConnectPlan {
             inserted_vector: vector_id,
-            updates: ConnectPlanLayer {
-                neighbors: vec![vector_id],
-                nb_links: vec![vec![vector_id]],
-            }
-            .to_updates(vector_id, 0),
+            updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
             set_ep: SetEntryPoint::False,
         }
     }

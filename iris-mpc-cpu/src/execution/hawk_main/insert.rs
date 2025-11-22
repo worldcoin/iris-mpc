@@ -1,7 +1,6 @@
 use crate::hnsw::{
     graph::neighborhood::SortedNeighborhoodV,
     searcher::{ConnectPlanV, SetEntryPoint},
-    sorting::quickselect::run_quickselect_with_store,
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
@@ -77,8 +76,8 @@ pub async fn insert<V: VectorStoreMut>(
             let mut layers = vec![];
             let mut nbhds = extended_links.clone();
             for (lc, nbhd) in nbhds.iter_mut().enumerate() {
-                let M = searcher.params.get_M(lc);
-                nbhd.trim_to_k_nearest(M);
+                let m = searcher.params.get_M(lc);
+                nbhd.trim_to_k_nearest(m);
                 layers.push(nbhd.vectors_cloned());
             }
             updates.push((inserted.clone(), layers, set_ep));
@@ -163,18 +162,10 @@ fn join_plans<V: VectorStore>(
 
 #[cfg(test)]
 mod tests {
-    use crate::hawkers::plaintext_store::{
-        PlaintextStore, PlaintextVectorRef, SharedPlaintextStore,
-    };
-    use crate::hnsw::graph::layered_graph::Layer;
+    use crate::hawkers::plaintext_store::PlaintextStore;
     use crate::hnsw::graph::neighborhood::SortedNeighborhoodV;
-    use crate::hnsw::SortedNeighborhood;
-    use aes_prng::AesRng;
-    use iris_mpc_common::{
-        iris_db::{db::IrisDB, iris::IrisCode},
-        vector_id::VectorId,
-    };
-    use rand::{thread_rng, SeedableRng};
+    use iris_mpc_common::iris_db::iris::IrisCode;
+    use rand::thread_rng;
     use std::sync::Arc;
     use std::sync::LazyLock;
 

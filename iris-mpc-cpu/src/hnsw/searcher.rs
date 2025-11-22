@@ -27,6 +27,7 @@ use siphasher::sip::SipHasher13;
 use std::{
     collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
+    iter::once,
 };
 use tracing::{debug, instrument, trace_span, Instrument};
 
@@ -256,7 +257,7 @@ pub struct HnswSearcher {
 }
 
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
-pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
+// pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
@@ -265,19 +266,16 @@ pub struct ConnectPlan<Vector> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
-    /// Neighborhood updates for (update_layer, update_base_vector, new_neighborhood)
-    pub updates: Vec<(usize, Vector, Vec<Vector>)>,
+    /// List of neighborhood updates to apply
+    pub updates: Vec<NbhdUpdate<Vector>>,
 
     // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
     pub set_ep: SetEntryPoint,
 }
 
-impl<Vector> ConnectPlan<Vector>
-where
-    Vector: PartialEq + Eq,
-{
-    /// returns the max insertion layer for inserted_vector
+impl<Vector: PartialEq + Eq> ConnectPlan<Vector> {
+    /// Returns the max insertion layer for inserted_vector
     pub fn get_max_insertion_layer(&self) -> Option<usize> {
         self.updates
             .iter()
@@ -288,37 +286,22 @@ where
     }
 }
 
-/// Represents the state updates required for insertion of a new node into a single layer of
-/// an HNSW hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlanLayer<Vector> {
-    /// The neighbors of the inserted vector
-    pub neighbors: Vec<Vector>,
+/// Represents a graph update of a single node's neighborhood in a graph, given
+/// by a tuple `(update_layer, update_vector, new_neighborhood)`.
+pub type NbhdUpdate<Vector> = (usize, Vector, Vec<Vector>);
 
-    /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
-    pub nb_links: Vec<Vec<Vector>>,
-}
-
-impl<Vector> ConnectPlanLayer<Vector>
-where
-    Vector: Clone,
-{
-    /// ConnectPlanLayer is still used by lots of testing code. ConnectPlan was updated to use a
-    /// Vec<update> instead of Vec<ConnectPlanLayer>. This function makes it easier to update the
-    /// test code
-    pub fn to_updates(
-        self,
-        inserted_vector: Vector,
-        layer: usize,
-    ) -> Vec<(usize, Vector, Vec<Vector>)> {
-        let mut updates = vec![];
-        updates.push((layer, inserted_vector.clone(), self.neighbors.clone()));
-
-        for (nb, nb_nb) in izip!(self.neighbors.into_iter(), self.nb_links.into_iter()) {
-            updates.push((layer, nb, nb_nb));
-        }
-        updates
-    }
+/// Build the updates in the specified layer representing "`inserted_vector`
+/// is connected to `neighbors`", and "each item of `neighbors` is connected
+/// to links in the same index of `nb_links`"
+pub fn build_layer_updates<V: Clone>(
+    inserted_vector: V,
+    neighbors: Vec<V>,
+    nb_links: Vec<Vec<V>>,
+    layer: usize,
+) -> Vec<NbhdUpdate<V>> {
+    once((layer, inserted_vector, neighbors.clone()))
+        .chain(izip!(neighbors, nb_links).map(|(nb, nb_nbs)| (layer, nb, nb_nbs)))
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1515,6 +1498,7 @@ impl HnswSearcher {
         Ok(r.pop().unwrap()) // work-around for odd error
     }
 
+    #[allow(clippy::type_complexity)] // TODO refactor type representation of `updates` field
     pub async fn insert_prepare_batch<V: VectorStore>(
         &self,
         // this may be used in the future to trim l_links
