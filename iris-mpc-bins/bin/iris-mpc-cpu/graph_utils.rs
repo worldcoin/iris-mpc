@@ -21,6 +21,7 @@ use iris_mpc_cpu::{
 
 use eyre::{eyre, Result};
 
+/// Utility binary to manipulate serialized HNSW graphs.
 #[derive(Parser)]
 #[command(name = "app")]
 struct Cli {
@@ -30,16 +31,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Upgrade a graph or graph pair from an older serialization format to the
-    /// current stable serialization format.  If a specific older format is
-    /// known, it can be specified with the `--src-format` flag.  Otherwise, the
-    /// utility will try all known graph serialization formats to find a format
-    /// which works, if any.  If a graph (pair) can be deserialized with
-    /// multiple formats, the utility will display which formats are possible
-    /// and halt.  In this case, a specific serialization format must be
-    /// provided to eliminate the ambiguity.
+    /// Upgrade a serialized graph or graph pair to the current serialization
+    /// format.
+    ///
+    /// If a specific older format is known, it can be specified with the
+    /// `--src-format` flag.  Otherwise, the utility will try all known graph
+    /// serialization formats to find a format which works, if any.  If a graph
+    /// (pair) can be deserialized with multiple formats, the utility will
+    /// display which formats are possible and halt.  In this case, a specific
+    /// serialization format must be provided to eliminate the ambiguity.
     UpgradeFormat {
-        /// Source file
+        /// Source file to upgrade
         src_file: PathBuf,
 
         /// Source graph file format, default behavior is to trial different formats
@@ -49,7 +51,7 @@ enum Commands {
         /// Destination file
         dst_file: PathBuf,
 
-        /// Flag to upgrade a graph pair
+        /// Flag to upgrade a graph pair rather than a single graph
         #[arg(long)]
         pair: bool,
     },
@@ -59,7 +61,7 @@ enum Commands {
         /// Source file for graph pair
         src_file: PathBuf,
 
-        /// Source graph file format for pair file, defaults to "current"
+        /// Source graph file format for pair file
         #[arg(long, value_enum, default_value_t = GraphFormat::Current)]
         src_format: GraphFormat,
 
@@ -75,14 +77,14 @@ enum Commands {
         /// Source file for left graph
         src_file_left: PathBuf,
 
-        /// Source graph file format for left graph, defaults to "current"
+        /// Source graph file format for left graph
         #[arg(long, value_enum, default_value_t = GraphFormat::Current)]
         src_format_left: GraphFormat,
 
         /// Source file for right graph
         src_file_right: PathBuf,
 
-        /// Source graph file format for right graph, defaults to "current"
+        /// Source graph file format for right graph
         #[arg(long, value_enum, default_value_t = GraphFormat::Current)]
         src_format_right: GraphFormat,
 
@@ -94,7 +96,7 @@ enum Commands {
         /// Source file
         src_file: PathBuf,
 
-        /// Source graph file format, defaults to "current"
+        /// Source graph file format
         #[arg(long, value_enum, default_value_t = GraphFormat::Current)]
         src_format: GraphFormat,
     },
@@ -103,14 +105,14 @@ enum Commands {
         /// Source file for graph 1
         src_file_1: PathBuf,
 
-        /// Source graph file format for graph 1, defaults to "current"
+        /// Source graph file format for graph 1
         #[arg(long, value_enum, default_value_t = GraphFormat::Current)]
         src_format_1: GraphFormat,
 
         /// Source file for graph 2
         src_file_2: PathBuf,
 
-        /// Source graph file format for graph 2, defaults to "current"
+        /// Source graph file format for graph 2
         #[arg(long, value_enum, default_value_t = GraphFormat::Current)]
         src_format_2: GraphFormat,
 
@@ -129,7 +131,7 @@ enum DiffSpec {
         num_display: usize,
     },
 
-    /// Use the explicit neighborhood differ, sorted by node index
+    /// Use the explicit neighborhood differ
     Links {
         /// Sorting method for display
         #[arg(long, value_enum, default_value_t = SortBy::Index)]

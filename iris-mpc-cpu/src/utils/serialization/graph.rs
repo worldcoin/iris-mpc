@@ -27,9 +27,11 @@ use crate::{
 
 #[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
 pub enum GraphFormat {
-    /// Designated current stable format for `GraphMem` serialization
+    /// Designated current stable format for `GraphMem` serialization.
     Current,
 
+    /// Stable graph serialization format Version 3.
+    ///
     /// - Binary format
     /// - Multiple entry-points <-- DIFF with V2
     /// - VectorId = (SerialId, VersionId)
@@ -37,6 +39,8 @@ pub enum GraphFormat {
     /// - Edges store VectorIds only
     V3,
 
+    /// Stable graph serialization format Version 2.
+    ///
     /// - Binary format
     /// - Single entry-point
     /// - VectorId = (SerialId, VersionId) <-- DIFF with V1
@@ -44,6 +48,8 @@ pub enum GraphFormat {
     /// - Edges store VectorIds only
     V2,
 
+    /// Stable graph serialization format Version 1.
+    ///
     /// - Binary format
     /// - Single entry-point
     /// - VectorId = SerialId only
@@ -51,6 +57,8 @@ pub enum GraphFormat {
     /// - Edges store VectorIds only <-- DIFF with V0
     V1,
 
+    /// Stable graph serialization format Version 0.
+    ///
     /// - Binary format
     /// - Single entry-point
     /// - VectorId = SerialId only
@@ -58,9 +66,10 @@ pub enum GraphFormat {
     /// - Edges store VectorIds and cached `(u16, u16)` distances
     V0,
 
-    /// Direct serialization from `GraphMem` derived format. This format type is
-    /// provided for compatibility only -- please prefer use of stable
-    /// serialization formats.
+    /// Direct serialization from `GraphMem` derived format.
+    ///
+    /// This format type is provided for compatibility only -- please prefer use
+    /// of stable serialization formats.
     Raw,
 }
 
