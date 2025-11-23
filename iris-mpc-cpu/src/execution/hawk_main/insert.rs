@@ -93,6 +93,8 @@ pub async fn insert<V: VectorStoreMut>(
         }
     }
 
+    tracing::debug!("Inserted ids: {inserted_ids:?}");
+
     // TODO batch local shuffle of all neighborhoods in `updates`
 
     let plans = searcher.insert_prepare_batch(store, graph, updates).await?;

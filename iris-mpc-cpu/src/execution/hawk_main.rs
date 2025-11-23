@@ -1438,6 +1438,9 @@ impl HawkHandle {
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
 
+                if let Err(e) = &health {
+                    tracing::debug!("Result error state: {e:?}");
+                }
                 let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
 

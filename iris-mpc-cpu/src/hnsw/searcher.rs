@@ -18,14 +18,14 @@ use crate::hnsw::GraphMem;
 
 use aes_prng::AesRng;
 use ampc_actor_utils::fast_metrics::FastHistogram;
-use eyre::{bail, eyre, Result};
+use eyre::{bail, eyre, OptionExt, Result};
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
     iter::once,
 };
@@ -1485,72 +1485,142 @@ impl HnswSearcher {
     pub async fn insert_prepare_batch<V: VectorStore>(
         &self,
         // this may be used in the future to trim l_links
-        store: &mut V,
+        _store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
     ) -> Result<Vec<ConnectPlanV<V>>> {
         tracing::debug!("Starting insert_prepare_batch");
 
-        let mut connect_plans = updates
-            .iter()
-            .map(|(vec, _links, set_ep)| ConnectPlan {
-                inserted_vector: vec.clone(),
-                updates: vec![],
-                set_ep: set_ep.clone(),
-            })
-            .collect::<Vec<_>>();
+        // Output connect plans
+        let mut output_plans: Vec<ConnectPlanV<V>> = Vec::new();
+        // Map from vector ids to output connect plan indices
+        let mut query_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
+
+        // Map `(vector_id, layer) -> Vec<query_id>` recording the query ids
+        // which are to be inserted into neighborhoods of nodes, and in what
+        // order.  Note input `vector_id` can be a `query_id` if the
+        // neighborhood of a subsequent query has been extended to include a
+        // previous query in the batch.  `BTreeMap` is used for deterministic
+        // iteration order.
+        let mut nbhd_updates: BTreeMap<
+            (<V as VectorStore>::VectorRef, usize),
+            Vec<<V as VectorStore>::VectorRef>,
+        > = BTreeMap::new();
 
         // todo: shuffle links
 
-        // HashMap connet (plan idx, update idx) -> neighborhood
-        let mut needs_compaction: HashMap<(usize, usize), Vec<_>> = HashMap::new();
-        for (idx, (vec, links, _)) in updates.iter().enumerate() {
-            for (lc, neighbors) in links.iter().enumerate() {
-                // add the inserted node's neighborhood for this layer
-                // these will never be too large because they were previously trimmed.
-                connect_plans[idx]
+        for (idx, (vec, links, set_ep)) in updates.iter().enumerate() {
+            // Initialize connect plan for output
+            output_plans.push(ConnectPlan {
+                inserted_vector: vec.clone(),
+                updates: vec![],
+                set_ep: set_ep.clone(),
+            });
+            // Record index of associated vector id
+            query_idxs.insert(vec.clone(), idx);
+
+            for (layer, neighbors) in links.iter().enumerate() {
+                // Add update for inserting node with outgoing edges in this layer
+                output_plans[idx]
                     .updates
-                    .push((lc, vec.clone(), neighbors.clone()));
-                // add the updated neighborhoods of all neighbors
-                for neighbor in neighbors.iter() {
-                    let mut nb_nb = graph.get_links(neighbor, lc).await;
-                    nb_nb.push(vec.clone());
-                    if nb_nb.len() > self.params.get_M_extra(lc) {
-                        // current len will be the idx after it is pushed to updates
-                        needs_compaction
-                            .insert((idx, connect_plans[idx].updates.len()), nb_nb.clone());
-                    }
-                    connect_plans[idx]
-                        .updates
-                        .push((lc, neighbor.clone(), nb_nb)); // todo: insert an empty vec if the
-                                                              // nbhd will be compacted?
+                    .push((layer, vec.clone(), neighbors.clone()));
+
+                // Record connections to existing nodes, organized by existing node
+                for nb in neighbors.iter() {
+                    nbhd_updates
+                        .entry((nb.clone(), layer))
+                        .or_default()
+                        .push(nb.clone());
                 }
             }
         }
 
-        // todo: use batch min-k
+        // Final updated neighborhood associated with each modified `(vector_id, layer)`
+        let mut final_nbhds: BTreeMap<
+            (<V as VectorStore>::VectorRef, usize),
+            Vec<<V as VectorStore>::VectorRef>,
+        > = BTreeMap::new();
 
-        let mut keys: Vec<_> = needs_compaction.keys().collect();
-        keys.sort();
-        for &(plan_idx, update_idx) in keys.into_iter() {
-            let updates = &connect_plans[plan_idx].updates[update_idx];
-            let layer = updates.0;
-            let to_insert = updates.1.clone();
-            let neighborhood = &updates.2;
-            let max_size = self.params.get_M_max(layer);
-            let new_nb =
-                Self::neighborhood_compaction(store, to_insert.clone(), neighborhood, max_size)
-                    .await?;
-            let new_update = (layer, to_insert.clone(), new_nb.clone());
-            connect_plans[plan_idx].updates[update_idx] = new_update;
+        for ((nb, layer), query_ids) in nbhd_updates {
+            // Identify the graph neighborhood of `nb` in layer `layer` prior to
+            // any updates in the batch
+            let mut nb_nbhd = if let Some(idx) = query_idxs.get(&nb) {
+                // `nb`` is a query id from the current batch
+                let update_entry = updates
+                    .get(*idx)
+                    .ok_or_eyre("Could not find associated update entry")?;
+                let nbhd = update_entry
+                    .1
+                    .get(layer)
+                    .ok_or_eyre("Update entry layer not present")?;
+                nbhd.clone()
+            } else {
+                graph.get_links(&nb, layer).await
+            };
+
+            // For each individual update, in order, extend the neighborhood and
+            // add as update in the corresopnding connect plan
+            for query_id in query_ids {
+                // Get the output connect plan associated with `query_id`
+                let connect_plan_idx = *query_idxs
+                    .get(&query_id)
+                    .ok_or_eyre("Could not find associated connect plan index")?;
+                let connect_plan = output_plans
+                    .get_mut(connect_plan_idx)
+                    .ok_or_eyre("Could not find associated connect plan")?;
+
+                // Insert `query_id` into the existing neighborhood
+                // TODO use uniform random insertion index
+                nb_nbhd.push(query_id);
+
+                // Add update reflecting change to the existing neighborhood
+                connect_plan
+                    .updates
+                    .push((layer, nb.clone(), nb_nbhd.clone()));
+            }
+
+            final_nbhds.insert((nb, layer), nb_nbhd);
         }
 
-        Ok(connect_plans)
+        // Initial updates without compaction are complete.  Now see if any
+        // modified neighborhoods are too large.
+
+        let _needs_compaction: BTreeMap<_, _> = final_nbhds
+            .into_iter()
+            .filter(|((_nb, layer), nb_nbhd)| {
+                nb_nbhd.len() > self.params.get_M_max(*layer) * 11 / 10
+            })
+            .collect();
+
+        // Compute compacted neighborhoods
+        // TODO implement batched mode
+
+        // todo: use batch min-k
+
+        // let mut keys: Vec<_> = needs_compaction.keys().collect();
+        // keys.sort();
+        // for &(plan_idx, update_idx) in keys.into_iter() {
+        //     let updates = &output_plans[plan_idx].updates[update_idx];
+        //     let layer = updates.0;
+        //     let to_insert = updates.1.clone();
+        //     let neighborhood = &updates.2;
+        //     let max_size = self.params.get_M_max(layer);
+        //     let new_nb =
+        //         Self::compact_neighborhood(store, to_insert.clone(), neighborhood, max_size)
+        //             .await?;
+        //     let new_update = (layer, to_insert.clone(), new_nb.clone());
+        //     output_plans[plan_idx].updates[update_idx] = new_update;
+        // }
+
+        tracing::debug!("{:?}", output_plans);
+
+        Ok(output_plans)
     }
 
     // todo: switch with oblivious min-k and random shuffle
     /// enforce size constraints on the neighborhood in an oblivious manner
-    async fn neighborhood_compaction<V: VectorStore>(
+    #[allow(dead_code)]
+    async fn compact_neighborhood<V: VectorStore>(
         store: &mut V,
         query: V::VectorRef,
         neighborhood: &[V::VectorRef],
