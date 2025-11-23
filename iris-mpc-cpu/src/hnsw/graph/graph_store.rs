@@ -815,7 +815,7 @@ mod tests {
         let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::new_with_test_parameters();
+        let searcher = HnswSearcher::new_with_test_parameters();
 
         let queries1 = IrisDB::new_random_rng(10, rng)
             .db
@@ -825,15 +825,31 @@ mod tests {
         // Insert the codes.
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
-            let insertion_layer = db.gen_layer_rng(rng)?;
-            let (neighbors, set_ep) = db
+            let insertion_layer = searcher.gen_layer_rng(rng)?;
+            let (links, set_ep) = searcher
                 .search_to_insert(vector_store, graph_mem, query, insertion_layer)
                 .await?;
-            assert!(!db.is_match(vector_store, &neighbors).await?);
+            assert!(!searcher.is_match(vector_store, &links).await?);
+
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
-            let plan = db
-                .insert_prepare(vector_store, graph_mem, inserted, neighbors, set_ep)
+
+            // Trim and extract unstructured vector lists
+            let mut links_unstructured = Vec::new();
+            for (lc, mut l) in links.iter().cloned().enumerate() {
+                let m = searcher.params.get_M(lc);
+                l.trim_to_k_nearest(m);
+                links_unstructured.push(l.vectors_cloned())
+            }
+
+            let plan = searcher
+                .insert_prepare(
+                    vector_store,
+                    graph_mem,
+                    inserted,
+                    links_unstructured,
+                    set_ep,
+                )
                 .await?;
 
             graph_mem.insert_apply(plan.clone()).await;
@@ -855,8 +871,8 @@ mod tests {
 
         // Search for the same codes and find matches.
         for query in queries1.iter() {
-            let neighbors = db.search(vector_store, &graph_mem2, query, 1).await?;
-            assert!(db.is_match(vector_store, &[neighbors]).await?);
+            let neighbors = searcher.search(vector_store, &graph_mem2, query, 1).await?;
+            assert!(searcher.is_match(vector_store, &[neighbors]).await?);
         }
 
         // Clean up

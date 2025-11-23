@@ -135,13 +135,22 @@ async fn per_insert_query(
         0
     };
 
+    // Trim and extract unstructured vector lists
+    let mut links_unstructured = Vec::new();
+    for (lc, mut l) in links.iter().cloned().enumerate() {
+        let m = search_params.hnsw.params.get_M(lc);
+        l.trim_to_k_nearest(m);
+        links_unstructured.push(l.vectors_cloned())
+    }
+
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
-            links,
+            links: links_unstructured,
             set_ep,
         },
+        links,
         match_count,
     })
 }
@@ -164,6 +173,7 @@ async fn per_search_query(
         )
         .await?;
 
+    let links_unstructured = vec![layer_0_neighbors.vectors_cloned()];
     let links = vec![layer_0_neighbors];
 
     let match_count = if search_params.do_match {
@@ -176,9 +186,10 @@ async fn per_search_query(
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
-            links,
+            links: links_unstructured,
             set_ep: UpdateEntryPoint::False,
         },
+        links,
         match_count,
     })
 }
@@ -202,9 +213,17 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
         .search_to_insert(&mut *store, &graph, &query, insertion_layer)
         .await?;
 
+    // Trim and extract unstructured vector lists
+    let mut links_unstructured = Vec::new();
+    for (lc, mut l) in links.iter().cloned().enumerate() {
+        let m = searcher.params.get_M(lc);
+        l.trim_to_k_nearest(m);
+        links_unstructured.push(l.vectors_cloned())
+    }
+
     Ok(InsertPlanV {
         query,
-        links,
+        links: links_unstructured,
         set_ep,
     })
 }
@@ -249,7 +268,7 @@ mod tests {
                 // Match because i from make_request is the same as i from init_db.
                 assert_eq!(rotations.center().match_count, 1);
                 assert_eq!(
-                    rotations.center().plan.links[0].edges[0].0,
+                    rotations.center().links[0].edges[0].0,
                     VectorId::from_0_index(i as u32)
                 );
             }

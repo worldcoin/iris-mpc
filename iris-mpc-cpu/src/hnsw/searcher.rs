@@ -1461,7 +1461,7 @@ impl HnswSearcher {
     /// into `graph` with the specified neighbors `links` and setting the entry point of the
     /// graph if `set_ep` is `true`.  The `links` vector contains the neighbor lists for the
     /// newly inserted node in different graph layers in which it is to be inserted, starting
-    /// with layer 0.
+    /// with layer 0.  Specified links are inserted as-is, without additional truncation.
     ///
     /// In this implementation, comparisons required for computing the insertion indices for
     /// updated neighborhoods are done in batches.
@@ -1473,20 +1473,10 @@ impl HnswSearcher {
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
-        mut links: Vec<SortedNeighborhoodV<V>>,
+        links: Vec<Vec<V::VectorRef>>,
         set_ep: UpdateEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
-        // this is for insert_prepare_batch
-        // the neighbors of inserted_vector at each layer
-        let mut neighbors = vec![];
-        // todo: re-evaluate this. perhaps add a shuffle afterwards.
-        for (lc, l_links) in links.iter_mut().enumerate() {
-            let M = self.params.get_M(lc);
-            l_links.trim_to_k_nearest(M);
-            neighbors.push(l_links.vectors_cloned());
-        }
-
-        let updates = vec![(inserted_vector, neighbors, set_ep)];
+        let updates = vec![(inserted_vector, links, set_ep)];
         let mut r = self.insert_prepare_batch(store, graph, updates).await?;
         Ok(r.pop().unwrap()) // work-around for odd error
     }
@@ -1495,10 +1485,12 @@ impl HnswSearcher {
     pub async fn insert_prepare_batch<V: VectorStore>(
         &self,
         // this may be used in the future to trim l_links
-        _store: &mut V,
+        store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
     ) -> Result<Vec<ConnectPlanV<V>>> {
+        tracing::debug!("Starting insert_prepare_batch");
+
         let mut connect_plans = updates
             .iter()
             .map(|(vec, _links, set_ep)| ConnectPlan {
@@ -1547,7 +1539,7 @@ impl HnswSearcher {
             let neighborhood = &updates.2;
             let max_size = self.params.get_M_max(layer);
             let new_nb =
-                Self::neighborhood_compaction(_store, to_insert.clone(), neighborhood, max_size)
+                Self::neighborhood_compaction(store, to_insert.clone(), neighborhood, max_size)
                     .await?;
             let new_update = (layer, to_insert.clone(), new_nb.clone());
             connect_plans[plan_idx].updates[update_idx] = new_update;
@@ -1594,8 +1586,16 @@ impl HnswSearcher {
         links: Vec<SortedNeighborhoodV<V>>,
         set_ep: UpdateEntryPoint,
     ) -> Result<()> {
+        // Trim and extract unstructured vector lists
+        let mut links_unstructured = Vec::new();
+        for (lc, mut l) in links.iter().cloned().enumerate() {
+            let m = self.params.get_M(lc);
+            l.trim_to_k_nearest(m);
+            links_unstructured.push(l.vectors_cloned())
+        }
+
         let plan = self
-            .insert_prepare(store, graph, inserted_vector, links, set_ep)
+            .insert_prepare(store, graph, inserted_vector, links_unstructured, set_ep)
             .await?;
         graph.insert_apply(plan).await;
         Ok(())

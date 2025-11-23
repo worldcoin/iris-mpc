@@ -456,14 +456,15 @@ impl Filter {
 #[cfg(test)]
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
+    use ampc_secret_sharing::shares::DistanceShare;
+    use ampc_secret_sharing::Share;
+
     use crate::execution::hawk_main::rot::Rotations;
     use crate::execution::hawk_main::{HawkResult, InsertPlanV, SearchRotations, VecRotations};
     use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::searcher::UpdateEntryPoint;
     use crate::hnsw::SortedNeighborhood;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
-    use crate::shares::share::DistanceShare;
-    use crate::shares::Share;
 
     use super::VectorId;
     use super::*;
@@ -700,17 +701,22 @@ mod tests {
         }
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
+            let match_count = match_ids.len();
+            let links = vec![SortedNeighborhood::from_ascending_vec(
+                chain!(match_ids.clone(), non_match_ids.clone())
+                    .map(|v| (v, distance()))
+                    .collect_vec(),
+            )];
+            let links_unstructured = vec![chain!(match_ids, non_match_ids).collect_vec()];
+
             let insert_plan = HawkInsertPlan {
-                match_count: match_ids.len(),
+                match_count,
                 plan: InsertPlanV {
                     query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
-                    links: vec![SortedNeighborhood::from_ascending_vec(
-                        chain!(match_ids, non_match_ids)
-                            .map(|v| (v, distance()))
-                            .collect_vec(),
-                    )],
+                    links: links_unstructured,
                     set_ep: UpdateEntryPoint::False,
                 },
+                links,
             };
             VecRotations::from(vec![insert_plan; SearchRotations::N_ROTATIONS])
         };

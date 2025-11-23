@@ -14,7 +14,11 @@ use crate::{
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{
+        graph::{graph_store, neighborhood::SortedNeighborhoodV},
+        searcher::ConnectPlanV,
+        GraphMem, HnswSearcher, VectorStore,
+    },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
@@ -295,6 +299,7 @@ pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef)
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
     pub plan: InsertPlanV<Aby3Store>,
+    pub links: Vec<SortedNeighborhoodV<Aby3Store>>,
     pub match_count: usize,
 }
 
@@ -305,8 +310,7 @@ pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 impl HawkInsertPlan {
     pub fn match_ids(&self) -> Vec<VectorId> {
-        self.plan
-            .links
+        self.links
             .iter()
             .take(1)
             .flat_map(|bottom_layer| bottom_layer.iter())
@@ -584,7 +588,7 @@ impl HawkActor {
         let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
-                let last_layer_insert_plan = match insert_plan.plan.links.first() {
+                let last_layer_insert_plan = match insert_plan.links.first() {
                     Some(neighbors) => neighbors,
                     None => continue,
                 };

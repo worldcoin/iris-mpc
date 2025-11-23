@@ -1,5 +1,4 @@
 use crate::hnsw::{
-    graph::neighborhood::SortedNeighborhoodV,
     searcher::{ConnectPlanV, LayerMode, UpdateEntryPoint},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
@@ -8,14 +7,17 @@ use crate::hnsw::{
 use super::VecRequests;
 
 use eyre::{bail, Result};
-use itertools::{izip, Itertools};
+use itertools::izip;
 
 /// InsertPlan specifies where a query may be inserted into the HNSW graph.
-/// That is lists of neighbors for each layer.
+///
+/// The `links` field specifies the final desired links in each layer for the
+/// newly inserted query, and should already be trimmed to the desired length,
+/// e.g. typically the HNSW parameter M.
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
-    pub links: Vec<SortedNeighborhoodV<V>>,
+    pub links: Vec<Vec<V::VectorRef>>,
     pub set_ep: UpdateEntryPoint,
 }
 
@@ -45,6 +47,8 @@ pub async fn insert<V: VectorStoreMut>(
     plans: VecRequests<Option<InsertPlanV<V>>>,
     ids: &VecRequests<Option<V::VectorRef>>,
 ) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
+    tracing::debug!("Inserting {} InsertPlans into store", plans.len());
+
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
@@ -57,15 +61,24 @@ pub async fn insert<V: VectorStoreMut>(
     for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate() {
         if let Some(InsertPlanV {
             query,
-            links,
+            mut links,
             set_ep,
         }) = plan
         {
             update_idxs.push(idx);
 
-            let extended_links =
-                add_batch_neighbors(&mut *store, &query, links, &inserted_ids, m).await?;
+            tracing::debug!("Adding batch neighbors");
 
+            // Extend links in bottom layer with items from batch, only when the
+            // bottom layer is not large enough to build full neighborhoods,
+            // i.e. when the graph does not yet have M elements.
+            if let Some(bottom_layer) = links.first_mut() {
+                if bottom_layer.len() < m {
+                    bottom_layer.extend_from_slice(&inserted_ids);
+                }
+            }
+
+            // Insert vector in store, getting new persistent vector id if none specified.
             let inserted = {
                 match update_id {
                     None => store.insert(&query).await,
@@ -73,19 +86,14 @@ pub async fn insert<V: VectorStoreMut>(
                 }
             };
 
-            // retaining existing behavior.
-            // not sure why extended_links isn't trimmed in each iteration as that would make the quicksort faster.
-            let mut layers = vec![];
-            let mut nbhds = extended_links.clone();
-            for (lc, nbhd) in nbhds.iter_mut().enumerate() {
-                let m = searcher.params.get_M(lc);
-                nbhd.trim_to_k_nearest(m);
-                layers.push(nbhd.vectors_cloned());
-            }
-            updates.push((inserted.clone(), layers, set_ep));
+            tracing::debug!("Inserted vector in store: {}", inserted);
+
+            updates.push((inserted.clone(), links, set_ep));
             inserted_ids.push(inserted);
         }
     }
+
+    // TODO batch local shuffle of all neighborhoods in `updates`
 
     let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
     for (cp_idx, plan) in izip!(update_idxs, plans) {
@@ -94,29 +102,6 @@ pub async fn insert<V: VectorStoreMut>(
     }
 
     Ok(connect_plans)
-}
-
-/// Extends the bottom layer of links with additional vectors in `extra_ids` if there is room.
-async fn add_batch_neighbors<V: VectorStore>(
-    store: &mut V,
-    query: &V::QueryRef,
-    mut links: Vec<SortedNeighborhoodV<V>>,
-    extra_ids: &[V::VectorRef],
-    target_n_neighbors: usize,
-) -> Result<Vec<SortedNeighborhoodV<V>>> {
-    if let Some(bottom_layer) = links.first_mut() {
-        if bottom_layer.len() < target_n_neighbors {
-            let distances = store.eval_distance_batch(query, extra_ids).await?;
-
-            let ids_dists = izip!(extra_ids.iter().cloned(), distances)
-                .map(|(id, dist)| (id, dist))
-                .collect_vec();
-
-            bottom_layer.insert_batch(&mut *store, &ids_dists).await?;
-        }
-    }
-
-    Ok(links)
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
@@ -222,8 +207,8 @@ fn validate_ep_updates<V: VectorStore>(
 #[cfg(test)]
 mod tests {
     use crate::hawkers::plaintext_store::PlaintextStore;
-    use crate::hnsw::graph::neighborhood::SortedNeighborhoodV;
     use iris_mpc_common::iris_db::iris::IrisCode;
+    use itertools::Itertools;
     use std::sync::Arc;
 
     use super::*;
@@ -239,7 +224,7 @@ mod tests {
 
         InsertPlanV {
             query: Arc::new(IrisCode::default()),
-            links: vec![SortedNeighborhoodV::<PlaintextStore>::new(); ins_layer],
+            links: vec![Vec::new(); ins_layer],
             set_ep: ep_update,
         }
     }
