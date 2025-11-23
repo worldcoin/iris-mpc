@@ -257,7 +257,6 @@ pub struct HnswSearcher {
 }
 
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
-// pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
@@ -271,19 +270,7 @@ pub struct ConnectPlan<Vector> {
 
     // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
-    pub set_ep: SetEntryPoint,
-}
-
-impl<Vector: PartialEq + Eq> ConnectPlan<Vector> {
-    /// Returns the max insertion layer for inserted_vector
-    pub fn get_max_insertion_layer(&self) -> Option<usize> {
-        self.updates
-            .iter()
-            .filter(|(_, v, _)| v == &self.inserted_vector)
-            .map(|(lc, _, _)| lc)
-            .max()
-            .cloned()
-    }
+    pub set_ep: UpdateEntryPoint,
 }
 
 /// Represents a graph update of a single node's neighborhood in a graph, given
@@ -305,15 +292,15 @@ pub fn build_layer_updates<V: Clone>(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SetEntryPoint {
+pub enum UpdateEntryPoint {
     /// Do not update entry points based on inserted vector
     False,
 
-    /// On new layer, clear the existing entry point before inserting
-    NewLayer,
+    /// Set a new unique entry point
+    SetUnique { layer: usize },
 
-    /// On the top layer, add to the list of entry points
-    AddToLayer,
+    /// Add a new item to the set of entry points
+    Append { layer: usize },
 }
 
 #[allow(non_snake_case)]
@@ -405,7 +392,7 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(SortedNeighborhoodV<V>, usize, usize, SetEntryPoint)> {
+    ) -> Result<(SortedNeighborhoodV<V>, usize, usize, UpdateEntryPoint)> {
         match self.layer_mode {
             LayerMode::Standard => {
                 let ep = graph.get_first_entry_point().await;
@@ -417,9 +404,11 @@ impl HnswSearcher {
 
                 // Set new entry point if layer is greater than entry point layer, or no entry point available
                 let set_ep = if layer.map(|l| insertion_layer > l).unwrap_or(true) {
-                    SetEntryPoint::NewLayer
+                    UpdateEntryPoint::SetUnique {
+                        layer: insertion_layer,
+                    }
                 } else {
-                    SetEntryPoint::False
+                    UpdateEntryPoint::False
                 };
 
                 Ok((W, n_layers, insertion_layer, set_ep))
@@ -437,9 +426,11 @@ impl HnswSearcher {
 
                 // Set new entry point if layer is greater than entry point layer, or no entry point available.
                 let set_ep = if layer.map(|l| bounded_insertion_layer > l).unwrap_or(true) {
-                    SetEntryPoint::NewLayer
+                    UpdateEntryPoint::SetUnique {
+                        layer: bounded_insertion_layer,
+                    }
                 } else {
-                    SetEntryPoint::False
+                    UpdateEntryPoint::False
                 };
 
                 Ok((W, n_layers, bounded_insertion_layer, set_ep))
@@ -487,9 +478,11 @@ impl HnswSearcher {
 
                 // Add query to entry points set if target insertion layer is greater than the max graph layer
                 let set_ep = if insertion_layer > max_graph_layer {
-                    SetEntryPoint::AddToLayer
+                    UpdateEntryPoint::Append {
+                        layer: max_graph_layer,
+                    }
                 } else {
-                    SetEntryPoint::False
+                    UpdateEntryPoint::False
                 };
 
                 Ok((W, n_layers, bounded_insertion_layer, set_ep))
@@ -1424,7 +1417,7 @@ impl HnswSearcher {
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(Vec<SortedNeighborhoodV<V>>, SetEntryPoint)> {
+    ) -> Result<(Vec<SortedNeighborhoodV<V>>, UpdateEntryPoint)> {
         // Initialize candidate neighborhood, index of highest search layer,
         // finalized layer of node insertion, and entry point update outcome.
         let (mut W, n_layers, insertion_layer, set_ep) = self
@@ -1481,7 +1474,7 @@ impl HnswSearcher {
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         mut links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: SetEntryPoint,
+        set_ep: UpdateEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
         // this is for insert_prepare_batch
         // the neighbors of inserted_vector at each layer
@@ -1504,7 +1497,7 @@ impl HnswSearcher {
         // this may be used in the future to trim l_links
         _store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
-        updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, SetEntryPoint)>,
+        updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
     ) -> Result<Vec<ConnectPlanV<V>>> {
         let mut connect_plans = updates
             .iter()
@@ -1599,7 +1592,7 @@ impl HnswSearcher {
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: SetEntryPoint,
+        set_ep: UpdateEntryPoint,
     ) -> Result<()> {
         let plan = self
             .insert_prepare(store, graph, inserted_vector, links, set_ep)
@@ -1729,12 +1722,12 @@ mod tests {
         let graph_store_default = &mut GraphMem::new();
 
         for (insertion_layer, expected_nb_len, expected_set_ep) in [
-            (0, 1, SetEntryPoint::NewLayer),
-            (0, 1, SetEntryPoint::False),
-            (1, 2, SetEntryPoint::NewLayer),
-            (1, 2, SetEntryPoint::False),
-            (2, 3, SetEntryPoint::NewLayer),
-            (2, 3, SetEntryPoint::False),
+            (0, 1, UpdateEntryPoint::SetUnique { layer: 0 }),
+            (0, 1, UpdateEntryPoint::False),
+            (1, 2, UpdateEntryPoint::SetUnique { layer: 1 }),
+            (1, 2, UpdateEntryPoint::False),
+            (2, 3, UpdateEntryPoint::SetUnique { layer: 2 }),
+            (2, 3, UpdateEntryPoint::False),
         ] {
             let query = queries.next().unwrap();
 
@@ -1767,12 +1760,12 @@ mod tests {
         let graph_store_linear = &mut GraphMem::new();
 
         for (insertion_layer, expected_nb_len, expected_set_ep) in [
-            (0, 1, SetEntryPoint::False),
-            (0, 1, SetEntryPoint::False),
-            (1, 2, SetEntryPoint::False),
-            (1, 2, SetEntryPoint::False),
-            (2, 2, SetEntryPoint::AddToLayer),
-            (2, 2, SetEntryPoint::AddToLayer),
+            (0, 1, UpdateEntryPoint::False),
+            (0, 1, UpdateEntryPoint::False),
+            (1, 2, UpdateEntryPoint::False),
+            (1, 2, UpdateEntryPoint::False),
+            (2, 2, UpdateEntryPoint::Append { layer: 1 }),
+            (2, 2, UpdateEntryPoint::Append { layer: 1 }),
         ] {
             // Same queries used above
             let query = queries_copy.next().unwrap();
@@ -1838,7 +1831,7 @@ mod tests {
             let connect_plan = ConnectPlan {
                 inserted_vector: vector_id,
                 updates: vec![(0, vector_id, nbs)],
-                set_ep: SetEntryPoint::False,
+                set_ep: UpdateEntryPoint::False,
             };
 
             // Apply the connect plan to the graph
@@ -1851,7 +1844,7 @@ mod tests {
         assert_eq!(neighbors[0].len(), 5);
 
         // Create the update for vector id 6
-        let updates = vec![(ids[5], neighbors, SetEntryPoint::False)];
+        let updates = vec![(ids[5], neighbors, UpdateEntryPoint::False)];
 
         // Prepare the batch insertion
         let connect_plans = searcher
@@ -1861,7 +1854,7 @@ mod tests {
         // Verify the connect plan was created correctly
         assert_eq!(connect_plans.len(), 1);
         let plan = &connect_plans[0];
-        assert_eq!(plan.set_ep, SetEntryPoint::False);
+        assert_eq!(plan.set_ep, UpdateEntryPoint::False);
         assert_eq!(plan.updates.len(), 6); // 1 for vector 6 + 5 for its neighbors
 
         // Verify that each neighbor's updated neighborhood has exactly 4 elements

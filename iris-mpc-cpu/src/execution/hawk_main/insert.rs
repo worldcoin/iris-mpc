@@ -1,13 +1,13 @@
 use crate::hnsw::{
     graph::neighborhood::SortedNeighborhoodV,
-    searcher::{ConnectPlanV, SetEntryPoint},
+    searcher::{ConnectPlanV, LayerMode, UpdateEntryPoint},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
 
 use super::VecRequests;
 
-use eyre::Result;
+use eyre::{bail, Result};
 use itertools::{izip, Itertools};
 
 /// InsertPlan specifies where a query may be inserted into the HNSW graph.
@@ -16,7 +16,7 @@ use itertools::{izip, Itertools};
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
     pub links: Vec<SortedNeighborhoodV<V>>,
-    pub set_ep: SetEntryPoint,
+    pub set_ep: UpdateEntryPoint,
 }
 
 // Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
@@ -45,7 +45,9 @@ pub async fn insert<V: VectorStoreMut>(
     plans: VecRequests<Option<InsertPlanV<V>>>,
     ids: &VecRequests<Option<V::VectorRef>>,
 ) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
-    let insert_plans = join_plans(plans);
+    let insert_plans = join_plans(plans, &searcher.layer_mode);
+    validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
+
     let mut connect_plans = vec![None; insert_plans.len()];
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
@@ -118,46 +120,103 @@ async fn add_batch_neighbors<V: VectorStore>(
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
+///
+/// Currently just processes entry point update operations.
 fn join_plans<V: VectorStore>(
     mut plans: Vec<Option<InsertPlanV<V>>>,
+    layer_mode: &LayerMode,
 ) -> Vec<Option<InsertPlanV<V>>> {
-    let ep_layers: Vec<_> = plans
-        .iter()
-        .flatten()
-        .filter(|plan| plan.set_ep != SetEntryPoint::False)
-        .map(|plan| plan.links.len())
-        .collect();
+    match layer_mode {
+        LayerMode::Standard | LayerMode::Bounded { .. } => {
+            // Requests to set unique entry point must have strictly increasing layer
+            let mut current_max_ep_layer: Option<usize> = None;
+            for plan in plans.iter_mut() {
+                let Some(plan) = plan else { continue };
 
-    if !ep_layers.is_empty() {
-        let max_insertion_layer = ep_layers.into_iter().max().unwrap_or_default();
+                if let UpdateEntryPoint::SetUnique { layer } = plan.set_ep {
+                    let update_valid = current_max_ep_layer
+                        .map(|max_ep_layer| max_ep_layer < layer)
+                        .unwrap_or(true);
+                    if update_valid {
+                        current_max_ep_layer = Some(layer);
+                    } else {
+                        plan.set_ep = UpdateEntryPoint::False;
+                    }
+                }
+            }
+        }
+        LayerMode::LinearScan { .. } => {}
+    }
 
-        // for TopLevelSearchMode::Default, SetEntryPoint::NewLayer is used.
-        // for TopLevelSearchMode::LinearScan, SetEntryPoint::AddToLayer is used.
-        // if multiple plans have SetEntryPoint::NewLayer, an arbitrary one is chosen as the entry point.
-        let mut set_ep_new_layer = false;
-        for plan in plans.iter_mut() {
+    plans
+}
+
+/// Verify that entry point updates are sane for different searcher `LayerMode` variants.
+fn validate_ep_updates<V: VectorStore>(
+    plans: &Vec<Option<InsertPlanV<V>>>,
+    layer_mode: &LayerMode,
+) -> Result<()> {
+    // For standard and bounded modes, check that entry point updates have
+    // strictly increasing layers and no "append" updates
+    if let LayerMode::Standard | LayerMode::Bounded { .. } = layer_mode {
+        let mut current_max_ep_layer: Option<usize> = None;
+        for plan in plans {
             let Some(plan) = plan else { continue };
 
-            if plan.set_ep == SetEntryPoint::False {
-                continue;
+            match plan.set_ep {
+                UpdateEntryPoint::SetUnique { layer } => {
+                    if current_max_ep_layer
+                        .map(|max_ep_layer| max_ep_layer < layer)
+                        .unwrap_or(true)
+                    {
+                        current_max_ep_layer = Some(layer)
+                    } else {
+                        bail!("InsertPlan sets entry point at or lower than the current maximum layer");
+                    }
+                }
+                UpdateEntryPoint::Append { .. } => {
+                    bail!("Append entry point update encountered during Standard or Bounded layer mode");
+                }
+                UpdateEntryPoint::False => {}
             }
+        }
+    }
 
-            let current_layer = plan.links.len();
-            if current_layer < max_insertion_layer {
-                plan.set_ep = SetEntryPoint::False;
-                continue;
-            }
+    // For bounded mode, check that all updates are at or below the layer bound
+    if let LayerMode::Bounded { max_graph_layer } = layer_mode {
+        for plan in plans {
+            let Some(plan) = plan else { continue };
 
-            if plan.set_ep == SetEntryPoint::NewLayer {
-                if !set_ep_new_layer {
-                    set_ep_new_layer = true;
-                } else {
-                    plan.set_ep = SetEntryPoint::False;
+            if let UpdateEntryPoint::SetUnique { layer } = plan.set_ep {
+                if layer > *max_graph_layer {
+                    bail!(
+                        "InsertPlan sets entry point higher than layer bound in Bounded layer mode"
+                    );
                 }
             }
         }
     }
-    plans
+
+    // For linear scan mode, check that all updates are "append" updates at the layer bound
+    if let LayerMode::LinearScan { max_graph_layer } = layer_mode {
+        for plan in plans {
+            let Some(plan) = plan else { continue };
+
+            match plan.set_ep {
+                UpdateEntryPoint::SetUnique { .. } => {
+                    bail!("SetUnique entry point update encountered during LinearScan layer mode");
+                }
+                UpdateEntryPoint::Append { layer } => {
+                    if layer != *max_graph_layer {
+                        bail!("InsertPlan adds entry point at different layer than max graph layer during LinearScan layer mode")
+                    }
+                }
+                UpdateEntryPoint::False => {}
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -165,95 +224,381 @@ mod tests {
     use crate::hawkers::plaintext_store::PlaintextStore;
     use crate::hnsw::graph::neighborhood::SortedNeighborhoodV;
     use iris_mpc_common::iris_db::iris::IrisCode;
-    use rand::thread_rng;
     use std::sync::Arc;
-    use std::sync::LazyLock;
 
     use super::*;
 
+    fn dummy_insert_plan(ep_update: UpdateEntryPoint) -> InsertPlanV<PlaintextStore> {
+        let ins_layer = if let UpdateEntryPoint::SetUnique { layer }
+        | UpdateEntryPoint::Append { layer } = ep_update
+        {
+            layer
+        } else {
+            0
+        };
+
+        InsertPlanV {
+            query: Arc::new(IrisCode::default()),
+            links: vec![SortedNeighborhoodV::<PlaintextStore>::new(); ins_layer],
+            set_ep: ep_update,
+        }
+    }
+
     /// Helper function to test join_plans with multiple scenarios
     fn test_join_plans_helper(
-        test_cases: &[(usize, SetEntryPoint)],
-        expected_results: &[SetEntryPoint],
+        test_cases: &[UpdateEntryPoint],
+        expected_results: &[UpdateEntryPoint],
+        layer_mode: &LayerMode,
     ) {
-        static QUERY: LazyLock<Arc<IrisCode>> = LazyLock::new(|| {
-            let mut rng = thread_rng();
-            let iris_code = IrisCode::random_rng(&mut rng);
-            Arc::new(iris_code)
-        });
-
-        let query = QUERY.clone();
-        let mut plans = Vec::new();
-        for (num_layers, input_set_ep) in test_cases {
-            let plan: InsertPlanV<PlaintextStore> = InsertPlanV {
-                query: query.clone(),
-                links: vec![SortedNeighborhoodV::<PlaintextStore>::new(); *num_layers],
-                set_ep: input_set_ep.clone(),
-            };
-            plans.push(Some(plan));
-        }
+        let mut plans = test_cases
+            .iter()
+            .cloned()
+            .map(dummy_insert_plan)
+            .map(Some)
+            .collect_vec();
         plans.push(None); // Add a None plan as in the original tests
-        let result = join_plans(plans);
+        let result = join_plans(plans, layer_mode);
         assert_eq!(result.len(), expected_results.len() + 1);
         for (idx, expected_set_ep) in expected_results.iter().enumerate() {
             assert_eq!(result[idx].as_ref().unwrap().set_ep, *expected_set_ep);
         }
     }
 
-    // test adding entry points at two different layers
+    // Test standard operation mode
     #[test]
-    fn test_join_plans1() {
+    fn test_join_plans_standard() {
+        // entry points in same layer
         test_join_plans_helper(
-            &[(9, SetEntryPoint::NewLayer), (10, SetEntryPoint::NewLayer)],
-            &[SetEntryPoint::False, SetEntryPoint::NewLayer],
+            &[
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::SetUnique { layer: 2 },
+            ],
+            &[
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::False,
+            ],
+            &LayerMode::Standard,
         );
 
-        // try reversing the order
+        // increasing layer order
         test_join_plans_helper(
-            &[(10, SetEntryPoint::NewLayer), (9, SetEntryPoint::NewLayer)],
-            &[SetEntryPoint::NewLayer, SetEntryPoint::False],
+            &[
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 2 },
+            ],
+            &[
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 2 },
+            ],
+            &LayerMode::Standard,
+        );
+
+        // decreasing layer order
+        test_join_plans_helper(
+            &[
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+            ],
+            &[
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::False,
+            ],
+            &LayerMode::Standard,
+        );
+
+        // exercise more complex case
+        test_join_plans_helper(
+            &[
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::SetUnique { layer: 2 },
+            ],
+            &[
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::False,
+            ],
+            &LayerMode::Standard,
         );
     }
 
-    // test adding entry points on the same layers
+    /// Test bounded operation mode
     #[test]
-    fn test_join_plans2() {
+    fn test_join_plans_bounded() {
+        // `join_plans` does not modify entry point updates based on bounded `max_graph_layer`
         test_join_plans_helper(
-            &[(10, SetEntryPoint::NewLayer), (10, SetEntryPoint::NewLayer)],
-            &[SetEntryPoint::NewLayer, SetEntryPoint::False],
+            &[
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::SetUnique { layer: 2 },
+            ],
+            &[
+                UpdateEntryPoint::SetUnique { layer: 2 },
+                UpdateEntryPoint::False,
+            ],
+            &LayerMode::Bounded { max_graph_layer: 1 },
         );
     }
 
-    // test AddToLayer on different layers
+    /// Test linear scan operation mode
     #[test]
-    fn test_join_plans3() {
+    fn test_join_plans_linear_scan() {
+        // `join_plans` does not modify append operations based on bounded `max_graph_layer`
         test_join_plans_helper(
             &[
-                (9, SetEntryPoint::AddToLayer),
-                (10, SetEntryPoint::AddToLayer),
+                UpdateEntryPoint::Append { layer: 1 },
+                UpdateEntryPoint::Append { layer: 1 },
             ],
-            &[SetEntryPoint::False, SetEntryPoint::AddToLayer],
+            &[
+                UpdateEntryPoint::Append { layer: 1 },
+                UpdateEntryPoint::Append { layer: 1 },
+            ],
+            &LayerMode::LinearScan { max_graph_layer: 1 },
         );
 
-        // change the order
+        // `join_plans` does not modify append operations based on bounded `max_graph_layer`
         test_join_plans_helper(
             &[
-                (10, SetEntryPoint::AddToLayer),
-                (9, SetEntryPoint::AddToLayer),
+                UpdateEntryPoint::Append { layer: 2 },
+                UpdateEntryPoint::Append { layer: 2 },
             ],
-            &[SetEntryPoint::AddToLayer, SetEntryPoint::False],
+            &[
+                UpdateEntryPoint::Append { layer: 2 },
+                UpdateEntryPoint::Append { layer: 2 },
+            ],
+            &LayerMode::LinearScan { max_graph_layer: 1 },
+        );
+
+        // `join_plans` does not modify append operations in case of different update layers
+        test_join_plans_helper(
+            &[
+                UpdateEntryPoint::Append { layer: 0 },
+                UpdateEntryPoint::Append { layer: 1 },
+            ],
+            &[
+                UpdateEntryPoint::Append { layer: 0 },
+                UpdateEntryPoint::Append { layer: 1 },
+            ],
+            &LayerMode::LinearScan { max_graph_layer: 1 },
         );
     }
 
-    // test AddToLayer on same layers
+    fn test_validate_ep_updates_helper(
+        test_cases: &[UpdateEntryPoint],
+        expect_ok: bool,
+        layer_mode: &LayerMode,
+    ) {
+        let mut plans = test_cases
+            .iter()
+            .cloned()
+            .map(dummy_insert_plan)
+            .map(Some)
+            .collect_vec();
+        plans.push(None);
+        let res = validate_ep_updates(&plans, layer_mode);
+        match res {
+            Ok(_) => {
+                if !expect_ok {
+                    panic!("Expected entry point validation to fail, but succeeded instead");
+                }
+            }
+            Err(e) => {
+                if expect_ok {
+                    panic!(
+                        "{}",
+                        format!(
+                            "Expected entry point validation to succeeed, but failed instead: {}",
+                            e
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    /// Test ep validator Standard layer mode validity checks
     #[test]
-    fn test_join_plans4() {
-        test_join_plans_helper(
+    fn test_ep_updates_validator_standard() {
+        let standard_layer_mode = LayerMode::Standard;
+
+        // Standard mode layers are strictly increasing
+        test_validate_ep_updates_helper(
             &[
-                (10, SetEntryPoint::AddToLayer),
-                (10, SetEntryPoint::AddToLayer),
+                UpdateEntryPoint::SetUnique { layer: 0 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
             ],
-            &[SetEntryPoint::AddToLayer, SetEntryPoint::AddToLayer],
+            false,
+            &standard_layer_mode,
+        );
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 0 },
+            ],
+            false,
+            &standard_layer_mode,
+        );
+
+        // Standard mode doesn't allow Append updates
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::SetUnique { layer: 0 },
+                UpdateEntryPoint::Append { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+            ],
+            false,
+            &standard_layer_mode,
+        );
+
+        // The following is valid for Standard mode
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 0 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 3 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 4 },
+                UpdateEntryPoint::SetUnique { layer: 5 },
+                UpdateEntryPoint::False,
+            ],
+            true,
+            &standard_layer_mode,
+        );
+    }
+
+    /// Test ep validator Bounded layer mode validity checks
+    #[test]
+    fn test_ep_updates_validator_bounded() {
+        let bounded_layer_mode = LayerMode::Bounded { max_graph_layer: 3 };
+
+        // Bounded mode layers are strictly increasing
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::SetUnique { layer: 0 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+            ],
+            false,
+            &bounded_layer_mode,
+        );
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 0 },
+            ],
+            false,
+            &bounded_layer_mode,
+        );
+
+        // Bounded mode doesn't allow Append updates
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::SetUnique { layer: 0 },
+                UpdateEntryPoint::Append { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+            ],
+            false,
+            &bounded_layer_mode,
+        );
+
+        // Bounded mode must set entry points at or below layer bound
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::SetUnique { layer: 0 },
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::SetUnique { layer: 3 },
+                UpdateEntryPoint::SetUnique { layer: 4 },
+            ],
+            false,
+            &bounded_layer_mode,
+        );
+
+        // The following is valid for Bounded mode
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 0 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 1 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::SetUnique { layer: 3 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::False,
+            ],
+            true,
+            &bounded_layer_mode,
+        );
+    }
+
+    /// Test ep validator LinearScan layer mode validity checks
+    #[test]
+    fn test_ep_updates_validator_linear_scan() {
+        let linear_scan_layer_mode = LayerMode::LinearScan { max_graph_layer: 3 };
+
+        // LinearScan mode cannot have SetUnique updates
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::SetUnique { layer: 3 },
+            ],
+            false,
+            &linear_scan_layer_mode,
+        );
+
+        // LinearScan mode cannot append entry points at layers besides the max graph layer
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 4 },
+            ],
+            false,
+            &linear_scan_layer_mode,
+        );
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 2 },
+            ],
+            false,
+            &linear_scan_layer_mode,
+        );
+
+        // The following is valid for LinearScan mode
+        test_validate_ep_updates_helper(
+            &[
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::Append { layer: 3 },
+                UpdateEntryPoint::False,
+                UpdateEntryPoint::False,
+            ],
+            true,
+            &linear_scan_layer_mode,
         );
     }
 }

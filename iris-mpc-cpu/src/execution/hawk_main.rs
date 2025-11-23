@@ -2060,7 +2060,7 @@ mod tests_db {
     use super::*;
     use crate::hnsw::{
         graph::graph_store::test_utils::TestGraphPg,
-        searcher::{build_layer_updates, SetEntryPoint},
+        searcher::{build_layer_updates, UpdateEntryPoint},
     };
 
     #[tokio::test]
@@ -2083,9 +2083,9 @@ mod tests_db {
                         0,
                     ),
                     set_ep: if i == side {
-                        SetEntryPoint::NewLayer
+                        UpdateEntryPoint::SetUnique { layer: 0 }
                     } else {
-                        SetEntryPoint::False
+                        UpdateEntryPoint::False
                     },
                 })
                 .map(Some)
@@ -2164,14 +2164,14 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::{build_layer_updates, SetEntryPoint};
+    use crate::hnsw::searcher::{build_layer_updates, UpdateEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
         ConnectPlan {
             inserted_vector: vector_id,
             updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
-            set_ep: SetEntryPoint::False,
+            set_ep: UpdateEntryPoint::False,
         }
     }
 

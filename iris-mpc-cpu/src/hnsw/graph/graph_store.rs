@@ -1,7 +1,7 @@
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        searcher::{ConnectPlanV, SetEntryPoint},
+        searcher::{ConnectPlanV, UpdateEntryPoint},
         GraphMem, VectorStore,
     },
 };
@@ -253,16 +253,13 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
         // If required, set vector as new entry point
-        let insertion_layer = plan.get_max_insertion_layer().unwrap();
         match plan.set_ep {
-            SetEntryPoint::False => {}
-            SetEntryPoint::NewLayer => {
-                self.set_entry_point(plan.inserted_vector, insertion_layer)
-                    .await?;
+            UpdateEntryPoint::False => {}
+            UpdateEntryPoint::SetUnique { layer } => {
+                self.set_entry_point(plan.inserted_vector, layer).await?;
             }
-            SetEntryPoint::AddToLayer => {
-                self.add_entry_point(plan.inserted_vector, insertion_layer)
-                    .await?;
+            UpdateEntryPoint::Append { layer } => {
+                self.add_entry_point(plan.inserted_vector, layer).await?;
             }
         }
 

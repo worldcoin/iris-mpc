@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        searcher::{ConnectPlan, LayerMode, SetEntryPoint},
+        searcher::{ConnectPlan, LayerMode, UpdateEntryPoint},
         vector_store::Ref,
         HnswSearcher,
     },
@@ -124,17 +124,15 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
-        let insertion_layer = plan.get_max_insertion_layer().unwrap();
-
         // If required, set vector as new entry point
         match plan.set_ep {
-            SetEntryPoint::False => {}
-            SetEntryPoint::NewLayer => {
-                self.set_unique_entry_point(plan.inserted_vector.clone(), insertion_layer)
+            UpdateEntryPoint::False => {}
+            UpdateEntryPoint::SetUnique { layer } => {
+                self.set_unique_entry_point(plan.inserted_vector.clone(), layer)
                     .await;
             }
-            SetEntryPoint::AddToLayer => {
-                self.add_entry_point(plan.inserted_vector.clone(), insertion_layer)
+            UpdateEntryPoint::Append { layer } => {
+                self.add_entry_point(plan.inserted_vector.clone(), layer)
                     .await;
             }
         }
