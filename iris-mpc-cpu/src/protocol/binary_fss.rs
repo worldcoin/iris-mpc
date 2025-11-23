@@ -1751,7 +1751,7 @@ where
             }
 
             // drop timer
-            drop(_tt);
+            drop(_tt_gen);
 
             //metrics: measure the network time
             let _tt_net = crate::perf_scoped_for_party!(
