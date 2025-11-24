@@ -8,6 +8,9 @@ env:
   - name: NCCL_SOCKET_IFNAME
     value: "eth0"
 
+  - name: FI_EFA_USE_DEVICE_RDMA
+    value: "1"
+
   - name: NCCL_COMM_ID
     value: "iris-mpc-node.1.stage.smpcv2.worldcoin.dev:4000"
 
