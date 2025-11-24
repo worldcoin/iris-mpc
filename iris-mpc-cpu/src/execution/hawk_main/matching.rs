@@ -714,7 +714,7 @@ mod tests {
                 plan: InsertPlanV {
                     query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
                     links: links_unstructured,
-                    set_ep: UpdateEntryPoint::False,
+                    update_ep: UpdateEntryPoint::False,
                 },
                 links,
             };

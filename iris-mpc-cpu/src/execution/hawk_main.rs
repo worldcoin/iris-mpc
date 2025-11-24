@@ -1438,9 +1438,6 @@ impl HawkHandle {
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
 
-                if let Err(e) = &health {
-                    tracing::debug!("Result error state: {e:?}");
-                }
                 let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
 
@@ -2089,7 +2086,7 @@ mod tests_db {
                         vec![vec![*vector]],
                         0,
                     ),
-                    set_ep: if i == side {
+                    update_ep: if i == side {
                         UpdateEntryPoint::SetUnique { layer: 0 }
                     } else {
                         UpdateEntryPoint::False
@@ -2178,7 +2175,7 @@ mod hawk_mutation_tests {
         ConnectPlan {
             inserted_vector: vector_id,
             updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
-            set_ep: UpdateEntryPoint::False,
+            update_ep: UpdateEntryPoint::False,
         }
     }
 

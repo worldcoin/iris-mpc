@@ -253,7 +253,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
         // If required, set vector as new entry point
-        match plan.set_ep {
+        match plan.update_ep {
             UpdateEntryPoint::False => {}
             UpdateEntryPoint::SetUnique { layer } => {
                 self.set_entry_point(plan.inserted_vector, layer).await?;
@@ -826,7 +826,7 @@ mod tests {
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
             let insertion_layer = searcher.gen_layer_rng(rng)?;
-            let (links, set_ep) = searcher
+            let (links, update_ep) = searcher
                 .search_to_insert(vector_store, graph_mem, query, insertion_layer)
                 .await?;
             assert!(!searcher.is_match(vector_store, &links).await?);
@@ -848,7 +848,7 @@ mod tests {
                     graph_mem,
                     inserted,
                     links_unstructured,
-                    set_ep,
+                    update_ep,
                 )
                 .await?;
 

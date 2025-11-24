@@ -18,7 +18,7 @@ use itertools::izip;
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
     pub links: Vec<Vec<V::VectorRef>>,
-    pub set_ep: UpdateEntryPoint,
+    pub update_ep: UpdateEntryPoint,
 }
 
 // Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
@@ -28,7 +28,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
         Self {
             query: self.query.clone(),
             links: self.links.clone(),
-            set_ep: self.set_ep.clone(),
+            update_ep: self.update_ep.clone(),
         }
     }
 }
@@ -62,7 +62,7 @@ pub async fn insert<V: VectorStoreMut>(
         if let Some(InsertPlanV {
             query,
             mut links,
-            set_ep,
+            update_ep,
         }) = plan
         {
             update_idxs.push(idx);
@@ -84,7 +84,7 @@ pub async fn insert<V: VectorStoreMut>(
                 }
             };
 
-            updates.push((inserted.clone(), links, set_ep));
+            updates.push((inserted.clone(), links, update_ep));
             inserted_ids.push(inserted);
         }
     }
@@ -112,14 +112,14 @@ fn join_plans<V: VectorStore>(
             for plan in plans.iter_mut() {
                 let Some(plan) = plan else { continue };
 
-                if let UpdateEntryPoint::SetUnique { layer } = plan.set_ep {
+                if let UpdateEntryPoint::SetUnique { layer } = plan.update_ep {
                     let update_valid = current_max_ep_layer
                         .map(|max_ep_layer| max_ep_layer < layer)
                         .unwrap_or(true);
                     if update_valid {
                         current_max_ep_layer = Some(layer);
                     } else {
-                        plan.set_ep = UpdateEntryPoint::False;
+                        plan.update_ep = UpdateEntryPoint::False;
                     }
                 }
             }
@@ -142,7 +142,7 @@ fn validate_ep_updates<V: VectorStore>(
         for plan in plans {
             let Some(plan) = plan else { continue };
 
-            match plan.set_ep {
+            match plan.update_ep {
                 UpdateEntryPoint::SetUnique { layer } => {
                     if current_max_ep_layer
                         .map(|max_ep_layer| max_ep_layer < layer)
@@ -166,7 +166,7 @@ fn validate_ep_updates<V: VectorStore>(
         for plan in plans {
             let Some(plan) = plan else { continue };
 
-            if let UpdateEntryPoint::SetUnique { layer } = plan.set_ep {
+            if let UpdateEntryPoint::SetUnique { layer } = plan.update_ep {
                 if layer > *max_graph_layer {
                     bail!(
                         "InsertPlan sets entry point higher than layer bound in Bounded layer mode"
@@ -181,7 +181,7 @@ fn validate_ep_updates<V: VectorStore>(
         for plan in plans {
             let Some(plan) = plan else { continue };
 
-            match plan.set_ep {
+            match plan.update_ep {
                 UpdateEntryPoint::SetUnique { .. } => {
                     bail!("SetUnique entry point update encountered during LinearScan layer mode");
                 }
@@ -219,7 +219,7 @@ mod tests {
         InsertPlanV {
             query: Arc::new(IrisCode::default()),
             links: vec![Vec::new(); ins_layer],
-            set_ep: ep_update,
+            update_ep: ep_update,
         }
     }
 
@@ -238,8 +238,8 @@ mod tests {
         plans.push(None); // Add a None plan as in the original tests
         let result = join_plans(plans, layer_mode);
         assert_eq!(result.len(), expected_results.len() + 1);
-        for (idx, expected_set_ep) in expected_results.iter().enumerate() {
-            assert_eq!(result[idx].as_ref().unwrap().set_ep, *expected_set_ep);
+        for (idx, expected_update_ep) in expected_results.iter().enumerate() {
+            assert_eq!(result[idx].as_ref().unwrap().update_ep, *expected_update_ep);
         }
     }
 

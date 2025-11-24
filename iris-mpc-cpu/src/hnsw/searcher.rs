@@ -270,7 +270,7 @@ pub struct ConnectPlan<Vector: Ord> {
 
     // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
-    pub set_ep: UpdateEntryPoint,
+    pub update_ep: UpdateEntryPoint,
 }
 
 /// Represents a graph update of a single node's neighborhood in a graph, given
@@ -403,7 +403,7 @@ impl HnswSearcher {
                 let n_layers = layer.map(|l| l + 1).unwrap_or(0);
 
                 // Set new entry point if layer is greater than entry point layer, or no entry point available
-                let set_ep = if layer.map(|l| insertion_layer > l).unwrap_or(true) {
+                let update_ep = if layer.map(|l| insertion_layer > l).unwrap_or(true) {
                     UpdateEntryPoint::SetUnique {
                         layer: insertion_layer,
                     }
@@ -411,7 +411,7 @@ impl HnswSearcher {
                     UpdateEntryPoint::False
                 };
 
-                Ok((W, n_layers, insertion_layer, set_ep))
+                Ok((W, n_layers, insertion_layer, update_ep))
             }
             LayerMode::Bounded { max_graph_layer } => {
                 let ep = graph.get_first_entry_point().await;
@@ -425,7 +425,7 @@ impl HnswSearcher {
                 let bounded_insertion_layer = insertion_layer.min(max_graph_layer);
 
                 // Set new entry point if layer is greater than entry point layer, or no entry point available.
-                let set_ep = if layer.map(|l| bounded_insertion_layer > l).unwrap_or(true) {
+                let update_ep = if layer.map(|l| bounded_insertion_layer > l).unwrap_or(true) {
                     UpdateEntryPoint::SetUnique {
                         layer: bounded_insertion_layer,
                     }
@@ -433,7 +433,7 @@ impl HnswSearcher {
                     UpdateEntryPoint::False
                 };
 
-                Ok((W, n_layers, bounded_insertion_layer, set_ep))
+                Ok((W, n_layers, bounded_insertion_layer, update_ep))
             }
             LayerMode::LinearScan { max_graph_layer } => {
                 // Get all valid entry points
@@ -477,7 +477,7 @@ impl HnswSearcher {
                 let bounded_insertion_layer = insertion_layer.min(max_graph_layer);
 
                 // Add query to entry points set if target insertion layer is greater than the max graph layer
-                let set_ep = if insertion_layer > max_graph_layer {
+                let update_ep = if insertion_layer > max_graph_layer {
                     UpdateEntryPoint::Append {
                         layer: max_graph_layer,
                     }
@@ -485,7 +485,7 @@ impl HnswSearcher {
                     UpdateEntryPoint::False
                 };
 
-                Ok((W, n_layers, bounded_insertion_layer, set_ep))
+                Ok((W, n_layers, bounded_insertion_layer, update_ep))
             }
         }
     }
@@ -1353,7 +1353,7 @@ impl HnswSearcher {
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
-        // insertion layer doesn't matter here because set_ep is ignored
+        // insertion layer doesn't matter here because `UpdateEntryPoint` output is ignored
         let (mut W, n_layers, _, _) = self.search_init(store, graph, query, 0).await?;
 
         // Search from the top layer down to layer 0
@@ -1376,11 +1376,11 @@ impl HnswSearcher {
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<V::VectorRef> {
-        let (neighbors, set_ep) = self
+        let (neighbors, update_ep) = self
             .search_to_insert(store, graph, query, insertion_layer)
             .await?;
         let inserted = store.insert(query).await;
-        self.insert_from_search_results(store, graph, inserted.clone(), neighbors, set_ep)
+        self.insert_from_search_results(store, graph, inserted.clone(), neighbors, update_ep)
             .await?;
         Ok(inserted)
     }
@@ -1420,7 +1420,7 @@ impl HnswSearcher {
     ) -> Result<(Vec<SortedNeighborhoodV<V>>, UpdateEntryPoint)> {
         // Initialize candidate neighborhood, index of highest search layer,
         // finalized layer of node insertion, and entry point update outcome.
-        let (mut W, n_layers, insertion_layer, set_ep) = self
+        let (mut W, n_layers, insertion_layer, update_ep) = self
             .search_init(store, graph, query, insertion_layer)
             .await?;
 
@@ -1454,17 +1454,19 @@ impl HnswSearcher {
 
         assert_eq!(links.len(), insertion_layer + 1);
 
-        Ok((links, set_ep))
+        Ok((links, update_ep))
     }
 
-    /// Prepare a `ConnectPlan` representing the updates required to insert `inserted_vector`
-    /// into `graph` with the specified neighbors `links` and setting the entry point of the
-    /// graph if `set_ep` is `true`.  The `links` vector contains the neighbor lists for the
-    /// newly inserted node in different graph layers in which it is to be inserted, starting
-    /// with layer 0.  Specified links are inserted as-is, without additional truncation.
+    /// Prepare a `ConnectPlan` representing the updates required to insert
+    /// `inserted_vector` into `graph` with the specified neighbors `links` and
+    /// setting the entry point of the graph if `update_ep` is `true`.  The
+    /// `links` vector contains the neighbor lists for the newly inserted node
+    /// in different graph layers in which it is to be inserted, starting with
+    /// layer 0.  Specified links are inserted as-is, without additional
+    /// truncation.
     ///
-    /// In this implementation, comparisons required for computing the insertion indices for
-    /// updated neighborhoods are done in batches.
+    /// In this implementation, comparisons required for computing the insertion
+    /// indices for updated neighborhoods are done in batches.
     ///
     /// This function call does *not* update `graph`.
     pub async fn insert_prepare<V: VectorStore>(
@@ -1474,9 +1476,9 @@ impl HnswSearcher {
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         links: Vec<Vec<V::VectorRef>>,
-        set_ep: UpdateEntryPoint,
+        update_ep: UpdateEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
-        let updates = vec![(inserted_vector, links, set_ep)];
+        let updates = vec![(inserted_vector, links, update_ep)];
         let mut r = self.insert_prepare_batch(store, graph, updates).await?;
         Ok(r.pop().unwrap()) // work-around for odd error
     }
@@ -1531,12 +1533,12 @@ impl HnswSearcher {
             Vec<<V as VectorStore>::VectorRef>,
         > = BTreeMap::new();
 
-        for (idx, (vec, links, set_ep)) in updates.iter().enumerate() {
+        for (idx, (vec, links, update_ep)) in updates.iter().enumerate() {
             // Initialize connect plan for output
             output_plans.push(ConnectPlan {
                 inserted_vector: vec.clone(),
                 updates: BTreeMap::new(),
-                set_ep: set_ep.clone(),
+                update_ep: update_ep.clone(),
             });
             // Record index of associated vector id
             query_idxs.insert(vec.clone(), idx);
@@ -1674,7 +1676,7 @@ impl HnswSearcher {
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
         links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: UpdateEntryPoint,
+        update_ep: UpdateEntryPoint,
     ) -> Result<()> {
         // Trim and extract unstructured vector lists
         let mut links_unstructured = Vec::new();
@@ -1685,7 +1687,7 @@ impl HnswSearcher {
         }
 
         let plan = self
-            .insert_prepare(store, graph, inserted_vector, links_unstructured, set_ep)
+            .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
             .await?;
         graph.insert_apply(plan).await;
         Ok(())
@@ -1743,15 +1745,21 @@ mod tests {
         // Insert the codes.
         for query in queries1.iter() {
             let insertion_layer = db.gen_layer_rng(rng)?;
-            let (neighbors, set_ep) = db
+            let (neighbors, update_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
             assert!(!db.is_match(vector_store, &neighbors).await?);
 
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
-            db.insert_from_search_results(vector_store, graph_store, inserted, neighbors, set_ep)
-                .await?;
+            db.insert_from_search_results(
+                vector_store,
+                graph_store,
+                inserted,
+                neighbors,
+                update_ep,
+            )
+            .await?;
         }
 
         let queries2 = IrisDB::new_random_rng(100, rng)
@@ -1812,7 +1820,7 @@ mod tests {
         let vector_store_default = &mut PlaintextStore::new();
         let graph_store_default = &mut GraphMem::new();
 
-        for (insertion_layer, expected_nb_len, expected_set_ep) in [
+        for (insertion_layer, expected_nb_len, expected_update_ep) in [
             (0, 1, UpdateEntryPoint::SetUnique { layer: 0 }),
             (0, 1, UpdateEntryPoint::False),
             (1, 2, UpdateEntryPoint::SetUnique { layer: 1 }),
@@ -1822,7 +1830,7 @@ mod tests {
         ] {
             let query = queries.next().unwrap();
 
-            let (neighbors, set_ep) = searcher_default
+            let (neighbors, update_ep) = searcher_default
                 .search_to_insert(
                     vector_store_default,
                     graph_store_default,
@@ -1832,7 +1840,7 @@ mod tests {
                 .await?;
 
             assert_eq!(neighbors.len(), expected_nb_len);
-            assert_eq!(set_ep, expected_set_ep);
+            assert_eq!(update_ep, expected_update_ep);
 
             searcher_default
                 .insert(
@@ -1850,7 +1858,7 @@ mod tests {
         let vector_store_linear = &mut PlaintextStore::new();
         let graph_store_linear = &mut GraphMem::new();
 
-        for (insertion_layer, expected_nb_len, expected_set_ep) in [
+        for (insertion_layer, expected_nb_len, expected_update_ep) in [
             (0, 1, UpdateEntryPoint::False),
             (0, 1, UpdateEntryPoint::False),
             (1, 2, UpdateEntryPoint::False),
@@ -1861,7 +1869,7 @@ mod tests {
             // Same queries used above
             let query = queries_copy.next().unwrap();
 
-            let (neighbors, set_ep) = searcher_linear
+            let (neighbors, update_ep) = searcher_linear
                 .search_to_insert(
                     vector_store_linear,
                     graph_store_linear,
@@ -1871,7 +1879,7 @@ mod tests {
                 .await?;
 
             assert_eq!(neighbors.len(), expected_nb_len);
-            assert_eq!(set_ep, expected_set_ep);
+            assert_eq!(update_ep, expected_update_ep);
 
             searcher_linear
                 .insert(
@@ -1911,7 +1919,7 @@ mod tests {
             let nbs = Vec::from_iter(chain!(ids[0..i].iter(), ids[i + 1..5].iter()).cloned());
 
             // Set entry point for first item
-            let set_ep = if i == 0 {
+            let update_ep = if i == 0 {
                 UpdateEntryPoint::SetUnique { layer: 0 }
             } else {
                 UpdateEntryPoint::False
@@ -1921,7 +1929,7 @@ mod tests {
             let connect_plan = ConnectPlan {
                 inserted_vector: vector_id,
                 updates: BTreeMap::from_iter([((vector_id, 0), nbs)]),
-                set_ep,
+                update_ep,
             };
 
             // Apply the connect plan to the graph
@@ -1941,7 +1949,7 @@ mod tests {
         // Verify the connect plan was created correctly
         assert_eq!(connect_plans.len(), 1);
         let plan = &connect_plans[0];
-        assert_eq!(plan.set_ep, UpdateEntryPoint::False);
+        assert_eq!(plan.update_ep, UpdateEntryPoint::False);
         assert_eq!(plan.updates.len(), 6); // 1 for vector id 6, and 5 others for its neighbors
 
         // Verify that each neighbor's updated neighborhood has exactly 4

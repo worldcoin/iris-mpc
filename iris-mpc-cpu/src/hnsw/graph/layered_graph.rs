@@ -125,7 +125,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
         // If required, set vector as new entry point
-        match plan.set_ep {
+        match plan.update_ep {
             UpdateEntryPoint::False => {}
             UpdateEntryPoint::SetUnique { layer } => {
                 self.set_unique_entry_point(plan.inserted_vector.clone(), layer)
@@ -526,7 +526,7 @@ mod tests {
         for raw_query in raw_queries.db {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, set_ep) = searcher
+            let (neighbors, update_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
             let inserted = vector_store.insert(&query).await;
@@ -536,7 +536,7 @@ mod tests {
                     &mut graph_store,
                     inserted,
                     neighbors,
-                    set_ep,
+                    update_ep,
                 )
                 .await?;
         }
@@ -561,7 +561,7 @@ mod tests {
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, set_ep) = searcher
+            let (neighbors, update_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
             let inserted = vector_store.insert(&query).await;
@@ -571,7 +571,7 @@ mod tests {
                     &mut graph_store,
                     inserted,
                     neighbors,
-                    set_ep,
+                    update_ep,
                 )
                 .await?;
 

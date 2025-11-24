@@ -124,7 +124,7 @@ async fn per_insert_query(
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
-    let (links, set_ep) = search_params
+    let (links, update_ep) = search_params
         .hnsw
         .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
         .await?;
@@ -148,7 +148,7 @@ async fn per_insert_query(
         plan: InsertPlanV {
             query,
             links: links_unstructured,
-            set_ep,
+            update_ep,
         },
         links,
         match_count,
@@ -187,7 +187,7 @@ async fn per_search_query(
         plan: InsertPlanV {
             query,
             links: links_unstructured,
-            set_ep: UpdateEntryPoint::False,
+            update_ep: UpdateEntryPoint::False,
         },
         links,
         match_count,
@@ -209,7 +209,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
 
     let insertion_layer = searcher.gen_layer_prf(&session.hnsw_prf_key, identifier)?;
 
-    let (links, set_ep) = searcher
+    let (links, update_ep) = searcher
         .search_to_insert(&mut *store, &graph, &query, insertion_layer)
         .await?;
 
@@ -224,7 +224,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     Ok(InsertPlanV {
         query,
         links: links_unstructured,
-        set_ep,
+        update_ep,
     })
 }
 

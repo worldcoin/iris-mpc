@@ -44,7 +44,7 @@ pub async fn plaintext_parallel_batch_insert(
             jobs.spawn(async move {
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
-                let (links, set_ep) = searcher
+                let (links, update_ep) = searcher
                     .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
 
@@ -59,7 +59,7 @@ pub async fn plaintext_parallel_batch_insert(
                 let insert_plan: InsertPlanV<SharedPlaintextStore> = InsertPlanV {
                     query,
                     links: links_unstructured,
-                    set_ep,
+                    update_ep,
                 };
                 Ok((vector_id, insert_plan))
             });

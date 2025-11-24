@@ -83,7 +83,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             let plan = ConnectPlan {
                 inserted_vector: id(i),
                 updates: build_layer_updates(id(i), edges(i), vec![edges(next(i))], 0),
-                set_ep: if i == 0 {
+                update_ep: if i == 0 {
                     UpdateEntryPoint::SetUnique { layer: 0 }
                 } else {
                     UpdateEntryPoint::False
