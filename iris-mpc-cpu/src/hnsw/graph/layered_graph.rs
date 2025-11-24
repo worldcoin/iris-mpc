@@ -138,7 +138,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
 
         // Connect the new vector to its neighbors in each layer.
-        for (lc, v, new_nb) in plan.updates.into_iter() {
+        for ((v, lc), new_nb) in plan.updates {
             self.set_links(v, new_nb, lc).await;
         }
     }

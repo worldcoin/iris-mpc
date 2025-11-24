@@ -48,12 +48,12 @@ pub struct HnswParams {
     /// The number of neighbors for insertion
     pub M: [usize; N_PARAM_LAYERS],
 
-    /// Maximum number of neighbors allowed per graph node
+    /// Target maximum number of neighbors allowed per graph node
     pub M_max: [usize; N_PARAM_LAYERS],
 
-    /// The real maximum, at which point the neighborhood should
-    /// be reduced to M_max.
-    pub M_max_extra: [usize; N_PARAM_LAYERS],
+    /// Limit number of neighbors allowed per graph node; any neighborhood
+    /// larger than this size should be compacted to size at most `M_max`.
+    pub M_limit: [usize; N_PARAM_LAYERS],
 
     /// Exploration factor `ef` for search layers during construction
     pub ef_constr_search: [usize; N_PARAM_LAYERS],
@@ -81,7 +81,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
-        let M_max_extra = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
+        let M_limit_arr = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
         let ef_constr_search_arr = [1usize; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef_construction; N_PARAM_LAYERS];
         let mut ef_search_arr = [1usize; N_PARAM_LAYERS];
@@ -90,7 +90,7 @@ impl HnswParams {
         Self {
             M: M_arr,
             M_max: M_max_arr,
-            M_max_extra,
+            M_limit: M_limit_arr,
             ef_constr_search: ef_constr_search_arr,
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
@@ -103,7 +103,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
-        let M_max_extra = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
+        let M_limit_arr = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
         let ef_constr_search_arr = [ef; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef; N_PARAM_LAYERS];
         let ef_search_arr = [ef; N_PARAM_LAYERS];
@@ -111,7 +111,7 @@ impl HnswParams {
         Self {
             M: M_arr,
             M_max: M_max_arr,
-            M_max_extra,
+            M_limit: M_limit_arr,
             ef_constr_search: ef_constr_search_arr,
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
@@ -126,8 +126,8 @@ impl HnswParams {
         Self::get_val(&self.M_max, lc)
     }
 
-    pub fn get_M_extra(&self, lc: usize) -> usize {
-        Self::get_val(&self.M_max_extra, lc)
+    pub fn get_M_limit(&self, lc: usize) -> usize {
+        Self::get_val(&self.M_limit, lc)
     }
 
     pub fn get_ef_constr_search(&self, lc: usize) -> usize {
@@ -261,12 +261,12 @@ pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlan<Vector> {
+pub struct ConnectPlan<Vector: Ord> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
     /// List of neighborhood updates to apply
-    pub updates: Vec<NbhdUpdate<Vector>>,
+    pub updates: BTreeMap<(Vector, usize), Vec<Vector>>,
 
     // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
@@ -280,14 +280,14 @@ pub type NbhdUpdate<Vector> = (usize, Vector, Vec<Vector>);
 /// Build the updates in the specified layer representing "`inserted_vector`
 /// is connected to `neighbors`", and "each item of `neighbors` is connected
 /// to links in the same index of `nb_links`"
-pub fn build_layer_updates<V: Clone>(
+pub fn build_layer_updates<V: Clone + Ord>(
     inserted_vector: V,
     neighbors: Vec<V>,
     nb_links: Vec<Vec<V>>,
     layer: usize,
-) -> Vec<NbhdUpdate<V>> {
-    once((layer, inserted_vector, neighbors.clone()))
-        .chain(izip!(neighbors, nb_links).map(|(nb, nb_nbs)| (layer, nb, nb_nbs)))
+) -> BTreeMap<(V, usize), Vec<V>> {
+    once(((inserted_vector, layer), neighbors.clone()))
+        .chain(izip!(neighbors, nb_links).map(|(nb, nb_nbs)| ((nb, layer), nb_nbs)))
         .collect()
 }
 
@@ -1481,14 +1481,35 @@ impl HnswSearcher {
         Ok(r.pop().unwrap()) // work-around for odd error
     }
 
-    #[allow(clippy::type_complexity)] // TODO refactor type representation of `updates` field
+    /// Prepare connect plans for a batch of graph updates.
+    ///
+    /// Given a collection of updates, generates a sequence of `ConnectPlan`
+    /// structs representing the individual sequential updates from applying the
+    /// input updates one after another.  This involves computing the
+    /// intermediate state of neighborhoods modified by insertions, and
+    /// collecting this intermediate state in corresponding updates.
+    ///
+    /// After the `ConnectPlan` structs are created, the final state of all
+    /// updated neighborhoods is inspected to see if any are too large and need
+    /// to be compacted.  All such neighborhoods are compacted in one step at
+    /// the end of the function call.
+    ///
+    /// TODO: finalize batched operation of compaction to minimize latency.
+    ///
+    /// This function call does *not* update `graph`.
+    #[allow(clippy::type_complexity)]
     pub async fn insert_prepare_batch<V: VectorStore>(
         &self,
-        // this may be used in the future to trim l_links
-        _store: &mut V,
+        store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
     ) -> Result<Vec<ConnectPlanV<V>>> {
+        if updates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // TODO batch local shuffle of neighborhoods in `updates`
+
         // Output connect plans
         let mut output_plans: Vec<ConnectPlanV<V>> = Vec::new();
         // Map from vector ids to output connect plan indices
@@ -1505,13 +1526,11 @@ impl HnswSearcher {
             Vec<<V as VectorStore>::VectorRef>,
         > = BTreeMap::new();
 
-        // todo: shuffle links
-
         for (idx, (vec, links, set_ep)) in updates.iter().enumerate() {
             // Initialize connect plan for output
             output_plans.push(ConnectPlan {
                 inserted_vector: vec.clone(),
-                updates: vec![],
+                updates: BTreeMap::new(),
                 set_ep: set_ep.clone(),
             });
             // Record index of associated vector id
@@ -1521,7 +1540,7 @@ impl HnswSearcher {
                 // Add update for inserting node with outgoing edges in this layer
                 output_plans[idx]
                     .updates
-                    .push((layer, vec.clone(), neighbors.clone()));
+                    .insert((vec.clone(), layer), neighbors.clone());
 
                 // Record connections to existing nodes, organized by existing node
                 for nb in neighbors.iter() {
@@ -1574,7 +1593,7 @@ impl HnswSearcher {
                 // Add update reflecting change to the existing neighborhood
                 connect_plan
                     .updates
-                    .push((layer, nb.clone(), nb_nbhd.clone()));
+                    .insert((nb.clone(), layer), nb_nbhd.clone());
             }
 
             final_nbhds.insert((nb, layer), nb_nbhd);
@@ -1583,40 +1602,34 @@ impl HnswSearcher {
         // Initial updates without compaction are complete.  Now see if any
         // modified neighborhoods are too large.
 
-        let _needs_compaction: BTreeMap<_, _> = final_nbhds
+        let needs_compaction: BTreeMap<_, _> = final_nbhds
             .into_iter()
-            .filter(|((_nb, layer), nb_nbhd)| {
-                nb_nbhd.len() > self.params.get_M_max(*layer) * 11 / 10
-            })
+            .filter(|((_nb, layer), nb_nbhd)| nb_nbhd.len() > self.params.get_M_limit(*layer))
             .collect();
 
         // Compute compacted neighborhoods
         // TODO implement batched mode
+        let mut compacted: BTreeMap<_, _> = BTreeMap::new();
+        for ((id, layer), nbhd) in needs_compaction {
+            let max_size = self.params.get_M_max(layer);
+            let compacted_nbhd =
+                Self::compact_neighborhood(store, id.clone(), &nbhd, max_size).await?;
+            compacted.insert((id, layer), compacted_nbhd);
+        }
 
-        // todo: use batch min-k
-
-        // let mut keys: Vec<_> = needs_compaction.keys().collect();
-        // keys.sort();
-        // for &(plan_idx, update_idx) in keys.into_iter() {
-        //     let updates = &output_plans[plan_idx].updates[update_idx];
-        //     let layer = updates.0;
-        //     let to_insert = updates.1.clone();
-        //     let neighborhood = &updates.2;
-        //     let max_size = self.params.get_M_max(layer);
-        //     let new_nb =
-        //         Self::compact_neighborhood(store, to_insert.clone(), neighborhood, max_size)
-        //             .await?;
-        //     let new_update = (layer, to_insert.clone(), new_nb.clone());
-        //     output_plans[plan_idx].updates[update_idx] = new_update;
-        // }
-
-        tracing::debug!("{:?}", output_plans);
+        // Add updates for neighborhood compaction to last connect plan
+        let last_plan = output_plans
+            .last_mut()
+            .ok_or_eyre("Output plans unexpectedly empty")?;
+        for ((id, layer), compacted_nbhd) in compacted {
+            last_plan.updates.insert((id, layer), compacted_nbhd);
+        }
 
         Ok(output_plans)
     }
 
-    // todo: switch with oblivious min-k and random shuffle
-    /// enforce size constraints on the neighborhood in an oblivious manner
+    // TODO switch to batched oblivious min-k and random shuffle
+    /// Enforce size constraints on the neighborhood in an oblivious manner
     #[allow(dead_code)]
     async fn compact_neighborhood<V: VectorStore>(
         store: &mut V,
@@ -1898,7 +1911,7 @@ mod tests {
             // Create connect plan for this vector at layer 0
             let connect_plan = ConnectPlan {
                 inserted_vector: vector_id,
-                updates: vec![(0, vector_id, nbs)],
+                updates: BTreeMap::from_iter([((vector_id, 0), nbs)]),
                 set_ep,
             };
 
@@ -1922,11 +1935,14 @@ mod tests {
         assert_eq!(plan.set_ep, UpdateEntryPoint::False);
         assert_eq!(plan.updates.len(), 6); // 1 for vector id 6, and 5 others for its neighbors
 
-        // Verify that each neighbor's updated neighborhood has exactly 4 elements
-        // (the original 4 neighbors plus the newly inserted vector, trimmed to M=4)
-        // for update in &plan.updates[1..] {
-        //     assert_eq!(update.2.len(), 4);
-        // }
+        // Verify that each neighbor's updated neighborhood has exactly 4
+        // elements (the original 4 neighbors plus the newly inserted vector,
+        // trimmed to M_max=4 in layer 0)
+        for ((id, _lc), nbhd) in &plan.updates {
+            if *id != next_id {
+                assert_eq!(nbhd.len(), 4);
+            }
+        }
 
         Ok(())
     }

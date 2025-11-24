@@ -264,7 +264,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         }
 
         // Connect the new vector to its neighbors in each layer.
-        for (lc, inserted_vector, neighbors) in plan.updates.into_iter() {
+        for ((inserted_vector, lc), neighbors) in plan.updates {
             self.set_links(inserted_vector, neighbors, lc).await?;
         }
 

@@ -89,8 +89,6 @@ pub async fn insert<V: VectorStoreMut>(
         }
     }
 
-    // TODO batch local shuffle of all neighborhoods in `updates`
-
     let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
     for (cp_idx, plan) in izip!(update_idxs, plans) {
         graph.insert_apply(plan.clone()).await;
