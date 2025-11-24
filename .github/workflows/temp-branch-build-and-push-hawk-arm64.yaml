@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "POP-2892/setup-importer-for-dev"
-      - "last-working-fss"
+      - "last-working-fss-timers"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
