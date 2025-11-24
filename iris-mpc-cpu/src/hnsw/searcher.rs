@@ -1480,7 +1480,8 @@ impl HnswSearcher {
     ) -> Result<ConnectPlanV<V>> {
         let updates = vec![(inserted_vector, links, update_ep)];
         let mut r = self.insert_prepare_batch(store, graph, updates).await?;
-        Ok(r.pop().unwrap()) // work-around for odd error
+        Ok(r.pop()
+            .ok_or(eyre!("insert_prepare produced no connect plans"))?)
     }
 
     /// Prepare connect plans for a batch of graph updates.
