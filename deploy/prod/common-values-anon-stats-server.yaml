@@ -65,6 +65,14 @@ imagePullSecrets:
 
 nodeSelector:
   kubernetes.io/arch: amd64
+  workload: "anon-stats-server"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "anonStatsServer"
+    effect: "NoSchedule"
+
 
 podSecurityContext:
   runAsUser: 65534
