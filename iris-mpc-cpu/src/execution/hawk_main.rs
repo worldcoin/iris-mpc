@@ -95,9 +95,9 @@ use is_match_batch::is_match_batch;
 pub type SearchRotations = CenterOnly;
 /// The choice of distance function to use in the Aby3Store.
 pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
-    DistanceFn::MinimalRotation
+    DistanceFn::MinFhd
 } else {
-    DistanceFn::Simple
+    DistanceFn::Fhd
 };
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
