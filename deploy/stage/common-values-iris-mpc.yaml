@@ -3,7 +3,7 @@ image: "ghcr.io/worldcoin/iris-mpc:07d7f71e7aadc0943909b99a8d668e04d9c15192"
 environment: stage
 replicaCount: 1
 
-#command: ["/bin/sh", "-c", "while true; do sleep 86400; done"]
+command: ["/bin/sh", "-c", "while true; do sleep 86400; done"]
 
 strategy:
   type: Recreate
@@ -17,23 +17,23 @@ ports:
     protocol: TCP
 
 livenessProbe:
-  httpGet:
-    path: /health
-    port: health
+#  httpGet:
+#    path: /health
+#    port: health
 
 readinessProbe:
-  periodSeconds: 30
-  httpGet:
-    path: /ready
-    port: health
+#  periodSeconds: 30
+#  httpGet:
+#    path: /ready
+#    port: health
 
 startupProbe:
-  initialDelaySeconds: 60
-  failureThreshold: 120
-  periodSeconds: 30
-  httpGet:
-    path: /ready
-    port: health
+#  initialDelaySeconds: 60
+#  failureThreshold: 120
+#  periodSeconds: 30
+#  httpGet:
+#    path: /ready
+#    port: health
 
 resources:
   limits:
