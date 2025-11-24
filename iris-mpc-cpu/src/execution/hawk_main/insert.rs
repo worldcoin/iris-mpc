@@ -67,8 +67,6 @@ pub async fn insert<V: VectorStoreMut>(
         {
             update_idxs.push(idx);
 
-            tracing::debug!("Adding batch neighbors");
-
             // Extend links in bottom layer with items from batch, only when the
             // bottom layer is not large enough to build full neighborhoods,
             // i.e. when the graph does not yet have M elements.
@@ -86,14 +84,10 @@ pub async fn insert<V: VectorStoreMut>(
                 }
             };
 
-            tracing::debug!("Inserted vector in store: {}", inserted);
-
             updates.push((inserted.clone(), links, set_ep));
             inserted_ids.push(inserted);
         }
     }
-
-    tracing::debug!("Inserted ids: {inserted_ids:?}");
 
     // TODO batch local shuffle of all neighborhoods in `updates`
 
