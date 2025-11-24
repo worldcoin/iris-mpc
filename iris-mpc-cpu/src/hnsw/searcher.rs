@@ -1502,13 +1502,18 @@ impl HnswSearcher {
         &self,
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
-        updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
+        mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
     ) -> Result<Vec<ConnectPlanV<V>>> {
         if updates.is_empty() {
             return Ok(Vec::new());
         }
 
-        // TODO batch local shuffle of neighborhoods in `updates`
+        // Sort all neighborhoods by index
+        for (_, links, _) in updates.iter_mut() {
+            for l in links.iter_mut() {
+                l.sort();
+            }
+        }
 
         // Output connect plans
         let mut output_plans: Vec<ConnectPlanV<V>> = Vec::new();
@@ -1586,9 +1591,12 @@ impl HnswSearcher {
                     .get_mut(connect_plan_idx)
                     .ok_or_eyre("Could not find associated connect plan")?;
 
-                // Insert `query_id` into the existing neighborhood
-                // TODO use uniform random insertion index
-                nb_nbhd.push(query_id);
+                // Insert `query_id` into the existing index-sorted neighborhood
+                match nb_nbhd.binary_search(&query_id) {
+                    Err(i) => nb_nbhd.insert(i, query_id),
+                    Ok(_) => tracing::warn!("Attempted to add graph edge which was already present: {nb:?} -> {query_id:?} (layer {layer})"),
+                }
+                // nb_nbhd.push(query_id);
 
                 // Add update reflecting change to the existing neighborhood
                 connect_plan
@@ -1621,7 +1629,8 @@ impl HnswSearcher {
         let last_plan = output_plans
             .last_mut()
             .ok_or_eyre("Output plans unexpectedly empty")?;
-        for ((id, layer), compacted_nbhd) in compacted {
+        for ((id, layer), mut compacted_nbhd) in compacted {
+            compacted_nbhd.sort();
             last_plan.updates.insert((id, layer), compacted_nbhd);
         }
 
