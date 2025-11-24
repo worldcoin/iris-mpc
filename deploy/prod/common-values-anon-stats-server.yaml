@@ -1,5 +1,5 @@
 # to be later updated to same release at iris-mpc
-image: "ghcr.io/worldcoin/anon-stats-server:a7e11cb214b2d2c456523370d04b0c2028a8fb8c"
+image: "ghcr.io/worldcoin/anon-stats-server:22bbe5a1f96784699ada08602e805e167f816492"
 
 environment: prod
 replicaCount: 1
@@ -54,17 +54,25 @@ readinessProbe:
 
 resources:
   limits:
-    cpu: 4
-    memory: 16Gi
+    cpu: "2"
+    memory: 10Gi
   requests:
-    cpu: 4
-    memory: 16Gi
+    cpu: "2"
+    memory: 10Gi
 
 imagePullSecrets:
   - name: github-secret
 
 nodeSelector:
   kubernetes.io/arch: amd64
+  workload: "anon-stats-server"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "anonStatsServer"
+    effect: "NoSchedule"
+
 
 podSecurityContext:
   runAsUser: 65534
