@@ -115,7 +115,7 @@ impl RequestEnqueuer {
         let [[l_code, l_mask], [r_code, r_mask]] = shares.clone();
         let shares = create_iris_party_shares_for_s3(
             &create_iris_code_party_shares(
-                request.identifier().clone(),
+                *request.identifier(),
                 l_code.to_owned(),
                 l_mask.to_owned(),
                 r_code.to_owned(),
