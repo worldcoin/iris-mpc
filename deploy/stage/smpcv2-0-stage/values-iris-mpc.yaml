@@ -14,6 +14,9 @@ env:
   - name: NCCL_COMM_ID
     value: "iris-mpc-node.1.stage.smpcv2.worldcoin.dev:4000"
 
+  - name: NCCL_DEBUG
+    value: "INFO"
+
   - name: RUST_BACKTRACE
     value: "full"
 
