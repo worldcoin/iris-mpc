@@ -6,7 +6,7 @@ env:
     value: "full"
 
   - name: NCCL_SOCKET_IFNAME
-    value: "ens"
+    value: "ens,eth"
 
   - name: FI_EFA_USE_DEVICE_RDMA
     value: "1"
@@ -18,6 +18,12 @@ env:
     value: "efa"
 
   - name: NCCL_DEBUG
+    value: "INFO"
+
+  - name: NCCL_DEBUG_SUBSYS
+    value: "INIT,NET"
+
+  - name: FI_LOG_LEVEL
     value: "INFO"
 
   - name: NCCL_COMM_ID
