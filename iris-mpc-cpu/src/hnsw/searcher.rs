@@ -168,6 +168,12 @@ pub enum LayerMode {
     },
 }
 
+#[derive(Debug, Deserialize)]
+pub enum NeighborhoodMode {
+    Sorted,
+    Unsorted,
+}
+
 /// Struct specifies the probability distribution used to generate insertion
 /// layers for new nodes in an HNSW graph.
 #[derive(Clone, Debug, Serialize, Deserialize)]

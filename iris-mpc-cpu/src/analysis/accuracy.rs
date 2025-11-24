@@ -4,7 +4,7 @@ use crate::{
         plaintext_store::{PlaintextStore, SharedPlaintextStore},
     },
     hnsw::{
-        searcher::{LayerDistribution, LayerMode},
+        searcher::{LayerDistribution, LayerMode, NeighborhoodMode},
         GraphMem, HnswParams, HnswSearcher,
     },
     utils::serialization::{
@@ -48,6 +48,8 @@ pub struct AnalysisConfig {
     pub mutations: Vec<f64>,
     /// Config for HNSW searcher to use for search during analysis.
     pub search_hnsw_config: HnswConfig,
+    /// Search using sorted or unsorted neighborhoods
+    pub neighborhood_mode: NeighborhoodMode,
 }
 
 impl AnalysisConfig {
