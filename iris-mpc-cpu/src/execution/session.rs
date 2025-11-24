@@ -60,7 +60,7 @@ impl NetworkSession {
         // let d = artificial_link_delay();
         // sleep(d).await;
 
-        sleep(ARTIFICIAL_LINK_DELAY).await; //uncomment this for dev tests
+        // sleep(ARTIFICIAL_LINK_DELAY).await; //uncomment this for dev tests
         self.networking.send(value, receiver).await
     }
 
