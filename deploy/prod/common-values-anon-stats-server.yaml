@@ -54,11 +54,11 @@ readinessProbe:
 
 resources:
   limits:
-    cpu: 4
-    memory: 16Gi
+    cpu: "3.5"
+    memory: 12Gi
   requests:
-    cpu: 4
-    memory: 16Gi
+    cpu: "3.5"
+    memory: 12Gi
 
 imagePullSecrets:
   - name: github-secret
