@@ -1,5 +1,5 @@
 # to be later updated to same release at iris-mpc
-image: "ghcr.io/worldcoin/anon-stats-server:58fe78f45612ef90072298aa098df8d036e954e0"
+image: "ghcr.io/worldcoin/anon-stats-server:22bbe5a1f96784699ada08602e805e167f816492"
 
 environment: prod
 replicaCount: 1
