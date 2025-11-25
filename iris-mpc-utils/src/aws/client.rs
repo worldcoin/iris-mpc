@@ -5,9 +5,9 @@ use aws_sdk_s3::{
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client as SQSClient;
-use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
+use tracing::info;
 
 use super::{
     config::AwsClientConfig,
@@ -69,13 +69,17 @@ impl AwsClient {
 impl AwsClient {
     /// Enqueues data to an S3 bucket.
     pub async fn s3_put_object(&self, s3_obj_info: S3ObjectInfo) -> Result<(), AwsClientError> {
+        info!("Putting AWS-S3 object: {}", s3_obj_info);
+
+        let bucket = s3_obj_info.bucket();
+        let key = s3_obj_info.key();
+        let body = ByteStream::new(SdkBody::from(s3_obj_info.body().as_slice()));
+
         self.s3
             .put_object()
-            .bucket(s3_obj_info.bucket())
-            .key(s3_obj_info.key())
-            .body(ByteStream::new(SdkBody::from(
-                s3_obj_info.body().as_slice(),
-            )))
+            .bucket(bucket)
+            .key(key)
+            .body(body)
             .send()
             .await
             .map(|_| ())
@@ -105,12 +109,19 @@ impl AwsClient {
         &self,
         sns_msg_info: SnsMessageInfo,
     ) -> Result<(), AwsClientError> {
+        info!("Publishing AWS-SNS message: {}", sns_msg_info);
+
+        let topic_arn = self.config().sns_request_topic_arn();
+        let message = sns_msg_info.body();
+        let message_group_id = sns_msg_info.group_id();
+        let message_attributes = create_sns_message_attributes(sns_msg_info.kind());
+
         self.sns
             .publish()
-            .topic_arn(self.config().sns_request_topic_arn())
-            .message_group_id(sns_msg_info.group_id())
-            .message(serde_json::to_string(sns_msg_info.body()).unwrap())
-            .set_message_attributes(Some(create_sns_message_attributes(sns_msg_info.kind())))
+            .topic_arn(topic_arn)
+            .message_group_id(message_group_id)
+            .message(message)
+            .set_message_attributes(Some(message_attributes))
             .send()
             .await
             .map(|_| ())

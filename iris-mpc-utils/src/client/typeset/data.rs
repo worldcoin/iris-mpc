@@ -148,17 +148,6 @@ impl fmt::Display for RequestBatchSize {
     }
 }
 
-/// Enumeration over request body.
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum RequestBody {
-    IdentityDeletion(smpc_request::IdentityDeletionRequest),
-    Reauthorization(smpc_request::ReAuthRequest),
-    ResetCheck(smpc_request::ResetCheckRequest),
-    ResetUpdate(smpc_request::ResetUpdateRequest),
-    Uniqueness(smpc_request::UniquenessRequest),
-}
-
 /// Enumeration over generated request data.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -194,4 +183,15 @@ impl fmt::Display for RequestData {
             }
         }
     }
+}
+
+/// Enumeration over request message body for dispatch to system egress queue.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum RequestMessageBody {
+    IdentityDeletion(smpc_request::IdentityDeletionRequest),
+    Reauthorization(smpc_request::ReAuthRequest),
+    ResetCheck(smpc_request::ResetCheckRequest),
+    ResetUpdate(smpc_request::ResetUpdateRequest),
+    Uniqueness(smpc_request::UniquenessRequest),
 }

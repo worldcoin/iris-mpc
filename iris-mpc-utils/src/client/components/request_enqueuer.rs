@@ -6,7 +6,8 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestData,
+    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestData,
+    RequestMessageBody,
 };
 use crate::aws::{
     create_iris_code_party_shares, create_iris_party_shares_for_s3,
@@ -43,7 +44,7 @@ impl Initialize for RequestEnqueuer {
 impl ProcessRequestBatch for RequestEnqueuer {
     async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ClientError> {
         for request in batch.requests() {
-            let body = self.get_body(request).await?;
+            let body = self.get_message_body(request).await?;
             self.aws_client
                 .sns_publish_json(SnsMessageInfo::from(body))
                 .await
@@ -57,34 +58,34 @@ impl ProcessRequestBatch for RequestEnqueuer {
 
 impl RequestEnqueuer {
     /// Returns body of message to be enqueued.
-    async fn get_body(&self, request: &Request) -> Result<RequestBody, ClientError> {
+    async fn get_message_body(&self, request: &Request) -> Result<RequestMessageBody, ClientError> {
         match request.data() {
-            RequestData::IdentityDeletion { .. } => self.get_body_identity_deletion(request).await,
-            RequestData::Reauthorization { .. } => self.get_body_reauthorization(request).await,
-            RequestData::ResetCheck { .. } => self.get_body_reset_check(request).await,
-            RequestData::ResetUpdate { .. } => self.get_body_reset_update(request).await,
-            RequestData::Uniqueness { .. } => self.get_body_uniqueness_request(request).await,
+            RequestData::IdentityDeletion { .. } => self.get_identity_deletion(request).await,
+            RequestData::Reauthorization { .. } => self.get_reauthorization(request).await,
+            RequestData::ResetCheck { .. } => self.get_reset_check(request).await,
+            RequestData::ResetUpdate { .. } => self.get_reset_update(request).await,
+            RequestData::Uniqueness { .. } => self.get_uniqueness_request(request).await,
         }
     }
 
-    async fn get_body_identity_deletion(
+    async fn get_identity_deletion(
         &self,
         _request: &Request,
-    ) -> Result<RequestBody, ClientError> {
+    ) -> Result<RequestMessageBody, ClientError> {
         unimplemented!()
     }
 
-    async fn get_body_reauthorization(
+    async fn get_reauthorization(
         &self,
         request: &Request,
-    ) -> Result<RequestBody, ClientError> {
+    ) -> Result<RequestMessageBody, ClientError> {
         // Destructure generated data.
         let _shares = match request.data() {
             RequestData::Reauthorization { shares } => shares,
             _ => unreachable!(),
         };
 
-        Ok(RequestBody::Reauthorization(ReAuthRequest {
+        Ok(RequestMessageBody::Reauthorization(ReAuthRequest {
             batch_size: None,
             reauth_id: String::from("reauth_id"),
             s3_key: String::from("s3_key"),
@@ -93,18 +94,21 @@ impl RequestEnqueuer {
         }))
     }
 
-    async fn get_body_reset_check(&self, _request: &Request) -> Result<RequestBody, ClientError> {
+    async fn get_reset_check(&self, _request: &Request) -> Result<RequestMessageBody, ClientError> {
         unimplemented!()
     }
 
-    async fn get_body_reset_update(&self, _request: &Request) -> Result<RequestBody, ClientError> {
+    async fn get_reset_update(
+        &self,
+        _request: &Request,
+    ) -> Result<RequestMessageBody, ClientError> {
         unimplemented!()
     }
 
-    async fn get_body_uniqueness_request(
+    async fn get_uniqueness_request(
         &self,
         request: &Request,
-    ) -> Result<RequestBody, ClientError> {
+    ) -> Result<RequestMessageBody, ClientError> {
         // Destructure generated data.
         let shares = match request.data() {
             RequestData::Uniqueness { shares } => shares,
@@ -137,7 +141,8 @@ impl RequestEnqueuer {
             Err(e) => return Err(ClientError::AwsServiceError(e)),
         };
 
-        Ok(RequestBody::Uniqueness(UniquenessRequest {
+        // Set AWS-SNS payload.
+        let sns_message_body = UniquenessRequest {
             batch_size: Some(1),
             signup_id: request.identifier().to_string(),
             s3_key: request.identifier().to_string(),
@@ -145,28 +150,30 @@ impl RequestEnqueuer {
             skip_persistence: None,
             full_face_mirror_attacks_detection_enabled: Some(true),
             disable_anonymized_stats: None,
-        }))
+        };
+
+        Ok(RequestMessageBody::Uniqueness(sns_message_body))
     }
 }
 
-impl From<RequestBody> for SnsMessageInfo {
-    fn from(body: RequestBody) -> Self {
+impl From<RequestMessageBody> for SnsMessageInfo {
+    fn from(body: RequestMessageBody) -> Self {
         match body {
-            RequestBody::IdentityDeletion(body) => SnsMessageInfo::new(
+            RequestMessageBody::IdentityDeletion(body) => SnsMessageInfo::new(
                 ENROLLMENT_REQUEST_TYPE,
                 IDENTITY_DELETION_MESSAGE_TYPE,
                 &body,
             ),
-            RequestBody::Reauthorization(body) => {
+            RequestMessageBody::Reauthorization(body) => {
                 SnsMessageInfo::new(ENROLLMENT_REQUEST_TYPE, REAUTH_MESSAGE_TYPE, &body)
             }
-            RequestBody::ResetCheck(body) => {
+            RequestMessageBody::ResetCheck(body) => {
                 SnsMessageInfo::new(ENROLLMENT_REQUEST_TYPE, RESET_CHECK_MESSAGE_TYPE, &body)
             }
-            RequestBody::ResetUpdate(body) => {
+            RequestMessageBody::ResetUpdate(body) => {
                 SnsMessageInfo::new(ENROLLMENT_REQUEST_TYPE, RESET_UPDATE_MESSAGE_TYPE, &body)
             }
-            RequestBody::Uniqueness(body) => {
+            RequestMessageBody::Uniqueness(body) => {
                 SnsMessageInfo::new(ENROLLMENT_REQUEST_TYPE, UNIQUENESS_MESSAGE_TYPE, &body)
             }
         }

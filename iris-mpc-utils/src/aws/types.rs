@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::ser::Serialize;
 use serde_json;
 
@@ -38,15 +40,26 @@ impl S3ObjectInfo {
     }
 }
 
+impl fmt::Display for S3ObjectInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "S3ObjectInfo:{}.{}", self.bucket, self.key)
+    }
+}
+
 // Helper type encpasulating an AWS-SQS message.
 pub struct SnsMessageInfo {
-    body: Vec<u8>,
+    // SNS message body - a JSON encoded string.
+    body: String,
+
+    // SNS message group - e.g. "enrollment".
     group_id: String,
+
+    // SNS message kind - e.g. "uniqueness".
     kind: String,
 }
 
 impl SnsMessageInfo {
-    pub fn body(&self) -> &Vec<u8> {
+    pub fn body(&self) -> &String {
         &self.body
     }
 
@@ -63,9 +76,15 @@ impl SnsMessageInfo {
         T: ?Sized + Serialize,
     {
         Self {
-            body: serde_json::to_vec(body).unwrap(),
+            body: serde_json::to_string(body).unwrap(),
             group_id: String::from(group_id),
             kind: String::from(kind),
         }
+    }
+}
+
+impl fmt::Display for SnsMessageInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "SnsMessageInfo:{}.{}", self.group_id, self.kind)
     }
 }
