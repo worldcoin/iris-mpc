@@ -76,10 +76,10 @@ tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
-ampc-anon-stats =  { git = "https://github.com/worldcoin/ampc-common.git", rev = "c23c50f573338f101d1eabe06270c9372086cb20" }
-ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "c23c50f573338f101d1eabe06270c9372086cb20" }
-ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "c23c50f573338f101d1eabe06270c9372086cb20" }
-ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "c23c50f573338f101d1eabe06270c9372086cb20" }
+ampc-anon-stats =  { git = "https://github.com/worldcoin/ampc-common.git", rev = "2ed2251f6a3f630e1f297eaf95f7c7969a2e163d" }
+ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "2ed2251f6a3f630e1f297eaf95f7c7969a2e163d" }
+ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "2ed2251f6a3f630e1f297eaf95f7c7969a2e163d" }
+ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "2ed2251f6a3f630e1f297eaf95f7c7969a2e163d" }
 
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.
