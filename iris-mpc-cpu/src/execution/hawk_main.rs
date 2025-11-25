@@ -24,7 +24,9 @@ use crate::{
 use ampc_actor_utils::{
     network::config::TlsConfig, protocol::anon_stats::compare_min_threshold_buckets,
 };
-use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
+use ampc_anon_stats::{
+    AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
+};
 use ampc_server_utils::statistics::Eye;
 use ampc_server_utils::{BucketStatistics, BucketStatistics2D};
 use clap::Parser;
@@ -686,7 +688,7 @@ impl HawkActor {
         };
 
         store
-            .insert_anon_stats_batch_1d_lifted(&bundles, origin)
+            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::Uniqueness)
             .await?;
 
         Ok(())
