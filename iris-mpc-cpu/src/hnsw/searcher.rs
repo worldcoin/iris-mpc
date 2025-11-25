@@ -1599,7 +1599,6 @@ impl HnswSearcher {
                     Err(i) => nb_nbhd.insert(i, query_id),
                     Ok(_) => tracing::warn!("Attempted to add graph edge which was already present: {nb:?} -> {query_id:?} (layer {layer})"),
                 }
-                // nb_nbhd.push(query_id);
 
                 // Add update reflecting change to the existing neighborhood
                 connect_plan
