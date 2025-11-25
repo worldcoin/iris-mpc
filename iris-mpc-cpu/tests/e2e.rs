@@ -202,7 +202,7 @@ async fn e2e_test() -> Result<()> {
     });
     let t = test_db.clone();
     set.spawn(async move {
-        let a = &args2;
+        let a = args2;
         let db_left = t.plain_dbs(0);
         let db_right = t.plain_dbs(1);
         start_hawk_node(&a, db_left, db_right).await
