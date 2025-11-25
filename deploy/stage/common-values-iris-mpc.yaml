@@ -35,13 +35,13 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 31
-    memory: 120Gi
+    cpu: 25
+    memory: 100Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
   requests:
-    cpu: 30
-    memory: 110Gi
+    cpu: 24
+    memory: 99Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
 
