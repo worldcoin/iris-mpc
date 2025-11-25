@@ -34,7 +34,10 @@ use tracing::{debug, instrument, trace_span, Instrument};
 /// The number of explicitly provided parameters for different layers of HNSW
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
-const M_MAX_MULTIPLIER: f64 = 1.0;
+
+/// Proportion by which `M_max` is multiplied to determine the compaction limit
+/// size `M_limit` by default.
+const DEFAULT_M_LIMIT_MULTIPLIER: f64 = 1.1;
 
 /// Struct specifying general parameters for HNSW search.
 ///
@@ -81,7 +84,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
-        let M_limit_arr = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
+        let M_limit_arr = M_max_arr.map(|m| (m as f64 * DEFAULT_M_LIMIT_MULTIPLIER) as usize);
         let ef_constr_search_arr = [1usize; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef_construction; N_PARAM_LAYERS];
         let mut ef_search_arr = [1usize; N_PARAM_LAYERS];
@@ -103,7 +106,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
-        let M_limit_arr = M_max_arr.map(|m| (m as f64 * M_MAX_MULTIPLIER) as usize);
+        let M_limit_arr = M_max_arr.map(|m| (m as f64 * DEFAULT_M_LIMIT_MULTIPLIER) as usize);
         let ef_constr_search_arr = [ef; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef; N_PARAM_LAYERS];
         let ef_search_arr = [ef; N_PARAM_LAYERS];
