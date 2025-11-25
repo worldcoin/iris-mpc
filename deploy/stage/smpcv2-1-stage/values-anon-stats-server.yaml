@@ -76,7 +76,7 @@ env:
   - name: SMPC__MIN_1D_JOB_SIZE_REAUTH
     value: "10"
 
-  - name: SMPC__MIN_2D_JOB_SIZE
+  - name: SMPC__MIN_1D_JOB_SIZE
     value: "64"
 
   - name: SMPC__MIN_2D_JOB_SIZE_REAUTH

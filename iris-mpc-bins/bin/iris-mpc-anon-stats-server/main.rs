@@ -196,8 +196,10 @@ impl AnonStatsProcessor {
         };
         let available = usize::try_from(available).unwrap_or(0);
         info!(
-            "Available anon stats entries for {:?}: {}",
-            origin, available
+            "Available anon stats entries for {:?}, {:?}: {}",
+            origin,
+            Some(operation),
+            available
         );
         if available == 0 {
             info!("No anon stats entries for {:?}", origin);
@@ -208,8 +210,9 @@ impl AnonStatsProcessor {
         let required_min = match kind {
             JobKind::Gpu1DReauth => self.config.min_1d_job_size_reauth,
             JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
-            JobKind::Gpu2D | JobKind::Gpu2DReauth => self.config.min_1d_job_size,
+            _ => panic!("Invalid job kind for 1D job"),
         };
+
         if min_job_size < required_min {
             debug!(
                 ?origin,
@@ -222,7 +225,7 @@ impl AnonStatsProcessor {
         }
 
         match kind {
-            JobKind::Gpu1D => {
+            JobKind::Gpu1D | JobKind::Gpu1DReauth => {
                 let (ids, bundles) = self
                     .store
                     .get_available_anon_stats_1d(origin, Some(operation), min_job_size)
@@ -252,9 +255,10 @@ impl AnonStatsProcessor {
                     process_1d_anon_stats_job(session, job, &origin, self.config.as_ref()).await?;
                 info!(
                     ?origin,
+                    ?kind,
                     job_size,
                     elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job"
+                    "Completed 1D anon stats job",
                 );
 
                 self.publish_1d_stats(operation, &stats).await?;
@@ -304,46 +308,6 @@ impl AnonStatsProcessor {
                 self.sync_failures.remove(&(origin, operation));
                 Ok(())
             }
-            JobKind::Gpu1DReauth => {
-                let (ids, bundles) = self
-                    .store
-                    .get_available_anon_stats_1d(origin, Some(operation), min_job_size)
-                    .await?;
-                if bundles.is_empty() {
-                    return Ok(());
-                }
-
-                let mut job: AnonStatsMapping<DistanceBundle1D> = AnonStatsMapping::new(bundles);
-                if job.len() > min_job_size {
-                    job.truncate(min_job_size);
-                }
-                let job_size = job.len();
-                let job_hash = job.get_id_hash();
-
-                if !sync_on_id_hash(session, job_hash).await? {
-                    warn!(
-                        ?origin,
-                        job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
-                    );
-                    self.handle_sync_failure(origin, operation, kind).await?;
-                    return Ok(());
-                }
-
-                let start = Instant::now();
-                let stats =
-                    process_1d_anon_stats_job(session, job, &origin, self.config.as_ref()).await?;
-                info!(
-                    ?origin,
-                    job_size,
-                    elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job (reauth)"
-                );
-
-                self.publish_1d_stats(operation, &stats).await?;
-                self.store.mark_anon_stats_processed_1d(&ids).await?;
-                self.sync_failures.remove(&(origin, operation));
-                Ok(())
-            }
             JobKind::Gpu2D | JobKind::Gpu2DReauth => unreachable!(),
         }
     }
@@ -369,7 +333,7 @@ impl AnonStatsProcessor {
         let required_min = match kind {
             JobKind::Gpu2DReauth => self.config.min_2d_job_size_reauth,
             JobKind::Gpu2D => self.config.min_2d_job_size,
-            _ => self.config.min_2d_job_size,
+            _ => panic!("Invalid job kind for 2D job"),
         };
         if min_job_size < required_min {
             debug!(
@@ -389,6 +353,7 @@ impl AnonStatsProcessor {
 
         info!(
             ?origin,
+            ?operation,
             "Fetched {} anon stats 2D bundles for processing",
             bundles.len()
         );
