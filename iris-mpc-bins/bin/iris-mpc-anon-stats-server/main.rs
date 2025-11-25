@@ -498,7 +498,7 @@ async fn main() -> Result<()> {
         sessions_per_request: 1,
         tls: None,
     };
-    let ct = shutdown_handler.get_cancellation_token();
+    let ct = shutdown_handler.get_network_cancellation_token();
 
     let mut networking = build_network_handle(args, ct.child_token()).await?;
     let mut sessions = networking.as_mut().make_sessions().await?;
