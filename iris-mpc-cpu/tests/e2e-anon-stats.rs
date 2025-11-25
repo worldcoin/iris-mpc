@@ -16,6 +16,7 @@ use iris_mpc_cpu::{
 };
 use rand::{random, rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -153,7 +154,7 @@ async fn start_hawk_node(
 }
 
 #[ignore = "Takes long time to run, in CI this is selected in a separate step"]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn e2e_anon_stats_test() -> Result<()> {
     install_tracing();
 
@@ -189,8 +190,7 @@ async fn e2e_anon_stats_test() -> Result<()> {
         .collect::<Vec<_>>();
 
     let test_db = generate_full_test_db(DB_SIZE, db_seed, true);
-    let db_left = test_db.plain_dbs(0);
-    let db_right = test_db.plain_dbs(1);
+    let test_db = Arc::new(test_db);
 
     let args0 = HawkArgs {
         party_index: 0,
@@ -216,14 +216,44 @@ async fn e2e_anon_stats_test() -> Result<()> {
         party_index: 2,
         ..args0.clone()
     };
-    let (handle0, handle1, handle2) = tokio::join!(
-        start_hawk_node(&args0, db_seed, db_left, db_right),
-        start_hawk_node(&args1, db_seed, db_left, db_right),
-        start_hawk_node(&args2, db_seed, db_left, db_right),
-    );
-    let mut handle0 = handle0?;
-    let mut handle1 = handle1?;
-    let mut handle2 = handle2?;
+
+    let mut set = JoinSet::new();
+    let t = test_db.clone();
+    set.spawn(async move {
+        let a = args0;
+        let db_left = t.plain_dbs(0);
+        let db_right = t.plain_dbs(1);
+        start_hawk_node(&a, db_seed, db_left, db_right).await
+    });
+    let t = test_db.clone();
+    set.spawn(async move {
+        let a = args1;
+        let db_left = t.plain_dbs(0);
+        let db_right = t.plain_dbs(1);
+        start_hawk_node(&a, db_seed, db_left, db_right).await
+    });
+    let t = test_db.clone();
+    set.spawn(async move {
+        let a = args2;
+        let db_left = t.plain_dbs(0);
+        let db_right = t.plain_dbs(1);
+        start_hawk_node(&a, db_seed, db_left, db_right).await
+    });
+
+    let mut results = vec![];
+    while let Some(res) = set.join_next().await {
+        let r = res.unwrap();
+        results.push(r);
+    }
+
+    let mut handle0 = results.pop().unwrap()?;
+    let mut handle1 = results.pop().unwrap()?;
+    let mut handle2 = results.pop().unwrap()?;
+
+    drop(results);
+    drop(set);
+
+    let test_db = Arc::into_inner(test_db).unwrap();
     let mut test_case_generator =
         SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, true, 0.0);
 
