@@ -36,7 +36,7 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 // 2) cross_compare
 // 3) cross_compare_and_swap
 // 4) lte_threshold_and_open
-pub const USE_FSS: bool = true;
+pub const USE_FSS: bool = false;
 
 // Measure calls of cross_compare
 use std::sync::atomic::{AtomicU64, Ordering};
