@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
-use ampc_server_utils::statistics::Eye;
+use ampc_anon_stats::types::Eye;
 use cudarc::driver::{result::memset_d8_sync, CudaSlice, CudaStream, DevicePtr, DeviceSlice};
 use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
+use std::collections::HashMap;
 
 use crate::{
     helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},

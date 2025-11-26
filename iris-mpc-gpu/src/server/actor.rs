@@ -20,9 +20,11 @@ use crate::{
     },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
-use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
-use ampc_server_utils::statistics::Eye;
-use ampc_server_utils::{AnonStatsResultSource, BucketStatistics, BucketStatistics2D};
+use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+use ampc_anon_stats::{
+    AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
+    BucketStatistics, BucketStatistics2D,
+};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -212,7 +214,10 @@ impl AnonStatsWriter {
     fn insert_1d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle1D)>) {
         let store = self.store.clone();
         self.runtime.spawn(async move {
-            if let Err(err) = store.insert_anon_stats_batch_1d(&data, origin).await {
+            if let Err(err) = store
+                .insert_anon_stats_batch_1d(&data, origin, AnonStatsOperation::default())
+                .await
+            {
                 tracing::warn!(?err, ?origin, "Failed to persist 1D anon stats batch");
             }
         });
@@ -221,7 +226,10 @@ impl AnonStatsWriter {
     fn insert_2d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle2D)>) {
         let store = self.store.clone();
         self.runtime.spawn(async move {
-            if let Err(err) = store.insert_anon_stats_batch_2d(&data, origin).await {
+            if let Err(err) = store
+                .insert_anon_stats_batch_2d(&data, origin, AnonStatsOperation::default())
+                .await
+            {
                 tracing::warn!(?err, ?origin, "Failed to persist 2D anon stats batch");
             }
         });
@@ -558,18 +566,42 @@ impl ServerActor {
             dev.synchronize().unwrap();
         }
 
-        let anonymized_bucket_statistics_left =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Left);
+        let anonymized_bucket_statistics_left = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
 
-        let anonymized_bucket_statistics_right =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Right);
+        let anonymized_bucket_statistics_right = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
 
-        let mut anonymized_bucket_statistics_left_mirror =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Left);
+        let mut anonymized_bucket_statistics_left_mirror = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
         anonymized_bucket_statistics_left_mirror.is_mirror_orientation = true;
 
-        let mut anonymized_bucket_statistics_right_mirror =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Right);
+        let mut anonymized_bucket_statistics_right_mirror = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
         anonymized_bucket_statistics_right_mirror.is_mirror_orientation = true;
         tracing::info!("GPU actor: Initialized");
 
@@ -581,6 +613,7 @@ impl ServerActor {
             n_buckets,
             party_id,
             AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
         );
 
         Ok(Self {
