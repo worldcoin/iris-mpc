@@ -18,6 +18,7 @@ helpers = [
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+async_from = "0.2.0"
 axum.workspace = true
 aws-config = { workspace = true, optional = true }
 aws-sdk-kms = { workspace = true, optional = true }
@@ -72,6 +73,7 @@ iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
+iris-mpc-utils = { path = "../iris-mpc-utils" }
 blake3 = "1.8.2"
 aws-smithy-types = "1.2.9"
 clap_builder = "4.5.51"
@@ -206,6 +208,10 @@ path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
 # ---------------------
 # binaries for iris-mpc-utils
 # ---------------------
+
+[[bin]]
+name = "service-client"
+path = "bin/iris-mpc-utils/service_client.rs"
 
 [[bin]]
 name = "write-node-config-toml"
