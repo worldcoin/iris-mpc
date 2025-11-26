@@ -102,6 +102,9 @@ env:
   - name: SMPC__SERVER_COORDINATION__PARTY_ID
     value: "1"
 
+  - name: SMPC__PARTY_ID
+    value: "1"
+
   - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
     value: '["node.0.dev.hnsw.worldcoin.dev", "0.0.0.0", "node.2.dev.hnsw.worldcoin.dev"]'
 
