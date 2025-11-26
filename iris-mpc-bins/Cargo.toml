@@ -164,6 +164,10 @@ path = "bin/iris-mpc-cpu/run_accuracy_analysis.rs"
 name = "generate_ideal_graph"
 path = "bin/iris-mpc-cpu/generate_ideal_graph.rs"
 
+[[bin]]
+name = "graph-utils"
+path = "bin/iris-mpc-cpu/graph_utils.rs"
+
 # ---------------------
 # binaries for iris-mpc-gpu
 # ---------------------
