@@ -26,12 +26,12 @@ pub struct RequestGenerator<R: Rng + CryptoRng> {
     n_batches: usize,
 
     /// Entropy source.
-    rng_seed: R,
+    rng: R,
 }
 
 impl<R: Rng + CryptoRng> RequestGenerator<R> {
-    fn rng_seed_mut(&mut self) -> &mut R {
-        &mut self.rng_seed
+    fn rng_mut(&mut self) -> &mut R {
+        &mut self.rng
     }
 
     fn batch_size(&self) -> usize {
@@ -44,14 +44,14 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
         n_batches: usize,
-        rng_seed: R,
+        rng: R,
     ) -> Self {
         Self {
             batch_count: 0,
             batch_kind,
             batch_size,
             n_batches,
-            rng_seed,
+            rng,
         }
     }
 
@@ -84,12 +84,12 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         match batch_kind {
             IDENTITY_DELETION_MESSAGE_TYPE => RequestData::IdentityDeletion,
             REAUTH_MESSAGE_TYPE => RequestData::Reauthorization {
-                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut()),
+                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
             },
             RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck,
             RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate,
             UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
-                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_seed_mut()),
+                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
             },
             _ => unreachable!(),
         }
