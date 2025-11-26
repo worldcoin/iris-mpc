@@ -97,7 +97,8 @@ mod tests {
             "eye": "Left",
             "start_time_utc_timestamp": 1700000000,
             "end_time_utc_timestamp": null,
-            "is_mirror_orientation": false
+            "is_mirror_orientation": false,
+            "operation": "Uniqueness",
         })
         .to_string();
 
