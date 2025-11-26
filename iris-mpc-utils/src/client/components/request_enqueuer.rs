@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 
 use iris_mpc_common::helpers::smpc_request::{
-    ReAuthRequest, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IdentityDeletionRequest, ReAuthRequest, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE,
+    REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
 };
 
 use super::super::typeset::{
@@ -44,9 +45,9 @@ impl Initialize for RequestEnqueuer {
 impl ProcessRequestBatch for RequestEnqueuer {
     async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ClientError> {
         for request in batch.requests() {
-            let body = self.get_message_body(request).await?;
+            let request_body = self.get_message_body(request).await?;
             self.aws_client
-                .sns_publish_json(SnsMessageInfo::from(body))
+                .sns_publish_json(SnsMessageInfo::from(request_body))
                 .await
                 .map_err(ClientError::AwsServiceError)?;
             tracing::info!("{}: Published to AWS-SNS", request);
@@ -72,7 +73,11 @@ impl RequestEnqueuer {
         &self,
         _request: &Request,
     ) -> Result<RequestMessageBody, ClientError> {
-        unimplemented!()
+        // Set body payload.
+        // TODO: get serial id from correlated uniqueness request.
+        let payload = IdentityDeletionRequest { serial_id: 2 };
+
+        Ok(RequestMessageBody::IdentityDeletion(payload))
     }
 
     async fn get_reauthorization(
@@ -85,13 +90,16 @@ impl RequestEnqueuer {
             _ => unreachable!(),
         };
 
-        Ok(RequestMessageBody::Reauthorization(ReAuthRequest {
+        // Set body payload.
+        let payload = ReAuthRequest {
             batch_size: None,
             reauth_id: String::from("reauth_id"),
             s3_key: String::from("s3_key"),
             serial_id: u32::default(),
             use_or_rule: bool::default(),
-        }))
+        };
+
+        Ok(RequestMessageBody::Reauthorization(payload))
     }
 
     async fn get_reset_check(&self, _request: &Request) -> Result<RequestMessageBody, ClientError> {
@@ -141,8 +149,8 @@ impl RequestEnqueuer {
             Err(e) => return Err(ClientError::AwsServiceError(e)),
         };
 
-        // Set AWS-SNS payload.
-        let sns_message_body = UniquenessRequest {
+        // Set body payload.
+        let payload = UniquenessRequest {
             batch_size: Some(1),
             signup_id: request.identifier().to_string(),
             s3_key: request.identifier().to_string(),
@@ -152,7 +160,7 @@ impl RequestEnqueuer {
             disable_anonymized_stats: None,
         };
 
-        Ok(RequestMessageBody::Uniqueness(sns_message_body))
+        Ok(RequestMessageBody::Uniqueness(payload))
     }
 }
 
