@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:f8a01172c19ca7b3bbe21f5c6d8319d06f14fe2d-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:84bae0b8d49c1cac264e0325ce836b7665499343-arm64"
 
 environment: dev
 replicaCount: 1
