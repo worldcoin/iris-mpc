@@ -10,10 +10,7 @@ use iris_mpc_common::IrisVectorId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hnsw::graph::{
-        layered_graph::{self, GraphMem, Layer},
-        neighborhood,
-    },
+    hnsw::graph::layered_graph::{self, GraphMem, Layer},
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
@@ -254,19 +251,6 @@ impl From<graph_v0::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
     }
 }
 
-impl From<graph_v0::Edges> for neighborhood::SortedEdgeIds<IrisVectorId> {
-    fn from(value: graph_v0::Edges) -> Self {
-        // V0 stores distances (PointId, (u16, u16)), we drop the distances.
-        neighborhood::SortedEdgeIds(
-            value
-                .0
-                .into_iter()
-                .map(|(point_id, _distances)| point_id.into())
-                .collect(),
-        )
-    }
-}
-
 impl From<graph_v0::Layer> for Layer<IrisVectorId> {
     fn from(value: graph_v0::Layer) -> Self {
         let mut layer = Layer::new();
@@ -307,12 +291,6 @@ impl From<graph_v1::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
             point: value.point.into(),
             layer: value.layer,
         }
-    }
-}
-
-impl From<graph_v1::EdgeIds> for neighborhood::SortedEdgeIds<IrisVectorId> {
-    fn from(value: graph_v1::EdgeIds) -> Self {
-        neighborhood::SortedEdgeIds(value.0.into_iter().map(Into::into).collect())
     }
 }
 
@@ -361,12 +339,6 @@ impl From<graph_v2::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
     }
 }
 
-impl From<graph_v2::EdgeIds> for neighborhood::SortedEdgeIds<IrisVectorId> {
-    fn from(value: graph_v2::EdgeIds) -> Self {
-        neighborhood::SortedEdgeIds(value.0.into_iter().map(Into::into).collect())
-    }
-}
-
 impl From<graph_v2::Layer> for Layer<IrisVectorId> {
     fn from(value: graph_v2::Layer) -> Self {
         let mut layer = Layer::new();
@@ -411,12 +383,6 @@ impl From<graph_v3::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
     }
 }
 
-impl From<graph_v3::EdgeIds> for neighborhood::SortedEdgeIds<IrisVectorId> {
-    fn from(value: graph_v3::EdgeIds) -> Self {
-        neighborhood::SortedEdgeIds(value.0.into_iter().map(Into::into).collect())
-    }
-}
-
 impl From<graph_v3::Layer> for Layer<IrisVectorId> {
     fn from(value: graph_v3::Layer) -> Self {
         let mut layer = Layer::new();
@@ -454,12 +420,6 @@ impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v3::EntryPoint {
             point: value.point.into(),
             layer: value.layer,
         }
-    }
-}
-
-impl From<neighborhood::SortedEdgeIds<IrisVectorId>> for graph_v3::EdgeIds {
-    fn from(value: neighborhood::SortedEdgeIds<IrisVectorId>) -> Self {
-        graph_v3::EdgeIds(value.0.into_iter().map(Into::into).collect())
     }
 }
 

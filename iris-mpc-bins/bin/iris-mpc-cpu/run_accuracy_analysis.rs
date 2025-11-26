@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     println!("Graph initialized.");
 
     println!("Starting analysis...");
-    let results = run_analysis(&config.analysis, store, graph, &mut rng).await?;
+    let results = run_analysis(config.analysis.clone(), store, graph, &mut rng).await?;
     println!("Analysis complete. {} searches performed.", results.len());
 
     process_results(&config.analysis, results)?;

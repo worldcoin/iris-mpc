@@ -4,8 +4,9 @@ use crate::{
         plaintext_store::{PlaintextStore, SharedPlaintextStore},
     },
     hnsw::{
+        graph::neighborhood::{UnsortedNeighborhood, WrappedNeighborhood},
         searcher::{LayerDistribution, LayerMode, NeighborhoodMode},
-        GraphMem, HnswParams, HnswSearcher,
+        GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
     },
     utils::serialization::{
         graph::{read_graph_from_file, GraphFormat},
@@ -28,7 +29,7 @@ use std::{
 };
 
 /// Configuration for the accuracy analysis run.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct AnalysisConfig {
     /// Number of existing iris codes to sample for the test.
     pub sample_size: usize,
@@ -72,7 +73,7 @@ pub struct AnalysisResult {
 }
 
 pub async fn run_analysis(
-    config: &AnalysisConfig,
+    config: AnalysisConfig,
     store: PlaintextStore,
     graph: GraphMem<VectorId>,
     rng: &mut StdRng,
@@ -125,14 +126,35 @@ pub async fn run_analysis(
                 let query_ref = Arc::new(query_code_inner);
                 let analysis_searcher_clone = analysis_searcher.clone();
                 let mut store_clone = store.clone();
+                let nb_mode = config.neighborhood_mode.clone();
                 let graph_clone = Arc::clone(&graph);
 
                 let future = async move {
-                    let neighbors = analysis_searcher_clone
-                        .search(&mut store_clone, &graph_clone, &query_ref, k_neighbors)
-                        .await?;
+                    let neighbors: WrappedNeighborhood<_> = match nb_mode {
+                        NeighborhoodMode::Sorted => analysis_searcher_clone
+                            .search::<_, SortedNeighborhood<_>>(
+                                &mut store_clone,
+                                &graph_clone,
+                                &query_ref,
+                                k_neighbors,
+                            )
+                            .await?
+                            .into(),
+                        NeighborhoodMode::Unsorted => analysis_searcher_clone
+                            .search::<_, UnsortedNeighborhood<_>>(
+                                &mut store_clone,
+                                &graph_clone,
+                                &query_ref,
+                                k_neighbors,
+                            )
+                            .await?
+                            .into(),
+                    };
 
-                    let found = neighbors.edges.iter().any(|(id, _dist)| *id == target_id);
+                    let found = neighbors
+                        .as_ref()
+                        .iter()
+                        .any(|(id, _dist)| *id == target_id);
 
                     eyre::Ok(AnalysisResult {
                         id: target_id.serial_id(),
@@ -247,14 +269,14 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub irises: IrisesInit,
     pub graph: GraphInit,
     pub analysis: AnalysisConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "option")]
 pub enum IrisesInit {
     /// Generate N random iris codes.
@@ -267,7 +289,7 @@ pub enum IrisesInit {
     },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "option")]
 pub enum GraphInit {
     /// Build a new graph from the loaded iris codes.
@@ -280,7 +302,7 @@ pub enum GraphInit {
 }
 
 /// HNSW parameters for graph construction.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(non_snake_case)]
 pub struct HnswConfig {
     pub ef_construction: usize,

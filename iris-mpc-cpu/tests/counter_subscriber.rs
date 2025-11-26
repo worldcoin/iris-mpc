@@ -18,7 +18,7 @@ use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
-        graph::neighborhood::SortedNeighborhoodV,
+        graph::neighborhood::SortedNeighborhood,
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamCounterRef, ParamVertexOpeningsCounter, StaticCounter,
         },
@@ -189,7 +189,7 @@ async fn hnsw_search_queries_seq(
 ) -> Result<()> {
     for q in [query1, query2].into_iter() {
         searcher
-            .search::<_, SortedNeighborhoodV<PlaintextStore>>(vector_store, graph_store, &q, 1)
+            .search::<_, SortedNeighborhood<PlaintextStore>>(vector_store, graph_store, &q, 1)
             .await?;
     }
 
@@ -210,7 +210,7 @@ async fn hnsw_search_queries_par(
         let graph_store = graph_store.clone();
         jobs.spawn(async move {
             searcher
-                .search::<_, SortedNeighborhoodV<PlaintextStore>>(
+                .search::<_, SortedNeighborhood<PlaintextStore>>(
                     &mut vector_store,
                     &graph_store,
                     &q,

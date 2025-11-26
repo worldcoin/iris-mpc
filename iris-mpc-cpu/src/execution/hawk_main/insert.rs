@@ -1,8 +1,8 @@
 use crate::hnsw::{
-    graph::neighborhood::{Neighborhood, SortedNeighborhoodV},
+    graph::neighborhood::Neighborhood,
     searcher::{ConnectPlanV, SetEntryPoint},
     vector_store::VectorStoreMut,
-    GraphMem, HnswSearcher, VectorStore,
+    GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
 };
 
 use super::VecRequests;
@@ -15,7 +15,7 @@ use itertools::{izip, Itertools};
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
-    pub links: Vec<SortedNeighborhoodV<V>>,
+    pub links: Vec<SortedNeighborhood<V>>,
     pub set_ep: SetEntryPoint,
 }
 
@@ -88,12 +88,12 @@ pub async fn insert<V: VectorStoreMut>(
 async fn add_batch_neighbors<V: VectorStore>(
     store: &mut V,
     query: &V::QueryRef,
-    mut links: Vec<SortedNeighborhoodV<V>>,
+    mut links: Vec<SortedNeighborhood<V>>,
     extra_ids: &[V::VectorRef],
     target_n_neighbors: usize,
-) -> Result<Vec<SortedNeighborhoodV<V>>> {
+) -> Result<Vec<SortedNeighborhood<V>>> {
     if let Some(bottom_layer) = links.first_mut() {
-        if bottom_layer.len() < target_n_neighbors {
+        if bottom_layer.as_ref().len() < target_n_neighbors {
             let distances = store.eval_distance_batch(query, extra_ids).await?;
 
             let ids_dists = izip!(extra_ids.iter().cloned(), distances)

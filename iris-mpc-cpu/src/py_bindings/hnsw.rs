@@ -23,7 +23,7 @@ pub fn search(
 
     rt.block_on(async move {
         let query = Arc::new(query);
-        let neighbors: SortedNeighborhood<_, _> =
+        let neighbors: SortedNeighborhood<_> =
             searcher.search(vector, graph, &query, 1).await.unwrap();
         let (nearest, (dist_num, dist_denom)) = neighbors.get_next_candidate().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
