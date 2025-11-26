@@ -5,10 +5,9 @@ use crate::{
     helpers::sync::{Modification, ModificationKey},
     ROTATIONS,
 };
+use ampc_anon_stats::{BucketStatistics, BucketStatistics2D};
 use ampc_server_utils::batch_sync::get_own_batch_sync_entries;
-use ampc_server_utils::{
-    get_batch_sync_entries, BatchSyncEntriesResult, BucketStatistics, BucketStatistics2D,
-};
+use ampc_server_utils::{get_batch_sync_entries, BatchSyncEntriesResult};
 use eyre::{eyre, Result};
 use std::{collections::HashMap, future::Future};
 

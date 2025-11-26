@@ -16,7 +16,7 @@ use crate::{
     vector_id::VectorId,
     IRIS_CODE_LENGTH,
 };
-use ampc_server_utils::{BucketResult, BucketStatistics};
+use ampc_anon_stats::{BucketResult, BucketStatistics};
 use eyre::Result;
 use itertools::izip;
 use rand::{
