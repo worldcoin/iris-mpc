@@ -20,11 +20,11 @@ use crate::{
     },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
+use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
 use ampc_anon_stats::{
     AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
+    BucketStatistics, BucketStatistics2D,
 };
-use ampc_server_utils::statistics::Eye;
-use ampc_server_utils::{AnonStatsResultSource, BucketStatistics, BucketStatistics2D};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -576,18 +576,42 @@ impl ServerActor {
             dev.synchronize().unwrap();
         }
 
-        let anonymized_bucket_statistics_left =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Left);
+        let anonymized_bucket_statistics_left = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
 
-        let anonymized_bucket_statistics_right =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Right);
+        let anonymized_bucket_statistics_right = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
 
-        let mut anonymized_bucket_statistics_left_mirror =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Left);
+        let mut anonymized_bucket_statistics_left_mirror = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
         anonymized_bucket_statistics_left_mirror.is_mirror_orientation = true;
 
-        let mut anonymized_bucket_statistics_right_mirror =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Right);
+        let mut anonymized_bucket_statistics_right_mirror = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
         anonymized_bucket_statistics_right_mirror.is_mirror_orientation = true;
         tracing::info!("GPU actor: Initialized");
 
@@ -599,6 +623,7 @@ impl ServerActor {
             n_buckets,
             party_id,
             AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
         );
 
         Ok(Self {

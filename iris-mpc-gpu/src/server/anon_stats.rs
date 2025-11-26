@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 
-use ampc_anon_stats::AnonStatsOperation;
-use ampc_server_utils::statistics::Eye;
-use cudarc::driver::{result::memset_d8_sync, CudaSlice, CudaStream, DevicePtr, DeviceSlice};
-use iris_mpc_common::ROTATIONS;
-use itertools::{izip, Itertools};
-
 use crate::{
     helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
+use ampc_anon_stats::types::Eye;
+use ampc_anon_stats::AnonStatsOperation;
+use cudarc::driver::{result::memset_d8_sync, CudaSlice, CudaStream, DevicePtr, DeviceSlice};
+use iris_mpc_common::ROTATIONS;
+use itertools::{izip, Itertools};
 
 pub struct DistanceCache {
     pub(crate) match_distances_buffer_codes_left: Vec<ChunkShare<u16>>,

@@ -1,15 +1,16 @@
 use ampc_anon_stats::anon_stats::{DistanceBundle1D, LiftedDistanceBundle1D};
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
+use ampc_anon_stats::types::Eye;
 use ampc_anon_stats::{
     process_1d_anon_stats_job, process_1d_lifted_anon_stats_job, process_2d_anon_stats_job,
     start_coordination_server, sync_on_id_hash, sync_on_job_sizes, AnonStatsContext,
     AnonStatsMapping, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin,
-    AnonStatsServerConfig, AnonStatsStore, Opt,
+    AnonStatsServerConfig, AnonStatsStore, BucketStatistics, BucketStatistics2D, Opt,
 };
 use ampc_server_utils::{
     init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
-    wait_for_others_unready, BucketStatistics, BucketStatistics2D, Eye, TaskMonitor,
+    wait_for_others_unready, TaskMonitor,
 };
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
@@ -30,7 +31,6 @@ use iris_mpc_cpu::{
     execution::session::Session,
     network::tcp::{build_network_handle, NetworkHandleArgs},
 };
-use serde::Serialize;
 use sodiumoxide::hex;
 use std::collections::HashSet;
 use std::{
@@ -251,8 +251,14 @@ impl AnonStatsProcessor {
                 }
 
                 let start = Instant::now();
-                let stats =
-                    process_1d_anon_stats_job(session, job, &origin, self.config.as_ref()).await?;
+                let stats = process_1d_anon_stats_job(
+                    session,
+                    job,
+                    &origin,
+                    self.config.as_ref(),
+                    Some(operation),
+                )
+                .await?;
                 info!(
                     ?origin,
                     ?kind,
@@ -261,7 +267,7 @@ impl AnonStatsProcessor {
                     "Completed 1D anon stats job",
                 );
 
-                self.publish_1d_stats(operation, &stats).await?;
+                self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d(&ids).await?;
                 self.sync_failures.remove(&(origin, operation));
                 Ok(())
@@ -293,9 +299,14 @@ impl AnonStatsProcessor {
                 }
 
                 let start = Instant::now();
-                let stats =
-                    process_1d_lifted_anon_stats_job(session, job, &origin, self.config.as_ref())
-                        .await?;
+                let stats = process_1d_lifted_anon_stats_job(
+                    session,
+                    job,
+                    &origin,
+                    self.config.as_ref(),
+                    Some(operation),
+                )
+                .await?;
                 info!(
                     ?origin,
                     job_size,
@@ -303,7 +314,7 @@ impl AnonStatsProcessor {
                     "Completed 1D anon stats job"
                 );
 
-                self.publish_1d_stats(operation, &stats).await?;
+                self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d_lifted(&ids).await?;
                 self.sync_failures.remove(&(origin, operation));
                 Ok(())
@@ -380,7 +391,8 @@ impl AnonStatsProcessor {
         }
 
         let start = Instant::now();
-        let stats = process_2d_anon_stats_job(session, job, self.config.as_ref()).await?;
+        let stats =
+            process_2d_anon_stats_job(session, job, self.config.as_ref(), Some(operation)).await?;
         info!(
             ?origin,
             job_size,
@@ -388,37 +400,23 @@ impl AnonStatsProcessor {
             "Completed 2D anon stats job"
         );
 
-        self.publish_2d_stats(operation, &stats).await?;
+        self.publish_2d_stats(&stats).await?;
         self.store.mark_anon_stats_processed_2d(&ids).await?;
         self.sync_failures.remove(&(origin, operation));
         Ok(())
     }
 
-    async fn publish_1d_stats(
-        &self,
-        operation: AnonStatsOperation,
-        stats: &BucketStatistics,
-    ) -> Result<()> {
-        let payload = serde_json::to_string(&StatsPayload {
-            operation: operation_label(operation),
-            stats,
-        })
-        .wrap_err("failed to serialize 1D anon stats payload")?;
+    async fn publish_1d_stats(&self, stats: &BucketStatistics) -> Result<()> {
+        let payload =
+            serde_json::to_string(stats).wrap_err("failed to serialize 1D anon stats payload")?;
         self.publish_message(payload, &self.publish.attributes_1d)
             .await
     }
 
-    async fn publish_2d_stats(
-        &self,
-        operation: AnonStatsOperation,
-        stats: &BucketStatistics2D,
-    ) -> Result<()> {
+    async fn publish_2d_stats(&self, stats: &BucketStatistics2D) -> Result<()> {
         info!("Sending 2D anonymized stats results");
-        let serialized = serde_json::to_string(&StatsPayload {
-            operation: operation_label(operation),
-            stats,
-        })
-        .wrap_err("failed to serialize 2D anonymized statistics result")?;
+        let serialized = serde_json::to_string(&stats)
+            .wrap_err("failed to serialize 2D anonymized statistics result")?;
 
         // offloading 2D anon stats file to s3 to avoid sending large messages to SNS
         // with 2D stats we were exceeding the SNS message size limit
@@ -439,7 +437,6 @@ impl AnonStatsProcessor {
         // Publish only the S3 key to SNS
         let payload = serde_json::to_string(&serde_json::json!({
             "s3_key": s3_key,
-            "operation": operation_label(operation),
         }))?;
         self.publish_message(payload, &self.publish.attributes_2d)
             .await
@@ -505,19 +502,6 @@ impl AnonStatsProcessor {
         info!(?origin, cleared, "Cleared unprocessed anon stats entries");
         self.sync_failures.insert((origin, operation), 0);
         Ok(())
-    }
-}
-
-#[derive(Serialize)]
-struct StatsPayload<'a, T> {
-    operation: &'a str,
-    stats: &'a T,
-}
-
-fn operation_label(operation: AnonStatsOperation) -> &'static str {
-    match operation {
-        AnonStatsOperation::Uniqueness => "uniqueness",
-        AnonStatsOperation::Reauth => "reauth",
     }
 }
 
