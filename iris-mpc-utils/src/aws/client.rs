@@ -18,7 +18,7 @@ use super::{
 use crate::types::PublicKeyset;
 
 /// Encpasulates access to a node's set of AWS service clients.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AwsClient {
     /// Associated configuration.
     config: AwsClientConfig,
@@ -30,6 +30,7 @@ pub struct AwsClient {
     s3: S3Client,
 
     /// Client for AWS Secrets Manager.
+    #[allow(dead_code)]
     secrets_manager: SecretsManagerClient,
 
     /// Client for Amazon Simple Notification Service.
@@ -180,19 +181,6 @@ impl AwsClient {
                 tracing::error!("AWS-SQS receive message from queue error: {}", e);
                 AwsClientError::SqsReceiveMessageError(e.to_string())
             })
-    }
-}
-
-impl Clone for AwsClient {
-    fn clone(&self) -> Self {
-        Self {
-            config: self.config.clone(),
-            public_keyset: None,
-            sqs: self.sqs.clone(),
-            sns: self.sns.clone(),
-            s3: self.s3.clone(),
-            secrets_manager: self.secrets_manager.clone(),
-        }
     }
 }
 

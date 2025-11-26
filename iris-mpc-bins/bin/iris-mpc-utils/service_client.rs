@@ -19,7 +19,7 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    let mut client = ServiceClient<StdRng>::async_from(options.clone()).await;
+    let mut client = ServiceClient::<StdRng>::async_from(options.clone()).await;
     if let Err(e) = client.init().await {
         tracing::error!("Initialisation failure: {}", e);
         return Err(e.into());

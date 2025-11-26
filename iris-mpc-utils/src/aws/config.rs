@@ -9,7 +9,7 @@ use aws_sdk_sqs::{config::Builder, Client as SQSClient};
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 
 /// Encpasulates AWS service client configuration.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AwsClientConfig {
     /// Execution environment.
     environment: String,
@@ -94,21 +94,6 @@ async fn get_sdk_config() -> aws_config::SdkConfig {
         .retry_config(retry_config)
         .load()
         .await
-}
-
-impl Clone for AwsClientConfig {
-    fn clone(&self) -> Self {
-        Self {
-            environment: self.environment.clone(),
-            public_key_base_url: self.public_key_base_url.clone(),
-            s3_request_bucket_name: self.s3_request_bucket_name.clone(),
-            sns_request_topic_arn: self.sns_request_topic_arn.clone(),
-            sqs_response_queue_url: self.sqs_response_queue_url.clone(),
-            sdk: self.sdk.clone(),
-            sqs_long_poll_wait_time: self.sqs_long_poll_wait_time,
-            sqs_wait_time_seconds: self.sqs_wait_time_seconds,
-        }
-    }
 }
 
 impl From<&AwsClientConfig> for SecretsManagerClient {
