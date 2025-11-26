@@ -175,7 +175,8 @@ pub async fn server_main(config: Config) -> Result<()> {
         batch_sync_shared_state,
     )
     .await?;
-    println!("evagelia: server shutting down gracefully.");
+    tracing::info!("evagelia: server shutting down gracefully.");
+
     Ok(())
 }
 
