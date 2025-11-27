@@ -15,7 +15,10 @@ use crate::{
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{
+        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, SortedNeighborhood,
+        VectorStore,
+    },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
@@ -297,6 +300,7 @@ pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef)
 pub struct HawkInsertPlan {
     pub plan: InsertPlanV<Aby3Store>,
     pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    pub links: Vec<SortedNeighborhood<Aby3Store>>,
 }
 
 /// ConnectPlan specifies how to connect a new node to the HNSW graph.
@@ -2042,9 +2046,8 @@ mod tests_db {
     use super::*;
     use crate::hnsw::{
         graph::graph_store::test_utils::TestGraphPg,
-        searcher::{ConnectPlanLayerV, SetEntryPoint},
+        searcher::{build_layer_updates, UpdateEntryPoint},
     };
-    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
@@ -2059,14 +2062,16 @@ mod tests_db {
                 .enumerate()
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
-                    layers: vec![ConnectPlanLayer {
-                        neighbors: vec![vectors[side]],
-                        nb_links: vec![vec![*vector]],
-                    }],
-                    set_ep: if i == side {
-                        SetEntryPoint::NewLayer
+                    updates: build_layer_updates(
+                        *vector,
+                        vec![vectors[side]],
+                        vec![vec![*vector]],
+                        0,
+                    ),
+                    update_ep: if i == side {
+                        UpdateEntryPoint::SetUnique { layer: 0 }
                     } else {
-                        SetEntryPoint::False
+                        UpdateEntryPoint::False
                     },
                 })
                 .map(Some)
@@ -2145,19 +2150,14 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::{ConnectPlanLayerV, SetEntryPoint};
+    use crate::hnsw::searcher::{build_layer_updates, UpdateEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
-
-    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
         ConnectPlan {
             inserted_vector: vector_id,
-            layers: vec![ConnectPlanLayer {
-                neighbors: vec![vector_id],
-                nb_links: vec![vec![vector_id]],
-            }],
-            set_ep: SetEntryPoint::False,
+            updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
+            update_ep: UpdateEntryPoint::False,
         }
     }
 

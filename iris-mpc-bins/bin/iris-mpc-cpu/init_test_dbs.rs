@@ -386,7 +386,7 @@ async fn main() -> Result<()> {
                 vector_store.insert_with_id(inserted_id, query.clone());
 
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
-                let (neighbors, set_ep) = searcher
+                let (neighbors, update_ep) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;
                 searcher
@@ -395,7 +395,7 @@ async fn main() -> Result<()> {
                         &mut graph,
                         inserted_id,
                         neighbors,
-                        set_ep,
+                        update_ep,
                     )
                     .await?;
 

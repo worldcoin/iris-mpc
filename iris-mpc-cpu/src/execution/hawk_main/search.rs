@@ -9,7 +9,10 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
+    hnsw::{
+        graph::neighborhood::Neighborhood, searcher::UpdateEntryPoint, GraphMem, HnswSearcher,
+        SortedNeighborhood,
+    },
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
@@ -124,9 +127,14 @@ async fn per_insert_query(
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
-    let (links, set_ep) = search_params
+    let (links, update_ep) = search_params
         .hnsw
-        .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
+        .search_to_insert::<_, SortedNeighborhood<_>>(
+            aby3_store,
+            graph_store,
+            &query,
+            insertion_layer,
+        )
         .await?;
 
     let matches = if search_params.do_match {
@@ -135,14 +143,23 @@ async fn per_insert_query(
         vec![]
     };
 
+    // Trim and extract unstructured vector lists
+    let mut links_unstructured = Vec::new();
+    for (lc, mut l) in links.iter().cloned().enumerate() {
+        let m = search_params.hnsw.params.get_M(lc);
+        l.trim(aby3_store, Some(m)).await?;
+        links_unstructured.push(l.edge_ids())
+    }
+
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
-            links,
-            set_ep,
+            links: links_unstructured,
+            update_ep,
         },
         matches,
+        links,
     })
 }
 
@@ -156,7 +173,7 @@ async fn per_search_query(
 
     let layer_0_neighbors = search_params
         .hnsw
-        .search(
+        .search::<_, SortedNeighborhood<_>>(
             aby3_store,
             graph_store,
             &query,
@@ -164,6 +181,7 @@ async fn per_search_query(
         )
         .await?;
 
+    let links_unstructured = vec![layer_0_neighbors.edge_ids()];
     let links = vec![layer_0_neighbors];
 
     let matches = if search_params.do_match {
@@ -176,10 +194,11 @@ async fn per_search_query(
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
-            links,
-            set_ep: SetEntryPoint::False,
+            links: links_unstructured,
+            update_ep: UpdateEntryPoint::False,
         },
         matches,
+        links,
     })
 }
 
@@ -198,14 +217,22 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
 
     let insertion_layer = searcher.gen_layer_prf(&session.hnsw_prf_key, identifier)?;
 
-    let (links, set_ep) = searcher
-        .search_to_insert(&mut *store, &graph, &query, insertion_layer)
+    let (links, update_ep) = searcher
+        .search_to_insert::<_, SortedNeighborhood<_>>(&mut *store, &graph, &query, insertion_layer)
         .await?;
+
+    // Trim and extract unstructured vector lists
+    let mut links_unstructured = Vec::new();
+    for (lc, mut l) in links.iter().cloned().enumerate() {
+        let m = searcher.params.get_M(lc);
+        l.trim(&mut store, Some(m)).await?;
+        links_unstructured.push(l.edge_ids());
+    }
 
     Ok(InsertPlanV {
         query,
-        links,
-        set_ep,
+        links: links_unstructured,
+        update_ep,
     })
 }
 
@@ -249,7 +276,7 @@ mod tests {
                 // Match because i from make_request is the same as i from init_db.
                 assert_eq!(rotations.center().matches.len(), 1);
                 assert_eq!(
-                    rotations.center().plan.links[0].edges[0].0,
+                    rotations.center().links[0].edges[0].0,
                     VectorId::from_0_index(i as u32)
                 );
             }

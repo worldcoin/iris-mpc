@@ -1,7 +1,7 @@
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        searcher::{ConnectPlanLayerV, ConnectPlanV, SetEntryPoint},
+        searcher::{ConnectPlanV, UpdateEntryPoint},
         GraphMem, VectorStore,
     },
 };
@@ -9,7 +9,6 @@ use eyre::{eyre, Result};
 use futures::future::try_join_all;
 use futures::StreamExt;
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
-use itertools::izip;
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{error::BoxDynError, types::Json, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
@@ -254,42 +253,20 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
         // If required, set vector as new entry point
-        let insertion_layer = plan.layers.len() - 1;
-        match plan.set_ep {
-            SetEntryPoint::False => {}
-            SetEntryPoint::NewLayer => {
-                self.set_entry_point(plan.inserted_vector, insertion_layer)
-                    .await?;
+        match plan.update_ep {
+            UpdateEntryPoint::False => {}
+            UpdateEntryPoint::SetUnique { layer } => {
+                self.set_entry_point(plan.inserted_vector, layer).await?;
             }
-            SetEntryPoint::AddToLayer => {
-                self.add_entry_point(plan.inserted_vector, insertion_layer)
-                    .await?;
+            UpdateEntryPoint::Append { layer } => {
+                self.add_entry_point(plan.inserted_vector, layer).await?;
             }
         }
 
         // Connect the new vector to its neighbors in each layer.
-        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
-            self.connect_apply(plan.inserted_vector, lc, layer_plan)
-                .await?;
+        for ((inserted_vector, lc), neighbors) in plan.updates {
+            self.set_links(inserted_vector, neighbors, lc).await?;
         }
-
-        Ok(())
-    }
-
-    /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
-    async fn connect_apply(
-        &mut self,
-        q: V::VectorRef,
-        lc: usize,
-        plan: ConnectPlanLayerV<V>,
-    ) -> Result<()> {
-        // Connect all n -> q.
-        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
-            self.set_links(*n, links, lc).await?;
-        }
-
-        // Connect q -> all n.
-        self.set_links(q, plan.neighbors, lc).await?;
 
         Ok(())
     }
@@ -838,7 +815,7 @@ mod tests {
         let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::new_with_test_parameters();
+        let searcher = HnswSearcher::new_with_test_parameters();
 
         let queries1 = IrisDB::new_random_rng(10, rng)
             .db
@@ -848,15 +825,31 @@ mod tests {
         // Insert the codes.
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
-            let insertion_layer = db.gen_layer_rng(rng)?;
-            let (neighbors, set_ep) = db
+            let insertion_layer = searcher.gen_layer_rng(rng)?;
+            let (links, update_ep) = searcher
                 .search_to_insert(vector_store, graph_mem, query, insertion_layer)
                 .await?;
-            assert!(!db.is_match(vector_store, &neighbors).await?);
+            assert!(!searcher.is_match(vector_store, &links).await?);
+
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
-            let plan = db
-                .insert_prepare(vector_store, graph_mem, inserted, neighbors, set_ep)
+
+            // Trim and extract unstructured vector lists
+            let mut links_unstructured = Vec::new();
+            for (lc, mut l) in links.iter().cloned().enumerate() {
+                let m = searcher.params.get_M(lc);
+                l.trim_to_k_nearest(m);
+                links_unstructured.push(l.vectors_cloned())
+            }
+
+            let plan = searcher
+                .insert_prepare(
+                    vector_store,
+                    graph_mem,
+                    inserted,
+                    links_unstructured,
+                    update_ep,
+                )
                 .await?;
 
             graph_mem.insert_apply(plan.clone()).await;
@@ -878,8 +871,8 @@ mod tests {
 
         // Search for the same codes and find matches.
         for query in queries1.iter() {
-            let neighbors = db.search(vector_store, &graph_mem2, query, 1).await?;
-            assert!(db.is_match(vector_store, &[neighbors]).await?);
+            let neighbors = searcher.search(vector_store, &graph_mem2, query, 1).await?;
+            assert!(searcher.is_match(vector_store, &[neighbors]).await?);
         }
 
         // Clean up

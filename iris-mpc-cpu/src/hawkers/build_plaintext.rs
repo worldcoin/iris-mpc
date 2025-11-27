@@ -9,7 +9,7 @@ use tracing::info;
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
     hawkers::plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
-    hnsw::{GraphMem, HnswSearcher},
+    hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
 };
 
 /// Number of entries to insert before reporting a new info log entry
@@ -44,14 +44,27 @@ pub async fn plaintext_parallel_batch_insert(
             jobs.spawn(async move {
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
-                let (links, set_ep) = searcher
-                    .search_to_insert(&mut store, &graph, &query, insertion_layer)
+                let (links, update_ep) = searcher
+                    .search_to_insert::<_, SortedNeighborhood<_>>(
+                        &mut store,
+                        &graph,
+                        &query,
+                        insertion_layer,
+                    )
                     .await?;
+
+                // Trim and extract unstructured vector lists
+                let mut links_unstructured = Vec::new();
+                for (lc, mut l) in links.into_iter().enumerate() {
+                    let m = searcher.params.get_M(lc);
+                    l.trim(&mut store, Some(m)).await?;
+                    links_unstructured.push(l.edge_ids())
+                }
 
                 let insert_plan: InsertPlanV<SharedPlaintextStore> = InsertPlanV {
                     query,
-                    links,
-                    set_ep,
+                    links: links_unstructured,
+                    update_ep,
                 };
                 Ok((vector_id, insert_plan))
             });

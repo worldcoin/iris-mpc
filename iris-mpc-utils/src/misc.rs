@@ -8,11 +8,6 @@ use std::{
     path::Path,
 };
 
-/// Returns a message for logging.
-fn get_formatted_message(component: &str, msg: String) -> String {
-    format!("HNSW-UTILS :: {} :: {}", component, msg)
-}
-
 /// Returns a boxed iterator over the first `limit` elements of `iter`.
 pub fn limited_iterator<I>(iter: I, limit: Option<usize>) -> Box<dyn Iterator<Item = I::Item>>
 where
@@ -22,50 +17,6 @@ where
         Some(num) => Box::new(iter.take(num)),
         None => Box::new(iter),
     }
-}
-
-/// Logs & returns a component error message.
-#[allow(dead_code)]
-pub fn log_error(component: &str, msg: String) -> String {
-    let msg = get_formatted_message(component, msg);
-
-    // In testing print to stdout.
-    #[cfg(test)]
-    println!("ERROR :: {}", msg);
-
-    // Trace as normal.
-    tracing::error!(msg);
-
-    msg
-}
-
-/// Logs & returns a component information message.
-#[allow(dead_code)]
-pub fn log_info(component: &str, msg: &str) -> String {
-    let msg = get_formatted_message(component, msg.to_string());
-
-    // In testing print to stdout.
-    #[cfg(test)]
-    println!("{}", msg);
-
-    // Trace as normal.
-    tracing::info!(msg);
-
-    msg
-}
-
-/// Logs & returns a component warning message.
-#[allow(dead_code)]
-pub fn log_warn(component: &str, msg: String) -> String {
-    let msg = get_formatted_message(component, msg);
-
-    // In testing print to stdout.
-    #[cfg(test)]
-    println!("WARN :: {}", msg);
-
-    tracing::warn!(msg);
-
-    msg
 }
 
 /// Reads binary data from a file & deserializes a domain type.
