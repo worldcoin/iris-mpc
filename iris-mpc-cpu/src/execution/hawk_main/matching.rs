@@ -463,7 +463,6 @@ mod tests {
     use crate::execution::hawk_main::{HawkResult, InsertPlanV, SearchRotations, VecRotations};
     use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::searcher::UpdateEntryPoint;
-    use crate::hnsw::SortedNeighborhood;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
 
     use super::VectorId;
@@ -701,13 +700,7 @@ mod tests {
         }
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
-            let match_count = match_ids.len();
-            let links = vec![SortedNeighborhood::from_ascending_vec(
-                chain!(match_ids.clone(), non_match_ids.clone())
-                    .map(|v| (v, distance()))
-                    .collect_vec(),
-            )];
-            let links_unstructured = vec![chain!(match_ids, non_match_ids).collect_vec()];
+            let links_unstructured = vec![chain!(match_ids.clone(), non_match_ids).collect_vec()];
 
             let insert_plan = HawkInsertPlan {
                 matches: match_ids
@@ -720,7 +713,6 @@ mod tests {
                     links: links_unstructured,
                     update_ep: UpdateEntryPoint::False,
                 },
-                links,
             };
             VecRotations::from(vec![insert_plan; SearchRotations::N_ROTATIONS])
         };

@@ -1,7 +1,7 @@
 use crate::hnsw::{
     searcher::{ConnectPlanV, LayerMode, UpdateEntryPoint},
     vector_store::VectorStoreMut,
-    GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
+    GraphMem, HnswSearcher, VectorStore,
 };
 
 use super::VecRequests;

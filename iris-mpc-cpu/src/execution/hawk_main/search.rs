@@ -159,7 +159,6 @@ async fn per_insert_query(
             update_ep,
         },
         matches,
-        links,
     })
 }
 
@@ -198,7 +197,6 @@ async fn per_search_query(
             update_ep: UpdateEntryPoint::False,
         },
         matches,
-        links,
     })
 }
 
@@ -275,10 +273,12 @@ mod tests {
             for (i, rotations) in side.iter().enumerate() {
                 // Match because i from make_request is the same as i from init_db.
                 assert_eq!(rotations.center().matches.len(), 1);
-                assert_eq!(
-                    rotations.center().links[0].edges[0].0,
-                    VectorId::from_0_index(i as u32)
-                );
+                assert!(rotations
+                    .center()
+                    .matches
+                    .iter()
+                    .position(|(v, _)| *v == VectorId::from_0_index(i as u32))
+                    .is_some());
             }
         }
         actor.sync_peers().await?;

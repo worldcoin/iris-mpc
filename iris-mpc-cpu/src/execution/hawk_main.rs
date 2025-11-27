@@ -15,10 +15,7 @@ use crate::{
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{
-        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, SortedNeighborhood,
-        VectorStore,
-    },
+    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
@@ -300,7 +297,6 @@ pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef)
 pub struct HawkInsertPlan {
     pub plan: InsertPlanV<Aby3Store>,
     pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
-    pub links: Vec<SortedNeighborhood<Aby3Store>>,
 }
 
 /// ConnectPlan specifies how to connect a new node to the HNSW graph.
