@@ -452,6 +452,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "async_from"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b397bca84f93309aa3c1f6a8153678bfb260a6749a4be58dc5458d18e1bb517"
+dependencies = [
+ "async-trait",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1732,6 +1741,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "csv"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cd9d68cf7efc6ddfaaee42e7288d3a99d613d4b50f76ce9827ae0c6e14f938"
+dependencies = [
+ "csv-core",
+ "itoa",
+ "ryu",
+ "serde_core",
+]
+
+[[package]]
+name = "csv-core"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704a3c26996a80471189265814dbc2c257598b96b8a7feae2d31ace646bb9782"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "cudarc"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2774,6 +2804,7 @@ dependencies = [
  "aes-prng",
  "ampc-anon-stats",
  "ampc-server-utils",
+ "async_from",
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-s3",
@@ -2800,6 +2831,7 @@ dependencies = [
  "iris-mpc-store",
  "iris-mpc-upgrade",
  "iris-mpc-upgrade-hawk",
+ "iris-mpc-utils",
  "itertools 0.13.0",
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
@@ -2902,6 +2934,7 @@ dependencies = [
  "core_affinity",
  "criterion",
  "crossbeam",
+ "csv",
  "dashmap",
  "eyre",
  "futures",
@@ -2919,6 +2952,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "siphasher",
  "socket2 0.6.0",
  "sqlx",
@@ -2928,6 +2962,7 @@ dependencies = [
  "tokio-rustls 0.26.2",
  "tokio-stream",
  "tokio-util",
+ "toml",
  "tracing",
  "tracing-forest",
  "tracing-subscriber",
@@ -3059,8 +3094,17 @@ dependencies = [
 name = "iris-mpc-utils"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-rds",
  "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "base64 0.22.1",
  "bincode",
+ "clap",
+ "dotenvy",
  "eyre",
  "iris-mpc",
  "iris-mpc-common",
@@ -3068,10 +3112,17 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "rand",
+ "rayon",
  "serde",
  "serde_json",
+ "sodiumoxide",
  "sqlx",
+ "thiserror 1.0.65",
+ "tokio",
+ "tokio-util",
+ "toml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

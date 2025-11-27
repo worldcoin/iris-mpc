@@ -59,6 +59,15 @@ impl PlaintextStore {
         }
     }
 
+    pub fn from_irises_iter(iter: impl Iterator<Item = IrisCode>) -> Self {
+        let mut vector = PlaintextStore::new();
+        for (idx, iris) in iter.enumerate() {
+            let id = VectorId::from_0_index(idx as u32);
+            vector.insert_with_id(id, Arc::new(iris));
+        }
+        vector
+    }
+
     /// Return the size of the underlying set of irises.
     pub fn len(&self) -> usize {
         self.storage.db_size()
@@ -115,11 +124,11 @@ impl PlaintextStore {
                 .clone();
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, set_ep) = searcher
+            let (neighbors, update_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
-                .insert_from_search_results(self, &mut graph, query_id, neighbors, set_ep)
+                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
                 .await?;
         }
 
