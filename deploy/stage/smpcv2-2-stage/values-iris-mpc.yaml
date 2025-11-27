@@ -57,10 +57,10 @@ env:
         name: application
 
   - name: SMPC__ANON_STATS_DATABASE__MIGRATE
-    value: "true"
+    value: "false"
 
   - name: SMPC__ANON_STATS_DATABASE__CREATE
-    value: "true"
+    value: "false"
 
   - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
     value: "8"
