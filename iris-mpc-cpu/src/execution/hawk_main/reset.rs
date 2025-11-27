@@ -5,7 +5,10 @@ use super::{
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
-use crate::{execution::hawk_main::search::SearchIds, protocol::shared_iris::GaloisRingSharedIris};
+use crate::{
+    execution::hawk_main::search::SearchIds, hnsw::SortedNeighborhood,
+    protocol::shared_iris::GaloisRingSharedIris,
+};
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
 
@@ -40,7 +43,7 @@ pub async fn search_to_reset(
     };
 
     // Search the central rotation to determine how to insert the reset vectors.
-    let search_results = search::search::<CenterOnly>(
+    let search_results = search::search::<CenterOnly, SortedNeighborhood<_>>(
         sessions,
         &updates.queries,
         &updates.request_ids,

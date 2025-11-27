@@ -31,7 +31,7 @@ pub struct SearchParams {
     pub do_match: bool,
 }
 
-pub async fn search<ROT>(
+pub async fn search<ROT, N: Neighborhood<Aby3Store>>(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
@@ -54,7 +54,7 @@ where
         let search_params = search_params.clone();
         let tx = tx.clone();
         async move {
-            per_session(
+            per_session::<_, SortedNeighborhood<_>>(
                 &session,
                 &search_queries,
                 &search_ids,
@@ -75,7 +75,7 @@ where
     Ok(results)
 }
 
-async fn per_session<ROT>(
+async fn per_session<ROT, N: Neighborhood<Aby3Store>>(
     session: &HawkSession,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
@@ -99,7 +99,7 @@ async fn per_session<ROT>(
             let insertion_layer = search_params
                 .hnsw
                 .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
-            per_insert_query(
+            per_insert_query::<N>(
                 query,
                 search_params,
                 &mut vector_store,
@@ -118,7 +118,7 @@ async fn per_session<ROT>(
     Ok(())
 }
 
-async fn per_insert_query(
+async fn per_insert_query<N: Neighborhood<Aby3Store>>(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store,
@@ -129,12 +129,7 @@ async fn per_insert_query(
 
     let (links, update_ep) = search_params
         .hnsw
-        .search_to_insert::<_, SortedNeighborhood<_>>(
-            aby3_store,
-            graph_store,
-            &query,
-            insertion_layer,
-        )
+        .search_to_insert::<_, N>(aby3_store, graph_store, &query, insertion_layer)
         .await?;
 
     let matches = if search_params.do_match {
@@ -266,7 +261,13 @@ mod tests {
             do_match: true,
         };
 
-        let result = search(&sessions, search_queries, &request.ids, search_params).await?;
+        let result = search::<_, SortedNeighborhood<_>>(
+            &sessions,
+            search_queries,
+            &request.ids,
+            search_params,
+        )
+        .await?;
 
         for side in result {
             assert_eq!(side.len(), batch_size);

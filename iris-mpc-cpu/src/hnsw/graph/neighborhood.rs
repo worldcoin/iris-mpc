@@ -21,7 +21,7 @@ use tracing::debug;
 /// - The last element in the container is the largest one.
 #[allow(async_fn_in_trait)]
 pub trait Neighborhood<V: VectorStore>:
-    Clone + AsRef<[(V::VectorRef, V::DistanceRef)]> + Into<WrappedNeighborhood<V>>
+    Send + Sync + Clone + AsRef<[(V::VectorRef, V::DistanceRef)]> + Into<WrappedNeighborhood<V>>
 {
     fn new() -> Self;
 

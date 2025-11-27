@@ -15,7 +15,10 @@ use crate::{
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{
+        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, SortedNeighborhood,
+        VectorStore,
+    },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
@@ -1484,7 +1487,7 @@ impl HawkHandle {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results = search::search::<SearchRotations>(
+            let search_results = search::search::<SearchRotations, SortedNeighborhood<_>>(
                 sessions_search,
                 search_queries,
                 search_ids,
