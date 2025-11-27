@@ -1,6 +1,7 @@
-image: "ghcr.io/worldcoin/anon-stats-server:58fe78f45612ef90072298aa098df8d036e954e0"
+# to be later updated to same release at iris-mpc
+image: "ghcr.io/worldcoin/anon-stats-server@sha256:b584e2e0d9906fbc78914b5df7596b97023232e4bdcd416bd96e88ae6f61da84" # v0.22.0
 
-environment: stage
+environment: prod
 replicaCount: 1
 
 strategy:
@@ -71,6 +72,7 @@ tolerations:
     operator: "Equal"
     value: "anonStatsServer"
     effect: "NoSchedule"
+
 
 podSecurityContext:
   runAsUser: 65534

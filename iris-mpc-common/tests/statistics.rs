@@ -1,7 +1,7 @@
 mod tests {
-    use ampc_server_utils::statistics::Eye;
-    use ampc_server_utils::{
-        AnonStatsResultSource, Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D,
+    use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+    use ampc_anon_stats::{
+        AnonStatsOperation, Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D,
     };
     use chrono::{TimeZone, Utc};
     use serde_json::{json, Value};
@@ -27,7 +27,8 @@ mod tests {
             n_buckets: 2,
             match_distances_buffer_size: 128,
             party_id: 999,
-            eye: Eye::Right,
+            eye: Some(Eye::Right),
+            operation: AnonStatsOperation::default(),
             source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: known_start_time,
             end_time_utc_timestamp: Some(known_end_time),
@@ -96,7 +97,8 @@ mod tests {
             "eye": "Left",
             "start_time_utc_timestamp": 1700000000,
             "end_time_utc_timestamp": null,
-            "is_mirror_orientation": false
+            "is_mirror_orientation": false,
+            "operation": "Uniqueness",
         })
         .to_string();
 
@@ -110,7 +112,7 @@ mod tests {
         assert_eq!(stats.n_buckets, 1);
         assert_eq!(stats.match_distances_buffer_size, 1024);
         assert_eq!(stats.party_id, 123);
-        assert!(matches!(stats.eye, Eye::Left));
+        assert!(matches!(stats.eye, Some(Eye::Left)));
 
         // start_time_utc is with seconds, so check that
         let expected_start = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
@@ -138,7 +140,8 @@ mod tests {
             n_buckets: 1,
             match_distances_buffer_size: 42,
             party_id: 777,
-            eye: Eye::Right,
+            operation: AnonStatsOperation::default(),
+            eye: Some(Eye::Right),
             source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
             end_time_utc_timestamp: Some(
@@ -169,7 +172,7 @@ mod tests {
         assert_eq!(roundtrip_stats.n_buckets, 1);
         assert_eq!(roundtrip_stats.match_distances_buffer_size, 42);
         assert_eq!(roundtrip_stats.party_id, 777);
-        assert!(matches!(roundtrip_stats.eye, Eye::Right));
+        assert!(matches!(roundtrip_stats.eye, Some(Eye::Right)));
 
         // Timestamps (except next_start_time_utc) should match
         assert_eq!(
@@ -206,7 +209,13 @@ mod tests {
         //   [2,3,7] ]
         let buckets_2d_cumulative = vec![1, 1, 2, 1, 2, 4, 2, 3, 7];
 
-        let mut stats = BucketStatistics2D::new(128, n, 42, AnonStatsResultSource::Legacy);
+        let mut stats = BucketStatistics2D::new(
+            128,
+            n,
+            42,
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::default()),
+        );
         stats.fill_buckets(&buckets_2d_cumulative, 1.0, None);
 
         // Expected per-cell histogram H (row-major, skipping zeros in output order):

@@ -6,7 +6,8 @@ use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 pub use actor::{
     generate_luc_records, prepare_or_policy_bitmap, Orientation, ServerActor, ServerActorHandle,
 };
-use ampc_server_utils::statistics::Eye;
+
+use ampc_anon_stats::types::Eye;
 use iris_mpc_common::helpers::sync::ModificationKey;
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::{
