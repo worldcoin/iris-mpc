@@ -82,14 +82,23 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
 
     fn get_request_data_from_batch_kind(&mut self, batch_kind: &'static str) -> RequestData {
         match batch_kind {
-            IDENTITY_DELETION_MESSAGE_TYPE => RequestData::IdentityDeletion,
+            IDENTITY_DELETION_MESSAGE_TYPE => RequestData::IdentityDeletion {
+                signup_id: uuid::Uuid::new_v4(),
+                signup_shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
+            },
             REAUTH_MESSAGE_TYPE => RequestData::Reauthorization {
-                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
+                reauthorisation_id: uuid::Uuid::new_v4(),
+                reauthorisation_shares: generate_iris_code_and_mask_shares_both_eyes(
+                    self.rng_mut(),
+                ),
+                signup_shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
+                signup_id: uuid::Uuid::new_v4(),
             },
             RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck,
             RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate,
             UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
-                shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
+                signup_id: uuid::Uuid::new_v4(),
+                signup_shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
             },
             _ => unreachable!(),
         }

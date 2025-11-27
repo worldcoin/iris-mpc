@@ -69,7 +69,7 @@ impl AwsClient {
 
 impl AwsClient {
     /// Enqueues data to an S3 bucket.
-    pub async fn s3_put_object(&self, s3_obj_info: S3ObjectInfo) -> Result<(), AwsClientError> {
+    pub async fn s3_put_object(&self, s3_obj_info: &S3ObjectInfo) -> Result<(), AwsClientError> {
         info!("Putting AWS-S3 object: {}", s3_obj_info);
 
         let bucket = s3_obj_info.bucket();

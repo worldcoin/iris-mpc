@@ -152,21 +152,28 @@ impl fmt::Display for RequestBatchSize {
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestData {
-    IdentityDeletion,
+    IdentityDeletion {
+        signup_id: uuid::Uuid,
+        signup_shares: BothEyes<IrisCodeAndMaskShares>,
+    },
     Reauthorization {
-        shares: BothEyes<IrisCodeAndMaskShares>,
+        reauthorisation_id: uuid::Uuid,
+        reauthorisation_shares: BothEyes<IrisCodeAndMaskShares>,
+        signup_id: uuid::Uuid,
+        signup_shares: BothEyes<IrisCodeAndMaskShares>,
     },
     ResetCheck,
     ResetUpdate,
     Uniqueness {
-        shares: BothEyes<IrisCodeAndMaskShares>,
+        signup_id: uuid::Uuid,
+        signup_shares: BothEyes<IrisCodeAndMaskShares>,
     },
 }
 
 impl fmt::Display for RequestData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::IdentityDeletion => {
+            Self::IdentityDeletion { .. } => {
                 write!(f, "IdentityDeletion")
             }
             RequestData::Reauthorization { .. } => {
@@ -178,8 +185,8 @@ impl fmt::Display for RequestData {
             RequestData::ResetUpdate => {
                 write!(f, "ResetUpdate")
             }
-            RequestData::Uniqueness { .. } => {
-                write!(f, "Uniqueness")
+            RequestData::Uniqueness { signup_id, .. } => {
+                write!(f, "Uniqueness::signup_id={}", signup_id)
             }
         }
     }

@@ -2,6 +2,7 @@ use rand::{CryptoRng, Rng};
 
 use crate::aws::{AwsClient, AwsClientConfig};
 
+use components::DataUploader;
 use components::RequestEnqueuer;
 use components::RequestGenerator;
 use components::ResponseCorrelator;
@@ -17,6 +18,9 @@ mod typeset;
 /// A utility for correlating enqueued system requests with system responses.
 #[derive(Debug)]
 pub struct ServiceClient<R: Rng + CryptoRng> {
+    // Component that uploads data to services prior to request processing.
+    data_uploader: DataUploader,
+
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
@@ -44,6 +48,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
         let aws_client = AwsClient::new(aws_client_config);
 
         Self {
+            data_uploader: DataUploader::new(aws_client.clone()),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
             request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count, rng_seed),
             response_correlator: ResponseCorrelator::new(aws_client.clone()),
@@ -55,6 +60,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     pub async fn init(&mut self) -> Result<(), ClientError> {
         tracing::info!("Initializing ...");
         for initializer in [
+            self.data_uploader.init(),
             self.request_enqueuer.init(),
             self.response_correlator.init(),
         ] {
@@ -74,11 +80,12 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     pub async fn exec(&mut self) -> Result<(), ClientError> {
         tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
-            for processor in [
+            for batch_processor in [
+                self.data_uploader.process_batch(&batch),
                 self.request_enqueuer.process_batch(&batch),
                 self.response_dequeuer.process_batch(&batch),
             ] {
-                processor.await?
+                batch_processor.await?
             }
         }
 
