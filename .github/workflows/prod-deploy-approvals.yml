@@ -38,8 +38,7 @@ jobs:
               'nmjustinchan', // Nethermind
               'reneraab',     // FAU
               'SyrineSlim',   // FAU
-              'sebhlr',        // FAU
-              'eaypek-tfh' // temp
+              'sebhlr'        // FAU
             ];
 
             const approvalGroups = new Map([
