@@ -83,8 +83,7 @@ fn chunk_size(d: usize, k: usize) -> usize {
 }
 
 /// - See Algorithm 2 in [1]
-/// - Append layers which merge sequences `x` and `y`, assuming that these correspond to sorted values.
-/// Note that `x` and `y` are sequences of indices.
+/// - Append layers which merge sequences `x` and `y`, assuming that these correspond to sorted values. Note that `x` and `y` are sequences of indices.
 /// - `start_layer` points to the layer in the global network on top of which this method should build.
 /// - Returns (indices which form the result, total depth of the built network)
 fn build_recursive_merge(
@@ -159,7 +158,6 @@ fn build_recursive_merge(
 ///  Alekseev's merge for the final top-level step.
 ///  Takes two sorted sequences `v_perm` and `w_perm` of length at most `k` and returns
 ///  the smallest `min(k, v_perm.len() + w_perm.len()` elements of `v_perm + w_perm` in no particular order.
-
 ///  For correctness:
 ///  - First analyze the case where `v_perm.len() == w_perm.len() == k`.
 ///  - In this case Alekseev just does `min_swap(v_perm[i], w_perm[k - i - 1])` for `0 <= i < k`.
