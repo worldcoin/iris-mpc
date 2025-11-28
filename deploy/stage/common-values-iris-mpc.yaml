@@ -35,15 +35,15 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 88
-    memory: 1000Gi
-    nvidia.com/gpu: 8
-    vpc.amazonaws.com/efa: 4
+    cpu: 28
+    memory: 100Gi
+    nvidia.com/gpu: 1
+    vpc.amazonaws.com/efa: 1
   requests:
-    cpu: 88
-    memory: 1000Gi
-    nvidia.com/gpu: 8
-    vpc.amazonaws.com/efa: 4
+    cpu: 27
+    memory: 99Gi
+    nvidia.com/gpu: 1
+    vpc.amazonaws.com/efa: 1
 
 imagePullSecrets:
   - name: github-secret
@@ -66,21 +66,6 @@ tolerations:
 keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
-
-#libsDir:
-#  enabled: true
-#  path: "/libs"
-#  size: 2Gi
-#  files:
-#    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublasLt.so.12.2.5.6"
-#      file: "libcublasLt.so.12.2.5.6"
-#    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublas.so.12.2.5.6"
-#      file: "libcublas.so.12.2.5.6"
-
-tmpDir:
-  enabled: true
-  size: 5Gi
-  mountPath: /dev/shm
 
 preStop:
   # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
