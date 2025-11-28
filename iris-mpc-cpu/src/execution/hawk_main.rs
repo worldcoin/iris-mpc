@@ -16,8 +16,9 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, SortedNeighborhood,
-        VectorStore,
+        graph::graph_store,
+        searcher::{ConnectPlanV, NeighborhoodMode},
+        GraphMem, HnswSearcher, VectorStore,
     },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
@@ -102,6 +103,9 @@ pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnl
 } else {
     DistanceFn::Fhd
 };
+
+pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
+
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
@@ -1487,11 +1491,12 @@ impl HawkHandle {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results = search::search::<SearchRotations, SortedNeighborhood<_>>(
+            let search_results = search::search::<SearchRotations>(
                 sessions_search,
                 search_queries,
                 search_ids,
                 search_params,
+                NEIGHBORHOOD_MODE,
             )
             .await?;
 

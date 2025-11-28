@@ -6,7 +6,7 @@ use super::{
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::search::SearchIds, hnsw::SortedNeighborhood,
+    execution::hawk_main::{search::SearchIds, NEIGHBORHOOD_MODE},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use eyre::Result;
@@ -43,11 +43,12 @@ pub async fn search_to_reset(
     };
 
     // Search the central rotation to determine how to insert the reset vectors.
-    let search_results = search::search::<CenterOnly, SortedNeighborhood<_>>(
+    let search_results = search::search::<CenterOnly>(
         sessions,
         &updates.queries,
         &updates.request_ids,
         search_params,
+        NEIGHBORHOOD_MODE,
     )
     .await?;
 

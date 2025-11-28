@@ -12,7 +12,7 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
+    graph::neighborhood::{Neighborhood, UnsortedNeighborhood, WrappedNeighborhood},
     metrics::ops_counter::Operation,
     SortedNeighborhood, VectorStore,
 };
@@ -1378,26 +1378,6 @@ impl HnswSearcher {
 
         W.trim(store, Some(k)).await?;
         Ok(W)
-    }
-
-    pub async fn insertW<V: VectorStoreMut, N: Neighborhood<V>>(
-        &self,
-        store: &mut V,
-        graph: &mut GraphMem<V::VectorRef>,
-        query: &V::QueryRef,
-        insertion_layer: usize,
-        mode: NeighborhoodMode,
-    ) -> Result<V::VectorRef> {
-        match mode {
-            NeighborhoodMode::Sorted => {
-                self.insert::<_, SortedNeighborhood<_>>(store, graph, query, insertion_layer)
-                    .await
-            }
-            NeighborhoodMode::Unsorted => {
-                self.insert::<_, UnsortedNeighborhood<_>>(store, graph, query, insertion_layer)
-                    .await
-            }
-        }
     }
 
     /// Insert `query` into the HNSW index represented by `store` and `graph`.

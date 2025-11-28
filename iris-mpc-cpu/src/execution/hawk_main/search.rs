@@ -10,8 +10,9 @@ use crate::{
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
     hnsw::{
-        graph::neighborhood::Neighborhood, searcher::UpdateEntryPoint, GraphMem, HnswSearcher,
-        SortedNeighborhood,
+        graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
+        searcher::{NeighborhoodMode, UpdateEntryPoint},
+        GraphMem, HnswSearcher, SortedNeighborhood,
     },
 };
 use eyre::{OptionExt, Result};
@@ -31,11 +32,12 @@ pub struct SearchParams {
     pub do_match: bool,
 }
 
-pub async fn search<ROT, N: Neighborhood<Aby3Store>>(
+pub async fn search<ROT>(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
     search_params: SearchParams,
+    mode: NeighborhoodMode,
 ) -> Result<SearchResults<ROT>>
 where
     ROT: Rotations,
@@ -53,16 +55,33 @@ where
         let search_ids = search_ids.clone();
         let search_params = search_params.clone();
         let tx = tx.clone();
+        let mode = mode.clone();
+
         async move {
-            per_session::<_, SortedNeighborhood<_>>(
-                &session,
-                &search_queries,
-                &search_ids,
-                &search_params,
-                tx,
-                batch,
-            )
-            .await
+            match mode {
+                NeighborhoodMode::Sorted => {
+                    per_session::<_, SortedNeighborhood<_>>(
+                        &session,
+                        &search_queries,
+                        &search_ids,
+                        &search_params,
+                        tx,
+                        batch,
+                    )
+                    .await
+                }
+                NeighborhoodMode::Unsorted => {
+                    per_session::<_, UnsortedNeighborhood<_>>(
+                        &session,
+                        &search_queries,
+                        &search_ids,
+                        &search_params,
+                        tx,
+                        batch,
+                    )
+                    .await
+                }
+            }
         }
     };
 
@@ -261,11 +280,12 @@ mod tests {
             do_match: true,
         };
 
-        let result = search::<_, SortedNeighborhood<_>>(
+        let result = search(
             &sessions,
             search_queries,
             &request.ids,
             search_params,
+            NeighborhoodMode::Sorted,
         )
         .await?;
 
