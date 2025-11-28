@@ -48,7 +48,7 @@ pub fn insert(
         let query = Arc::new(iris);
         let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
         searcher
-            .insert(vector, graph, &query, insertion_layer)
+            .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
             .await
             .unwrap()
     })
@@ -83,7 +83,7 @@ pub fn fill_uniform_random(
             let query = Arc::new(IrisCode::random_rng(&mut rng));
             let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
-                .insert(vector, graph, &query, insertion_layer)
+                .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
                 .await
                 .unwrap();
             if idx % 100 == 99 {
@@ -116,7 +116,7 @@ pub fn fill_from_ndjson_file(
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
-                .insert(vector, graph, &query, insertion_layer)
+                .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
                 .await
                 .unwrap();
         }

@@ -7,7 +7,7 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, VectorStore,
+        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -125,7 +125,7 @@ impl PlaintextStore {
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert(self, &graph, &query, insertion_layer)
+                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
                 .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)

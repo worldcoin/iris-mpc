@@ -1382,7 +1382,7 @@ impl HnswSearcher {
     /// Insert `query` into the HNSW index represented by `store` and `graph`.
     /// Return a `V::VectorRef` representing the inserted vector.
     #[instrument(level = "trace", skip_all, target = "searcher::cpu_time")]
-    pub async fn insert<V: VectorStoreMut>(
+    pub async fn insert<V: VectorStoreMut, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
@@ -1390,7 +1390,7 @@ impl HnswSearcher {
         insertion_layer: usize,
     ) -> Result<V::VectorRef> {
         let (neighbors, update_ep) = self
-            .search_to_insert(store, graph, query, insertion_layer)
+            .search_to_insert::<_, N>(store, graph, query, insertion_layer)
             .await?;
         let inserted = store.insert(query).await;
         self.insert_from_search_results(store, graph, inserted.clone(), neighbors, update_ep)
@@ -1683,12 +1683,12 @@ impl HnswSearcher {
         target = "searcher::cpu_time",
         skip(self, store, graph, inserted_vector, links)
     )]
-    pub async fn insert_from_search_results<V: VectorStore>(
+    pub async fn insert_from_search_results<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
-        links: Vec<SortedNeighborhood<V>>,
+        links: Vec<N>,
         update_ep: UpdateEntryPoint,
     ) -> Result<()> {
         // Trim and extract unstructured vector lists
@@ -1792,8 +1792,13 @@ mod tests {
         // Insert the codes with helper function
         for query in queries2.iter() {
             let insertion_layer = db.gen_layer_rng(rng)?;
-            db.insert(vector_store, graph_store, query, insertion_layer)
-                .await?;
+            db.insert::<_, SortedNeighborhood<_>>(
+                vector_store,
+                graph_store,
+                query,
+                insertion_layer,
+            )
+            .await?;
         }
 
         // Search for the same codes and find matches.
@@ -1864,7 +1869,7 @@ mod tests {
             assert_eq!(update_ep, expected_update_ep);
 
             searcher_default
-                .insert(
+                .insert::<_, SortedNeighborhood<_>>(
                     vector_store_default,
                     graph_store_default,
                     &query,
@@ -1903,7 +1908,7 @@ mod tests {
             assert_eq!(update_ep, expected_update_ep);
 
             searcher_linear
-                .insert(
+                .insert::<_, SortedNeighborhood<_>>(
                     vector_store_linear,
                     graph_store_linear,
                     &query,

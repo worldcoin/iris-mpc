@@ -508,7 +508,7 @@ mod tests {
             },
             plaintext_store::PlaintextStore,
         },
-        hnsw::{GraphMem, HnswSearcher},
+        hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
         network::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
     };
@@ -549,7 +549,12 @@ mod tests {
                 for query in queries.iter() {
                     let insertion_layer = db.gen_layer_rng(&mut rng).unwrap();
                     let inserted_vector = db
-                        .insert(&mut *store, &mut aby3_graph, query, insertion_layer)
+                        .insert::<_, SortedNeighborhood<_>>(
+                            &mut *store,
+                            &mut aby3_graph,
+                            query,
+                            insertion_layer,
+                        )
                         .await
                         .unwrap();
                     inserted.push(inserted_vector)
