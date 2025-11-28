@@ -560,9 +560,9 @@ impl HnswSearcher {
     }
 
     /// The standard layer search algorithm for HNSW search, which inspects
-    /// Neighborhood<V>s of graph nodes one element at a time, comparing each
+    /// neighborhoods of graph nodes one element at a time, comparing each
     /// in sequence against the current farthest element of the candidate
-    /// Neighborhood<V> W and inserting into W if closer.
+    /// neighborhood W and inserting into W if closer.
     ///
     /// This implementation varies slightly from the original specification of
     /// Malkov and Yashunin in that the candidates queue C is removed, and
@@ -583,7 +583,7 @@ impl HnswSearcher {
         let mut visited =
             HashSet::<V::VectorRef>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
 
-        // The set of visited vectors for which we have inspected their Neighborhood<V>
+        // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::<V::VectorRef>::new();
 
         // fq: The current furthest distance in W.
@@ -596,7 +596,7 @@ impl HnswSearcher {
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
         let less_than_span = trace_span!(target: "searcher::cpu_time", "less_than_aggr");
         let insert_span =
-            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_Neighborhood<V>_aggr");
+            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
         // Continue until all current entries in candidate nearest neighbors list have
         // been opened
@@ -648,7 +648,7 @@ impl HnswSearcher {
     }
 
     /// Run an HNSW layer search with batched operation. The algorithm mutates
-    /// the input sorted Neighborhood<V> `W` into the `ef` (approximate)
+    /// the input neighborhood `W` into the `ef` (approximate)
     /// nearest vectors to the query `q` in layer `lc` of the layered graph
     /// `graph`.
     ///
@@ -668,10 +668,10 @@ impl HnswSearcher {
     /// ongoing sequential search pattern. It is accomplished in the
     /// following way.
     ///
-    /// First, as `W` is initially filled up to size `ef`, the entire Neighborhood<V>s
+    /// First, as `W` is initially filled up to size `ef`, the entire neighborhoods
     /// of nodes are inserted into `W` via a batched insertion operation
     /// such as a low-depth sorting network. (This functionality is provided
-    /// by `Neighborhood<V>::insert_batch`.) This continues
+    /// by `neighborhood::insert_batch`.) This continues
     /// until `W` has reached size `ef`, so that additional insertions will
     /// result in truncation of farthest elements.
     ///
@@ -740,7 +740,7 @@ impl HnswSearcher {
         let mut visited =
             HashSet::<V::VectorRef>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
 
-        // The set of visited vectors for which we have inspected their Neighborhood<V>
+        // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::<V::VectorRef>::new();
 
         // c: the current candidate to be opened, initialized to first entry of W
@@ -1229,7 +1229,7 @@ impl HnswSearcher {
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
         let insert_span =
-            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_Neighborhood<V>_aggr");
+            trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
         loop {
             // Open the candidate node and visit its unvisited neighbors, computing
@@ -1247,7 +1247,7 @@ impl HnswSearcher {
                 .instrument(insert_span.clone())
                 .await?;
 
-            // New closest node from greedy search of Neighborhood<V>
+            // New closest node from greedy search of neighborhood
             let (n_vec, n_dist) = c_links.first().ok_or(eyre!("No neighbors found"))?.clone();
 
             // If no neighbors are nearer, return current node; otherwise continue
