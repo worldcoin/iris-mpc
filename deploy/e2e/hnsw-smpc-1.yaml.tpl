@@ -132,7 +132,7 @@ hnsw-smpc-1:
       value: "1"
 
     - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
-      value: '["hnsw-smpc-0.$ENV.svc.cluster.local","hnsw-smpc-1.$ENV.svc.cluster.local","hnsw-smpc-2.$ENV.svc.cluster.local"]'
+      value: '["hnsw-smpc-0.orb.e2e.test","0.0.0.0","hnsw-smpc-2.orb.e2e.test"]'
 
     - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
       value: $(IMAGE_NAME)
@@ -205,9 +205,6 @@ hnsw-smpc-1:
 
     - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
       value: '3000'
-
-    - name: SMPC__NODE_HOSTNAMES
-      value: '["hnsw-smpc-0.orb.e2e.test","0.0.0.0","hnsw-smpc-2.orb.e2e.test"]'
 
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
