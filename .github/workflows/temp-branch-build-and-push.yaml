@@ -3,7 +3,8 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "POP-3250/bump-cuda-to-1291-and-test-with-deeplearningcontainer-images"
+      - "dev"
+      - "feat/anon-stats-for-reauth"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
