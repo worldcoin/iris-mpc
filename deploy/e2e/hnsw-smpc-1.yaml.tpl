@@ -179,6 +179,9 @@ hnsw-smpc-1:
     - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
       value: "true"
 
+    - name: SMPC__ANON_STATS_DATABASE__DB_SCHEMA_NAME
+      value: "anon_stats_hnsw_1"
+
     - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
       value: "false"
 
