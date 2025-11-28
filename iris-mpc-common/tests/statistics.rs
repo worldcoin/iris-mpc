@@ -27,8 +27,8 @@ mod tests {
             n_buckets: 2,
             match_distances_buffer_size: 128,
             party_id: 999,
+            operation: AnonStatsOperation::Uniqueness,
             eye: Some(Eye::Right),
-            operation: AnonStatsOperation::default(),
             source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: known_start_time,
             end_time_utc_timestamp: Some(known_end_time),
@@ -126,6 +126,7 @@ mod tests {
         assert_eq!(stats.next_start_time_utc_timestamp, None);
 
         assert!(!stats.is_mirror_orientation);
+        // default value for source enum
         assert_eq!(stats.source, AnonStatsResultSource::Legacy);
     }
 
@@ -140,7 +141,6 @@ mod tests {
             n_buckets: 1,
             match_distances_buffer_size: 42,
             party_id: 777,
-            operation: AnonStatsOperation::default(),
             eye: Some(Eye::Right),
             source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
@@ -150,6 +150,7 @@ mod tests {
             ),
             next_start_time_utc_timestamp: None,
             is_mirror_orientation: false,
+            operation: AnonStatsOperation::Uniqueness,
         };
 
         // Serialize
@@ -173,6 +174,7 @@ mod tests {
         assert_eq!(roundtrip_stats.match_distances_buffer_size, 42);
         assert_eq!(roundtrip_stats.party_id, 777);
         assert!(matches!(roundtrip_stats.eye, Some(Eye::Right)));
+        assert_eq!(roundtrip_stats.operation, AnonStatsOperation::Uniqueness);
 
         // Timestamps (except next_start_time_utc) should match
         assert_eq!(
@@ -214,7 +216,7 @@ mod tests {
             n,
             42,
             AnonStatsResultSource::Legacy,
-            Some(AnonStatsOperation::default()),
+            Some(AnonStatsOperation::Uniqueness),
         );
         stats.fill_buckets(&buckets_2d_cumulative, 1.0, None);
 

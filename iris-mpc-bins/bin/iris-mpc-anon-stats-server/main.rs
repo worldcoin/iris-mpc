@@ -81,6 +81,8 @@ enum JobKind {
     Gpu1D,
     Hnsw1D,
     Gpu2D,
+    Gpu1DReauth,
+    Gpu2DReauth,
 }
 
 struct PublishTargets {
@@ -96,7 +98,7 @@ struct AnonStatsProcessor {
     sns_client: SNSClient,
     s3_client: S3Client,
     publish: PublishTargets,
-    sync_failures: HashMap<AnonStatsOrigin, usize>,
+    sync_failures: HashMap<(AnonStatsOrigin, AnonStatsOperation), usize>,
 }
 
 impl AnonStatsProcessor {
@@ -125,13 +127,49 @@ impl AnonStatsProcessor {
 
     async fn run_iteration(&mut self, session: &mut Session) -> Result<()> {
         for origin in GPU_1D_ORIGINS {
-            self.run_1d_job(session, origin, JobKind::Gpu1D).await?;
+            self.run_1d_job(
+                session,
+                origin,
+                JobKind::Gpu1D,
+                AnonStatsOperation::Uniqueness,
+            )
+            .await?;
+        }
+        for origin in GPU_1D_ORIGINS {
+            self.run_1d_job(
+                session,
+                origin,
+                JobKind::Gpu1DReauth,
+                AnonStatsOperation::Reauth,
+            )
+            .await?;
         }
         for origin in HNSW_1D_ORIGINS {
-            self.run_1d_job(session, origin, JobKind::Hnsw1D).await?;
+            self.run_1d_job(
+                session,
+                origin,
+                JobKind::Hnsw1D,
+                AnonStatsOperation::Uniqueness,
+            )
+            .await?;
         }
         for origin in GPU_2D_ORIGINS {
-            self.run_2d_job(session, origin).await?;
+            self.run_2d_job(
+                session,
+                origin,
+                JobKind::Gpu2D,
+                AnonStatsOperation::Uniqueness,
+            )
+            .await?;
+        }
+        for origin in GPU_2D_ORIGINS {
+            self.run_2d_job(
+                session,
+                origin,
+                JobKind::Gpu2DReauth,
+                AnonStatsOperation::Reauth,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -141,24 +179,27 @@ impl AnonStatsProcessor {
         session: &mut Session,
         origin: AnonStatsOrigin,
         kind: JobKind,
+        operation: AnonStatsOperation,
     ) -> Result<()> {
         let available = match kind {
-            JobKind::Gpu1D => {
+            JobKind::Gpu1D | JobKind::Gpu1DReauth => {
                 self.store
-                    .num_available_anon_stats_1d(origin, Some(AnonStatsOperation::default()))
+                    .num_available_anon_stats_1d(origin, Some(operation))
                     .await?
             }
             JobKind::Hnsw1D => {
                 self.store
-                    .num_available_anon_stats_1d_lifted(origin, Some(AnonStatsOperation::default()))
+                    .num_available_anon_stats_1d_lifted(origin, Some(operation))
                     .await?
             }
-            JobKind::Gpu2D => 0,
+            JobKind::Gpu2D | JobKind::Gpu2DReauth => 0,
         };
         let available = usize::try_from(available).unwrap_or(0);
         info!(
-            "Available anon stats entries for {:?}: {}",
-            origin, available
+            "Available anon stats entries for {:?}, {:?}: {}",
+            origin,
+            Some(operation),
+            available
         );
         if available == 0 {
             info!("No anon stats entries for {:?}", origin);
@@ -166,26 +207,28 @@ impl AnonStatsProcessor {
         }
 
         let min_job_size = sync_on_job_sizes(session, available).await?;
-        if min_job_size < self.config.min_1d_job_size {
+        let required_min = match kind {
+            JobKind::Gpu1DReauth => self.config.min_1d_job_size_reauth,
+            JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
+            _ => panic!("Invalid job kind for 1D job"),
+        };
+
+        if min_job_size < required_min {
             debug!(
                 ?origin,
                 available,
                 min_job_size,
-                required = self.config.min_1d_job_size,
+                required = required_min,
                 "Not enough entries yet for 1D anon stats job"
             );
             return Ok(());
         }
 
         match kind {
-            JobKind::Gpu1D => {
+            JobKind::Gpu1D | JobKind::Gpu1DReauth => {
                 let (ids, bundles) = self
                     .store
-                    .get_available_anon_stats_1d(
-                        origin,
-                        Some(AnonStatsOperation::default()),
-                        min_job_size,
-                    )
+                    .get_available_anon_stats_1d(origin, Some(operation), min_job_size)
                     .await?;
                 if bundles.is_empty() {
                     return Ok(());
@@ -203,7 +246,7 @@ impl AnonStatsProcessor {
                         ?origin,
                         job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
                     );
-                    self.handle_sync_failure(origin, kind).await?;
+                    self.handle_sync_failure(origin, operation, kind).await?;
                     return Ok(());
                 }
 
@@ -213,29 +256,26 @@ impl AnonStatsProcessor {
                     job,
                     &origin,
                     self.config.as_ref(),
-                    Some(AnonStatsOperation::default()),
+                    Some(operation),
                 )
                 .await?;
                 info!(
                     ?origin,
+                    ?kind,
                     job_size,
                     elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job"
+                    "Completed 1D anon stats job",
                 );
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d(&ids).await?;
-                self.sync_failures.remove(&origin);
+                self.sync_failures.remove(&(origin, operation));
                 Ok(())
             }
             JobKind::Hnsw1D => {
                 let (ids, bundles) = self
                     .store
-                    .get_available_anon_stats_1d_lifted(
-                        origin,
-                        Some(AnonStatsOperation::default()),
-                        min_job_size,
-                    )
+                    .get_available_anon_stats_1d_lifted(origin, Some(operation), min_job_size)
                     .await?;
                 if bundles.is_empty() {
                     return Ok(());
@@ -254,7 +294,7 @@ impl AnonStatsProcessor {
                         ?origin,
                         job_size, "Mismatched 1D anon stats job hash detected; scheduling recovery"
                     );
-                    self.handle_sync_failure(origin, kind).await?;
+                    self.handle_sync_failure(origin, operation, kind).await?;
                     return Ok(());
                 }
 
@@ -264,7 +304,7 @@ impl AnonStatsProcessor {
                     job,
                     &origin,
                     self.config.as_ref(),
-                    Some(AnonStatsOperation::default()),
+                    Some(operation),
                 )
                 .await?;
                 info!(
@@ -276,17 +316,23 @@ impl AnonStatsProcessor {
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d_lifted(&ids).await?;
-                self.sync_failures.remove(&origin);
+                self.sync_failures.remove(&(origin, operation));
                 Ok(())
             }
-            JobKind::Gpu2D => unreachable!(),
+            JobKind::Gpu2D | JobKind::Gpu2DReauth => unreachable!(),
         }
     }
 
-    async fn run_2d_job(&mut self, session: &mut Session, origin: AnonStatsOrigin) -> Result<()> {
+    async fn run_2d_job(
+        &mut self,
+        session: &mut Session,
+        origin: AnonStatsOrigin,
+        kind: JobKind,
+        operation: AnonStatsOperation,
+    ) -> Result<()> {
         let available = usize::try_from(
             self.store
-                .num_available_anon_stats_2d(origin, Some(AnonStatsOperation::default()))
+                .num_available_anon_stats_2d(origin, Some(operation))
                 .await?,
         )
         .unwrap_or(0);
@@ -295,12 +341,17 @@ impl AnonStatsProcessor {
         }
 
         let min_job_size = sync_on_job_sizes(session, available).await?;
-        if min_job_size < self.config.min_1d_job_size {
+        let required_min = match kind {
+            JobKind::Gpu2DReauth => self.config.min_2d_job_size_reauth,
+            JobKind::Gpu2D => self.config.min_2d_job_size,
+            _ => panic!("Invalid job kind for 2D job"),
+        };
+        if min_job_size < required_min {
             debug!(
                 ?origin,
                 available,
                 min_job_size,
-                required = self.config.min_1d_job_size,
+                required = required_min,
                 "Not enough entries yet for 2D anon stats job"
             );
             return Ok(());
@@ -308,11 +359,12 @@ impl AnonStatsProcessor {
 
         let (ids, bundles) = self
             .store
-            .get_available_anon_stats_2d(origin, Some(AnonStatsOperation::default()), min_job_size)
+            .get_available_anon_stats_2d(origin, Some(operation), min_job_size)
             .await?;
 
         info!(
             ?origin,
+            ?operation,
             "Fetched {} anon stats 2D bundles for processing",
             bundles.len()
         );
@@ -334,18 +386,13 @@ impl AnonStatsProcessor {
                 ?origin,
                 job_size, "Mismatched 2D anon stats job hash detected; scheduling recovery"
             );
-            self.handle_sync_failure(origin, JobKind::Gpu2D).await?;
+            self.handle_sync_failure(origin, operation, kind).await?;
             return Ok(());
         }
 
         let start = Instant::now();
-        let stats = process_2d_anon_stats_job(
-            session,
-            job,
-            self.config.as_ref(),
-            Some(AnonStatsOperation::default()),
-        )
-        .await?;
+        let stats =
+            process_2d_anon_stats_job(session, job, self.config.as_ref(), Some(operation)).await?;
         info!(
             ?origin,
             job_size,
@@ -355,7 +402,7 @@ impl AnonStatsProcessor {
 
         self.publish_2d_stats(&stats).await?;
         self.store.mark_anon_stats_processed_2d(&ids).await?;
-        self.sync_failures.remove(&origin);
+        self.sync_failures.remove(&(origin, operation));
         Ok(())
     }
 
@@ -412,8 +459,13 @@ impl AnonStatsProcessor {
         Ok(())
     }
 
-    async fn handle_sync_failure(&mut self, origin: AnonStatsOrigin, kind: JobKind) -> Result<()> {
-        let failures = self.sync_failures.entry(origin).or_insert(0);
+    async fn handle_sync_failure(
+        &mut self,
+        origin: AnonStatsOrigin,
+        operation: AnonStatsOperation,
+        kind: JobKind,
+    ) -> Result<()> {
+        let failures = self.sync_failures.entry((origin, operation)).or_insert(0);
         *failures += 1;
 
         if *failures < self.config.max_sync_failures_before_reset {
@@ -431,27 +483,24 @@ impl AnonStatsProcessor {
         );
 
         let cleared = match kind {
-            JobKind::Gpu1D => {
+            JobKind::Gpu1D | JobKind::Gpu1DReauth => {
                 self.store
-                    .clear_unprocessed_anon_stats_1d(origin, Some(AnonStatsOperation::default()))
+                    .clear_unprocessed_anon_stats_1d(origin, Some(operation))
                     .await?
             }
             JobKind::Hnsw1D => {
                 self.store
-                    .clear_unprocessed_anon_stats_1d_lifted(
-                        origin,
-                        Some(AnonStatsOperation::default()),
-                    )
+                    .clear_unprocessed_anon_stats_1d_lifted(origin, Some(operation))
                     .await?
             }
-            JobKind::Gpu2D => {
+            JobKind::Gpu2D | JobKind::Gpu2DReauth => {
                 self.store
-                    .clear_unprocessed_anon_stats_2d(origin, Some(AnonStatsOperation::default()))
+                    .clear_unprocessed_anon_stats_2d(origin, Some(operation))
                     .await?
             }
         };
         info!(?origin, cleared, "Cleared unprocessed anon stats entries");
-        self.sync_failures.insert(origin, 0);
+        self.sync_failures.insert((origin, operation), 0);
         Ok(())
     }
 }

@@ -362,7 +362,7 @@ impl HawkActor {
             args.party_index,
             Some(Eye::Left),
             AnonStatsResultSource::Legacy,
-            Some(AnonStatsOperation::default()),
+            Some(AnonStatsOperation::Uniqueness),
         );
         let bucket_statistics_right = BucketStatistics::new(
             args.match_distances_buffer_size,
@@ -370,7 +370,7 @@ impl HawkActor {
             args.party_index,
             Some(Eye::Right),
             AnonStatsResultSource::Legacy,
-            Some(AnonStatsOperation::default()),
+            Some(AnonStatsOperation::Uniqueness),
         );
 
         Ok(HawkActor {
@@ -692,7 +692,7 @@ impl HawkActor {
         };
 
         store
-            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::default())
+            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::Uniqueness)
             .await?;
 
         Ok(())
