@@ -160,6 +160,21 @@ iris-mpc-0:
     - name: SMPC__DATABASE__LOAD_PARALLELISM
       value: "8"
 
+    - name: SMPC__ANON_STATS_DATABASE__URL
+      valueFrom:
+        secretKeyRef:
+          key: DATABASE_AURORA_URL
+          name: application
+
+    - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__CREATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
+      value: "8"
+
     - name: SMPC__REQUESTS_QUEUE_URL
       value: "http://sqs.$AWS_REGION.localhost.localstack.cloud:4566/000000000000/smpcv2-0-e2e.fifo"
 
