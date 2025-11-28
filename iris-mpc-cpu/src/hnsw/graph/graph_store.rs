@@ -838,8 +838,8 @@ mod tests {
             let mut links_unstructured = Vec::new();
             for (lc, mut l) in links.iter().cloned().enumerate() {
                 let m = searcher.params.get_M(lc);
-                l.trim_to_k_nearest(m);
-                links_unstructured.push(l.vectors_cloned())
+                l.trim(vector_store, Some(m)).await?;
+                links_unstructured.push(l.edge_ids())
             }
 
             let plan = searcher
