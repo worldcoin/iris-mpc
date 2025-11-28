@@ -128,8 +128,14 @@ hnsw-smpc-1:
     - name: SMPC__SERVICE__SERVICE_NAME
       value: "hnsw-service-1"
 
-    - name: SMPC__PARTY_ID
+    - name: SMPC__SERVER_COORDINATION__PARTY_ID
       value: "1"
+
+    - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+      value: '["hnsw-smpc-0.$ENV.svc.cluster.local","hnsw-smpc-1.$ENV.svc.cluster.local","hnsw-smpc-2.$ENV.svc.cluster.local"]'
+
+    - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+      value: $(IMAGE_NAME)
 
     - name: SMPC__CPU_DATABASE__URL
       valueFrom:
