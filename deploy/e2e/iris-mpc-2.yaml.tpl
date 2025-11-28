@@ -175,8 +175,14 @@ iris-mpc-2:
     - name: SMPC__KMS_KEY_ARNS
       value: '["arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000002"]'
 
-    - name: SMPC__PARTY_ID
+    - name: SMPC__SERVER_COORDINATION__PARTY_ID
       value: "2"
+
+    - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+      value: '["iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.$ENV.svc.cluster.local"]'
+
+    - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+      value: $(IMAGE_NAME)
 
     - name: SMPC__PUBLIC_KEY_BASE_URL
       value: "http://wf-$ENV-public-keys.s3.localhost.localstack.cloud:4566"
