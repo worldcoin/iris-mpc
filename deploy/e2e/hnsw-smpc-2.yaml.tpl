@@ -182,6 +182,21 @@ hnsw-smpc-2:
     - name: SMPC__ANON_STATS_DATABASE__DB_SCHEMA_NAME
       value: "anon_stats_hnsw_2"
 
+    - name: SMPC__ANON_STATS_DATABASE__URL
+      valueFrom:
+        secretKeyRef:
+          key: DATABASE_AURORA_URL
+          name: application
+
+    - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__CREATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
+      value: "8"
+
     - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
       value: "false"
 
