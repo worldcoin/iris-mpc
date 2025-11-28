@@ -12,9 +12,8 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::{Neighborhood, UnsortedNeighborhood, WrappedNeighborhood},
-    metrics::ops_counter::Operation,
-    SortedNeighborhood, VectorStore,
+    graph::neighborhood::Neighborhood, metrics::ops_counter::Operation, SortedNeighborhood,
+    VectorStore,
 };
 
 use crate::hnsw::GraphMem;

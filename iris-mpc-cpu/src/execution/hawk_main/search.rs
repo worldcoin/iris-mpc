@@ -298,8 +298,7 @@ mod tests {
                     .center()
                     .matches
                     .iter()
-                    .position(|(v, _)| *v == VectorId::from_0_index(i as u32))
-                    .is_some());
+                    .any(|(v, _)| *v == VectorId::from_0_index(i as u32)));
             }
         }
         actor.sync_peers().await?;
