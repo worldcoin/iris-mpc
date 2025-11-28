@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:90e1a8835fcff907c5ea08723edf8b0f8261702e"
+image: "ghcr.io/worldcoin/iris-mpc:1bfaf4eaabbd1f4904261cd1ca1106660da4c90e"
 
 environment: stage
 replicaCount: 1
@@ -35,13 +35,13 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 25
-    memory: 100Gi
+    cpu: 31
+    memory: 120Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
   requests:
-    cpu: 24
-    memory: 99Gi
+    cpu: 30
+    memory: 110Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
 
