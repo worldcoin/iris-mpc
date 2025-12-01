@@ -9,7 +9,7 @@ env:
     value: "anon-stats-server-hnsw-1"
 
   - name: SMPC__SNS_BUFFER_BUCKET_NAME
-    value: "wf-hsnw-stage-sns-buffer"
+    value: "wf-hnsw-stage-sns-buffer"
 
   - name: SMPC__DB_URL
     valueFrom:
