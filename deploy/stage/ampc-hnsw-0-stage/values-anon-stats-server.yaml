@@ -130,3 +130,9 @@ initContainer:
 
       # Execute AWS CLI command with the generated JSON
       aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+    - sg-009f4095359514cf3 # CHANGE THIS: hnsw-ampc-anon-stats-stage pod sg
+
