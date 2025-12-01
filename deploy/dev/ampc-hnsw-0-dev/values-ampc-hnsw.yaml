@@ -33,6 +33,12 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
+  - name: SMPC__hnsw_schema_name_suffix
+    value: "_cpu1"
+
+  - name: SMPC__gpu_schema_name_suffix
+    value: "_gpu1"
+
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-0"
 
