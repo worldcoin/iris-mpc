@@ -214,13 +214,22 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     let identifier = (vector_id, side);
                     let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                    let (links, set_ep) = searcher
+                    let (links, update_ep) = searcher
                         .search_to_insert(store, graph, &query, insertion_layer)
                         .await?;
+
+                    // Trim and extract unstructured vector lists
+                    let mut links_unstructured = Vec::new();
+                    for (lc, mut l) in links.into_iter().enumerate() {
+                        let m = searcher.params.get_M(lc);
+                        l.trim_to_k_nearest(m);
+                        links_unstructured.push(l.vectors_cloned())
+                    }
+
                     let insert_plan = InsertPlanV {
                         query,
-                        links,
-                        set_ep,
+                        links: links_unstructured,
+                        update_ep,
                     };
 
                     insert::insert(
@@ -304,14 +313,22 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 let identifier = (vector_id, side);
                 let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                let (links, set_ep) = searcher
+                let (links, update_ep) = searcher
                     .search_to_insert(store, graph, &query, insertion_layer)
                     .await?;
 
+                // Trim and extract unstructured vector lists
+                let mut links_unstructured = Vec::new();
+                for (lc, mut l) in links.into_iter().enumerate() {
+                    let m = searcher.params.get_M(lc);
+                    l.trim_to_k_nearest(m);
+                    links_unstructured.push(l.vectors_cloned())
+                }
+
                 let insert_plan: InsertPlanV<PlaintextStore> = InsertPlanV {
                     query,
-                    links,
-                    set_ep,
+                    links: links_unstructured,
+                    update_ep,
                 };
 
                 results.push(Some(insert_plan));
