@@ -7,14 +7,9 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestData,
-    RequestMessageBody,
+    ClientError, ProcessRequestBatch, Request, RequestBatch, RequestData, RequestMessageBody,
 };
-use crate::aws::{
-    create_iris_code_party_shares, create_iris_party_shares_for_s3,
-    types::{S3ObjectInfo, SnsMessageInfo},
-    AwsClient,
-};
+use crate::aws::{types::SnsMessageInfo, AwsClient};
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
@@ -32,18 +27,8 @@ impl RequestEnqueuer {
 }
 
 #[async_trait]
-impl Initialize for RequestEnqueuer {
-    async fn init(&mut self) -> Result<(), ClientError> {
-        self.aws_client
-            .set_public_keyset()
-            .await
-            .map_err(ClientError::AwsServiceError)
-    }
-}
-
-#[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
-    async fn process_batch(&self, batch: &RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
         for request in batch.requests() {
             let request_body = self.get_message_body(request).await?;
             self.aws_client
@@ -85,39 +70,11 @@ impl RequestEnqueuer {
         request: &Request,
     ) -> Result<RequestMessageBody, ClientError> {
         // Destructure generated data.
-        let (reauthorisation_id, shares_1) = match request.data() {
+        let reauthorisation_id = match request.data() {
             RequestData::Reauthorization {
-                reauthorisation_id,
-                reauthorisation_shares: shares,
-                ..
-            } => (reauthorisation_id, shares),
+                reauthorisation_id, ..
+            } => reauthorisation_id,
             _ => unreachable!(),
-        };
-
-        // Set AWS-S3 JSON compatible shares.  Signup id is derived from request id.
-        let [[l_code, l_mask], [r_code, r_mask]] = shares_1;
-        let shares = create_iris_party_shares_for_s3(
-            &create_iris_code_party_shares(
-                *reauthorisation_id,
-                l_code.to_owned(),
-                l_mask.to_owned(),
-                r_code.to_owned(),
-                r_mask.to_owned(),
-            ),
-            &self.aws_client.public_keyset(),
-        );
-
-        // Upload to AWS-S3.
-        let s3_obj_info = S3ObjectInfo::new(
-            self.aws_client.config().s3_request_bucket_name(),
-            &reauthorisation_id.to_string(),
-            &shares,
-        );
-        match self.aws_client.s3_put_object(&s3_obj_info).await {
-            Ok(_) => {
-                tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
-            }
-            Err(e) => return Err(ClientError::AwsServiceError(e)),
         };
 
         // Set body payload.
@@ -148,39 +105,9 @@ impl RequestEnqueuer {
         request: &Request,
     ) -> Result<RequestMessageBody, ClientError> {
         // Destructure generated data.
-        let (signup_id, shares) = match request.data() {
-            RequestData::Uniqueness {
-                signup_id,
-                signup_shares: shares,
-                ..
-            } => (signup_id, shares),
+        let signup_id = match request.data() {
+            RequestData::Uniqueness { signup_id, .. } => signup_id,
             _ => unreachable!(),
-        };
-
-        // Set AWS-S3 JSON compatible shares.  Signup id is derived from request id.
-        let [[l_code, l_mask], [r_code, r_mask]] = shares;
-        let shares = create_iris_party_shares_for_s3(
-            &create_iris_code_party_shares(
-                *signup_id,
-                l_code.to_owned(),
-                l_mask.to_owned(),
-                r_code.to_owned(),
-                r_mask.to_owned(),
-            ),
-            &self.aws_client.public_keyset(),
-        );
-
-        // Upload to AWS-S3.
-        let s3_obj_info = S3ObjectInfo::new(
-            self.aws_client.config().s3_request_bucket_name(),
-            &request.identifier().to_string(),
-            &shares,
-        );
-        match self.aws_client.s3_put_object(&s3_obj_info).await {
-            Ok(_) => {
-                tracing::info!("{} :: Shares encrypted and uploaded to S3", request);
-            }
-            Err(e) => return Err(ClientError::AwsServiceError(e)),
         };
 
         // Set body payload.

@@ -1,5 +1,3 @@
-use rand::{CryptoRng, Rng};
-
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
@@ -8,11 +6,10 @@ use iris_mpc_common::helpers::smpc_request::{
 use super::super::typeset::{
     ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData,
 };
-use crate::irises::generate_iris_code_and_mask_shares_both_eyes;
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
-pub struct RequestGenerator<R: Rng + CryptoRng> {
+pub struct RequestGenerator {
     // Count of generated batches.
     batch_count: usize,
 
@@ -24,16 +21,9 @@ pub struct RequestGenerator<R: Rng + CryptoRng> {
 
     /// Number of request batches to generate.
     n_batches: usize,
-
-    /// Entropy source.
-    rng: R,
 }
 
-impl<R: Rng + CryptoRng> RequestGenerator<R> {
-    fn rng_mut(&mut self) -> &mut R {
-        &mut self.rng
-    }
-
+impl RequestGenerator {
     fn batch_size(&self) -> usize {
         match self.batch_size {
             RequestBatchSize::Static(size) => size,
@@ -44,14 +34,12 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
         n_batches: usize,
-        rng: R,
     ) -> Self {
         Self {
             batch_count: 0,
             batch_kind,
             batch_size,
             n_batches,
-            rng,
         }
     }
 
@@ -84,21 +72,19 @@ impl<R: Rng + CryptoRng> RequestGenerator<R> {
         match batch_kind {
             IDENTITY_DELETION_MESSAGE_TYPE => RequestData::IdentityDeletion {
                 signup_id: uuid::Uuid::new_v4(),
-                signup_shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
             },
             REAUTH_MESSAGE_TYPE => RequestData::Reauthorization {
                 reauthorisation_id: uuid::Uuid::new_v4(),
-                reauthorisation_shares: generate_iris_code_and_mask_shares_both_eyes(
-                    self.rng_mut(),
-                ),
-                signup_shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
                 signup_id: uuid::Uuid::new_v4(),
             },
-            RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck,
-            RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate,
+            RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck {
+                reset_id: uuid::Uuid::new_v4(),
+            },
+            RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate {
+                reset_id: uuid::Uuid::new_v4(),
+            },
             UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
                 signup_id: uuid::Uuid::new_v4(),
-                signup_shares: generate_iris_code_and_mask_shares_both_eyes(self.rng_mut()),
             },
             _ => unreachable!(),
         }

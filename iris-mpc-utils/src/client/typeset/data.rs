@@ -3,9 +3,6 @@ use std::fmt;
 use uuid;
 
 use iris_mpc_common::helpers::smpc_request;
-use iris_mpc_cpu::execution::hawk_main::BothEyes;
-
-use crate::types::IrisCodeAndMaskShares;
 
 /// Encapsualates information to dispatch a system service request.
 #[derive(Debug)]
@@ -154,19 +151,19 @@ impl fmt::Display for RequestBatchSize {
 pub enum RequestData {
     IdentityDeletion {
         signup_id: uuid::Uuid,
-        signup_shares: BothEyes<IrisCodeAndMaskShares>,
     },
     Reauthorization {
         reauthorisation_id: uuid::Uuid,
-        reauthorisation_shares: BothEyes<IrisCodeAndMaskShares>,
         signup_id: uuid::Uuid,
-        signup_shares: BothEyes<IrisCodeAndMaskShares>,
     },
-    ResetCheck,
-    ResetUpdate,
+    ResetCheck {
+        reset_id: uuid::Uuid,
+    },
+    ResetUpdate {
+        reset_id: uuid::Uuid,
+    },
     Uniqueness {
         signup_id: uuid::Uuid,
-        signup_shares: BothEyes<IrisCodeAndMaskShares>,
     },
 }
 
@@ -179,10 +176,10 @@ impl fmt::Display for RequestData {
             RequestData::Reauthorization { .. } => {
                 write!(f, "Reauthorisation")
             }
-            RequestData::ResetCheck => {
+            RequestData::ResetCheck { .. } => {
                 write!(f, "ResetCheck")
             }
-            RequestData::ResetUpdate => {
+            RequestData::ResetUpdate { .. } => {
                 write!(f, "ResetUpdate")
             }
             RequestData::Uniqueness { signup_id, .. } => {

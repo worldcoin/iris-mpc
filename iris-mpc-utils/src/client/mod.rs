@@ -17,15 +17,15 @@ mod typeset;
 
 /// A utility for correlating enqueued system requests with system responses.
 #[derive(Debug)]
-pub struct ServiceClient<R: Rng + CryptoRng> {
+pub struct ServiceClient<R: Rng + CryptoRng + Send> {
     // Component that uploads data to services prior to request processing.
-    data_uploader: DataUploader,
+    data_uploader: DataUploader<R>,
 
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
     // Component that generates system requests.
-    request_generator: RequestGenerator<R>,
+    request_generator: RequestGenerator,
 
     // Component that correlates system requests & responses.
     #[allow(dead_code)]
@@ -48,9 +48,9 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
         let aws_client = AwsClient::new(aws_client_config);
 
         Self {
-            data_uploader: DataUploader::new(aws_client.clone()),
+            data_uploader: DataUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count, rng_seed),
+            request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count),
             response_correlator: ResponseCorrelator::new(aws_client.clone()),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
@@ -59,11 +59,7 @@ impl<R: Rng + CryptoRng> ServiceClient<R> {
     /// Initializer.
     pub async fn init(&mut self) -> Result<(), ClientError> {
         tracing::info!("Initializing ...");
-        for initializer in [
-            self.data_uploader.init(),
-            self.request_enqueuer.init(),
-            self.response_correlator.init(),
-        ] {
+        for initializer in [self.data_uploader.init(), self.response_correlator.init()] {
             match initializer.await {
                 Ok(()) => (),
                 Err(e) => {
