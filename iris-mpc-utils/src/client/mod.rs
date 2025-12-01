@@ -36,7 +36,7 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
     response_dequeuer: ResponseDequeuer,
 }
 
-impl<R: Rng + CryptoRng> ServiceClient<R> {
+impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     /// Constructor.
     pub async fn new(
         aws_client_config: AwsClientConfig,
