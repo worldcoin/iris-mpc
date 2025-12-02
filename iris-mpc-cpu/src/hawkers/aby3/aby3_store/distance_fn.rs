@@ -1,11 +1,13 @@
 use super::{
     Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
 };
+use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, ROTATIONS};
 use itertools::Itertools;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
 pub enum DistanceFn {
     Fhd,
     MinFhd,
