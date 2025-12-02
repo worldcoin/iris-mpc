@@ -249,7 +249,7 @@ impl fmt::Display for RequestBatchKind {
 
 impl From<&String> for RequestBatchKind {
     fn from(option: &String) -> Self {
-        RequestBatchKind::Simple(match option.as_str() {
+        Self::Simple(match option.as_str() {
             IDENTITY_DELETION_MESSAGE_TYPE => IDENTITY_DELETION_MESSAGE_TYPE,
             REAUTH_MESSAGE_TYPE => REAUTH_MESSAGE_TYPE,
             RESET_CHECK_MESSAGE_TYPE => RESET_CHECK_MESSAGE_TYPE,
