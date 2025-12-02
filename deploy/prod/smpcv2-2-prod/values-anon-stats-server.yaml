@@ -3,13 +3,13 @@ env:
     value: "info"
 
   - name: SMPC__ENVIRONMENT
-    value: "stage"
+    value: "prod"
 
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "anon-stats-server-smpcv2-2"
 
   - name: SMPC__SNS_BUFFER_BUCKET_NAME
-    value: "wf-smpcv2-stage-sns-buffer"
+    value: "wf-smpcv2-prod-sns-buffer"
 
   - name: SMPC__DB_URL
     valueFrom:
@@ -27,7 +27,7 @@ env:
     value: "2"
 
   - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
-    value: '["anon-stats-server.1.stage.smpcv2.worldcoin.dev","anon-stats-server.2.stage.smpcv2.worldcoin.dev","0.0.0.0"]'
+    value: '["anon-stats-server.1.smpcv2.worldcoin.org","anon-stats-server.2.smpcv2.worldcoin.org","0.0.0.0"]'
 
   - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
     value: $(IMAGE_NAME)
@@ -76,17 +76,11 @@ env:
   - name: SMPC__N_BUCKETS_2D
     value: "375"
 
-  - name: SMPC__MIN_1D_JOB_SIZE_REAUTH
-    value: "10"
-
   - name: SMPC__MIN_1D_JOB_SIZE
-    value: "64"
-
-  - name: SMPC__MIN_2D_JOB_SIZE_REAUTH
-    value: "10"
+    value: "65536"
 
   - name: SMPC__MIN_2D_JOB_SIZE
-    value: "64"
+    value: "1024"
 
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
@@ -108,7 +102,7 @@ initContainer:
       #!/usr/bin/env bash
 
       # Set up environment variables
-      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".stage.smpcv2.worldcoin.dev --query "HostedZones[0].Id" --output text)
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".smpcv2.worldcoin.org --query "HostedZones[0].Id" --output text)
 
       # Generate the JSON content in memory
       BATCH_JSON=$(cat <<EOF
@@ -118,7 +112,7 @@ initContainer:
           {
             "Action": "UPSERT",
             "ResourceRecordSet": {
-              "Name": "anon-stats-server.$PARTY_ID.stage.smpcv2.worldcoin.dev",
+              "Name": "anon-stats-server.$PARTY_ID.smpcv2.worldcoin.org",
               "TTL": 5,
               "Type": "A",
               "ResourceRecords": [{

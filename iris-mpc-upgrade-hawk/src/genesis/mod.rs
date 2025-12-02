@@ -394,7 +394,7 @@ async fn exec_setup(
 
     // Coordinator: await network state = ready.
     set_node_ready(is_ready_flag);
-    let ct = shutdown_handler.get_cancellation_token();
+    let ct = shutdown_handler.get_network_cancellation_token();
     tokio::select! {
         _ = ct.cancelled() => Err(eyre!("ready check failed")),
         r = wait_for_others_ready(server_coord_config) => r
@@ -921,7 +921,11 @@ async fn get_hawk_actor(
         hawk_args.party_index, node_addresses
     ));
 
-    HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await
+    HawkActor::from_cli(
+        &hawk_args,
+        shutdown_handler.get_network_cancellation_token(),
+    )
+    .await
 }
 
 /// Returns service clients used downstream.

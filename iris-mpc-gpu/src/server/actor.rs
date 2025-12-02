@@ -20,9 +20,11 @@ use crate::{
     },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
-use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
-use ampc_server_utils::statistics::Eye;
-use ampc_server_utils::{BucketStatistics, BucketStatistics2D};
+use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+use ampc_anon_stats::{
+    AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
+    BucketStatistics, BucketStatistics2D,
+};
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -209,19 +211,35 @@ impl AnonStatsWriter {
         Self { store, runtime }
     }
 
-    fn insert_1d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle1D)>) {
+    fn insert_1d(
+        &self,
+        origin: AnonStatsOrigin,
+        operation: AnonStatsOperation,
+        data: Vec<(i64, DistanceBundle1D)>,
+    ) {
         let store = self.store.clone();
         self.runtime.spawn(async move {
-            if let Err(err) = store.insert_anon_stats_batch_1d(&data, origin).await {
+            if let Err(err) = store
+                .insert_anon_stats_batch_1d(&data, origin, operation)
+                .await
+            {
                 tracing::warn!(?err, ?origin, "Failed to persist 1D anon stats batch");
             }
         });
     }
 
-    fn insert_2d(&self, origin: AnonStatsOrigin, data: Vec<(i64, DistanceBundle2D)>) {
+    fn insert_2d(
+        &self,
+        origin: AnonStatsOrigin,
+        operation: AnonStatsOperation,
+        data: Vec<(i64, DistanceBundle2D)>,
+    ) {
         let store = self.store.clone();
         self.runtime.spawn(async move {
-            if let Err(err) = store.insert_anon_stats_batch_2d(&data, origin).await {
+            if let Err(err) = store
+                .insert_anon_stats_batch_2d(&data, origin, operation)
+                .await
+            {
                 tracing::warn!(?err, ?origin, "Failed to persist 2D anon stats batch");
             }
         });
@@ -558,26 +576,55 @@ impl ServerActor {
             dev.synchronize().unwrap();
         }
 
-        let anonymized_bucket_statistics_left =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Left);
+        let anonymized_bucket_statistics_left = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
 
-        let anonymized_bucket_statistics_right =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Right);
+        let anonymized_bucket_statistics_right = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
 
-        let mut anonymized_bucket_statistics_left_mirror =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Left);
+        let mut anonymized_bucket_statistics_left_mirror = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
         anonymized_bucket_statistics_left_mirror.is_mirror_orientation = true;
 
-        let mut anonymized_bucket_statistics_right_mirror =
-            BucketStatistics::new(match_distances_buffer_size, n_buckets, party_id, Eye::Right);
+        let mut anonymized_bucket_statistics_right_mirror = BucketStatistics::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
         anonymized_bucket_statistics_right_mirror.is_mirror_orientation = true;
         tracing::info!("GPU actor: Initialized");
 
         let both_side_match_distances_buffer =
             vec![TwoSidedDistanceCache::default(); device_manager.device_count()];
 
-        let anonymized_bucket_statistics_2d =
-            BucketStatistics2D::new(match_distances_2d_buffer_size, n_buckets, party_id);
+        let anonymized_bucket_statistics_2d = BucketStatistics2D::new(
+            match_distances_2d_buffer_size,
+            n_buckets,
+            party_id,
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
 
         Ok(Self {
             party_id,
@@ -877,6 +924,17 @@ impl ServerActor {
         }
         batch_size = valid_entry_idxs.len();
         batch.retain(&valid_entry_idxs);
+        let batch_operations = batch
+            .request_types
+            .iter()
+            .map(|request_type| {
+                if request_type.as_str() == REAUTH_MESSAGE_TYPE {
+                    AnonStatsOperation::Reauth
+                } else {
+                    AnonStatsOperation::Uniqueness
+                }
+            })
+            .collect::<Vec<_>>();
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
         self.internal_batch_counter += 1;
 
@@ -1033,6 +1091,7 @@ impl ServerActor {
                 self.full_scan_side,
                 batch_size,
                 orientation,
+                &batch_operations,
             );
 
         ///////////////////////////////////////////////////////////////////
@@ -1142,6 +1201,7 @@ impl ServerActor {
                     other_side,
                     batch_size,
                     orientation,
+                    &batch_operations,
                 )
             } else {
                 tracing::info!("Comparing {} eye queries against DB subset", other_side);
@@ -1153,6 +1213,7 @@ impl ServerActor {
                     batch_size,
                     &partial_matches_side1,
                     orientation,
+                    &batch_operations,
                 )
             };
 
@@ -2202,6 +2263,7 @@ impl ServerActor {
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
+        operations: &[AnonStatsOperation],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
@@ -2434,6 +2496,8 @@ impl ServerActor {
                     * (100 + self.match_distances_buffer_size_extra_percent)
                     / 100,
                 &self.streams[0],
+                operations,
+                self.distance_comparator.query_length as u64,
             ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
@@ -2444,7 +2508,7 @@ impl ServerActor {
 
         (partial_results_with_rotations, new_partial_match_buffer)
     }
-
+    #[allow(clippy::too_many_arguments)]
     fn compare_query_against_db_and_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
@@ -2453,6 +2517,7 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         orientation: Orientation,
+        operations: &[AnonStatsOperation],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
@@ -2786,6 +2851,8 @@ impl ServerActor {
                     * (100 + self.match_distances_buffer_size_extra_percent)
                     / 100,
                 &self.streams[0],
+                operations,
+                self.distance_comparator.query_length as u64,
             ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
@@ -3375,7 +3442,8 @@ impl ServerActor {
             context: AnonStatsContext::GPU,
         };
 
-        let mut bundles = Vec::new();
+        let mut uniqueness_bundles = Vec::new();
+        let mut reauth_bundles = Vec::new();
         for cache in caches {
             for (key, values) in cache.iter() {
                 if values.is_empty() {
@@ -3393,6 +3461,17 @@ impl ServerActor {
                 };
                 let mut sorted = values.clone();
                 sorted.sort_by_key(|share| share.idx);
+                let operation = sorted
+                    .first()
+                    .map(|share| share.operation)
+                    .unwrap_or(AnonStatsOperation::Uniqueness);
+                if sorted.iter().any(|share| share.operation != operation) {
+                    tracing::warn!(
+                        "Mixed anonymized stats operations detected for match_id {} on eye {:?}",
+                        match_id,
+                        eye
+                    );
+                }
                 let distance_bundle = sorted
                     .into_iter()
                     .map(|share| {
@@ -3402,14 +3481,33 @@ impl ServerActor {
                         )
                     })
                     .collect::<DistanceBundle1D>();
-                bundles.push((match_id, distance_bundle));
+                match operation {
+                    AnonStatsOperation::Reauth => reauth_bundles.push((match_id, distance_bundle)),
+                    _ => uniqueness_bundles.push((match_id, distance_bundle)),
+                }
             }
         }
 
-        if !bundles.is_empty() {
-            tracing::info!("Inserting {} anon stats bundles", bundles.len());
-            writer.insert_1d(origin, bundles);
-        } else {
+        if !uniqueness_bundles.is_empty() {
+            tracing::info!(
+                "Inserting {} uniqueness anon stats bundles",
+                uniqueness_bundles.len()
+            );
+            writer.insert_1d(
+                origin,
+                AnonStatsOperation::Uniqueness,
+                uniqueness_bundles.clone(),
+            );
+        }
+        if !reauth_bundles.is_empty() {
+            tracing::info!(
+                "Inserting {} reauth anon stats bundles",
+                reauth_bundles.len()
+            );
+            writer.insert_1d(origin, AnonStatsOperation::Reauth, reauth_bundles.clone());
+        }
+
+        if uniqueness_bundles.is_empty() && reauth_bundles.is_empty() {
             tracing::info!("No anon stats bundles to insert");
         }
     }
@@ -3427,7 +3525,8 @@ impl ServerActor {
             context: AnonStatsContext::GPU,
         };
 
-        let mut bundles = Vec::new();
+        let mut uniqueness_bundles = Vec::new();
+        let mut reauth_bundles = Vec::new();
         for cache in caches {
             for (key, (left_values, right_values)) in cache.iter() {
                 if left_values.is_empty() || right_values.is_empty() {
@@ -3445,6 +3544,20 @@ impl ServerActor {
                 };
                 let mut left_sorted = left_values.clone();
                 left_sorted.sort_by_key(|share| share.idx);
+                let operation = left_sorted
+                    .first()
+                    .map(|share| share.operation)
+                    .unwrap_or(AnonStatsOperation::Uniqueness);
+                if left_sorted.iter().any(|share| share.operation != operation)
+                    || right_values
+                        .iter()
+                        .any(|share| share.operation != operation)
+                {
+                    tracing::warn!(
+                        "Mixed operations detected while persisting 2D anon stats for match_id {}",
+                        match_id
+                    );
+                }
                 let mut right_sorted = right_values.clone();
                 right_sorted.sort_by_key(|share| share.idx);
 
@@ -3468,12 +3581,20 @@ impl ServerActor {
                     })
                     .collect::<DistanceBundle1D>();
 
-                bundles.push((match_id, (left_bundle, right_bundle)));
+                match operation {
+                    AnonStatsOperation::Reauth => {
+                        reauth_bundles.push((match_id, (left_bundle, right_bundle)))
+                    }
+                    _ => uniqueness_bundles.push((match_id, (left_bundle, right_bundle))),
+                }
             }
         }
 
-        if !bundles.is_empty() {
-            writer.insert_2d(origin, bundles);
+        if !uniqueness_bundles.is_empty() {
+            writer.insert_2d(origin, AnonStatsOperation::Uniqueness, uniqueness_bundles);
+        }
+        if !reauth_bundles.is_empty() {
+            writer.insert_2d(origin, AnonStatsOperation::Reauth, reauth_bundles);
         }
     }
 }

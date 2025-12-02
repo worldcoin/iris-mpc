@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
-use ampc_server_utils::statistics::Eye;
-use cudarc::driver::{result::memset_d8_sync, CudaSlice, CudaStream, DevicePtr, DeviceSlice};
-use iris_mpc_common::ROTATIONS;
-use itertools::{izip, Itertools};
-
 use crate::{
     helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
     threshold_ring::protocol::{ChunkShare, Circuits},
 };
+use ampc_anon_stats::types::Eye;
+use ampc_anon_stats::AnonStatsOperation;
+use cudarc::driver::{result::memset_d8_sync, CudaSlice, CudaStream, DevicePtr, DeviceSlice};
+use iris_mpc_common::ROTATIONS;
+use itertools::{izip, Itertools};
 
 pub struct DistanceCache {
     pub(crate) match_distances_buffer_codes_left: Vec<ChunkShare<u16>>,
@@ -147,6 +147,7 @@ impl DistanceCache {
             .collect::<Vec<_>>()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn load_additions_since(
         &self,
         device_manager: &DeviceManager,
@@ -154,6 +155,8 @@ impl DistanceCache {
         old_counters: Vec<usize>,
         max_internal_buffer_size: usize,
         streams: &[CudaStream],
+        operations: &[AnonStatsOperation],
+        max_query_length: u64,
     ) -> Vec<OneSidedDistanceCache> {
         let (codes, masks, counters, indices_gpu) = self.get_buffers(eye);
         let counters = device_manager
@@ -247,6 +250,7 @@ impl DistanceCache {
             .skip(old)
             .take(new - old)
             {
+                let operation = operation_from_match_id(idx, operations, max_query_length);
                 map.entry(idx / ROTATIONS as u64)
                     .or_insert_with(|| Vec::with_capacity(4))
                     .push(CpuDistanceShare {
@@ -255,6 +259,7 @@ impl DistanceCache {
                         code_b: c_b,
                         mask_a: m_a,
                         mask_b: m_b,
+                        operation,
                     });
             }
         }
@@ -273,6 +278,23 @@ pub struct CpuDistanceShare {
     pub code_b: u16,
     pub mask_a: u16,
     pub mask_b: u16,
+    pub operation: AnonStatsOperation,
+}
+
+fn operation_from_match_id(
+    match_idx: u64,
+    operations: &[AnonStatsOperation],
+    max_query_length: u64,
+) -> AnonStatsOperation {
+    if operations.is_empty() || max_query_length == 0 {
+        return AnonStatsOperation::Uniqueness;
+    }
+    let query_idx = (match_idx % max_query_length) as usize;
+    let request_idx = query_idx / ROTATIONS;
+    operations
+        .get(request_idx)
+        .copied()
+        .unwrap_or(AnonStatsOperation::Uniqueness)
 }
 
 pub struct CpuLiftedDistanceShare {
