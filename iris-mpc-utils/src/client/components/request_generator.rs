@@ -46,8 +46,6 @@ impl RequestGenerator {
 
         let batch_idx = self.batch_count + 1;
         let mut batch = RequestBatch::new(batch_idx, self.batch_size());
-        tracing::info!("{} :: Instantiated", batch);
-
         for batch_item_idx in 1..(self.batch_size() + 1) {
             batch.requests_mut().push(match self.batch_kind {
                 RequestBatchKind::Simple(batch_kind) => {
@@ -55,8 +53,9 @@ impl RequestGenerator {
                 }
             });
         }
-
         self.batch_count += 1;
+
+        tracing::info!("{} :: Instantiated", batch);
 
         Ok(Some(batch))
     }

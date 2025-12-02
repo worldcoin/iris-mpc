@@ -28,11 +28,10 @@ impl RequestEnqueuer {
 
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
-        for request in batch.requests_mut() {
-            let request_body = self.get_message_body(request).await?;
+    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
+        for request in batch.requests() {
             self.aws_client
-                .sns_publish_json(SnsMessageInfo::from(request_body))
+                .sns_publish_json(SnsMessageInfo::from(RequestMessageBody::from(request)))
                 .await
                 .map_err(ClientError::AwsServiceError)?;
             tracing::info!("{}: Published to AWS-SNS", request);
@@ -42,72 +41,36 @@ impl ProcessRequestBatch for RequestEnqueuer {
     }
 }
 
-impl RequestEnqueuer {
-    /// Returns body of message to be enqueued.
-    async fn get_message_body(
-        &self,
-        request: &mut Request,
-    ) -> Result<RequestMessageBody, ClientError> {
+impl From<&Request> for RequestMessageBody {
+    fn from(request: &Request) -> Self {
+        // TODO: ensure correlated data is available here.
         match request {
-            Request::IdentityDeletion { .. } => self.get_identity_deletion(request).await,
-            Request::Reauthorization { .. } => self.get_reauthorization(request).await,
-            Request::ResetCheck { .. } => self.get_reset_check(request).await,
-            Request::ResetUpdate { .. } => self.get_reset_update(request).await,
-            Request::Uniqueness { .. } => self.get_uniqueness_request(request).await,
+            Request::IdentityDeletion { .. } => {
+                RequestMessageBody::IdentityDeletion(IdentityDeletionRequest { serial_id: 2 })
+            }
+            Request::Reauthorization { reauth_id, .. } => {
+                RequestMessageBody::Reauthorization(ReAuthRequest {
+                    batch_size: Some(1),
+                    reauth_id: reauth_id.to_string(),
+                    s3_key: reauth_id.to_string(),
+                    serial_id: 1,
+                    use_or_rule: bool::default(),
+                })
+            }
+            Request::ResetCheck { .. } => unimplemented!(),
+            Request::ResetUpdate { .. } => unimplemented!(),
+            Request::Uniqueness { signup_id, .. } => {
+                RequestMessageBody::Uniqueness(UniquenessRequest {
+                    batch_size: Some(1),
+                    signup_id: signup_id.to_string(),
+                    s3_key: signup_id.to_string(),
+                    or_rule_serial_ids: None,
+                    skip_persistence: None,
+                    full_face_mirror_attacks_detection_enabled: Some(true),
+                    disable_anonymized_stats: None,
+                })
+            }
         }
-    }
-
-    async fn get_identity_deletion(
-        &self,
-        _request: &mut Request,
-    ) -> Result<RequestMessageBody, ClientError> {
-        // Set body payload.
-        // TODO: get serial id from correlated uniqueness request.
-        let payload = IdentityDeletionRequest { serial_id: 2 };
-
-        Ok(RequestMessageBody::IdentityDeletion(payload))
-    }
-
-    async fn get_reauthorization(
-        &self,
-        request: &mut Request,
-    ) -> Result<RequestMessageBody, ClientError> {
-        Ok(RequestMessageBody::Reauthorization(ReAuthRequest {
-            batch_size: Some(1),
-            reauth_id: request.reauth_id().to_string(),
-            s3_key: request.reauth_id().to_string(),
-            serial_id: 1,
-            use_or_rule: bool::default(),
-        }))
-    }
-
-    async fn get_reset_check(
-        &self,
-        _request: &mut Request,
-    ) -> Result<RequestMessageBody, ClientError> {
-        unimplemented!()
-    }
-
-    async fn get_reset_update(
-        &self,
-        _request: &mut Request,
-    ) -> Result<RequestMessageBody, ClientError> {
-        unimplemented!()
-    }
-
-    async fn get_uniqueness_request(
-        &self,
-        request: &mut Request,
-    ) -> Result<RequestMessageBody, ClientError> {
-        Ok(RequestMessageBody::Uniqueness(UniquenessRequest {
-            batch_size: Some(1),
-            signup_id: request.signup_id().to_string(),
-            s3_key: request.signup_id().to_string(),
-            or_rule_serial_ids: None,
-            skip_persistence: None,
-            full_face_mirror_attacks_detection_enabled: Some(true),
-            disable_anonymized_stats: None,
-        }))
     }
 }
 

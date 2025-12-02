@@ -11,5 +11,5 @@ pub trait Initialize {
 /// Implemented by components within batch processing pipeline.
 #[async_trait]
 pub trait ProcessRequestBatch {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError>;
+    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError>;
 }

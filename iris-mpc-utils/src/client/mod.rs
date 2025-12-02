@@ -15,7 +15,7 @@ pub use typeset::{
 mod components;
 mod typeset;
 
-/// A utility for correlating enqueued system requests with system responses.
+/// A utility for enqueuing system requests & correlating with system responses.
 #[derive(Debug)]
 pub struct ServiceClient<R: Rng + CryptoRng + Send> {
     // Component that uploads data to services prior to request processing.
@@ -37,7 +37,6 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
 }
 
 impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
-    /// Constructor.
     pub async fn new(
         aws_client_config: AwsClientConfig,
         batch_count: usize,
@@ -56,7 +55,17 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         }
     }
 
-    /// Initializer.
+    pub async fn exec(&mut self) -> Result<(), ClientError> {
+        tracing::info!("Executing ...");
+        while let Some(batch) = self.request_generator.next().await.unwrap() {
+            self.data_uploader.process_batch(&batch).await?;
+            self.request_enqueuer.process_batch(&batch).await?;
+            self.response_dequeuer.process_batch(&batch).await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn init(&mut self) -> Result<(), ClientError> {
         tracing::info!("Initializing ...");
         for initializer in [self.data_uploader.init(), self.response_correlator.init()] {
@@ -67,18 +76,6 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
                     return Err(ClientError::InitialisationError(e.to_string()));
                 }
             }
-        }
-
-        Ok(())
-    }
-
-    /// Executor.
-    pub async fn exec(&mut self) -> Result<(), ClientError> {
-        tracing::info!("Executing ...");
-        while let Some(mut batch) = self.request_generator.next().await.unwrap() {
-            self.data_uploader.process_batch(&mut batch).await?;
-            self.request_enqueuer.process_batch(&mut batch).await?;
-            self.response_dequeuer.process_batch(&mut batch).await?;
         }
 
         Ok(())
