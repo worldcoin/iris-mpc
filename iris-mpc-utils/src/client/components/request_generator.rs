@@ -1,10 +1,5 @@
-use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
-};
-
 use super::super::typeset::{
-    ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData,
+    ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -53,40 +48,16 @@ impl RequestGenerator {
         let mut batch = RequestBatch::new(batch_idx, self.batch_size());
         tracing::info!("{} :: Instantiated", batch);
 
-        for item_idx in 1..(self.batch_size() + 1) {
-            batch.requests_mut().push(Request::new(
-                batch_idx,
-                item_idx,
-                match self.batch_kind {
-                    RequestBatchKind::Simple(kind) => self.get_request_data_from_batch_kind(kind),
-                },
-            ));
+        for batch_item_idx in 1..(self.batch_size() + 1) {
+            batch.requests_mut().push(match self.batch_kind {
+                RequestBatchKind::Simple(batch_kind) => {
+                    Request::new(batch_idx, batch_item_idx, batch_kind)
+                }
+            });
         }
 
         self.batch_count += 1;
 
         Ok(Some(batch))
-    }
-
-    fn get_request_data_from_batch_kind(&mut self, batch_kind: &'static str) -> RequestData {
-        match batch_kind {
-            IDENTITY_DELETION_MESSAGE_TYPE => RequestData::IdentityDeletion {
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            REAUTH_MESSAGE_TYPE => RequestData::Reauthorization {
-                reauthorisation_id: uuid::Uuid::new_v4(),
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            RESET_CHECK_MESSAGE_TYPE => RequestData::ResetCheck {
-                reset_id: uuid::Uuid::new_v4(),
-            },
-            RESET_UPDATE_MESSAGE_TYPE => RequestData::ResetUpdate {
-                reset_id: uuid::Uuid::new_v4(),
-            },
-            UNIQUENESS_MESSAGE_TYPE => RequestData::Uniqueness {
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            _ => unreachable!(),
-        }
     }
 }

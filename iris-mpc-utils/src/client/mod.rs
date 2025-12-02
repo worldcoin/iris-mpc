@@ -75,14 +75,10 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     /// Executor.
     pub async fn exec(&mut self) -> Result<(), ClientError> {
         tracing::info!("Executing ...");
-        while let Some(batch) = self.request_generator.next().await.unwrap() {
-            for batch_processor in [
-                self.data_uploader.process_batch(&batch),
-                self.request_enqueuer.process_batch(&batch),
-                self.response_dequeuer.process_batch(&batch),
-            ] {
-                batch_processor.await?
-            }
+        while let Some(mut batch) = self.request_generator.next().await.unwrap() {
+            self.data_uploader.process_batch(&mut batch).await?;
+            self.request_enqueuer.process_batch(&mut batch).await?;
+            self.response_dequeuer.process_batch(&mut batch).await?;
         }
 
         Ok(())

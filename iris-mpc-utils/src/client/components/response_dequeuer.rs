@@ -19,7 +19,7 @@ impl ResponseDequeuer {
 
 #[async_trait]
 impl ProcessRequestBatch for ResponseDequeuer {
-    async fn process_batch(&mut self, _batch: &RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, _batch: &mut RequestBatch) -> Result<(), ClientError> {
         let msg = self.aws_client.sqs_receive_message().await;
         println!("AWS-SQS receive message event: {:?}", msg);
 
