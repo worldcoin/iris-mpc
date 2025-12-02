@@ -1027,6 +1027,8 @@ impl HnswSearcher {
         // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::new();
 
+        let mut metric_edges = FastHistogram::new(&format!("search_edges_layer{}", lc));
+
         // Fill initial candidate neighborhood from W.  List is constructed as:
         //
         // [w1, w2, ..., wk, ---N(w1)---, ---N(w2)---, ...],
@@ -1061,6 +1063,8 @@ impl HnswSearcher {
         )
         .instrument(eval_dist_span.clone())
         .await?;
+
+        metric_edges.record(init_opened.len() as f64);
 
         opened.extend(init_opened);
 
@@ -1124,6 +1128,8 @@ impl HnswSearcher {
             )
             .instrument(eval_dist_span.clone())
             .await?;
+
+            metric_edges.record(new_opened.len() as f64);
 
             debug!(
                 event_type = Operation::OpenNode.id(),

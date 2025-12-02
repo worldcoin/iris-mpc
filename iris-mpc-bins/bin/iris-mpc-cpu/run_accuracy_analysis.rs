@@ -4,7 +4,10 @@ use iris_mpc_cpu::analysis::accuracy::{
     load_graph, load_iris_store, process_results, run_analysis, Config,
 };
 use iris_mpc_cpu::utils::serialization::load_toml;
+use metrics::histogram;
+use metrics_util::debugging::{DebuggingRecorder, Snapshotter};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -35,15 +38,28 @@ async fn main() -> Result<()> {
     let graph = load_graph(&config.graph, &mut store, &mut rng).await?;
     println!("Graph initialized.");
 
+    let recorder = DebuggingRecorder::new();
+    let snapshotter = recorder.snapshotter();
+    recorder.install().expect("failed to install recorder");
+
     println!("Starting analysis...");
     let results = run_analysis(&config.analysis, store, graph, &mut rng).await?;
-    println!("Analysis complete. {} searches performed.", results.len());
 
     process_results(&config.analysis, results)?;
+
+    print_metrics(&snapshotter);
+
     println!(
         "Results written to {}.",
         config.analysis.output_path.display()
     );
 
     Ok(())
+}
+
+fn print_metrics(snapshotter: &Snapshotter) {
+    let snapshot = snapshotter.snapshot();
+    for (key, _unit, _description, value) in snapshot.into_vec() {
+        println!("{:?}: {:?}", key.key(), value);
+    }
 }

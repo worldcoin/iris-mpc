@@ -53,6 +53,7 @@ ampc-anon-stats.workspace = true
 ampc-server-utils.workspace = true
 tonic = "0.12.3"
 metrics.workspace = true
+metrics-util.workspace = true
 metrics-exporter-statsd.workspace = true
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
