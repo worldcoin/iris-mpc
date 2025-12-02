@@ -1,7 +1,7 @@
-image: "ghcr.io/worldcoin/iris-mpc@sha256:391766cc7b8483597c62c3ac30ff6a2f70fb7463c778d837d9d276a9bf145dc7" # v0.22.0
+image: "ghcr.io/worldcoin/iris-mpc@sha256:de45a330ddd6e6349d5436ae66ee4205ebbf03fa24ffbb57c93f2f36c6574c6e" # v0.23.0
 
 environment: prod
-replicaCount: 0
+replicaCount: 1
 
 strategy:
   type: Recreate
@@ -67,16 +67,6 @@ tolerations:
 keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
-
-libsDir:
-  enabled: true
-  path: "/libs"
-  size: 2Gi
-  files:
-    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublasLt.so.12.2.5.6"
-      file: "libcublasLt.so.12.2.5.6"
-    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublas.so.12.2.5.6"
-      file: "libcublas.so.12.2.5.6"
 
 tmpDir:
   enabled: true
