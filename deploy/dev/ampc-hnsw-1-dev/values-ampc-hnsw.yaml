@@ -33,6 +33,9 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
     value: "_cpu1"
 
