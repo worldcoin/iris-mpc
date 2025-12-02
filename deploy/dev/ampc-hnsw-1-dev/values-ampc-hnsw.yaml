@@ -51,7 +51,7 @@ env:
   - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_URL
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
   - name: SMPC__MAX_DB_SIZE
