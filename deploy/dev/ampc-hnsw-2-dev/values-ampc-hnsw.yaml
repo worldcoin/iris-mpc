@@ -33,10 +33,10 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
-  - name: SMPC__hnsw_schema_name_suffix
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
     value: "_cpu1"
 
-  - name: SMPC__gpu_schema_name_suffix
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
     value: "_gpu1"
 
   - name: SMPC__SERVICE__SERVICE_NAME
@@ -46,6 +46,12 @@ env:
     valueFrom:
       secretKeyRef:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
+
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
         name: application
 
   - name: SMPC__MAX_DB_SIZE
