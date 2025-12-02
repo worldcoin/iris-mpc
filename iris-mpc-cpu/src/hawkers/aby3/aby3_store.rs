@@ -35,7 +35,7 @@ mod distance_fn;
 pub use distance_fn::DistanceFn;
 
 /// The number of rotations at which to switch from binary tree to round-robin minimum algorthims.
-const MIN_ROUND_ROBIN_SIZE: usize = 1;
+const MIN_ROUND_ROBIN_SIZE: usize = 8;
 const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 
 /// Iris to be searcher or inserted into the store.
