@@ -1,5 +1,6 @@
 #[cfg(feature = "gpu_dependent")]
 mod bucket_2d_aggregation_test {
+    use ampc_anon_stats::AnonStatsOperation::Uniqueness;
     use cudarc::{driver::CudaStream, nccl::Id};
     use eyre::Result;
     use iris_mpc_common::iris_db::iris::IrisCodeArray;
@@ -107,6 +108,7 @@ mod bucket_2d_aggregation_test {
                             code_b: cc,
                             mask_a: ma,
                             mask_b: mc,
+                            operation: Uniqueness,
                         },
                         CpuDistanceShare {
                             idx: idx as u64,
@@ -114,6 +116,7 @@ mod bucket_2d_aggregation_test {
                             code_b: ca,
                             mask_a: mb,
                             mask_b: ma,
+                            operation: Uniqueness,
                         },
                         CpuDistanceShare {
                             idx: idx as u64,
@@ -121,6 +124,7 @@ mod bucket_2d_aggregation_test {
                             code_b: cb,
                             mask_a: mc,
                             mask_b: mb,
+                            operation: Uniqueness,
                         },
                     )
                 })
@@ -138,6 +142,7 @@ mod bucket_2d_aggregation_test {
                             code_b: cc,
                             mask_a: ma,
                             mask_b: mc,
+                            operation: Uniqueness,
                         },
                         CpuDistanceShare {
                             idx: idx as u64,
@@ -145,6 +150,7 @@ mod bucket_2d_aggregation_test {
                             code_b: ca,
                             mask_a: mb,
                             mask_b: ma,
+                            operation: Uniqueness,
                         },
                         CpuDistanceShare {
                             idx: idx as u64,
@@ -152,6 +158,7 @@ mod bucket_2d_aggregation_test {
                             code_b: cb,
                             mask_a: mc,
                             mask_b: mb,
+                            operation: Uniqueness,
                         },
                     )
                 })

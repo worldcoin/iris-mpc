@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "dev"
+      - "feat/anon-stats-for-reauth"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
