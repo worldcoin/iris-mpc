@@ -33,6 +33,9 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
+  - name: SMPC__PARTY_ID
+    value: "0"
+
   - name: SMPC__SCHEMA_NAME
     value: "genesis"
 
