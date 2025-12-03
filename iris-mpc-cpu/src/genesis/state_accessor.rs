@@ -64,7 +64,7 @@ pub async fn get_iris_deletions(
         .map_err(|err| {
             utils::log_error(
                 COMPONENT,
-                format!("Failed to download file from S3: {}", err),
+                format!("Failed to download file from S3: {:?}", err),
             );
             IndexationError::AwsS3ObjectDownload
         })?;
