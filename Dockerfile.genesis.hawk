@@ -38,8 +38,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG ARCHITECTURE
 ENV ARCHITECTURE=$ARCHITECTURE
 
-RUN apt-get update && apt-get install -y ca-certificates awscli curl
+RUN apt-get update && apt-get install -y ca-certificates curl unzip
 
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "awscliv2.zip" && \
+  unzip awscliv2.zip && \
+  ./aws/install && \
+  aws --version
+
+RUN apt-get update && apt-get install -y ca-certificates curl
 RUN curl -o /usr/local/share/ca-certificates/ca_party_dev_0.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_0.pem && \
     curl -o /usr/local/share/ca-certificates/ca_party_dev_1.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_1.pem && \
     curl -o /usr/local/share/ca-certificates/ca_party_dev_2.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_2.pem
@@ -54,6 +60,7 @@ RUN curl -o /usr/local/share/ca-certificates/ca_party_prod_0.crt https://wf-ampc
 
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
+
 
 COPY --from=build-app /src/iris-mpc-upgrade-hawk/target/aarch64-unknown-linux-gnu/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
 
