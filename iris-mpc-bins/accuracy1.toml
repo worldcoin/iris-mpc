@@ -7,12 +7,12 @@ selection = "All"
 
 [graph]
 option = "GenerateDynamic"
-size = 350
+size = 500
 
 [graph.gen_hnsw_config]
-ef_construction = 100
-ef_search = 100
-M = 64
+ef_construction = 65
+ef_search = 65
+M = 16
 layer_mode = { LinearScan = { max_graph_layer = 1 } }
 
 
@@ -23,7 +23,7 @@ distance_fn = "min_fhd"  # Must be "fhd" or "min_fhd"
 k_neighbors = 128
 output_format = "rate"   # Must be "full_csv", "rate" or "histogram"
 output_path = "accuracy_results.csv"
-mutations = [0.200, 0.333]
+mutations = [0.33, 0.37, 0.51]
 
 [analysis.rotations]
 start = -3
@@ -31,6 +31,6 @@ end = 4  # End of range is exclusive
 
 [analysis.search_hnsw_config]
 ef_construction = 320
-ef_search = 100
+ef_search = 70
 M = 256
 layer_mode = { LinearScan = { max_graph_layer = 1} }

@@ -2825,6 +2825,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "csv",
  "cudarc",
  "data-encoding",
  "dotenvy",
@@ -2842,6 +2843,7 @@ dependencies = [
  "itertools 0.13.0",
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
+ "metrics-tracing-context",
  "metrics-util 0.16.3",
  "rand",
  "reqwest",
@@ -3287,6 +3289,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lockfree-object-pool"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9374ef4228402d4b7e403e5838cb880d9ee663314b0a900d5a6aabf0c213552e"
+
+[[package]]
 name = "log"
 version = "0.4.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3427,6 +3435,23 @@ dependencies = [
  "cadence",
  "metrics 0.23.0",
  "thiserror 1.0.65",
+]
+
+[[package]]
+name = "metrics-tracing-context"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb791d015f8947acf5a7f62bd28d00f289bb7ea98cfbe3ffec1d061eee12df12"
+dependencies = [
+ "indexmap 2.6.0",
+ "itoa",
+ "lockfree-object-pool",
+ "metrics 0.22.3",
+ "metrics-util 0.16.3",
+ "once_cell",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]

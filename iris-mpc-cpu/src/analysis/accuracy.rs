@@ -26,6 +26,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+use tracing::{info_span, Instrument};
 
 /// Configuration for the accuracy analysis run.
 #[derive(Debug, Deserialize)]
@@ -138,7 +139,13 @@ pub async fn run_analysis(
                         rotation: ri,
                         found,
                     })
-                };
+                }
+                .instrument(info_span!(
+                    "search_task",
+                    query_id = target_id.serial_id(),
+                    mutation = mutation,
+                    rotation = ri
+                ));
                 futures.push(tokio::spawn(future));
             }
         }
