@@ -27,11 +27,16 @@ use iris_mpc_common::{
     vector_id::VectorId,
 };
 use itertools::{izip, Itertools};
+use static_assertions::const_assert;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
 
 mod distance_fn;
 pub use distance_fn::DistanceFn;
+
+/// The number of rotations at which to switch from binary tree to round-robin minimum algorthims.
+const MIN_ROUND_ROBIN_SIZE: usize = 1;
+const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 
 /// Iris to be searcher or inserted into the store.
 ///
@@ -232,7 +237,7 @@ impl Aby3Store {
             return Ok(distances[0].clone());
         }
         let mut res = distances.to_vec();
-        while res.len() > 16 {
+        while res.len() > MIN_ROUND_ROBIN_SIZE {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             // create pairs from the remaining distances
@@ -349,7 +354,7 @@ impl Aby3Store {
         }
 
         let mut res = distances.to_vec();
-        while res.len() > 16 {
+        while res.len() > MIN_ROUND_ROBIN_SIZE {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
             let pairs = res

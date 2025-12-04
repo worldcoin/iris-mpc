@@ -221,7 +221,7 @@ impl VectorStoreMut for PlaintextStore {
 #[derive(Debug, Clone)]
 pub struct SharedPlaintextStore {
     pub storage: PlaintextSharedIrisesRef,
-    distance_fn: DistanceFn,
+    pub distance_fn: DistanceFn,
 }
 
 impl Default for SharedPlaintextStore {

@@ -1,12 +1,13 @@
 use crate::config::json_wrapper::JsonStrWrapper;
 use ampc_actor_utils::network::config::deserialize_yaml_json_string;
 use ampc_actor_utils::network::config::TlsConfig;
-use ampc_server_utils::statistics::Eye;
+use ampc_anon_stats::types::Eye;
 use ampc_server_utils::{AwsConfig, ServerCoordinationConfig, ServiceConfig};
 use clap::Parser;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+
 pub mod json_wrapper;
 
 pub const ENV_DEV: &str = "dev";
