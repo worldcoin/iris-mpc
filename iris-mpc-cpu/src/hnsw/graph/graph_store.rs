@@ -793,7 +793,7 @@ mod tests {
 
             for j in 4..7 {
                 links
-                    .insert_and_trim(&mut vector_store, vectors[j], distances[j], links.len())
+                    .insert_and_trim(&mut vector_store, vectors[j], distances[j], links.len() + 1)
                     .await?;
             }
             let links = links.edge_ids();

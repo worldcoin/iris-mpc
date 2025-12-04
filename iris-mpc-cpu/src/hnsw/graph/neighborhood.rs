@@ -408,7 +408,7 @@ mod tests {
         }
 
         // This is a bit wasteful but we don't care
-        nbhd.insert_batch_and_trim(store, &pairs, nbhd.len())
+        nbhd.insert_batch_and_trim(store, &pairs, nbhd.len() + pairs.len())
             .await?;
         Ok(())
     }
