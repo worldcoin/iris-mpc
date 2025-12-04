@@ -2952,6 +2952,7 @@ dependencies = [
  "siphasher",
  "socket2 0.6.0",
  "sqlx",
+ "static_assertions",
  "statrs",
  "thiserror 1.0.65",
  "tokio",
