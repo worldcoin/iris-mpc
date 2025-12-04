@@ -262,39 +262,6 @@ impl fmt::Display for RequestBatchSize {
     }
 }
 
-/// Enumeration over generated request data.
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum RequestData {
-    IdentityDeletion,
-    Reauthorization,
-    ResetCheck,
-    ResetUpdate,
-    Uniqueness,
-}
-
-impl fmt::Display for RequestData {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::IdentityDeletion { .. } => {
-                write!(f, "IdentityDeletion")
-            }
-            RequestData::Reauthorization { .. } => {
-                write!(f, "Reauthorisation")
-            }
-            RequestData::ResetCheck { .. } => {
-                write!(f, "ResetCheck")
-            }
-            RequestData::ResetUpdate { .. } => {
-                write!(f, "ResetUpdate")
-            }
-            RequestData::Uniqueness { .. } => {
-                write!(f, "Uniqueness")
-            }
-        }
-    }
-}
-
 /// Enumeration over request message body for dispatch to system egress queue.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]

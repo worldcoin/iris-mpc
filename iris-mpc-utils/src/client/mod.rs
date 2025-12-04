@@ -9,7 +9,7 @@ use components::{
 };
 pub use typeset::{
     ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
-    RequestBatchSize, RequestData,
+    RequestBatchSize,
 };
 
 mod components;
