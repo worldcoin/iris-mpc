@@ -42,6 +42,9 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_minfhd"
+
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
 
