@@ -161,7 +161,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store>>(
     let mut links_unstructured = Vec::new();
     for (lc, mut l) in links.iter().cloned().enumerate() {
         let m = search_params.hnsw.params.get_M(lc);
-        l.trim(aby3_store, Some(m)).await?;
+        l.trim(aby3_store, m).await?;
         links_unstructured.push(l.edge_ids())
     }
 
@@ -237,7 +237,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     let mut links_unstructured = Vec::new();
     for (lc, mut l) in links.iter().cloned().enumerate() {
         let m = searcher.params.get_M(lc);
-        l.trim(&mut store, Some(m)).await?;
+        l.trim(&mut store, m).await?;
         links_unstructured.push(l.edge_ids());
     }
 

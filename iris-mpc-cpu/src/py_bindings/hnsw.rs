@@ -1,4 +1,3 @@
-use crate::hnsw::graph::neighborhood::Neighborhood;
 use crate::hnsw::SortedNeighborhood;
 use crate::utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection};
 use crate::{
@@ -25,7 +24,7 @@ pub fn search(
         let query = Arc::new(query);
         let neighbors: SortedNeighborhood<_> =
             searcher.search(vector, graph, &query, 1).await.unwrap();
-        let (nearest, (dist_num, dist_denom)) = neighbors.get_next_candidate().unwrap();
+        let (nearest, (dist_num, dist_denom)) = neighbors.as_ref().first().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
     })
 }

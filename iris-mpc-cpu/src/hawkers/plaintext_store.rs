@@ -428,7 +428,7 @@ mod tests {
             let serial_id = i as u32 + 1;
             let vector_id = VectorId::from_serial_id(serial_id);
             let query = ptxt_vector.storage.get_vector(&vector_id).unwrap().clone();
-            let cleartext_neighbors = searcher
+            let cleartext_neighbors: SortedNeighborhood<_> = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;
             assert!(
@@ -471,7 +471,7 @@ mod tests {
                 jobs.spawn(async move { searcher.search(&mut sh_vec, &graph, &query, 1).await });
             }
 
-            let results = jobs
+            let results: Vec<SortedNeighborhood<_>> = jobs
                 .join_all()
                 .await
                 .into_iter()

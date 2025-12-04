@@ -57,7 +57,7 @@ pub async fn plaintext_parallel_batch_insert(
                 let mut links_unstructured = Vec::new();
                 for (lc, mut l) in links.into_iter().enumerate() {
                     let m = searcher.params.get_M(lc);
-                    l.trim(&mut store, Some(m)).await?;
+                    l.trim(&mut store, m).await?;
                     links_unstructured.push(l.edge_ids())
                 }
 
@@ -160,7 +160,9 @@ mod tests {
         // Check if each inserted iris can be found and matched correctly
         for (_vector_id, iris_code) in irises {
             let query = Arc::new(iris_code);
-            let result = searcher.search(&mut store, &graph, &query, 1).await?;
+            let result = searcher
+                .search::<_, SortedNeighborhood<_>>(&mut store, &graph, &query, 1)
+                .await?;
             assert!(
                 searcher.is_match(&mut store, &[result]).await?,
                 "Match verification failed for an inserted iris"

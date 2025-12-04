@@ -25,6 +25,14 @@ pub trait Neighborhood<V: VectorStore>:
 {
     fn new() -> Self;
 
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
     fn from_singleton(element: (V::VectorRef, V::DistanceRef)) -> Self;
 
     fn edge_ids(&self) -> Vec<V::VectorRef> {
@@ -42,13 +50,13 @@ pub trait Neighborhood<V: VectorStore>:
         &mut self,
         store: &mut V,
         vals: &[(V::VectorRef, V::DistanceRef)],
-        k: Option<usize>,
+        k: usize,
     ) -> Result<()>;
 
     /// Apply the invariant-maintaining algorithm
     /// Note that in general maintaining the invariant may incur significant overhead.
     /// Consult implementer for performance specs.
-    async fn trim(&mut self, store: &mut V, k: Option<usize>) -> Result<()> {
+    async fn trim(&mut self, store: &mut V, k: usize) -> Result<()> {
         self.insert_batch_and_trim(store, &[], k).await
     }
 
@@ -61,7 +69,7 @@ pub trait Neighborhood<V: VectorStore>:
         store: &mut V,
         to: V::VectorRef,
         dist: V::DistanceRef,
-        k: Option<usize>,
+        k: usize,
     ) -> Result<()> {
         self.insert_batch_and_trim(store, &[(to, dist)], k).await
     }
@@ -69,9 +77,6 @@ pub trait Neighborhood<V: VectorStore>:
     /// Returns matching records in the neighborhood.
     /// No specific order should be assumed.
     async fn matches(&self, store: &mut V) -> Result<Vec<(V::VectorRef, V::DistanceRef)>>;
-
-    // Returns a suitable node for opening
-    fn get_next_candidate(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
 
     /// Returns the node with maximum distance in the neighborhood
     fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
@@ -189,7 +194,7 @@ impl<V: VectorStore> Neighborhood<V> for SortedNeighborhood<V> {
         &mut self,
         store: &mut V,
         vals: &[(V::VectorRef, V::DistanceRef)],
-        k: Option<usize>,
+        k: usize,
     ) -> Result<()> {
         debug!(batch_size = vals.len(), "Insert batch into neighborhood");
 
@@ -198,13 +203,8 @@ impl<V: VectorStore> Neighborhood<V> for SortedNeighborhood<V> {
         // the default individual binary insertion procedure as batch size
         // approaches 1.
         self.quicksort_insert(store, vals).await?;
-        let k = k.unwrap_or(self.edges.len());
         self.edges.truncate(k);
         Ok(())
-    }
-
-    fn get_next_candidate(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
-        self.edges.first()
     }
 
     fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
@@ -293,12 +293,12 @@ impl<V: VectorStore> Neighborhood<V> for UnsortedNeighborhood<V> {
         &mut self,
         store: &mut V,
         vals: &[(V::VectorRef, V::DistanceRef)],
-        k: Option<usize>,
+        k: usize,
     ) -> Result<()> {
         debug!(batch_size = vals.len(), "Insert batch into neighborhood");
         self.edges.extend(vals.to_vec());
 
-        let k = k.unwrap_or(self.edges.len());
+        // TODO: this case can be optimized if needed
         let k = k.min(self.edges.len());
 
         if k == 0 {
@@ -307,10 +307,6 @@ impl<V: VectorStore> Neighborhood<V> for UnsortedNeighborhood<V> {
             self.quickselect(store, k).await?;
         }
         Ok(())
-    }
-
-    fn get_next_candidate(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
-        self.edges.first()
     }
 
     fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
@@ -370,12 +366,10 @@ impl<V: VectorStore> WrappedNeighborhood<V> {
                 &mut self,
                 store: &mut V,
                 vals: &[(V::VectorRef, V::DistanceRef)],
-                k: Option<usize>,
+                k: usize,
             ) -> Result<()>;
 
             async fn matches(&self, store: &mut V) -> Result<Vec<(V::VectorRef, V::DistanceRef)>>;
-
-            fn get_next_candidate(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
 
             fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
         }
@@ -414,7 +408,8 @@ mod tests {
         }
 
         // This is a bit wasteful but we don't care
-        nbhd.insert_batch_and_trim(store, &pairs, None).await?;
+        nbhd.insert_batch_and_trim(store, &pairs, nbhd.len())
+            .await?;
         Ok(())
     }
 
@@ -438,14 +433,13 @@ mod tests {
             &[Arc::new(query.get_similar_iris(&mut rng, 0.18))],
         )
         .await?;
-        nbhd.insert_batch_and_trim(&mut store, &[], Some(2)).await?;
+        nbhd.insert_batch_and_trim(&mut store, &[], 2).await?;
         assert_eq!(nbhd.as_ref().len(), 2);
 
         // We should have exactly one match at this point (almost always :))
         assert_eq!(nbhd.matches(&mut store).await?.len(), 1);
 
         // Next candidate is arbitrary in general, but it should not be None
-        _ = nbhd.get_next_candidate().unwrap();
 
         // Insert an even closer match
         insert_batch_store_and_nbhd(
@@ -458,7 +452,7 @@ mod tests {
         assert_eq!(nbhd.as_ref().len(), 3);
 
         // Let's shrink to closest 2
-        nbhd.insert_batch_and_trim(&mut store, &[], Some(2)).await?;
+        nbhd.insert_batch_and_trim(&mut store, &[], 2).await?;
         assert_eq!(nbhd.as_ref().len(), 2);
 
         // We should have exactly two matches at this point
@@ -469,12 +463,11 @@ mod tests {
         assert_eq!(furthest.0, IrisVectorId::from_serial_id(4));
 
         // This should clear
-        nbhd.insert_batch_and_trim(&mut store, &[], Some(0)).await?;
+        nbhd.insert_batch_and_trim(&mut store, &[], 0).await?;
 
         assert_eq!(nbhd.as_ref().len(), 0);
         assert!(nbhd.as_ref().is_empty());
         assert!(nbhd.get_furthest().is_none());
-        assert!(nbhd.get_next_candidate().is_none());
 
         Ok(())
     }

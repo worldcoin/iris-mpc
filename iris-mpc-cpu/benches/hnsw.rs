@@ -305,7 +305,12 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             jobs.spawn(async move {
                                 let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
-                                    .search(&mut *vector_store, &graph_store, &query, 1)
+                                    .search::<_, SortedNeighborhood<_>>(
+                                        &mut *vector_store,
+                                        &graph_store,
+                                        &query,
+                                        1,
+                                    )
                                     .await
                                     .unwrap();
                                 searcher

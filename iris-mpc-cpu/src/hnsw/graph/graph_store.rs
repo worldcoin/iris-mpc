@@ -661,8 +661,9 @@ mod tests {
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
         hnsw::{
-            graph::layered_graph::EntryPoint, graph::neighborhood::Neighborhood,
-            vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood,
+            graph::{layered_graph::EntryPoint, neighborhood::Neighborhood},
+            vector_store::VectorStoreMut,
+            GraphMem, HnswSearcher, SortedNeighborhood,
         },
     };
     use aes_prng::AesRng;
@@ -720,7 +721,7 @@ mod tests {
             for j in 0..5 {
                 if i != j {
                     links
-                        .insert_and_trim(&mut vector_store, vectors[j], distances[j], None)
+                        .insert_and_trim(&mut vector_store, vectors[j], distances[j], links.len())
                         .await?;
                 }
             }
@@ -792,7 +793,7 @@ mod tests {
 
             for j in 4..7 {
                 links
-                    .insert_and_trim(&mut vector_store, vectors[j], distances[j], None)
+                    .insert_and_trim(&mut vector_store, vectors[j], distances[j], links.len())
                     .await?;
             }
             let links = links.edge_ids();
@@ -826,7 +827,7 @@ mod tests {
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
             let insertion_layer = searcher.gen_layer_rng(rng)?;
-            let (links, update_ep) = searcher
+            let (links, update_ep): (Vec<SortedNeighborhood<_>>, _) = searcher
                 .search_to_insert(vector_store, graph_mem, query, insertion_layer)
                 .await?;
             assert!(!searcher.is_match(vector_store, &links).await?);
@@ -838,7 +839,7 @@ mod tests {
             let mut links_unstructured = Vec::new();
             for (lc, mut l) in links.iter().cloned().enumerate() {
                 let m = searcher.params.get_M(lc);
-                l.trim(vector_store, Some(m)).await?;
+                l.trim(vector_store, m).await?;
                 links_unstructured.push(l.edge_ids())
             }
 
@@ -871,7 +872,8 @@ mod tests {
 
         // Search for the same codes and find matches.
         for query in queries1.iter() {
-            let neighbors = searcher.search(vector_store, &graph_mem2, query, 1).await?;
+            let neighbors: SortedNeighborhood<_> =
+                searcher.search(vector_store, &graph_mem2, query, 1).await?;
             assert!(searcher.is_match(vector_store, &[neighbors]).await?);
         }
 
