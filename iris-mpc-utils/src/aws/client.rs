@@ -169,18 +169,28 @@ impl AwsClient {
 
     /// Dequeues a message from an SQS queue.
     pub async fn sqs_receive_message(&self) -> Result<(), AwsClientError> {
-        self.sqs
+        let output = self
+            .sqs
             .receive_message()
             .queue_url(self.config().sqs_response_queue_url())
             .wait_time_seconds(self.config().sqs_wait_time_seconds() as i32)
             .max_number_of_messages(1)
             .send()
             .await
-            .map(|_| ())
             .map_err(|e| {
                 tracing::error!("AWS-SQS receive message from queue error: {}", e);
                 AwsClientError::SqsReceiveMessageError(e.to_string())
             })
+            .unwrap();
+
+        for msg in output.messages() {
+            tracing::info!(
+                "TODO: Correlate request with SQS response: {:?}",
+                msg.message_id().unwrap()
+            );
+        }
+
+        Ok(())
     }
 }
 

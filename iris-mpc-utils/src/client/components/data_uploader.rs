@@ -1,6 +1,6 @@
 use async_trait::async_trait;
+use futures;
 use rand::{CryptoRng, Rng};
-use uuid::Uuid;
 
 use super::super::typeset::{ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch};
 use crate::{
@@ -41,43 +41,72 @@ impl<R: Rng + CryptoRng + Send> Initialize for DataUploader<R> {
 #[async_trait]
 impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for DataUploader<R> {
     async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
+        // Set shares to be uploaded.
+        let mut shares = Vec::new();
         for request in batch.requests() {
             match request {
-                Request::IdentityDeletion { signup_id, .. } => {
-                    self.upload_iris_shares(signup_id).await?;
+                Request::IdentityDeletion {
+                    known_iris_serial_id,
+                    signup_id,
+                    ..
+                } => {
+                    if known_iris_serial_id.is_none() {
+                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
+                    }
                 }
                 Request::Reauthorization {
+                    known_iris_serial_id,
                     reauth_id,
                     signup_id,
                     ..
                 } => {
-                    self.upload_iris_shares(reauth_id).await?;
-                    self.upload_iris_shares(signup_id).await?;
+                    shares.push((reauth_id, generate_iris_shares(self.rng_mut())));
+                    if known_iris_serial_id.is_none() {
+                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
+                    }
                 }
-                Request::ResetCheck { reset_id, .. } => {
-                    self.upload_iris_shares(reset_id).await?;
+                Request::ResetCheck {
+                    known_iris_serial_id,
+                    reset_id,
+                    signup_id,
+                    ..
+                } => {
+                    shares.push((reset_id, generate_iris_shares(self.rng_mut())));
+                    if known_iris_serial_id.is_none() {
+                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
+                    }
                 }
-                Request::ResetUpdate { reset_id, .. } => {
-                    self.upload_iris_shares(reset_id).await?;
+                Request::ResetUpdate {
+                    known_iris_serial_id,
+                    reset_id,
+                    signup_id,
+                    ..
+                } => {
+                    shares.push((reset_id, generate_iris_shares(self.rng_mut())));
+                    if known_iris_serial_id.is_none() {
+                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
+                    }
                 }
                 Request::Uniqueness { signup_id, .. } => {
-                    self.upload_iris_shares(signup_id).await?;
+                    shares.push((signup_id, generate_iris_shares(self.rng_mut())));
                 }
             }
         }
 
-        Ok(())
-    }
-}
+        // Set upload tasks.
+        let aws_client = &self.aws_client;
+        let tasks: Vec<_> = shares
+            .iter()
+            .map(|(identifier, shares)| async move {
+                aws_client
+                    .s3_upload_iris_shares(identifier, shares)
+                    .await
+                    .map_err(ClientError::AwsServiceError)
+            })
+            .collect();
 
-impl<R: Rng + CryptoRng + Send> DataUploader<R> {
-    async fn upload_iris_shares(&mut self, identifier: &Uuid) -> Result<(), ClientError> {
-        let shares = generate_iris_shares(self.rng_mut());
-
-        self.aws_client
-            .s3_upload_iris_shares(identifier, &shares)
-            .await
-            .map_err(ClientError::AwsServiceError)?;
+        // Execute tasks in parallel.
+        futures::future::try_join_all(tasks).await?;
 
         Ok(())
     }

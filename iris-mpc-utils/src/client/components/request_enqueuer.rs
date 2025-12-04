@@ -29,13 +29,25 @@ impl RequestEnqueuer {
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
     async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
-        for request in batch.requests() {
-            self.aws_client
-                .sns_publish_json(SnsMessageInfo::from(request))
-                .await
-                .map_err(ClientError::AwsServiceError)?;
-            tracing::info!("{}: Published to AWS-SNS", request);
-        }
+        // Set enqueue tasks.
+        let tasks: Vec<_> = batch
+            .requests()
+            .iter()
+            .map(|request| {
+                let aws_client = &self.aws_client;
+                let sns_message_info = SnsMessageInfo::from(request);
+                async move {
+                    aws_client
+                        .sns_publish_json(sns_message_info)
+                        .await
+                        .map_err(ClientError::AwsServiceError)?;
+                    Ok::<(), ClientError>(())
+                }
+            })
+            .collect();
+
+        // Execute tasks in parallel.
+        futures::future::try_join_all(tasks).await?;
 
         Ok(())
     }
@@ -48,11 +60,15 @@ impl From<&Request> for RequestMessageBody {
             Request::IdentityDeletion { .. } => {
                 Self::IdentityDeletion(IdentityDeletionRequest { serial_id: 2 })
             }
-            Request::Reauthorization { reauth_id, .. } => Self::Reauthorization(ReAuthRequest {
+            Request::Reauthorization {
+                reauth_id,
+                known_iris_serial_id,
+                ..
+            } => Self::Reauthorization(ReAuthRequest {
                 batch_size: Some(1),
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
-                serial_id: 1,
+                serial_id: known_iris_serial_id.unwrap_or(1),
                 use_or_rule: bool::default(),
             }),
             Request::ResetCheck { reset_id, .. } => Self::ResetCheck(ResetCheckRequest {
@@ -60,10 +76,14 @@ impl From<&Request> for RequestMessageBody {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
             }),
-            Request::ResetUpdate { reset_id, .. } => Self::ResetUpdate(ResetUpdateRequest {
+            Request::ResetUpdate {
+                reset_id,
+                known_iris_serial_id,
+                ..
+            } => Self::ResetUpdate(ResetUpdateRequest {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
-                serial_id: 1,
+                serial_id: known_iris_serial_id.unwrap_or(1),
             }),
             Request::Uniqueness { signup_id, .. } => Self::Uniqueness(UniquenessRequest {
                 batch_size: Some(1),

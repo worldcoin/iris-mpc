@@ -19,9 +19,12 @@ impl ResponseDequeuer {
 
 #[async_trait]
 impl ProcessRequestBatch for ResponseDequeuer {
-    async fn process_batch(&mut self, _batch: &RequestBatch) -> Result<(), ClientError> {
-        let msg = self.aws_client.sqs_receive_message().await;
-        println!("AWS-SQS receive message event: {:?}", msg);
+    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
+        // TODO: dequeue system responses until the entire
+        // batch is correlated or a timeout occurs.
+        for _request in batch.requests() {
+            self.aws_client.sqs_receive_message().await?;
+        }
 
         Ok(())
     }

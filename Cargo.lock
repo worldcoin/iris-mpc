@@ -3102,6 +3102,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "eyre",
+ "futures",
  "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",

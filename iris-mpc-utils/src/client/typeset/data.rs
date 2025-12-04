@@ -2,29 +2,36 @@ use std::fmt;
 
 use uuid;
 
-use iris_mpc_common::helpers::smpc_request::{
-    self, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+use iris_mpc_common::{
+    helpers::smpc_request::{
+        self, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    },
+    IrisSerialId,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Request {
     IdentityDeletion {
         info: RequestInfo,
+        known_iris_serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
     Reauthorization {
         info: RequestInfo,
+        known_iris_serial_id: Option<IrisSerialId>,
         reauth_id: uuid::Uuid,
         signup_id: uuid::Uuid,
     },
     ResetCheck {
         info: RequestInfo,
+        known_iris_serial_id: Option<IrisSerialId>,
         reset_id: uuid::Uuid,
         signup_id: uuid::Uuid,
     },
     ResetUpdate {
         info: RequestInfo,
+        known_iris_serial_id: Option<IrisSerialId>,
         reset_id: uuid::Uuid,
         signup_id: uuid::Uuid,
     },
@@ -39,7 +46,7 @@ impl Request {
         self.info().identifier()
     }
 
-    fn info(&self) -> &RequestInfo {
+    pub fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. } => info,
             Self::Reauthorization { info, .. } => info,
@@ -74,24 +81,33 @@ impl Request {
         }
     }
 
-    pub fn new(batch_idx: usize, batch_item_idx: usize, batch_kind: &'static str) -> Self {
+    pub fn new(
+        batch_idx: usize,
+        batch_item_idx: usize,
+        batch_kind: &'static str,
+        known_iris_serial_id: Option<IrisSerialId>,
+    ) -> Self {
         match batch_kind {
             IDENTITY_DELETION_MESSAGE_TYPE => Self::IdentityDeletion {
                 info: RequestInfo::new(batch_idx, batch_item_idx),
+                known_iris_serial_id,
                 signup_id: uuid::Uuid::new_v4(),
             },
             REAUTH_MESSAGE_TYPE => Self::Reauthorization {
                 info: RequestInfo::new(batch_idx, batch_item_idx),
+                known_iris_serial_id,
                 reauth_id: uuid::Uuid::new_v4(),
                 signup_id: uuid::Uuid::new_v4(),
             },
             RESET_CHECK_MESSAGE_TYPE => Self::ResetCheck {
                 info: RequestInfo::new(batch_idx, batch_item_idx),
+                known_iris_serial_id,
                 reset_id: uuid::Uuid::new_v4(),
                 signup_id: uuid::Uuid::new_v4(),
             },
             RESET_UPDATE_MESSAGE_TYPE => Self::ResetUpdate {
                 info: RequestInfo::new(batch_idx, batch_item_idx),
+                known_iris_serial_id,
                 reset_id: uuid::Uuid::new_v4(),
                 signup_id: uuid::Uuid::new_v4(),
             },
@@ -151,7 +167,7 @@ impl fmt::Display for Request {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RequestInfo {
     /// Batch ordinal identifier.
     batch_idx: usize,

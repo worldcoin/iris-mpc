@@ -5,7 +5,7 @@ use clap::Parser;
 use eyre::Result;
 use rand::{rngs::StdRng, SeedableRng};
 
-use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
+use iris_mpc_common::{helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, IrisSerialId};
 
 use iris_mpc_utils::{
     aws::AwsClientConfig,
@@ -58,6 +58,10 @@ struct CliOptions {
 
     #[clap(long)]
     environment: String,
+
+    /// A known serial identifier that allows response correlation to be bypassed.
+    #[clap(long, default_value = "1")]
+    known_iris_serial_id: Option<IrisSerialId>,
 
     /// Number of request batches to process.
     #[clap(long, default_value = "5")]
@@ -145,6 +149,7 @@ impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
             options.request_batch_count,
             options.request_batch_kind(),
             options.request_batch_size(),
+            options.known_iris_serial_id,
             options.rng_seed(),
         )
         .await
