@@ -6,7 +6,25 @@ env:
     value: "full"
 
   - name: NCCL_SOCKET_IFNAME
-    value: "eth0"
+    value: "ens,eth"
+
+  - name: FI_EFA_USE_DEVICE_RDMA
+    value: "1"
+
+  - name: FI_PROVIDER
+    value: "efa"
+
+  - name: NCCL_DEBUG
+    value: "INFO"
+
+  - name: NCCL_DEBUG_SUBSYS
+    value: "INIT,NET"
+
+  - name: FI_LOG_LEVEL
+    value: "INFO"
+
+  - name: NCCL_IB_CUDA_SUPPORT
+    value: "1"
 
   - name: NCCL_COMM_ID
     value: "iris-mpc-node.1.stage.smpcv2.worldcoin.dev:4000"
@@ -39,10 +57,10 @@ env:
         name: application
 
   - name: SMPC__ANON_STATS_DATABASE__MIGRATE
-    value: "true"
+    value: "false"
 
   - name: SMPC__ANON_STATS_DATABASE__CREATE
-    value: "true"
+    value: "false"
 
   - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
     value: "8"
@@ -225,7 +243,3 @@ initContainer:
 
       # Execute AWS CLI command with the generated JSON
       aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
-
-      cd /libs
-      aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
-      aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
