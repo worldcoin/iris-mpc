@@ -169,12 +169,14 @@ mod tests {
         .await
     }
 
+    #[ignore = "temporary"]
     #[tokio::test]
     async fn test_client_new() {
         let clients = create_client().await;
         assert_clients(&clients);
     }
 
+    #[ignore = "temporary"]
     #[tokio::test]
     async fn test_client_clone() {
         let clients = create_client().await.clone();

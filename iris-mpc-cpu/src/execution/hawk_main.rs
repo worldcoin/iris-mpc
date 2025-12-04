@@ -28,9 +28,11 @@ use crate::{
 use ampc_actor_utils::{
     network::config::TlsConfig, protocol::anon_stats::compare_min_threshold_buckets,
 };
-use ampc_anon_stats::{AnonStatsContext, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore};
-use ampc_server_utils::statistics::Eye;
-use ampc_server_utils::{BucketStatistics, BucketStatistics2D};
+use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+use ampc_anon_stats::{
+    AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
+    BucketStatistics, BucketStatistics2D,
+};
 use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::{future::try_join_all, try_join};
@@ -362,13 +364,17 @@ impl HawkActor {
             args.match_distances_buffer_size,
             args.n_buckets,
             args.party_index,
-            Eye::Left,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
         );
         let bucket_statistics_right = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
             args.party_index,
-            Eye::Right,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
         );
 
         Ok(HawkActor {
@@ -690,7 +696,7 @@ impl HawkActor {
         };
 
         store
-            .insert_anon_stats_batch_1d_lifted(&bundles, origin)
+            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::Uniqueness)
             .await?;
 
         Ok(())

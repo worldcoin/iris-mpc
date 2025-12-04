@@ -124,8 +124,14 @@ hnsw-smpc-0:
     - name: SMPC__SERVICE__SERVICE_NAME
       value: "hnsw-service-0"
 
-    - name: SMPC__PARTY_ID
+    - name: SMPC__SERVER_COORDINATION__PARTY_ID
       value: "0"
+
+    - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+      value: '["0.0.0.0","hnsw-smpc-1.orb.e2e.test","hnsw-smpc-2.orb.e2e.test"]'
+
+    - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+      value: $(IMAGE_NAME)
 
     - name: SMPC__CPU_DATABASE__URL
       valueFrom:
@@ -169,6 +175,24 @@ hnsw-smpc-0:
     - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
       value: "true"
 
+    - name: SMPC__ANON_STATS_DATABASE__URL
+      valueFrom:
+        secretKeyRef:
+          key: DATABASE_AURORA_URL
+          name: application
+
+    - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__CREATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
+      value: "8"
+
+    - name: SMPC__ANON_STATS_DATABASE__DB_SCHEMA_NAME
+      value: "anon_stats_hnsw_0"
+
     - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
       value: "false"
 
@@ -195,9 +219,6 @@ hnsw-smpc-0:
 
     - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
       value: '3000'
-
-    - name: SMPC__NODE_HOSTNAMES
-      value: '["0.0.0.0","hnsw-smpc-1.orb.e2e.test","hnsw-smpc-2.orb.e2e.test"]'
 
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"

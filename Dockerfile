@@ -30,7 +30,7 @@ WORKDIR /src/gpu-iris-mpc
 COPY . .
 RUN cargo build -p iris-mpc-bins --release --target x86_64-unknown-linux-gnu --bin nccl --bin iris-mpc-gpu --bin client --bin key-manager --bin reshare-server --bin reshare-client
 
-FROM --platform=linux/amd64 ghcr.io/worldcoin/iris-mpc-base:cuda12_2-nccl2_22_3_1
+FROM --platform=linux/amd64 public.ecr.aws/deep-learning-containers/base:12.8.0-gpu-py312-cu128-ubuntu22.04-ec2-v1.17
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Include client, server and key-manager, upgrade-client and upgrade-server binaries
