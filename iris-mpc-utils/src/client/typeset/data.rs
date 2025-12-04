@@ -42,10 +42,6 @@ pub enum Request {
 }
 
 impl Request {
-    pub fn identifier(&self) -> &uuid::Uuid {
-        self.info().identifier()
-    }
-
     pub fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. } => info,
@@ -53,31 +49,6 @@ impl Request {
             Self::ResetCheck { info, .. } => info,
             Self::ResetUpdate { info, .. } => info,
             Self::Uniqueness { info, .. } => info,
-        }
-    }
-
-    pub fn reauth_id(&self) -> &uuid::Uuid {
-        match self {
-            Self::Reauthorization { reauth_id, .. } => reauth_id,
-            _ => panic!("Request type does not expose a reauth id."),
-        }
-    }
-
-    pub fn reset_id(&self) -> &uuid::Uuid {
-        match self {
-            Self::ResetCheck { reset_id, .. } => reset_id,
-            Self::ResetUpdate { reset_id, .. } => reset_id,
-            _ => panic!("Request type does not expose a reset id."),
-        }
-    }
-
-    pub fn signup_id(&self) -> &uuid::Uuid {
-        match self {
-            Self::IdentityDeletion { signup_id, .. } => signup_id,
-            Self::Reauthorization { signup_id, .. } => signup_id,
-            Self::ResetCheck { signup_id, .. } => signup_id,
-            Self::ResetUpdate { signup_id, .. } => signup_id,
-            Self::Uniqueness { signup_id, .. } => signup_id,
         }
     }
 
