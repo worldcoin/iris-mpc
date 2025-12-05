@@ -21,6 +21,7 @@ clap.workspace = true
 core_affinity = "0.8.3"
 crossbeam = "0.8.4"
 csv = "*"
+delegate = "0.13.5"
 dashmap = "6.1.0"
 eyre.workspace = true
 futures.workspace = true
