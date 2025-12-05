@@ -27,6 +27,62 @@ use tracing::{instrument, trace_span, Instrument};
 use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
+#[inline]
+fn bits_to_network_vec(bits: &[RingElement<Bit>]) -> Vec<NetworkValue> {
+    bits.iter()
+        .copied()
+        .map(NetworkValue::RingElementBit)
+        .collect()
+}
+
+#[inline]
+fn network_vec_to_bits(values: Vec<NetworkValue>) -> Result<Vec<RingElement<Bit>>, Error> {
+    values
+        .into_iter()
+        .map(|nv| match nv {
+            NetworkValue::RingElementBit(bit) => Ok(bit),
+            other => Err(eyre!("expected RingElementBit, got {:?}", other)),
+        })
+        .collect()
+}
+
+#[inline]
+fn decode_key_package(
+    pkg: NetworkValue,
+) -> Result<(Vec<RingElement<u32>>, Vec<RingElement<u32>>), Error> {
+    let mut entries = NetworkValue::vec_from_network(pkg)?;
+    if entries.len() != 2 {
+        bail!("invalid key package length {}", entries.len());
+    }
+    let blob = entries
+        .pop()
+        .ok_or_else(|| eyre!("missing key blob in package"))?;
+    let lens = entries
+        .pop()
+        .ok_or_else(|| eyre!("missing key lengths in package"))?;
+
+    let lens = match lens {
+        NetworkValue::VecRing32(v) => Ok(v),
+        other => Err(eyre!("expected VecRing32 for lens, got {:?}", other)),
+    }?;
+    let blob = match blob {
+        NetworkValue::VecRing32(v) => Ok(v),
+        other => Err(eyre!("expected VecRing32 for blob, got {:?}", other)),
+    }?;
+    Ok((lens, blob))
+}
+
+#[inline]
+fn encode_key_package(
+    lens: Vec<RingElement<u32>>,
+    blob: Vec<RingElement<u32>>,
+) -> NetworkValue {
+    NetworkValue::vec_to_network(vec![
+        NetworkValue::VecRing32(lens),
+        NetworkValue::VecRing32(blob),
+    ])
+}
+
 // Evaluation (P0/P1) and generation (P2) becomes parallel under `parallel-msb` if batch.len > parallel_threshold
 // Here r_2 = r_1 = 0, so d2r2=d2 and d1r1=d1
 pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
@@ -63,41 +119,23 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 0 (Evaluator)
         // =======================
         0 => {
-            // metrics: measure the network for share reconstruction
-            let _tt_net_recv = crate::perf_scoped_for_party!(
-                "fss.network.start_recv_keylen",
-                role,
-                n,            // bucket on the items this block processes
-                bucket_bound  // your desired bucket cap
-            );
-
-            // Receive lengths and concatenated key blob from Dealer (P2/prev)
-            let lens_re = session.network_session.receive_prev().await.map_err(|e| {
-                eyre!("Party 0 cannot receive FSS key lengths batch from dealer: {e}")
-            })?;
-
-            // metrics: stop timer
-            drop(_tt_net_recv);
-
-            // metrics: measure the network for share reconstruction
+            // metrics: receive combined key package from Dealer (P2/prev)
             let _tt_net_recv = crate::perf_scoped_for_party!(
                 "fss.network.start_recv_keys",
                 role,
                 n,            // bucket on the items this block processes
                 bucket_bound  // your desired bucket cap
             );
-
-            let key_blob_re = session
+            let key_pkg = session
                 .network_session
                 .receive_prev()
                 .await
-                .map_err(|e| eyre!("Party 0 cannot receive FSS key batch from dealer: {e}"))?;
-
-            // metrics: stop timer
+                .map_err(|e| eyre!("Party 0 cannot receive FSS key package from dealer: {e}"))?;
             drop(_tt_net_recv);
 
-            let lens_p0 = re_vec_to_u32(u32::into_vec(lens_re)?);
-            let key_blob = re_vec_to_u32(u32::into_vec(key_blob_re)?);
+            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
+            let lens_p0 = re_vec_to_u32(lens_re);
+            let key_blob = re_vec_to_u32(key_blob_re);
 
             // Deserialize my keys (batched)
             let mut off = 0usize;
@@ -167,7 +205,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             // ===== Evaluate all indices and collect bit shares =====
             // Parallel when feature enabled and n >= threshold; otherwise sequential.
             #[cfg(feature = "parallel-msb")]
-            let (bit0s_ringbit, bit0s_u32) = {
+            let (bit0s_ringbit, _bit0s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
@@ -219,7 +257,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             };
 
             #[cfg(not(feature = "parallel-msb"))]
-            let (bit0s_ringbit, bit0s_u32) = {
+            let (bit0s_ringbit, _bit0s_u32) = {
                 let _tt = crate::perf_scoped_for_party!(
                     "fss.add3.non-parallel",
                     role,
@@ -250,7 +288,9 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             };
 
             // ===== batched bit-share exchange =====
-            // Send our bits to BOTH neighbors as a single vector of u32 (0/1)
+            // Send our bits to BOTH neighbors as packed NetworkValues
+
+            let bit0s_network_vec = bits_to_network_vec(&bit0s_ringbit);
 
             //metrics: measure the network time
             let _tt_net = crate::perf_scoped_for_party!(
@@ -262,7 +302,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             session
                 .network_session
-                .send_prev(NetworkInt::new_network_vec(bit0s_u32.clone()))
+                .send_prev(NetworkValue::vec_to_network(bit0s_network_vec.clone()))
                 .await?;
 
             // metrics: stop timer
@@ -278,7 +318,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             session
                 .network_session
-                .send_next(NetworkInt::new_network_vec(bit0s_u32))
+                .send_next(NetworkValue::vec_to_network(bit0s_network_vec))
                 .await?;
 
             // metrics: stop timer
@@ -292,7 +332,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 bucket_bound  // your desired bucket cap
             );
 
-            // Receive P1's bits (as u32 0/1 vector) from NEXT
+            // Receive P1's bits (packed) from NEXT
             let p1_bits_msg = session
                 .network_session
                 .receive_next()
@@ -302,11 +342,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             // metrics: stop timer
             drop(_tt_net);
 
-            let p1_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p1_bits_msg)?;
-            let bit1s_ringbit: Vec<RingElement<Bit>> = p1_bits_u32
-                .into_iter()
-                .map(|re| RingElement(Bit::new(re.0 != 0)))
-                .collect();
+            let bit1s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p1_bits_msg)?).map_err(|e| {
+                    eyre!("Party 0 cannot deserialize bit vector from P1: {e}")
+                })?;
 
             // Assemble output shares
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -322,40 +361,22 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 1 (Evaluator)
         // =======================
         1 => {
-            // metrics: measure the network for share reconstruction
-            let _tt_net_recv = crate::perf_scoped_for_party!(
-                "fss.network.start_recv_keylen",
-                role,
-                n,            // bucket on the items this block processes
-                bucket_bound  // your desired bucket cap
-            );
-
-            // Receive lengths and concatenated key blob from Dealer (P2/next)
-            let lens_re = session.network_session.receive_next().await.map_err(|e| {
-                eyre!("Party 1 cannot receive FSS key lengths batch from dealer: {e}")
-            })?;
-
-            // metrics: stop timer
-            drop(_tt_net_recv);
-
-            // metrics: measure the network for share reconstruction
             let _tt_net_recv = crate::perf_scoped_for_party!(
                 "fss.network.start_recv_keys",
                 role,
                 n,            // bucket on the items this block processes
                 bucket_bound  // your desired bucket cap
             );
-            let key_blob_re = session
+            let key_pkg = session
                 .network_session
                 .receive_next()
                 .await
-                .map_err(|e| eyre!("Party 1 cannot receive FSS key batch from dealer: {e}"))?;
-
-            // metrics: stop timer
+                .map_err(|e| eyre!("Party 1 cannot receive FSS key package from dealer: {e}"))?;
             drop(_tt_net_recv);
 
-            let lens_p1 = re_vec_to_u32(u32::into_vec(lens_re)?);
-            let key_blob = re_vec_to_u32(u32::into_vec(key_blob_re)?);
+            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
+            let lens_p1 = re_vec_to_u32(lens_re);
+            let key_blob = re_vec_to_u32(key_blob_re);
 
             // Deserialize my keys (batched)
             let mut off = 0usize;
@@ -424,7 +445,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             // ===== Evaluate all indices and collect bit shares =====
             #[cfg(feature = "parallel-msb")]
-            let (bit1s_ringbit, bit1s_u32) = {
+            let (bit1s_ringbit, _bit1s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
@@ -474,7 +495,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             };
 
             #[cfg(not(feature = "parallel-msb"))]
-            let (bit1s_ringbit, bit1s_u32) = {
+            let (bit1s_ringbit, _bit1s_u32) = {
                 let _tt = crate::perf_scoped_for_party!(
                     "fss.add3.non-parallel",
                     role,
@@ -505,7 +526,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             };
 
             // ===== batched bit-share exchange =====
-            // Send our bits to BOTH neighbors as a single vector of u32 (0/1)
+            let bit1s_network_vec = bits_to_network_vec(&bit1s_ringbit);
 
             //metrics: measure the network time
             let _tt_net = crate::perf_scoped_for_party!(
@@ -517,7 +538,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             session
                 .network_session
-                .send_next(NetworkInt::new_network_vec(bit1s_u32.clone()))
+                .send_next(NetworkValue::vec_to_network(bit1s_network_vec.clone()))
                 .await?;
 
             // metrics: stop timer
@@ -533,7 +554,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             session
                 .network_session
-                .send_prev(NetworkInt::new_network_vec(bit1s_u32))
+                .send_prev(NetworkValue::vec_to_network(bit1s_network_vec))
                 .await?;
 
             // metrics: stop time
@@ -547,7 +568,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 bucket_bound  // your desired bucket cap
             );
 
-            // Receive P0's bits (as u32 0/1 vector) from PREV
+            // Receive P0's bits (packed) from PREV
             let p0_bits_msg = session
                 .network_session
                 .receive_prev()
@@ -557,11 +578,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             // metrics: stop timer
             drop(_tt_net);
 
-            let p0_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p0_bits_msg)?;
-            let bit0s_ringbit: Vec<RingElement<Bit>> = p0_bits_u32
-                .into_iter()
-                .map(|re| RingElement(Bit::new(re.0 != 0)))
-                .collect();
+            let bit0s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p0_bits_msg)?).map_err(|e| {
+                    eyre!("Party 1 cannot deserialize bit vector from P0: {e}")
+                })?;
 
             // Assemble output shares
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -689,27 +709,14 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             session
                 .network_session
-                .send_prev(NetworkInt::new_network_vec(u32_to_re_vec(lens_p0.clone())))
+                .send_prev(encode_key_package(
+                    u32_to_re_vec(lens_p0.clone()),
+                    u32_to_re_vec(key_blob_for_p0),
+                ))
                 .await?;
 
             // drop
             drop(_tt_net0a);
-
-            //metrics: measure the network time
-            let _tt_net0b = crate::perf_scoped_for_party!(
-                "fss.network.dealer.send_P0b",
-                role,
-                n,            // bucket on the items this block processes
-                bucket_bound  // your desired bucket cap
-            );
-
-            session
-                .network_session
-                .send_prev(NetworkInt::new_network_vec(u32_to_re_vec(key_blob_for_p0)))
-                .await?;
-
-            // drop
-            drop(_tt_net0b);
 
             //metrics: measure the network time
             let _tt_net1a = crate::perf_scoped_for_party!(
@@ -721,27 +728,14 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             session
                 .network_session
-                .send_next(NetworkInt::new_network_vec(u32_to_re_vec(lens_p1.clone())))
-                .await?;
-
-            // drop
-            drop(_tt_net1a);
-
-            //metrics: measure the network time
-            let _tt_net1b = crate::perf_scoped_for_party!(
-                "fss.network.dealer.send_P1b",
-                role,
-                n,            // bucket on the items this block processes
-                bucket_bound  // your desired bucket cap
-            );
-
-            session
-                .network_session
-                .send_next(NetworkInt::new_network_vec(u32_to_re_vec(key_blob_for_p1)))
+                .send_next(encode_key_package(
+                    u32_to_re_vec(lens_p1.clone()),
+                    u32_to_re_vec(key_blob_for_p1),
+                ))
                 .await?;
 
             //drop
-            drop(_tt_net1b);
+            drop(_tt_net1a);
 
             // Dealer (P2)
             // Receive from PREV => P1; from NEXT => P0
@@ -780,18 +774,20 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             // drop timer
             drop(_tt_net);
 
-            let p0_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p0_bits_msg)?;
-            let p1_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p1_bits_msg)?;
+            let bit0s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p0_bits_msg)?).map_err(|e| {
+                    eyre!("Dealer cannot deserialize bit vector from P0: {e}")
+                })?;
+            let bit1s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p1_bits_msg)?).map_err(|e| {
+                    eyre!("Dealer cannot deserialize bit vector from P1: {e}")
+                })?;
 
             // Keep the (P0_bits, P1_bits) ordering to match P0/P1
-            let out: Vec<Share<Bit>> = p0_bits_u32
+            let out: Vec<Share<Bit>> = bit0s_ringbit
                 .into_iter()
-                .zip(p1_bits_u32.into_iter())
-                .map(|(b0u32, b1u32)| {
-                    let b0 = RingElement(Bit::new(b0u32.0 != 0));
-                    let b1 = RingElement(Bit::new(b1u32.0 != 0));
-                    Share::new(b0, b1)
-                })
+                .zip(bit1s_ringbit.into_iter())
+                .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
 
             Ok(out)
@@ -837,19 +833,15 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 0 (Evaluator)
         // =======================
         0 => {
-            // Receive lengths and concatenated key blob from Dealer (P2/prev)
-            let lens_re = session.network_session.receive_prev().await.map_err(|e| {
-                eyre!("Party 0 cannot receive FSS key lengths batch from dealer: {e}")
-            })?;
-
-            let key_blob_re = session
+            let key_pkg = session
                 .network_session
                 .receive_prev()
                 .await
-                .map_err(|e| eyre!("Party 0 cannot receive FSS key batch from dealer: {e}"))?;
+                .map_err(|e| eyre!("Party 0 cannot receive FSS key package from dealer: {e}"))?;
 
-            let lens_p0 = re_vec_to_u32(u32::into_vec(lens_re)?);
-            let key_blob = re_vec_to_u32(u32::into_vec(key_blob_re)?);
+            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
+            let lens_p0 = re_vec_to_u32(lens_re);
+            let key_blob = re_vec_to_u32(key_blob_re);
 
             // Deserialize my keys (batched)
             let mut off = 0usize;
@@ -897,7 +889,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             // ===== Evaluate all indices and collect bit shares =====
             // Parallel when feature enabled and n >= threshold; otherwise sequential.
             #[cfg(feature = "parallel-msb")]
-            let (bit0s_ringbit, bit0s_u32) = {
+            let (bit0s_ringbit, _bit0s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
@@ -949,7 +941,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             };
 
             #[cfg(not(feature = "parallel-msb"))]
-            let (bit0s_ringbit, bit0s_u32) = {
+            let (bit0s_ringbit, _bit0s_u32) = {
                 let mut bit0s_ringbit: Vec<RingElement<Bit>> = Vec::with_capacity(n);
                 let mut bit0s_u32: Vec<RingElement<u32>> = Vec::with_capacity(n);
                 for i in 0..n {
@@ -965,27 +957,25 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             };
 
             // ===== batched bit-share exchange =====
-            // Send our bits to BOTH neighbors as a single vector of u32 (0/1)
+            let bit0s_network_vec = bits_to_network_vec(&bit0s_ringbit);
             session
                 .network_session
-                .send_prev(NetworkInt::new_network_vec(bit0s_u32.clone()))
+                .send_prev(NetworkValue::vec_to_network(bit0s_network_vec.clone()))
                 .await?;
             session
                 .network_session
-                .send_next(NetworkInt::new_network_vec(bit0s_u32))
+                .send_next(NetworkValue::vec_to_network(bit0s_network_vec))
                 .await?;
-            // Receive P1's bits (as u32 0/1 vector) from NEXT
             let p1_bits_msg = session
                 .network_session
                 .receive_next()
                 .await
                 .map_err(|e| eyre!("Party 0 cannot receive bit vector from P1: {e}"))?;
 
-            let p1_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p1_bits_msg)?;
-            let bit1s_ringbit: Vec<RingElement<Bit>> = p1_bits_u32
-                .into_iter()
-                .map(|re| RingElement(Bit::new(re.0 != 0)))
-                .collect();
+            let bit1s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p1_bits_msg)?).map_err(|e| {
+                    eyre!("Party 0 cannot deserialize bit vector from P1: {e}")
+                })?;
 
             // Assemble output shares
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -1001,18 +991,14 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 1 (Evaluator)
         // =======================
         1 => {
-            // Receive lengths and concatenated key blob from Dealer (P2/next)
-            let lens_re = session.network_session.receive_next().await.map_err(|e| {
-                eyre!("Party 1 cannot receive FSS key lengths batch from dealer: {e}")
-            })?;
-            let key_blob_re = session
+            let key_pkg = session
                 .network_session
                 .receive_next()
                 .await
-                .map_err(|e| eyre!("Party 1 cannot receive FSS key batch from dealer: {e}"))?;
-
-            let lens_p1 = re_vec_to_u32(u32::into_vec(lens_re)?);
-            let key_blob = re_vec_to_u32(u32::into_vec(key_blob_re)?);
+                .map_err(|e| eyre!("Party 1 cannot receive FSS key package from dealer: {e}"))?;
+            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
+            let lens_p1 = re_vec_to_u32(lens_re);
+            let key_blob = re_vec_to_u32(key_blob_re);
 
             // Deserialize my keys (batched)
             let mut off = 0usize;
@@ -1058,7 +1044,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
 
             // ===== Evaluate all indices and collect bit shares =====
             #[cfg(feature = "parallel-msb")]
-            let (bit1s_ringbit, bit1s_u32) = {
+            let (bit1s_ringbit, _bit1s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
@@ -1108,7 +1094,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             };
 
             #[cfg(not(feature = "parallel-msb"))]
-            let (bit1s_ringbit, bit1s_u32) = {
+            let (bit1s_ringbit, _bit1s_u32) = {
                 let mut bit1s_ringbit: Vec<RingElement<Bit>> = Vec::with_capacity(n);
                 let mut bit1s_u32: Vec<RingElement<u32>> = Vec::with_capacity(n);
                 for i in 0..n {
@@ -1124,28 +1110,27 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             };
 
             // ===== batched bit-share exchange =====
-            // Send our bits to BOTH neighbors as a single vector of u32 (0/1)
+            let bit1s_network_vec = bits_to_network_vec(&bit1s_ringbit);
             session
                 .network_session
-                .send_next(NetworkInt::new_network_vec(bit1s_u32.clone()))
+                .send_next(NetworkValue::vec_to_network(bit1s_network_vec.clone()))
                 .await?;
             session
                 .network_session
-                .send_prev(NetworkInt::new_network_vec(bit1s_u32))
+                .send_prev(NetworkValue::vec_to_network(bit1s_network_vec))
                 .await?;
 
-            // Receive P0's bits (as u32 0/1 vector) from PREV
+            // Receive P0's bits (packed) from PREV
             let p0_bits_msg = session
                 .network_session
                 .receive_prev()
                 .await
                 .map_err(|e| eyre!("Party 1 cannot receive bit vector from P0: {e}"))?;
 
-            let p0_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p0_bits_msg)?;
-            let bit0s_ringbit: Vec<RingElement<Bit>> = p0_bits_u32
-                .into_iter()
-                .map(|re| RingElement(Bit::new(re.0 != 0)))
-                .collect();
+            let bit0s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p0_bits_msg)?).map_err(|e| {
+                    eyre!("Party 1 cannot deserialize bit vector from P0: {e}")
+                })?;
 
             // Assemble output shares
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -1248,19 +1233,17 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
 
             session
                 .network_session
-                .send_prev(NetworkInt::new_network_vec(u32_to_re_vec(lens_p0.clone())))
+                .send_prev(encode_key_package(
+                    u32_to_re_vec(lens_p0.clone()),
+                    u32_to_re_vec(key_blob_for_p0),
+                ))
                 .await?;
             session
                 .network_session
-                .send_prev(NetworkInt::new_network_vec(u32_to_re_vec(key_blob_for_p0)))
-                .await?;
-            session
-                .network_session
-                .send_next(NetworkInt::new_network_vec(u32_to_re_vec(lens_p1.clone())))
-                .await?;
-            session
-                .network_session
-                .send_next(NetworkInt::new_network_vec(u32_to_re_vec(key_blob_for_p1)))
+                .send_next(encode_key_package(
+                    u32_to_re_vec(lens_p1.clone()),
+                    u32_to_re_vec(key_blob_for_p1),
+                ))
                 .await?;
 
             // Dealer (P2)
@@ -1276,18 +1259,20 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .await
                 .map_err(|e| eyre!("Dealer cannot receive bit vector from P0: {e}"))?;
 
-            let p0_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p0_bits_msg)?;
-            let p1_bits_u32: Vec<RingElement<u32>> = u32::into_vec(p1_bits_msg)?;
+            let bit0s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p0_bits_msg)?).map_err(|e| {
+                    eyre!("Dealer cannot deserialize bit vector from P0: {e}")
+                })?;
+            let bit1s_ringbit =
+                network_vec_to_bits(NetworkValue::vec_from_network(p1_bits_msg)?).map_err(|e| {
+                    eyre!("Dealer cannot deserialize bit vector from P1: {e}")
+                })?;
 
             // Keep the (P0_bits, P1_bits) ordering to match P0/P1
-            let out: Vec<Share<Bit>> = p0_bits_u32
+            let out: Vec<Share<Bit>> = bit0s_ringbit
                 .into_iter()
-                .zip(p1_bits_u32.into_iter())
-                .map(|(b0u32, b1u32)| {
-                    let b0 = RingElement(Bit::new(b0u32.0 != 0));
-                    let b1 = RingElement(Bit::new(b1u32.0 != 0));
-                    Share::new(b0, b1)
-                })
+                .zip(bit1s_ringbit.into_iter())
+                .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
 
             Ok(out)

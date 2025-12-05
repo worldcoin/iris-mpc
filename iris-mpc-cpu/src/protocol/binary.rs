@@ -1573,7 +1573,9 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     //     vec_of_msb_shares.push(add_3_get_msb_fss(session, x_).await?);
     // }
 
-    let batch_size: usize = 64;
+    // Larger batches reduce the number of round trips to the dealer and evaluator peers.
+    // Tuned empirically for lower-latency runs.
+    let batch_size: usize = 256;
     let parallel_thresh = 4;
 
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
