@@ -1,3 +1,4 @@
+use crate::hnsw::SortedNeighborhood;
 use crate::utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection};
 use crate::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
@@ -21,8 +22,9 @@ pub fn search(
 
     rt.block_on(async move {
         let query = Arc::new(query);
-        let neighbors = searcher.search(vector, graph, &query, 1).await.unwrap();
-        let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
+        let neighbors: SortedNeighborhood<_> =
+            searcher.search(vector, graph, &query, 1).await.unwrap();
+        let (nearest, (dist_num, dist_denom)) = neighbors.as_ref().first().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
     })
 }
@@ -45,7 +47,7 @@ pub fn insert(
         let query = Arc::new(iris);
         let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
         searcher
-            .insert(vector, graph, &query, insertion_layer)
+            .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
             .await
             .unwrap()
     })
@@ -80,7 +82,7 @@ pub fn fill_uniform_random(
             let query = Arc::new(IrisCode::random_rng(&mut rng));
             let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
-                .insert(vector, graph, &query, insertion_layer)
+                .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
                 .await
                 .unwrap();
             if idx % 100 == 99 {
@@ -113,7 +115,7 @@ pub fn fill_from_ndjson_file(
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
-                .insert(vector, graph, &query, insertion_layer)
+                .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
                 .await
                 .unwrap();
         }
