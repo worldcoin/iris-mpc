@@ -194,6 +194,19 @@ impl VectorStore for PlaintextStore {
         Ok(fraction_less_than(distance1, distance2))
     }
 
+    // Note: default implementation + metrics
+    async fn less_than_batch(
+        &mut self,
+        distances: &[(Self::DistanceRef, Self::DistanceRef)],
+    ) -> Result<Vec<bool>> {
+        let mut results: Vec<bool> = Vec::with_capacity(distances.len());
+        for (d1, d2) in distances {
+            results.push(self.less_than(d1, d2).await?);
+        }
+        metrics::counter!("less_than").increment(distances.len() as u64);
+        Ok(results)
+    }
+
     async fn only_valid_vectors(
         &mut self,
         mut vectors: Vec<Self::VectorRef>,
@@ -311,6 +324,19 @@ impl VectorStore for SharedPlaintextStore {
     ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
         Ok(fraction_less_than(distance1, distance2))
+    }
+
+    // Note: default implementation + metrics
+    async fn less_than_batch(
+        &mut self,
+        distances: &[(Self::DistanceRef, Self::DistanceRef)],
+    ) -> Result<Vec<bool>> {
+        let mut results: Vec<bool> = Vec::with_capacity(distances.len());
+        for (d1, d2) in distances {
+            results.push(self.less_than(d1, d2).await?);
+        }
+        metrics::counter!("less_than").increment(distances.len() as u64);
+        Ok(results)
     }
 
     async fn only_valid_vectors(

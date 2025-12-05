@@ -23,6 +23,7 @@ distance_fn = "min_fhd"  # Must be "fhd" or "min_fhd"
 k_neighbors = 128
 output_format = "rate"   # Must be "full_csv", "rate" or "histogram"
 output_path = "accuracy_results.csv"
+metrics_path = "metrics.csv"
 mutations = [0.33, 0.37, 0.51]
 
 [analysis.rotations]

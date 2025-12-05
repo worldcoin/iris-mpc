@@ -1175,17 +1175,17 @@ impl HnswSearcher {
                 n_insertions, "Batch distances comparison filter"
             );
 
+            // TODO: refine this metric / make it more succinct (?)
             let ins_rate: f64 = (ins_rate_denom as f64) / (INS_RATE_NUM as f64);
-
-            // metrics::counter!(
-            //     "insertion_stats",
-            //     &[
-            //         ("currently_visited", visited_nodes_count.to_string()),
-            //         ("computed_ins_rate", ins_rate.to_string()),
-            //         ("n_insertions", n_insertions.to_string()),
-            //         ("depth", depth.to_string())
-            //     ]
-            // );
+            metrics::counter!(
+                "insertion_stats",
+                &[
+                    ("currently_visited", visited_nodes_count.to_string()),
+                    ("computed_ins_rate", ins_rate.to_string()),
+                    ("n_insertions", n_insertions.to_string()),
+                    ("depth", depth.to_string())
+                ]
+            );
 
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
             W.insert_batch(store, &filtered_links)
