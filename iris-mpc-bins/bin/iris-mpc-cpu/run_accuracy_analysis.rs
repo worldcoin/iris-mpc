@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
     metrics::set_global_recorder(recorder).expect("failed to install recorder");
 
     println!("Starting analysis...");
-    let results = run_analysis(&config.analysis, store, graph, &mut rng).await?;
+    let results = run_analysis(config.analysis.clone(), store, graph, &mut rng).await?;
 
     process_results(&config.analysis, results)?;
 
