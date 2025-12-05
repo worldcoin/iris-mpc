@@ -4,12 +4,12 @@ on:
   push:
     branches:
       - "dev"
-      - "sw/run-genesis"
+      - "sw/run-genesis-2"
     paths-ignore:
       - "deploy/**"
 
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 env:
