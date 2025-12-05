@@ -91,6 +91,15 @@ env:
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
 
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: "anon-stats-server"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "anonStatsServer"
+    effect: "NoSchedule"
 
 initContainer:
   enabled: true
