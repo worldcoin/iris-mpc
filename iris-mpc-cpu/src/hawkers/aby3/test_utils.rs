@@ -18,7 +18,7 @@ use crate::{
         plaintext_store::{PlaintextStore, PlaintextVectorRef},
         TEST_DISTANCE_FN,
     },
-    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     shares::{RingElement, Share},
@@ -358,7 +358,12 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
                 for query in queries.iter() {
                     let insertion_layer = searcher.gen_layer_rng(&mut rng_searcher)?;
                     searcher
-                        .insert(&mut *store_lock, &mut graph_store, query, insertion_layer)
+                        .insert::<_, SortedNeighborhood<_>>(
+                            &mut *store_lock,
+                            &mut graph_store,
+                            query,
+                            insertion_layer,
+                        )
                         .await?;
                 }
                 Ok((store.clone(), graph_store))
