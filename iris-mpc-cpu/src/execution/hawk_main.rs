@@ -111,6 +111,8 @@ pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
+const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
+
 #[derive(Clone, Parser)]
 #[allow(non_snake_case)]
 pub struct HawkArgs {
@@ -330,10 +332,11 @@ impl HawkActor {
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        let searcher = Arc::new(HnswSearcher::new_standard(
+        let searcher = Arc::new(HnswSearcher::new_linear_scan(
             args.hnsw_param_ef_constr,
             args.hnsw_param_ef_search,
             args.hnsw_param_M,
+            LINEAR_SCAN_MAX_GRAPH_LAYER,
         ));
 
         let network_args = NetworkHandleArgs {
