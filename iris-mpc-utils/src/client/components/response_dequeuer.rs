@@ -19,7 +19,7 @@ impl ResponseDequeuer {
 
 #[async_trait]
 impl ProcessRequestBatch for ResponseDequeuer {
-    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
         // TODO: dequeue system responses until the entire
         // batch is correlated or a timeout occurs.
         for _request in batch.requests() {

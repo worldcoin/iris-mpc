@@ -40,7 +40,7 @@ impl<R: Rng + CryptoRng + Send> Initialize for DataUploader<R> {
 
 #[async_trait]
 impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for DataUploader<R> {
-    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
         // Set shares to be uploaded.
         let mut shares = Vec::new();
         for request in batch.requests() {

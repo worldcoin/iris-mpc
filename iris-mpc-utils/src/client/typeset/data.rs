@@ -168,6 +168,16 @@ impl Request {
                 _ => true,
             }
     }
+
+    pub fn set_status_enqueued(&mut self) {
+        match self {
+            Self::IdentityDeletion { status, .. }
+            | Self::Reauthorization { status, .. }
+            | Self::ResetCheck { status, .. }
+            | Self::ResetUpdate { status, .. }
+            | Self::Uniqueness { status, .. } => *status = RequestStatus::Enqueued,
+        }
+    }
 }
 
 impl fmt::Display for Request {
