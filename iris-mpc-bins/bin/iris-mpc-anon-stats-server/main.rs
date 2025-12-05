@@ -202,7 +202,7 @@ impl AnonStatsProcessor {
             "operation" => format!("{:?}", operation),
             "kind" => format!("{:?}", kind),
         )
-        .set(available);
+        .set(available as f64);
 
         info!(
             "Available anon stats entries for {:?}, {:?}: {}",
@@ -387,7 +387,7 @@ impl AnonStatsProcessor {
             "operation" => format!("{:?}", operation),
             "kind" => format!("{:?}", kind),
         )
-        .set(available);
+        .set(available as f64);
 
         info!(
             ?origin,
