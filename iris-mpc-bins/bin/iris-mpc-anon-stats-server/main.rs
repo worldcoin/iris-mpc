@@ -41,7 +41,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tokio::time::{interval, MissedTickBehavior};
-use tracing::{debug, info, warn};
+use tracing::{debug, event, info, warn};
 use uuid::Uuid;
 
 const GPU_1D_ORIGINS: [AnonStatsOrigin; 2] = [
@@ -195,6 +195,15 @@ impl AnonStatsProcessor {
             JobKind::Gpu2D | JobKind::Gpu2DReauth => 0,
         };
         let available = usize::try_from(available).unwrap_or(0);
+
+        metrics::gauge!(
+            "anon_stats.available_entries",
+            "origin" => format!("{:?}", origin),
+            "operation" => format!("{:?}", operation),
+            "kind" => format!("{:?}", kind),
+        )
+        .set(available);
+
         info!(
             "Available anon stats entries for {:?}, {:?}: {}",
             origin,
@@ -259,6 +268,16 @@ impl AnonStatsProcessor {
                     Some(operation),
                 )
                 .await?;
+
+                event!(
+                    tracing::Level::INFO,
+                    ?origin,
+                    ?kind,
+                    job_size,
+                    elapsed_ms = start.elapsed().as_millis(),
+                    "Completed 1D anon stats job",
+                );
+
                 info!(
                     ?origin,
                     ?kind,
@@ -362,6 +381,14 @@ impl AnonStatsProcessor {
             .get_available_anon_stats_2d(origin, Some(operation), min_job_size)
             .await?;
 
+        metrics::gauge!(
+            "anon_stats.available_entries",
+            "origin" => format!("{:?}", origin),
+            "operation" => format!("{:?}", operation),
+            "kind" => format!("{:?}", kind),
+        )
+        .set(available);
+
         info!(
             ?origin,
             ?operation,
@@ -393,6 +420,16 @@ impl AnonStatsProcessor {
         let start = Instant::now();
         let stats =
             process_2d_anon_stats_job(session, job, self.config.as_ref(), Some(operation)).await?;
+
+        event!(
+            tracing::Level::INFO,
+            ?origin,
+            ?kind,
+            job_size,
+            elapsed_ms = start.elapsed().as_millis(),
+            "Completed 2D anon stats job",
+        );
+
         info!(
             ?origin,
             job_size,
@@ -478,6 +515,11 @@ impl AnonStatsProcessor {
         }
 
         warn!(
+            ?origin,
+            "Exceeded sync mismatches threshold; clearing local anon stats queue"
+        );
+        event!(
+            tracing::Level::ERROR,
             ?origin,
             "Exceeded sync mismatches threshold; clearing local anon stats queue"
         );
