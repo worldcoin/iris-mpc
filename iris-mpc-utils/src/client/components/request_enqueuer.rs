@@ -29,7 +29,7 @@ impl RequestEnqueuer {
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
-        // Set enqueue tasks.
+        // Execute enqueue tasks in parallel.
         let tasks: Vec<_> = batch
             .requests()
             .iter()
@@ -47,15 +47,12 @@ impl ProcessRequestBatch for RequestEnqueuer {
                 }
             })
             .collect();
-
-        // Execute tasks in parallel.
         let enqueued_indices = futures::future::try_join_all(tasks).await?;
 
-        // Mark requests as enqueued after successful publish
+        // Mark requests as enqueued after successful publish.
         for idx in enqueued_indices {
             if let Some(request) = batch.requests_mut().get_mut(idx) {
                 request.set_status_enqueued();
-                println!("enqueued {}", request);
             }
         }
 
@@ -67,8 +64,10 @@ impl From<&Request> for RequestMessageBody {
     fn from(request: &Request) -> Self {
         // TODO: serial ID from correlated uniqueness response
         match request {
-            Request::IdentityDeletion { .. } => {
-                Self::IdentityDeletion(IdentityDeletionRequest { serial_id: 2 })
+            Request::IdentityDeletion { serial_id, .. } => {
+                Self::IdentityDeletion(IdentityDeletionRequest {
+                    serial_id: serial_id.unwrap_or(1),
+                })
             }
             Request::Reauthorization {
                 reauth_id,
@@ -97,8 +96,8 @@ impl From<&Request> for RequestMessageBody {
             }),
             Request::Uniqueness { signup_id, .. } => Self::Uniqueness(UniquenessRequest {
                 batch_size: Some(1),
-                signup_id: signup_id.to_string(),
                 s3_key: signup_id.to_string(),
+                signup_id: signup_id.to_string(),
                 or_rule_serial_ids: None,
                 skip_persistence: None,
                 full_face_mirror_attacks_detection_enabled: Some(true),

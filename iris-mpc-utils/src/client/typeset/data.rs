@@ -15,7 +15,7 @@ pub enum Request {
     IdentityDeletion {
         batch_idx: usize,
         batch_item_idx: usize,
-        identifier: uuid::Uuid,
+        request_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
         status: RequestStatus,
@@ -23,7 +23,7 @@ pub enum Request {
     Reauthorization {
         batch_idx: usize,
         batch_item_idx: usize,
-        identifier: uuid::Uuid,
+        request_id: uuid::Uuid,
         reauth_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
@@ -32,14 +32,14 @@ pub enum Request {
     ResetCheck {
         batch_idx: usize,
         batch_item_idx: usize,
-        identifier: uuid::Uuid,
+        request_id: uuid::Uuid,
         reset_check_id: uuid::Uuid,
         status: RequestStatus,
     },
     ResetUpdate {
         batch_idx: usize,
         batch_item_idx: usize,
-        identifier: uuid::Uuid,
+        request_id: uuid::Uuid,
         reset_update_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
@@ -48,7 +48,7 @@ pub enum Request {
     Uniqueness {
         batch_idx: usize,
         batch_item_idx: usize,
-        identifier: uuid::Uuid,
+        request_id: uuid::Uuid,
         signup_id: uuid::Uuid,
         status: RequestStatus,
     },
@@ -75,13 +75,13 @@ impl Request {
         }
     }
 
-    pub fn identifier(&self) -> &uuid::Uuid {
+    pub fn request_id(&self) -> &uuid::Uuid {
         match self {
-            Self::IdentityDeletion { identifier, .. }
-            | Self::Reauthorization { identifier, .. }
-            | Self::ResetCheck { identifier, .. }
-            | Self::ResetUpdate { identifier, .. }
-            | Self::Uniqueness { identifier, .. } => identifier,
+            Self::IdentityDeletion { request_id, .. }
+            | Self::Reauthorization { request_id, .. }
+            | Self::ResetCheck { request_id, .. }
+            | Self::ResetUpdate { request_id, .. }
+            | Self::Uniqueness { request_id, .. } => request_id,
         }
     }
 
@@ -100,10 +100,10 @@ impl Request {
             Self::Uniqueness { signup_id, .. } => Self::IdentityDeletion {
                 batch_idx: batch.batch_idx,
                 batch_item_idx: batch.next_item_idx(),
-                identifier: uuid::Uuid::new_v4(),
+                request_id: uuid::Uuid::new_v4(),
                 serial_id: None,
                 signup_id: *signup_id,
-                status: RequestStatus::New,
+                status: RequestStatus::Generated,
             },
             _ => unreachable!(),
         }
@@ -114,11 +114,11 @@ impl Request {
             Self::Uniqueness { signup_id, .. } => Self::Reauthorization {
                 batch_idx: batch.batch_idx,
                 batch_item_idx: batch.next_item_idx(),
-                identifier: uuid::Uuid::new_v4(),
                 reauth_id: uuid::Uuid::new_v4(),
+                request_id: uuid::Uuid::new_v4(),
                 serial_id: None,
                 signup_id: *signup_id,
-                status: RequestStatus::New,
+                status: RequestStatus::Generated,
             },
             _ => unreachable!(),
         }
@@ -128,9 +128,9 @@ impl Request {
         Self::ResetCheck {
             batch_idx: batch.batch_idx,
             batch_item_idx: batch.next_item_idx(),
-            identifier: uuid::Uuid::new_v4(),
+            request_id: uuid::Uuid::new_v4(),
             reset_check_id: uuid::Uuid::new_v4(),
-            status: RequestStatus::New,
+            status: RequestStatus::Generated,
         }
     }
 
@@ -139,11 +139,11 @@ impl Request {
             Self::Uniqueness { signup_id, .. } => Self::ResetUpdate {
                 batch_idx: batch.batch_idx,
                 batch_item_idx: batch.next_item_idx(),
-                identifier: uuid::Uuid::new_v4(),
+                request_id: uuid::Uuid::new_v4(),
                 reset_update_id: uuid::Uuid::new_v4(),
                 serial_id: None,
                 signup_id: *signup_id,
-                status: RequestStatus::New,
+                status: RequestStatus::Generated,
             },
             _ => unreachable!(),
         }
@@ -153,14 +153,15 @@ impl Request {
         Self::Uniqueness {
             batch_idx: batch.batch_idx,
             batch_item_idx: batch.next_item_idx(),
-            identifier: uuid::Uuid::new_v4(),
+            request_id: uuid::Uuid::new_v4(),
             signup_id: uuid::Uuid::new_v4(),
-            status: RequestStatus::New,
+            status: RequestStatus::Generated,
         }
     }
 
     pub fn can_enqueue(&self) -> bool {
-        matches!(self.status(), RequestStatus::New)
+        // True if generated and not awaiting data returned from a parent request.
+        matches!(self.status(), RequestStatus::Generated)
             && match self {
                 Self::IdentityDeletion { serial_id, .. } => serial_id.is_some(),
                 Self::Reauthorization { serial_id, .. } => serial_id.is_some(),
@@ -169,14 +170,22 @@ impl Request {
             }
     }
 
-    pub fn set_status_enqueued(&mut self) {
+    fn set_status(&mut self, new_state: RequestStatus) {
         match self {
             Self::IdentityDeletion { status, .. }
             | Self::Reauthorization { status, .. }
             | Self::ResetCheck { status, .. }
             | Self::ResetUpdate { status, .. }
-            | Self::Uniqueness { status, .. } => *status = RequestStatus::Enqueued,
+            | Self::Uniqueness { status, .. } => *status = new_state,
         }
+    }
+
+    pub fn set_status_complete(&mut self) {
+        self.set_status(RequestStatus::Complete);
+    }
+
+    pub fn set_status_enqueued(&mut self) {
+        self.set_status(RequestStatus::Enqueued);
     }
 }
 
@@ -223,6 +232,10 @@ impl RequestBatch {
             batch_idx,
             requests: Vec::with_capacity(batch_size * 2),
         }
+    }
+
+    pub fn can_enqueue(&self) -> bool {
+        self.requests.iter().any(|r| r.can_enqueue())
     }
 }
 
@@ -286,10 +299,15 @@ pub enum RequestMessageBody {
     Uniqueness(smpc_request::UniquenessRequest),
 }
 
-/// Enumeration over request processing status.
+/// Enumeration over request processing states.
 #[derive(Debug, Clone)]
 pub enum RequestStatus {
+    // Has been successfully processed.
     Complete,
+
+    // Has been enqueued upon system ingress queue.
     Enqueued,
-    New,
+
+    // Has been generated and is awaiting processing.
+    Generated,
 }

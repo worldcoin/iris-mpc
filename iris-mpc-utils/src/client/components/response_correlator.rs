@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::super::typeset::{ClientError, Initialize, RequestBatch};
+use super::super::typeset::{ClientError, Initialize, ProcessRequestBatch, RequestBatch};
 use crate::aws::AwsClient;
 
 /// A component responsible for correlating system requests with system responses.
@@ -32,5 +32,13 @@ impl Initialize for ResponseCorrelator {
             .sqs_purge_response_queue()
             .await
             .map_err(ClientError::AwsServiceError)
+    }
+}
+
+#[async_trait]
+impl ProcessRequestBatch for ResponseCorrelator {
+    async fn process_batch(&mut self, _batch: &mut RequestBatch) -> Result<(), ClientError> {
+        // TODO: perform correlation of requests with responses
+        Ok(())
     }
 }
