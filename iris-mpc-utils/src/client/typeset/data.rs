@@ -13,49 +13,81 @@ use iris_mpc_common::{
 #[derive(Clone, Debug)]
 pub enum Request {
     IdentityDeletion {
-        info: RequestInfo,
+        batch_idx: usize,
+        batch_item_idx: usize,
+        identifier: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
     Reauthorization {
-        info: RequestInfo,
+        batch_idx: usize,
+        batch_item_idx: usize,
+        identifier: uuid::Uuid,
         reauth_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
     ResetCheck {
-        info: RequestInfo,
+        batch_idx: usize,
+        batch_item_idx: usize,
+        identifier: uuid::Uuid,
         reset_check_id: uuid::Uuid,
     },
     ResetUpdate {
-        info: RequestInfo,
+        batch_idx: usize,
+        batch_item_idx: usize,
+        identifier: uuid::Uuid,
         reset_update_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
     Uniqueness {
-        info: RequestInfo,
+        batch_idx: usize,
+        batch_item_idx: usize,
+        identifier: uuid::Uuid,
         signup_id: uuid::Uuid,
     },
 }
 
 impl Request {
-    pub fn info(&self) -> &RequestInfo {
+    pub fn batch_idx(&self) -> usize {
         match self {
-            Self::IdentityDeletion { info, .. } => info,
-            Self::Reauthorization { info, .. } => info,
-            Self::ResetCheck { info, .. } => info,
-            Self::ResetUpdate { info, .. } => info,
-            Self::Uniqueness { info, .. } => info,
+            Self::IdentityDeletion { batch_idx, .. } => *batch_idx,
+            Self::Reauthorization { batch_idx, .. } => *batch_idx,
+            Self::ResetCheck { batch_idx, .. } => *batch_idx,
+            Self::ResetUpdate { batch_idx, .. } => *batch_idx,
+            Self::Uniqueness { batch_idx, .. } => *batch_idx,
+        }
+    }
+
+    pub fn batch_item_idx(&self) -> usize {
+        match self {
+            Self::IdentityDeletion { batch_item_idx, .. } => *batch_item_idx,
+            Self::Reauthorization { batch_item_idx, .. } => *batch_item_idx,
+            Self::ResetCheck { batch_item_idx, .. } => *batch_item_idx,
+            Self::ResetUpdate { batch_item_idx, .. } => *batch_item_idx,
+            Self::Uniqueness { batch_item_idx, .. } => *batch_item_idx,
+        }
+    }
+
+    pub fn identifier(&self) -> &uuid::Uuid {
+        match self {
+            Self::IdentityDeletion { identifier, .. } => identifier,
+            Self::Reauthorization { identifier, .. } => identifier,
+            Self::ResetCheck { identifier, .. } => identifier,
+            Self::ResetUpdate { identifier, .. } => identifier,
+            Self::Uniqueness { identifier, .. } => identifier,
         }
     }
 
     pub fn new_identity_deletion(batch: &RequestBatch, parent: &Request) -> Self {
         match parent {
             Self::Uniqueness { signup_id, .. } => Self::IdentityDeletion {
-                info: RequestInfo::new(batch),
+                batch_idx: batch.batch_idx,
+                batch_item_idx: batch.next_item_idx(),
+                identifier: uuid::Uuid::new_v4(),
                 serial_id: None,
-                signup_id: signup_id.clone(),
+                signup_id: *signup_id,
             },
             _ => unreachable!(),
         }
@@ -64,10 +96,12 @@ impl Request {
     pub fn new_reauthorisation(batch: &RequestBatch, parent: &Request) -> Self {
         match parent {
             Self::Uniqueness { signup_id, .. } => Self::Reauthorization {
-                info: RequestInfo::new(batch),
+                batch_idx: batch.batch_idx,
+                batch_item_idx: batch.next_item_idx(),
+                identifier: uuid::Uuid::new_v4(),
                 reauth_id: uuid::Uuid::new_v4(),
                 serial_id: None,
-                signup_id: signup_id.clone(),
+                signup_id: *signup_id,
             },
             _ => unreachable!(),
         }
@@ -75,7 +109,9 @@ impl Request {
 
     pub fn new_reset_check(batch: &RequestBatch) -> Self {
         Self::ResetCheck {
-            info: RequestInfo::new(batch),
+            batch_idx: batch.batch_idx,
+            batch_item_idx: batch.next_item_idx(),
+            identifier: uuid::Uuid::new_v4(),
             reset_check_id: uuid::Uuid::new_v4(),
         }
     }
@@ -83,10 +119,12 @@ impl Request {
     pub fn new_reset_update(batch: &RequestBatch, parent: &Request) -> Self {
         match parent {
             Self::Uniqueness { signup_id, .. } => Self::ResetUpdate {
-                info: RequestInfo::new(batch),
+                batch_idx: batch.batch_idx,
+                batch_item_idx: batch.next_item_idx(),
+                identifier: uuid::Uuid::new_v4(),
                 reset_update_id: uuid::Uuid::new_v4(),
                 serial_id: None,
-                signup_id: signup_id.clone(),
+                signup_id: *signup_id,
             },
             _ => unreachable!(),
         }
@@ -94,7 +132,9 @@ impl Request {
 
     pub fn new_uniqueness(batch: &RequestBatch) -> Self {
         Self::Uniqueness {
-            info: RequestInfo::new(batch),
+            batch_idx: batch.batch_idx,
+            batch_item_idx: batch.next_item_idx(),
+            identifier: uuid::Uuid::new_v4(),
             signup_id: uuid::Uuid::new_v4(),
         }
     }
@@ -105,8 +145,8 @@ impl fmt::Display for Request {
         write!(
             f,
             "Request:{:03}.{:03}",
-            self.info().batch_idx(),
-            self.info().batch_item_idx(),
+            self.batch_idx(),
+            self.batch_item_idx(),
         )
     }
 }
@@ -192,50 +232,6 @@ impl fmt::Display for RequestBatchSize {
         match self {
             Self::Static(size) => write!(f, "{}", size),
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RequestInfo {
-    /// Batch ordinal identifier.
-    batch_idx: usize,
-
-    /// Batch item ordinal identifier.
-    batch_item_idx: usize,
-
-    /// An identifier assigned by client for correlation purposes.
-    identifier: uuid::Uuid,
-}
-
-impl RequestInfo {
-    pub fn batch_idx(&self) -> usize {
-        self.batch_idx
-    }
-
-    pub fn batch_item_idx(&self) -> usize {
-        self.batch_item_idx
-    }
-
-    pub fn identifier(&self) -> &uuid::Uuid {
-        &self.identifier
-    }
-
-    pub fn new(batch: &RequestBatch) -> Self {
-        Self {
-            batch_idx: batch.batch_idx(),
-            batch_item_idx: batch.next_item_idx(),
-            identifier: uuid::Uuid::new_v4(),
-        }
-    }
-}
-
-impl fmt::Display for RequestInfo {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Request:{:03}.{:03}.{}",
-            self.batch_idx, self.batch_item_idx, self.identifier
-        )
     }
 }
 
