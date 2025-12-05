@@ -27,6 +27,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+use tracing::{info_span, Instrument};
 
 /// Configuration for the accuracy analysis run.
 #[derive(Clone, Debug, Deserialize)]
@@ -43,6 +44,8 @@ pub struct AnalysisConfig {
     pub output_format: String,
     /// Path for the output CSV file.
     pub output_path: PathBuf,
+    /// Path for the output CSV file.
+    pub metrics_path: PathBuf,
     /// Range of relative rotations to test (e.g., [-3, -2, -1, 0, 1, 2, 3]).
     pub rotations: Range<isize>,
     /// List of mutation amounts
@@ -162,7 +165,13 @@ pub async fn run_analysis(
                         rotation: ri,
                         found,
                     })
-                };
+                }
+                .instrument(info_span!(
+                    "search_task",
+                    __query_id = target_id.serial_id(),
+                    __mutation = mutation,
+                    __rotation = ri
+                ));
                 futures.push(tokio::spawn(future));
             }
         }
