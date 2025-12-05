@@ -1,7 +1,5 @@
 use rand::{CryptoRng, Rng};
 
-use iris_mpc_common::IrisSerialId;
-
 use crate::aws::{AwsClient, AwsClientConfig};
 
 use components::{
@@ -42,7 +40,6 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
-        known_iris_serial_id: Option<IrisSerialId>,
         rng_seed: R,
     ) -> Self {
         let aws_client = AwsClient::new(aws_client_config);
@@ -50,19 +47,13 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         Self {
             data_uploader: DataUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(
-                batch_count,
-                batch_kind,
-                batch_size,
-                known_iris_serial_id,
-            ),
+            request_generator: RequestGenerator::new(batch_count, batch_kind, batch_size),
             response_correlator: ResponseCorrelator::new(aws_client.clone()),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
 
     pub async fn exec(&mut self) -> Result<(), ClientError> {
-        tracing::info!("Executing ...");
         while let Some(batch) = self.request_generator.next().await.unwrap() {
             self.data_uploader.process_batch(&batch).await?;
             self.request_enqueuer.process_batch(&batch).await?;
@@ -73,7 +64,6 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     }
 
     pub async fn init(&mut self) -> Result<(), ClientError> {
-        tracing::info!("Initializing ...");
         for initializer in [self.data_uploader.init(), self.response_correlator.init()] {
             initializer.await.map_err(|e| {
                 tracing::error!("Service client: component initialisation failed: {}", e);

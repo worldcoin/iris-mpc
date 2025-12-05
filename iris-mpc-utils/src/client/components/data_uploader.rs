@@ -45,50 +45,30 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for DataUploader<R> {
         let mut shares = Vec::new();
         for request in batch.requests() {
             match request {
-                Request::IdentityDeletion {
-                    known_iris_serial_id,
-                    signup_id,
-                    ..
-                } => {
-                    if known_iris_serial_id.is_none() {
-                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
-                    }
+                Request::IdentityDeletion { signup_id, .. } => {
+                    shares.push((generate_iris_shares(self.rng_mut()), signup_id));
                 }
                 Request::Reauthorization {
-                    known_iris_serial_id,
                     reauth_id,
                     signup_id,
                     ..
                 } => {
-                    shares.push((reauth_id, generate_iris_shares(self.rng_mut())));
-                    if known_iris_serial_id.is_none() {
-                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
-                    }
+                    shares.push((generate_iris_shares(self.rng_mut()), reauth_id));
+                    shares.push((generate_iris_shares(self.rng_mut()), signup_id));
                 }
-                Request::ResetCheck {
-                    known_iris_serial_id,
-                    reset_id,
-                    signup_id,
-                    ..
-                } => {
-                    shares.push((reset_id, generate_iris_shares(self.rng_mut())));
-                    if known_iris_serial_id.is_none() {
-                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
-                    }
+                Request::ResetCheck { reset_check_id, .. } => {
+                    shares.push((generate_iris_shares(self.rng_mut()), reset_check_id));
                 }
                 Request::ResetUpdate {
-                    known_iris_serial_id,
-                    reset_id,
+                    reset_update_id,
                     signup_id,
                     ..
                 } => {
-                    shares.push((reset_id, generate_iris_shares(self.rng_mut())));
-                    if known_iris_serial_id.is_none() {
-                        shares.push((signup_id, generate_iris_shares(self.rng_mut())));
-                    }
+                    shares.push((generate_iris_shares(self.rng_mut()), reset_update_id));
+                    shares.push((generate_iris_shares(self.rng_mut()), signup_id));
                 }
                 Request::Uniqueness { signup_id, .. } => {
-                    shares.push((signup_id, generate_iris_shares(self.rng_mut())));
+                    shares.push((generate_iris_shares(self.rng_mut()), signup_id));
                 }
             }
         }
@@ -97,7 +77,7 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for DataUploader<R> {
         let aws_client = &self.aws_client;
         let tasks: Vec<_> = shares
             .iter()
-            .map(|(identifier, shares)| async move {
+            .map(|(shares, identifier)| async move {
                 aws_client
                     .s3_upload_iris_shares(identifier, shares)
                     .await

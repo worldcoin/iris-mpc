@@ -14,25 +14,23 @@ use iris_mpc_common::{
 pub enum Request {
     IdentityDeletion {
         info: RequestInfo,
-        known_iris_serial_id: Option<IrisSerialId>,
+        serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
     Reauthorization {
         info: RequestInfo,
-        known_iris_serial_id: Option<IrisSerialId>,
         reauth_id: uuid::Uuid,
+        serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
     ResetCheck {
         info: RequestInfo,
-        known_iris_serial_id: Option<IrisSerialId>,
-        reset_id: uuid::Uuid,
-        signup_id: uuid::Uuid,
+        reset_check_id: uuid::Uuid,
     },
     ResetUpdate {
         info: RequestInfo,
-        known_iris_serial_id: Option<IrisSerialId>,
-        reset_id: uuid::Uuid,
+        reset_update_id: uuid::Uuid,
+        serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
     Uniqueness {
@@ -52,132 +50,63 @@ impl Request {
         }
     }
 
-    pub fn new(
-        batch_idx: usize,
-        batch_item_idx: usize,
-        batch_kind: &'static str,
-        known_iris_serial_id: Option<IrisSerialId>,
-    ) -> Self {
-        match batch_kind {
-            IDENTITY_DELETION_MESSAGE_TYPE => Self::IdentityDeletion {
-                info: RequestInfo::new(batch_idx, batch_item_idx),
-                known_iris_serial_id,
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            REAUTH_MESSAGE_TYPE => Self::Reauthorization {
-                info: RequestInfo::new(batch_idx, batch_item_idx),
-                known_iris_serial_id,
-                reauth_id: uuid::Uuid::new_v4(),
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            RESET_CHECK_MESSAGE_TYPE => Self::ResetCheck {
-                info: RequestInfo::new(batch_idx, batch_item_idx),
-                known_iris_serial_id,
-                reset_id: uuid::Uuid::new_v4(),
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            RESET_UPDATE_MESSAGE_TYPE => Self::ResetUpdate {
-                info: RequestInfo::new(batch_idx, batch_item_idx),
-                known_iris_serial_id,
-                reset_id: uuid::Uuid::new_v4(),
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            UNIQUENESS_MESSAGE_TYPE => Self::Uniqueness {
-                info: RequestInfo::new(batch_idx, batch_item_idx),
-                signup_id: uuid::Uuid::new_v4(),
+    pub fn new_identity_deletion(batch: &RequestBatch, parent: &Request) -> Self {
+        match parent {
+            Self::Uniqueness { signup_id, .. } => Self::IdentityDeletion {
+                info: RequestInfo::new(batch),
+                serial_id: None,
+                signup_id: signup_id.clone(),
             },
             _ => unreachable!(),
+        }
+    }
+
+    pub fn new_reauthorisation(batch: &RequestBatch, parent: &Request) -> Self {
+        match parent {
+            Self::Uniqueness { signup_id, .. } => Self::Reauthorization {
+                info: RequestInfo::new(batch),
+                reauth_id: uuid::Uuid::new_v4(),
+                serial_id: None,
+                signup_id: signup_id.clone(),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn new_reset_check(batch: &RequestBatch) -> Self {
+        Self::ResetCheck {
+            info: RequestInfo::new(batch),
+            reset_check_id: uuid::Uuid::new_v4(),
+        }
+    }
+
+    pub fn new_reset_update(batch: &RequestBatch, parent: &Request) -> Self {
+        match parent {
+            Self::Uniqueness { signup_id, .. } => Self::ResetUpdate {
+                info: RequestInfo::new(batch),
+                reset_update_id: uuid::Uuid::new_v4(),
+                serial_id: None,
+                signup_id: signup_id.clone(),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn new_uniqueness(batch: &RequestBatch) -> Self {
+        Self::Uniqueness {
+            info: RequestInfo::new(batch),
+            signup_id: uuid::Uuid::new_v4(),
         }
     }
 }
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::IdentityDeletion { .. } => {
-                write!(
-                    f,
-                    "Request:{:03}.{:03}.IdentityDeletion",
-                    self.info().batch_idx(),
-                    self.info().batch_item_idx(),
-                )
-            }
-            Self::Reauthorization { .. } => {
-                write!(
-                    f,
-                    "Request:{:03}.{:03}.Reauthorization",
-                    self.info().batch_idx(),
-                    self.info().batch_item_idx(),
-                )
-            }
-            Self::ResetCheck { .. } => {
-                write!(
-                    f,
-                    "Request:{:03}.{:03}.ResetCheck",
-                    self.info().batch_idx(),
-                    self.info().batch_item_idx(),
-                )
-            }
-            Self::ResetUpdate { .. } => {
-                write!(
-                    f,
-                    "Request:{:03}.{:03}.ResetUpdate",
-                    self.info().batch_idx(),
-                    self.info().batch_item_idx(),
-                )
-            }
-            Self::Uniqueness { .. } => {
-                write!(
-                    f,
-                    "Request:{:03}.{:03}.Uniqueness",
-                    self.info().batch_idx(),
-                    self.info().batch_item_idx(),
-                )
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RequestInfo {
-    /// Batch ordinal identifier.
-    batch_idx: usize,
-
-    /// Batch item ordinal identifier.
-    batch_item_idx: usize,
-
-    /// An identifier assigned by client for correlation purposes.
-    identifier: uuid::Uuid,
-}
-
-impl RequestInfo {
-    pub fn batch_idx(&self) -> usize {
-        self.batch_idx
-    }
-
-    pub fn batch_item_idx(&self) -> usize {
-        self.batch_item_idx
-    }
-
-    pub fn identifier(&self) -> &uuid::Uuid {
-        &self.identifier
-    }
-
-    pub fn new(batch_idx: usize, batch_item_idx: usize) -> Self {
-        Self {
-            batch_idx,
-            batch_item_idx,
-            identifier: uuid::Uuid::new_v4(),
-        }
-    }
-}
-
-impl fmt::Display for RequestInfo {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Request:{:03}.{:03}.{}",
-            self.batch_idx, self.batch_item_idx, self.identifier
+            "Request:{:03}.{:03}",
+            self.info().batch_idx(),
+            self.info().batch_item_idx(),
         )
     }
 }
@@ -197,6 +126,10 @@ impl RequestBatch {
         self.batch_idx
     }
 
+    pub fn next_item_idx(&self) -> usize {
+        &self.requests.len() + 1
+    }
+
     pub fn requests(&self) -> &Vec<Request> {
         &self.requests
     }
@@ -208,14 +141,14 @@ impl RequestBatch {
     pub fn new(batch_idx: usize, batch_size: usize) -> Self {
         Self {
             batch_idx,
-            requests: Vec::with_capacity(batch_size),
+            requests: Vec::with_capacity(batch_size * 2),
         }
     }
 }
 
 impl fmt::Display for RequestBatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Request-Batch:{:03}", self.batch_idx)
+        write!(f, "Batch:{:03}", self.batch_idx)
     }
 }
 
@@ -259,6 +192,50 @@ impl fmt::Display for RequestBatchSize {
         match self {
             Self::Static(size) => write!(f, "{}", size),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RequestInfo {
+    /// Batch ordinal identifier.
+    batch_idx: usize,
+
+    /// Batch item ordinal identifier.
+    batch_item_idx: usize,
+
+    /// An identifier assigned by client for correlation purposes.
+    identifier: uuid::Uuid,
+}
+
+impl RequestInfo {
+    pub fn batch_idx(&self) -> usize {
+        self.batch_idx
+    }
+
+    pub fn batch_item_idx(&self) -> usize {
+        self.batch_item_idx
+    }
+
+    pub fn identifier(&self) -> &uuid::Uuid {
+        &self.identifier
+    }
+
+    pub fn new(batch: &RequestBatch) -> Self {
+        Self {
+            batch_idx: batch.batch_idx(),
+            batch_item_idx: batch.next_item_idx(),
+            identifier: uuid::Uuid::new_v4(),
+        }
+    }
+}
+
+impl fmt::Display for RequestInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Request:{:03}.{:03}.{}",
+            self.batch_idx, self.batch_item_idx, self.identifier
+        )
     }
 }
 

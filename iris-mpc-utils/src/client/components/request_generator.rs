@@ -1,4 +1,7 @@
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::helpers::smpc_request::{
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+};
 
 use super::super::typeset::{
     ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
@@ -18,10 +21,6 @@ pub struct RequestGenerator {
 
     // Count of generated batches.
     generated_batch_count: usize,
-
-    /// A known Iris serial identifier used to by full response correlation.
-    /// Note: this is a temporary field until correlation is fully supported.
-    known_iris_serial_id: Option<IrisSerialId>,
 }
 
 impl RequestGenerator {
@@ -35,14 +34,12 @@ impl RequestGenerator {
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
-        known_iris_serial_id: Option<IrisSerialId>,
     ) -> Self {
         Self {
             generated_batch_count: 0,
             batch_count,
             batch_kind,
             batch_size,
-            known_iris_serial_id,
         }
     }
 
@@ -54,19 +51,40 @@ impl RequestGenerator {
 
         let batch_idx = self.generated_batch_count + 1;
         let mut batch = RequestBatch::new(batch_idx, self.batch_size());
-        for batch_item_idx in 1..(self.batch_size() + 1) {
-            batch.requests_mut().push(match self.batch_kind {
-                RequestBatchKind::Simple(batch_kind) => Request::new(
-                    batch_idx,
-                    batch_item_idx,
-                    batch_kind,
-                    self.known_iris_serial_id,
-                ),
-            });
+        for _ in 0..self.batch_size() {
+            match self.batch_kind {
+                RequestBatchKind::Simple(batch_kind) => match batch_kind {
+                    IDENTITY_DELETION_MESSAGE_TYPE => {
+                        let r1 = Request::new_uniqueness(&batch);
+                        let r2 = Request::new_identity_deletion(&batch, &r1);
+                        batch.requests_mut().push(r1);
+                        batch.requests_mut().push(r2);
+                    }
+                    REAUTH_MESSAGE_TYPE => {
+                        let r1 = Request::new_uniqueness(&batch);
+                        let r2 = Request::new_reauthorisation(&batch, &r1);
+                        batch.requests_mut().push(r1);
+                        batch.requests_mut().push(r2);
+                    }
+                    RESET_CHECK_MESSAGE_TYPE => {
+                        let r1 = Request::new_reset_check(&batch);
+                        batch.requests_mut().push(r1);
+                    }
+                    RESET_UPDATE_MESSAGE_TYPE => {
+                        let r1 = Request::new_uniqueness(&batch);
+                        let r2 = Request::new_reset_update(&batch, &r1);
+                        batch.requests_mut().push(r1);
+                        batch.requests_mut().push(r2);
+                    }
+                    UNIQUENESS_MESSAGE_TYPE => {
+                        let r1 = Request::new_uniqueness(&batch);
+                        batch.requests_mut().push(r1);
+                    }
+                    _ => unreachable!(),
+                },
+            }
         }
         self.generated_batch_count += 1;
-
-        tracing::info!("{} :: Instantiated", batch);
 
         Ok(Some(batch))
     }

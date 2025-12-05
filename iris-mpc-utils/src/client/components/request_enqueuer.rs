@@ -62,28 +62,28 @@ impl From<&Request> for RequestMessageBody {
             }
             Request::Reauthorization {
                 reauth_id,
-                known_iris_serial_id,
+                serial_id,
                 ..
             } => Self::Reauthorization(ReAuthRequest {
                 batch_size: Some(1),
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
-                serial_id: known_iris_serial_id.unwrap_or(1),
+                serial_id: serial_id.unwrap_or(1),
                 use_or_rule: bool::default(),
             }),
-            Request::ResetCheck { reset_id, .. } => Self::ResetCheck(ResetCheckRequest {
+            Request::ResetCheck { reset_check_id, .. } => Self::ResetCheck(ResetCheckRequest {
                 batch_size: Some(1),
-                reset_id: reset_id.to_string(),
-                s3_key: reset_id.to_string(),
+                reset_id: reset_check_id.to_string(),
+                s3_key: reset_check_id.to_string(),
             }),
             Request::ResetUpdate {
-                reset_id,
-                known_iris_serial_id,
+                reset_update_id,
+                serial_id,
                 ..
             } => Self::ResetUpdate(ResetUpdateRequest {
-                reset_id: reset_id.to_string(),
-                s3_key: reset_id.to_string(),
-                serial_id: known_iris_serial_id.unwrap_or(1),
+                reset_id: reset_update_id.to_string(),
+                s3_key: reset_update_id.to_string(),
+                serial_id: serial_id.unwrap_or(1),
             }),
             Request::Uniqueness { signup_id, .. } => Self::Uniqueness(UniquenessRequest {
                 batch_size: Some(1),

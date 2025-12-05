@@ -42,7 +42,7 @@ impl S3ObjectInfo {
 
 impl fmt::Display for S3ObjectInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "S3ObjectInfo:{}.{}", self.bucket, self.key)
+        write!(f, "{}", self.bucket)
     }
 }
 
@@ -85,6 +85,6 @@ impl SnsMessageInfo {
 
 impl fmt::Display for SnsMessageInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SnsMessageInfo:{}.{}", self.group_id, self.kind)
+        write!(f, "{}.{}", self.group_id, self.kind)
     }
 }

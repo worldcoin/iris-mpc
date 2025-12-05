@@ -59,10 +59,6 @@ struct CliOptions {
     #[clap(long)]
     environment: String,
 
-    /// A known serial identifier that allows response correlation to be bypassed.
-    #[clap(long, default_value = "1")]
-    known_iris_serial_id: Option<IrisSerialId>,
-
     /// Number of request batches to process.
     #[clap(long, default_value = "5")]
     request_batch_count: usize,
@@ -149,7 +145,6 @@ impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
             options.request_batch_count,
             options.request_batch_kind(),
             options.request_batch_size(),
-            options.known_iris_serial_id,
             options.rng_seed(),
         )
         .await
