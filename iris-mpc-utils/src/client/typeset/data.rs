@@ -18,6 +18,7 @@ pub enum Request {
         identifier: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
+        status: RequestStatus,
     },
     Reauthorization {
         batch_idx: usize,
@@ -26,12 +27,14 @@ pub enum Request {
         reauth_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
+        status: RequestStatus,
     },
     ResetCheck {
         batch_idx: usize,
         batch_item_idx: usize,
         identifier: uuid::Uuid,
         reset_check_id: uuid::Uuid,
+        status: RequestStatus,
     },
     ResetUpdate {
         batch_idx: usize,
@@ -40,43 +43,55 @@ pub enum Request {
         reset_update_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
+        status: RequestStatus,
     },
     Uniqueness {
         batch_idx: usize,
         batch_item_idx: usize,
         identifier: uuid::Uuid,
         signup_id: uuid::Uuid,
+        status: RequestStatus,
     },
 }
 
 impl Request {
     pub fn batch_idx(&self) -> usize {
         match self {
-            Self::IdentityDeletion { batch_idx, .. } => *batch_idx,
-            Self::Reauthorization { batch_idx, .. } => *batch_idx,
-            Self::ResetCheck { batch_idx, .. } => *batch_idx,
-            Self::ResetUpdate { batch_idx, .. } => *batch_idx,
-            Self::Uniqueness { batch_idx, .. } => *batch_idx,
+            Self::IdentityDeletion { batch_idx, .. }
+            | Self::Reauthorization { batch_idx, .. }
+            | Self::ResetCheck { batch_idx, .. }
+            | Self::ResetUpdate { batch_idx, .. }
+            | Self::Uniqueness { batch_idx, .. } => *batch_idx,
         }
     }
 
     pub fn batch_item_idx(&self) -> usize {
         match self {
-            Self::IdentityDeletion { batch_item_idx, .. } => *batch_item_idx,
-            Self::Reauthorization { batch_item_idx, .. } => *batch_item_idx,
-            Self::ResetCheck { batch_item_idx, .. } => *batch_item_idx,
-            Self::ResetUpdate { batch_item_idx, .. } => *batch_item_idx,
-            Self::Uniqueness { batch_item_idx, .. } => *batch_item_idx,
+            Self::IdentityDeletion { batch_item_idx, .. }
+            | Self::Reauthorization { batch_item_idx, .. }
+            | Self::ResetCheck { batch_item_idx, .. }
+            | Self::ResetUpdate { batch_item_idx, .. }
+            | Self::Uniqueness { batch_item_idx, .. } => *batch_item_idx,
         }
     }
 
     pub fn identifier(&self) -> &uuid::Uuid {
         match self {
-            Self::IdentityDeletion { identifier, .. } => identifier,
-            Self::Reauthorization { identifier, .. } => identifier,
-            Self::ResetCheck { identifier, .. } => identifier,
-            Self::ResetUpdate { identifier, .. } => identifier,
-            Self::Uniqueness { identifier, .. } => identifier,
+            Self::IdentityDeletion { identifier, .. }
+            | Self::Reauthorization { identifier, .. }
+            | Self::ResetCheck { identifier, .. }
+            | Self::ResetUpdate { identifier, .. }
+            | Self::Uniqueness { identifier, .. } => identifier,
+        }
+    }
+
+    pub fn status(&self) -> &RequestStatus {
+        match self {
+            Self::IdentityDeletion { status, .. }
+            | Self::Reauthorization { status, .. }
+            | Self::ResetCheck { status, .. }
+            | Self::ResetUpdate { status, .. }
+            | Self::Uniqueness { status, .. } => status,
         }
     }
 
@@ -88,6 +103,7 @@ impl Request {
                 identifier: uuid::Uuid::new_v4(),
                 serial_id: None,
                 signup_id: *signup_id,
+                status: RequestStatus::New,
             },
             _ => unreachable!(),
         }
@@ -102,6 +118,7 @@ impl Request {
                 reauth_id: uuid::Uuid::new_v4(),
                 serial_id: None,
                 signup_id: *signup_id,
+                status: RequestStatus::New,
             },
             _ => unreachable!(),
         }
@@ -113,6 +130,7 @@ impl Request {
             batch_item_idx: batch.next_item_idx(),
             identifier: uuid::Uuid::new_v4(),
             reset_check_id: uuid::Uuid::new_v4(),
+            status: RequestStatus::New,
         }
     }
 
@@ -125,6 +143,7 @@ impl Request {
                 reset_update_id: uuid::Uuid::new_v4(),
                 serial_id: None,
                 signup_id: *signup_id,
+                status: RequestStatus::New,
             },
             _ => unreachable!(),
         }
@@ -136,7 +155,18 @@ impl Request {
             batch_item_idx: batch.next_item_idx(),
             identifier: uuid::Uuid::new_v4(),
             signup_id: uuid::Uuid::new_v4(),
+            status: RequestStatus::New,
         }
+    }
+
+    pub fn can_enqueue(&self) -> bool {
+        matches!(self.status(), RequestStatus::New)
+            && match self {
+                Self::IdentityDeletion { serial_id, .. } => serial_id.is_some(),
+                Self::Reauthorization { serial_id, .. } => serial_id.is_some(),
+                Self::ResetUpdate { serial_id, .. } => serial_id.is_some(),
+                _ => true,
+            }
     }
 }
 
@@ -244,4 +274,12 @@ pub enum RequestMessageBody {
     ResetCheck(smpc_request::ResetCheckRequest),
     ResetUpdate(smpc_request::ResetUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
+}
+
+/// Enumeration over request processing status.
+#[derive(Debug, Clone)]
+pub enum RequestStatus {
+    Complete,
+    Enqueued,
+    New,
 }

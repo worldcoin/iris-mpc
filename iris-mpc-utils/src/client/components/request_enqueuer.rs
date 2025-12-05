@@ -33,6 +33,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
         let tasks: Vec<_> = batch
             .requests()
             .iter()
+            .take_while(|r| r.can_enqueue())
             .map(|request| {
                 let aws_client = &self.aws_client;
                 let sns_message_info = SnsMessageInfo::from(request);

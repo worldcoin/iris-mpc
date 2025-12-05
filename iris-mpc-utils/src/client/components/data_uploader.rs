@@ -45,31 +45,21 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for DataUploader<R> {
         let mut shares = Vec::new();
         for request in batch.requests() {
             match request {
-                Request::IdentityDeletion { signup_id, .. } => {
-                    shares.push((generate_iris_shares(self.rng_mut()), signup_id));
-                }
-                Request::Reauthorization {
-                    reauth_id,
-                    signup_id,
-                    ..
-                } => {
+                Request::Reauthorization { reauth_id, .. } => {
                     shares.push((generate_iris_shares(self.rng_mut()), reauth_id));
-                    shares.push((generate_iris_shares(self.rng_mut()), signup_id));
                 }
                 Request::ResetCheck { reset_check_id, .. } => {
                     shares.push((generate_iris_shares(self.rng_mut()), reset_check_id));
                 }
                 Request::ResetUpdate {
-                    reset_update_id,
-                    signup_id,
-                    ..
+                    reset_update_id, ..
                 } => {
                     shares.push((generate_iris_shares(self.rng_mut()), reset_update_id));
-                    shares.push((generate_iris_shares(self.rng_mut()), signup_id));
                 }
                 Request::Uniqueness { signup_id, .. } => {
                     shares.push((generate_iris_shares(self.rng_mut()), signup_id));
                 }
+                _ => {}
             }
         }
 
