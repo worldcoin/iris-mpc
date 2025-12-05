@@ -106,7 +106,7 @@ pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnl
     DistanceFn::Fhd
 };
 
-pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
+pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Unsorted;
 
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
