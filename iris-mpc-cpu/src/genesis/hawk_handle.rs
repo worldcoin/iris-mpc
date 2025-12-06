@@ -5,7 +5,8 @@ use super::{
 use crate::{
     execution::hawk_main::{
         insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, LEFT, RIGHT, STORE_IDS,
+        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, StoreId, LEFT, RIGHT,
+        STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -117,6 +118,15 @@ impl Handle {
                     batch_id,
                     vector_ids.len(),
                 ));
+
+                let queries = JobRequest::numa_realloc(
+                    queries,
+                    [
+                        actor.workers_handle(StoreId::Left),
+                        actor.workers_handle(StoreId::Right),
+                    ],
+                )
+                .await;
 
                 // Use all sessions per iris side to search for insertion indices per
                 // batch, number configured by `args.request_parallelism`.
