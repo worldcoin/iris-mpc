@@ -1061,6 +1061,7 @@ async fn get_results_thread(
                     vector_ids_to_persist,
                     ..
                 } => {
+                    let start = Instant::now();
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
                     // get iris shares to persist
                     let left_store = &imem_iris_stores_bg[LEFT];
@@ -1112,6 +1113,7 @@ async fn get_results_thread(
                     log_info(format!(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
                     ));
+                    metrics::histogram!("handle_mutations_duration").record(start.elapsed().as_secs_f64());
                     metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
