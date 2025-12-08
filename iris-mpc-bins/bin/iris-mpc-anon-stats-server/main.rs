@@ -509,8 +509,8 @@ impl AnonStatsProcessor {
         job_size: usize,
         duration: Duration,
     ) {
-        let duration_metric_name = format!("anon_stats.job_{}.duration", metric_name_suffix);
-        let job_size_metric_name = format!("anon_stats.job_{}.size", metric_name_suffix);
+        let duration_metric_name = format!("job_{}.duration", metric_name_suffix);
+        let job_size_metric_name = format!("job_{}.size", metric_name_suffix);
 
         let side = match origin.side {
             Some(eye) => format!("{:?}", eye),
@@ -549,7 +549,7 @@ impl AnonStatsProcessor {
         };
 
         metrics::gauge!(
-            "anon_stats.available_entries",
+            "available_entries",
             "orientation" => format!("{:?}", origin.orientation),
             "kind" => format!("{:?}", kind),
             "side" => side
@@ -557,7 +557,7 @@ impl AnonStatsProcessor {
         .set(available as f64);
 
         metrics::gauge!(
-            "anon_stats.required_mind",
+            "required_min_entries",
             "orientation" => format!("{:?}", origin.orientation),
             "kind" => format!("{:?}", kind),
         )
