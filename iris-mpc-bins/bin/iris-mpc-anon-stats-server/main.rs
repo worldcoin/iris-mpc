@@ -196,20 +196,6 @@ impl AnonStatsProcessor {
         };
         let available = usize::try_from(available).unwrap_or(0);
 
-        metrics::gauge!(
-            "anon_stats.available_entries",
-            "origin" => format!("{:?}", origin),
-            "operation" => format!("{:?}", operation),
-            "kind" => format!("{:?}", kind),
-        )
-        .set(available as f64);
-
-        info!(
-            "Available anon stats entries for {:?}, {:?}: {}",
-            origin,
-            Some(operation),
-            available
-        );
         if available == 0 {
             info!("No anon stats entries for {:?}", origin);
             return Ok(());
@@ -221,6 +207,9 @@ impl AnonStatsProcessor {
             JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
             _ => panic!("Invalid job kind for 1D job"),
         };
+
+        self.log_available_entries(available, required_min, origin, kind)
+            .await;
 
         if min_job_size < required_min {
             debug!(
@@ -342,20 +331,16 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        metrics::gauge!(
-            "anon_stats.available_entries",
-            "origin" => format!("{:?}", origin),
-            "operation" => format!("{:?}", operation),
-            "kind" => format!("{:?}", kind),
-        )
-        .set(available as f64);
-
         let min_job_size = sync_on_job_sizes(session, available).await?;
         let required_min = match kind {
             JobKind::Gpu2DReauth => self.config.min_2d_job_size_reauth,
             JobKind::Gpu2D => self.config.min_2d_job_size,
             _ => panic!("Invalid job kind for 2D job"),
         };
+
+        self.log_available_entries(available, required_min, origin, kind)
+            .await;
+
         if min_job_size < required_min {
             debug!(
                 ?origin,
@@ -549,6 +534,39 @@ impl AnonStatsProcessor {
         .record(job_size as f64);
 
         info!("Completed anon stats job of kind: {:?}", kind);
+    }
+
+    async fn log_available_entries(
+        &self,
+        available: usize,
+        required_min: usize,
+        origin: AnonStatsOrigin,
+        kind: JobKind,
+    ) {
+        let side = match origin.side {
+            Some(eye) => format!("{:?}", eye),
+            None => "both".to_string(),
+        };
+
+        metrics::gauge!(
+            "anon_stats.available_entries",
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+            "side" => side
+        )
+        .set(available as f64);
+
+        metrics::gauge!(
+            "anon_stats.required_mind",
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+        )
+        .set(required_min as f64);
+
+        debug!(
+            "Available entries for side {:?}, kind {:?}: {}",
+            origin, kind, available
+        );
     }
 }
 
