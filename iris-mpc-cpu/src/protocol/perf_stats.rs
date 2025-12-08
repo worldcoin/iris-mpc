@@ -105,6 +105,11 @@ pub fn enable() {
     ENABLED.store(true, Ordering::Relaxed);
 }
 
+/// Returns true if performance recording is currently enabled.
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
 /// Clear all accumulated stats.
 pub fn clear() {
     STATS.clear();

@@ -5,6 +5,7 @@ use crate::{
     protocol::binary_fss::{
         add_3_get_msb_fss_batch_parallel_threshold,
         add_3_get_msb_fss_batch_parallel_threshold_timers, add_3_get_msb_fss_batch_timers,
+        BinaryFssContext,
     },
     shares::{
         bit::Bit,
@@ -14,7 +15,7 @@ use crate::{
         vecshare::{SliceShare, VecShare},
     },
 };
-use std::io::Write;
+use std::{collections::VecDeque, io::Write};
 
 use aes_prng::AesRng;
 use ark_std::{end_timer, start_timer};
@@ -24,7 +25,11 @@ use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
-use std::{cell::RefCell, ops::SubAssign};
+use std::{
+    cell::RefCell,
+    ops::SubAssign,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use tracing::{instrument, trace_span, Instrument};
 
 thread_local! {
@@ -38,6 +43,13 @@ use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
 // Choose between the two FSS implementations
 pub const USE_PARALLEL_THRESH: bool = true;
+
+static MSB_FSS_INPUT_COUNT: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub fn msb_fss_total_inputs() -> u64 {
+    MSB_FSS_INPUT_COUNT.load(Ordering::Relaxed)
+}
 
 /// Splits the components of the given arithmetic share into 3 secret shares as described in Section 5.3 of the ABY3 paper.
 ///
@@ -1565,6 +1577,10 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     session: &mut Session,
     x: &[Share<u32>],
 ) -> Result<Vec<Share<Bit>>> {
+    // Update performance stats but make sure only one party does it to avoid double counting
+    if session.own_role().index() == 0 {
+        MSB_FSS_INPUT_COUNT.fetch_add(x.len() as u64, Ordering::Relaxed);
+    }
     // FSS: loop over get_msb_fss for all relevant entries of x, and collect results
     // open_bin later will take care of XOR-ing the msb shares from each party
     // Commented below is previous version without sending batches to add_3_get...
@@ -1580,15 +1596,54 @@ pub(crate) async fn extract_msb_u32_batch_fss(
 
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
 
-    for batch in x.chunks(batch_size) {
-        let batch_out = if USE_PARALLEL_THRESH {
-            add_3_get_msb_fss_batch_parallel_threshold_timers(session, batch, parallel_thresh)
-                .await?
-        } else {
-            add_3_get_msb_fss_batch_timers(session, batch).await?
-        };
+    if USE_PARALLEL_THRESH {
+        let fss_ctx = BinaryFssContext::new(session);
+        let timers_enabled = crate::protocol::perf_stats::enabled();
+        let max_inflight = if timers_enabled { 3usize } else { 2usize };
+        let mut inflight: VecDeque<tokio::task::JoinHandle<Result<Vec<Share<Bit>>, Error>>> =
+            VecDeque::new();
 
-        vec_of_msb_shares.extend(batch_out);
+        for batch in x.chunks(batch_size) {
+            let batch_vec = batch.to_vec();
+            let ctx = fss_ctx.clone();
+            let handle = if timers_enabled {
+                tokio::spawn(async move {
+                    add_3_get_msb_fss_batch_parallel_threshold_timers(
+                        ctx,
+                        batch_vec,
+                        parallel_thresh,
+                    )
+                    .await
+                })
+            } else {
+                tokio::spawn(async move {
+                    add_3_get_msb_fss_batch_parallel_threshold(ctx, batch_vec, parallel_thresh)
+                        .await
+                })
+            };
+
+            inflight.push_back(handle);
+
+            while inflight.len() > max_inflight {
+                if let Some(front) = inflight.pop_front() {
+                    let chunk = front
+                        .await
+                        .map_err(|e| eyre!("FSS batch task panicked: {e}"))??;
+                    vec_of_msb_shares.extend(chunk);
+                }
+            }
+        }
+        while let Some(front) = inflight.pop_front() {
+            let chunk = front
+                .await
+                .map_err(|e| eyre!("FSS batch task panicked: {e}"))??;
+            vec_of_msb_shares.extend(chunk);
+        }
+    } else {
+        for batch in x.chunks(batch_size) {
+            let batch_out = add_3_get_msb_fss_batch_timers(session, batch).await?;
+            vec_of_msb_shares.extend(batch_out);
+        }
     }
 
     Ok(vec_of_msb_shares)

@@ -10,7 +10,7 @@ use std::{collections::HashMap, time::Duration};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedReceiver},
-        oneshot,
+        oneshot, Mutex,
     },
     time::sleep,
 };
@@ -247,7 +247,10 @@ impl GrpcHandle {
             session_id,
             own_identity: self.party_id.clone(),
             out_streams: outstreams,
-            in_streams: instreams,
+            in_streams: instreams
+                .into_iter()
+                .map(|(id, stream)| (id, Mutex::new(stream)))
+                .collect(),
             config: self.config.clone(),
         })
     }

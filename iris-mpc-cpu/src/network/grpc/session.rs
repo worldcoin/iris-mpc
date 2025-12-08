@@ -6,8 +6,10 @@ use crate::{
 use eyre::{eyre, Result};
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::time::sleep;
-use tokio::time::timeout;
+use tokio::{
+    sync::Mutex,
+    time::{sleep, timeout},
+};
 use tonic::async_trait;
 
 // Hard-coded artificial one-way link latency used in tests.
@@ -19,13 +21,13 @@ pub struct GrpcSession {
     pub session_id: SessionId,
     pub own_identity: Identity,
     pub out_streams: HashMap<Identity, OutStream>,
-    pub in_streams: HashMap<Identity, InStream>,
+    pub in_streams: HashMap<Identity, Mutex<InStream>>,
     pub config: GrpcConfig,
 }
 
 #[async_trait]
 impl Networking for GrpcSession {
-    async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
+    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()> {
         // sleep(ARTIFICIAL_LINK_DELAY).await;
         let value = value.to_network();
 
@@ -43,12 +45,13 @@ impl Networking for GrpcSession {
         Ok(())
     }
 
-    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue> {
-        let incoming_stream = self.in_streams.get_mut(sender).ok_or(eyre!(
+    async fn receive(&self, sender: &Identity) -> Result<NetworkValue> {
+        let incoming_stream = self.in_streams.get(sender).ok_or(eyre!(
             "Incoming stream for {sender:?} in {:?} not found",
             self.session_id
         ))?;
-        match timeout(self.config.timeout_duration, incoming_stream.recv()).await {
+        let mut guard = incoming_stream.lock().await;
+        match timeout(self.config.timeout_duration, guard.recv()).await {
             Ok(res) => res
                 .ok_or(eyre!("No message received"))
                 .and_then(|msg| NetworkValue::deserialize(&msg.data)),

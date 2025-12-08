@@ -25,7 +25,7 @@ const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
-const HAWK_CONNECTION_PARALLELISM: usize = 1;
+const HAWK_CONNECTION_PARALLELISM: usize = 2;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 const MAX_RESET_UPDATES_PER_BATCH: usize = 0; // TODO: set back to 10 or so once reset is supported
 
@@ -238,7 +238,11 @@ async fn e2e_test() -> Result<()> {
         )
     };
 
-    println!("\n{scheme}: cross_compare was called {calls} times\n");
+    println!("\n{scheme}: cross_compare was called {calls} times");
+    println!(
+        "{scheme}: extract_msb_u32_batch_fss processed {} inputs\n",
+        iris_mpc_cpu::protocol::msb_fss_total_inputs()
+    );
 
     // Metrics: total duration per party for cross_compare.extract_open
     let [p0, p1, p2] =
@@ -356,6 +360,69 @@ async fn e2e_test() -> Result<()> {
 
         println!("");
     } // if USE_FSS && !USE_PARALLEL_THRESH
+
+    // -- FSS data size metrics -- //
+    if USE_FSS {
+        let [p0, p1, p2] = iris_mpc_cpu::protocol::traffic_totals_per_party().unwrap_or([0, 0, 0]);
+
+        println!(
+            "FSS traffic totals — p0: {}, p1: {}, p2: {}\n",
+            iris_mpc_cpu::protocol::format_traffic_bytes(p0),
+            iris_mpc_cpu::protocol::format_traffic_bytes(p1),
+            iris_mpc_cpu::protocol::format_traffic_bytes(p2)
+        );
+
+        if let Some((p0_key_bytes, p1_key_bytes)) = iris_mpc_cpu::protocol::fss_key_package_bytes()
+        {
+            let total = p0_key_bytes + p1_key_bytes;
+            println!(
+                "FSS key package size — total: {}, p0 share: {}, p1 share: {}\n",
+                iris_mpc_cpu::protocol::format_traffic_bytes(total),
+                iris_mpc_cpu::protocol::format_traffic_bytes(p0_key_bytes),
+                iris_mpc_cpu::protocol::format_traffic_bytes(p1_key_bytes),
+            );
+        }
+
+        if let Some(eval_breakdowns) = iris_mpc_cpu::protocol::eval_traffic_breakdown() {
+            println!("FSS evaluator traffic breakdown:");
+            for (idx, snapshot) in eval_breakdowns.iter().enumerate() {
+                println!(
+                    "  Party {} send totals — recon: {}, post_prev: {}, post_next: {}; total send: {}",
+                    idx,
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.recon_send),
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.post_send_prev),
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.post_send_next),
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.total_send()),
+                );
+                println!(
+                    "  Party {} recv totals — keys: {}, recon: {}, post: {}; total recv: {}",
+                    idx,
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.key_recv),
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.recon_recv),
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.post_recv),
+                    iris_mpc_cpu::protocol::format_traffic_bytes(snapshot.total_recv()),
+                );
+            }
+            println!();
+        }
+
+        if let Some(dealer_snapshot) = iris_mpc_cpu::protocol::dealer_traffic_breakdown() {
+            println!("FSS dealer traffic breakdown:");
+            println!(
+                "  Dealer sends — to p0: {}, to p1: {}; total send: {}",
+                iris_mpc_cpu::protocol::format_traffic_bytes(dealer_snapshot.key_send_prev),
+                iris_mpc_cpu::protocol::format_traffic_bytes(dealer_snapshot.key_send_next),
+                iris_mpc_cpu::protocol::format_traffic_bytes(dealer_snapshot.total_send()),
+            );
+            println!(
+                "  Dealer receives — from p0: {}, from p1: {}; total recv: {}",
+                iris_mpc_cpu::protocol::format_traffic_bytes(dealer_snapshot.recv_from_p0),
+                iris_mpc_cpu::protocol::format_traffic_bytes(dealer_snapshot.recv_from_p1),
+                iris_mpc_cpu::protocol::format_traffic_bytes(dealer_snapshot.total_recv()),
+            );
+            println!();
+        }
+    }
 
     Ok(())
 }

@@ -3,7 +3,7 @@ use super::binary::{
     open_bin, open_bin_fss, single_extract_msb_u32,
 };
 use crate::{
-    execution::session::{NetworkSession, Session, SessionHandles},
+    execution::session::{NetworkSessionInner, Session, SessionHandles},
     network::value::{
         NetworkInt,
         NetworkValue::{self},
@@ -64,7 +64,7 @@ pub fn cross_compare_calls_rss() -> u64 {
     fields(party = ?session.own_role),
     skip_all
 )]
-pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<Prf> {
+pub async fn setup_replicated_prf(session: &NetworkSessionInner, my_seed: PrfSeed) -> Result<Prf> {
     // send my_seed to the next party
     session.send_next(NetworkValue::PrfKey(my_seed)).await?;
     // deserializing received seed.
@@ -77,7 +77,7 @@ pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed
 }
 
 /// Setup an RNG common between all parties, for use in stochastic algorithms (e.g. HNSW layer selection).
-pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<PrfSeed> {
+pub async fn setup_shared_seed(session: &NetworkSessionInner, my_seed: PrfSeed) -> Result<PrfSeed> {
     let my_msg = NetworkValue::PrfKey(my_seed);
 
     let decode = |msg| match msg {

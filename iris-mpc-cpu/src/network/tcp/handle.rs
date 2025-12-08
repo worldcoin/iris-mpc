@@ -50,8 +50,10 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
 struct SessionChannels {
     outbound_tx: HashMap<Identity, HashMap<StreamId, UnboundedSender<OutboundMsg>>>,
     outbound_rx: HashMap<Identity, HashMap<StreamId, UnboundedReceiver<OutboundMsg>>>,
-    inbound_tx: HashMap<Identity, HashMap<SessionId, UnboundedSender<NetworkValue>>>,
-    inbound_rx: HashMap<Identity, HashMap<SessionId, UnboundedReceiver<NetworkValue>>>,
+    inbound_tx:
+        HashMap<Identity, HashMap<StreamId, HashMap<SessionId, UnboundedSender<NetworkValue>>>>,
+    inbound_rx:
+        HashMap<Identity, HashMap<StreamId, HashMap<SessionId, UnboundedReceiver<NetworkValue>>>>,
 }
 
 enum Cmd {
@@ -123,7 +125,12 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
                     .remove(&stream_id)
                     .unwrap();
 
-                let inbound_forwarder = sc.inbound_tx.get(peer_id).cloned().unwrap();
+                let inbound_forwarder = sc
+                    .inbound_tx
+                    .get(peer_id)
+                    .and_then(|m| m.get(&stream_id))
+                    .cloned()
+                    .unwrap();
                 let ch = self.ch_map.get(peer_id).unwrap().get(&stream_id).unwrap();
                 let (rsp_tx, rsp_rx) = oneshot::channel();
                 ch.send(Cmd::NewSessions {
@@ -138,30 +145,32 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
 
         // create the sessions
         let mut sessions = vec![];
-        for (idx, session_id) in (self.next_session_id..self.next_session_id + num_sessions)
+        for session_id in (self.next_session_id..self.next_session_id + num_sessions)
             .map(|x| SessionId::from(x as u32))
-            .enumerate()
         {
             let mut tx_map = HashMap::new();
             let mut rx_map = HashMap::new();
-            let stream_id = StreamId::from((idx % num_connections) as u32);
 
             for peer_id in &self.peers {
-                let outbound_tx = sc
-                    .outbound_tx
-                    .get(peer_id)
-                    .unwrap()
-                    .get(&stream_id)
-                    .cloned()
-                    .unwrap();
-                tx_map.insert(peer_id.clone(), outbound_tx.clone());
-                let inbound_rx = sc
-                    .inbound_rx
-                    .get_mut(peer_id)
-                    .unwrap()
-                    .remove(&session_id)
-                    .unwrap();
-                rx_map.insert(peer_id.clone(), inbound_rx);
+                let lanes_map = sc.outbound_tx.get(peer_id).unwrap();
+                let inbound_peer = sc.inbound_rx.get_mut(peer_id).unwrap();
+                let mut outbound_lanes = Vec::with_capacity(num_connections);
+                let mut inbound_lanes = Vec::with_capacity(num_connections);
+                for stream_id in (0..num_connections).map(|x| StreamId::from(x as u32)) {
+                    let outbound_tx = lanes_map.get(&stream_id).cloned().unwrap_or_else(|| {
+                        panic!("missing outbound lane {:?} for {:?}", stream_id, peer_id)
+                    });
+                    outbound_lanes.push(outbound_tx);
+                    let stream_sessions = inbound_peer
+                        .get_mut(&stream_id)
+                        .expect("inbound stream map missing");
+                    let inbound_rx = stream_sessions
+                        .remove(&session_id)
+                        .expect("inbound session missing");
+                    inbound_lanes.push(inbound_rx);
+                }
+                tx_map.insert(peer_id.clone(), outbound_lanes);
+                rx_map.insert(peer_id.clone(), inbound_lanes);
             }
 
             // Create the TcpSession for this stream
@@ -197,14 +206,17 @@ fn make_channels(
             let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
             outbound_tx.insert(stream_id, tx);
             outbound_rx.insert(stream_id, rx);
-        }
-
-        for session_id in (next_session_id..next_session_id + config.num_sessions)
-            .map(|x| SessionId::from(x as u32))
-        {
-            let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
-            inbound_tx.insert(session_id, tx);
-            inbound_rx.insert(session_id, rx);
+            let mut stream_inbound_tx = HashMap::new();
+            let mut stream_inbound_rx = HashMap::new();
+            for session_id in (next_session_id..next_session_id + config.num_sessions)
+                .map(|x| SessionId::from(x as u32))
+            {
+                let (itx, irx) = mpsc::unbounded_channel::<NetworkValue>();
+                stream_inbound_tx.insert(session_id, itx);
+                stream_inbound_rx.insert(session_id, irx);
+            }
+            inbound_tx.insert(stream_id, stream_inbound_tx);
+            inbound_rx.insert(stream_id, stream_inbound_rx);
         }
 
         sc.outbound_tx.insert(peer_id.clone(), outbound_tx);

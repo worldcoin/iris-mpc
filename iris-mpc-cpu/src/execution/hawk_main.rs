@@ -4,7 +4,7 @@ use crate::{
         hawk_main::{insert::InsertPlanV, iris_worker::IrisPoolHandle, search::SearchIds},
         local::generate_local_identities,
         player::{Role, RoleAssignment},
-        session::{NetworkSession, Session, SessionId},
+        session::{spawn_network_client, NetworkSession, NetworkSessionInner, Session, SessionId},
     },
     hawkers::{
         aby3::aby3_store::{
@@ -391,7 +391,7 @@ impl HawkActor {
     /// upon startup of the `HawkActor` instance.
     async fn get_or_init_prf_key(
         &mut self,
-        network_session: &mut NetworkSession,
+        network_session: &NetworkSessionInner,
     ) -> Result<Arc<[u8; 16]>> {
         if self.prf_key.is_none() {
             let prf_key_ = if let Some(prf_key) = self.args.hnsw_prf_key {
@@ -432,14 +432,14 @@ impl HawkActor {
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
         let mut network_sessions = vec![];
         for tcp_session in self.networking.make_sessions().await? {
-            network_sessions.push(NetworkSession {
+            network_sessions.push(NetworkSessionInner {
                 session_id: tcp_session.id(),
                 role_assignments: self.role_assignments.clone(),
-                networking: Box::new(tcp_session),
+                networking: Arc::new(tcp_session),
                 own_role: Role::new(self.party_id),
             });
         }
-        let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
+        let hnsw_prf_key = self.get_or_init_prf_key(&network_sessions[0]).await?;
 
         // todo: replace this with array_chunks::<2>() once that feature
         // is stabilized in Rust.
@@ -472,7 +472,7 @@ impl HawkActor {
     fn create_session(
         &self,
         store_id: StoreId,
-        mut network_session: NetworkSession,
+        network_session: NetworkSessionInner,
         hnsw_prf_key: &Arc<[u8; 16]>,
     ) -> impl Future<Output = Result<HawkSession>> {
         let storage = self.iris_store(store_id);
@@ -482,11 +482,21 @@ impl HawkActor {
 
         async move {
             let my_session_seed = thread_rng().gen();
-            let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+            let prf = setup_replicated_prf(&network_session, my_session_seed).await?;
+            let session_id = network_session.session_id;
+            let role_assignments = network_session.role_assignments.clone();
+            let own_role = network_session.own_role;
+            let (client, network_task) = spawn_network_client(network_session);
             let aby3_store = Aby3Store {
                 session: Session {
-                    network_session,
+                    network_session: NetworkSession::new(
+                        client,
+                        session_id,
+                        role_assignments,
+                        own_role,
+                    ),
                     prf,
+                    network_task,
                 },
                 storage,
                 workers,

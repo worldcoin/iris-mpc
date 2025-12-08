@@ -1,7 +1,7 @@
 use crate::{
     execution::{
         player::*,
-        session::{NetworkSession, Session, SessionId},
+        session::{spawn_network_client, NetworkSession, NetworkSessionInner, Session, SessionId},
     },
     network::{
         grpc::setup_local_grpc_networking,
@@ -101,13 +101,13 @@ impl LocalRuntime {
             NetworkType::Local => {
                 let sess_id = SessionId::from(0_u32);
                 let network = LocalNetworkingStore::from_host_ids(&identities);
-                let network_sessions: Vec<NetworkSession> = (0..seeds.len())
+                let network_sessions: Vec<NetworkSessionInner> = (0..seeds.len())
                     .map(|i| {
                         let identity = identities[i].clone();
-                        NetworkSession {
+                        NetworkSessionInner {
                             session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
-                            networking: Box::new(network.get_local_network(identity.clone())),
+                            networking: Arc::new(network.get_local_network(identity.clone())),
                             own_role: Role::new(i),
                         }
                     })
@@ -140,13 +140,13 @@ impl LocalRuntime {
                     .into_iter()
                     .map(|r| r.map_err(eyre::Report::new)?)
                     .collect::<Result<Vec<_>>>()?;
-                let network_sessions: Vec<NetworkSession> = grpc_sessions
+                let network_sessions: Vec<NetworkSessionInner> = grpc_sessions
                     .into_iter()
                     .enumerate()
-                    .map(|(id, session)| NetworkSession {
+                    .map(|(id, session)| NetworkSessionInner {
                         session_id: session.session_id,
                         role_assignments: Arc::new(role_assignments.clone()),
-                        networking: Box::new(session),
+                        networking: Arc::new(session),
                         own_role: Role::new(id % seeds.len()),
                     })
                     .collect();
@@ -172,13 +172,13 @@ impl LocalRuntime {
                 std::mem::forget(h);
 
                 let interleaved = interleave_vecs(sessions);
-                let network_sessions: Vec<NetworkSession> = interleaved
+                let network_sessions: Vec<NetworkSessionInner> = interleaved
                     .into_iter()
                     .enumerate()
-                    .map(|(id, session)| NetworkSession {
+                    .map(|(id, session)| NetworkSessionInner {
                         session_id: session.id(),
                         role_assignments: Arc::new(role_assignments.clone()),
-                        networking: Box::new(session),
+                        networking: Arc::new(session),
                         own_role: Role::new(id % seeds.len()),
                     })
                     .collect();
@@ -187,10 +187,10 @@ impl LocalRuntime {
         };
 
         let mut jobs = vec![];
-        for (player_id, mut network_session) in network_sessions.into_iter().enumerate() {
+        for (player_id, network_session) in network_sessions.into_iter().enumerate() {
             let player_seed = seeds[player_id % seeds.len()];
-            let task: JoinHandle<Result<(NetworkSession, Prf)>> = tokio::spawn(async move {
-                let prf = setup_replicated_prf(&mut network_session, player_seed).await?;
+            let task: JoinHandle<Result<(NetworkSessionInner, Prf)>> = tokio::spawn(async move {
+                let prf = setup_replicated_prf(&network_session, player_seed).await?;
                 Ok((network_session, prf))
             });
             jobs.push(task);
@@ -200,9 +200,16 @@ impl LocalRuntime {
             .into_iter()
             .map(|t| {
                 let (network_session, prf) = t??;
+                let session_id = network_session.session_id;
+                let role_assignments = network_session.role_assignments.clone();
+                let own_role = network_session.own_role;
+                let (network_client, network_task) = spawn_network_client(network_session);
+                let network_session_handle =
+                    NetworkSession::new(network_client, session_id, role_assignments, own_role);
                 Ok(Session {
-                    network_session,
+                    network_session: network_session_handle,
                     prf,
+                    network_task,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

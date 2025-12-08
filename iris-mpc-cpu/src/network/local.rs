@@ -59,7 +59,7 @@ pub struct LocalNetworking {
 
 #[async_trait]
 impl Networking for LocalNetworking {
-    async fn send(&mut self, val: NetworkValue, receiver: &Identity) -> Result<()> {
+    async fn send(&self, val: NetworkValue, receiver: &Identity) -> Result<()> {
         // sleep(ARTIFICIAL_LINK_DELAY).await;
         let val = val.to_network();
         let (tx, _) = self
@@ -78,7 +78,7 @@ impl Networking for LocalNetworking {
         tx.send(ready_to_send_value).await.map_err(|e| e.into())
     }
 
-    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue> {
+    async fn receive(&self, sender: &Identity) -> Result<NetworkValue> {
         let (_, rx) = self
             .p2p_channels
             .get(&(sender.clone(), self.owner.clone()))

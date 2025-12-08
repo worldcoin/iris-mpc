@@ -10,10 +10,31 @@ use eyre::Result;
 
 /// Requirements for networking.
 #[async_trait]
-pub trait Networking {
-    async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()>;
+pub trait Networking: Send + Sync {
+    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()>;
 
-    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue>;
+    async fn receive(&self, sender: &Identity) -> Result<NetworkValue>;
+
+    /// Number of parallel lanes available per peer.
+    fn num_lanes(&self) -> usize {
+        1
+    }
+
+    /// Send using a specific lane. Default implementation falls back to single-lane send.
+    async fn send_on_lane(
+        &self,
+        value: NetworkValue,
+        receiver: &Identity,
+        lane_idx: usize,
+    ) -> Result<()> {
+        let _ = lane_idx;
+        self.send(value, receiver).await
+    }
+
+    async fn receive_on_lane(&self, sender: &Identity, lane_idx: usize) -> Result<NetworkValue> {
+        let _ = lane_idx;
+        self.receive(sender).await
+    }
 }
 
 #[derive(Clone)]
