@@ -196,20 +196,6 @@ impl AnonStatsProcessor {
         };
         let available = usize::try_from(available).unwrap_or(0);
 
-        metrics::gauge!(
-            "anon_stats.available_entries",
-            "origin" => format!("{:?}", origin),
-            "operation" => format!("{:?}", operation),
-            "kind" => format!("{:?}", kind),
-        )
-        .set(available as f64);
-
-        info!(
-            "Available anon stats entries for {:?}, {:?}: {}",
-            origin,
-            Some(operation),
-            available
-        );
         if available == 0 {
             info!("No anon stats entries for {:?}", origin);
             return Ok(());
@@ -221,6 +207,9 @@ impl AnonStatsProcessor {
             JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
             _ => panic!("Invalid job kind for 1D job"),
         };
+
+        self.log_available_entries(available, required_min, origin, kind)
+            .await;
 
         if min_job_size < required_min {
             debug!(
@@ -269,22 +258,8 @@ impl AnonStatsProcessor {
                 )
                 .await?;
 
-                event!(
-                    tracing::Level::INFO,
-                    ?origin,
-                    ?kind,
-                    job_size,
-                    elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job",
-                );
-
-                info!(
-                    ?origin,
-                    ?kind,
-                    job_size,
-                    elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job",
-                );
+                self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
+                    .await;
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d(&ids).await?;
@@ -326,12 +301,9 @@ impl AnonStatsProcessor {
                     Some(operation),
                 )
                 .await?;
-                info!(
-                    ?origin,
-                    job_size,
-                    elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job"
-                );
+
+                self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
+                    .await;
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d_lifted(&ids).await?;
@@ -365,6 +337,10 @@ impl AnonStatsProcessor {
             JobKind::Gpu2D => self.config.min_2d_job_size,
             _ => panic!("Invalid job kind for 2D job"),
         };
+
+        self.log_available_entries(available, required_min, origin, kind)
+            .await;
+
         if min_job_size < required_min {
             debug!(
                 ?origin,
@@ -380,14 +356,6 @@ impl AnonStatsProcessor {
             .store
             .get_available_anon_stats_2d(origin, Some(operation), min_job_size)
             .await?;
-
-        metrics::gauge!(
-            "anon_stats.available_entries",
-            "origin" => format!("{:?}", origin),
-            "operation" => format!("{:?}", operation),
-            "kind" => format!("{:?}", kind),
-        )
-        .set(available as f64);
 
         info!(
             ?origin,
@@ -421,21 +389,8 @@ impl AnonStatsProcessor {
         let stats =
             process_2d_anon_stats_job(session, job, self.config.as_ref(), Some(operation)).await?;
 
-        event!(
-            tracing::Level::INFO,
-            ?origin,
-            ?kind,
-            job_size,
-            elapsed_ms = start.elapsed().as_millis(),
-            "Completed 2D anon stats job",
-        );
-
-        info!(
-            ?origin,
-            job_size,
-            elapsed_ms = start.elapsed().as_millis(),
-            "Completed 2D anon stats job"
-        );
+        self.log_job_metrics("2d", origin, kind, job_size, start.elapsed())
+            .await;
 
         self.publish_2d_stats(&stats).await?;
         self.store.mark_anon_stats_processed_2d(&ids).await?;
@@ -544,6 +499,74 @@ impl AnonStatsProcessor {
         info!(?origin, cleared, "Cleared unprocessed anon stats entries");
         self.sync_failures.insert((origin, operation), 0);
         Ok(())
+    }
+
+    async fn log_job_metrics(
+        &self,
+        metric_name_suffix: &str,
+        origin: AnonStatsOrigin,
+        kind: JobKind,
+        job_size: usize,
+        duration: Duration,
+    ) {
+        let duration_metric_name = format!("job_{}.duration", metric_name_suffix);
+        let job_size_metric_name = format!("job_{}.size", metric_name_suffix);
+
+        let side = match origin.side {
+            Some(eye) => format!("{:?}", eye),
+            None => "both".to_string(),
+        };
+
+        metrics::histogram!(
+            duration_metric_name,
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+            "side" => side.clone(),
+        )
+        .record(duration.as_millis() as f64);
+
+        metrics::histogram!(
+            job_size_metric_name,
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+            "side" => side,
+        )
+        .record(job_size as f64);
+
+        info!("Completed anon stats job of kind: {:?}", kind);
+    }
+
+    async fn log_available_entries(
+        &self,
+        available: usize,
+        required_min: usize,
+        origin: AnonStatsOrigin,
+        kind: JobKind,
+    ) {
+        let side = match origin.side {
+            Some(eye) => format!("{:?}", eye),
+            None => "both".to_string(),
+        };
+
+        metrics::gauge!(
+            "available_entries",
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+            "side" => side
+        )
+        .set(available as f64);
+
+        metrics::gauge!(
+            "required_min_entries",
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+        )
+        .set(required_min as f64);
+
+        debug!(
+            "Available entries for side {:?}, kind {:?}: {}",
+            origin, kind, available
+        );
     }
 }
 
