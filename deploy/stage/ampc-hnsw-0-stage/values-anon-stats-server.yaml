@@ -88,6 +88,15 @@ env:
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
 
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
+
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERTS
+    value: '["/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_2.crt"]'
+
 
 initContainer:
   enabled: true
