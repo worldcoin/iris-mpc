@@ -259,7 +259,7 @@ impl AnonStatsProcessor {
                 .await?;
 
                 self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
-                    .await?;
+                    .await;
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d(&ids).await?;
@@ -303,7 +303,7 @@ impl AnonStatsProcessor {
                 .await?;
 
                 self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
-                    .await?;
+                    .await;
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d_lifted(&ids).await?;
@@ -390,7 +390,7 @@ impl AnonStatsProcessor {
             process_2d_anon_stats_job(session, job, self.config.as_ref(), Some(operation)).await?;
 
         self.log_job_metrics("2d", origin, kind, job_size, start.elapsed())
-            .await?;
+            .await;
 
         self.publish_2d_stats(&stats).await?;
         self.store.mark_anon_stats_processed_2d(&ids).await?;
@@ -518,10 +518,10 @@ impl AnonStatsProcessor {
         };
 
         metrics::histogram!(
-            duration_metric_name.as_str(),
+            duration_metric_name,
             "orientation" => format!("{:?}", origin.orientation),
             "kind" => format!("{:?}", kind),
-            "side" => side,
+            "side" => side.clone(),
         )
         .record(duration.as_millis() as f64);
 
