@@ -359,6 +359,14 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
+        metrics::gauge!(
+            "anon_stats.available_entries",
+            "origin" => format!("{:?}", origin),
+            "operation" => format!("{:?}", operation),
+            "kind" => format!("{:?}", kind),
+        )
+        .set(available as f64);
+
         let min_job_size = sync_on_job_sizes(session, available).await?;
         let required_min = match kind {
             JobKind::Gpu2DReauth => self.config.min_2d_job_size_reauth,
@@ -380,14 +388,6 @@ impl AnonStatsProcessor {
             .store
             .get_available_anon_stats_2d(origin, Some(operation), min_job_size)
             .await?;
-
-        metrics::gauge!(
-            "anon_stats.available_entries",
-            "origin" => format!("{:?}", origin),
-            "operation" => format!("{:?}", operation),
-            "kind" => format!("{:?}", kind),
-        )
-        .set(available as f64);
 
         info!(
             ?origin,
