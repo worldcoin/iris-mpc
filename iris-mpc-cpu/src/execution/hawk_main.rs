@@ -99,6 +99,9 @@ use is_match_batch::is_match_batch;
 
 /// The master switch to enable search-per-rotation or search-center-only.
 pub type SearchRotations = CenterOnly;
+/// Rotation support as configured by SearchRotations.
+pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
+
 /// The choice of distance function to use in the Aby3Store.
 pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
     DistanceFn::MinFhd
@@ -106,10 +109,8 @@ pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnl
     DistanceFn::Fhd
 };
 
+// The choice of HNSW candidate list strategy
 pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
-
-/// Rotation support as configured by SearchRotations.
-pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
 #[derive(Clone, Parser)]
 #[allow(non_snake_case)]
@@ -180,6 +181,7 @@ pub struct HawkActor {
     /// Cache of distances for each eye.
     /// Eye -> List of Lists of distances, where the inner list is all distances for rotations of a query.
     /// In a later step, these distances will be reduced to a single, minimum distance per query.
+    /// Only used for anonymized statistics.
     distances_cache: BothEyes<DistanceCache>,
 
     anon_stats_store: Option<AnonStatsStore>,
@@ -246,18 +248,19 @@ impl TryFrom<usize> for StoreId {
     }
 }
 
-// TODO: Merge with the same in iris-mpc-gpu.
 // Orientation enum to indicate the orientation of the iris code during the batch processing.
 // Normal: Normal orientation of the iris code.
 // Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
+// TODO: Merge with the same in iris-mpc-gpu.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
     Normal = 0,
     Mirror = 1,
 }
 
-// TODO: Merge with the same in iris-mpc-gpu.
 /// The index in `ServerJobResult::merged_results` which means "no matches and no insertions".
+//TODO: Merge with the same in iris-mpc-gpu.
 const NON_MATCH_ID: u32 = u32::MAX;
 
 impl std::fmt::Display for StoreId {
@@ -1452,14 +1455,16 @@ impl HawkHandle {
         sessions: &mut SessionGroups,
         request: HawkRequest,
     ) -> Result<HawkResult> {
-        tracing::info!("Processing an Hawk job…");
+        tracing::info!("Processing a Hawk job…");
         let now = Instant::now();
 
+        // DOCTODO
         let request = request
             .numa_realloc(hawk_actor.workers_handle.clone())
             .await;
 
-        // Deletions.
+        // All deletions in a batch are applied at the beginning of batch processing
+        // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
 
         tracing::info!(
@@ -1470,10 +1475,12 @@ impl HawkHandle {
             request.batch.reauth_use_or_rule,
         );
 
+        // Compute search results for a given orientation and compute matching information
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
-                // The store to find vector ids (same left or right).
+                // Choice of LEFT store here is arbitrary, because it's only used for VectorId bookkeeping.
+                // The two sides are in sync w.r.t stored vector ids.
                 let store = hawk_actor.iris_store[LEFT].read().await;
                 (
                     request.luc_ids(&store),
@@ -1481,6 +1488,8 @@ impl HawkHandle {
                 )
             };
 
+            // Job that computes intra-batch matches. Note that it is awaited later, allowing it
+            // to run in parallel with the HNSW searches.
             let intra_results = {
                 let sessions_intra = sessions.for_intra_batch(orient);
                 let search_queries = search_queries.clone();
@@ -1489,14 +1498,14 @@ impl HawkHandle {
                 )
             };
 
-            // Search for nearest neighbors.
-            // For both eyes, all requests, and rotations.
+            // Search for nearest neighbors for all requests, all rotations (if applicable) and both eyes.
             let sessions_search = &sessions.for_search(orient);
             let search_ids = &request.ids;
             let search_params = SearchParams {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
+
             let search_results = search::search::<SearchRotations>(
                 sessions_search,
                 search_queries,
@@ -1506,10 +1515,11 @@ impl HawkHandle {
             )
             .await?;
 
+            // Organize results per orientation. Consult the matching module for details on organizing steps.
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
 
-                // Go fetch the missing vector IDs and calculate their is_match.
+                // Fetch the missing vector IDs for each side and calculate their is_match.
                 let missing_is_match =
                     is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
                         .await?;
@@ -1520,6 +1530,7 @@ impl HawkHandle {
             Ok((search_results, match_result))
         };
 
+        // Search for both orientations
         let (search_results, match_result) = {
             let start = Instant::now();
             let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
@@ -1528,6 +1539,7 @@ impl HawkHandle {
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
+            // Apply final organization + decision step, using results for both orientations
             (search_normal, matches_normal.step3(matches_mirror))
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
@@ -1538,6 +1550,7 @@ impl HawkHandle {
         tracing::info!("Updated anonymized statistics.");
 
         // Reset Updates. Find how to insert the new irises into the graph.
+        // TODO: Parallelize with the other searches
         let resets = search_to_reset(hawk_actor, sessions_mutations, &request).await?;
 
         // Insert into the in memory stores.
@@ -1589,7 +1602,7 @@ impl HawkHandle {
         let decisions = match_result.decisions();
         let requests_order = &request.batch.requests_order;
 
-        // The vector IDs of reauths and resets, or None for uniqueness insertions.
+        // Fetch targeted vector IDs of reauths and resets (None for uniqueness insertions).
         let update_ids = requests_order
             .iter()
             .map(|req_index| match req_index {
@@ -1636,14 +1649,15 @@ impl HawkHandle {
                 unique_insertions_persistence_skipped.len()
             );
 
+            // Collect the HNSW insertion plans for all mutating decisions
             let insert_plans = requests_order
                 .iter()
                 .map(|req_index| match req_index {
-                    // If the decision is a mutation, return the insertion plan.
                     RequestIndex::UniqueReauthResetCheck(i) => decisions[*i]
                         .is_mutation()
                         .then(|| search_results[*i].center().clone()),
                     RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
+                    // Deletions where handled earlier in handle_job
                     RequestIndex::Deletion(_) => None,
                 })
                 .collect_vec();
@@ -1716,7 +1730,6 @@ impl HawkHandle {
         // validate that the RNGs have not diverged
         // TODO: debug serialization issues encountered with this function and then re-enable
         // HawkSession::prf_check(&sessions.for_search).await?;
-
         Ok(())
     }
 }
