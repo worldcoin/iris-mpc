@@ -15,11 +15,13 @@
 //! - **Session Management**: Creating [`HawkSession`]s to handle parallel MPC operations.
 //!   Each session encapsulates the necessary cryptographic context for a
 //!   single thread of work.
-//! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of irises
-//!   to be checked for uniqueness or re-authenticated. This involves:
-//!   - Searching the HNSW graph for nearest neighbors.
-//!   - Performing cryptographic distance comparisons using the ABY3 protocol.
-//!   - Deciding whether a query results in a match, an insertion, or a re-authentication.
+//! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of requests of the
+//!   usual types: Uniqueness, ResetCheck, ResetUpdate, Reauth and Deletion.
+//!   . This involves:
+//!     - Searching the HNSW graph for nearest neighbors of a given iris, both for matching and graph insertion
+//! purposes.
+//!     - Performing secret-shared distance evaluations and comparisons using the ABY3 protocol.
+//!     - Deciding whether a query results in a match, an insertion, or a re-authentication.
 //! - **State Mutation**: Applying changes to the HNSW graph (inserting new nodes) and
 //!   persisting these changes to the database.
 //! - **Anonymized Statistics**: Collecting distance data to generate privacy-preserving
@@ -32,55 +34,32 @@
 //! These switches are typically configured for a specific deployment and are not expected
 //! to change at runtime.
 //!
-//! NOTE: As of Dec 9th 2025, the choice of optimal configuration for deployment is still being researched.
+//! NOTE: As of Dec 9th 2025, the choice of optimal configuration for production deployment is still being researched.
 //!
 //! ### 1. HNSW Entry Point Strategy
 //!
+//! - **`Standard`**: The search starts from a single, pre-defined entry point.
+//! - **`LinearScan`**: The search begins by evaluating a set of entry points
+//!   candidates and choosing the one closest to the query vector.
+//!
 //! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
-//! This is configured via the `layer_mode` field in the `HnswSearcher` struct, and the
-//! logic is handled in `HnswSearcher::search_init`, which selects the starting entry
-//! points based on the `LayerMode` enum.
-//!
-//! - **`Standard`**: The search starts from a single, pre-defined entry point at the top
-//!   layer of the graph. This is efficient but can be suboptimal if the entry point is
-//!   not a good starting location for a given query.
-//! - **`LinearScan`**: The search begins by evaluating a set of high-quality entry point
-//!   candidates and choosing the one closest to the query vector. This provides a better
-//!   starting position, improving search accuracy and speed. From a privacy perspective,
-//!   using a larger set of entry points minimizes information leakage. If an attacker
-//!   knows the queries, a small, contained set of entry points could allow them to
-//!   gather many constraints about distance ordering for those specific nodes. A larger,
-//!   more diverse set of starting points mitigates this risk.
-//!
+
 //! ### 2. Distance Function: `MinFhd` vs. `Fhd`
 //!
-//! The distance function is crucial for how iris codes are compared. The choice is
-//! tightly coupled with the rotation strategy (`SearchRotations`). The `DISTANCE_FN`
-//! constant is passed during the initialization of the `Aby3Store` in
-//! `HawkActor::create_session`, which then uses it to select the appropriate MPC
-//! distance calculation.
+//! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance.
+//! - **`MinFhd` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
+//!   distance across a set of predefined reotations.
 //!
-//! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance. This
-//!   is used when each rotation of an iris is treated as a separate vector in the database.
-//! - **`MinFhd` (Minimum Fractional Hamming Distance)**: This is used with a `CenterOnly`
-//!   rotation strategy. Instead of searching over all rotations, it performs an MPC
-//!   computation that obliviously finds the minimum distance across all possible rotations
-//!   of the query iris against a database iris. This has significant privacy advantages, as
-//!   it computes the best-fit rotation without revealing which rotation it was.
+//! The distance is chosen by the `DISTANCE_FN` constant, which gets passed to the vector store constructor.
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
-//! This strategy (`NEIGHBORHOOD_MODE`) governs how candidate lists are managed during HNSW
-//! graph traversal. The constant is passed as a generic parameter to the `search::search`
-//! and `insert::insert` functions, which in turn instantiates the correct `Neighborhood`
-//! implementation (`Sorted` or `Unsorted`) for managing candidate lists.
+//! This strategy governs how candidate lists are managed during HNSW
+//! graph traversal.
+//! - **`Sorted`**: Keeps the list of nearest neighbor candidates sorted by distance.
+//! - **`Unsorted`**: Maintains an unsorted list of candidates.
 //!
-//! - **`Sorted`**: Keeps the list of nearest neighbor candidates sorted by distance at all
-//!   times. This can be more efficient for graph traversal algorithms that rely on
-//!   distance-ordered lists.
-//! - **`Unsorted`**: Maintains an unsorted list of candidates. While potentially less
-//!   performant during the search, this approach leaks less information about the precise
-//!   distance ordering of neighbors, adding another layer of privacy.
+//! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
 
 use crate::{
     execution::{
@@ -260,7 +239,7 @@ pub struct HawkArgs {
 ///
 /// The `HawkActor` is the central component for the CPU-based matching engine. It orchestrates
 /// MPC sessions, manages the HNSW graphs and iris data stores for both eyes, and handles
-/// incoming search/insert requests. It is designed to be a long-lived object that holds
+/// incoming requests. It is designed to be a long-lived object that holds
 /// the entire state of the MPC node.
 ///
 /// # Responsibilities
@@ -268,8 +247,7 @@ pub struct HawkArgs {
 ///   shared iris data (`iris_store`).
 /// - **Session Management:** Creates and manages `HawkSession`s, which provide the
 ///   cryptographic context for MPC operations.
-/// - **Request Handling:** Processes `HawkRequest` batches for uniqueness checks, re-authentication,
-///   and database insertions.
+/// - **Request Handling:** Processes `HawkRequest` batches.
 /// - **Persistence:** Coordinates with `GraphPg` to load the HNSW graph from and persist updates
 ///   to a Postgres database.
 /// - **Anonymized Statistics:** Collects and aggregates distance data to generate anonymized
