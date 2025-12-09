@@ -1,12 +1,16 @@
+use crate::misc::log_info;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     protocol::shared_iris::GaloisRingSharedIris,
-    utils::serialization::types::iris_base64::Base64IrisCode,
+    utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
 };
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
-use std::{fs::File, io::BufReader, path::PathBuf};
+use std::path::PathBuf;
+
+/// Component name for logging purposes.
+const COMPONENT: &str = "SystemState-PgresIrises";
 
 /// Number of MPC parties.
 const N_PARTIES: usize = 3;
@@ -18,15 +22,21 @@ pub fn read_irises_from_ndjson(
     ndjson_path: PathBuf,
     num_pairs: usize,
 ) -> Result<Vec<(IrisCode, IrisCode)>> {
-    let file = File::open(ndjson_path.as_path())?;
-    let reader = BufReader::new(file);
+    log_info(
+        COMPONENT,
+        &format!(
+            "Reading {num_pairs} iris code pairs from file {}",
+            ndjson_path.display()
+        ),
+    );
 
-    let iris_pairs = serde_json::Deserializer::from_reader(reader)
-        .into_iter::<Base64IrisCode>()
-        .map(|x| IrisCode::from(&x.unwrap()))
-        .tuples::<(_, _)>()
-        .take(num_pairs)
-        .collect_vec();
+    let iris_pairs = irises_from_ndjson_iter(
+        ndjson_path.as_path(),
+        Some(2 * num_pairs),
+        IrisSelection::All,
+    )?
+    .tuples::<(_, _)>()
+    .collect_vec();
 
     Ok(iris_pairs)
 }

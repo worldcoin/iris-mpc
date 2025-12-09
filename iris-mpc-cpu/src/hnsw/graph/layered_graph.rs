@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        searcher::{ConnectPlan, LayerMode, UpdateEntryPoint},
+        searcher::{ConnectPlan, ConnectPlanLayer, LayerMode, SetEntryPoint},
         vector_store::Ref,
         HnswSearcher,
     },
@@ -124,23 +124,37 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
+        let insertion_layer = plan.layers.len() - 1;
+
         // If required, set vector as new entry point
-        match plan.update_ep {
-            UpdateEntryPoint::False => {}
-            UpdateEntryPoint::SetUnique { layer } => {
-                self.set_unique_entry_point(plan.inserted_vector.clone(), layer)
+        match plan.set_ep {
+            SetEntryPoint::False => {}
+            SetEntryPoint::NewLayer => {
+                self.set_unique_entry_point(plan.inserted_vector.clone(), insertion_layer)
                     .await;
             }
-            UpdateEntryPoint::Append { layer } => {
-                self.add_entry_point(plan.inserted_vector.clone(), layer)
+            SetEntryPoint::AddToLayer => {
+                self.add_entry_point(plan.inserted_vector.clone(), insertion_layer)
                     .await;
             }
         }
 
         // Connect the new vector to its neighbors in each layer.
-        for ((v, lc), new_nb) in plan.updates {
-            self.set_links(v, new_nb, lc).await;
+        for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
+            self.connect_apply(plan.inserted_vector.clone(), lc, layer_plan)
+                .await;
         }
+    }
+
+    /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
+    async fn connect_apply(&mut self, q: V, lc: usize, plan: ConnectPlanLayer<V>) {
+        // Connect all n -> q.
+        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
+            self.set_links(n.clone(), links, lc).await;
+        }
+
+        // Connect q -> all n.
+        self.set_links(q, plan.neighbors, lc).await;
     }
 
     pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
@@ -435,7 +449,7 @@ mod tests {
         hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-            SortedNeighborhood, VectorStore,
+            VectorStore,
         },
     };
     use aes_prng::AesRng;
@@ -526,13 +540,8 @@ mod tests {
         for raw_query in raw_queries.db {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(
-                    &mut vector_store,
-                    &graph_store,
-                    &query,
-                    insertion_layer,
-                )
+            let (neighbors, set_ep) = searcher
+                .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
@@ -541,7 +550,7 @@ mod tests {
                     &mut graph_store,
                     inserted,
                     neighbors,
-                    update_ep,
+                    set_ep,
                 )
                 .await?;
         }
@@ -566,13 +575,8 @@ mod tests {
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(
-                    &mut vector_store,
-                    &graph_store,
-                    &query,
-                    insertion_layer,
-                )
+            let (neighbors, set_ep) = searcher
+                .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
@@ -581,7 +585,7 @@ mod tests {
                     &mut graph_store,
                     inserted,
                     neighbors,
-                    update_ep,
+                    set_ep,
                 )
                 .await?;
 

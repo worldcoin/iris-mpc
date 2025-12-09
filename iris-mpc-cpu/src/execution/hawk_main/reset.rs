@@ -5,10 +5,7 @@ use super::{
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
-use crate::{
-    execution::hawk_main::{search::SearchIds, NEIGHBORHOOD_MODE},
-    protocol::shared_iris::GaloisRingSharedIris,
-};
+use crate::{execution::hawk_main::search::SearchIds, protocol::shared_iris::GaloisRingSharedIris};
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
 
@@ -48,7 +45,6 @@ pub async fn search_to_reset(
         &updates.queries,
         &updates.request_ids,
         search_params,
-        NEIGHBORHOOD_MODE,
     )
     .await?;
 

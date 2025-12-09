@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   fmt:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:

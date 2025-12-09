@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use crate::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
 use crate::IRIS_CODE_LENGTH;
 use base64::{prelude::BASE64_STANDARD, Engine};
@@ -548,27 +546,15 @@ impl IrisCode {
         self.mask.rotate_left(by);
     }
 
-    pub fn rotations_from_range(&self, range: Range<isize>) -> Vec<IrisCode> {
+    pub fn all_rotations(&self) -> Vec<IrisCode> {
         let mut code = self.clone();
-        // Initialize code to minimal rotation - 1
-        if range.start - 1 < 0 {
-            code.rotate_left(-(range.start - 1) as usize);
-        } else {
-            code.rotate_right((range.start - 1) as usize);
-        }
-
+        code.rotate_left(Self::ROTATIONS_PER_DIRECTION + 1);
         let mut rotations = Vec::new();
-        for _ in range {
+        for _ in 0..Self::ROTATIONS_PER_DIRECTION * 2 + 1 {
             code.rotate_right(1);
             rotations.push(code.clone());
         }
         rotations
-    }
-
-    pub fn all_rotations(&self) -> Vec<IrisCode> {
-        self.rotations_from_range(
-            -(Self::ROTATIONS_PER_DIRECTION as isize)..(Self::ROTATIONS_PER_DIRECTION + 1) as isize,
-        )
     }
 }
 
@@ -612,7 +598,8 @@ pub struct IrisMutationFamily {
 }
 
 impl IrisMutationFamily {
-    pub fn new<R: Rng>(iris: &IrisCode, rng: &mut R) -> Self {
+    #[allow(dead_code)]
+    fn new<R: Rng>(iris: &IrisCode, rng: &mut R) -> Self {
         let mut visible_bits = (0..IRIS_CODE_LENGTH)
             .filter(|i| iris.mask.get_bit(*i))
             .collect::<Vec<_>>();

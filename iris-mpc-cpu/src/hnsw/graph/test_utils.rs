@@ -7,14 +7,11 @@ use crate::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
-        graph::{
-            graph_diff::{
-                explicit::{ExplicitNeighborhoodDiffer, SortBy},
-                jaccard::DetailedJaccardDiffer,
-                node_equiv::ensure_node_equivalence,
-                run_diff,
-            },
-            neighborhood::Neighborhood,
+        graph::graph_diff::{
+            explicit::{ExplicitNeighborhoodDiffer, SortBy},
+            jaccard::DetailedJaccardDiffer,
+            node_equiv::ensure_node_equivalence,
+            run_diff,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
@@ -311,11 +308,11 @@ impl DbContext {
 
             for j in 4..7 {
                 links
-                    .insert_and_trim(&mut vector_store, vectors[j], distances[j], links.len() + 1)
+                    .insert(&mut vector_store, vectors[j], distances[j])
                     .await?;
             }
             let links = links.edge_ids();
-            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
         }
 
         tx.tx.commit().await?;

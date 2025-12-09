@@ -11,21 +11,12 @@ pub trait TransientRef: Clone + Debug + PartialEq + Eq + Hash + Sync {}
 impl<T> TransientRef for T where T: Clone + Debug + PartialEq + Eq + Hash + Sync {}
 
 pub trait Ref:
-    Send + Sync + Clone + Debug + PartialEq + Eq + Hash + Serialize + for<'de> serde::Deserialize<'de>
+    Clone + Debug + PartialEq + Eq + Hash + Sync + Serialize + for<'de> serde::Deserialize<'de>
 {
 }
 
 impl<T> Ref for T where
-    T: Send
-        + Sync
-        + Clone
-        + Debug
-        + PartialEq
-        + Eq
-        + Hash
-        + Sync
-        + Serialize
-        + for<'de> serde::Deserialize<'de>
+    T: Clone + Debug + PartialEq + Eq + Hash + Sync + Serialize + for<'de> serde::Deserialize<'de>
 {
 }
 

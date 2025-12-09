@@ -9,7 +9,7 @@ use tracing::info;
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
     hawkers::plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
-    hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
+    hnsw::{GraphMem, HnswSearcher},
 };
 
 /// Number of entries to insert before reporting a new info log entry
@@ -44,27 +44,14 @@ pub async fn plaintext_parallel_batch_insert(
             jobs.spawn(async move {
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
-                let (links, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                let (links, set_ep) = searcher
+                    .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
-
-                // Trim and extract unstructured vector lists
-                let mut links_unstructured = Vec::new();
-                for (lc, mut l) in links.into_iter().enumerate() {
-                    let m = searcher.params.get_M(lc);
-                    l.trim(&mut store, m).await?;
-                    links_unstructured.push(l.edge_ids())
-                }
 
                 let insert_plan: InsertPlanV<SharedPlaintextStore> = InsertPlanV {
                     query,
-                    links: links_unstructured,
-                    update_ep,
+                    links,
+                    set_ep,
                 };
                 Ok((vector_id, insert_plan))
             });
@@ -160,9 +147,7 @@ mod tests {
         // Check if each inserted iris can be found and matched correctly
         for (_vector_id, iris_code) in irises {
             let query = Arc::new(iris_code);
-            let result = searcher
-                .search::<_, SortedNeighborhood<_>>(&mut store, &graph, &query, 1)
-                .await?;
+            let result = searcher.search(&mut store, &graph, &query, 1).await?;
             assert!(
                 searcher.is_match(&mut store, &[result]).await?,
                 "Match verification failed for an inserted iris"
@@ -173,10 +158,38 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_insert_with_batches() -> Result<()> {
-        let database_size = 64;
-        let to_insert = 64;
-        let batch_size = 8;
+    async fn test_insert_with_small_batches() -> Result<()> {
+        let database_size = 256;
+        let to_insert = 512;
+        let batch_size = 32;
+        let (searcher, graph, store, irises, prf_seed) =
+            setup_test_data(database_size, to_insert).await?;
+
+        let (final_graph, final_store) = plaintext_parallel_batch_insert(
+            Some(graph),
+            Some(store),
+            irises.clone(),
+            &searcher,
+            batch_size,
+            &prf_seed,
+        )
+        .await?;
+
+        check_results(
+            final_store,
+            final_graph,
+            irises,
+            &searcher,
+            database_size + to_insert,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_insert_with_large_batches() -> Result<()> {
+        let database_size = 256;
+        let to_insert = 512;
+        let batch_size = 100;
         let (searcher, graph, store, irises, prf_seed) =
             setup_test_data(database_size, to_insert).await?;
 

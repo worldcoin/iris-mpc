@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
         },
         plaintext_store::PlaintextStore,
     },
-    hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
+    hnsw::{GraphMem, HnswSearcher},
     protocol::{
         ops::{
             batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,
@@ -53,12 +53,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                 let query = Arc::new(raw_query.clone());
                 let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
                 searcher
-                    .insert::<_, SortedNeighborhood<_>>(
-                        &mut vector,
-                        &mut graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .insert(&mut vector, &mut graph, &query, insertion_layer)
                     .await
                     .unwrap();
             }
@@ -75,12 +70,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                     let query = Arc::new(on_the_fly_query);
                     let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
                     searcher
-                        .insert::<_, SortedNeighborhood<_>>(
-                            &mut db_vectors,
-                            &mut graph,
-                            &query,
-                            insertion_layer,
-                        )
+                        .insert(&mut db_vectors, &mut graph, &query, insertion_layer)
                         .await
                         .unwrap();
                 },
@@ -265,7 +255,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                 let mut vector_store = vector_store.lock().await;
                                 let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
                                 searcher
-                                    .insert::<_, SortedNeighborhood<_>>(
+                                    .insert(
                                         &mut *vector_store,
                                         &mut graph_store,
                                         &query,
@@ -305,12 +295,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             jobs.spawn(async move {
                                 let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
-                                    .search::<_, SortedNeighborhood<_>>(
-                                        &mut *vector_store,
-                                        &graph_store,
-                                        &query,
-                                        1,
-                                    )
+                                    .search(&mut *vector_store, &graph_store, &query, 1)
                                     .await
                                     .unwrap();
                                 searcher

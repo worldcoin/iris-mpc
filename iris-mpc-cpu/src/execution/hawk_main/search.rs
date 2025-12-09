@@ -9,11 +9,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
-    hnsw::{
-        graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
-        searcher::{NeighborhoodMode, UpdateEntryPoint},
-        GraphMem, HnswSearcher, SortedNeighborhood,
-    },
+    hnsw::{searcher::SetEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
@@ -37,7 +33,6 @@ pub async fn search<ROT>(
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
     search_params: SearchParams,
-    mode: NeighborhoodMode,
 ) -> Result<SearchResults<ROT>>
 where
     ROT: Rotations,
@@ -55,33 +50,16 @@ where
         let search_ids = search_ids.clone();
         let search_params = search_params.clone();
         let tx = tx.clone();
-        let mode = mode.clone();
-
         async move {
-            match mode {
-                NeighborhoodMode::Sorted => {
-                    per_session::<_, SortedNeighborhood<_>>(
-                        &session,
-                        &search_queries,
-                        &search_ids,
-                        &search_params,
-                        tx,
-                        batch,
-                    )
-                    .await
-                }
-                NeighborhoodMode::Unsorted => {
-                    per_session::<_, UnsortedNeighborhood<_>>(
-                        &session,
-                        &search_queries,
-                        &search_ids,
-                        &search_params,
-                        tx,
-                        batch,
-                    )
-                    .await
-                }
-            }
+            per_session(
+                &session,
+                &search_queries,
+                &search_ids,
+                &search_params,
+                tx,
+                batch,
+            )
+            .await
         }
     };
 
@@ -94,7 +72,7 @@ where
     Ok(results)
 }
 
-async fn per_session<ROT, N: Neighborhood<Aby3Store>>(
+async fn per_session<ROT>(
     session: &HawkSession,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
@@ -118,7 +96,7 @@ async fn per_session<ROT, N: Neighborhood<Aby3Store>>(
             let insertion_layer = search_params
                 .hnsw
                 .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
-            per_insert_query::<N>(
+            per_insert_query(
                 query,
                 search_params,
                 &mut vector_store,
@@ -137,7 +115,7 @@ async fn per_session<ROT, N: Neighborhood<Aby3Store>>(
     Ok(())
 }
 
-async fn per_insert_query<N: Neighborhood<Aby3Store>>(
+async fn per_insert_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store,
@@ -146,33 +124,25 @@ async fn per_insert_query<N: Neighborhood<Aby3Store>>(
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
-    let (links, update_ep) = search_params
+    let (links, set_ep) = search_params
         .hnsw
-        .search_to_insert::<_, N>(aby3_store, graph_store, &query, insertion_layer)
+        .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
         .await?;
 
-    let matches = if search_params.do_match {
-        search_params.hnsw.matches(aby3_store, &links).await?
+    let match_count = if search_params.do_match {
+        search_params.hnsw.match_count(aby3_store, &links).await?
     } else {
-        vec![]
+        0
     };
-
-    // Trim and extract unstructured vector lists
-    let mut links_unstructured = Vec::new();
-    for (lc, mut l) in links.iter().cloned().enumerate() {
-        let m = search_params.hnsw.params.get_M(lc);
-        l.trim(aby3_store, m).await?;
-        links_unstructured.push(l.edge_ids())
-    }
 
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
-            links: links_unstructured,
-            update_ep,
+            links,
+            set_ep,
         },
-        matches,
+        match_count,
     })
 }
 
@@ -186,7 +156,7 @@ async fn per_search_query(
 
     let layer_0_neighbors = search_params
         .hnsw
-        .search::<_, SortedNeighborhood<_>>(
+        .search(
             aby3_store,
             graph_store,
             &query,
@@ -194,23 +164,22 @@ async fn per_search_query(
         )
         .await?;
 
-    let links_unstructured = vec![layer_0_neighbors.edge_ids()];
     let links = vec![layer_0_neighbors];
 
-    let matches = if search_params.do_match {
-        search_params.hnsw.matches(aby3_store, &links).await?
+    let match_count = if search_params.do_match {
+        search_params.hnsw.match_count(aby3_store, &links).await?
     } else {
-        vec![]
+        0
     };
 
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
-            links: links_unstructured,
-            update_ep: UpdateEntryPoint::False,
+            links,
+            set_ep: SetEntryPoint::False,
         },
-        matches,
+        match_count,
     })
 }
 
@@ -229,22 +198,14 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
 
     let insertion_layer = searcher.gen_layer_prf(&session.hnsw_prf_key, identifier)?;
 
-    let (links, update_ep) = searcher
-        .search_to_insert::<_, SortedNeighborhood<_>>(&mut *store, &graph, &query, insertion_layer)
+    let (links, set_ep) = searcher
+        .search_to_insert(&mut *store, &graph, &query, insertion_layer)
         .await?;
-
-    // Trim and extract unstructured vector lists
-    let mut links_unstructured = Vec::new();
-    for (lc, mut l) in links.iter().cloned().enumerate() {
-        let m = searcher.params.get_M(lc);
-        l.trim(&mut store, m).await?;
-        links_unstructured.push(l.edge_ids());
-    }
 
     Ok(InsertPlanV {
         query,
-        links: links_unstructured,
-        update_ep,
+        links,
+        set_ep,
     })
 }
 
@@ -280,25 +241,17 @@ mod tests {
             do_match: true,
         };
 
-        let result = search(
-            &sessions,
-            search_queries,
-            &request.ids,
-            search_params,
-            NeighborhoodMode::Sorted,
-        )
-        .await?;
+        let result = search(&sessions, search_queries, &request.ids, search_params).await?;
 
         for side in result {
             assert_eq!(side.len(), batch_size);
             for (i, rotations) in side.iter().enumerate() {
                 // Match because i from make_request is the same as i from init_db.
-                assert_eq!(rotations.center().matches.len(), 1);
-                assert!(rotations
-                    .center()
-                    .matches
-                    .iter()
-                    .any(|(v, _)| *v == VectorId::from_0_index(i as u32)));
+                assert_eq!(rotations.center().match_count, 1);
+                assert_eq!(
+                    rotations.center().plan.links[0].edges[0].0,
+                    VectorId::from_0_index(i as u32)
+                );
             }
         }
         actor.sync_peers().await?;

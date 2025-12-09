@@ -127,6 +127,7 @@ impl HawkSession {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::hnsw::graph::neighborhood::SortedEdgeIds;
     use iris_mpc_common::vector_id::VectorId;
     use itertools::Itertools;
 
@@ -136,7 +137,7 @@ mod test {
 
         let a = 12_u64;
         let b = VectorId::from_serial_id(34);
-        let c = (a, &vec![b; 10]);
+        let c = (a, &SortedEdgeIds::from_ascending_vec(vec![b; 10]));
 
         let mut set_hash = SetHash::default();
         digests.push(set_hash.checksum());

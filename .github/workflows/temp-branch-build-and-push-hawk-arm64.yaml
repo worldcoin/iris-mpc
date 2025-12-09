@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "dev"
-      - "au/min-round-robin-size"
     paths-ignore:
       - "deploy/**"
 

@@ -6,11 +6,8 @@ use iris_mpc_common::IrisVectorId;
 use tracing::info;
 
 use iris_mpc_cpu::{
-    hawkers::{
-        aby3::aby3_store::DistanceFn, build_plaintext::plaintext_parallel_batch_insert,
-        plaintext_store::SharedPlaintextStore,
-    },
-    hnsw::{searcher::LayerDistribution, GraphMem, HnswSearcher},
+    hawkers::build_plaintext::plaintext_parallel_batch_insert,
+    hnsw::{searcher::LayerDistribution, HnswSearcher},
     utils::serialization::{
         iris_ndjson::{irises_from_ndjson, IrisSelection},
         write_bin,
@@ -23,14 +20,6 @@ struct Args {
     /// The source file for plaintext iris codes, in NDJSON file format.
     #[clap(long("source"))]
     iris_codes_path: PathBuf,
-
-    /// The selection of iris codes to read from the input file.
-    #[clap(long, value_enum, default_value_t = IrisSelection::All)]
-    iris_selection: IrisSelection,
-
-    /// The distance function to use for graph construction.
-    #[clap(long, value_enum, default_value_t = DistanceFn::MinFhd)]
-    distance_fn: DistanceFn,
 
     /// The target file for the constructed HNSW graph.
     #[clap(long("target"))]
@@ -89,7 +78,7 @@ async fn main() -> Result<()> {
     let irises = irises_from_ndjson(
         args.iris_codes_path.as_path(),
         args.graph_size,
-        args.iris_selection,
+        IrisSelection::All,
     )?;
     let irises = irises
         .into_iter()
@@ -97,15 +86,9 @@ async fn main() -> Result<()> {
         .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
         .collect();
 
-    let mut store = SharedPlaintextStore::new();
-    store.distance_fn = args.distance_fn;
-
-    let graph = GraphMem::new();
-
     info!("Building HNSW graph over iris codes...");
     let (graph, _) =
-        plaintext_parallel_batch_insert(Some(graph), Some(store), irises, &searcher, 1, &prf_seed)
-            .await?;
+        plaintext_parallel_batch_insert(None, None, irises, &searcher, 1, &prf_seed).await?;
 
     info!("Persisting HNSW graph to file");
     write_bin(&graph, args.graph_path.as_os_str().to_str().unwrap())?;
