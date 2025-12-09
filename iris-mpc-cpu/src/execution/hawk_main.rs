@@ -1777,6 +1777,10 @@ mod tests {
                     &addresses.join(","),
                     "--party-index",
                     &index.to_string(),
+                    "--hnsw-param-ef-constr",
+                    &320.to_string(),
+                    "--hnsw-param-m",
+                    &256.to_string(),
                 ]);
 
                 // Make the test async.

@@ -1534,6 +1534,12 @@ impl HnswSearcher {
             Vec<<V as VectorStore>::VectorRef>,
         > = BTreeMap::new();
 
+        // Final updated neighborhood associated with each modified `(vector_id, layer)`
+        let mut final_nbhds: BTreeMap<
+            (<V as VectorStore>::VectorRef, usize),
+            Vec<<V as VectorStore>::VectorRef>,
+        > = BTreeMap::new();
+
         for (idx, (vec, links, update_ep)) in updates.iter().enumerate() {
             // Initialize connect plan for output
             output_plans.push(ConnectPlan {
@@ -1550,6 +1556,10 @@ impl HnswSearcher {
                     .updates
                     .insert((vec.clone(), layer), neighbors.clone());
 
+                // Record neighborhood of new node as potential final neighborhood.
+                // (May be overwritten later if updated during batch.)
+                final_nbhds.insert((vec.clone(), layer), neighbors.clone());
+
                 // Record connections to existing nodes, organized by existing node
                 for nb in neighbors.iter() {
                     nbhd_updates
@@ -1559,12 +1569,6 @@ impl HnswSearcher {
                 }
             }
         }
-
-        // Final updated neighborhood associated with each modified `(vector_id, layer)`
-        let mut final_nbhds: BTreeMap<
-            (<V as VectorStore>::VectorRef, usize),
-            Vec<<V as VectorStore>::VectorRef>,
-        > = BTreeMap::new();
 
         for ((nb, layer), query_ids) in nbhd_updates {
             // Identify the graph neighborhood of `nb` in layer `layer` prior to

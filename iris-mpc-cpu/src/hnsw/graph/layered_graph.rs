@@ -53,6 +53,39 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     pub layers: Vec<Layer<V>>,
 }
 
+impl Display for GraphMem<IrisVectorId> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "GraphMem")?;
+        let eps_str = self
+            .entry_points
+            .iter()
+            .map(|ep| format!("{}:l{}", ep.point, ep.layer))
+            .join(", ");
+        writeln!(f, "entry_points: [{eps_str}]")?;
+        for (lc, layer) in self.layers.iter().enumerate().rev() {
+            writeln!(f, "layer: {lc}")?;
+            writeln!(f, "{layer}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for Layer<IrisVectorId> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut links = self
+            .links
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect_vec();
+        links.sort_by_key(|(k, _)| *k);
+        for (id, l) in links.iter() {
+            let links_str = l.iter().map(|nb| format!("{nb}")).join(", ");
+            writeln!(f, "| {id} :: {links_str}")?;
+        }
+        Ok(())
+    }
+}
+
 impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
     fn clone(&self) -> Self {
         GraphMem {
@@ -367,7 +400,11 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
 
     /// Constructs a Layer from pairs of (vectorRef, iris) by computing
     /// the ideal K-nearest neighbors for each such entry.
-    fn ideal_from_irises(iris_data: Vec<(V, IrisCode)>, k: usize, echoice: EngineChoice) -> Self {
+    pub fn ideal_from_irises(
+        iris_data: Vec<(V, IrisCode)>,
+        k: usize,
+        echoice: EngineChoice,
+    ) -> Self {
         let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
         let n = irises.len();
         let k = k.min(n - 1);

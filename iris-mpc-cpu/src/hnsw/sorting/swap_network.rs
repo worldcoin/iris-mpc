@@ -3,6 +3,7 @@ use crate::{
     hnsw::VectorStore,
     shares::Share,
 };
+use ampc_secret_sharing::shares::bit::Bit;
 use eyre::{eyre, Result};
 use itertools::Itertools;
 
@@ -160,29 +161,47 @@ pub async fn apply_oblivious_swap_network(
     list: &[(u32, Aby3DistanceRef)],
     network: &SwapNetwork,
 ) -> Result<Vec<(Share<u32>, Aby3DistanceRef)>> {
-    let mut encrypted_list = vec![];
+    let mut encrypted_list = Vec::new();
+
     for (layer_id, layer) in network.layers.iter().enumerate() {
-        let distances: Vec<_> = layer
+        // Collect distances associated with the wires of this layer of the swap network
+        let current_list_distances: Vec<_> = if layer_id == 0 {
+            list.iter().map(|(_, d)| d).collect()
+        } else {
+            encrypted_list.iter().map(|(_, d)| d).collect()
+        };
+
+        // Compute secret shared bits d1 <= d2 without opening, by computing
+        // d1 > d2 bits and taking complements.
+        let cmp_distances: Vec<_> = layer
             .iter()
-            .filter_map(
-                |(idx1, idx2): &(usize, usize)| match (list.get(*idx1), list.get(*idx2)) {
+            .filter_map(|(idx1, idx2): &(usize, usize)| {
+                match (
+                    current_list_distances.get(*idx1),
+                    current_list_distances.get(*idx2),
+                ) {
                     // swap order to check for strict inequality d1 > d2
-                    (Some((_, d1)), Some((_, d2))) => Some((d2.clone(), d1.clone())),
+                    (Some(&d1), Some(&d2)) => Some((d2.clone(), d1.clone())),
                     _ => None,
-                },
-            )
+                }
+            })
             .collect();
-        // Computes d1 > d2 without opening as in less_than_batch
-        let comp_results = store.oblivious_less_than_batch(&distances).await?;
+        let cmp_results_ = store.oblivious_less_than_batch(&cmp_distances).await?;
+        let cmp_results = cmp_results_
+            .into_iter()
+            .map(|r| Share::from_const(Bit::new(true), store.session.network_session.own_role) - r)
+            .collect_vec();
+
+        // Apply swap network layer based on comparison results
         encrypted_list = if layer_id == 0 {
             // First layer: input ids are in plaintext, so we can use the more efficient plain_ids version.
             store
-                .oblivious_swap_batch_plain_ids(comp_results, list, layer)
+                .oblivious_swap_batch_plain_ids(cmp_results, list, layer)
                 .await?
         } else {
             // Following layers: input ids are secret shared
             store
-                .oblivious_swap_batch(comp_results, &encrypted_list, layer)
+                .oblivious_swap_batch(cmp_results, &encrypted_list, layer)
                 .await?
         };
     }
