@@ -34,9 +34,7 @@ use tracing::info;
 #[derive(Debug)]
 enum IrisTask {
     /// A synchronization barrier to ensure all preceding tasks in the channel are completed.
-    Sync {
-        rsp: oneshot::Sender<()>,
-    },
+    Sync { rsp: oneshot::Sender<()> },
     /// Reallocates an `ArcIris` to NUMA-local memory.
     ///
     /// This task takes a shared iris pointer and creates a new `Arc` with the data
@@ -47,14 +45,9 @@ enum IrisTask {
         rsp: oneshot::Sender<ArcIris>,
     },
     /// Inserts a new iris into the worker's local shard of the iris database.
-    Insert {
-        vector_id: VectorId,
-        iris: ArcIris,
-    },
+    Insert { vector_id: VectorId, iris: ArcIris },
     /// Pre-allocates memory in the iris store to accommodate a number of new irises.
-    Reserve {
-        additional: usize,
-    },
+    Reserve { additional: usize },
     /// Computes the dot product for a list of iris pairs.
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
@@ -87,14 +80,12 @@ enum IrisTask {
 /// A handle to a pool of `IrisWorker` threads.
 ///
 /// This struct provides an interface to a pool of background workers that are responsible
-/// for CPU-intensive computations and NUMA-aware data management. By offloading tasks
-/// to this pool, the main `HawkActor` can remain responsive and avoid blocking on
-/// long-running operations.
+/// for CPU-intensive computations and NUMA-aware data management.
 ///
 /// # NUMA Awareness
 /// When NUMA is enabled, each worker is pinned to a specific CPU core, and tasks like
 /// `numa_realloc` ensure that data is moved to memory local to that core before processing.
-/// This minimizes memory latency and is critical for performance on multi-socket servers.
+/// This minimizes memory latency and is important for performance on multi-socket servers.
 ///
 /// # Task Distribution
 /// Tasks are distributed among the workers to parallelize work. For read-only tasks

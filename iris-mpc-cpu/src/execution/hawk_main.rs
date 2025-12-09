@@ -18,8 +18,7 @@
 //! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of requests of the
 //!   usual types: Uniqueness, ResetCheck, ResetUpdate, Reauth and Deletion.
 //!   . This involves:
-//!     - Searching the HNSW graph for nearest neighbors of a given iris, both for matching and graph insertion
-//! purposes.
+//!     - Searching the HNSW graph for nearest neighbors of a given iris, both for matching and graph insertion purposes.
 //!     - Performing secret-shared distance evaluations and comparisons using the ABY3 protocol.
 //!     - Deciding whether a query results in a match, an insertion, or a re-authentication.
 //! - **State Mutation**: Applying changes to the HNSW graph (inserting new nodes) and
@@ -38,8 +37,8 @@
 //!
 //! ### 1. HNSW Entry Point Strategy
 //!
-//! - **`Standard`**: The search starts from a single, pre-defined entry point.
-//! - **`LinearScan`**: The search begins by evaluating a set of entry points
+//! - **`Standard`**: The HNSW search starts from a single, pre-defined entry point.
+//! - **`LinearScan`**: The HNSW search begins by evaluating a set of entry points
 //!   candidates and choosing the one closest to the query vector.
 //!
 //! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
@@ -54,9 +53,8 @@
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
-//! This strategy governs how candidate lists are managed during HNSW
-//! graph traversal.
-//! - **`Sorted`**: Keeps the list of nearest neighbor candidates sorted by distance.
+//! This strategy governs how nearest neighbors candidate lists are managed during HNSW graph traversal.
+//! - **`Sorted`**: Maintains an order list of candidates.
 //! - **`Unsorted`**: Maintains an unsorted list of candidates.
 //!
 //! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
@@ -220,17 +218,6 @@ pub struct HawkArgs {
     pub tls: Option<TlsConfig>,
 
     /// Enables NUMA-aware optimizations.
-    ///
-    /// If set, the actor will spawn worker threads pinned to specific CPU cores and
-    /// reallocate incoming iris data to the memory node local to those cores. This can
-    /// significantly improve performance on NUMA architectures by minimizing cross-node
-    /// memory access during MPC computations.
-    /// Enables NUMA-aware optimizations.
-    ///
-    /// If set, the actor will spawn worker threads pinned to specific CPU cores and
-    /// reallocate incoming iris data to the memory node local to those cores. This can
-    /// significantly improve performance on NUMA architectures by minimizing cross-node
-    /// memory access during MPC computations.
     #[clap(long, default_value_t = false)]
     pub numa: bool,
 }
@@ -415,15 +402,26 @@ pub struct HawkSession {
 
 pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef);
 
+/// A high-level plan for inserting a query into the HNSW graph after a search.
+///
+/// This struct is created as a result of the search phase that precedes an insertion.
+/// It bundles the low-level `InsertPlanV` with the matches found during the search.
+/// The `InsertPlanV` specifies the ideal connections for the new node, while the `matches`
+/// are used for further processing, such as determining if the query is a full match or needs
+/// to be inserted.
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
     pub plan: InsertPlanV<Aby3Store>,
     pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
 }
 
-/// ConnectPlan specifies how to connect a new node to the HNSW graph.
-/// This includes the updates to the neighbors' own neighbor lists, including
-/// bilateral edges.
+/// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
+///
+/// A `ConnectPlan` is the final output of the insertion preparation phase (`HnswSearcher::insert_prepare_batch`).
+/// Unlike `InsertPlanV`, which specifies the *desired* neighbors for the new node, `ConnectPlan`
+/// represents the full set of atomic graph updates required. This includes not only the new
+/// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
+/// new one. It is the definitive set of changes that will be applied to the graph storage.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 impl HawkActor {
@@ -1053,12 +1051,9 @@ impl HawkRequest {
     /// incoming request to the same NUMA node where the cryptographic computations will
     /// be performed.
     ///
-    /// It dispatches reallocation tasks to the `IrisPoolHandle` worker pools for both
-    /// normal and mirrored orientations. The workers, which are pinned to specific CPU
-    //. The workers, which are pinned to specific CPU
+    /// It dispatches reallocation tasks to the `IrisPoolHandle` worker pools.
+    /// The workers, which are pinned to specific CPU
     /// cores, handle the memory copy, ensuring data locality for subsequent processing.
-    /// This step is crucial for minimizing memory latency and maximizing throughput on
-    /// NUMA-enabled hardware. If NUMA is disabled, this function is a no-op.
     async fn numa_realloc(self, workers: BothEyes<IrisPoolHandle>) -> Self {
         // TODO: Result<Self>
         let start = Instant::now();
