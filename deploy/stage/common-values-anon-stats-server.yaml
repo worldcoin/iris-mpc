@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:3e532c05d922200f31c56877c7ae025f2682cb7b"
+image: "ghcr.io/worldcoin/anon-stats-server:883d02e8416b607edee1ddd011cf2ca06913d238"
 
 environment: stage
 replicaCount: 1
@@ -65,3 +65,7 @@ imagePullSecrets:
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private

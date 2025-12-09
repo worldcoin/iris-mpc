@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=071317d7d2947494339e2f576077f622b5f6c808#071317d7d2947494339e2f576077f622b5f6c808"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=071317d7d2947494339e2f576077f622b5f6c808#071317d7d2947494339e2f576077f622b5f6c808"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -120,6 +120,7 @@ dependencies = [
  "clap",
  "config",
  "eyre",
+ "futures-util",
  "itertools 0.14.0",
  "rand",
  "serde",
@@ -134,7 +135,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=071317d7d2947494339e2f576077f622b5f6c808#071317d7d2947494339e2f576077f622b5f6c808"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -149,7 +150,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=071317d7d2947494339e2f576077f622b5f6c808#071317d7d2947494339e2f576077f622b5f6c808"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -3170,7 +3171,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
