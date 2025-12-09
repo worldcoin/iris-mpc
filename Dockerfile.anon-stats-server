@@ -37,22 +37,22 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y ca-certificates awscli curl
 
 # stage and prod ca certs for smpcv2
-RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_smpcv2_party_stage_0.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_smpcv2_party_stage_1.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_smpcv2_party_stage_2.pem
+RUN curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_2.pem
 
-RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_smpcv2_party_stage_0.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_smpcv2_party_stage_1.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_smpcv2_party_stage_2.pem
+RUN curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_prod_0.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_prod_1.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_prod_2.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_2.pem
 
 # stage and prod ca certs for ampc-hnsw
-RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_ampc_hnsw_party_stage_0.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_ampc_hnsw_party_stage_1.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_ampc_hnsw_party_stage_2.pem
+RUN curl -o /usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_2.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_2.pem
 
-RUN curl -o /usr/local/share/ca-certificates/ca_party_prod_0.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_ampc_hnsw_party_prod_0.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_prod_1.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_ampc_hnsw_party_prod_1.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_prod_2.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_ampc_hnsw_party_prod_2.pem
+RUN curl -o /usr/local/share/ca-certificates/ca_ampc_hnsw_party_prod_0.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_ampc_hnsw_party_prod_1.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_ampc_hnsw_party_prod_2.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_2.pem
 
 
 COPY certs /usr/local/share/ca-certificates/
