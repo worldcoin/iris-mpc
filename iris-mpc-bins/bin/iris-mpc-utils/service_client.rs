@@ -5,7 +5,7 @@ use clap::Parser;
 use eyre::Result;
 use rand::{rngs::StdRng, SeedableRng};
 
-use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
+use iris_mpc_common::{helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, IrisSerialId};
 
 use iris_mpc_utils::{
     aws::AwsClientConfig,
@@ -19,16 +19,13 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    tracing::info!("Initialising ...");
-    let mut client = ServiceClient::async_from(options.clone()).await;
-    match client.init(options.aws_public_key_base_url).await {
-        Ok(()) => {
-            client.exec().await.unwrap();
-        }
-        Err(e) => {
-            tracing::error!("Initialisation failure: {}", e);
-        }
-    };
+    let mut client = ServiceClient::<StdRng>::async_from(options.clone()).await;
+    if let Err(e) = client.init().await {
+        tracing::error!("Initialisation failure: {}", e);
+        return Err(e.into());
+    }
+
+    client.exec().await?;
 
     Ok(())
 }
@@ -55,12 +52,24 @@ struct CliOptions {
     #[clap(long)]
     aws_sqs_response_queue_url: String,
 
+    /// AWS: polling interval between AWS SQS receive message operations.
+    #[clap(long, default_value = "2")]
+    aws_sqs_wait_time_seconds: usize,
+
     #[clap(long)]
     environment: String,
+
+    /// A known serial identifier that allows response correlation to be bypassed.
+    #[clap(long, default_value = "1")]
+    known_iris_serial_id: Option<IrisSerialId>,
 
     /// Number of request batches to process.
     #[clap(long, default_value = "5")]
     request_batch_count: usize,
+
+    /// Number of request batches to process.
+    #[clap(long, default_value = UNIQUENESS_MESSAGE_TYPE)]
+    request_batch_kind: String,
 
     /// Maximum size of each request batch.
     #[clap(long, default_value = "10")]
@@ -73,9 +82,7 @@ struct CliOptions {
 
 impl CliOptions {
     fn request_batch_kind(&self) -> RequestBatchKind {
-        // Currently defaults to sets of uniqueness requests.
-        // TODO: parse from env | command line | file.
-        RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE)
+        RequestBatchKind::from(&self.request_batch_kind)
     }
 
     fn request_batch_size(&self) -> RequestBatchSize {
@@ -142,6 +149,7 @@ impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
             options.request_batch_count,
             options.request_batch_kind(),
             options.request_batch_size(),
+            options.known_iris_serial_id,
             options.rng_seed(),
         )
         .await
@@ -153,10 +161,12 @@ impl AsyncFrom<CliOptions> for AwsClientConfig {
     async fn async_from(options: CliOptions) -> Self {
         AwsClientConfig::new(
             options.environment,
+            options.aws_public_key_base_url,
             options.aws_s3_request_bucket_name,
             options.aws_sns_request_topic_arn,
             options.aws_sqs_long_poll_wait_time,
             options.aws_sqs_response_queue_url,
+            options.aws_sqs_wait_time_seconds,
         )
         .await
     }

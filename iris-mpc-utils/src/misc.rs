@@ -1,12 +1,21 @@
+use std::{
+    fs::File,
+    hash::{DefaultHasher, Hash, Hasher},
+    io::{BufReader, BufWriter},
+    path::Path,
+};
+
 use bincode;
 use eyre::Result;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json;
-use std::{
-    fs::File,
-    io::{BufReader, BufWriter},
-    path::Path,
-};
+
+/// Returns a hash computed over a type instance using `DefaultHasher`.
+pub fn compute_default_hash<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
+}
 
 /// Returns a boxed iterator over the first `limit` elements of `iter`.
 pub fn limited_iterator<I>(iter: I, limit: Option<usize>) -> Box<dyn Iterator<Item = I::Item>>

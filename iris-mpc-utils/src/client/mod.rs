@@ -1,26 +1,31 @@
 use rand::{CryptoRng, Rng};
 
+use iris_mpc_common::IrisSerialId;
+
 use crate::aws::{AwsClient, AwsClientConfig};
 
-use components::RequestEnqueuer;
-use components::RequestGenerator;
-use components::ResponseCorrelator;
-use components::ResponseDequeuer;
-pub use errors::ServiceClientError;
-pub use types::{Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestData};
+use components::{
+    DataUploader, RequestEnqueuer, RequestGenerator, ResponseCorrelator, ResponseDequeuer,
+};
+pub use typeset::{
+    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
+    RequestBatchSize,
+};
 
 mod components;
-mod errors;
-mod types;
+mod typeset;
 
-/// A utility for correlating enqueued system requests with system responses.
+/// A utility for enqueuing system requests & correlating with system responses.
 #[derive(Debug)]
-pub struct ServiceClient<R: Rng + CryptoRng> {
+pub struct ServiceClient<R: Rng + CryptoRng + Send> {
+    // Component that uploads data to services prior to request processing.
+    data_uploader: DataUploader<R>,
+
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
     // Component that generates system requests.
-    request_generator: RequestGenerator<R>,
+    request_generator: RequestGenerator,
 
     // Component that correlates system requests & responses.
     #[allow(dead_code)]
@@ -31,49 +36,49 @@ pub struct ServiceClient<R: Rng + CryptoRng> {
     response_dequeuer: ResponseDequeuer,
 }
 
-impl<R: Rng + CryptoRng> ServiceClient<R> {
-    /// Constructor.
+impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     pub async fn new(
         aws_client_config: AwsClientConfig,
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
+        known_iris_serial_id: Option<IrisSerialId>,
         rng_seed: R,
     ) -> Self {
         let aws_client = AwsClient::new(aws_client_config);
 
         Self {
+            data_uploader: DataUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(batch_kind, batch_size, batch_count, rng_seed),
+            request_generator: RequestGenerator::new(
+                batch_count,
+                batch_kind,
+                batch_size,
+                known_iris_serial_id,
+            ),
             response_correlator: ResponseCorrelator::new(aws_client.clone()),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
 
-    /// Initializer.
-    pub async fn init(&mut self, public_key_base_url: String) -> Result<(), ServiceClientError> {
-        for initialization_result in [
-            self.request_enqueuer.init(public_key_base_url).await,
-            self.response_correlator.init().await,
-        ] {
-            match initialization_result {
-                Ok(()) => (),
-                Err(e) => {
-                    tracing::error!("Service client: component initialisation failed: {}", e);
-                    return Err(ServiceClientError::InitialisationError(e.to_string()));
-                }
-            }
+    pub async fn exec(&mut self) -> Result<(), ClientError> {
+        tracing::info!("Executing ...");
+        while let Some(batch) = self.request_generator.next().await.unwrap() {
+            self.data_uploader.process_batch(&batch).await?;
+            self.request_enqueuer.process_batch(&batch).await?;
+            self.response_dequeuer.process_batch(&batch).await?;
         }
 
         Ok(())
     }
 
-    /// Executor.
-    pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
-        tracing::info!("Executing ...");
-        while let Some(batch) = self.request_generator.next().await.unwrap() {
-            self.request_enqueuer.enqueue(&batch).await.unwrap();
-            // TODO await responses & correlate.
+    pub async fn init(&mut self) -> Result<(), ClientError> {
+        tracing::info!("Initializing ...");
+        for initializer in [self.data_uploader.init(), self.response_correlator.init()] {
+            initializer.await.map_err(|e| {
+                tracing::error!("Service client: component initialisation failed: {}", e);
+                ClientError::InitialisationError(e.to_string())
+            })?;
         }
 
         Ok(())

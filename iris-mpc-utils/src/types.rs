@@ -8,9 +8,6 @@ use iris_mpc_common::{
 
 use super::constants::N_PARTIES;
 
-// MPC party encryption public keys.
-pub type EncryptionPublicKeyset = [PublicKey; N_PARTIES];
-
 // Iris code and mask galois shares.
 pub type IrisCodeAndMaskShares = [[GaloisRingIrisCodeShare; N_PARTIES]; 2];
 
@@ -35,3 +32,6 @@ impl Default for NodeExecutionHost {
 
 /// Type alias: Ordinal identifier of an MPC participant.
 pub type PartyIdx = usize;
+
+// MPC party public keys (used for encryption).
+pub type PublicKeyset = [PublicKey; N_PARTIES];

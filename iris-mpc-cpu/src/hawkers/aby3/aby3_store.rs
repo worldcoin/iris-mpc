@@ -669,7 +669,7 @@ mod tests {
             },
             plaintext_store::PlaintextStore,
         },
-        hnsw::{GraphMem, HnswSearcher},
+        hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
         network::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
     };
@@ -710,7 +710,12 @@ mod tests {
                 for query in queries.iter() {
                     let insertion_layer = db.gen_layer_rng(&mut rng).unwrap();
                     let inserted_vector = db
-                        .insert(&mut *store, &mut aby3_graph, query, insertion_layer)
+                        .insert::<_, SortedNeighborhood<_>>(
+                            &mut *store,
+                            &mut aby3_graph,
+                            query,
+                            insertion_layer,
+                        )
                         .await
                         .unwrap();
                     inserted.push(inserted_vector)
@@ -722,7 +727,7 @@ mod tests {
                     let iris = store.storage.get_vector_or_empty(&v).await;
                     let query = Aby3Query::new(&iris);
                     let neighbors = db
-                        .search(&mut *store, &aby3_graph, &query, 1)
+                        .search::<_, SortedNeighborhood<_>>(&mut *store, &aby3_graph, &query, 1)
                         .await
                         .unwrap();
                     tracing::debug!("Finished checking query");
@@ -778,7 +783,12 @@ mod tests {
                 .unwrap()
                 .clone();
             let cleartext_neighbors = hawk_searcher
-                .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
+                .search::<_, SortedNeighborhood<_>>(
+                    &mut cleartext_data.0,
+                    &cleartext_data.1,
+                    &query,
+                    1,
+                )
                 .await?;
             assert!(
                 hawk_searcher
@@ -796,7 +806,7 @@ mod tests {
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let secret_neighbors =
+                    let secret_neighbors: SortedNeighborhood<_> =
                         hawk_searcher.search(&mut *v_lock, &g, &q, 1).await.unwrap();
 
                     hawk_searcher
@@ -815,7 +825,7 @@ mod tests {
                     let mut v_lock = v.lock().await;
                     let iris = v_lock.storage.get_vector_or_empty(&vector_id).await;
                     let query = Aby3Query::new(&iris);
-                    let secret_neighbors = hawk_searcher
+                    let secret_neighbors: SortedNeighborhood<_> = hawk_searcher
                         .search(&mut *v_lock, &g, &query, 1)
                         .await
                         .unwrap();
@@ -1335,7 +1345,7 @@ mod tests {
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;
-                    let secret_neighbors =
+                    let secret_neighbors: SortedNeighborhood<_> =
                         searcher.search(&mut *store, &graph, &q, 1).await.unwrap();
                     searcher
                         .is_match(&mut *store, &[secret_neighbors])
