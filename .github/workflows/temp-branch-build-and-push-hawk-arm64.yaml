@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "au/min-round-robin-size"
+      - "sw/deploy_dev_with_latency"
     paths-ignore:
       - "deploy/**"
 
