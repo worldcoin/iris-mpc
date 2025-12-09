@@ -53,10 +53,10 @@ readinessProbe:
 
 resources:
   limits:
-    cpu: "2"
+    cpu: "2.1"
     memory: 10Gi
   requests:
-    cpu: "2"
+    cpu: "2.1"
     memory: 10Gi
 
 imagePullSecrets:
