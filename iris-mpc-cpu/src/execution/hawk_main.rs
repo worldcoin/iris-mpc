@@ -1,3 +1,30 @@
+//! Implements the main execution logic for the HAWK MPC protocol on the CPU.
+//!
+//! This module orchestrates the multi-party computation for iris matching using an HNSW
+//! (Hierarchical Navigable Small World) graph. It is responsible for managing the state
+//! of the MPC node, handling network communication, processing batches of queries, and
+//! interacting with the underlying cryptographic and data storage layers.
+//!
+//! The central component is the [`HawkActor`], which acts as a state machine for the
+//! entire process. It manages connections to other MPC parties, holds the in-memory
+//! HNSW graphs, and processes incoming jobs.
+//!
+//! Key responsibilities of this module include:
+//! - **Initialization**: Setting up network connections, loading the HNSW graph from
+//!   persistent storage, and initializing shared cryptographic state (e.g., PRF keys).
+//! - **Session Management**: Creating [`HawkSession`]s to handle parallel MPC operations.
+//!   Each session encapsulates the necessary cryptographic context for a
+//!   single thread of work.
+//! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of irises
+//!   to be checked for uniqueness or re-authenticated. This involves:
+//!   - Searching the HNSW graph for nearest neighbors.
+//!   - Performing cryptographic distance comparisons using the ABY3 protocol.
+//!   - Deciding whether a query results in a match, an insertion, or a re-authentication.
+//! - **State Mutation**: Applying changes to the HNSW graph (inserting new nodes) and
+//!   persisting these changes to the database.
+//! - **Anonymized Statistics**: Collecting distance data to generate privacy-preserving
+//!   statistics on match distributions.
+
 use crate::{
     execution::{
         hawk_main::{
@@ -160,35 +187,60 @@ pub struct HawkArgs {
     pub numa: bool,
 }
 
-/// HawkActor manages the state of the HNSW database and connections to other
-/// MPC nodes.
+/// Manages the state and execution of the HNSW-based MPC protocol (HAWK).
+///
+/// The `HawkActor` is the central component for the CPU-based matching engine. It orchestrates
+/// MPC sessions, manages the HNSW graphs and iris data stores for both eyes, and handles
+/// incoming search/insert requests. It is designed to be a long-lived object that holds
+/// the entire state of the MPC node.
+///
+/// # Responsibilities
+/// - **State Management:** Holds in-memory HNSW graphs (`graph_store`) and the underlying
+///   shared iris data (`iris_store`).
+/// - **Session Management:** Creates and manages `HawkSession`s, which provide the
+///   cryptographic context for MPC operations.
+/// - **Request Handling:** Processes `HawkRequest` batches for uniqueness checks, re-authentication,
+///   and database insertions.
+/// - **Persistence:** Coordinates with `GraphPg` to load the HNSW graph from and persist updates
+///   to a Postgres database.
+/// - **Anonymized Statistics:** Collects and aggregates distance data to generate anonymized
+///   statistics about match distributions.
 pub struct HawkActor {
+    /// Command-line arguments and configuration for the actor.
     args: HawkArgs,
 
-    // ---- Shared setup ----
+    // ---- Shared MPC & HNSW setup ----
+    /// The HNSW searcher, containing parameters and logic for graph traversal.
     searcher: Arc<HnswSearcher>,
+    /// A shared PRF key used to deterministically generate insertion layers for new nodes
+    /// in the HNSW graph, ensuring all parties build compatible graph structures.
+    /// Initialized once on startup.
     prf_key: Option<Arc<[u8; 16]>>,
 
-    // ---- My state ----
-    /// A size used by the startup loader.
+    // ---- Core State ----
+    /// The number of irises loaded into the database. Used during the initial load.
     loader_db_size: usize,
+    /// In-memory storage for the secret-shared iris codes for both left and right eyes.
     iris_store: BothEyes<Aby3SharedIrisesRef>,
+    /// In-memory HNSW graphs for both left and right eyes.
     graph_store: BothEyes<GraphRef>,
+    /// Handles to the iris worker pools for NUMA-aware data processing.
     workers_handle: BothEyes<IrisPoolHandle>,
+    /// Aggregates statistics for anonymized reporting on match distance distributions.
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 
-    /// ---- Distances cache ----
-    /// Cache of distances for each eye.
-    /// Eye -> List of Lists of distances, where the inner list is all distances for rotations of a query.
-    /// In a later step, these distances will be reduced to a single, minimum distance per query.
-    /// Only used for anonymized statistics.
+    /// Caches computed distances for anonymized statistics before they are processed and cleared.
     distances_cache: BothEyes<DistanceCache>,
 
+    /// An optional store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
 
-    // ---- My network setup ----
+    // ---- Networking ----
+    /// Handle for managing network connections and creating MPC sessions with peers.
     networking: Box<dyn NetworkHandle>,
+    /// A cancellation token to signal errors and gracefully shut down network activity.
     error_ct: CancellationToken,
+    /// The index of this MPC party (0, 1, or 2).
     party_id: usize,
 }
 
@@ -259,8 +311,8 @@ pub enum Orientation {
     Mirror = 1,
 }
 
+// TODO: Merge with the same in iris-mpc-gpu.
 /// The index in `ServerJobResult::merged_results` which means "no matches and no insertions".
-//TODO: Merge with the same in iris-mpc-gpu.
 const NON_MATCH_ID: u32 = u32::MAX;
 
 impl std::fmt::Display for StoreId {
@@ -295,7 +347,18 @@ type Aby3Ref = Arc<RwLock<Aby3Store>>;
 type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 
-/// HawkSession is a unit of parallelism when operating on the HawkActor.
+/// A container for state required to perform parallel MPC operations.
+///
+/// A `HawkSession` encapsulates the necessary context for a single thread of execution
+/// within the HAWK protocol. This includes a reference to the underlying ABY3 store
+/// (which manages secret-shared data and cryptographic primitives) and the HNSW graph.
+/// Multiple sessions can be created to parallelize operations across a batch of requests.
+///
+/// Each session is initialized with a unique, collaboratively-generated seed for its
+/// internal Pseudo-Random Function (PRF). This ensures that concurrent sessions
+/// produce independent random values for cryptographic operations (e.g., creating new
+/// secret sharings), which is critical for secure parallel execution. All sessions
+/// operate on the same shared `graph_store` and `iris_store` held by the `HawkActor`.
 #[derive(Clone)]
 pub struct HawkSession {
     pub aby3_store: Aby3Ref,
@@ -830,12 +893,25 @@ struct HawkJob {
     return_channel: oneshot::Sender<Result<HawkResult>>,
 }
 
-/// HawkRequest contains a batch of items to search.
+/// Represents a batch of queries to be processed by the `HawkActor`.
+///
+/// This struct encapsulates all the data required for a single batch operation, including
+/// uniqueness checks, re-authentications, and potential insertions. It is constructed
+/// from a `BatchQuery` and contains the iris data for both normal and mirrored orientations.
+///
+/// The `queries` and `queries_mirror` fields hold secret-shared iris codes that have been
+/// prepared for MPC. The `Normal` orientation is used for standard matching against the
+/// database, while the `Mirror` orientation is used to detect full-face mirror attacks by
+/// matching the left query iris against the right iris database and vice-versa.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
+    /// The original `BatchQuery` containing request metadata and raw iris data.
     batch: BatchQuery,
+    /// Secret-shared iris queries for normal matching (left vs. left, right vs. right).
     queries: SearchQueries<SearchRotations>,
+    /// Secret-shared iris queries for mirror-attack detection (left vs. right, right vs. left).
     queries_mirror: SearchQueries<SearchRotations>,
+    /// The identifiers for each request in the batch.
     ids: SearchIds,
 }
 
@@ -1455,7 +1531,7 @@ impl HawkHandle {
         sessions: &mut SessionGroups,
         request: HawkRequest,
     ) -> Result<HawkResult> {
-        tracing::info!("Processing a Hawk job…");
+        tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
         // DOCTODO
