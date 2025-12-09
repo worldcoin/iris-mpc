@@ -183,6 +183,18 @@ pub struct HawkArgs {
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
 
+    /// Enables NUMA-aware optimizations.
+    ///
+    /// If set, the actor will spawn worker threads pinned to specific CPU cores and
+    /// reallocate incoming iris data to the memory node local to those cores. This can
+    /// significantly improve performance on NUMA architectures by minimizing cross-node
+    /// memory access during MPC computations.
+    /// Enables NUMA-aware optimizations.
+    ///
+    /// If set, the actor will spawn worker threads pinned to specific CPU cores and
+    /// reallocate incoming iris data to the memory node local to those cores. This can
+    /// significantly improve performance on NUMA architectures by minimizing cross-node
+    /// memory access during MPC computations.
     #[clap(long, default_value_t = false)]
     pub numa: bool,
 }
@@ -998,6 +1010,20 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
+    /// Reallocates iris data to be local to the NUMA node of the worker threads.
+    ///
+    /// On NUMA (Non-Uniform Memory Access) architectures, memory is divided into nodes,
+    /// and accessing memory on a remote node is slower than accessing local memory.
+    /// This function optimizes performance by moving the secret-shared iris data for an
+    /// incoming request to the same NUMA node where the cryptographic computations will
+    /// be performed.
+    ///
+    /// It dispatches reallocation tasks to the `IrisPoolHandle` worker pools for both
+    /// normal and mirrored orientations. The workers, which are pinned to specific CPU
+    //. The workers, which are pinned to specific CPU
+    /// cores, handle the memory copy, ensuring data locality for subsequent processing.
+    /// This step is crucial for minimizing memory latency and maximizing throughput on
+    /// NUMA-enabled hardware. If NUMA is disabled, this function is a no-op.
     async fn numa_realloc(self, workers: BothEyes<IrisPoolHandle>) -> Self {
         // TODO: Result<Self>
         let start = Instant::now();

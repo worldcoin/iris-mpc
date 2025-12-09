@@ -26,51 +26,88 @@ use std::{
 use tokio::sync::oneshot;
 use tracing::info;
 
+/// Defines the types of tasks that can be offloaded to an `IrisWorker`.
+///
+/// This enum represents the commands that can be sent to the worker pool for processing.
+/// Each variant includes the necessary data for the operation and a `oneshot::Sender` (`rsp`)
+/// to return the result to the caller.
 #[derive(Debug)]
 enum IrisTask {
+    /// A synchronization barrier to ensure all preceding tasks in the channel are completed.
     Sync {
         rsp: oneshot::Sender<()>,
     },
-    /// Move an iris code to memory closer to the pool (NUMA-awareness).
+    /// Reallocates an `ArcIris` to NUMA-local memory.
+    ///
+    /// This task takes a shared iris pointer and creates a new `Arc` with the data
+    /// allocated on the memory node local to the worker's CPU core. This is a key
+    /// optimization for NUMA architectures, reducing memory access latency.
     Realloc {
         iris: ArcIris,
         rsp: oneshot::Sender<ArcIris>,
     },
+    /// Inserts a new iris into the worker's local shard of the iris database.
     Insert {
         vector_id: VectorId,
         iris: ArcIris,
     },
+    /// Pre-allocates memory in the iris store to accommodate a number of new irises.
     Reserve {
         additional: usize,
     },
+    /// Computes the dot product for a list of iris pairs.
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
+    /// Computes the dot product between a single query iris and a batch of database irises.
     DotProductBatch {
         query: ArcIris,
         vector_ids: Vec<VectorId>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
+    /// Computes the rotation-aware dot product between a query and a batch of database irises.
     RotationAwareDotProductBatch {
         query: ArcIris,
         vector_ids: Vec<VectorId>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
+    /// Computes the pairwise distance for pairs of irises in the Galois Ring.
     RingPairwiseDistance {
         input: Vec<Option<(ArcIris, ArcIris)>>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
+    /// Computes the rotation-aware pairwise distance for a single pair of irises.
     RotationAwarePairwiseDistance {
         pair: (ArcIris, ArcIris),
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
 }
 
+/// A handle to a pool of `IrisWorker` threads.
+///
+/// This struct provides an interface to a pool of background workers that are responsible
+/// for CPU-intensive computations and NUMA-aware data management. By offloading tasks
+/// to this pool, the main `HawkActor` can remain responsive and avoid blocking on
+/// long-running operations.
+///
+/// # NUMA Awareness
+/// When NUMA is enabled, each worker is pinned to a specific CPU core, and tasks like
+/// `numa_realloc` ensure that data is moved to memory local to that core before processing.
+/// This minimizes memory latency and is critical for performance on multi-socket servers.
+///
+/// # Task Distribution
+/// Tasks are distributed among the workers to parallelize work. For read-only tasks
+/// (like `numa_realloc`), a round-robin strategy is used. For tasks that mutate the
+/// underlying iris store (like `insert`), a consistent worker is chosen based on the
+/// `VectorId` to ensure data consistency without requiring locks.
 #[derive(Clone, Debug)]
 pub struct IrisPoolHandle {
+    /// Senders for each worker thread's task channel.
     workers: Arc<[Sender<IrisTask>]>,
+    /// A counter used for round-robin task distribution.
     next_counter: Arc<AtomicU64>,
+    /// A metric to record the latency of task execution.
     metric_latency: FastHistogram,
 }
 
