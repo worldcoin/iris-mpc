@@ -8,12 +8,6 @@ env:
   - name: NCCL_SOCKET_IFNAME
     value: "ens,eth"
 
-  - name: FI_EFA_USE_DEVICE_RDMA
-    value: "1"
-
-  - name: FI_PROVIDER
-    value: "efa"
-
   - name: NCCL_DEBUG
     value: "INFO"
 
