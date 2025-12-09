@@ -5,7 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/anon-stats-for-reauth"
-      - "sw/deploy_dev"
+      - "sw/deploy_dev_with_latency"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
