@@ -24,6 +24,63 @@
 //!   persisting these changes to the database.
 //! - **Anonymized Statistics**: Collecting distance data to generate privacy-preserving
 //!   statistics on match distributions.
+//!
+//! # Configuration Master Switches
+//!
+//! This module uses several compile-time constants that act as "master switches" to control
+//! fundamental trade-offs between performance, accuracy, and privacy in the HAWK protocol.
+//! These switches are typically configured for a specific deployment and are not expected
+//! to change at runtime.
+//!
+//! NOTE: As of Dec 9th 2025, the choice of optimal configuration for deployment is still being researched.
+//!
+//! ### 1. HNSW Entry Point Strategy
+//!
+//! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
+//! This is configured via the `layer_mode` field in the `HnswSearcher` struct, and the
+//! logic is handled in `HnswSearcher::search_init`, which selects the starting entry
+//! points based on the `LayerMode` enum.
+//!
+//! - **`Standard`**: The search starts from a single, pre-defined entry point at the top
+//!   layer of the graph. This is efficient but can be suboptimal if the entry point is
+//!   not a good starting location for a given query.
+//! - **`LinearScan`**: The search begins by evaluating a set of high-quality entry point
+//!   candidates and choosing the one closest to the query vector. This provides a better
+//!   starting position, improving search accuracy and speed. From a privacy perspective,
+//!   using a larger set of entry points minimizes information leakage. If an attacker
+//!   knows the queries, a small, contained set of entry points could allow them to
+//!   gather many constraints about distance ordering for those specific nodes. A larger,
+//!   more diverse set of starting points mitigates this risk.
+//!
+//! ### 2. Distance Function: `MinFhd` vs. `Fhd`
+//!
+//! The distance function is crucial for how iris codes are compared. The choice is
+//! tightly coupled with the rotation strategy (`SearchRotations`). The `DISTANCE_FN`
+//! constant is passed during the initialization of the `Aby3Store` in
+//! `HawkActor::create_session`, which then uses it to select the appropriate MPC
+//! distance calculation.
+//!
+//! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance. This
+//!   is used when each rotation of an iris is treated as a separate vector in the database.
+//! - **`MinFhd` (Minimum Fractional Hamming Distance)**: This is used with a `CenterOnly`
+//!   rotation strategy. Instead of searching over all rotations, it performs an MPC
+//!   computation that obliviously finds the minimum distance across all possible rotations
+//!   of the query iris against a database iris. This has significant privacy advantages, as
+//!   it computes the best-fit rotation without revealing which rotation it was.
+//!
+//! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
+//!
+//! This strategy (`NEIGHBORHOOD_MODE`) governs how candidate lists are managed during HNSW
+//! graph traversal. The constant is passed as a generic parameter to the `search::search`
+//! and `insert::insert` functions, which in turn instantiates the correct `Neighborhood`
+//! implementation (`Sorted` or `Unsorted`) for managing candidate lists.
+//!
+//! - **`Sorted`**: Keeps the list of nearest neighbor candidates sorted by distance at all
+//!   times. This can be more efficient for graph traversal algorithms that rely on
+//!   distance-ordered lists.
+//! - **`Unsorted`**: Maintains an unsorted list of candidates. While potentially less
+//!   performant during the search, this approach leaks less information about the precise
+//!   distance ordering of neighbors, adding another layer of privacy.
 
 use crate::{
     execution::{
@@ -1560,7 +1617,6 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        // DOCTODO
         let request = request
             .numa_realloc(hawk_actor.workers_handle.clone())
             .await;
