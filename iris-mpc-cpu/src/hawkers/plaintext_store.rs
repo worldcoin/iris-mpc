@@ -7,7 +7,7 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, VectorStore,
+        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -57,6 +57,15 @@ impl PlaintextStore {
             storage,
             distance_fn: TEST_DISTANCE_FN,
         }
+    }
+
+    pub fn from_irises_iter(iter: impl Iterator<Item = IrisCode>) -> Self {
+        let mut vector = PlaintextStore::new();
+        for (idx, iris) in iter.enumerate() {
+            let id = VectorId::from_0_index(idx as u32);
+            vector.insert_with_id(id, Arc::new(iris));
+        }
+        vector
     }
 
     /// Return the size of the underlying set of irises.
@@ -115,11 +124,11 @@ impl PlaintextStore {
                 .clone();
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, set_ep) = searcher
-                .search_to_insert(self, &graph, &query, insertion_layer)
+            let (neighbors, update_ep) = searcher
+                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
-                .insert_from_search_results(self, &mut graph, query_id, neighbors, set_ep)
+                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
                 .await?;
         }
 
@@ -212,7 +221,7 @@ impl VectorStoreMut for PlaintextStore {
 #[derive(Debug, Clone)]
 pub struct SharedPlaintextStore {
     pub storage: PlaintextSharedIrisesRef,
-    distance_fn: DistanceFn,
+    pub distance_fn: DistanceFn,
 }
 
 impl Default for SharedPlaintextStore {
@@ -419,7 +428,7 @@ mod tests {
             let serial_id = i as u32 + 1;
             let vector_id = VectorId::from_serial_id(serial_id);
             let query = ptxt_vector.storage.get_vector(&vector_id).unwrap().clone();
-            let cleartext_neighbors = searcher
+            let cleartext_neighbors: SortedNeighborhood<_> = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;
             assert!(
@@ -462,7 +471,7 @@ mod tests {
                 jobs.spawn(async move { searcher.search(&mut sh_vec, &graph, &query, 1).await });
             }
 
-            let results = jobs
+            let results: Vec<SortedNeighborhood<_>> = jobs
                 .join_all()
                 .await
                 .into_iter()

@@ -629,6 +629,9 @@ pub(crate) async fn min_round_robin_batch(
     if distances.len() % batch_size != 0 {
         eyre::bail!("Distances length must be a multiple of batch size");
     }
+    if batch_size < 2 {
+        return Ok(distances.to_vec());
+    }
 
     // Within each batch, compute all the pairwise comparisons in a round-robin fashion.
     // The resulting comparison table looks like
