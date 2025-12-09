@@ -1,4 +1,3 @@
-use ampc_anon_stats::anon_stats::{DistanceBundle1D, LiftedDistanceBundle1D};
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::types::Eye;
@@ -6,7 +5,8 @@ use ampc_anon_stats::{
     process_1d_anon_stats_job, process_1d_lifted_anon_stats_job, process_2d_anon_stats_job,
     start_coordination_server, sync_on_id_hash, sync_on_job_sizes, AnonStatsContext,
     AnonStatsMapping, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin,
-    AnonStatsServerConfig, AnonStatsStore, BucketStatistics, BucketStatistics2D, Opt,
+    AnonStatsServerConfig, AnonStatsStore, BucketStatistics, BucketStatistics2D, DistanceBundle1D,
+    LiftedDistanceBundle1D, Opt,
 };
 use ampc_server_utils::{
     init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
@@ -655,7 +655,7 @@ async fn main() -> Result<()> {
         connection_parallelism: 8,
         request_parallelism: 8,
         sessions_per_request: 1,
-        tls: None,
+        tls: config.tls.clone(),
     };
     let ct = shutdown_handler.get_network_cancellation_token();
 
