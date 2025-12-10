@@ -1584,7 +1584,8 @@ impl HnswSearcher {
                     .ok_or_eyre("Update entry layer not present")?;
                 nbhd.clone()
             } else {
-                graph.get_links(&nb, layer).await
+                let links = graph.get_links(&nb, layer).await;
+                store.only_valid_vectors(links).await
             };
 
             // For each individual update, in order, extend the neighborhood and

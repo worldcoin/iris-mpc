@@ -184,7 +184,7 @@ pub trait VectorStore: Debug {
 
     /// For each tuple of elements in sequence from the lists `base_nodes`,
     /// `neighborhoods`, and `max_sizes`, produce a compacted neighborhood of
-    /// specified maximum size conssiting of the nearest elements to the
+    /// specified maximum size consisting of the nearest elements to the
     /// specified base node.
     ///
     /// The default implementation is a loop over `compact_neighborhood`.
@@ -199,6 +199,7 @@ pub trait VectorStore: Debug {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
 
+        // TODO could improve this to do a properly batched quickselect
         let mut results = Vec::with_capacity(base_nodes.len());
         for (base_node, neighborhood, max_size) in
             izip!(base_nodes.iter().cloned(), neighborhoods, max_sizes)
