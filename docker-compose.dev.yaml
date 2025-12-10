@@ -1,16 +1,16 @@
 services:
   dev_db:
-    image: public.ecr.aws/docker/library/postgres:16.10-alpine3.22
+    image: pg-local-build:latest
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     user: "postgres"
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
     volumes:
-      - ./scripts/tools/init-db-pgres.sql:/docker-entrypoint-initdb.d/init-db-pgres.sql
+      - dev_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
+      test: ["CMD-SHELL", "pg_isready"]
       interval: 10s
       timeout: 30s
       retries: 5
@@ -41,3 +41,6 @@ services:
 
     volumes:
       - ./scripts/tools/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
+
+volumes:
+  dev_db_data:
