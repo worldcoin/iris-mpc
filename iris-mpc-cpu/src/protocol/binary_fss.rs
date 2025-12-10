@@ -152,6 +152,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         0 => {
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
+
             // Generate FSS keys locally using deterministic randomness from session PRF
             //metrics: measure the genkeys time
             let _tt_gen = crate::perf_scoped_for_party!(
@@ -393,6 +394,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         1 => {
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
+
             // Generate FSS keys locally using deterministic randomness from session PRF
             //metrics: measure the genkeys time
             let _tt_gen = crate::perf_scoped_for_party!(
@@ -1195,6 +1197,43 @@ where
             // drop timer
             drop(_tt_net_recon);
 
+            // Set up the function for FSS (needed for key generation)
+            let n_falf_u32 = 1u32 << 31;
+            let n_half = InG::from(n_falf_u32);
+            let p = InG::from(1u32 << 31) + n_half;
+            let q = InG::from(u32::MAX) + n_half;
+
+            // OPTIMIZATION: Generate FSS keys while waiting for network receive
+            // Spawn key generation as blocking task to overlap CPU work with network I/O
+            let key_gen_handle = tokio::task::spawn_blocking({
+                let batch_size = batch_size;
+                let p = p;
+                let q = q;
+                move || {
+                    let mut keys = Vec::with_capacity(batch_size);
+                    for i in 0..batch_size {
+                        let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                        seed_u128 ^= i as u128 + 1;
+                        let derived_seed = seed_u128.to_le_bytes();
+                        let mut prf_rng = AesRng::from_seed(derived_seed);
+                        
+                        let prg_seed = [[0u8; 16]; 4];
+                        let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                            &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                        ]);
+                        let icf = Icf::new(p, q, prg);
+                        
+                        let f = IntvFn {
+                            r_in: InG::from(0u32),
+                            r_out: OutG::from(0u128),
+                        };
+                        let (k0, _k1) = icf.gen(f, &mut prf_rng);
+                        keys.push(k0);
+                    }
+                    keys
+                }
+            });
+
             //metrics: measure the network for share reconstruction
             let _tt_net_recon = crate::perf_scoped_for_party!(
                 "fss.network.recon.recv",
@@ -1203,7 +1242,7 @@ where
                 bucket_bound  // your desired bucket cap
             );
 
-            // Receive d1+r1 from party 1
+            // Receive d1+r1 from party 1 (while key generation runs in parallel)
             let d1r1 = match session.network_session.receive_next().await {
                 Ok(v) => u32::into_vec(v),
                 Err(e) => Err(eyre!("FSS: Party 0 cannot receive d1+r1 from party 1: {e}")),
@@ -1212,39 +1251,8 @@ where
             // drop timer
             drop(_tt_net_recon);
 
-            // Set up the function for FSS
-            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
-            let n_falf_u32 = 1u32 << 31;
-            let n_half = InG::from(n_falf_u32);
-            // make the interval so that we return 1 when MSB == 1
-            // this is (our number + n/2 ) % n, modulo is handled by U32Group
-            let p = InG::from(1u32 << 31) + n_half;
-            let q = InG::from(u32::MAX) + n_half; // modulo is handled by U32Group
-
-            // Generate FSS keys locally using deterministic randomness
-            let mut my_keys = Vec::with_capacity(batch_size);
-            for i in 0..batch_size {
-                // Deterministic RNG derived from a shared base seed and per-index counter
-                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
-                let derived_seed = seed_u128.to_le_bytes();
-                let mut prf_rng = AesRng::from_seed(derived_seed);
-                
-                // Build PRG/ICF for key generation
-                let prg_seed = [[0u8; 16]; 4];
-                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
-                ]);
-                let icf = Icf::new(p, q, prg);
-                
-                // Generate FSS key pair using deterministic PRF RNG
-                let f = IntvFn {
-                    r_in: InG::from(0u32),
-                    r_out: OutG::from(0u128),
-                };
-                let (k0, _k1) = icf.gen(f, &mut prf_rng);
-                my_keys.push(k0);
-            }
+            // Wait for key generation to complete
+            let my_keys = key_gen_handle.await.map_err(|e| eyre!("Key generation task failed: {e}"))?;
 
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
             let mut f_x_0_bits = Vec::with_capacity(batch_size); // store all the eval results
@@ -1387,6 +1395,43 @@ where
             // drop timer
             drop(_tt_net_recon);
 
+            // Set up the function for FSS (needed for key generation)
+            let n_falf_u32 = 1u32 << 31;
+            let n_half = InG::from(n_falf_u32);
+            let p = InG::from(1u32 << 31) + n_half;
+            let q = InG::from(u32::MAX) + n_half;
+
+            // OPTIMIZATION: Generate FSS keys while waiting for network receive
+            // Spawn key generation as blocking task to overlap CPU work with network I/O
+            let key_gen_handle = tokio::task::spawn_blocking({
+                let batch_size = batch_size;
+                let p = p;
+                let q = q;
+                move || {
+                    let mut keys = Vec::with_capacity(batch_size);
+                    for i in 0..batch_size {
+                        let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                        seed_u128 ^= i as u128 + 1;
+                        let derived_seed = seed_u128.to_le_bytes();
+                        let mut prf_rng = AesRng::from_seed(derived_seed);
+                        
+                        let prg_seed = [[0u8; 16]; 4];
+                        let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                            &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                        ]);
+                        let icf = Icf::new(p, q, prg);
+                        
+                        let f = IntvFn {
+                            r_in: InG::from(0u32),
+                            r_out: OutG::from(0u128),
+                        };
+                        let (_k0, k1) = icf.gen(f, &mut prf_rng);
+                        keys.push(k1);
+                    }
+                    keys
+                }
+            });
+
             //metrics: measure the network for share reconstruction
             let _tt_net_recon = crate::perf_scoped_for_party!(
                 "fss.network.recon.recv",
@@ -1395,7 +1440,7 @@ where
                 bucket_bound  // your desired bucket cap
             );
 
-            // Receive d2+r2 from party 0
+            // Receive d2+r2 from party 0 (while key generation runs in parallel)
             let d2r2_vec = match session.network_session.receive_prev().await {
                 Ok(v) => u32::into_vec(v),
                 Err(e) => Err(eyre!("FSS: Party 1 cannot receive d2+r2 from party 0: {e}")),
@@ -1404,39 +1449,8 @@ where
             // drop timer
             drop(_tt_net_recon);
 
-            // Set up the function for FSS
-            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
-            let n_falf_u32 = 1u32 << 31;
-            let n_half = InG::from(n_falf_u32);
-            // make the interval so that we return 1 when MSB == 1
-            // this is (our number + n/2 ) % n, modulo is handled by U32Group
-            let p = InG::from(1u32 << 31) + n_half;
-            let q = InG::from(u32::MAX) + n_half; // modulo is handled by U32Group
-
-            // Generate FSS keys locally using deterministic randomness
-            let mut my_keys = Vec::with_capacity(batch_size);
-            for i in 0..batch_size {
-                // Deterministic RNG derived from a shared base seed and per-index counter
-                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
-                let derived_seed = seed_u128.to_le_bytes();
-                let mut prf_rng = AesRng::from_seed(derived_seed);
-                
-                // Build PRG/ICF for key generation
-                let prg_seed = [[0u8; 16]; 4];
-                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
-                ]);
-                let icf = Icf::new(p, q, prg);
-                
-                // Generate FSS key pair using deterministic PRF RNG
-                let f = IntvFn {
-                    r_in: InG::from(0u32),
-                    r_out: OutG::from(0u128),
-                };
-                let (_k0, k1) = icf.gen(f, &mut prf_rng);
-                my_keys.push(k1);
-            }
+            // Wait for key generation to complete
+            let my_keys = key_gen_handle.await.map_err(|e| eyre!("Key generation task failed: {e}"))?;
 
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
             let mut f_x_1_bits = Vec::with_capacity(batch_size); // store all the eval results

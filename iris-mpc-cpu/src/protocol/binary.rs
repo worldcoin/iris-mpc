@@ -42,7 +42,7 @@ use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
 // Choose between the two FSS implementations
-pub const USE_PARALLEL_THRESH: bool = false;
+pub const USE_PARALLEL_THRESH: bool = true;
 
 static MSB_FSS_INPUT_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -1589,8 +1589,8 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     // }
 
     // Larger batches reduce the number of round trips to the dealer and evaluator peers.
-    // Tuned empirically for lower-latency runs.
-    let batch_size: usize = 256;
+    // Increased from 256 to 512 to reduce network round trips and improve throughput.
+    let batch_size: usize = 512;
     let parallel_thresh = 4;
 
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
