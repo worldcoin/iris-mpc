@@ -1,6 +1,6 @@
 services:
   dev_db:
-    image: pg-local-build:latest
+    image: pg-local-build:latest # build Dockerfile.postgres and init-test-dbs first
     ports:
       - "127.0.0.1:5432:5432"
     user: "postgres"
