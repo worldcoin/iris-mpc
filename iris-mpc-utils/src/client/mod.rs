@@ -1,5 +1,7 @@
 use rand::{CryptoRng, Rng};
 
+use iris_mpc_common::IrisSerialId;
+
 use crate::aws::{AwsClient, AwsClientConfig};
 
 use components::{
@@ -40,6 +42,7 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
+        known_iris_serial_id: Option<IrisSerialId>,
         rng_seed: R,
     ) -> Self {
         let aws_client = AwsClient::new(aws_client_config);

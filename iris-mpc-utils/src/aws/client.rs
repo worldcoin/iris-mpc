@@ -8,6 +8,7 @@ use aws_sdk_sqs::{types::Message as SqsMessage, Client as SQSClient};
 use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
+use tracing::info;
 
 use super::{
     config::AwsClientConfig,
