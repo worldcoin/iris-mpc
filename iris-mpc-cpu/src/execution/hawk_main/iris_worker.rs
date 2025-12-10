@@ -29,7 +29,7 @@ use tracing::info;
 /// Defines the types of tasks that can be offloaded to an `IrisWorker`.
 ///
 /// This enum represents the commands that can be sent to the worker pool for processing.
-/// Each variant includes the necessary data for the operation and a `oneshot::Sender` (`rsp`)
+/// Each variant includes the necessary data for the operation and usually a `oneshot::Sender` (`rsp`)
 /// to return the result to the caller.
 #[derive(Debug)]
 enum IrisTask {
@@ -44,7 +44,7 @@ enum IrisTask {
         iris: ArcIris,
         rsp: oneshot::Sender<ArcIris>,
     },
-    /// Inserts a new iris into the worker's local shard of the iris database.
+    /// Inserts a new iris in the vector store.
     Insert { vector_id: VectorId, iris: ArcIris },
     /// Pre-allocates memory in the iris store to accommodate a number of new irises.
     Reserve { additional: usize },
@@ -89,7 +89,7 @@ enum IrisTask {
 ///
 /// # Task Distribution
 /// Tasks are distributed among the workers to parallelize work. For read-only tasks
-/// (like `numa_realloc`), a round-robin strategy is used. For tasks that mutate the
+/// (like dot products), a round-robin strategy is used. For tasks that mutate the
 /// underlying iris store (like `insert`), a consistent worker is chosen based on the
 /// `VectorId` to ensure data consistency without requiring locks.
 #[derive(Clone, Debug)]

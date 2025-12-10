@@ -1,4 +1,4 @@
-//! Implements the main execution logic for the HAWK MPC protocol on the CPU.
+//! Implements the main execution logic for the MPC protocol on the CPU.
 //!
 //! This module orchestrates the multi-party computation for iris matching using an HNSW
 //! (Hierarchical Navigable Small World) graph. It is responsible for managing the state
@@ -10,8 +10,7 @@
 //! HNSW graphs, and processes incoming jobs.
 //!
 //! Key responsibilities of this module include:
-//! - **Initialization**: Setting up network connections, loading the HNSW graph from
-//!   persistent storage, and initializing shared cryptographic state (e.g., PRF keys).
+//! - **Initialization**: Setting up network connections and initializing shared cryptographic state (e.g., PRF keys).
 //! - **Session Management**: Creating [`HawkSession`]s to handle parallel MPC operations.
 //!   Each session encapsulates the necessary cryptographic context for a
 //!   single thread of work.
@@ -29,7 +28,7 @@
 //! # Configuration Master Switches
 //!
 //! This module uses several compile-time constants that act as "master switches" to control
-//! fundamental trade-offs between performance, accuracy, and privacy in the HAWK protocol.
+//! fundamental trade-offs between performance, accuracy, and privacy in the protocol.
 //! These switches are typically configured for a specific deployment and are not expected
 //! to change at runtime.
 //!
@@ -47,14 +46,16 @@
 //!
 //! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance.
 //! - **`MinFhd` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
-//!   distance across a set of predefined reotations.
+//!   distance across a set of predefined rotations.
 //!
-//! The distance is chosen by the `DISTANCE_FN` constant, which gets passed to the vector store constructor.
+//! The distance is determined by the `DISTANCE_FN` constant, which gets passed to the vector store constructor.
+//! DISTANCE_FN itself is initialized from the choice of rotations included in search (SearchRotations type alias).
+//! Center-only implies MinFhd while searching explicitly for rotated irises implies Fhd.
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
 //! This strategy governs how nearest neighbors candidate lists are managed during HNSW graph traversal.
-//! - **`Sorted`**: Maintains an order list of candidates.
+//! - **`Sorted`**: Maintains a sorted list of candidates.
 //! - **`Unsorted`**: Maintains an unsorted list of candidates.
 //!
 //! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
@@ -170,7 +171,7 @@ pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnl
     DistanceFn::Fhd
 };
 
-// The choice of HNSW candidate list strategy
+/// The choice of HNSW candidate list strategy
 pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
 
 #[derive(Clone, Parser)]
@@ -222,7 +223,7 @@ pub struct HawkArgs {
     pub numa: bool,
 }
 
-/// Manages the state and execution of the HNSW-based MPC protocol (HAWK).
+/// Manages the state and execution of the HNSW-based MPC protocol.
 ///
 /// The `HawkActor` is the central component for the CPU-based matching engine. It orchestrates
 /// MPC sessions, manages the HNSW graphs and iris data stores for both eyes, and handles
@@ -242,17 +243,16 @@ pub struct HawkArgs {
 pub struct HawkActor {
     /// Command-line arguments and configuration for the actor.
     args: HawkArgs,
-
     // ---- Shared MPC & HNSW setup ----
     /// The HNSW searcher, containing parameters and logic for graph traversal.
     searcher: Arc<HnswSearcher>,
-    /// A shared PRF key used to deterministically generate insertion layers for new nodes
-    /// in the HNSW graph, ensuring all parties build compatible graph structures.
-    /// Initialized once on startup.
+    /// An override for the shared HNSW PRF.
+    /// If it is Some(`key``), `key` is used.
+    /// If it is None, the parties mutually derive the PRF key.
+    /// See `get_or_init_prf_key`.
     prf_key: Option<Arc<[u8; 16]>>,
-
     // ---- Core State ----
-    /// The number of irises loaded into the database. Used during the initial load.
+    /// A size used by the start-up loader.
     loader_db_size: usize,
     /// In-memory storage for the secret-shared iris codes for both left and right eyes.
     iris_store: BothEyes<Aby3SharedIrisesRef>,
@@ -334,10 +334,10 @@ impl TryFrom<usize> for StoreId {
     }
 }
 
-// Orientation enum to indicate the orientation of the iris code during the batch processing.
-// Normal: Normal orientation of the iris code.
-// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
-// TODO: Merge with the same in iris-mpc-gpu.
+/// Orientation enum to indicate the orientation of the iris code during the batch processing.
+/// Normal: Normal orientation of the iris code.
+/// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
+/// TODO: Merge with the same in iris-mpc-gpu.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -384,15 +384,12 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 /// A container for state required to perform parallel MPC operations.
 ///
 /// A `HawkSession` encapsulates the necessary context for a single thread of execution
-/// within the HAWK protocol. This includes a reference to the underlying ABY3 store
+/// within the protocol. This includes a reference to the underlying ABY3 store
 /// (which manages secret-shared data and cryptographic primitives) and the HNSW graph.
 /// Multiple sessions can be created to parallelize operations across a batch of requests.
 ///
-/// Each session is initialized with a unique, collaboratively-generated seed for its
-/// internal Pseudo-Random Function (PRF). This ensures that concurrent sessions
-/// produce independent random values for cryptographic operations (e.g., creating new
-/// secret sharings), which is critical for secure parallel execution. All sessions
-/// operate on the same shared `graph_store` and `iris_store` held by the `HawkActor`.
+/// All sessions operate on the same shared `graph_store` and `iris_store` held by the `HawkActor`.
+/// All sessions keep a copy of the HNSW PRF key (mostly used for generating insertion layers).
 #[derive(Clone)]
 pub struct HawkSession {
     pub aby3_store: Aby3Ref,
@@ -526,8 +523,8 @@ impl HawkActor {
     /// mutually derived with other MPC parties in PROD environments.
     ///
     /// This PRF key is used to determine insertion heights for new elements added to the
-    /// HNSW graphs, so is configured to be equal across all sessions, and initialized once
-    /// upon startup of the `HawkActor` instance.
+    /// HNSW graphs, so is configured to be equal across all sessions, and is initialized every time
+    /// `new_sessions` is called.
     async fn get_or_init_prf_key(
         &mut self,
         network_session: &mut NetworkSession,
@@ -1788,7 +1785,7 @@ impl HawkHandle {
                         .is_mutation()
                         .then(|| search_results[*i].center().clone()),
                     RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
-                    // Deletions where handled earlier in handle_job
+                    // Deletions were handled earlier in handle_job
                     RequestIndex::Deletion(_) => None,
                 })
                 .collect_vec();
