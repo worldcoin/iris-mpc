@@ -3,7 +3,7 @@ FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 # important files:
 # /opt/irises.dat
 # /bin/init-test-dbs
-# /bin/run-postgres.sh
+# /bin/pg-entrypoint-wraper.sh
 # /docker-entrypoint-initdb.d/init-db-custom.sh
 
 # copy over programs and data used to initialize the volume on the first run
@@ -22,7 +22,7 @@ RUN chmod +x /docker-entrypoint-initdb.d/init-db-custom.sh
 
 # ---
 # copy a script to delete and recreate the CPU databases on every run
-COPY ./scripts/tools/run-postgres.sh /bin/run-postgres.sh
-RUN chmod +x /bin/run-postgres.sh
+COPY ./scripts/tools/pg-entrypoint-wrapper.sh /bin/pg-entrypoint-wrapper.sh
+RUN chmod +x /bin/pg-entrypoint-wrapper.sh
 
-ENTRYPOINT ["/bin/run-postgres.sh"]
+ENTRYPOINT ["/bin/pg-entrypoint-wrapper.sh"]
