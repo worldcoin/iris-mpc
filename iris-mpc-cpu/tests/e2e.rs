@@ -22,13 +22,13 @@ use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DB_SIZE: usize = 500; // original value was 1000
+const DB_SIZE: usize = 1000; // original value was 1000
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
-const HAWK_CONNECTION_PARALLELISM: usize = 1;
+const HAWK_CONNECTION_PARALLELISM: usize = 8; // Increased from 1 to 8 for better network parallelism
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 const MAX_RESET_UPDATES_PER_BATCH: usize = 0; // TODO: set back to 10 or so once reset is supported
 

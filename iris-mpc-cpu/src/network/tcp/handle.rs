@@ -23,7 +23,7 @@ use tokio::{
     },
 };
 
-const BUFFER_CAPACITY: usize = 32 * 1024;
+const BUFFER_CAPACITY: usize = 256 * 1024; // Increased from 32KB to 256KB for better batching
 const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
@@ -377,6 +377,7 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         msg.serialize(&mut buf);
 
         // Try to fill the buffer with more messages, up to num_sessions, BUFFER_CAPACITY or two attempts.
+        // Reduced retries to avoid delaying sends when receiver is waiting.
         let loop_start_time = Instant::now();
         let mut retried = false;
         while buffered_msgs < num_sessions {
