@@ -3,7 +3,7 @@ FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 # important files:
 # /opt/irises.dat
 # /bin/init-test-dbs
-# /bin/pg-entrypoint-wraper.sh
+# /bin/pg-entrypoint-wrapper.sh
 # /docker-entrypoint-initdb.d/init-db-custom.sh
 
 # copy over programs and data used to initialize the volume on the first run
