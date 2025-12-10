@@ -3,9 +3,12 @@ use std::fmt;
 use uuid;
 
 use iris_mpc_common::{
-    helpers::smpc_request::{
-        self, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    helpers::{
+        smpc_request::{
+            self, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+            RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        },
+        smpc_response,
     },
     IrisSerialId,
 };
@@ -72,6 +75,16 @@ impl Request {
             | Self::ResetCheck { batch_item_idx, .. }
             | Self::ResetUpdate { batch_item_idx, .. }
             | Self::Uniqueness { batch_item_idx, .. } => *batch_item_idx,
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::IdentityDeletion { .. } => "IdentityDeletion",
+            Self::Reauthorization { .. } => "Reauthorization",
+            Self::ResetCheck { .. } => "ResetCheck",
+            Self::ResetUpdate { .. } => "ResetUpdate",
+            Self::Uniqueness { .. } => "Uniqueness",
         }
     }
 
@@ -159,6 +172,18 @@ impl Request {
         }
     }
 
+    pub fn is_complete(&self) -> bool {
+        matches!(self.status(), RequestStatus::Complete)
+    }
+
+    pub fn is_enqueued(&self) -> bool {
+        matches!(self.status(), RequestStatus::Enqueued)
+    }
+
+    pub fn is_error(&self) -> bool {
+        matches!(self.status(), RequestStatus::Error)
+    }
+
     pub fn can_enqueue(&self) -> bool {
         // True if generated and not awaiting data returned from a parent request.
         matches!(self.status(), RequestStatus::Generated)
@@ -193,9 +218,10 @@ impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Request:{:03}.{:03}",
+            "Request:{:03}.{:03}.{}",
             self.batch_idx(),
             self.batch_item_idx(),
+            self.label()
         )
     }
 }
@@ -219,8 +245,8 @@ impl RequestBatch {
         &self.requests.len() + 1
     }
 
-    pub fn requests(&self) -> &Vec<Request> {
-        &self.requests
+    pub fn requests(&self) -> &[Request] {
+        &self.requests.as_slice()
     }
 
     pub fn requests_mut(&mut self) -> &mut Vec<Request> {
@@ -288,7 +314,7 @@ impl fmt::Display for RequestBatchSize {
     }
 }
 
-/// Enumeration over request message body for dispatch to system egress queue.
+/// Enumeration over request message body for dispatch to system ingress queue.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum RequestMessageBody {
@@ -304,10 +330,20 @@ pub enum RequestMessageBody {
 pub enum RequestStatus {
     // Has been successfully processed.
     Complete,
-
     // Has been enqueued upon system ingress queue.
     Enqueued,
-
+    // Has been processed but an error occurred.
+    Error,
     // Has been generated and is awaiting processing.
     Generated,
+}
+
+/// Enumeration over system response message body fetched from system egress queue.
+#[derive(Debug, Clone)]
+pub enum ResponseMessageBody {
+    IdentityDeletion(smpc_response::IdentityDeletionResult),
+    Reauthorization(smpc_response::ReAuthResult),
+    ResetCheck(smpc_response::ResetCheckResult),
+    ResetUpdate(smpc_response::ResetUpdateAckResult),
+    Uniqueness(smpc_response::UniquenessResult),
 }

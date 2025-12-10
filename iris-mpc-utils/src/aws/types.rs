@@ -4,6 +4,7 @@ use serde::ser::Serialize;
 use serde_json;
 
 // Helper type encpasulating AWS-S3 object information.
+#[derive(Debug)]
 pub struct S3ObjectInfo {
     // S3 object data.
     body: Vec<u8>,
@@ -47,6 +48,7 @@ impl fmt::Display for S3ObjectInfo {
 }
 
 // Helper type encpasulating an AWS-SQS message.
+#[derive(Debug)]
 pub struct SnsMessageInfo {
     // SNS message body - a JSON encoded string.
     body: String,
@@ -86,5 +88,46 @@ impl SnsMessageInfo {
 impl fmt::Display for SnsMessageInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}.{}", self.group_id, self.kind)
+    }
+}
+
+// Helper type encpasulating an AWS-SQS message.
+#[derive(Debug)]
+pub struct SqsMessageInfo {
+    // SNS message body - a JSON encoded string.
+    body: String,
+
+    // SQS message kind - e.g. "uniqueness".
+    kind: String,
+
+    // SQS  message ID - a uuid.
+    message_id: String,
+}
+
+impl SqsMessageInfo {
+    pub fn body(&self) -> &String {
+        &self.body
+    }
+
+    pub fn kind(&self) -> &String {
+        &self.kind
+    }
+
+    pub fn message_id(&self) -> &String {
+        &self.message_id
+    }
+
+    pub fn new(message_id: &str, kind: &str, body: &str) -> Self {
+        Self {
+            body: body.to_string(),
+            kind: kind.to_string(),
+            message_id: message_id.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for SqsMessageInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}.{}", self.kind, self.message_id)
     }
 }

@@ -78,7 +78,7 @@ impl From<&Request> for RequestMessageBody {
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
                 serial_id: serial_id.unwrap_or(1),
-                use_or_rule: bool::default(),
+                use_or_rule: false,
             }),
             Request::ResetCheck { reset_check_id, .. } => Self::ResetCheck(ResetCheckRequest {
                 batch_size: Some(1),

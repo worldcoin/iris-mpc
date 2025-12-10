@@ -4,7 +4,8 @@ use aws_sdk_s3::{
 };
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::Client as SQSClient;
+use aws_sdk_sqs::{types::Message as SqsMessage, Client as SQSClient};
+use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
@@ -12,7 +13,7 @@ use super::{
     config::AwsClientConfig,
     errors::AwsClientError,
     keys::download_public_keyset,
-    types::{S3ObjectInfo, SnsMessageInfo},
+    types::{S3ObjectInfo, SnsMessageInfo, SqsMessageInfo},
 };
 use crate::types::PublicKeyset;
 
@@ -152,30 +153,39 @@ impl AwsClient {
             })
     }
 
-    /// Dequeues a message from an SQS queue.
-    pub async fn sqs_receive_message(&self) -> Result<(), AwsClientError> {
-        let output = self
+    /// Dequeues messages from SQS system response queue.
+    pub async fn sqs_receive_messages(
+        &self,
+        max_messages: Option<usize>,
+    ) -> Result<Vec<SqsMessageInfo>, AwsClientError> {
+        Ok(self
             .sqs
             .receive_message()
             .queue_url(self.config().sqs_response_queue_url())
             .wait_time_seconds(self.config().sqs_wait_time_seconds() as i32)
-            .max_number_of_messages(1)
+            .max_number_of_messages(max_messages.unwrap_or(1) as i32)
             .send()
             .await
             .map_err(|e| {
                 tracing::error!("AWS-SQS receive message from queue error: {}", e);
                 AwsClientError::SqsReceiveMessageError(e.to_string())
             })
-            .unwrap();
-
-        for msg in output.messages() {
-            tracing::info!(
-                "TODO: Correlate request with SQS response: {:?}",
-                msg.message_id().unwrap()
-            );
-        }
-
-        Ok(())
+            .unwrap()
+            .messages()
+            .iter()
+            .map(|msg| {
+                let body: serde_json::Value =
+                    serde_json::from_str(msg.body().expect("Empty JSON string"))
+                        .expect("Invalid JSON string");
+                SqsMessageInfo::new(
+                    body["MessageId"].as_str().unwrap(),
+                    body["MessageAttributes"]["message_type"]["Value"]
+                        .as_str()
+                        .unwrap(),
+                    body["Message"].as_str().unwrap(),
+                )
+            })
+            .collect())
     }
 }
 
