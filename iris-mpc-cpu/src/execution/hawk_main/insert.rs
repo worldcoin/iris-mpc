@@ -9,11 +9,21 @@ use super::VecRequests;
 use eyre::{bail, Result};
 use itertools::izip;
 
-/// InsertPlan specifies where a query may be inserted into the HNSW graph.
+/// A low-level plan for inserting a query into the HNSW graph.
 ///
-/// The `links` field specifies the final desired links in each layer for the
-/// newly inserted query, and should already be trimmed to the desired length,
-/// e.g. typically the HNSW parameter M.
+/// An `InsertPlanV` represents the *desired* state of a new node's connections after
+/// it is added to the graph. It is created during the initial search phase that precedes
+/// the actual insertion.
+///
+/// The `links` field contains a list of neighbors for each layer of the HNSW graph that
+/// the new node will be a part of. These are the "ideal" neighbors found during the
+/// search. The list of links should already be trimmed to the desired length (e.g., the
+/// HNSW parameter `M`).
+///
+/// This struct is considered a "low-level" plan because it only specifies the outgoing
+/// connections from the new node. It does not include the reciprocal (bilateral) connections
+/// from the existing neighbors back to the new node. The final, complete set of graph
+/// modifications is represented by a `ConnectPlanV`, which is generated from this `InsertPlanV`.
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
