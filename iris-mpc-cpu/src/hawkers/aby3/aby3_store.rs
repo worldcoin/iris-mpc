@@ -548,12 +548,11 @@ impl VectorStore for Aby3Store {
             let current_size = nbhd.len();
 
             // Constructed network is already optimized for the case of k > n - k
-            let mut network = min_k_batcher_sort_network(current_size, *target_size)?;
+            let network = min_k_batcher_sort_network(current_size, *target_size)?;
 
             // Merge individual swap network into overall batch network
             let network_shift_amount = isize::try_from(total_items)?;
-            network.shift(network_shift_amount)?;
-            batched_network = SwapNetwork::merge_parallel(batched_network, network);
+            batched_network.insert_parallel_in_place(network, network_shift_amount)?;
 
             total_items += current_size;
         }

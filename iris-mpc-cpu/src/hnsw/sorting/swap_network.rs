@@ -5,7 +5,7 @@ use crate::{
 };
 use ampc_secret_sharing::shares::bit::Bit;
 use eyre::{eyre, Result};
-use itertools::Itertools;
+use itertools::{EitherOrBoth, Itertools};
 
 /// Type of a single layer in a non-adaptive comparator network represented by
 /// the `SwapNetwork` struct.
@@ -61,6 +61,26 @@ impl SwapNetwork {
         })
     }
 
+    pub fn insert_parallel_in_place(
+        &mut self,
+        mut other: SwapNetwork,
+        shift_amount: isize,
+    ) -> Result<&mut Self> {
+        other.shift(shift_amount)?;
+
+        let mut extension_layers = Vec::new();
+        for layers in self.layers.iter_mut().zip_longest(other.layers) {
+            match layers {
+                EitherOrBoth::Both(l1, l2) => l1.extend(l2),
+                EitherOrBoth::Right(l2) => extension_layers.push(l2),
+                EitherOrBoth::Left(_) => break,
+            }
+        }
+        self.layers.extend(extension_layers);
+
+        Ok(self)
+    }
+
     /// Apply a filter to wires of the swap network, removing any layers
     /// which are empty in the output.
     pub fn filter_wires<F>(&mut self, predicate: F) -> &mut Self
@@ -101,9 +121,9 @@ impl SwapNetwork {
             .into_iter()
             .zip_longest(n2.layers)
             .map(|layers| match layers {
-                itertools::EitherOrBoth::Left(l1) => l1,
-                itertools::EitherOrBoth::Right(l2) => l2,
-                itertools::EitherOrBoth::Both(l1, l2) => l1.into_iter().chain(l2).collect(),
+                EitherOrBoth::Left(l1) => l1,
+                EitherOrBoth::Right(l2) => l2,
+                EitherOrBoth::Both(l1, l2) => l1.into_iter().chain(l2).collect(),
             })
             .collect();
 
