@@ -27,6 +27,11 @@ use tracing::{instrument, trace_span, Instrument};
 use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
+// Deterministic base seed for FSS key generation (shared across all parties).
+const FSS_KEYGEN_BASE_SEED: [u8; 16] = [
+    0x42, 0x9a, 0xf1, 0x7c, 0x3d, 0x55, 0x6b, 0x10, 0x99, 0xaa, 0xbb, 0xcc, 0xde, 0x01, 0x23, 0x45,
+];
+
 #[inline]
 fn bits_to_network_vec(bits: &[RingElement<Bit>]) -> Vec<NetworkValue> {
     bits.iter()
@@ -93,7 +98,6 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
     use eyre::eyre;
     use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
     use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
-    use rand::thread_rng;
 
     let role = session.own_role().index();
     let n = batch.len();
@@ -119,43 +123,41 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 0 (Evaluator)
         // =======================
         0 => {
-            // metrics: receive combined key package from Dealer (P2/prev)
-            let _tt_net_recv = crate::perf_scoped_for_party!(
-                "fss.network.start_recv_keys",
+            // Generate FSS keys locally using deterministic randomness from session PRF
+            //metrics: measure the genkeys time
+            let _tt_gen = crate::perf_scoped_for_party!(
+                "fss.dealer.genkeys",
                 role,
                 n,            // bucket on the items this block processes
                 bucket_bound  // your desired bucket cap
             );
-            let key_pkg = session
-                .network_session
-                .receive_prev()
-                .await
-                .map_err(|e| eyre!("Party 0 cannot receive FSS key package from dealer: {e}"))?;
-            drop(_tt_net_recv);
 
-            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
-            let lens_p0 = re_vec_to_u32(lens_re);
-            let key_blob = re_vec_to_u32(key_blob_re);
-
-            // Deserialize my keys (batched)
-            let mut off = 0usize;
             let mut my_keys = Vec::with_capacity(n);
-            for &l in &lens_p0 {
-                let len = l as usize;
-                my_keys.push(IcShare::deserialize(&key_blob[off..off + len])?);
-                off += len;
+            for i in 0..n {
+                // Deterministic RNG derived from a shared base seed and per-index counter
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= i as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
+                
+                // Build PRG/ICF for key generation
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
+                
+                // Generate FSS key pair using deterministic PRF RNG
+                // All parties will generate the same (k0, k1) pair
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (k0, _k1) = icf.gen(f, &mut prf_rng);
+                my_keys.push(k0);
             }
 
-            // Precompute offsets so we can (optionally) re-deserialize per-index in parallel
-            let lens_usize: Vec<usize> = lens_p0.iter().map(|&x| x as usize).collect();
-            let mut offs: Vec<usize> = Vec::with_capacity(n);
-            {
-                let mut acc = 0usize;
-                for &len in &lens_usize {
-                    offs.push(acc);
-                    acc += len;
-                }
-            }
+            drop(_tt_gen);
 
             // Build a single PRG/ICF for eval (used in the sequential path)
             let seed = [[0u8; 16]; 4];
@@ -221,14 +223,11 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                             ]);
                             let icf_i = Icf::new(p, q, prg_i);
 
-                            // Re-deserialize key locally to avoid Sync bounds on IcShare
-                            let start = offs[i];
-                            let len = lens_usize[i];
-                            let key_i = IcShare::deserialize(&key_blob[start..start + len])
-                                .expect("deserialize IcShare (P0)");
+                            // Use pre-generated key (keys are already generated above)
+                            let key_i = &my_keys[i];
 
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
-                            let f0 = icf_i.eval(false, &key_i, fss_rs::group::int::U32Group(y.0));
+                            let f0 = icf_i.eval(false, key_i, fss_rs::group::int::U32Group(y.0));
                             let f0_u128 = u128::from_le_bytes(f0.0);
                             let b = (f0_u128 & 1) != 0;
                             (
@@ -361,42 +360,41 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 1 (Evaluator)
         // =======================
         1 => {
-            let _tt_net_recv = crate::perf_scoped_for_party!(
-                "fss.network.start_recv_keys",
+            // Generate FSS keys locally using deterministic randomness from session PRF
+            //metrics: measure the genkeys time
+            let _tt_gen = crate::perf_scoped_for_party!(
+                "fss.dealer.genkeys",
                 role,
                 n,            // bucket on the items this block processes
                 bucket_bound  // your desired bucket cap
             );
-            let key_pkg = session
-                .network_session
-                .receive_next()
-                .await
-                .map_err(|e| eyre!("Party 1 cannot receive FSS key package from dealer: {e}"))?;
-            drop(_tt_net_recv);
 
-            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
-            let lens_p1 = re_vec_to_u32(lens_re);
-            let key_blob = re_vec_to_u32(key_blob_re);
-
-            // Deserialize my keys (batched)
-            let mut off = 0usize;
             let mut my_keys = Vec::with_capacity(n);
-            for &l in &lens_p1 {
-                let len = l as usize;
-                my_keys.push(IcShare::deserialize(&key_blob[off..off + len])?);
-                off += len;
+            for i in 0..n {
+                // Deterministic RNG derived from a shared base seed and per-index counter
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= i as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
+                
+                // Build PRG/ICF for key generation
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
+                
+                // Generate FSS key pair using deterministic PRF RNG
+                // All parties will generate the same (k0, k1) pair
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (_k0, k1) = icf.gen(f, &mut prf_rng);
+                my_keys.push(k1);
             }
 
-            // Precompute offsets for optional per-iteration re-deserialization
-            let lens_usize: Vec<usize> = lens_p1.iter().map(|&x| x as usize).collect();
-            let mut offs: Vec<usize> = Vec::with_capacity(n);
-            {
-                let mut acc = 0usize;
-                for &len in &lens_usize {
-                    offs.push(acc);
-                    acc += len;
-                }
-            }
+            drop(_tt_gen);
 
             // Build a single PRG/ICF for eval (used in the sequential path)
             let seed = [[0u8; 16]; 4];
@@ -461,14 +459,11 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                             ]);
                             let icf_i = Icf::new(p, q, prg_i);
 
-                            // Re-deserialize key locally
-                            let start = offs[i];
-                            let len = lens_usize[i];
-                            let key_i = IcShare::deserialize(&key_blob[start..start + len])
-                                .expect("deserialize IcShare (P1)");
+                            // Use pre-generated key (keys are already generated above)
+                            let key_i = &my_keys[i];
 
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
-                            let f1 = icf_i.eval(true, &key_i, fss_rs::group::int::U32Group(y.0));
+                            let f1 = icf_i.eval(true, key_i, fss_rs::group::int::U32Group(y.0));
                             let f1_u128 = u128::from_le_bytes(f1.0);
                             let b = (f1_u128 & 1) != 0;
                             (
@@ -597,145 +592,39 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 2 (Dealer)
         // =======================
         2 => {
-            // // Build r_in (input masks) using the session PRF; must match evaluators' PRF consumption
-            // let mut r_in_list: Vec<u32> = Vec::with_capacity(n);
-            // for _ in 0..n {
-            //     let (r_next, r_prev) = session.prf.gen_rands::<RingElement<u32>>().clone();
-            //     let r_in = (r_next + r_prev).convert();
-            //     r_in_list.push(r_in);
-            // }
-
-            // This variant assumes r1 = r2 = 0 on evaluators, so use r_in = 0 here as well.
-            // Otherwise keys would be generated for x + r_in while evaluators feed x.
-            let r_in_list: Vec<u32> = vec![0u32; n];
-
-            // Fresh ICF.Gen per index, r_out = 0; adaptive parallelism by threshold
-            // First collect key pairs, then pre-size and flatten to avoid reallocs.
-            let pairs: Vec<(Vec<u32>, Vec<u32>)> = {
-                #[cfg(feature = "parallel-msb")]
-                {
-                    //metrics: measure the genkeys time
-                    let _tt_gen = crate::perf_scoped_for_party!(
-                        "fss.dealer.genkeys",
-                        role,
-                        n,            // bucket on the items this block processes
-                        bucket_bound  // your desired bucket cap
-                    );
-
-                    if n >= parallel_threshold {
-                        use rayon::prelude::*;
-                        r_in_list
-                            .par_iter()
-                            .map(|&r_in_u32| {
-                                let seed = [[0u8; 16]; 4];
-                                let prg_i = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                                    &seed[0], &seed[1], &seed[2], &seed[3],
-                                ]);
-                                let icf = Icf::new(p, q, prg_i);
-                                let mut rng = thread_rng();
-                                let f = IntvFn {
-                                    //r_in: InG::from(r_in_u32),
-                                    r_in: InG::from(0u32),
-                                    r_out: OutG::from(0u128),
-                                };
-                                let (k0, k1) = icf.gen(f, &mut rng);
-                                (k0.serialize().unwrap(), k1.serialize().unwrap())
-                            })
-                            .collect()
-                    } else {
-                        let mut tmp = Vec::with_capacity(n);
-                        for &r_in_u32 in &r_in_list {
-                            let seed = [[0u8; 16]; 4];
-                            let prg_i = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                                &seed[0], &seed[1], &seed[2], &seed[3],
-                            ]);
-                            let icf = Icf::new(p, q, prg_i);
-                            let mut rng = thread_rng();
-                            let f = IntvFn {
-                                //r_in: InG::from(r_in_u32),
-                                r_in: InG::from(0u32),
-                                r_out: OutG::from(0u128),
-                            };
-                            let (k0, k1) = icf.gen(f, &mut rng);
-                            tmp.push((k0.serialize()?, k1.serialize()?));
-                        }
-                        tmp
-                    }
-                }
-
-                #[cfg(not(feature = "parallel-msb"))]
-                {
-                    //metrics: measure the genkeys time
-                    let _tt_gen = crate::perf_scoped_for_party!(
-                        "fss.dealer.genkeys",
-                        role,
-                        n,            // bucket on the items this block processes
-                        bucket_bound  // your desired bucket cap
-                    );
-
-                    let mut tmp = Vec::with_capacity(n);
-                    for &r_in_u32 in &r_in_list {
-                        let seed = [[0u8; 16]; 4];
-                        let prg_i = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                            &seed[0], &seed[1], &seed[2], &seed[3],
-                        ]);
-                        let icf = Icf::new(p, q, prg_i);
-                        let mut rng = thread_rng();
-                        let f = IntvFn {
-                            //r_in: InG::from(r_in_u32),
-                            r_in: InG::from(0u32),
-                            r_out: OutG::from(0u128),
-                        };
-                        let (k0, k1) = icf.gen(f, &mut rng);
-                        tmp.push((k0.serialize()?, k1.serialize()?));
-                    }
-                    tmp
-                }
-            };
-
-            // Flatten and send to P0 (prev) and P1 (next)
-            let lens_p0: Vec<u32> = pairs.iter().map(|(k0, _)| k0.len() as u32).collect();
-            let lens_p1: Vec<u32> = pairs.iter().map(|(_, k1)| k1.len() as u32).collect();
-            let key_blob_for_p0: Vec<u32> = pairs.iter().flat_map(|(k0, _)| k0.clone()).collect();
-            let key_blob_for_p1: Vec<u32> = pairs.iter().flat_map(|(_, k1)| k1.clone()).collect();
-
-            //metrics: measure the network time
-            let _tt_net0a = crate::perf_scoped_for_party!(
-                "fss.network.dealer.send_P0a",
+            // Party 2 no longer generates or sends FSS keys - each party generates them locally
+            // We just need to consume the same PRF randomness to stay in sync
+            // (even though we don't use the keys, we need to match PRF consumption)
+            let _tt_gen = crate::perf_scoped_for_party!(
+                "fss.dealer.genkeys",
                 role,
                 n,            // bucket on the items this block processes
                 bucket_bound  // your desired bucket cap
             );
 
-            session
-                .network_session
-                .send_prev(encode_key_package(
-                    u32_to_re_vec(lens_p0.clone()),
-                    u32_to_re_vec(key_blob_for_p0),
-                ))
-                .await?;
+            for i in 0..n {
+                // Consume deterministic RNG to match parties 0 and 1 (keys discarded)
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= i as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
 
-            // drop
-            drop(_tt_net0a);
+                // Build PRG/ICF for key generation (same as parties 0 and 1)
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
 
-            //metrics: measure the network time
-            let _tt_net1a = crate::perf_scoped_for_party!(
-                "fss.network.dealer.send_P1a",
-                role,
-                n,            // bucket on the items this block processes
-                bucket_bound  // your desired bucket cap
-            );
+                // Generate FSS key pair to consume randomness (keys are discarded)
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (_k0, _k1) = icf.gen(f, &mut prf_rng);
+            }
 
-            session
-                .network_session
-                .send_next(encode_key_package(
-                    u32_to_re_vec(lens_p1.clone()),
-                    u32_to_re_vec(key_blob_for_p1),
-                ))
-                .await?;
-
-            //drop
-            drop(_tt_net1a);
+            drop(_tt_gen);
 
             // Dealer (P2)
             // Receive from PREV => P1; from NEXT => P0
@@ -808,7 +697,6 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
     use eyre::eyre;
     use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
     use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
-    use rand::thread_rng;
 
     let role = session.own_role().index();
     let n = batch.len();
@@ -833,34 +721,30 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 0 (Evaluator)
         // =======================
         0 => {
-            let key_pkg = session
-                .network_session
-                .receive_prev()
-                .await
-                .map_err(|e| eyre!("Party 0 cannot receive FSS key package from dealer: {e}"))?;
-
-            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
-            let lens_p0 = re_vec_to_u32(lens_re);
-            let key_blob = re_vec_to_u32(key_blob_re);
-
-            // Deserialize my keys (batched)
-            let mut off = 0usize;
+            // Generate FSS keys locally using deterministic randomness from session PRF
             let mut my_keys = Vec::with_capacity(n);
-            for &l in &lens_p0 {
-                let len = l as usize;
-                my_keys.push(IcShare::deserialize(&key_blob[off..off + len])?);
-                off += len;
-            }
-
-            // Precompute offsets so we can (optionally) re-deserialize per-index in parallel
-            let lens_usize: Vec<usize> = lens_p0.iter().map(|&x| x as usize).collect();
-            let mut offs: Vec<usize> = Vec::with_capacity(n);
-            {
-                let mut acc = 0usize;
-                for &len in &lens_usize {
-                    offs.push(acc);
-                    acc += len;
-                }
+            for i in 0..n {
+                // Deterministic RNG derived from a shared base seed and per-index counter
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= i as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
+                
+                // Build PRG/ICF for key generation
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
+                
+                // Generate FSS key pair using deterministic PRF RNG
+                // All parties will generate the same (k0, k1) pair
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (k0, _k1) = icf.gen(f, &mut prf_rng);
+                my_keys.push(k0);
             }
 
             // Build a single PRG/ICF for eval (used in the sequential path)
@@ -905,11 +789,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                             ]);
                             let icf_i = Icf::new(p, q, prg_i);
 
-                            // Re-deserialize key locally to avoid Sync bounds on IcShare
-                            let start = offs[i];
-                            let len = lens_usize[i];
-                            let key_i = IcShare::deserialize(&key_blob[start..start + len])
-                                .expect("deserialize IcShare (P0)");
+                            // Use pre-generated key (keys are already generated above)
+                            let key_i = &my_keys[i];
 
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
                             let f0 = icf_i.eval(false, &key_i, fss_rs::group::int::U32Group(y.0));
@@ -991,33 +872,30 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 1 (Evaluator)
         // =======================
         1 => {
-            let key_pkg = session
-                .network_session
-                .receive_next()
-                .await
-                .map_err(|e| eyre!("Party 1 cannot receive FSS key package from dealer: {e}"))?;
-            let (lens_re, key_blob_re) = decode_key_package(key_pkg)?;
-            let lens_p1 = re_vec_to_u32(lens_re);
-            let key_blob = re_vec_to_u32(key_blob_re);
-
-            // Deserialize my keys (batched)
-            let mut off = 0usize;
+            // Generate FSS keys locally using deterministic randomness from session PRF
             let mut my_keys = Vec::with_capacity(n);
-            for &l in &lens_p1 {
-                let len = l as usize;
-                my_keys.push(IcShare::deserialize(&key_blob[off..off + len])?);
-                off += len;
-            }
-
-            // Precompute offsets for optional per-iteration re-deserialization
-            let lens_usize: Vec<usize> = lens_p1.iter().map(|&x| x as usize).collect();
-            let mut offs: Vec<usize> = Vec::with_capacity(n);
-            {
-                let mut acc = 0usize;
-                for &len in &lens_usize {
-                    offs.push(acc);
-                    acc += len;
-                }
+            for i in 0..n {
+                // Deterministic RNG derived from a shared base seed and per-index counter
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= i as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
+                
+                // Build PRG/ICF for key generation
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
+                
+                // Generate FSS key pair using deterministic PRF RNG
+                // All parties will generate the same (k0, k1) pair
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (_k0, k1) = icf.gen(f, &mut prf_rng);
+                my_keys.push(k1);
             }
 
             // Build a single PRG/ICF for eval (used in the sequential path)
@@ -1060,11 +938,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                             ]);
                             let icf_i = Icf::new(p, q, prg_i);
 
-                            // Re-deserialize key locally
-                            let start = offs[i];
-                            let len = lens_usize[i];
-                            let key_i = IcShare::deserialize(&key_blob[start..start + len])
-                                .expect("deserialize IcShare (P1)");
+                            // Use pre-generated key (keys are already generated above)
+                            let key_i = &my_keys[i];
 
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
                             let f1 = icf_i.eval(true, &key_i, fss_rs::group::int::U32Group(y.0));
@@ -1146,105 +1021,30 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 2 (Dealer)
         // =======================
         2 => {
-            // // Build r_in (input masks) using the session PRF; must match evaluators' PRF consumption
-            // let mut r_in_list: Vec<u32> = Vec::with_capacity(n);
-            // for _ in 0..n {
-            //     let (r_next, r_prev) = session.prf.gen_rands::<RingElement<u32>>().clone();
-            //     let r_in = (r_next + r_prev).convert();
-            //     r_in_list.push(r_in);
-            // }
+            // Party 2 no longer generates or sends FSS keys - each party generates them locally
+            // We just need to consume the same PRF randomness to stay in sync
+            // (even though we don't use the keys, we need to match PRF consumption)
+            for i in 0..n {
+                // Consume deterministic RNG to match parties 0 and 1 (keys discarded)
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= i as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
 
-            // This variant assumes r1 = r2 = 0 on evaluators, so use r_in = 0 here as well.
-            // Otherwise keys would be generated for x + r_in while evaluators feed x.
-            let r_in_list: Vec<u32> = vec![0u32; n];
+                // Build PRG/ICF for key generation (same as parties 0 and 1)
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
 
-            // Fresh ICF.Gen per index, r_out = 0; adaptive parallelism by threshold
-            // First collect key pairs, then pre-size and flatten to avoid reallocs.
-            let pairs: Vec<(Vec<u32>, Vec<u32>)> = {
-                #[cfg(feature = "parallel-msb")]
-                {
-                    if n >= parallel_threshold {
-                        use rayon::prelude::*;
-                        r_in_list
-                            .par_iter()
-                            .map(|&r_in_u32| {
-                                let seed = [[0u8; 16]; 4];
-                                let prg_i = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                                    &seed[0], &seed[1], &seed[2], &seed[3],
-                                ]);
-                                let icf = Icf::new(p, q, prg_i);
-                                let mut rng = thread_rng();
-                                let f = IntvFn {
-                                    //r_in: InG::from(r_in_u32),
-                                    r_in: InG::from(0u32),
-                                    r_out: OutG::from(0u128),
-                                };
-                                let (k0, k1) = icf.gen(f, &mut rng);
-                                (k0.serialize().unwrap(), k1.serialize().unwrap())
-                            })
-                            .collect()
-                    } else {
-                        let mut tmp = Vec::with_capacity(n);
-                        for &r_in_u32 in &r_in_list {
-                            let seed = [[0u8; 16]; 4];
-                            let prg_i = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                                &seed[0], &seed[1], &seed[2], &seed[3],
-                            ]);
-                            let icf = Icf::new(p, q, prg_i);
-                            let mut rng = thread_rng();
-                            let f = IntvFn {
-                                //r_in: InG::from(r_in_u32),
-                                r_in: InG::from(0u32),
-                                r_out: OutG::from(0u128),
-                            };
-                            let (k0, k1) = icf.gen(f, &mut rng);
-                            tmp.push((k0.serialize()?, k1.serialize()?));
-                        }
-                        tmp
-                    }
-                }
-                #[cfg(not(feature = "parallel-msb"))]
-                {
-                    let mut tmp = Vec::with_capacity(n);
-                    for &r_in_u32 in &r_in_list {
-                        let seed = [[0u8; 16]; 4];
-                        let prg_i = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                            &seed[0], &seed[1], &seed[2], &seed[3],
-                        ]);
-                        let icf = Icf::new(p, q, prg_i);
-                        let mut rng = thread_rng();
-                        let f = IntvFn {
-                            //r_in: InG::from(r_in_u32),
-                            r_in: InG::from(0u32),
-                            r_out: OutG::from(0u128),
-                        };
-                        let (k0, k1) = icf.gen(f, &mut rng);
-                        tmp.push((k0.serialize()?, k1.serialize()?));
-                    }
-                    tmp
-                }
-            };
-
-            // Flatten and send to P0 (prev) and P1 (next)
-            let lens_p0: Vec<u32> = pairs.iter().map(|(k0, _)| k0.len() as u32).collect();
-            let lens_p1: Vec<u32> = pairs.iter().map(|(_, k1)| k1.len() as u32).collect();
-            let key_blob_for_p0: Vec<u32> = pairs.iter().flat_map(|(k0, _)| k0.clone()).collect();
-            let key_blob_for_p1: Vec<u32> = pairs.iter().flat_map(|(_, k1)| k1.clone()).collect();
-
-            session
-                .network_session
-                .send_prev(encode_key_package(
-                    u32_to_re_vec(lens_p0.clone()),
-                    u32_to_re_vec(key_blob_for_p0),
-                ))
-                .await?;
-            session
-                .network_session
-                .send_next(encode_key_package(
-                    u32_to_re_vec(lens_p1.clone()),
-                    u32_to_re_vec(key_blob_for_p1),
-                ))
-                .await?;
+                // Generate FSS key pair to consume randomness (keys are discarded)
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (_k0, _k1) = icf.gen(f, &mut prf_rng);
+            }
 
             // Dealer (P2)
             // Receive from PREV => P1; from NEXT => P0

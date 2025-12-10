@@ -1583,7 +1583,9 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     for batch in x.chunks(batch_size) {
         let batch_out = if USE_PARALLEL_THRESH {
             add_3_get_msb_fss_batch_parallel_threshold_timers(session, batch, parallel_thresh)
-                .await?
+               .await?
+            // add_3_get_msb_fss_batch_parallel_threshold(session, batch, parallel_thresh)
+            //     .await?
         } else {
             add_3_get_msb_fss_batch_timers(session, batch).await?
         };
@@ -1746,9 +1748,9 @@ pub(crate) async fn open_bin_fss_from_rss(
 }
 
 fn to_bit_from_u32(msb_xored: RingElement<u32>) -> Result<Bit, Error> {
-    if (msb_xored.is_zero()) {
+    if msb_xored.is_zero() {
         Ok(Bit::new(false))
-    } else if (msb_xored.is_one()) {
+    } else if msb_xored.is_one() {
         Ok(Bit::new(true))
     } else {
         Err(eyre!("expected a Bit (0/1), got {}", msb_xored))
@@ -1756,9 +1758,9 @@ fn to_bit_from_u32(msb_xored: RingElement<u32>) -> Result<Bit, Error> {
 }
 
 fn to_bit_from_u128(msb_xored: RingElement<u128>) -> Result<Bit, Error> {
-    if (msb_xored.is_zero()) {
+    if msb_xored.is_zero() {
         Ok(Bit::new(false))
-    } else if (msb_xored.is_one()) {
+    } else if msb_xored.is_one() {
         Ok(Bit::new(true))
     } else {
         Err(eyre!("expected a Bit (0/1), got {}", msb_xored))
