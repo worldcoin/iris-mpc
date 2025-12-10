@@ -24,8 +24,12 @@ use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
-use std::{cell::RefCell, ops::SubAssign};
-use tracing::{instrument, trace_span, Instrument};
+use std::{
+    cell::RefCell,
+    ops::SubAssign,
+    sync::atomic::{AtomicU64, Ordering},
+};
+use tracing::{info, instrument, trace_span, Instrument};
 
 thread_local! {
     static ROUNDS_METRICS: RefCell<FastHistogram> = RefCell::new(
@@ -38,6 +42,13 @@ use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
 // Choose between the two FSS implementations
 pub const USE_PARALLEL_THRESH: bool = true;
+
+static MSB_FSS_INPUT_COUNT: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub fn msb_fss_total_inputs() -> u64 {
+    MSB_FSS_INPUT_COUNT.load(Ordering::Relaxed)
+}
 
 /// Splits the components of the given arithmetic share into 3 secret shares as described in Section 5.3 of the ABY3 paper.
 ///
@@ -1565,6 +1576,9 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     session: &mut Session,
     x: &[Share<u32>],
 ) -> Result<Vec<Share<Bit>>> {
+    if session.own_role().index() == 0 {
+        MSB_FSS_INPUT_COUNT.fetch_add(x.len() as u64, Ordering::Relaxed);
+    }
     // FSS: loop over get_msb_fss for all relevant entries of x, and collect results
     // open_bin later will take care of XOR-ing the msb shares from each party
     // Commented below is previous version without sending batches to add_3_get...

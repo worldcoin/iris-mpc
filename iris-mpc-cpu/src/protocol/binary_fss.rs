@@ -22,10 +22,37 @@ use num_traits::{One, Zero};
 use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::{cell::RefCell, ops::SubAssign};
-use tracing::{instrument, trace_span, Instrument};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::{info, instrument, trace_span, Instrument};
 
 use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
+
+#[inline]
+fn approx_bytes_int_vec(v: &[RingElement<u32>]) -> usize {
+    v.len() * std::mem::size_of::<u32>()
+}
+
+#[inline]
+fn approx_bytes_bit_vec(v: &[RingElement<Bit>]) -> usize {
+    v.len() // rough count: 1 byte per bit share
+}
+
+static FSS_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
+static FSS_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn record_traffic(sent: usize, recv: usize) {
+    FSS_BYTES_SENT.fetch_add(sent as u64, Ordering::Relaxed);
+    FSS_BYTES_RECV.fetch_add(recv as u64, Ordering::Relaxed);
+}
+
+pub fn fss_traffic_totals() -> (u64, u64) {
+    (
+        FSS_BYTES_SENT.load(Ordering::Relaxed),
+        FSS_BYTES_RECV.load(Ordering::Relaxed),
+    )
+}
 
 // Deterministic base seed for FSS key generation (shared across all parties).
 const FSS_KEYGEN_BASE_SEED: [u8; 16] = [
@@ -123,6 +150,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 0 (Evaluator)
         // =======================
         0 => {
+            let mut sent_bytes = 0usize;
+            let mut recv_bytes = 0usize;
             // Generate FSS keys locally using deterministic randomness from session PRF
             //metrics: measure the genkeys time
             let _tt_gen = crate::perf_scoped_for_party!(
@@ -178,6 +207,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             );
 
             let send_d2r2: Vec<RingElement<u32>> = batch.iter().map(|x| x.b).collect();
+            sent_bytes += approx_bytes_int_vec(&send_d2r2);
             session
                 .network_session
                 .send_next(NetworkInt::new_network_vec(send_d2r2))
@@ -200,6 +230,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 .await
                 .map_err(|e| eyre!("FSS: Party 0 cannot receive d1+r1 vector from P1: {e}"))?;
             let d1r1_vec: Vec<RingElement<u32>> = u32::into_vec(d1r1_msg)?;
+            recv_bytes += approx_bytes_int_vec(&d1r1_vec);
 
             // metrics: stop timer here for network reconstruction
             drop(_tt_net_recon);
@@ -360,6 +391,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 1 (Evaluator)
         // =======================
         1 => {
+            let mut sent_bytes = 0usize;
+            let mut recv_bytes = 0usize;
             // Generate FSS keys locally using deterministic randomness from session PRF
             //metrics: measure the genkeys time
             let _tt_gen = crate::perf_scoped_for_party!(
@@ -415,6 +448,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             );
 
             let send_d1r1: Vec<RingElement<u32>> = batch.iter().map(|x| x.a).collect();
+            sent_bytes += approx_bytes_int_vec(&send_d1r1);
             session
                 .network_session
                 .send_prev(NetworkInt::new_network_vec(send_d1r1))
@@ -437,6 +471,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 .await
                 .map_err(|e| eyre!("FSS: Party 1 cannot receive d2+r2 vector from P0: {e}"))?;
             let d2r2_vec: Vec<RingElement<u32>> = u32::into_vec(d2r2_msg)?;
+            recv_bytes += approx_bytes_int_vec(&d2r2_vec);
 
             // metrics: stop timer here for network reconstruction
             drop(_tt_net_recon);
@@ -592,6 +627,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 2 (Dealer)
         // =======================
         2 => {
+            let mut sent_bytes = 0usize;
+            let mut recv_bytes = 0usize;
             // Party 2 no longer generates or sends FSS keys - each party generates them locally
             // We just need to consume the same PRF randomness to stay in sync
             // (even though we don't use the keys, we need to match PRF consumption)
@@ -671,6 +708,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 network_vec_to_bits(NetworkValue::vec_from_network(p1_bits_msg)?).map_err(|e| {
                     eyre!("Dealer cannot deserialize bit vector from P1: {e}")
                 })?;
+            recv_bytes += approx_bytes_bit_vec(&bit0s_ringbit);
+            recv_bytes += approx_bytes_bit_vec(&bit1s_ringbit);
 
             // Keep the (P0_bits, P1_bits) ordering to match P0/P1
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -678,7 +717,6 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 .zip(bit1s_ringbit.into_iter())
                 .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
-
             Ok(out)
         }
 
@@ -721,6 +759,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 0 (Evaluator)
         // =======================
         0 => {
+            let mut sent_bytes = 0usize;
+            let mut recv_bytes = 0usize;
             // Generate FSS keys locally using deterministic randomness from session PRF
             let mut my_keys = Vec::with_capacity(n);
             for i in 0..n {
@@ -758,6 +798,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             // Send all (d2+r2) to NEXT; receive all (d1+r1) from NEXT
 
             let send_d2r2: Vec<RingElement<u32>> = batch.iter().map(|x| x.b).collect();
+            sent_bytes += approx_bytes_int_vec(&send_d2r2);
             session
                 .network_session
                 .send_next(NetworkInt::new_network_vec(send_d2r2))
@@ -769,6 +810,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .await
                 .map_err(|e| eyre!("FSS: Party 0 cannot receive d1+r1 vector from P1: {e}"))?;
             let d1r1_vec: Vec<RingElement<u32>> = u32::into_vec(d1r1_msg)?;
+            recv_bytes += approx_bytes_int_vec(&d1r1_vec);
 
             // ===== Evaluate all indices and collect bit shares =====
             // Parallel when feature enabled and n >= threshold; otherwise sequential.
@@ -843,10 +885,12 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .network_session
                 .send_prev(NetworkValue::vec_to_network(bit0s_network_vec.clone()))
                 .await?;
+            sent_bytes += approx_bytes_bit_vec(&bit0s_ringbit);
             session
                 .network_session
                 .send_next(NetworkValue::vec_to_network(bit0s_network_vec))
                 .await?;
+            sent_bytes += approx_bytes_bit_vec(&bit0s_ringbit);
             let p1_bits_msg = session
                 .network_session
                 .receive_next()
@@ -857,6 +901,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 network_vec_to_bits(NetworkValue::vec_from_network(p1_bits_msg)?).map_err(|e| {
                     eyre!("Party 0 cannot deserialize bit vector from P1: {e}")
                 })?;
+            recv_bytes += approx_bytes_bit_vec(&bit1s_ringbit);
 
             // Assemble output shares
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -865,6 +910,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
 
+            record_traffic(sent_bytes, recv_bytes);
+
             Ok(out)
         }
 
@@ -872,6 +919,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 1 (Evaluator)
         // =======================
         1 => {
+            let mut sent_bytes = 0usize;
+            let mut recv_bytes = 0usize;
             // Generate FSS keys locally using deterministic randomness from session PRF
             let mut my_keys = Vec::with_capacity(n);
             for i in 0..n {
@@ -908,6 +957,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             // ===== batched masked-share exchange =====
             // Send all (d1+r1) to PREV; receive all (d2+r2) from PREV
             let send_d1r1: Vec<RingElement<u32>> = batch.iter().map(|x| x.a).collect();
+            sent_bytes += approx_bytes_int_vec(&send_d1r1);
             session
                 .network_session
                 .send_prev(NetworkInt::new_network_vec(send_d1r1))
@@ -919,6 +969,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .await
                 .map_err(|e| eyre!("FSS: Party 1 cannot receive d2+r2 vector from P0: {e}"))?;
             let d2r2_vec: Vec<RingElement<u32>> = u32::into_vec(d2r2_msg)?;
+            recv_bytes += approx_bytes_int_vec(&d2r2_vec);
 
             // ===== Evaluate all indices and collect bit shares =====
             #[cfg(feature = "parallel-msb")]
@@ -990,10 +1041,12 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .network_session
                 .send_next(NetworkValue::vec_to_network(bit1s_network_vec.clone()))
                 .await?;
+            sent_bytes += approx_bytes_bit_vec(&bit1s_ringbit);
             session
                 .network_session
                 .send_prev(NetworkValue::vec_to_network(bit1s_network_vec))
                 .await?;
+            sent_bytes += approx_bytes_bit_vec(&bit1s_ringbit);
 
             // Receive P0's bits (packed) from PREV
             let p0_bits_msg = session
@@ -1006,6 +1059,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 network_vec_to_bits(NetworkValue::vec_from_network(p0_bits_msg)?).map_err(|e| {
                     eyre!("Party 1 cannot deserialize bit vector from P0: {e}")
                 })?;
+            recv_bytes += approx_bytes_bit_vec(&bit0s_ringbit);
 
             // Assemble output shares
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -1014,6 +1068,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
 
+            record_traffic(sent_bytes, recv_bytes);
             Ok(out)
         }
 
@@ -1021,6 +1076,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 2 (Dealer)
         // =======================
         2 => {
+            let mut sent_bytes = 0usize;
+            let mut recv_bytes = 0usize;
             // Party 2 no longer generates or sends FSS keys - each party generates them locally
             // We just need to consume the same PRF randomness to stay in sync
             // (even though we don't use the keys, we need to match PRF consumption)
@@ -1067,6 +1124,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 network_vec_to_bits(NetworkValue::vec_from_network(p1_bits_msg)?).map_err(|e| {
                     eyre!("Dealer cannot deserialize bit vector from P1: {e}")
                 })?;
+            recv_bytes += approx_bytes_bit_vec(&bit0s_ringbit);
+            recv_bytes += approx_bytes_bit_vec(&bit1s_ringbit);
 
             // Keep the (P0_bits, P1_bits) ordering to match P0/P1
             let out: Vec<Share<Bit>> = bit0s_ringbit
@@ -1075,6 +1134,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
 
+            record_traffic(sent_bytes, recv_bytes);
             Ok(out)
         }
 

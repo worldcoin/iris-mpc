@@ -13,7 +13,10 @@ use iris_mpc_cpu::{
     },
     hnsw::{GraphMem, HnswParams, HnswSearcher},
     // import FSS flags
-    protocol::{ops::USE_FSS, shared_iris::GaloisRingSharedIris, USE_PARALLEL_THRESH},
+    protocol::{
+        fss_traffic_totals, msb_fss_total_inputs, ops::USE_FSS,
+        shared_iris::GaloisRingSharedIris, USE_PARALLEL_THRESH,
+    },
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -356,6 +359,17 @@ async fn e2e_test() -> Result<()> {
 
         println!("");
     } // if USE_FSS && !USE_PARALLEL_THRESH
+
+    // Print total FSS traffic once at the end
+    let (sent_bytes, recv_bytes) = fss_traffic_totals();
+    println!(
+        "FSS total traffic: sent ~{} bytes, received ~{} bytes",
+        sent_bytes, recv_bytes
+    );
+    println!(
+        "FSS total inputs processed: {}",
+        msb_fss_total_inputs()
+    );
 
     Ok(())
 }
