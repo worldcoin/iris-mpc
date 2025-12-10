@@ -27,7 +27,6 @@ else
     psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "SMPC2" <<EOF
     DROP SCHEMA IF EXISTS "genesis_cpu_2" CASCADE;
     EOF
-fi
 
-# Wait on background postgres (PID 1 swap)
-wait -n
+    wait -n
+fi
