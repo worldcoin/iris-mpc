@@ -44,7 +44,15 @@ pub struct EntryPoint<VectorRef> {
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
-    /// Starting vector and layer for HNSW search
+    /// Entry points for HNSW search.
+    ///
+    /// A graph built by a searcher in `LinearScan` mode will only populate this list
+    /// once the `max_graph_layer` is non-empty. Until then, `get_temporary_entry_point`
+    /// should be used.
+    ///
+    /// A graph built by a searcher in `Standard` or `Bounded` mode will populate this list
+    /// with a single entry point at any given time: the first node inserted at the current
+    /// highest layer (or the `max_graph_layer` for `Bounded`)
     pub entry_points: Vec<EntryPoint<V>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
@@ -99,6 +107,9 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     ///
     /// This is currently defined as the vector with minimal id in the top
     /// non-empty layer of the graph, or `None` if the graph is empty.
+    ///
+    /// This is intended to be used in LinearScan mode while the entry_points
+    /// list empty.
     pub fn get_temporary_entry_point(&self) -> Option<(V, usize)> {
         self.layers
             .iter()
@@ -108,7 +119,10 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (x.clone(), lc)))
     }
 
-    pub fn get_ep_layer(&self) -> Option<Vec<V>> {
+    /// Gets all entry_points.
+    /// Note that in the case of `LinearScan` mode a temporary entry point might still exist
+    /// even if the list returned by this method is empty. See `get_temporary_entry_point`.
+    pub fn get_entry_points(&self) -> Option<Vec<V>> {
         let v: Vec<_> = self
             .entry_points
             .iter()
