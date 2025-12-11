@@ -29,28 +29,27 @@ impl RequestEnqueuer {
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
-        // Execute enqueue tasks in parallel.
+        // Set enqueue tasks.
         let tasks: Vec<_> = batch
             .requests()
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.can_enqueue())
+            .filter(|(_, r)| r.is_enqueueable())
             .map(|(idx, request)| {
                 let aws_client = &self.aws_client;
-                let sns_message_info = SnsMessageInfo::from(request);
+                let sns_msg_info = SnsMessageInfo::from(request);
                 async move {
                     aws_client
-                        .sns_publish_json(sns_message_info)
+                        .sns_publish_json(sns_msg_info)
                         .await
                         .map_err(ClientError::AwsServiceError)?;
                     Ok::<usize, ClientError>(idx)
                 }
             })
             .collect();
-        let enqueued_indices = futures::future::try_join_all(tasks).await?;
 
-        // Mark requests as enqueued after successful publish.
-        for idx in enqueued_indices {
+        // Enqueue & mark requests as enqueued.
+        for idx in futures::future::try_join_all(tasks).await? {
             if let Some(request) = batch.requests_mut().get_mut(idx) {
                 request.set_status_enqueued();
             }

@@ -42,7 +42,7 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
-        known_iris_serial_id: Option<IrisSerialId>,
+        _known_iris_serial_id: Option<IrisSerialId>,
         rng_seed: R,
     ) -> Self {
         let aws_client = AwsClient::new(aws_client_config);
@@ -59,10 +59,12 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     pub async fn exec(&mut self) -> Result<(), ClientError> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             self.data_uploader.process_batch(&mut batch).await?;
-            while batch.can_enqueue() {
+            while batch.is_enqueueable() {
                 self.request_enqueuer.process_batch(&mut batch).await?;
                 self.response_dequeuer.process_batch(&mut batch).await?;
                 self.response_correlator.process_batch(&mut batch).await?;
+
+                break;
             }
         }
 

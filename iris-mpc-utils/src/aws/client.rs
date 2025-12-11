@@ -8,7 +8,6 @@ use aws_sdk_sqs::{types::Message as SqsMessage, Client as SQSClient};
 use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
-use tracing::info;
 
 use super::{
     config::AwsClientConfig,
@@ -158,8 +157,8 @@ impl AwsClient {
     pub async fn sqs_receive_messages(
         &self,
         max_messages: Option<usize>,
-    ) -> Result<Vec<SqsMessageInfo>, AwsClientError> {
-        Ok(self
+    ) -> Result<impl Iterator<Item = SqsMessageInfo>, AwsClientError> {
+        let response = self
             .sqs
             .receive_message()
             .queue_url(self.config().sqs_response_queue_url())
@@ -170,23 +169,28 @@ impl AwsClient {
             .map_err(|e| {
                 tracing::error!("AWS-SQS receive message from queue error: {}", e);
                 AwsClientError::SqsReceiveMessageError(e.to_string())
-            })
-            .unwrap()
+            })?;
+
+        Ok(response
             .messages()
-            .iter()
-            .map(|msg| {
-                let body: serde_json::Value =
-                    serde_json::from_str(msg.body().expect("Empty JSON string"))
-                        .expect("Invalid JSON string");
-                SqsMessageInfo::new(
-                    body["MessageId"].as_str().unwrap(),
-                    body["MessageAttributes"]["message_type"]["Value"]
-                        .as_str()
-                        .unwrap(),
-                    body["Message"].as_str().unwrap(),
-                )
-            })
-            .collect())
+            .to_vec()
+            .into_iter()
+            .map(|msg| SqsMessageInfo::from(&msg)))
+    }
+}
+
+impl From<&SqsMessage> for SqsMessageInfo {
+    fn from(msg: &SqsMessage) -> Self {
+        let body: serde_json::Value = serde_json::from_str(msg.body().expect("Empty JSON string"))
+            .expect("Invalid JSON string");
+
+        SqsMessageInfo::new(
+            body["MessageId"].as_str().unwrap(),
+            body["MessageAttributes"]["message_type"]["Value"]
+                .as_str()
+                .unwrap(),
+            body["Message"].as_str().unwrap(),
+        )
     }
 }
 
