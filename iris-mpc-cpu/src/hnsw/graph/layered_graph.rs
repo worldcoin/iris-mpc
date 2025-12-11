@@ -168,8 +168,10 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
     }
 
-    /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
-    /// graph.
+    /// Applies a `ConnectPlan` to finalize an insertion.
+    ///
+    /// This updates the graph's entry point and connects the new vector to its
+    /// neighbors as specified in the plan.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
         // If required, set vector as new entry point
         match plan.update_ep {
@@ -363,9 +365,10 @@ impl GraphMem<IrisVectorId> {
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct Layer<V: Ref + Display + FromStr + Ord> {
-    /// Map a base vector to its neighbors, including the distance between
-    /// base and neighbor.
+    /// Map a base vector to its neighbors.
     pub links: HashMap<V, Vec<V>>,
+    /// A checksum of the layer's links, used for state verification.
+    /// This hash is updated whenever links are modified.
     set_hash: SetHash,
 }
 
