@@ -4,7 +4,14 @@ use crate::{
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
-    hnsw::{vector_store::VectorStoreMut, VectorStore},
+    hnsw::{
+        sorting::{
+            min_k_batcher::min_k_batcher_sort_network,
+            swap_network::{apply_oblivious_swap_network, SwapNetwork},
+        },
+        vector_store::VectorStoreMut,
+        VectorStore,
+    },
     protocol::{
         ops::{
             batch_signed_lift_vec, conditionally_select_distances_with_plain_ids,
@@ -21,14 +28,19 @@ use crate::{
         RingElement,
     },
 };
-use eyre::{OptionExt, Result};
+use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     vector_id::VectorId,
 };
 use itertools::{izip, Itertools};
 use static_assertions::const_assert;
-use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Debug,
+    sync::Arc,
+    vec,
+};
 use tracing::instrument;
 
 mod distance_fn;
@@ -378,6 +390,134 @@ impl Aby3Store {
         let flattened_distances = res.iter().flatten().cloned().collect_vec();
         min_round_robin_batch(&mut self.session, &flattened_distances, res.len()).await
     }
+
+    async fn compact_neighborhood_batch(
+        &mut self,
+        base_nodes: &[Aby3VectorRef],
+        neighborhoods: &[Vec<Aby3VectorRef>],
+        max_sizes: &[usize],
+    ) -> Result<Vec<Vec<Aby3VectorRef>>> {
+        if base_nodes.len() != neighborhoods.len() || base_nodes.len() != max_sizes.len() {
+            bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
+        }
+
+        let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await;
+        let query_vec_pairs = izip!(base_node_queries, neighborhoods.iter())
+            .flat_map(|(q, nbhd)| nbhd.iter().map(move |nb| (q.clone(), *nb)))
+            .collect_vec();
+        let distances = self.eval_distance_pairs(&query_vec_pairs).await?;
+        let id_distances = neighborhoods
+            .iter()
+            .flatten()
+            .zip(distances)
+            .map(|(vector_id, distance)| (vector_id.serial_id(), distance))
+            .collect_vec();
+        let id_versions: BTreeMap<_, _> = neighborhoods
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, nbhd)| {
+                nbhd.iter()
+                    .map(move |vector_id| ((idx, vector_id.serial_id()), vector_id.version_id()))
+            })
+            .collect();
+
+        // Construct aggregated selection networks for top-k selection over all neighborhoods
+        let mut total_items: usize = 0;
+        let mut batched_network = SwapNetwork::new();
+        for (nbhd, target_size) in izip!(neighborhoods.iter(), max_sizes.iter()) {
+            let current_size = nbhd.len();
+
+            // Constructed network is already optimized for the case of k > n - k
+            let network = min_k_batcher_sort_network(current_size, *target_size)?;
+
+            // Merge individual swap network into overall batch network
+            let network_shift_amount = isize::try_from(total_items)?;
+            batched_network.insert_parallel_in_place(network, network_shift_amount)?;
+
+            total_items += current_size;
+        }
+
+        // Oblivious application of batched selection networks
+        let res_id_distances =
+            apply_oblivious_swap_network(self, &id_distances, &batched_network).await?;
+
+        // Truncate results and unpack into individual vectors
+        let mut unshuffled_truncated_shares = Vec::with_capacity(neighborhoods.len());
+        let mut base_idx = 0;
+        for (nbhd, max_size) in izip!(neighborhoods.iter(), max_sizes.iter()) {
+            let n_keep = usize::min(nbhd.len(), *max_size);
+            let nbhd_shares = res_id_distances[base_idx..base_idx + n_keep].to_vec();
+            unshuffled_truncated_shares.push(nbhd_shares);
+            base_idx += nbhd.len();
+        }
+
+        // Organize vectors by length for batch shuffling. (Batched shuffle
+        // protocol implementation is currently limited to a single list length
+        // over the batch.)
+        let mut shares_by_length: BTreeMap<usize, Vec<_>> = BTreeMap::new();
+        for (idx, nbhd_shares) in unshuffled_truncated_shares.into_iter().enumerate() {
+            let v = shares_by_length.entry(nbhd_shares.len()).or_default();
+            v.push((idx, nbhd_shares));
+        }
+
+        // Batch shuffle
+        let mut shuffled_shares_by_idx: BTreeMap<usize, Vec<_>> = BTreeMap::new();
+        for (_len, v) in shares_by_length.into_iter() {
+            let (idxs, nbhds): (Vec<_>, Vec<_>) = v.into_iter().unzip();
+
+            let shuffled_nbhds =
+                ampc_actor_utils::protocol::shuffle::random_shuffle_batch(&mut self.session, nbhds)
+                    .await?;
+
+            for (idx, shuffled_nbhd) in izip!(idxs, shuffled_nbhds) {
+                shuffled_shares_by_idx.insert(idx, shuffled_nbhd);
+            }
+        }
+
+        // Open secret shared neighborhood vector ids
+        let secret_nbhds = shuffled_shares_by_idx
+            .into_values()
+            .map(|nbhd| {
+                nbhd.into_iter()
+                    .map(|(idx_share, _dist_share)| idx_share)
+                    .collect_vec()
+            })
+            .collect_vec();
+        let nbhd_lengths = secret_nbhds.iter().map(|n| n.len()).collect_vec();
+        let opened_nbhds_flat = open_ring(
+            &mut self.session,
+            &secret_nbhds.into_iter().flatten().collect_vec(),
+        )
+        .await?;
+
+        // Unflatten opened neighborhoods
+        let mut nbhd_serial_ids = Vec::with_capacity(neighborhoods.len());
+        let mut base_idx = 0;
+        for len in nbhd_lengths {
+            let opened_nbhd = opened_nbhds_flat[base_idx..base_idx + len].to_vec();
+            nbhd_serial_ids.push(opened_nbhd);
+            base_idx += len;
+        }
+
+        // Reconstruct versions of vector ids
+        let compacted_nbhds = nbhd_serial_ids
+            .into_iter()
+            .enumerate()
+            .map(|(idx, nbhd)| {
+                nbhd.into_iter()
+                    .map(|serial_id| {
+                        let version = *id_versions.get(&(idx, serial_id)).ok_or_eyre(format!(
+                            "Unexpected: found no record of reconstructed serial id: {}",
+                            serial_id
+                        ))?;
+                        Ok(VectorId::new(serial_id, version))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(compacted_nbhds)
+    }
 }
 
 impl VectorStore for Aby3Store {
@@ -482,6 +622,31 @@ impl VectorStore for Aby3Store {
             return Ok(vec![]);
         }
         lte_threshold_and_open(&mut self.session, distances).await
+    }
+
+    async fn compact_neighborhood(
+        &mut self,
+        base_node: Self::VectorRef,
+        neighborhood: &[Self::VectorRef],
+        max_size: usize,
+    ) -> Result<Vec<Self::VectorRef>> {
+        let compaction_list = self
+            .compact_neighborhood_batch(&[base_node], &[neighborhood.to_vec()], &[max_size])
+            .await?;
+        compaction_list
+            .first()
+            .ok_or_eyre("Unexpected: no compacted neighborhood returned from batch processing")
+            .cloned()
+    }
+
+    async fn compact_neighborhood_batch(
+        &mut self,
+        base_nodes: &[Self::VectorRef],
+        neighborhoods: &[Vec<Self::VectorRef>],
+        max_sizes: &[usize],
+    ) -> Result<Vec<Vec<Self::VectorRef>>> {
+        self.compact_neighborhood_batch(base_nodes, neighborhoods, max_sizes)
+            .await
     }
 }
 
