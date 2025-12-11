@@ -6,9 +6,7 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::super::typeset::{
-    ClientError, ProcessRequestBatch, Request, RequestBatch, RequestMessageBody,
-};
+use super::super::typeset::{ClientError, ProcessRequestBatch, Request, RequestBatch, RequestBody};
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -59,7 +57,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
     }
 }
 
-impl From<&Request> for RequestMessageBody {
+impl From<&Request> for RequestBody {
     fn from(request: &Request) -> Self {
         // TODO: serial ID from correlated uniqueness response
         match request {
@@ -108,28 +106,28 @@ impl From<&Request> for RequestMessageBody {
 
 impl From<&Request> for SnsMessageInfo {
     fn from(request: &Request) -> Self {
-        Self::from(RequestMessageBody::from(request))
+        Self::from(RequestBody::from(request))
     }
 }
 
-impl From<RequestMessageBody> for SnsMessageInfo {
-    fn from(body: RequestMessageBody) -> Self {
+impl From<RequestBody> for SnsMessageInfo {
+    fn from(body: RequestBody) -> Self {
         match body {
-            RequestMessageBody::IdentityDeletion(body) => Self::new(
+            RequestBody::IdentityDeletion(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 IDENTITY_DELETION_MESSAGE_TYPE,
                 &body,
             ),
-            RequestMessageBody::Reauthorization(body) => {
+            RequestBody::Reauthorization(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, REAUTH_MESSAGE_TYPE, &body)
             }
-            RequestMessageBody::ResetCheck(body) => {
+            RequestBody::ResetCheck(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, RESET_CHECK_MESSAGE_TYPE, &body)
             }
-            RequestMessageBody::ResetUpdate(body) => {
+            RequestBody::ResetUpdate(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, RESET_UPDATE_MESSAGE_TYPE, &body)
             }
-            RequestMessageBody::Uniqueness(body) => {
+            RequestBody::Uniqueness(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, UNIQUENESS_MESSAGE_TYPE, &body)
             }
         }

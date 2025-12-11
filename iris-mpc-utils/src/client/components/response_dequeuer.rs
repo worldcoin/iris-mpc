@@ -6,7 +6,7 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::super::typeset::{ClientError, ProcessRequestBatch, RequestBatch, Response};
+use super::super::typeset::{ClientError, ProcessRequestBatch, RequestBatch, ResponseBody};
 use crate::aws::{types::SqsMessageInfo, AwsClient};
 
 /// A component responsible for dequeuing system responses from network egress queues.
@@ -28,7 +28,7 @@ impl ProcessRequestBatch for ResponseDequeuer {
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
         while batch.is_enqueueable() {
             for sqs_msg in self.aws_client.sqs_receive_messages(Some(1)).await? {
-                batch.maybe_set_response(Response::from(&sqs_msg));
+                batch.maybe_set_response(ResponseBody::from(&sqs_msg));
             }
         }
 
@@ -36,23 +36,23 @@ impl ProcessRequestBatch for ResponseDequeuer {
     }
 }
 
-impl From<&SqsMessageInfo> for Response {
+impl From<&SqsMessageInfo> for ResponseBody {
     fn from(msg: &SqsMessageInfo) -> Self {
         match msg.kind().as_str() {
             IDENTITY_DELETION_MESSAGE_TYPE => {
-                Response::IdentityDeletion(serde_json::from_str(&msg.body()).unwrap())
+                ResponseBody::IdentityDeletion(serde_json::from_str(&msg.body()).unwrap())
             }
             REAUTH_MESSAGE_TYPE => {
-                Response::Reauthorization(serde_json::from_str(&msg.body()).unwrap())
+                ResponseBody::Reauthorization(serde_json::from_str(&msg.body()).unwrap())
             }
             RESET_CHECK_MESSAGE_TYPE => {
-                Response::ResetCheck(serde_json::from_str(&msg.body()).unwrap())
+                ResponseBody::ResetCheck(serde_json::from_str(&msg.body()).unwrap())
             }
             RESET_UPDATE_MESSAGE_TYPE => {
-                Response::ResetUpdate(serde_json::from_str(&msg.body()).unwrap())
+                ResponseBody::ResetUpdate(serde_json::from_str(&msg.body()).unwrap())
             }
             UNIQUENESS_MESSAGE_TYPE => {
-                Response::Uniqueness(serde_json::from_str(&msg.body()).unwrap())
+                ResponseBody::Uniqueness(serde_json::from_str(&msg.body()).unwrap())
             }
             _ => panic!("Unsupported system response type"),
         }
