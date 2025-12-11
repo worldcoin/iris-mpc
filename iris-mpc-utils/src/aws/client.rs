@@ -124,7 +124,6 @@ impl AwsClient {
 
     /// Purges a response message from an SQS queue.
     pub async fn sqs_purge_message(&self, sqs_msg: &SqsMessageInfo) -> Result<(), AwsClientError> {
-        tracing::info!("AWS-SQS: purging response message");
         self.sqs
             .delete_message()
             .queue_url(self.config().sqs_response_queue_url())
@@ -132,10 +131,10 @@ impl AwsClient {
             .send()
             .await
             .map(|_| {
-                tracing::info!("AWS-SQS: purged message");
+                tracing::info!("AWS-SQS: purged message -> {}", sqs_msg.kind());
             })
             .map_err(|e| {
-                tracing::error!("AWS-SQS: response queue message deletion error: {}", e);
+                tracing::error!("AWS-SQS: purged message -> error: {}", e);
                 AwsClientError::SqsDeleteMessageError(e.to_string())
             })
     }
@@ -178,7 +177,7 @@ impl AwsClient {
             .into_iter()
             .map(|msg| {
                 let msg = SqsMessageInfo::from(&msg);
-                tracing::info!("AWS-SQS: received message: {}", msg);
+                tracing::info!("AWS-SQS: received message -> {}", msg);
                 msg
             });
 

@@ -66,27 +66,11 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
             .collect();
         futures::future::try_join_all(tasks).await?;
 
+        // Update state of requests.
+        for item in batch.requests_mut() {
+            item.set_status_data_uploaded();
+        }
+
         Ok(())
     }
 }
-
-// let mut shares = Vec::new();
-// for request in batch.requests() {
-//     match request {
-//         Request::Reauthorization { reauth_id, .. } => {
-//             shares.push((generate_iris_shares(self.rng_mut()), reauth_id));
-//         }
-//         Request::ResetCheck { reset_check_id, .. } => {
-//             shares.push((generate_iris_shares(self.rng_mut()), reset_check_id));
-//         }
-//         Request::ResetUpdate {
-//             reset_update_id, ..
-//         } => {
-//             shares.push((generate_iris_shares(self.rng_mut()), reset_update_id));
-//         }
-//         Request::Uniqueness { signup_id, .. } => {
-//             shares.push((generate_iris_shares(self.rng_mut()), signup_id));
-//         }
-//         _ => {}
-//     }
-// }

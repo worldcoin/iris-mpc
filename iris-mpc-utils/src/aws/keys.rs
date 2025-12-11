@@ -32,17 +32,17 @@ pub(super) async fn download_public_keyset(base_url: &str) -> Result<PublicKeyse
         let pbk_b64 = key_pair::download_public_key(base_url.to_owned(), party_idx.to_string())
             .await
             .map_err(|e| {
-                tracing::error!("MPC-{}: public key download error: {}", party_idx, e);
+                tracing::error!("Node-{}: public key download error: {}", party_idx, e);
                 PublicKeyError::DownloadError(e.to_string())
             })?;
-        tracing::info!("MPC-{}: public key downloaded", party_idx);
+        tracing::info!("Node-{}: public key downloaded", party_idx);
 
         let pbk_bytes = general_purpose::STANDARD
             .decode(pbk_b64)
             .map_err(|e| PublicKeyError::DecodeError(e.to_string()))?;
 
         PublicKey::from_slice(&pbk_bytes).ok_or_else(|| {
-            PublicKeyError::FormatError(format!("MPC-{}: public key format is invalid", party_idx))
+            PublicKeyError::FormatError(format!("Node-{}: public key format is invalid", party_idx))
         })
     }
 
