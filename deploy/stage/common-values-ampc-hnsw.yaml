@@ -75,6 +75,7 @@ nodeSelector:
 podSecurityContext:
   allowPrivilegeEscalation: true
   runAsNonRoot: false
+  seccompProfile: null
   capabilities:
     add: ["NET_ADMIN"]
 
