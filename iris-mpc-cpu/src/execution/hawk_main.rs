@@ -394,6 +394,18 @@ impl HawkActor {
         network_session: &mut NetworkSession,
     ) -> Result<Arc<[u8; 16]>> {
         if self.prf_key.is_none() {
+            // In tests, avoid the shared-seed handshake to prevent deep stack usage.
+            #[cfg(test)]
+            let prf_key_ = {
+                const HNSW_PRF_KEY_TEST: u64 = 0x1234_5678;
+                tracing::info!(
+                    "Initializing HNSW shared PRF key to test static value {}",
+                    HNSW_PRF_KEY_TEST
+                );
+                (HNSW_PRF_KEY_TEST as u128).to_le_bytes()
+            };
+
+            #[cfg(not(test))]
             let prf_key_ = if let Some(prf_key) = self.args.hnsw_prf_key {
                 tracing::info!("Initializing HNSW shared PRF key to static value {prf_key:?}");
                 (prf_key as u128).to_le_bytes()

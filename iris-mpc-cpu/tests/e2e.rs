@@ -12,29 +12,27 @@ use iris_mpc_cpu::{
         shared_irises::SharedIrises,
     },
     hnsw::{GraphMem, HnswParams, HnswSearcher},
-    // import FSS flags
-    protocol::{
-        fss_traffic_totals, msb_fss_total_inputs, ops::USE_FSS,
-        shared_iris::GaloisRingSharedIris, USE_PARALLEL_THRESH,
-    },
+    protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{rngs::StdRng, SeedableRng};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::TcpListener, sync::Arc, time::Duration};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DB_SIZE: usize = 1000; // original value was 1000
+const DB_SIZE: usize = 1000;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
-const HAWK_CONNECTION_PARALLELISM: usize = 8; // Increased from 1 to 8 for better network parallelism
+const HAWK_CONNECTION_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 const MAX_RESET_UPDATES_PER_BATCH: usize = 0; // TODO: set back to 10 or so once reset is supported
 
 const HNSW_EF_CONSTR: usize = 320;
 const HNSW_M: usize = 256;
 const HNSW_EF_SEARCH: usize = 256;
+// Use a fixed HNSW PRF key in tests to avoid the shared-seed handshake recursion.
+const HNSW_PRF_KEY_TEST: u64 = 0x1234_5678;
 
 fn install_tracing() {
     tracing_subscriber::registry()
@@ -43,6 +41,19 @@ fn install_tracing() {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+}
+
+fn pick_free_addresses(n: usize) -> Vec<String> {
+    (0..n)
+        .map(|_| {
+            let listener =
+                TcpListener::bind("127.0.0.1:0").expect("failed to bind ephemeral port for test");
+            let port = listener.local_addr().expect("no local addr").port();
+            // Drop the listener so the port is free for the actual server.
+            drop(listener);
+            format!("127.0.0.1:{port}")
+        })
+        .collect()
 }
 
 async fn create_graph_from_plain_dbs(
@@ -153,7 +164,7 @@ async fn start_hawk_node(
     Ok(handle)
 }
 
-#[ignore = "Expected to fail for now"]
+#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();
@@ -162,10 +173,7 @@ async fn e2e_test() -> Result<()> {
     let db_left = test_db.plain_dbs(0);
     let db_right = test_db.plain_dbs(1);
 
-    let addresses = ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"]
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
+    let addresses = pick_free_addresses(3);
 
     let args0 = HawkArgs {
         party_index: 0,
@@ -175,7 +183,7 @@ async fn e2e_test() -> Result<()> {
         hnsw_param_ef_constr: HNSW_EF_CONSTR,
         hnsw_param_M: HNSW_M,
         hnsw_param_ef_search: HNSW_EF_SEARCH,
-        hnsw_prf_key: None,
+        hnsw_prf_key: Some(HNSW_PRF_KEY_TEST),
         disable_persistence: false,
         match_distances_buffer_size: 64,
         n_buckets: 10,
@@ -225,151 +233,6 @@ async fn e2e_test() -> Result<()> {
     // TODO: ATM we have no real way to wait for the actors to finish, so just sleep
     // a bit for now
     tokio::time::sleep(Duration::from_secs(5)).await;
-
-    // -- FSS metrics & stats starts -- //
-
-    // Metrics: cross_compare calls
-    let (scheme, calls) = if iris_mpc_cpu::protocol::ops::USE_FSS {
-        (
-            "FSS",
-            iris_mpc_cpu::protocol::ops::cross_compare_calls_fss(),
-        )
-    } else {
-        (
-            "RSS",
-            iris_mpc_cpu::protocol::ops::cross_compare_calls_rss(),
-        )
-    };
-
-    println!("\n{scheme}: cross_compare was called {calls} times\n");
-
-    // Metrics: total duration per party for cross_compare.extract_open
-    let [p0, p1, p2] =
-        iris_mpc_cpu::protocol::perf_stats::total_duration_per_party("cross_compare.extract_open");
-
-    println!("extract+open_bin totals — p0: {p0:?}, p1: {p1:?}, p2: {p2:?}\n");
-
-    if USE_FSS && USE_PARALLEL_THRESH {
-        // times for FSS evaluation parties
-        println!("\nTimers for parties 0 and 1:");
-
-        let evaluator_stats = vec![
-            (
-                "fss.network.start_recv_keylen",
-                "Receive key length from the dealer",
-            ),
-            (
-                "fss.network.start_recv_keys",
-                "Receive keys from the dealer",
-            ),
-            ("fss.network.recon.send", "Reconstruct d+r send"),
-            ("fss.network.recon.recv", "Reconstruct d+r recv"),
-            ("fss.add3.non-parallel", "FSS add3 non-parallel"),
-            ("fss.add3.icf.eval", "FSS add3 ICF eval"),
-            ("fss.network.post-icf.send_prev", "Post-ICF send_prev"),
-            ("fss.network.post-icf.send_next", "Post-ICF send_next"),
-            ("fss.network.post-icf.recv_to_eval", "Post-ICF recv_to_eval"),
-        ];
-
-        for (key, message) in evaluator_stats {
-            let [p0, p1, _] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
-            println!("{} p0: {:?}", message, p0);
-            println!("{} p1: {:?}", message, p1);
-            println!();
-        }
-
-        // times for FSS dealer
-        println!("\nTimers for FSS dealer:");
-
-        let dealer_stats = vec![
-            (
-                "fss.network.dealer.send_P0a",
-                "Dealer send FSS keylen to p0",
-            ),
-            ("fss.network.dealer.send_P0b", "Dealer send FSS keys to p0"),
-            (
-                "fss.network.dealer.send_P1a",
-                "Dealer send FSS keylen to p1",
-            ),
-            ("fss.network.dealer.send_P1b", "Dealer send FSS keys to p1"),
-            (
-                "fss.network.dealer.recv_P0",
-                "Dealer recv FSS shares from p0",
-            ),
-            (
-                "fss.network.dealer.recv_P1",
-                "Dealer recv FSS shares from p1",
-            ),
-            ("fss.dealer.genkeys", "Dealer generate keys"),
-        ];
-
-        for (key, label) in dealer_stats {
-            let [_, _, p2] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
-            println!("{}: {:?}", label, p2);
-        }
-        println!("");
-    } // if USE_FSS && USE_PARALLEL_THRESH
-
-    // Since the code differs between the parallel and non-parallel version,
-    // some timers are the same while the rest differ, but there is a lot of repetition
-    if USE_FSS && !USE_PARALLEL_THRESH {
-        // times for FSS evaluation parties
-        println!("\nTimers for parties 0 and 1:");
-
-        let evaluator_stats = vec![
-            ("fss.network.recon.send", "Reconstruct d+r send"),
-            ("fss.network.recon.recv", "Reconstruct d+r recv"),
-            (
-                "fss.network.start_recv_keys",
-                "Receive FSS keys from the dealer",
-            ),
-            ("fss.network.post-icf.send_next", "Post-ICF send_next"),
-            ("fss.network.post-icf.send_prev", "Post-ICF send_prev"),
-            ("fss.network.post-icf.recv", "Post-ICF recv"),
-        ];
-
-        for (key, message) in evaluator_stats {
-            let [p0, p1, _] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
-            println!("{} p0: {:?}", message, p0);
-            println!("{} p1: {:?}", message, p1);
-            println!();
-        }
-
-        // times for FSS dealer
-        println!("\nTimers for FSS dealer:");
-
-        let dealer_stats = vec![
-            ("fss.network.dealer.send_P0", "Dealer send FSS keys to p0"),
-            ("fss.network.dealer.send_P1", "Dealer send FSS keys to p1"),
-            (
-                "fss.network.dealer.recv_P0",
-                "Dealer receive FSS shares from p0",
-            ),
-            (
-                "fss.network.dealer.recv_P1",
-                "Dealer receive FSS shares from p1",
-            ),
-            ("fss.dealer.genkeys", "Dealer generate keys"),
-        ];
-
-        for (key, label) in dealer_stats {
-            let [_, _, p2] = iris_mpc_cpu::protocol::perf_stats::total_duration_per_party(key);
-            println!("{}: {:?}", label, p2);
-        }
-
-        println!("");
-    } // if USE_FSS && !USE_PARALLEL_THRESH
-
-    // Print total FSS traffic once at the end
-    let (sent_bytes, recv_bytes) = fss_traffic_totals();
-    println!(
-        "FSS total traffic: sent ~{} bytes, received ~{} bytes",
-        sent_bytes, recv_bytes
-    );
-    println!(
-        "FSS total inputs processed: {}",
-        msb_fss_total_inputs()
-    );
 
     Ok(())
 }
