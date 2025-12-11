@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y \
     debhelper \
     ca-certificates \
     protobuf-compiler \
-    wget
+    wget \
+    iproute2
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -62,6 +63,8 @@ RUN update-ca-certificates
 
 COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/iris-mpc-hawk /bin/iris-mpc-hawk
 
-USER 65534
 
-ENTRYPOINT ["/bin/iris-mpc-hawk"]
+COPY ./scripts/tools/hawk-ep.sh /bin
+RUN chmod +x /bin/hawk-ep.sh
+
+ENTRYPOINT ["/bin/hawk-ep.sh", "/bin/iris-mpc-hawk"]
