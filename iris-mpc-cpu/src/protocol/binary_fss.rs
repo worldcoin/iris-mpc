@@ -24,9 +24,88 @@ use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::{cell::RefCell, ops::SubAssign};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, instrument, trace_span, Instrument};
+use std::fs::OpenOptions;
 
 use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
+
+const FSS_DEBUG_LOG_PATH: &str = "./fss_debug_batch_bits.log";
+const DEBUG_TARGET_IDX: usize = 815;
+
+#[inline]
+fn append_debug_line(line: &str) {
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(FSS_DEBUG_LOG_PATH)
+    {
+        let _ = writeln!(f, "{}", line);
+    }
+}
+
+#[inline]
+fn log_batch_start(role: usize, base_idx: usize, n: usize) {
+    #[cfg(feature = "parallel-msb")]
+    {
+        append_debug_line(&format!(
+            "p{} batch_start base={} len={}",
+            role, base_idx, n
+        ));
+    }
+}
+
+#[inline]
+fn log_target_bit(role: usize, base_idx: usize, local_idx: usize, stage: &str, bit: bool) {
+    #[cfg(feature = "parallel-msb")]
+    {
+        if base_idx + local_idx == DEBUG_TARGET_IDX {
+            append_debug_line(&format!(
+                "p{} target={} stage={} local={} bit={}",
+                role,
+                DEBUG_TARGET_IDX,
+                stage,
+                local_idx,
+                bit as u8
+            ));
+        }
+    }
+}
+
+#[inline]
+fn log_target_y(role: usize, base_idx: usize, local_idx: usize, stage: &str, y: u32) {
+    #[cfg(feature = "parallel-msb")]
+    {
+        if base_idx + local_idx == DEBUG_TARGET_IDX {
+            append_debug_line(&format!(
+                "p{} target={} stage={} local={} y={}",
+                role,
+                DEBUG_TARGET_IDX,
+                stage,
+                local_idx,
+                y
+            ));
+        }
+    }
+}
+
+#[inline]
+fn log_target_y_minus_half(role: usize, base_idx: usize, local_idx: usize, stage: &str, y: u32) {
+    #[cfg(feature = "parallel-msb")]
+    {
+        if base_idx + local_idx == DEBUG_TARGET_IDX {
+            // Undo the +N/2 shift (mod 2^32) to get the original signed-space value.
+            let y_minus_half = y.wrapping_sub(1u32 << 31);
+            append_debug_line(&format!(
+                "p{} target={} stage={} local={} y_minus_half={}",
+                role,
+                DEBUG_TARGET_IDX,
+                stage,
+                local_idx,
+                y_minus_half
+            ));
+        }
+    }
+}
 
 #[inline]
 fn approx_bytes_int_vec(v: &[RingElement<u32>]) -> usize {
@@ -40,6 +119,7 @@ fn approx_bytes_bit_vec(v: &[RingElement<Bit>]) -> usize {
 
 static FSS_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
 static FSS_BYTES_RECV: AtomicU64 = AtomicU64::new(0);
+static GLOBAL_FSS_BASE_IDX: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn record_traffic(sent: usize, recv: usize) {
@@ -121,6 +201,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
     session: &mut Session,
     batch: &[Share<u32>],
     parallel_threshold: usize,
+    base_idx: usize,
 ) -> Result<Vec<Share<Bit>>, Error> {
     use eyre::eyre;
     use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
@@ -150,6 +231,17 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 0 (Evaluator)
         // =======================
         0 => {
+            let base_idx_msg = session
+                .network_session
+                .receive_prev()
+                .await
+                .map_err(|e| eyre!("Party 0 cannot receive base_idx from dealer: {e}"))?;
+            let base_idx = u64::into_vec(base_idx_msg)?
+                .pop()
+                .ok_or_else(|| eyre!("base_idx message empty"))?
+                .0 as usize;
+            log_batch_start(role, base_idx, n);
+
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
 
@@ -166,7 +258,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             for i in 0..n {
                 // Deterministic RNG derived from a shared base seed and per-index counter
                 let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
+                seed_u128 ^= (base_idx + i) as u128 + 1;
                 let derived_seed = seed_u128.to_le_bytes();
                 let mut prf_rng = AesRng::from_seed(derived_seed);
                 
@@ -247,6 +339,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                         .map(|i| {
                             let x = &batch[i]; // borrow, do not move
                             let y = x.a + d1r1_vec[i] + x.b + RingElement(n_half_u32);
+                            log_target_y(role, base_idx, i, "p0_eval_y", y.0);
+                            log_target_y_minus_half(role, base_idx, i, "p0_eval_y_minus_half", y.0);
 
                             // Rebuild ICF locally per task to avoid shared state
                             let seed = [[0u8; 16]; 4];
@@ -262,6 +356,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                             let f0 = icf_i.eval(false, key_i, fss_rs::group::int::U32Group(y.0));
                             let f0_u128 = u128::from_le_bytes(f0.0);
                             let b = (f0_u128 & 1) != 0;
+                            log_target_bit(role, base_idx, i, "p0_eval", b);
                             (
                                 RingElement(Bit::new(b)),
                                 RingElement(if b { 1u32 } else { 0u32 }),
@@ -275,10 +370,13 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                     for i in 0..n {
                         let x = &batch[i];
                         let y = x.a + d1r1_vec[i] + x.b + RingElement(n_half_u32);
+                        log_target_y(role, base_idx, i, "p0_eval_y", y.0);
+                        log_target_y_minus_half(role, base_idx, i, "p0_eval_y_minus_half", y.0);
                         let f0 = icf.eval(false, &my_keys[i], fss_rs::group::int::U32Group(y.0));
                         //let f0_u128 = u128::from_be_bytes(f0.0);
                         let f0_u128 = u128::from_le_bytes(f0.0);
                         let b = (f0_u128 & 1) != 0;
+                        log_target_bit(role, base_idx, i, "p0_eval", b);
                         //let b = fss_out_bit(&f0.0);
                         bit0s_ringbit.push(RingElement(Bit::new(b)));
                         bit0s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
@@ -392,6 +490,17 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 1 (Evaluator)
         // =======================
         1 => {
+            let base_idx_msg = session
+                .network_session
+                .receive_next()
+                .await
+                .map_err(|e| eyre!("Party 1 cannot receive base_idx from dealer: {e}"))?;
+            let base_idx = u64::into_vec(base_idx_msg)?
+                .pop()
+                .ok_or_else(|| eyre!("base_idx message empty"))?
+                .0 as usize;
+            log_batch_start(role, base_idx, n);
+
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
 
@@ -408,7 +517,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             for i in 0..n {
                 // Deterministic RNG derived from a shared base seed and per-index counter
                 let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
+                seed_u128 ^= (base_idx + i) as u128 + 1;
                 let derived_seed = seed_u128.to_le_bytes();
                 let mut prf_rng = AesRng::from_seed(derived_seed);
                 
@@ -488,6 +597,8 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                         .map(|i| {
                             let x = &batch[i]; // borrow, do not move
                             let y = x.a + d2r2_vec[i] + x.b + RingElement(n_half_u32);
+                            log_target_y(role, base_idx, i, "p1_eval_y", y.0);
+                            log_target_y_minus_half(role, base_idx, i, "p1_eval_y_minus_half", y.0);
 
                             // Rebuild ICF locally
                             let seed = [[0u8; 16]; 4];
@@ -503,6 +614,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                             let f1 = icf_i.eval(true, key_i, fss_rs::group::int::U32Group(y.0));
                             let f1_u128 = u128::from_le_bytes(f1.0);
                             let b = (f1_u128 & 1) != 0;
+                            log_target_bit(role, base_idx, i, "p1_eval", b);
                             (
                                 RingElement(Bit::new(b)),
                                 RingElement(if b { 1u32 } else { 0u32 }),
@@ -516,9 +628,12 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                     for i in 0..n {
                         let x = &batch[i];
                         let y = x.a + d2r2_vec[i] + x.b + RingElement(n_half_u32);
+                        log_target_y(role, base_idx, i, "p1_eval_y", y.0);
+                        log_target_y_minus_half(role, base_idx, i, "p1_eval_y_minus_half", y.0);
                         let f1 = icf.eval(true, &my_keys[i], fss_rs::group::int::U32Group(y.0));
                         let f1_u128 = u128::from_le_bytes(f1.0);
                         let b = (f1_u128 & 1) != 0;
+                        log_target_bit(role, base_idx, i, "p1_eval", b);
                         bit1s_ringbit.push(RingElement(Bit::new(b)));
                         bit1s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
                     }
@@ -551,6 +666,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
                     let f1_u128: u128 = u128::from_le_bytes(f1.0);
                     let b = (f1_u128 & 1) != 0;
+                    log_target_bit(role, base_idx, i, "p1_eval", b);
                     bit1s_ringbit.push(RingElement(Bit::new(b)));
                     bit1s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
                 }
@@ -629,6 +745,29 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         // Party 2 (Dealer)
         // =======================
         2 => {
+            let base_idx = GLOBAL_FSS_BASE_IDX.fetch_add(n as u64, Ordering::Relaxed) as usize;
+            log_batch_start(role, base_idx, n);
+            session
+                .network_session
+                .send_next(u64::new_network_element(RingElement(base_idx as u64)))
+                .await
+                .map_err(|e| eyre!("Dealer cannot send base_idx to P0: {e}"))?;
+            session
+                .network_session
+                .send_prev(u64::new_network_element(RingElement(base_idx as u64)))
+                .await
+                .map_err(|e| eyre!("Dealer cannot send base_idx to P1: {e}"))?;
+            session
+                .network_session
+                .send_next(u64::new_network_element(RingElement(base_idx as u64)))
+                .await
+                .map_err(|e| eyre!("Dealer cannot send base_idx to P0: {e}"))?;
+            session
+                .network_session
+                .send_prev(u64::new_network_element(RingElement(base_idx as u64)))
+                .await
+                .map_err(|e| eyre!("Dealer cannot send base_idx to P1: {e}"))?;
+
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
             // Party 2 no longer generates or sends FSS keys - each party generates them locally
@@ -644,10 +783,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             for i in 0..n {
                 // Consume deterministic RNG to match parties 0 and 1 (keys discarded)
                 let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
+                seed_u128 ^= (base_idx + i) as u128 + 1;
                 let derived_seed = seed_u128.to_le_bytes();
                 let mut prf_rng = AesRng::from_seed(derived_seed);
-
+                
                 // Build PRG/ICF for key generation (same as parties 0 and 1)
                 let prg_seed = [[0u8; 16]; 4];
                 let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
@@ -719,6 +858,15 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 .zip(bit1s_ringbit.into_iter())
                 .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
+            if n > 0 {
+                if let Some(local_idx) = (0..n).find(|i| base_idx + *i == DEBUG_TARGET_IDX) {
+                    if let Some(b0) = out.get(local_idx) {
+                        let a_bool = b0.a.0 != Bit::new(false);
+                        let b_bool = b0.b.0 != Bit::new(false);
+                        log_target_bit(role, base_idx, local_idx, "p2_out", a_bool ^ b_bool);
+                    }
+                }
+            }
             Ok(out)
         }
 
@@ -733,6 +881,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
     session: &mut Session,
     batch: &[Share<u32>],
     parallel_threshold: usize,
+    base_idx: usize,
 ) -> Result<Vec<Share<Bit>>, Error> {
     use eyre::eyre;
     use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
@@ -740,6 +889,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
 
     let role = session.own_role().index();
     let n = batch.len();
+    let debug_target_idx: usize = DEBUG_TARGET_IDX;
 
     #[inline]
     fn re_vec_to_u32(v: Vec<RingElement<u32>>) -> Vec<u32> {
@@ -768,7 +918,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             for i in 0..n {
                 // Deterministic RNG derived from a shared base seed and per-index counter
                 let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
+                seed_u128 ^= (base_idx + i) as u128 + 1;
                 let derived_seed = seed_u128.to_le_bytes();
                 let mut prf_rng = AesRng::from_seed(derived_seed);
                 
@@ -928,7 +1078,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             for i in 0..n {
                 // Deterministic RNG derived from a shared base seed and per-index counter
                 let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
+                seed_u128 ^= (base_idx + i) as u128 + 1;
                 let derived_seed = seed_u128.to_le_bytes();
                 let mut prf_rng = AesRng::from_seed(derived_seed);
                 
@@ -1021,6 +1171,24 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                 }
             };
 
+            // Debug: log the bit share for the target index if this batch covers it
+            #[cfg(feature = "parallel-msb")]
+            {
+                if debug_target_idx >= base_idx && debug_target_idx < base_idx + n {
+                    let local_idx = debug_target_idx - base_idx;
+                    // Evaluate sequentially for the target index using the same icf to log value
+                    let x = &batch[local_idx];
+                    let y = x.a + d2r2_vec[local_idx] + x.b + RingElement(n_half_u32);
+                    let f1 = icf.eval(true, &my_keys[local_idx], fss_rs::group::int::U32Group(y.0));
+                    let f1_u128 = u128::from_le_bytes(f1.0);
+                    let b = (f1_u128 & 1) != 0;
+                    append_debug_line(&format!(
+                        "p1 target={} local={} bit={}",
+                        debug_target_idx, local_idx, b
+                    ));
+                }
+            }
+
             #[cfg(not(feature = "parallel-msb"))]
             let (bit1s_ringbit, _bit1s_u32) = {
                 let mut bit1s_ringbit: Vec<RingElement<Bit>> = Vec::with_capacity(n);
@@ -1078,6 +1246,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // Party 2 (Dealer)
         // =======================
         2 => {
+            log_batch_start(role, base_idx, n);
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
             // Party 2 no longer generates or sends FSS keys - each party generates them locally
@@ -1086,7 +1255,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             for i in 0..n {
                 // Consume deterministic RNG to match parties 0 and 1 (keys discarded)
                 let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
+                seed_u128 ^= (base_idx + i) as u128 + 1;
                 let derived_seed = seed_u128.to_le_bytes();
                 let mut prf_rng = AesRng::from_seed(derived_seed);
 
@@ -1150,6 +1319,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
 pub(crate) async fn add_3_get_msb_fss_batch_timers(
     session: &mut Session,
     x: &[Share<u32>],
+    base_idx: usize,
 ) -> Result<Vec<Share<Bit>>, Error>
 where
     Standard: Distribution<u32>,
@@ -1164,18 +1334,26 @@ where
     let n = x.len();
     let batch_size = x.len();
     let bucket_bound = 150;
+    let debug_target_idx: usize = DEBUG_TARGET_IDX;
 
     // Depending on the role, do different stuff
     match role {
         0 => {
+            let base_idx_msg = session
+                .network_session
+                .receive_prev()
+                .await
+                .map_err(|e| eyre!("Party 0 cannot receive base_idx from dealer: {e}"))?;
+            let base_idx = u64::into_vec(base_idx_msg)?
+                .pop()
+                .ok_or_else(|| eyre!("base_idx message empty"))?
+                .0 as usize;
+            log_batch_start(role, base_idx, n);
             //Generate all r2 prf key, keep the r0 keys for later
             // println!("party 0: Batch size is {}", batch_size);
-            let mut r_prime_keys = Vec::with_capacity(batch_size);
             let mut d2r2_vec = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
-                let (r_prime_temp, _) = session.prf.gen_rands::<RingElement<u32>>().clone(); //_ is r2
-                r_prime_keys.push(RingElement::<u128>(u128::from(r_prime_temp.0))); //convet to this for later
-                d2r2_vec.push(x[i].b + RingElement(0)); // change this to take the second thing gen_rands returns
+                d2r2_vec.push(x[i].b + RingElement(0)); // r2 assumed 0 in this deterministic variant
             }
 
             // Send the vector of d2+r2 to party 1
@@ -1197,42 +1375,39 @@ where
             // drop timer
             drop(_tt_net_recon);
 
-            // Set up the function for FSS (needed for key generation)
+            // Set up the function for FSS
+            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
             let n_falf_u32 = 1u32 << 31;
             let n_half = InG::from(n_falf_u32);
-            let p = InG::from(1u32 << 31) + n_half;
-            let q = InG::from(u32::MAX) + n_half;
+            // Interval: [0, 2^31) after shifting inputs by n/2 to handle signed values
+            // Matches the parallel path parameters
+            let p = InG::from(0u32);
+            let q = InG::from(1u32 << 31);
 
-            // OPTIMIZATION: Generate FSS keys while waiting for network receive
-            // Spawn key generation as blocking task to overlap CPU work with network I/O
-            let key_gen_handle = tokio::task::spawn_blocking({
-                let batch_size = batch_size;
-                let p = p;
-                let q = q;
-                move || {
-                    let mut keys = Vec::with_capacity(batch_size);
-                    for i in 0..batch_size {
-                        let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                        seed_u128 ^= i as u128 + 1;
-                        let derived_seed = seed_u128.to_le_bytes();
-                        let mut prf_rng = AesRng::from_seed(derived_seed);
-                        
-                        let prg_seed = [[0u8; 16]; 4];
-                        let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                            &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
-                        ]);
-                        let icf = Icf::new(p, q, prg);
-                        
-                        let f = IntvFn {
-                            r_in: InG::from(0u32),
-                            r_out: OutG::from(0u128),
-                        };
-                        let (k0, _k1) = icf.gen(f, &mut prf_rng);
-                        keys.push(k0);
-                    }
-                    keys
-                }
-            });
+            // Generate FSS keys locally using deterministic randomness
+            let mut my_keys = Vec::with_capacity(batch_size);
+            for i in 0..batch_size {
+                // Deterministic RNG derived from a shared base seed and per-index counter
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= (base_idx + i) as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
+                
+                // Build PRG/ICF for key generation
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
+                
+                // Generate FSS key pair using deterministic PRF RNG
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (k0, _k1) = icf.gen(f, &mut prf_rng);
+                my_keys.push(k0);
+            }
 
             //metrics: measure the network for share reconstruction
             let _tt_net_recon = crate::perf_scoped_for_party!(
@@ -1242,7 +1417,7 @@ where
                 bucket_bound  // your desired bucket cap
             );
 
-            // Receive d1+r1 from party 1 (while key generation runs in parallel)
+            // Receive d1+r1 from party 1
             let d1r1 = match session.network_session.receive_next().await {
                 Ok(v) => u32::into_vec(v),
                 Err(e) => Err(eyre!("FSS: Party 0 cannot receive d1+r1 from party 1: {e}")),
@@ -1250,9 +1425,6 @@ where
 
             // drop timer
             drop(_tt_net_recon);
-
-            // Wait for key generation to complete
-            let my_keys = key_gen_handle.await.map_err(|e| eyre!("Key generation task failed: {e}"))?;
 
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
             let mut f_x_0_bits = Vec::with_capacity(batch_size); // store all the eval results
@@ -1280,11 +1452,8 @@ where
                     .0,
                 ));
 
-                // Add the respective r_prime and add to the vector of results and take only the LSB
-                // Make them RingElements so it's easy to send to network
-                f_x_0_bits.push(RingElement(Bit::new(
-                    ((temp_eval ^ r_prime_keys[i]).0 & 1) != 0,
-                )));
+                // Take only the LSB of the evaluation result as our bit share
+                f_x_0_bits.push(RingElement(Bit::new((temp_eval.0 & 1) != 0)));
             }
 
             // Prepare them in a vector to send to dealer and next party
@@ -1363,17 +1532,36 @@ where
                 .zip(f_x_1_bits)
                 .map(|(a, b)| Share { a, b })
                 .collect();
+
+            // Debug: log the bit share for the target index if this batch covers it
+            if debug_target_idx >= base_idx && debug_target_idx < base_idx + n {
+                let local_idx = debug_target_idx - base_idx;
+                if let Some(share) = shares.get(local_idx) {
+                    append_debug_line(&format!(
+                        "p0 target={} local={} bit_a={} bit_b={}",
+                        debug_target_idx, local_idx, share.a.0, share.b.0
+                    ));
+                }
+            }
+
             Ok(shares)
         }
         1 => {
+            let base_idx_msg = session
+                .network_session
+                .receive_next()
+                .await
+                .map_err(|e| eyre!("Party 1 cannot receive base_idx from dealer: {e}"))?;
+            let base_idx = u64::into_vec(base_idx_msg)?
+                .pop()
+                .ok_or_else(|| eyre!("base_idx message empty"))?
+                .0 as usize;
+            log_batch_start(role, base_idx, n);
             // eprintln!("party 1: Batch size is {}", batch_size);
             std::io::stderr().flush().ok();
-            let mut r_prime_keys = Vec::with_capacity(batch_size);
             let mut d1r1_vec = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
-                let (_, r_prime_temp) = session.prf.gen_rands::<RingElement<u32>>().clone(); //_ is r1
-                r_prime_keys.push(RingElement::<u128>(u128::from(r_prime_temp.0))); //convet to this for later
-                d1r1_vec.push(x[i].a + RingElement(0)); // change this to take the first thing gen_rands returns
+                d1r1_vec.push(x[i].a + RingElement(0)); // r1 assumed 0 in this deterministic variant
             }
 
             // Send the vector of d1+r1 to party 0
@@ -1395,42 +1583,39 @@ where
             // drop timer
             drop(_tt_net_recon);
 
-            // Set up the function for FSS (needed for key generation)
+            // Set up the function for FSS
+            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
             let n_falf_u32 = 1u32 << 31;
             let n_half = InG::from(n_falf_u32);
-            let p = InG::from(1u32 << 31) + n_half;
-            let q = InG::from(u32::MAX) + n_half;
+            // Interval: [0, 2^31) after shifting inputs by n/2 to handle signed values
+            // Matches the parallel path parameters
+            let p = InG::from(0u32);
+            let q = InG::from(1u32 << 31);
 
-            // OPTIMIZATION: Generate FSS keys while waiting for network receive
-            // Spawn key generation as blocking task to overlap CPU work with network I/O
-            let key_gen_handle = tokio::task::spawn_blocking({
-                let batch_size = batch_size;
-                let p = p;
-                let q = q;
-                move || {
-                    let mut keys = Vec::with_capacity(batch_size);
-                    for i in 0..batch_size {
-                        let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                        seed_u128 ^= i as u128 + 1;
-                        let derived_seed = seed_u128.to_le_bytes();
-                        let mut prf_rng = AesRng::from_seed(derived_seed);
-                        
-                        let prg_seed = [[0u8; 16]; 4];
-                        let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
-                            &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
-                        ]);
-                        let icf = Icf::new(p, q, prg);
-                        
-                        let f = IntvFn {
-                            r_in: InG::from(0u32),
-                            r_out: OutG::from(0u128),
-                        };
-                        let (_k0, k1) = icf.gen(f, &mut prf_rng);
-                        keys.push(k1);
-                    }
-                    keys
-                }
-            });
+            // Generate FSS keys locally using deterministic randomness
+            let mut my_keys = Vec::with_capacity(batch_size);
+            for i in 0..batch_size {
+                // Deterministic RNG derived from a shared base seed and per-index counter
+                let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
+                seed_u128 ^= (base_idx + i) as u128 + 1;
+                let derived_seed = seed_u128.to_le_bytes();
+                let mut prf_rng = AesRng::from_seed(derived_seed);
+                
+                // Build PRG/ICF for key generation
+                let prg_seed = [[0u8; 16]; 4];
+                let prg = Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&[
+                    &prg_seed[0], &prg_seed[1], &prg_seed[2], &prg_seed[3],
+                ]);
+                let icf = Icf::new(p, q, prg);
+                
+                // Generate FSS key pair using deterministic PRF RNG
+                let f = IntvFn {
+                    r_in: InG::from(0u32),
+                    r_out: OutG::from(0u128),
+                };
+                let (_k0, k1) = icf.gen(f, &mut prf_rng);
+                my_keys.push(k1);
+            }
 
             //metrics: measure the network for share reconstruction
             let _tt_net_recon = crate::perf_scoped_for_party!(
@@ -1440,7 +1625,7 @@ where
                 bucket_bound  // your desired bucket cap
             );
 
-            // Receive d2+r2 from party 0 (while key generation runs in parallel)
+            // Receive d2+r2 from party 0
             let d2r2_vec = match session.network_session.receive_prev().await {
                 Ok(v) => u32::into_vec(v),
                 Err(e) => Err(eyre!("FSS: Party 1 cannot receive d2+r2 from party 0: {e}")),
@@ -1448,9 +1633,6 @@ where
 
             // drop timer
             drop(_tt_net_recon);
-
-            // Wait for key generation to complete
-            let my_keys = key_gen_handle.await.map_err(|e| eyre!("Key generation task failed: {e}"))?;
 
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
             let mut f_x_1_bits = Vec::with_capacity(batch_size); // store all the eval results
@@ -1478,11 +1660,8 @@ where
                     .0,
                 ));
 
-                // Add the respective r_prime and add to the vector of results and take only the LSB
-                // Make them RingElements so it's easy to send to network
-                f_x_1_bits.push(RingElement(Bit::new(
-                    ((temp_eval ^ r_prime_keys[i]).0 & 1) != 0,
-                )));
+                // Take only the LSB of the evaluation result as our bit share
+                f_x_1_bits.push(RingElement(Bit::new((temp_eval.0 & 1) != 0)));
             }
 
             // Prepare them in a vector to send to dealer and next party
@@ -1569,10 +1748,10 @@ where
             let n_half = InG::from(1u32 << 31);
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
 
-            // make the interval so that we return 1 when MSB == 1
-            // this is (our number + n/2 ) % n, modulo is handled by U32Group
-            let p = InG::from(1u32 << 31) + n_half;
-            let q = InG::from(u32::MAX) + n_half; // modulo is handled by U32Group
+            // Interval: [0, 2^31) after shifting inputs by n/2 to handle signed values
+            // Matches the parallel path parameters
+            let p = InG::from(0u32);
+            let q = InG::from(1u32 << 31);
 
             // Generate FSS keys locally (same as P0/P1) to consume PRF randomness and stay in sync
             // We don't send these keys since P0/P1 generate them locally
@@ -1585,14 +1764,10 @@ where
             );
 
             for i in 0..batch_size {
-                // Consume PRF randomness to match P0/P1's consumption pattern
-                // P0 calls gen_rands() and gets (r_prime, r2), P1 gets (r1, r_prime)
-                // P2 needs to call it to stay in sync, even though we don't use the values
-                let (_r2, _r1) = session.prf.gen_rands::<RingElement<u32>>();
-                
+                // Generate FSS keys locally (same as P0/P1) using deterministic randomness
                 // Deterministic RNG derived from a shared base seed and per-index counter
                 let mut seed_u128 = u128::from_le_bytes(FSS_KEYGEN_BASE_SEED);
-                seed_u128 ^= i as u128 + 1;
+                seed_u128 ^= (base_idx + i) as u128 + 1;
                 let derived_seed = seed_u128.to_le_bytes();
                 let mut prf_rng = AesRng::from_seed(derived_seed);
                 
@@ -1609,7 +1784,7 @@ where
                     r_out: OutG::from(0u128),
                 };
                 let (_k0, _k1) = icf.gen(f, &mut prf_rng);
-                // Keys are discarded - we just need to consume the same randomness as P0/P1
+                // Keys are discarded - we just need to consume the same deterministic randomness as P0/P1
             }
 
             // drop timer
@@ -1691,6 +1866,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_pipelined(
     batches: &[&[Share<u32>]],
     parallel_threshold: usize,
     output: &mut Vec<Share<Bit>>,
+    base_start: usize,
 ) -> Result<(), Error> {
     use eyre::eyre;
     use fss_rs::icf::{Icf, InG, IntvFn, OutG};
@@ -1709,9 +1885,11 @@ pub(crate) async fn add_3_get_msb_fss_batch_pipelined(
     // For simplicity and correctness, process batches sequentially but optimize the inner loop
     // The key optimization: we can't easily pipeline due to protocol dependencies
     // But we ensure sends complete quickly (they're non-blocking) before receives
+    let mut base_idx = base_start;
     for &batch in batches {
-        let batch_out = add_3_get_msb_fss_batch_parallel_threshold_timers(session, batch, parallel_threshold).await?;
+        let batch_out = add_3_get_msb_fss_batch_parallel_threshold_timers(session, batch, parallel_threshold, base_idx).await?;
         output.extend(batch_out);
+        base_idx += batch.len();
     }
     Ok(())
 }

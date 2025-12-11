@@ -1604,14 +1604,28 @@ pub(crate) async fn extract_msb_u32_batch_fss(
     // Strategy: send batch N+1's reconstruct while waiting for batch N's reconstruct receive
     if USE_PARALLEL_THRESH && batches.len() > 1 {
         use crate::protocol::binary_fss::add_3_get_msb_fss_batch_pipelined;
-        add_3_get_msb_fss_batch_pipelined(session, &batches, parallel_thresh, &mut vec_of_msb_shares).await?;
+        add_3_get_msb_fss_batch_pipelined(
+            session,
+            &batches,
+            parallel_thresh,
+            &mut vec_of_msb_shares,
+            0, // base_start
+        )
+        .await?;
     } else {
         // Fallback to sequential processing for single batch or non-parallel mode
-        for batch in batches {
+        for (batch_idx, batch) in batches.into_iter().enumerate() {
+            let base_idx = batch_idx * batch_size;
             let batch_out = if USE_PARALLEL_THRESH {
-                add_3_get_msb_fss_batch_parallel_threshold_timers(session, batch, parallel_thresh).await?
+                add_3_get_msb_fss_batch_parallel_threshold_timers(
+                    session,
+                    batch,
+                    parallel_thresh,
+                    base_idx,
+                )
+                .await?
             } else {
-                add_3_get_msb_fss_batch_timers(session, batch).await?
+                add_3_get_msb_fss_batch_timers(session, batch, base_idx).await?
             };
             vec_of_msb_shares.extend(batch_out);
         }

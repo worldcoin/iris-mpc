@@ -6,3 +6,6 @@
 *.iml
 
 .DS_Store
+
+# Logs
+*.log
