@@ -168,7 +168,7 @@ impl AwsClient {
             .send()
             .await
             .map_err(|e| {
-                tracing::error!("AWS-SQS receive message from queue error: {}", e);
+                tracing::error!("AWS-SQS received message error -> {}", e);
                 AwsClientError::SqsReceiveMessageError(e.to_string())
             })?;
         let mapped = response
