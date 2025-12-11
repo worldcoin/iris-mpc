@@ -9,7 +9,7 @@ FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 # copy over programs and data used to initialize the volume on the first run
 
 # this has to be built first. no sense putting a mess in the dockerfile if ci/cd isn't using it.
-COPY target/release/init-test-dbs /bin/init-test-dbs
+COPY ./target/release/init-test-dbs /bin/init-test-dbs
 RUN chmod +x /bin/init-test-dbs
 
 # get the 2^20 iris codes. this is large but will be stored on disk.
