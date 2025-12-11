@@ -250,7 +250,7 @@ impl LayerDistribution {
 /// evaluation and distance comparison operations, because we use SMPC protocols to implement these
 /// basic ops and so the sequential latency introduced by back-and-forth network communication
 /// between protocol parties can become significant without batching of operations. See in
-/// particular the documentation for the `layer_search_batched_c2` and `layer_search_greedy` functions
+/// particular the documentation for the `layer_search_batched_v2` and `layer_search_greedy` functions
 /// for details on these search optimizations.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HnswSearcher {
@@ -1458,7 +1458,7 @@ impl HnswSearcher {
 
     /// Prepare a `ConnectPlan` representing the updates required to insert
     /// `inserted_vector` into `graph` with the specified neighbors `links` and
-    /// updating the entry point according to the `update_ep` argument. The
+    /// to update the entry point according to the `update_ep` argument. The
     /// `links` vector contains the neighbor lists for the newly inserted node
     /// in different graph layers in which it is to be inserted, starting with
     /// layer 0. Specified links are inserted as-is, without additional

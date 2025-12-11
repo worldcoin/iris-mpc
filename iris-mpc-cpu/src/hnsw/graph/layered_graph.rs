@@ -46,13 +46,13 @@ pub struct EntryPoint<VectorRef> {
 pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// Entry points for HNSW search.
     ///
-    /// A graph built by a searcher in `LinearScan` mode will only populate this list
-    /// once the `max_graph_layer` is non-empty. Until then, `get_temporary_entry_point`
-    /// should be used.
+    /// If the graph is built by a searcher in `LinearScan` mode, this list will contain all nodes assigned
+    /// to an `insertion_level >= max_graph_layer`. The searcher uses `get_temporary_entry_point`
+    /// while no such node exists.
     ///
-    /// A graph built by a searcher in `Standard` or `Bounded` mode will populate this list
-    /// with a single entry point at any given time: the first node inserted at the current
-    /// highest layer (or the `max_graph_layer` for `Bounded`)
+    /// If the graph is built by a searcher in `Standard` or `Bounded` mode this list
+    /// will contain a single entry point at any given time, which corresponds to a node
+    /// in the highest layer of the graph.
     pub entry_points: Vec<EntryPoint<V>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
@@ -152,9 +152,8 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (x.clone(), lc)))
     }
 
-    /// Gets all entry_points.
-    /// Note that in the case of `LinearScan` mode a temporary entry point might still exist
-    /// even if the list returned by this method is empty. See `get_temporary_entry_point`.
+    /// Gets the list of entry points.
+    /// If this list is empty in LinearScan mode, `get_temporary_entry_point` may be used instead.
     pub fn get_entry_points(&self) -> Option<Vec<V>> {
         let v: Vec<_> = self
             .entry_points
@@ -170,7 +169,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
     /// Applies a `ConnectPlan` to finalize an insertion.
     ///
-    /// This updates the graph's entry point and connects the new vector to its
+    /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the plan.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
         // If required, set vector as new entry point
