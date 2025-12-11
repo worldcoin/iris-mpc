@@ -171,11 +171,11 @@ impl AwsClient {
                 AwsClientError::SqsReceiveMessageError(e.to_string())
             })?;
 
-        Ok(response
-            .messages()
-            .to_vec()
-            .into_iter()
-            .map(|msg| SqsMessageInfo::from(&msg)))
+        Ok(response.messages().to_vec().into_iter().map(|msg| {
+            let msg = SqsMessageInfo::from(&msg);
+            tracing::info!("AWS-SQS: dequeued message: {}", msg);
+            msg
+        }))
     }
 }
 

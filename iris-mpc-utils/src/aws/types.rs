@@ -100,7 +100,7 @@ pub struct SqsMessageInfo {
     // SQS message kind - e.g. "uniqueness".
     kind: String,
 
-    // SQS  message ID - a uuid.
+    // SQS message ID - a uuid.
     message_id: String,
 }
 
