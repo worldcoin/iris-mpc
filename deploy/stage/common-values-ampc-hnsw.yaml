@@ -73,6 +73,8 @@ nodeSelector:
   node.kubernetes.io/instance-type: "x8g.2xlarge"
 
 podSecurityContext:
+  allowPrivilegeEscalation: true
+  runAsNonRoot: false
   capabilities:
     add: ["NET_ADMIN"]
 
