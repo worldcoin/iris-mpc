@@ -13,6 +13,8 @@ use iris_mpc_common::{
     IrisSerialId,
 };
 
+use crate::constants::{PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2};
+
 /// Encapsulates common data pertinent to a system processing request.
 #[derive(Clone, Debug)]
 pub struct RequestInfo {
@@ -50,6 +52,26 @@ impl RequestInfo {
             status: RequestStatus::default(),
         }
     }
+
+    /// True if all expected system responses have been observed.
+    pub fn is_correlated(&self) -> bool {
+        self.correlation_0.is_some() & self.correlation_1.is_some() & self.correlation_2.is_some()
+    }
+
+    /// Sets a correlated response.
+    fn set_correlation(&mut self, response: &ResponseBody) {
+        let correlation = match response.node_id() {
+            PARTY_IDX_0 => &mut self.correlation_0,
+            PARTY_IDX_1 => &mut self.correlation_1,
+            PARTY_IDX_2 => &mut self.correlation_2,
+            id => panic!("Invalid node id: {}", id),
+        };
+        *correlation = Some(response.to_owned());
+        // TODO: distinguish between response success and error states.
+        if self.is_correlated() {
+            self.status = RequestStatus::Complete;
+        }
+    }
 }
 
 /// Encapsulates data pertinent to a system processing request.
@@ -68,11 +90,11 @@ pub enum Request {
     },
     ResetCheck {
         info: RequestInfo,
-        reset_check_id: uuid::Uuid,
+        reset_id: uuid::Uuid,
     },
     ResetUpdate {
         info: RequestInfo,
-        reset_update_id: uuid::Uuid,
+        reset_id: uuid::Uuid,
         serial_id: Option<IrisSerialId>,
         signup_id: uuid::Uuid,
     },
@@ -125,13 +147,14 @@ impl Request {
         &self.info().request_id
     }
 
-    pub fn signup_id(&self) -> Option<&uuid::Uuid> {
+    /// Returns identifier to be assigned to associated iris shares.
+    pub fn shares_id(&self) -> Option<&uuid::Uuid> {
         match self {
-            Self::IdentityDeletion { signup_id, .. }
-            | Self::Reauthorization { signup_id, .. }
-            | Self::ResetUpdate { signup_id, .. }
-            | Self::Uniqueness { signup_id, .. } => Some(signup_id),
-            Self::ResetCheck { .. } => None,
+            Self::IdentityDeletion { .. } => None,
+            Self::Reauthorization { reauth_id, .. } => Some(reauth_id),
+            Self::ResetCheck { reset_id, .. } => Some(reset_id),
+            Self::ResetUpdate { reset_id, .. } => Some(reset_id),
+            Self::Uniqueness { signup_id, .. } => Some(signup_id),
         }
     }
 
@@ -165,7 +188,7 @@ impl Request {
     pub fn new_reset_check(batch: &RequestBatch) -> Self {
         Self::ResetCheck {
             info: RequestInfo::new(batch.batch_idx, batch.next_item_idx()),
-            reset_check_id: uuid::Uuid::new_v4(),
+            reset_id: uuid::Uuid::new_v4(),
         }
     }
 
@@ -173,7 +196,7 @@ impl Request {
         match parent {
             Self::Uniqueness { signup_id, .. } => Self::ResetUpdate {
                 info: RequestInfo::new(batch.batch_idx, batch.next_item_idx()),
-                reset_update_id: uuid::Uuid::new_v4(),
+                reset_id: uuid::Uuid::new_v4(),
                 serial_id: None,
                 signup_id: *signup_id,
             },
@@ -193,15 +216,13 @@ impl Request {
         matches!(self.status(), RequestStatus::Complete)
     }
 
-    /// True if all node responses have been collated.
-    pub fn is_received(&self) -> bool {
-        self.info().correlation_0.is_some()
-            & self.info().correlation_0.is_some()
-            & self.info().correlation_0.is_some()
+    /// True if all associated system responses have been correlated.
+    pub fn is_correlated(&self) -> bool {
+        self.info().is_correlated()
     }
 
-    /// Returns true if the response is deemed to be correlated with the request.
-    pub fn is_correlated(&self, response: &ResponseBody) -> bool {
+    /// Returns true if a system response is deemed to be correlated with this system request.
+    pub fn is_correlated_response(&self, response: &ResponseBody) -> bool {
         match response {
             ResponseBody::IdentityDeletion(result) => match self {
                 Self::IdentityDeletion { serial_id, .. } => result.serial_id == serial_id.unwrap(),
@@ -214,14 +235,16 @@ impl Request {
                 _ => false,
             },
             ResponseBody::ResetCheck(result) => match self {
-                Self::ResetCheck { reset_check_id, .. } => {
-                    result.reset_id == reset_check_id.to_string()
-                }
+                Self::ResetCheck {
+                    reset_id: reset_check_id,
+                    ..
+                } => result.reset_id == reset_check_id.to_string(),
                 _ => false,
             },
             ResponseBody::ResetUpdate(result) => match self {
                 Self::ResetUpdate {
-                    reset_update_id, ..
+                    reset_id: reset_update_id,
+                    ..
                 } => result.reset_id == reset_update_id.to_string(),
                 _ => false,
             },
@@ -255,32 +278,13 @@ impl Request {
 
     /// Sets a correlated response (if correlated).
     pub fn maybe_set_correlated_response(&mut self, response: &ResponseBody) {
-        if self.is_correlated(response) {
-            match response.node_id() {
-                0 => {
-                    self.info_mut().correlation_0 = Some(response.to_owned());
-                }
-                1 => {
-                    self.info_mut().correlation_1 = Some(response.to_owned());
-                }
-                2 => {
-                    self.info_mut().correlation_2 = Some(response.to_owned());
-                }
-                _ => panic!("Invalid node id: {}", response.node_id()),
-            };
+        if self.is_correlated_response(response) {
+            self.info_mut().set_correlation(response);
         }
-    }
-
-    pub fn set_status_complete(&mut self) {
-        self.info_mut().status = RequestStatus::Complete;
     }
 
     pub fn set_status_enqueued(&mut self) {
         self.info_mut().status = RequestStatus::Enqueued;
-    }
-
-    pub fn set_status_error(&mut self) {
-        self.info_mut().status = RequestStatus::Error;
     }
 }
 
@@ -296,7 +300,7 @@ impl fmt::Display for Request {
     }
 }
 
-/// A data structure representing a batch of requests for system processing.
+/// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Debug)]
 pub struct RequestBatch {
     /// Ordinal batch identifier to distinguish batches.
@@ -311,28 +315,12 @@ impl RequestBatch {
         self.batch_idx
     }
 
-    pub fn next_item_idx(&self) -> usize {
-        &self.requests.len() + 1
-    }
-
     pub fn requests(&self) -> &[Request] {
         &self.requests.as_slice()
     }
 
     pub fn requests_mut(&mut self) -> &mut Vec<Request> {
         &mut self.requests
-    }
-
-    pub fn enqueued_mut(&mut self) -> impl Iterator<Item = &mut Request> {
-        self.requests_mut().iter_mut().filter(|r| r.is_enqueued())
-    }
-
-    pub fn complete(&mut self) -> impl Iterator<Item = &Request> {
-        self.requests().iter().filter(|r| r.is_complete())
-    }
-
-    pub fn error(&mut self) -> impl Iterator<Item = &Request> {
-        self.requests().iter().filter(|r| r.is_error())
     }
 
     pub fn new(batch_idx: usize, batch_size: usize) -> Self {
@@ -342,8 +330,28 @@ impl RequestBatch {
         }
     }
 
+    pub fn enqueued_mut(&mut self) -> impl Iterator<Item = &mut Request> {
+        self.requests_mut().iter_mut().filter(|r| r.is_enqueued())
+    }
+
+    pub fn is_complete(&mut self) -> impl Iterator<Item = &Request> {
+        self.requests().iter().filter(|r| r.is_complete())
+    }
+
+    pub fn is_dequeueable(&self) -> bool {
+        self.requests.iter().any(|r| r.is_enqueued())
+    }
+
     pub fn is_enqueueable(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueueable())
+    }
+
+    pub fn is_error(&mut self) -> impl Iterator<Item = &Request> {
+        self.requests().iter().filter(|r| r.is_error())
+    }
+
+    pub fn next_item_idx(&self) -> usize {
+        &self.requests.len() + 1
     }
 
     pub fn maybe_set_response(&mut self, response: ResponseBody) {

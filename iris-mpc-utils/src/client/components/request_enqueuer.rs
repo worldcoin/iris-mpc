@@ -77,13 +77,16 @@ impl From<&Request> for RequestBody {
                 serial_id: serial_id.unwrap_or(1),
                 use_or_rule: false,
             }),
-            Request::ResetCheck { reset_check_id, .. } => Self::ResetCheck(ResetCheckRequest {
+            Request::ResetCheck {
+                reset_id: reset_check_id,
+                ..
+            } => Self::ResetCheck(ResetCheckRequest {
                 batch_size: Some(1),
                 reset_id: reset_check_id.to_string(),
                 s3_key: reset_check_id.to_string(),
             }),
             Request::ResetUpdate {
-                reset_update_id,
+                reset_id: reset_update_id,
                 serial_id,
                 ..
             } => Self::ResetUpdate(ResetUpdateRequest {
