@@ -122,16 +122,18 @@ impl AwsClient {
             })
     }
 
-    /// Delete a message from an SQS queue.
-    pub async fn sqs_delete_message(&self, sqs_receipt_handle: &str) -> Result<(), AwsClientError> {
-        tracing::info!("AWS-SQS: deleting response queue message");
+    /// Purges a response message from an SQS queue.
+    pub async fn sqs_purge_message(&self, sqs_msg: &SqsMessageInfo) -> Result<(), AwsClientError> {
+        tracing::info!("AWS-SQS: purging response message");
         self.sqs
             .delete_message()
             .queue_url(self.config().sqs_response_queue_url())
-            .receipt_handle(sqs_receipt_handle)
+            .receipt_handle(sqs_msg.receipt_handle())
             .send()
             .await
-            .map(|_| {})
+            .map(|_| {
+                tracing::info!("AWS-SQS: purged message");
+            })
             .map_err(|e| {
                 tracing::error!("AWS-SQS: response queue message deletion error: {}", e);
                 AwsClientError::SqsDeleteMessageError(e.to_string())
@@ -139,7 +141,7 @@ impl AwsClient {
     }
 
     /// Purges an SQS queue.
-    pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
+    pub async fn sqs_purge_queue(&self) -> Result<(), AwsClientError> {
         tracing::info!("AWS-SQS: purging response queue");
         self.sqs
             .purge_queue()
@@ -170,27 +172,43 @@ impl AwsClient {
                 tracing::error!("AWS-SQS receive message from queue error: {}", e);
                 AwsClientError::SqsReceiveMessageError(e.to_string())
             })?;
+        let mapped = response
+            .messages
+            .unwrap_or_default()
+            .into_iter()
+            .map(|msg| {
+                let msg = SqsMessageInfo::from(&msg);
+                tracing::info!("AWS-SQS: received message: {}", msg);
+                msg
+            });
 
-        Ok(response.messages().to_vec().into_iter().map(|msg| {
-            let msg = SqsMessageInfo::from(&msg);
-            tracing::info!("AWS-SQS: dequeued message: {}", msg);
-            msg
-        }))
+        Ok(mapped)
     }
 }
 
 impl From<&SqsMessage> for SqsMessageInfo {
     fn from(msg: &SqsMessage) -> Self {
-        let body: serde_json::Value = serde_json::from_str(msg.body().expect("Empty JSON string"))
-            .expect("Invalid JSON string");
+        let raw = msg.body().expect("Empty JSON string");
+        let decoded: serde_json::Value = serde_json::from_str(raw).expect("Invalid JSON string");
 
-        SqsMessageInfo::new(
-            body["MessageId"].as_str().unwrap(),
-            body["MessageAttributes"]["message_type"]["Value"]
-                .as_str()
-                .unwrap(),
-            body["Message"].as_str().unwrap(),
-        )
+        let msg_kind = decoded
+            .get("MessageAttributes")
+            .and_then(|v| v.get("message_type"))
+            .and_then(|v| v.get("Value"))
+            .and_then(|v| v.as_str())
+            .expect("Missing message_type")
+            .to_string();
+        let msg_body = decoded
+            .get("Message")
+            .and_then(|v| v.as_str())
+            .expect("Missing Message")
+            .to_string();
+        let msg_receipt_handle = msg
+            .receipt_handle()
+            .expect("Missing receipt_handle")
+            .to_string();
+
+        SqsMessageInfo::new(msg_kind, msg_body, msg_receipt_handle)
     }
 }
 

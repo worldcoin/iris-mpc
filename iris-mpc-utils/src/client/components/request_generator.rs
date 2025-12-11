@@ -4,7 +4,7 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
+    ClientError, RequestBatch, RequestBatchKind, RequestBatchSize, RequestFactory,
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -53,34 +53,31 @@ impl RequestGenerator {
         let mut batch = RequestBatch::new(batch_idx, self.batch_size());
         for _ in 0..self.batch_size() {
             match self.batch_kind {
-                RequestBatchKind::Simple(batch_kind) => match batch_kind {
-                    IDENTITY_DELETION_MESSAGE_TYPE => {
-                        let r1 = Request::new_uniqueness(&batch);
-                        let r2 = Request::new_identity_deletion(&batch, &r1);
-                        batch.requests_mut().push(r1);
-                        batch.requests_mut().push(r2);
-                    }
-                    REAUTH_MESSAGE_TYPE => {
-                        let r1 = Request::new_uniqueness(&batch);
-                        let r2 = Request::new_reauthorisation(&batch, &r1);
-                        batch.requests_mut().push(r1);
-                        batch.requests_mut().push(r2);
-                    }
+                RequestBatchKind::Simple(kind) => match kind {
                     RESET_CHECK_MESSAGE_TYPE => {
-                        let r1 = Request::new_reset_check(&batch);
-                        batch.requests_mut().push(r1);
-                    }
-                    RESET_UPDATE_MESSAGE_TYPE => {
-                        let r1 = Request::new_uniqueness(&batch);
-                        let r2 = Request::new_reset_update(&batch, &r1);
-                        batch.requests_mut().push(r1);
-                        batch.requests_mut().push(r2);
+                        batch.push(RequestFactory::new_reset_check(&batch));
                     }
                     UNIQUENESS_MESSAGE_TYPE => {
-                        let r1 = Request::new_uniqueness(&batch);
-                        batch.requests_mut().push(r1);
+                        batch.push(RequestFactory::new_uniqueness(&batch));
                     }
-                    _ => unreachable!(),
+                    IDENTITY_DELETION_MESSAGE_TYPE
+                    | REAUTH_MESSAGE_TYPE
+                    | RESET_UPDATE_MESSAGE_TYPE => {
+                        let r1 = RequestFactory::new_uniqueness(&batch);
+                        let r2 = match kind {
+                            IDENTITY_DELETION_MESSAGE_TYPE => {
+                                RequestFactory::new_identity_deletion(&batch, &r1)
+                            }
+                            REAUTH_MESSAGE_TYPE => RequestFactory::new_reauthorisation(&batch, &r1),
+                            RESET_UPDATE_MESSAGE_TYPE => {
+                                RequestFactory::new_reset_update(&batch, &r1)
+                            }
+                            _ => unreachable!(),
+                        };
+                        batch.push(r1);
+                        batch.push(r2);
+                    }
+                    _ => panic!("Invalid batch kind"),
                 },
             }
         }

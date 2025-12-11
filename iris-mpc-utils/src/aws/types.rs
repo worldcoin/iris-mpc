@@ -100,8 +100,8 @@ pub struct SqsMessageInfo {
     // SQS message kind - e.g. "uniqueness".
     kind: String,
 
-    // SQS message ID - a uuid.
-    message_id: String,
+    // SQS message receipt handle for subsequent purging.
+    receipt_handle: String,
 }
 
 impl SqsMessageInfo {
@@ -113,21 +113,21 @@ impl SqsMessageInfo {
         &self.kind
     }
 
-    pub fn message_id(&self) -> &String {
-        &self.message_id
+    pub fn receipt_handle(&self) -> &String {
+        &self.receipt_handle
     }
 
-    pub fn new(message_id: &str, kind: &str, body: &str) -> Self {
+    pub fn new(kind: String, body: String, receipt_handle: String) -> Self {
         Self {
-            body: body.to_string(),
-            kind: kind.to_string(),
-            message_id: message_id.to_string(),
+            body,
+            kind,
+            receipt_handle,
         }
     }
 }
 
 impl fmt::Display for SqsMessageInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}.{}", self.kind, self.message_id)
+        write!(f, "{}", self.kind)
     }
 }

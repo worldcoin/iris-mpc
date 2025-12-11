@@ -13,63 +13,57 @@ use iris_mpc_common::{
     IrisSerialId,
 };
 
-use crate::constants::{PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2};
+use crate::constants::N_PARTIES;
 
 /// Encapsulates common data pertinent to a system processing request.
 #[derive(Clone, Debug)]
 pub struct RequestInfo {
-    /// Associated batch ordinal identifier.
+    /// Associated request batch ordinal identifier.
     batch_idx: usize,
 
-    /// Associated batch item ordinal identifier.
+    /// Associated request batch item ordinal identifier.
     batch_item_idx: usize,
 
-    /// Associated universally unique identifier.
-    request_id: uuid::Uuid,
+    /// Correlated system responses returned by MPC nodes.
+    correlation_set: [Option<ResponseBody>; N_PARTIES],
 
-    /// A correlated system response returned by node 0.
-    correlation_0: Option<ResponseBody>,
-
-    /// A correlated system response returned by node 1.
-    correlation_1: Option<ResponseBody>,
-
-    /// A correlated system response returned by node 2.
-    correlation_2: Option<ResponseBody>,
-
-    /// Associated processing state.
+    /// Current processing state.
     status: RequestStatus,
 }
 
 impl RequestInfo {
-    pub fn new(batch_idx: usize, batch_item_idx: usize) -> Self {
-        Self {
-            batch_idx,
-            batch_item_idx,
-            request_id: uuid::Uuid::new_v4(),
-            correlation_0: None,
-            correlation_1: None,
-            correlation_2: None,
-            status: RequestStatus::default(),
+    pub fn is_correlated(&self) -> bool {
+        self.correlation_set.iter().all(|c| c.is_some())
+    }
+
+    fn set_correlation(&mut self, response: &ResponseBody) {
+        self.correlation_set[response.node_id()] = Some(response.to_owned());
+        tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
+        if self.is_correlated() {
+            self.set_status(RequestStatus::Correlated);
+            tracing::info!("{} :: Correlated", &self);
         }
     }
 
-    /// True if all expected system responses have been observed.
-    pub fn is_correlated(&self) -> bool {
-        self.correlation_0.is_some() & self.correlation_1.is_some() & self.correlation_2.is_some()
+    fn set_status(&mut self, new_state: RequestStatus) {
+        self.status = new_state;
+        tracing::info!("{} :: State -> {:?}", &self, self.status);
     }
+}
 
-    /// Sets a correlated response.
-    fn set_correlation(&mut self, response: &ResponseBody) {
-        let correlation = match response.node_id() {
-            PARTY_IDX_0 => &mut self.correlation_0,
-            PARTY_IDX_1 => &mut self.correlation_1,
-            PARTY_IDX_2 => &mut self.correlation_2,
-            id => panic!("Invalid node id: {}", id),
-        };
-        *correlation = Some(response.to_owned());
-        // TODO: distinguish between response success and error states.
-        if self.is_correlated() {
-            self.status = RequestStatus::Complete;
+impl fmt::Display for RequestInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Request {}.{}", self.batch_idx, self.batch_item_idx)
+    }
+}
+
+impl From<&RequestBatch> for RequestInfo {
+    fn from(batch: &RequestBatch) -> Self {
+        Self {
+            batch_idx: batch.batch_idx(),
+            batch_item_idx: batch.next_item_idx(),
+            correlation_set: [const { None }; N_PARTIES],
+            status: RequestStatus::default(),
         }
     }
 }
@@ -78,42 +72,49 @@ impl RequestInfo {
 #[derive(Clone, Debug)]
 pub enum Request {
     IdentityDeletion {
+        // Standard request information.
         info: RequestInfo,
+        // Iris serial identifier.
         serial_id: Option<IrisSerialId>,
+        // Iris sign-up identifier.
         signup_id: uuid::Uuid,
     },
     Reauthorization {
+        // Standard request information.
         info: RequestInfo,
+        // Operation identifier.
         reauth_id: uuid::Uuid,
+        // Iris serial identifier.
         serial_id: Option<IrisSerialId>,
+        // Iris sign-up identifier.
         signup_id: uuid::Uuid,
     },
     ResetCheck {
+        // Standard request information.
         info: RequestInfo,
+        // Operation identifier.
         reset_id: uuid::Uuid,
     },
     ResetUpdate {
+        // Standard request information.
         info: RequestInfo,
+        // Operation identifier.
         reset_id: uuid::Uuid,
+        // Iris serial identifier.
         serial_id: Option<IrisSerialId>,
+        // Iris sign-up identifier.
         signup_id: uuid::Uuid,
     },
     Uniqueness {
+        // Standard request information.
         info: RequestInfo,
+        // Iris sign-up identifier.
         signup_id: uuid::Uuid,
     },
 }
 
 impl Request {
-    pub fn batch_idx(&self) -> usize {
-        self.info().batch_idx
-    }
-
-    pub fn batch_item_idx(&self) -> usize {
-        self.info().batch_item_idx
-    }
-
-    pub fn info(&self) -> &RequestInfo {
+    fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
@@ -143,10 +144,6 @@ impl Request {
         }
     }
 
-    pub fn request_id(&self) -> &uuid::Uuid {
-        &self.info().request_id
-    }
-
     /// Returns identifier to be assigned to associated iris shares.
     pub fn shares_id(&self) -> Option<&uuid::Uuid> {
         match self {
@@ -162,96 +159,25 @@ impl Request {
         &self.info().status
     }
 
-    pub fn new_identity_deletion(batch: &RequestBatch, parent: &Request) -> Self {
-        match parent {
-            Self::Uniqueness { signup_id, .. } => Self::IdentityDeletion {
-                info: RequestInfo::new(batch.batch_idx, batch.next_item_idx()),
-                serial_id: None,
-                signup_id: *signup_id,
-            },
-            _ => panic!("Invalid request parent"),
-        }
-    }
-
-    pub fn new_reauthorisation(batch: &RequestBatch, parent: &Request) -> Self {
-        match parent {
-            Self::Uniqueness { signup_id, .. } => Self::Reauthorization {
-                info: RequestInfo::new(batch.batch_idx, batch.next_item_idx()),
-                reauth_id: uuid::Uuid::new_v4(),
-                serial_id: None,
-                signup_id: *signup_id,
-            },
-            _ => panic!("Invalid request parent"),
-        }
-    }
-
-    pub fn new_reset_check(batch: &RequestBatch) -> Self {
-        Self::ResetCheck {
-            info: RequestInfo::new(batch.batch_idx, batch.next_item_idx()),
-            reset_id: uuid::Uuid::new_v4(),
-        }
-    }
-
-    pub fn new_reset_update(batch: &RequestBatch, parent: &Request) -> Self {
-        match parent {
-            Self::Uniqueness { signup_id, .. } => Self::ResetUpdate {
-                info: RequestInfo::new(batch.batch_idx, batch.next_item_idx()),
-                reset_id: uuid::Uuid::new_v4(),
-                serial_id: None,
-                signup_id: *signup_id,
-            },
-            _ => panic!("Invalid request parent"),
-        }
-    }
-
-    pub fn new_uniqueness(batch: &RequestBatch) -> Self {
-        Self::Uniqueness {
-            info: RequestInfo::new(batch.batch_idx, batch.next_item_idx()),
-            signup_id: uuid::Uuid::new_v4(),
-        }
-    }
-
-    /// Returns true if request system processing is complete.
-    pub fn is_complete(&self) -> bool {
-        matches!(self.status(), RequestStatus::Complete)
-    }
-
-    /// True if all associated system responses have been correlated.
-    pub fn is_correlated(&self) -> bool {
-        self.info().is_correlated()
-    }
-
     /// Returns true if a system response is deemed to be correlated with this system request.
-    pub fn is_correlated_response(&self, response: &ResponseBody) -> bool {
-        match response {
-            ResponseBody::IdentityDeletion(result) => match self {
-                Self::IdentityDeletion { serial_id, .. } => result.serial_id == serial_id.unwrap(),
-                _ => false,
-            },
-            ResponseBody::Reauthorization(result) => match self {
-                Self::Reauthorization { reauth_id, .. } => {
-                    result.reauth_id == reauth_id.to_string()
-                }
-                _ => false,
-            },
-            ResponseBody::ResetCheck(result) => match self {
-                Self::ResetCheck {
-                    reset_id: reset_check_id,
-                    ..
-                } => result.reset_id == reset_check_id.to_string(),
-                _ => false,
-            },
-            ResponseBody::ResetUpdate(result) => match self {
-                Self::ResetUpdate {
-                    reset_id: reset_update_id,
-                    ..
-                } => result.reset_id == reset_update_id.to_string(),
-                _ => false,
-            },
-            ResponseBody::Uniqueness(result) => match self {
-                Self::Uniqueness { signup_id, .. } => result.signup_id == signup_id.to_string(),
-                _ => false,
-            },
+    fn is_correlated_response(&self, response: &ResponseBody) -> bool {
+        match (self, response) {
+            (Self::IdentityDeletion { serial_id, .. }, ResponseBody::IdentityDeletion(result)) => {
+                result.serial_id == serial_id.unwrap()
+            }
+            (Self::Reauthorization { reauth_id, .. }, ResponseBody::Reauthorization(result)) => {
+                result.reauth_id == reauth_id.to_string()
+            }
+            (Self::ResetCheck { reset_id, .. }, ResponseBody::ResetCheck(result)) => {
+                result.reset_id == reset_id.to_string()
+            }
+            (Self::ResetUpdate { reset_id, .. }, ResponseBody::ResetUpdate(result)) => {
+                result.reset_id == reset_id.to_string()
+            }
+            (Self::Uniqueness { signup_id, .. }, ResponseBody::Uniqueness(result)) => {
+                result.signup_id == signup_id.to_string()
+            }
+            _ => false,
         }
     }
 
@@ -262,7 +188,7 @@ impl Request {
 
     /// Returns true if generated and not awaiting data returned from a parent request.
     pub fn is_enqueueable(&self) -> bool {
-        matches!(self.status(), RequestStatus::Generated)
+        matches!(self.status(), RequestStatus::New)
             && match self {
                 Self::IdentityDeletion { serial_id, .. } => serial_id.is_some(),
                 Self::Reauthorization { serial_id, .. } => serial_id.is_some(),
@@ -271,32 +197,23 @@ impl Request {
             }
     }
 
-    /// Returns true if request system processing resulted in an error.
-    pub fn is_error(&self) -> bool {
-        matches!(self.status(), RequestStatus::Error)
-    }
-
     /// Sets a correlated response (if correlated).
-    pub fn maybe_set_correlated_response(&mut self, response: &ResponseBody) {
-        if self.is_correlated_response(response) {
+    pub fn maybe_set_correlation(&mut self, response: &ResponseBody) -> bool {
+        let is_correlated = self.is_correlated_response(response);
+        if is_correlated {
             self.info_mut().set_correlation(response);
         }
+        is_correlated
     }
 
     pub fn set_status_enqueued(&mut self) {
-        self.info_mut().status = RequestStatus::Enqueued;
+        self.info_mut().set_status(RequestStatus::Enqueued);
     }
 }
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Request:{:03}.{:03}.{}",
-            self.batch_idx(),
-            self.batch_item_idx(),
-            self.label()
-        )
+        write!(f, "{}.{}", self.info(), self.label())
     }
 }
 
@@ -316,7 +233,7 @@ impl RequestBatch {
     }
 
     pub fn requests(&self) -> &[Request] {
-        &self.requests.as_slice()
+        self.requests.as_slice()
     }
 
     pub fn requests_mut(&mut self) -> &mut Vec<Request> {
@@ -334,11 +251,7 @@ impl RequestBatch {
         self.requests_mut().iter_mut().filter(|r| r.is_enqueued())
     }
 
-    pub fn is_complete(&mut self) -> impl Iterator<Item = &Request> {
-        self.requests().iter().filter(|r| r.is_complete())
-    }
-
-    pub fn is_dequeueable(&self) -> bool {
+    pub fn has_enqueued_items(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueued())
     }
 
@@ -346,18 +259,12 @@ impl RequestBatch {
         self.requests.iter().any(|r| r.is_enqueueable())
     }
 
-    pub fn is_error(&mut self) -> impl Iterator<Item = &Request> {
-        self.requests().iter().filter(|r| r.is_error())
-    }
-
     pub fn next_item_idx(&self) -> usize {
         &self.requests.len() + 1
     }
 
-    pub fn maybe_set_response(&mut self, response: ResponseBody) {
-        for request in self.enqueued_mut() {
-            request.maybe_set_correlated_response(&response);
-        }
+    pub fn push(&mut self, request: Request) {
+        self.requests_mut().push(request);
     }
 }
 
@@ -422,21 +329,71 @@ pub enum RequestBody {
 }
 
 /// Enumeration over request processing states.
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub enum RequestStatus {
-    // Processed successfully.
-    Complete,
+    // Associated responses have been correlated.
+    Correlated,
     // Enqueued upon system ingress queue.
     Enqueued,
-    // Processed but an error occurred.
+    // Processed by system but an error occurred.
     Error,
-    // Generated but awaiting processing.
-    Generated,
+    // Newly generated by client.
+    #[default]
+    New,
+    // Processed by system sucessfully.
+    Success,
 }
 
-impl Default for RequestStatus {
-    fn default() -> Self {
-        RequestStatus::Generated
+pub struct RequestFactory {}
+
+impl RequestFactory {
+    pub fn new_identity_deletion(batch: &RequestBatch, parent: &Request) -> Request {
+        match parent {
+            Request::Uniqueness { signup_id, .. } => Request::IdentityDeletion {
+                info: RequestInfo::from(batch),
+                serial_id: None,
+                signup_id: *signup_id,
+            },
+            _ => panic!("Invalid request parent"),
+        }
+    }
+
+    pub fn new_reauthorisation(batch: &RequestBatch, parent: &Request) -> Request {
+        match parent {
+            Request::Uniqueness { signup_id, .. } => Request::Reauthorization {
+                info: RequestInfo::from(batch),
+                reauth_id: uuid::Uuid::new_v4(),
+                serial_id: None,
+                signup_id: *signup_id,
+            },
+            _ => panic!("Invalid request parent"),
+        }
+    }
+
+    pub fn new_reset_check(batch: &RequestBatch) -> Request {
+        Request::ResetCheck {
+            info: RequestInfo::from(batch),
+            reset_id: uuid::Uuid::new_v4(),
+        }
+    }
+
+    pub fn new_reset_update(batch: &RequestBatch, parent: &Request) -> Request {
+        match parent {
+            Request::Uniqueness { signup_id, .. } => Request::ResetUpdate {
+                info: RequestInfo::from(batch),
+                reset_id: uuid::Uuid::new_v4(),
+                serial_id: None,
+                signup_id: *signup_id,
+            },
+            _ => panic!("Invalid request parent"),
+        }
+    }
+
+    pub fn new_uniqueness(batch: &RequestBatch) -> Request {
+        Request::Uniqueness {
+            info: RequestInfo::from(batch),
+            signup_id: uuid::Uuid::new_v4(),
+        }
     }
 }
 
