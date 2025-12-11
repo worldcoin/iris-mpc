@@ -5,10 +5,7 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use super::{
-    sorting::{
-        quickselect::run_quickselect_with_store, swap_network::apply_swap_network,
-        tree_min::tree_min,
-    },
+    sorting::{swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
@@ -1533,6 +1530,12 @@ impl HnswSearcher {
             Vec<<V as VectorStore>::VectorRef>,
         > = BTreeMap::new();
 
+        // Final updated neighborhood associated with each modified `(vector_id, layer)`
+        let mut final_nbhds: BTreeMap<
+            (<V as VectorStore>::VectorRef, usize),
+            Vec<<V as VectorStore>::VectorRef>,
+        > = BTreeMap::new();
+
         for (idx, (vec, links, update_ep)) in updates.iter().enumerate() {
             // Initialize connect plan for output
             output_plans.push(ConnectPlan {
@@ -1549,6 +1552,10 @@ impl HnswSearcher {
                     .updates
                     .insert((vec.clone(), layer), neighbors.clone());
 
+                // Record neighborhood of new node as potential final neighborhood.
+                // (May be overwritten later if updated during batch.)
+                final_nbhds.insert((vec.clone(), layer), neighbors.clone());
+
                 // Record connections to existing nodes, organized by existing node
                 for nb in neighbors.iter() {
                     nbhd_updates
@@ -1558,12 +1565,6 @@ impl HnswSearcher {
                 }
             }
         }
-
-        // Final updated neighborhood associated with each modified `(vector_id, layer)`
-        let mut final_nbhds: BTreeMap<
-            (<V as VectorStore>::VectorRef, usize),
-            Vec<<V as VectorStore>::VectorRef>,
-        > = BTreeMap::new();
 
         for ((nb, layer), query_ids) in nbhd_updates {
             // Identify the graph neighborhood of `nb` in layer `layer` prior to
@@ -1579,7 +1580,8 @@ impl HnswSearcher {
                     .ok_or_eyre("Update entry layer not present")?;
                 nbhd.clone()
             } else {
-                graph.get_links(&nb, layer).await
+                let links = graph.get_links(&nb, layer).await;
+                store.only_valid_vectors(links).await
             };
 
             // For each individual update, in order, extend the neighborhood and
@@ -1616,49 +1618,36 @@ impl HnswSearcher {
             .filter(|((_nb, layer), nb_nbhd)| nb_nbhd.len() > self.params.get_M_limit(*layer))
             .collect();
 
-        // Compute compacted neighborhoods
-        // TODO implement batched mode
-        let mut compacted: BTreeMap<_, _> = BTreeMap::new();
-        for ((id, layer), nbhd) in needs_compaction {
-            let max_size = self.params.get_M_max(layer);
-            let compacted_nbhd =
-                Self::compact_neighborhood(store, id.clone(), &nbhd, max_size).await?;
-            compacted.insert((id, layer), compacted_nbhd);
-        }
+        metrics::histogram!("neighborhooods_compacted").record(needs_compaction.len() as f64);
+        tracing::info!(
+            "Batch compacting {} oversized neighborhoods",
+            needs_compaction.len()
+        );
 
-        // Add updates for neighborhood compaction to last connect plan
-        let last_plan = output_plans
-            .last_mut()
-            .ok_or_eyre("Output plans unexpectedly empty")?;
-        for ((id, layer), mut compacted_nbhd) in compacted {
-            compacted_nbhd.sort();
-            last_plan.updates.insert((id, layer), compacted_nbhd);
+        if !needs_compaction.is_empty() {
+            // Apply batch compaction
+            let (base_nodes, neighborhoods, max_sizes, layers): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
+                needs_compaction
+                    .into_iter()
+                    .map(|((nb, layer), nb_nbhd)| {
+                        (nb, nb_nbhd, self.params.get_M_max(layer), layer)
+                    })
+                    .multiunzip();
+            let compacted_nbhds = store
+                .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
+                .await?;
+
+            // Add updates for neighborhood compaction to last connect plan
+            let last_plan = output_plans
+                .last_mut()
+                .ok_or_eyre("Output plans unexpectedly empty")?;
+            for (id, layer, mut compacted_nbhd) in izip!(base_nodes, layers, compacted_nbhds) {
+                compacted_nbhd.sort();
+                last_plan.updates.insert((id, layer), compacted_nbhd);
+            }
         }
 
         Ok(output_plans)
-    }
-
-    // TODO switch to batched oblivious min-k and random shuffle
-    /// Enforce size constraints on the neighborhood in an oblivious manner
-    #[allow(dead_code)]
-    async fn compact_neighborhood<V: VectorStore>(
-        store: &mut V,
-        query: V::VectorRef,
-        neighborhood: &[V::VectorRef],
-        max_size: usize,
-    ) -> Result<Vec<V::VectorRef>> {
-        let r = store.vectors_as_queries(vec![query]).await;
-        let query = &r[0];
-        let link_distances = store.eval_distance_batch(query, neighborhood).await?;
-        let sorted_idxs =
-            run_quickselect_with_store(&mut (*store), &link_distances, max_size).await?;
-
-        let trimmed_neighborhood = sorted_idxs
-            .into_iter()
-            .take(max_size)
-            .map(|idx| neighborhood[idx].clone())
-            .collect();
-        Ok(trimmed_neighborhood)
     }
 
     /// Insert a vector using the search results from `search_to_insert`,
