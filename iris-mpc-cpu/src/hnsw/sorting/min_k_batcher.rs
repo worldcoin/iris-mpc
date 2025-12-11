@@ -4,7 +4,8 @@
 //! Based on the following paper:
 //! - (<https://eprint.iacr.org/2023/852.pdf>) [1]
 
-use eyre::Result;
+use cached::proc_macro::cached;
+use eyre::{bail, OptionExt, Result};
 use std::{
     cmp,
     collections::{BTreeMap, HashSet},
@@ -239,7 +240,12 @@ fn build_recursive_sort(
 ///
 /// `n`: Total number of input wires.
 /// `k`: The number of smallest elements to find.
+#[cached(size = 200, result = true)]
 pub fn min_k_batcher_sort_network(n: usize, k: usize) -> Result<SwapNetwork> {
+    if n < k {
+        bail!("Cannot construct min-k selection network for n < k; n = {n}, k = {k}");
+    }
+
     let mut builder = MinKBatcherBuilder::new();
     let initial_indices: Vec<usize> = (0..n).collect();
 
@@ -295,7 +301,12 @@ pub fn min_k_batcher_sort_network(n: usize, k: usize) -> Result<SwapNetwork> {
     }
 
     // Apply inverse permutation on the swap network indices.
-    swap_network.map_indices(|i| Ok(inv_perm[i]))?;
+    swap_network.map_indices(|i| {
+        inv_perm
+            .get(i)
+            .copied()
+            .ok_or_eyre("Unexpected: permutation index out of bounds")
+    })?;
     // Now the Min-K elements form a prefix of the sequence.
 
     Ok(swap_network)

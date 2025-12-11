@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1#b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1#b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -120,6 +120,7 @@ dependencies = [
  "clap",
  "config",
  "eyre",
+ "futures-util",
  "itertools 0.14.0",
  "rand",
  "serde",
@@ -134,7 +135,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1#b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -149,7 +150,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e#45b3dd3f2bce88fd6c8a29b07beb4b7635fe5a2e"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1#b7da33ad5ff7dcd441c9b2026cafb8d8a0315db1"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -1330,6 +1331,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "cached"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "801927ee168e17809ab8901d9f01f700cd7d8d6a6527997fee44e4b0327a253c"
+dependencies = [
+ "ahash",
+ "cached_proc_macro",
+ "cached_proc_macro_types",
+ "hashbrown 0.15.0",
+ "once_cell",
+ "thiserror 2.0.16",
+ "web-time",
+]
+
+[[package]]
+name = "cached_proc_macro"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9225bdcf4e4a9a4c08bf16607908eb2fbf746828d5e0b5e019726dbf6571f201"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "cached_proc_macro_types"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
+
+[[package]]
 name = "cadence"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1769,6 +1803,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "486c221362668c63a1636cfa51463b09574433b39029326cff40864b3ba12b6e"
 dependencies = [
  "libloading",
+]
+
+[[package]]
+name = "darling"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
+dependencies = [
+ "darling_core",
+ "darling_macro",
+]
+
+[[package]]
+name = "darling_core"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
+dependencies = [
+ "darling_core",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2699,6 +2768,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ident_case"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
+
+[[package]]
 name = "idna"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2937,6 +3012,7 @@ dependencies = [
  "blake3",
  "bytemuck",
  "bytes",
+ "cached",
  "clap",
  "core_affinity",
  "criterion",
@@ -3235,7 +3311,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]

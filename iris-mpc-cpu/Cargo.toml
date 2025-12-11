@@ -17,6 +17,7 @@ blake3 = "1"
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
+cached = "0.56.0"
 clap.workspace = true
 core_affinity = "0.8.3"
 crossbeam = "0.8.4"
