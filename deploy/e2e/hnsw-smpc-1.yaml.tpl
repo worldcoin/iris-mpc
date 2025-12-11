@@ -2,6 +2,11 @@ hnsw-smpc-1:
   fullnameOverride: "hnsw-smpc-1"
   image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
+  securityContext:
+    capabilities:
+      add:
+      - NET_ADMIN
+
   environment: $ENV
   replicaCount: 1
 
