@@ -13,8 +13,7 @@ RUN apt-get update && apt-get install -y \
     debhelper \
     ca-certificates \
     protobuf-compiler \
-    wget \
-    iproute2
+    wget
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -38,7 +37,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG ARCHITECTURE
 ENV ARCHITECTURE=$ARCHITECTURE
 
-RUN apt-get update && apt-get install -y ca-certificates curl unzip
+RUN apt-get update && apt-get install -y ca-certificates curl unzip iproute2
 
 RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "awscliv2.zip" && \
   unzip awscliv2.zip && \
