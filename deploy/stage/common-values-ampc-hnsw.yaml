@@ -73,8 +73,8 @@ nodeSelector:
   node.kubernetes.io/instance-type: "x8g.2xlarge"
 
 podSecurityContext:
-  runAsUser: 65534
-  runAsGroup: 65534
+  capabilities:
+    add: ["NET_ADMIN"]
 
 preStop:
   # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
