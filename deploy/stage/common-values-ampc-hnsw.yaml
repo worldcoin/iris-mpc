@@ -73,14 +73,15 @@ nodeSelector:
   node.kubernetes.io/instance-type: "x8g.2xlarge"
 
 podSecurityContext:
-  runAsNonRoot: true
-  seccompProfile:
-    type: RuntimeDefault
+  runAsNonRoot: false
+  seccompProfile: null
 
 securityContext:
   allowPrivilegeEscalation: true
+  runAsNonRoot: false
   capabilities:
-    add: ["NET_ADMIN"]
+    add:
+      - NET_ADMIN
 
 preStop:
   # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
