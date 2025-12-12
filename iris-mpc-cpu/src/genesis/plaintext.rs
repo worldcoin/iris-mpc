@@ -32,7 +32,7 @@ use crate::{
     },
     genesis::BatchSize,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswParams, HnswSearcher},
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
 };
 
 /// Represents irises db table, mapping serial ids to version, and left and right iris codes.
@@ -148,14 +148,11 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             .await?;
     }
 
-    let search_params = HnswParams::new(
+    let searcher = HnswSearcher::new_standard(
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
         state.config.hnsw_M,
     );
-    let searcher = HnswSearcher {
-        params: search_params,
-    };
 
     let prf_key: [u8; 16] = state
         .config
@@ -215,7 +212,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     let query = Arc::new(iris);
 
                     let identifier = (vector_id, side);
-                    let insertion_layer = searcher.select_layer_prf(&prf_key, &identifier)?;
+                    let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
                     let (links, set_ep) = searcher
                         .search_to_insert(store, graph, &query, insertion_layer)
@@ -305,7 +302,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             ) {
                 let query = Arc::new(iris);
                 let identifier = (vector_id, side);
-                let insertion_layer = searcher.select_layer_prf(&prf_key, &identifier)?;
+                let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
                 let (links, set_ep) = searcher
                     .search_to_insert(store, graph, &query, insertion_layer)

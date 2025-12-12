@@ -1,5 +1,4 @@
 use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
-use crate::helpers::statistics::BucketResult;
 use crate::iris_db::iris::MATCH_THRESHOLD_RATIO;
 use crate::job::{BatchMetadata, GaloisSharesBothSides};
 use crate::ROTATIONS;
@@ -8,7 +7,6 @@ use crate::{
     helpers::{
         inmemory_store::InMemoryStore,
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::BucketStatistics,
     },
     iris_db::{
         db::IrisDB,
@@ -18,6 +16,7 @@ use crate::{
     vector_id::VectorId,
     IRIS_CODE_LENGTH,
 };
+use ampc_anon_stats::{BucketResult, BucketStatistics};
 use eyre::Result;
 use itertools::izip;
 use rand::{

@@ -6,29 +6,31 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
+use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
+use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
+use ampc_anon_stats::AnonStatsStore;
+use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
+use ampc_server_utils::shutdown_handler::ShutdownHandler;
+use ampc_server_utils::{
+    delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
+    init_heartbeat_task, set_node_ready, start_coordination_server, wait_for_others_ready,
+    wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
+};
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
-use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
     RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
-use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
-use iris_mpc_common::helpers::task_monitor::TaskMonitor;
-use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
+use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_common::server_coordination::{
-    get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
-    BatchSyncSharedState,
-};
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
@@ -55,6 +57,7 @@ pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
 pub async fn server_main(config: Config) -> Result<()> {
+    tracing::info!("Starting ampc-hnsw server with configuration: {:?}", config);
     let shutdown_handler = init_shutdown_handler(&config).await;
 
     process_config(&config);
@@ -69,7 +72,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     check_store_consistency(&config, &iris_store).await?;
     let my_state = build_sync_state(&config, &aws_clients, &iris_store).await?;
 
-    let mut background_tasks = init_task_monitor();
+    let mut background_tasks = TaskMonitor::new();
 
     // Initialize shared current_batch_id
     let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
@@ -78,21 +81,30 @@ pub async fn server_main(config: Config) -> Result<()> {
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
-    let is_ready_flag = start_coordination_server(
-        &config,
+    let server_coord_config = config
+        .server_coordination
+        .clone()
+        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
+
+    tracing::info!(
+        "Server coordination config loaded: party_id={}, healthcheck_ports={:?}",
+        server_coord_config.party_id,
+        server_coord_config.healthcheck_ports
+    );
+
+    // Start coordination server
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+        &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
-        batch_sync_shared_state.clone(),
+        Some(batch_sync_shared_state.clone()),
     )
     .await;
+    tracing::info!("Coordination server started");
 
-    background_tasks.check_tasks();
-
-    wait_for_others_unready(&config).await?;
-    init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
-
-    background_tasks.check_tasks();
+    // Wait for other servers to be un-ready (syncing on startup)
+    wait_for_others_unready(&server_coord_config, &verified_peers, &my_uuid).await?;
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
@@ -133,6 +145,18 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
 
+    if let Some(url) = config.get_anon_stats_db_url() {
+        let schema = config.get_anon_stats_db_schema();
+        let anon_client =
+            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+        let anon_store = AnonStatsStore::new(&anon_client).await?;
+        hawk_actor.set_anon_stats_store(Some(anon_store));
+    } else {
+        tracing::warn!(
+                "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
+            );
+    }
+
     load_database(
         &config,
         &iris_store,
@@ -155,10 +179,16 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
+    init_heartbeat_task(
+        &server_coord_config,
+        &mut background_tasks,
+        &shutdown_handler,
+    )
+    .await?;
     background_tasks.check_tasks();
 
     set_node_ready(is_ready_flag);
-    wait_for_others_ready(&config).await?;
+    wait_for_others_ready(&server_coord_config).await?;
 
     background_tasks.check_tasks();
 
@@ -348,7 +378,12 @@ async fn build_sync_state(
     let modifications = store
         .last_modifications(config.max_modifications_lookback)
         .await?;
-    let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
+    let next_sns_sequence_num = get_next_sns_seq_num(
+        &aws_clients.sqs_client,
+        &config.requests_queue_url,
+        config.sqs_sync_long_poll_seconds,
+    )
+    .await?;
     let common_config = CommonConfig::from(config.clone());
 
     tracing::info!("Database store length is: {}", db_len);
@@ -362,8 +397,9 @@ async fn build_sync_state(
 }
 
 async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
+    let server_coord_config = config.server_coordination.clone().unwrap();
     let mut all_states = vec![my_state.clone()];
-    all_states.extend(get_others_sync_state(config).await?);
+    all_states.extend(get_others_sync_state(&server_coord_config).await?);
     let sync_result = SyncResult::new(my_state.clone(), all_states);
     Ok(sync_result)
 }
@@ -377,10 +413,11 @@ async fn sync_sqs_queues(
 ) -> Result<()> {
     let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
     delete_messages_until_sequence_num(
-        config,
         &aws_clients.sqs_client,
+        &config.requests_queue_url,
         sync_result.my_state.next_sns_sequence_num,
         max_sqs_sequence_num,
+        config.sqs_sync_long_poll_seconds,
     )
     .await?;
 
@@ -393,16 +430,26 @@ async fn init_hawk_actor(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
-    let node_addresses: Vec<String> = config
+    let server_coord_config = config.server_coordination.clone().unwrap();
+
+    let node_inbound_addresses: Vec<String> = server_coord_config
         .node_hostnames
         .iter()
         .zip(config.service_ports.iter())
         .map(|(host, port)| format!("{}:{}", host, port))
         .collect();
 
+    let node_outbound_addresses: Vec<String> = server_coord_config
+        .node_hostnames
+        .iter()
+        .zip(config.service_outbound_ports.iter())
+        .map(|(host, port)| format!("{}:{}", host, port))
+        .collect();
+
     let hawk_args = HawkArgs {
         party_index: config.party_id,
-        addresses: node_addresses.clone(),
+        addresses: node_inbound_addresses.clone(),
+        outbound_addrs: node_outbound_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
@@ -417,12 +464,17 @@ async fn init_hawk_actor(
     };
 
     tracing::info!(
-        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+       "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outobund addresses: {:?}",
         hawk_args.party_index,
-        node_addresses
+        node_inbound_addresses,
+        node_outbound_addresses
     );
 
-    HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await
+    HawkActor::from_cli(
+        &hawk_args,
+        shutdown_handler.get_network_cancellation_token(),
+    )
+    .await
 }
 
 /// Loads iris code shares & HNSW graph from Postgres and/or S3.

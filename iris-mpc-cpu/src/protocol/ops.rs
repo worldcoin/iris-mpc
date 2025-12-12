@@ -1,78 +1,36 @@
-use super::binary::{
-    bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
-    single_extract_msb_u32,
-};
 use crate::{
-    execution::session::{NetworkSession, Session, SessionHandles},
-    network::value::{
-        NetworkInt,
-        NetworkValue::{self},
-    },
-    protocol::{
-        prf::{Prf, PrfSeed},
-        shared_iris::ArcIris,
-    },
+    execution::session::{Session, SessionHandles},
+    protocol::shared_iris::ArcIris,
     shares::{
         bit::Bit,
-        ring_impl::RingElement,
-        share::{DistanceShare, Share},
+        ring_impl::{RingElement, VecRingElement},
+        share::{reconstruct_distance_vector, DistanceShare, Share},
         vecshare::VecShare,
-        IntRing2k,
     },
 };
+use ampc_actor_utils::fast_metrics::FastHistogram;
+use ampc_actor_utils::protocol::binary::{
+    and_product, bit_inject, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
+    single_extract_msb_u32,
+};
+// Import non-iris-specific protocol operations from ampc-common
+pub use ampc_actor_utils::protocol::ops::{
+    galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
+    sub_pub,
+};
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::{fast_metrics::FastHistogram, galois_engine::degree4::SHARE_OF_MAX_DISTANCE};
+use iris_mpc_common::{
+    galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
+    ROTATIONS,
+};
 use itertools::{izip, Itertools};
-use std::{array, ops::Not, time::Instant};
+use std::{cmp::Ordering, ops::Not, time::Instant};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
 pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
-
-/// Setup the PRF seeds in the replicated protocol.
-/// Each party sends to the next party a random seed.
-/// At the end, each party will hold two seeds which are the basis of the
-/// replicated protocols.
-#[instrument(
-    level = "trace",
-    target = "searcher::network",
-    fields(party = ?session.own_role),
-    skip_all
-)]
-pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<Prf> {
-    // send my_seed to the next party
-    session.send_next(NetworkValue::PrfKey(my_seed)).await?;
-    // deserializing received seed.
-    let other_seed = match session.receive_prev().await {
-        Ok(NetworkValue::PrfKey(seed)) => seed,
-        _ => bail!("Could not deserialize PrfKey"),
-    };
-    // creating the two PRFs
-    Ok(Prf::new(my_seed, other_seed))
-}
-
-/// Setup an RNG common between all parties, for use in stochastic algorithms (e.g. HNSW layer selection).
-pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<PrfSeed> {
-    let my_msg = NetworkValue::PrfKey(my_seed);
-
-    let decode = |msg| match msg {
-        Ok(NetworkValue::PrfKey(seed)) => Ok(seed),
-        _ => Err(eyre!("Could not deserialize PrfKey")),
-    };
-
-    // Round 1: Send to the next party and receive from the previous party.
-    session.send_next(my_msg.clone()).await?;
-    let prev_seed = decode(session.receive_prev().await)?;
-
-    // Round 2: Send/receive in the opposite direction.
-    session.send_prev(my_msg).await?;
-    let next_seed = decode(session.receive_next().await)?;
-
-    let shared_seed = array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]);
-    Ok(shared_seed)
-}
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
@@ -106,97 +64,6 @@ pub fn translate_threshold_a(t: f64) -> u32 {
         "Threshold must be in the range [0, 1]"
     );
     ((1. - 2. * t) * (B as f64)) as u32
-}
-
-/// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
-/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
-/// The result of the comparisons is then summed up bucket-wise, with each bucket corresponding to a threshold.
-pub async fn compare_threshold_buckets(
-    session: &mut Session,
-    threshold_a_terms: &[u32],
-    distances: &[DistanceShare<u32>],
-) -> Result<Vec<Share<u32>>> {
-    let diffs = threshold_a_terms
-        .iter()
-        .flat_map(|a| {
-            distances.iter().map(|d| {
-                let x = d.mask_dot.clone() * *a;
-                let y = d.code_dot.clone() * B as u32;
-                x - y
-            })
-        })
-        .collect_vec();
-
-    tracing::info!("compare_threshold_buckets diffs length: {}", diffs.len());
-    let msbs = extract_msb_u32_batch(session, &diffs).await?;
-    let msbs = VecShare::new_vec(msbs);
-    tracing::info!("msbs extracted, now bit_injecting");
-    // bit_inject all MSBs into u32 to be able to add them up
-    let sums = bit_inject_ot_2round(session, msbs).await?;
-    tracing::info!("bit_inject done, now summing");
-    // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
-    let buckets = sums
-        .into_iter()
-        .chunks(distances.len())
-        .into_iter()
-        .map(|chunk| chunk.reduce(|a, b| a + b).unwrap_or_default())
-        .collect_vec();
-
-    Ok(buckets)
-}
-
-/// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
-/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
-/// The result of the comparisons is then summed up bucket-wise, with each bucket corresponding to a threshold.
-///
-/// In comparison to `compare_threshold_buckets`, this function takes grouped distances as input, and for each group
-/// only the minimum distance is considered for creating the buckets.
-pub async fn compare_min_threshold_buckets(
-    session: &mut Session,
-    threshold_a_terms: &[u32],
-    distances: &[Vec<DistanceShare<u32>>],
-) -> Result<Vec<Share<u32>>> {
-    // grab the first one of the distance in each group
-    let mut reduced_distances = distances
-        .iter()
-        .map(|group| {
-            group
-                .first()
-                .cloned()
-                .ok_or_else(|| eyre!("Expected at least one distance in the group"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut sizes = distances
-        .iter()
-        .map(|group| group.len() - 1)
-        .collect::<Vec<_>>();
-
-    // This loop is executed at most MAX_ROTATIONS-1 times, which is 30 currently
-    // however, in practice it will probably be executed much less often.
-    while !sizes.iter().all(|&size| size == 0) {
-        // we grab a vector of potential rotations to reduce
-        // If this current group is already reduced to 0, we grab the first element as a dummy copy.
-        let distances_to_reduce: Vec<(DistanceShare<u32>, DistanceShare<u32>)> = distances
-            .iter()
-            .zip(sizes.iter_mut())
-            .map(|(group, size)| {
-                let element_to_reduce = group[*size].clone();
-                if *size > 0 {
-                    *size -= 1;
-                }
-                element_to_reduce
-            })
-            .zip(reduced_distances.iter())
-            .map(|(new, reduced)| (new, reduced.clone()))
-            .collect();
-
-        reduced_distances = cross_compare_and_swap(session, &distances_to_reduce).await?;
-    }
-
-    // Now we have a single distance for each group, we can compare it to the thresholds
-    let buckets = compare_threshold_buckets(session, threshold_a_terms, &reduced_distances).await?;
-
-    Ok(buckets)
 }
 
 /// The same as compare_threshold, but the input shares are 16-bit and lifted to
@@ -258,7 +125,7 @@ pub(crate) async fn cross_mul(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<Share<u32>>> {
-    let res_a: Vec<RingElement<u32>> = distances
+    let res_a: VecRingElement<u32> = distances
         .iter()
         .map(|(d1, d2)| {
             session.prf.gen_zero_share() + &d2.code_dot * &d1.mask_dot - &d1.code_dot * &d2.mask_dot
@@ -267,20 +134,64 @@ pub(crate) async fn cross_mul(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+    let res_b = network.receive_ring_vec_prev().await?;
+    Ok(izip!(res_a, res_b).map(|(a, b)| Share::new(a, b)).collect())
+}
+
+/// Conditionally selects equally-sized slices of input shares based on control bits.
+/// If the control bit is 1, it selects the left value shares; otherwise, it selects the right value share.
+async fn select_shared_slices_by_bits(
+    session: &mut Session,
+    left_values: &[Share<u32>],
+    right_values: &[Share<u32>],
+    control_bits: &[Share<u32>],
+    slice_size: usize,
+) -> Result<Vec<Share<u32>>> {
+    if left_values.len() != right_values.len() {
+        bail!("Left and right values must have the same length");
+    }
+    if left_values.len() % slice_size != 0 {
+        bail!("Left and right values length must be multiple of slice size");
+    }
+    if control_bits.len() != left_values.len() / slice_size {
+        bail!("Number of control bits must match number of slices");
+    }
+
+    // Conditional multiplexing:
+    // If control bit is 1, select left_value, else select right_value.
+    // res = c * (left_value - right_value) + right_value
+    // Compute c * (left_value - right_value)
+    let res_a: VecRingElement<u32> = izip!(
+        left_values.chunks(slice_size),
+        right_values.chunks(slice_size),
+        control_bits.iter()
+    )
+    .flat_map(|(left_chunk, right_chunk, c)| {
+        left_chunk
+            .iter()
+            .zip(right_chunk.iter())
+            .map(|(left, right)| {
+                let diff = left.clone() - right.clone();
+                session.prf.gen_zero_share() + c.a * diff.a + c.b * diff.a + c.a * diff.b
+            })
+            .collect_vec()
+    })
+    .collect();
+
+    let network = &mut session.network_session;
+
+    network.send_ring_vec_next(&res_a).await?;
+
+    let res_b = network.receive_ring_vec_prev().await?;
+
+    // Pack networking messages into shares and
+    // compute the result by adding the right shares
+    Ok(izip!(res_a, res_b)
         .map(|(a, b)| Share::new(a, b))
+        .zip(right_values.iter())
+        .map(|(res, right)| res + right)
         .collect())
 }
 
@@ -294,10 +205,9 @@ async fn conditionally_select_distance(
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
     control_bits: &[Share<u32>],
 ) -> Result<Vec<DistanceShare<u32>>> {
-    assert!(
-        distances.len() == control_bits.len(),
-        "Number of distances must match number of control bits"
-    );
+    if distances.len() != control_bits.len() {
+        bail!("Number of distances must match number of control bits");
+    }
 
     // Conditional multiplexing:
     // If control bit is 1, select d1, else select d2.
@@ -305,7 +215,7 @@ async fn conditionally_select_distance(
     // We need to do it for both code_dot and mask_dot.
 
     // we start with the mult of c and d1-d2
-    let res_a: Vec<RingElement<u32>> = distances
+    let res_a: VecRingElement<u32> = distances
         .iter()
         .zip(control_bits.iter())
         .flat_map(|((d1, d2), c)| {
@@ -321,21 +231,12 @@ async fn conditionally_select_distance(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // finally compute the result by adding the d2 shares
-    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+    Ok(izip!(res_a, res_b)
         // combine a and b part into shares
         .map(|(a, b)| Share::new(a, b))
         // combine the code and mask parts into DistanceShare
@@ -351,6 +252,91 @@ async fn conditionally_select_distance(
             mask_dot: res.mask_dot + &d2.mask_dot,
         })
         .collect())
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub(crate) async fn conditionally_select_distances_with_plain_ids(
+    session: &mut Session,
+    left_distances: Vec<(u32, DistanceShare<u32>)>,
+    right_distances: Vec<(u32, DistanceShare<u32>)>,
+    control_bits: Vec<Share<u32>>,
+) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+    if left_distances.len() != control_bits.len() {
+        eyre::bail!("Number of distances must match number of control bits");
+    }
+    if left_distances.len() != right_distances.len() {
+        eyre::bail!("Left and right distances must have the same length");
+    }
+    if left_distances.is_empty() {
+        eyre::bail!("Distances must not be empty");
+    }
+
+    // Now select distances
+    let (left_ids, left_dist): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
+    let (right_ids, right_dist): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
+    let left_dist = left_dist
+        .into_iter()
+        .flat_map(|d| [d.code_dot, d.mask_dot])
+        .collect_vec();
+    let right_dist = right_dist
+        .into_iter()
+        .flat_map(|d| [d.code_dot, d.mask_dot])
+        .collect_vec();
+
+    let distances =
+        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 2)
+            .await?
+            .into_iter()
+            .tuples()
+            .map(|(code_dot, mask_dot)| DistanceShare::new(code_dot, mask_dot));
+
+    // Select ids first: c * (left_id - right_id) + right_id
+    let ids = izip!(left_ids, right_ids, control_bits).map(|(left_id, right_id, c)| {
+        let diff = left_id.wrapping_sub(right_id);
+        let mut res = c.clone() * RingElement(diff);
+        res.add_assign_const_role(right_id, session.own_role());
+        res
+    });
+
+    Ok(izip!(ids, distances)
+        .map(|(id, distance)| (id, distance))
+        .collect_vec())
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub(crate) async fn conditionally_select_distances_with_shared_ids(
+    session: &mut Session,
+    left_distances: Vec<(Share<u32>, DistanceShare<u32>)>,
+    right_distances: Vec<(Share<u32>, DistanceShare<u32>)>,
+    control_bits: Vec<Share<u32>>,
+) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+    if left_distances.len() != control_bits.len() {
+        eyre::bail!("Number of distances must match number of control bits");
+    }
+    if left_distances.len() != right_distances.len() {
+        eyre::bail!("Left and right distances must have the same length");
+    }
+    if left_distances.is_empty() {
+        eyre::bail!("Distances must not be empty");
+    }
+
+    let left_dist = left_distances
+        .into_iter()
+        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .collect_vec();
+    let right_dist = right_distances
+        .into_iter()
+        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .collect_vec();
+    let distances =
+        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 3)
+            .await?
+            .into_iter()
+            .tuples()
+            .map(|(id, code_dot, mask_dot)| (id, DistanceShare::new(code_dot, mask_dot)))
+            .collect_vec();
+
+    Ok(distances)
 }
 
 /// Conditionally swaps the distance shares based on control bits.
@@ -379,7 +365,7 @@ pub async fn conditionally_swap_distances_plain_ids(
         })
         .collect_vec();
     // Lift swap bits to u32 shares
-    let swap_bits_u32 = bit_inject_ot_2round(session, VecShare::<Bit>::new_vec(swap_bits))
+    let swap_bits_u32 = bit_inject(session, VecShare::<Bit>::new_vec(swap_bits))
         .await?
         .inner();
 
@@ -442,7 +428,7 @@ pub async fn conditionally_swap_distances(
         return Err(eyre!("swap bits and indices must have the same length"));
     }
     // Lift bits to u32 shares
-    let swap_bits_u32 = bit_inject_ot_2round(session, VecShare::<Bit>::new_vec(swap_bits))
+    let swap_bits_u32 = bit_inject(session, VecShare::<Bit>::new_vec(swap_bits))
         .await?
         .inner();
 
@@ -459,7 +445,7 @@ pub async fn conditionally_swap_distances(
     // We need to do it for ids, code_dot and mask_dot.
 
     // Compute c * (d1-d2)
-    let res_a: Vec<RingElement<u32>> = indices
+    let res_a: VecRingElement<u32> = indices
         .iter()
         .zip(swap_bits_u32.iter())
         .flat_map(|((idx1, idx2), sb)| {
@@ -475,18 +461,9 @@ pub async fn conditionally_swap_distances(
 
     let network = &mut session.network_session;
 
-    let message = if res_a.len() == 1 {
-        NetworkValue::RingElement32(res_a[0])
-    } else {
-        NetworkValue::VecRing32(res_a.clone())
-    };
-    network.send_next(message).await?;
+    network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = match network.receive_prev().await {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => bail!("Could not deserialize RingElement32"),
-    };
+    let res_b = network.receive_ring_vec_prev().await?;
 
     // Finally compute the swapped tuples.
     let swapped_distances = izip!(res_a, res_b)
@@ -562,7 +539,7 @@ pub async fn cross_compare(
 /// 2. The most significant bit of the result is extracted.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn oblivious_cross_compare(
+pub(crate) async fn oblivious_cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<Share<Bit>>> {
@@ -572,25 +549,188 @@ pub async fn oblivious_cross_compare(
     extract_msb_u32_batch(session, &diff).await
 }
 
+/// For every pair of distance shares (d1, d2), this computes the secret-shared bit d2 < d1 and lift it to u32 shares.
+///
+/// The less-than operator is implemented in 2 steps:
+///
+/// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
+/// 2. The most significant bit of the result is extracted.
+///
+/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
+pub(crate) async fn oblivious_cross_compare_lifted(
+    session: &mut Session,
+    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+) -> Result<Vec<Share<u32>>> {
+    // compute the secret-shared bits d1 < d2
+    let bits = oblivious_cross_compare(session, distances).await?;
+    // inject bits to T shares
+    Ok(bit_inject(session, VecShare::new_vec(bits)).await?.inner())
+}
+
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn cross_compare_and_swap(
+pub(crate) async fn min_of_pair_batch(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<DistanceShare<u32>>> {
-    // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
-    let diff = cross_mul(session, distances).await?;
-    // Compute the MSB of the above
-    let bits = extract_msb_u32_batch(session, &diff).await?;
-    // inject bits to u32 shares
-    let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
-        .await?
-        .inner();
+    // compute the secret-shared bits d1 < d2
+    let bits = oblivious_cross_compare_lifted(session, distances).await?;
 
-    conditionally_select_distance(session, distances, u32_bits.as_slice()).await
+    conditionally_select_distance(session, distances, bits.as_slice()).await
 }
 
+/// Given a flattened array of distance shares arranged in batches,
+/// this function computes the minimum distance share within each batch via the round-robin method.
+///
+/// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
+/// then the input distance shares are arranged as follows:
+/// `[
+///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
+///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
+///     ...,
+///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
+/// ]`
+///
+/// The round-robin method computes all pairwise "less-than" relations within each batch,
+/// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 | b10| 1  | b12| b13|
+/// d2 | b20| b21| 1  | b23|
+/// d3 | b30| b31| b32| 1  |
+///
+/// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
+/// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
+/// that turns the comparison table into
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 |!b01| 1  | b12| b13|
+/// d2 |!b02|!b12| 1  | b23|
+/// d3 |!b03|!b13|!b23| 1  |
+///
+/// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
+/// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
+/// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
+/// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
+/// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
+pub(crate) async fn min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<u32>>> {
+    if distances.is_empty() {
+        eyre::bail!("Expected at least one distance share");
+    }
+    if distances.len() % batch_size != 0 {
+        eyre::bail!("Distances length must be a multiple of batch size");
+    }
+
+    // Within each batch, compute all the pairwise comparisons in a round-robin fashion.
+    // The resulting comparison table looks like
+    //
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | -  | b01| b02| b03|
+    // d1 |    | -  | b12| b13|
+    // d2 |    |    | -  | b23|
+    // d3 |    |    |    | -  |
+    //
+    // where `bij` is the bit corresponding to `di < dj`.
+    // Comparison bits are arranged in a flat vector as
+    // `[b01, b02, b03, b12, b13, b23]`.
+    let num_batches = distances.len() / batch_size;
+    let mut pairs = Vec::with_capacity(num_batches * (batch_size * (batch_size - 1) / 2));
+    for i_batch in 0..num_batches {
+        for i in 0..batch_size {
+            for j in (i + 1)..batch_size {
+                let distance_i = distances[i * num_batches + i_batch].clone();
+                let distance_j = distances[j * num_batches + i_batch].clone();
+                pairs.push((distance_i, distance_j));
+            }
+        }
+    }
+    let comparison_bits = oblivious_cross_compare(session, &pairs).await?;
+    // Fill in the rest of the comparison table by setting diagonal bits to 1 and negating the bits above the diagonal.
+    // In other words, the `[i][j]`-th value of the table is equal to the bit
+    // - `di < dj` if `i < j`, or
+    // - `di <= dj` if `i >= j`.
+    //
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | 1  | b01| b02| b03|
+    // d1 |!b01| 1  | b12| b13|
+    // d2 |!b02|!b12| 1  | b23|
+    // d3 |!b03|!b13|!b23| 1  |
+    //
+    // Extract this table column-wise as `batch_matrix` to AND them element-wise.
+    // Group jth columns together, i.e., return a matrix `batch_selection_bits`, where `batch_selection_bits[j]` contains the comparison bits
+    // between distance `j` of every batch and all the other distances within the same batch.
+    let mut batch_selection_bits = (0..batch_size)
+        .map(|_| VecShare::with_capacity(num_batches * batch_size))
+        .collect_vec();
+    for batch in comparison_bits.chunks(batch_size * (batch_size - 1) / 2) {
+        let mut batch_matrix = (0..batch_size)
+            .map(|_| VecShare::with_capacity(batch_size))
+            .collect_vec();
+        let mut batch_counter = 0;
+        for i in 0..batch_size {
+            for j in 0..batch_size {
+                let value = match i.cmp(&j) {
+                    Ordering::Less => {
+                        batch_counter += 1;
+                        batch[batch_counter - 1].clone()
+                    }
+                    Ordering::Equal => Share::from_const(Bit::new(true), session.own_role()),
+                    Ordering::Greater => batch_matrix[i].get_at(j).not(),
+                };
+                batch_matrix[j].push(value);
+            }
+        }
+        for (j, column_bits) in batch_matrix.into_iter().enumerate() {
+            batch_selection_bits[j].extend(column_bits);
+        }
+    }
+    // Compute the AND of each row in the `batch_selection_bits` matrix.
+    // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
+    let selection_bits =
+        and_product(session, batch_selection_bits, num_batches * batch_size).await?;
+    // The resulting bits are bit injected into u32.
+    let selection_bits: VecShare<u32> = bit_inject(session, selection_bits).await?;
+    // Multiply distance shares with selection bits to zero out non-minimum distances.
+    let selected_distances = {
+        let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
+        for i_batch in 0..num_batches {
+            for i in 0..batch_size {
+                let distance = &distances[i * num_batches + i_batch];
+                let b = &selection_bits.shares()[i_batch * batch_size + i];
+                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
+                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
+                shares_a.push(code_a);
+                shares_a.push(mask_a);
+            }
+        }
+
+        let network = &mut session.network_session;
+        network.send_ring_vec_next(&shares_a).await?;
+        let shares_b = network.receive_ring_vec_prev().await?;
+        reconstruct_distance_vector(shares_a, shares_b)
+    };
+    // Now sum up the selected distances within each batch.
+    // Only one distance per batch is non-zero, so this gives us the minimum distance per batch.
+    let res = selected_distances
+        .chunks(batch_size)
+        .map(|chunk| chunk.iter().cloned().reduce(|acc, a| acc + a).unwrap())
+        .collect_vec();
+    Ok(res)
+}
+
+use ampc_actor_utils::network::value::NetworkInt;
+use ampc_secret_sharing::IntRing2k;
 use std::cell::RefCell;
 
 thread_local! {
@@ -647,38 +787,51 @@ where
     additive_shares
 }
 
-/// Converts additive sharing (from trick_dot output) to a replicated sharing by
-/// masking it with a zero sharing
-pub async fn galois_ring_to_rep3(
-    session: &mut Session,
-    items: Vec<RingElement<u16>>,
-) -> Result<Vec<Share<u16>>> {
-    let network = &mut session.network_session;
+/// This is similar to `pairwise_distance`, but performs dot products on all rotations of the query.
+pub fn rotation_aware_pairwise_distance<'a, I>(
+    query: &'a ArcIris,
+    targets: I,
+) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    let start = Instant::now();
+    let mut count = 0;
+    let mut additive_shares = Vec::with_capacity(2 * ROTATIONS * targets.len());
 
-    // make sure we mask the input with a zero sharing
-    let masked_items: Vec<_> = items
-        .iter()
-        .map(|x| session.prf.gen_zero_share() + x)
-        .collect();
-
-    // sending to the next party
-    network
-        .send_next(NetworkValue::VecRing16(masked_items.clone()))
-        .await?;
-
-    // receiving from previous party
-    let shares_b = {
-        match network.receive_prev().await {
-            Ok(NetworkValue::VecRing16(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in galois_ring_to_rep3 operation")),
+    for target in targets {
+        for rotation in IrisRotation::all() {
+            let (code_dist, mask_dist) = if let Some(y) = target {
+                count += 1;
+                let (a, b) = (
+                    query.code.rotation_aware_trick_dot(&y.code, &rotation),
+                    query.mask.rotation_aware_trick_dot(&y.mask, &rotation),
+                );
+                (RingElement(a), RingElement(2) * RingElement(b))
+            } else {
+                // Non-existent vectors get the largest relative distance of 100%.
+                let (a, b) = SHARE_OF_MAX_DISTANCE;
+                (RingElement(a), RingElement(b))
+            };
+            additive_shares.push(code_dist);
+            additive_shares.push(mask_dist);
         }
-    }?;
-    let res: Vec<Share<u16>> = masked_items
-        .into_iter()
-        .zip(shares_b)
-        .map(|(a, b)| Share::new(a, b))
-        .collect();
-    Ok(res)
+    }
+
+    let batch_size = count as f64;
+    let duration = start.elapsed().as_secs_f64() / batch_size;
+    PAIRWISE_DISTANCE_METRICS.with_borrow_mut(|[metric_batch_size, metric_per_pair_duration]| {
+        metric_batch_size.record(batch_size);
+        metric_per_pair_duration.record(duration);
+    });
+    additive_shares
+}
+
+pub fn non_existent_distance() -> Vec<RingElement<u16>> {
+    vec![
+        RingElement(SHARE_OF_MAX_DISTANCE.0),
+        RingElement(SHARE_OF_MAX_DISTANCE.1),
+    ]
 }
 
 /// Compares the given distance to a threshold and reveal the bit "less than or equal".
@@ -693,30 +846,37 @@ pub async fn lte_threshold_and_open(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_ring<T: IntRing2k + NetworkInt>(
+/// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
+/// each party needs to send its entire share to the next and previous party.
+pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
     session: &mut Session,
-    shares: &[Share<T>],
+    shares: &[RingElement<T>],
 ) -> Result<Vec<T>> {
     let network = &mut session.network_session;
     let message = if shares.len() == 1 {
-        T::new_network_element(shares[0].b)
+        T::new_network_element(shares[0])
     } else {
-        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
-        T::new_network_vec(shares)
+        T::new_network_vec(shares.to_vec())
     };
 
-    network.send_next(message).await?;
+    network.send_next(message.clone()).await?;
+    network.send_prev(message).await?;
 
     // receiving from previous party
-    let c = network
+    let b = network
         .receive_prev()
+        .await
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+    let c = network
+        .receive_next()
         .await
         .and_then(|v| T::into_vec(v))
         .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
 
     // ADD shares with the received shares
-    izip!(shares.iter(), c.iter())
-        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
+    izip!(shares.iter(), b.iter(), c.iter())
+        .map(|(a, b, c)| Ok((*a + *b + *c).convert()))
         .collect::<Result<Vec<_>>>()
 }
 
@@ -725,19 +885,21 @@ mod tests {
     use super::*;
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
-        network::value::NetworkInt,
-        protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
+        network::value::{NetworkInt, NetworkValue},
+        protocol::shared_iris::GaloisRingSharedIris,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
+    use ampc_actor_utils::protocol::prf::Prf;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
     use rand_distr::{Distribution, Standard};
     use rstest::rstest;
-    use std::{array, collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, sync::Arc};
     use tokio::{sync::Mutex, task::JoinSet};
     use tracing::trace;
+    use NetworkValue::RingElement32;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_single(session: &mut Session, x: Share<u32>) -> Result<RingElement<u32>> {
@@ -948,243 +1110,6 @@ mod tests {
         // check first party output is equal to the expected result.
         let t = jobs.join_next().await.unwrap().unwrap();
         assert_eq!(t, RingElement(2));
-    }
-
-    #[tokio::test]
-    async fn test_compare_threshold_buckets() {
-        const NUM_BUCKETS: usize = 100;
-        const NUM_ITEMS: usize = 20;
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let items = (0..NUM_ITEMS)
-            .flat_map(|_| {
-                let mask = rng.gen_range(6000u32..12000);
-                let code = rng.gen_range(-12000i16..12000);
-                [code as u16 as u32, mask]
-            })
-            .collect_vec();
-
-        let shares = create_array_sharing(&mut rng, &items);
-
-        let thresholds: [f64; NUM_BUCKETS] =
-            array::from_fn(|i| i as f64 / (NUM_BUCKETS * 2) as f64);
-        let threshold_a_terms = thresholds
-            .iter()
-            .map(|x| translate_threshold_a(*x))
-            .collect_vec();
-
-        let num_parties = 3;
-        let identities = generate_local_identities();
-
-        let share_map = HashMap::from([
-            (identities[0].clone(), shares.p0),
-            (identities[1].clone(), shares.p1),
-            (identities[2].clone(), shares.p2),
-        ]);
-
-        let mut seeds = Vec::new();
-        for i in 0..num_parties {
-            let mut seed = [0_u8; 16];
-            seed[0] = i;
-            seeds.push(seed);
-        }
-        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
-            .await
-            .unwrap();
-
-        let sessions: Vec<Arc<Mutex<Session>>> = runtime
-            .sessions
-            .into_iter()
-            .map(|s| Arc::new(Mutex::new(s)))
-            .collect();
-
-        let mut jobs = JoinSet::new();
-        for session in sessions {
-            let session_lock = session.lock().await;
-            let shares = share_map.get(&session_lock.own_identity()).unwrap().clone();
-            let session = session.clone();
-            let threshold_a_terms = threshold_a_terms.clone();
-            jobs.spawn(async move {
-                let mut session = session.lock().await;
-                let distances = shares[..]
-                    .chunks_exact(2)
-                    .map(|x| DistanceShare {
-                        code_dot: x[0].clone(),
-                        mask_dot: x[1].clone(),
-                    })
-                    .collect_vec();
-
-                let bucket_result_shares =
-                    compare_threshold_buckets(&mut session, &threshold_a_terms, &distances)
-                        .await
-                        .unwrap();
-
-                open_ring(&mut session, &bucket_result_shares)
-                    .await
-                    .unwrap()
-            });
-        }
-        // check first party output is equal to the expected result.
-        let t1 = jobs.join_next().await.unwrap().unwrap();
-        let t2 = jobs.join_next().await.unwrap().unwrap();
-        let t3 = jobs.join_next().await.unwrap().unwrap();
-        let expected = items[..]
-            .chunks_exact(2)
-            .fold([0; NUM_BUCKETS], |mut acc, x| {
-                let code_dist = x[0];
-                let mask_dist = x[1];
-                for (i, &threshold) in thresholds.iter().enumerate() {
-                    let threshold_a = translate_threshold_a(threshold);
-                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
-                    acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
-                }
-                acc
-            });
-        assert_eq!(t1, expected);
-        assert_eq!(t2, expected);
-        assert_eq!(t3, expected);
-    }
-
-    #[tokio::test]
-    async fn test_compare_min_threshold_buckets() {
-        const NUM_BUCKETS: usize = 100;
-        const NUM_ITEMS: usize = 20;
-        const MAX_TEST_ROTATIONS: usize = 15;
-        let mut rng = AesRng::seed_from_u64(0_u64);
-        let sizes = (0..NUM_ITEMS)
-            .map(|_| rng.gen_range(1..=MAX_TEST_ROTATIONS))
-            .collect_vec();
-        let flat_size = sizes.iter().sum::<usize>();
-
-        let items = (0..flat_size)
-            .flat_map(|_| {
-                let mask = rng.gen_range(6000u32..12000);
-                let code = rng.gen_range(-12000i16..12000);
-                [code as u16 as u32, mask]
-            })
-            .collect_vec();
-
-        let shares = create_array_sharing(&mut rng, &items);
-
-        let thresholds: [f64; NUM_BUCKETS] =
-            array::from_fn(|i| i as f64 / (NUM_BUCKETS * 2) as f64);
-        let threshold_a_terms = thresholds
-            .iter()
-            .map(|x| translate_threshold_a(*x))
-            .collect_vec();
-
-        let num_parties = 3;
-        let identities = generate_local_identities();
-
-        let share_map = HashMap::from([
-            (identities[0].clone(), shares.p0),
-            (identities[1].clone(), shares.p1),
-            (identities[2].clone(), shares.p2),
-        ]);
-
-        let mut seeds = Vec::new();
-        for i in 0..num_parties {
-            let mut seed = [0_u8; 16];
-            seed[0] = i;
-            seeds.push(seed);
-        }
-        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
-            .await
-            .unwrap();
-
-        let sessions: Vec<Arc<Mutex<Session>>> = runtime
-            .sessions
-            .into_iter()
-            .map(|s| Arc::new(Mutex::new(s)))
-            .collect();
-
-        let mut jobs = JoinSet::new();
-        for session in sessions {
-            let session_lock = session.lock().await;
-            let shares = share_map.get(&session_lock.own_identity()).unwrap().clone();
-            let session = session.clone();
-            let threshold_a_terms = threshold_a_terms.clone();
-            jobs.spawn({
-                let sizes = sizes.clone();
-                async move {
-                    let mut session = session.lock().await;
-                    let mut counter = 0;
-                    let grouped_distances = sizes
-                        .iter()
-                        .map(|&size| {
-                            (0..size)
-                                .map(|_| {
-                                    let code_dot = shares[counter].clone();
-                                    let mask_dot = shares[counter + 1].clone();
-                                    counter += 2;
-                                    DistanceShare { code_dot, mask_dot }
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>();
-
-                    let bucket_result_shares = compare_min_threshold_buckets(
-                        &mut session,
-                        &threshold_a_terms,
-                        &grouped_distances,
-                    )
-                    .await
-                    .unwrap();
-
-                    open_ring(&mut session, &bucket_result_shares)
-                        .await
-                        .unwrap()
-                }
-            });
-        }
-        // check first party output is equal to the expected result.
-        let t1 = jobs.join_next().await.unwrap().unwrap();
-        let t2 = jobs.join_next().await.unwrap().unwrap();
-        let t3 = jobs.join_next().await.unwrap().unwrap();
-
-        let mut counter = 0;
-        let grouped_distances = sizes
-            .iter()
-            .map(|&size| {
-                (0..size)
-                    .map(|_| {
-                        let code_dist = items[counter];
-                        let mask_dist = items[counter + 1];
-                        counter += 2;
-                        (code_dist, mask_dist)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let expected = grouped_distances
-            .iter()
-            .map(|group| {
-                // reduce distances in each group
-                group
-                    .iter()
-                    .reduce(|a, b| {
-                        // plain distance formula is (0.5 - code/2*mask), the below is that multiplied by 2
-                        if (1f64 - a.0 as f64 / a.1 as f64) < (1f64 - b.0 as f64 / b.1 as f64) {
-                            a
-                        } else {
-                            b
-                        }
-                    })
-                    .expect("Expected at least one distance in the group")
-            })
-            .fold([0; NUM_BUCKETS], |mut acc, x| {
-                let code_dist = x.0;
-                let mask_dist = x.1;
-                for (i, &threshold) in thresholds.iter().enumerate() {
-                    let threshold_a = translate_threshold_a(threshold);
-                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
-                    acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
-                }
-                acc
-            });
-        assert_eq!(t1, expected);
-        assert_eq!(t2, expected);
-        assert_eq!(t3, expected);
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]

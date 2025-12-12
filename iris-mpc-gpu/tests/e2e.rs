@@ -1,10 +1,10 @@
 #[cfg(feature = "gpu_dependent")]
 mod e2e_test {
+    use ampc_anon_stats::types::Eye;
     use cudarc::nccl::Id;
     use eyre::Result;
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
-        job::Eye,
         test::{generate_full_test_db, load_test_db, TestCaseGenerator},
     };
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
@@ -117,6 +117,7 @@ mod e2e_test {
                 false,
                 Eye::Left,
                 true,
+                None,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0, &mut actor);
@@ -152,6 +153,7 @@ mod e2e_test {
                 false,
                 Eye::Left,
                 true,
+                None,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1, &mut actor);
@@ -187,6 +189,7 @@ mod e2e_test {
                 false,
                 Eye::Left,
                 true,
+                None,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2, &mut actor);

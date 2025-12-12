@@ -4,7 +4,7 @@ pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::{IrisCode, IrisCodeArray},
-        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH, PRE_PROC_ROW_PADDING,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use eyre::Result;
@@ -49,6 +49,94 @@ pub mod degree4 {
         coefs
             .chunks_exact_mut(CODE_COLS * 4)
             .for_each(|chunk| chunk.rotate_left(by * 4));
+    }
+
+    fn trick_dot<const D: usize>(left: &[u16; D], right: &[u16; D]) -> u16 {
+        let mut sum = 0u16;
+        for i in 0..D {
+            sum = sum.wrapping_add(left[i].wrapping_mul(right[i]));
+        }
+        sum
+    }
+
+    // iterate over left.coefs as though it has been rotated according to the iris rotation.
+    // this involves chunking by CODE_COLS * 4 and then rotating the chunk
+    // the rotation is accomplished by operating over two slices
+    fn rotation_aware_trick_dot<const D: usize>(
+        left: &[u16; D],
+        right: &[u16; D],
+        rotation: &IrisRotation,
+    ) -> u16 {
+        let skip = match rotation {
+            IrisRotation::Center => 0,
+            IrisRotation::Left(rot) => rot * 4,
+            IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
+        };
+
+        let mut sum = 0u16;
+        let chunk_size = CODE_COLS * 4;
+
+        for (left_slice, right_slice) in left
+            .chunks_exact(chunk_size)
+            .zip(right.chunks_exact(chunk_size))
+        {
+            // Split the rotation into two contiguous loops,
+            // allowing the compiler to vectorize
+            let (left1, left2) = left_slice.split_at(skip);
+            let (right1, right2) = right_slice.split_at(chunk_size - skip);
+
+            for (l, r) in left1.iter().zip(right2.iter()) {
+                sum = sum.wrapping_add(l.wrapping_mul(*r));
+            }
+
+            for (l, r) in left2.iter().zip(right1.iter()) {
+                sum = sum.wrapping_add(l.wrapping_mul(*r));
+            }
+        }
+        sum
+    }
+
+    pub fn rotation_aware_trick_dot_padded(
+        left: &[u16; PRE_PROC_IRIS_CODE_LENGTH],
+        right: &[u16; IRIS_CODE_LENGTH],
+        rotation: &IrisRotation,
+    ) -> u16 {
+        let skip = match rotation {
+            IrisRotation::Center => 60, // no padding (60 added on each side)
+            IrisRotation::Left(rot) => 60 + (rot * 4),
+            IrisRotation::Right(rot) => 60 - (rot * 4),
+        };
+
+        let mut sum = 0u16;
+        const UNPADDED_ROW_LEN: usize = CODE_COLS * 4; // 800 elements per row
+        const PADDED_CHUNK_SIZE: usize = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
+
+        // Process each row
+        for (row_idx, chunk) in left.chunks_exact(PADDED_CHUNK_SIZE).enumerate() {
+            // Calculate the starting index in the padded chunk
+            // Each row used to be elements 0..=799 but now has:
+            // - elements 740..=799 prepended (60 elements)
+            // - elements 0..=59 appended (60 elements)
+            // So we need to start at index `skip` to get 800 consecutive elements
+            let start_idx = skip;
+            let end_idx = start_idx + UNPADDED_ROW_LEN;
+
+            // Extract the slice we need for this row
+            let left_slice = &chunk[start_idx..end_idx];
+
+            // Get corresponding slice from self
+            let right_start = row_idx * UNPADDED_ROW_LEN;
+            let right_end = right_start + UNPADDED_ROW_LEN;
+            let right_slice = &right[right_start..right_end];
+
+            // Compute dot product for this row
+            // use explicit indices for the loop to try to help the compiler optimize with SIMD
+            for i in 0..UNPADDED_ROW_LEN {
+                sum = sum.wrapping_add(left_slice[i].wrapping_mul(right_slice[i]));
+            }
+        }
+
+        sum
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -118,11 +206,15 @@ pub mod degree4 {
         }
 
         pub fn trick_dot(&self, other: &GaloisRingTrimmedMaskCodeShare) -> u16 {
-            let mut sum = 0u16;
-            for i in 0..MASK_CODE_LENGTH {
-                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
-            }
-            sum
+            trick_dot(&self.coefs, &other.coefs)
+        }
+
+        pub fn rotation_aware_trick_dot(
+            &self,
+            other: &GaloisRingTrimmedMaskCodeShare,
+            rotation: &IrisRotation,
+        ) -> u16 {
+            rotation_aware_trick_dot(&self.coefs, &other.coefs, rotation)
         }
     }
 
@@ -351,12 +443,18 @@ pub mod degree4 {
             }
             sum
         }
+
         pub fn trick_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
-            let mut sum = 0u16;
-            for i in 0..IRIS_CODE_LENGTH {
-                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
-            }
-            sum
+            trick_dot(&self.coefs, &other.coefs)
+        }
+
+        pub fn rotation_aware_trick_dot(
+            &self,
+            other: &GaloisRingIrisCodeShare,
+            // rotation applied to self
+            rotation: &IrisRotation,
+        ) -> u16 {
+            rotation_aware_trick_dot(&self.coefs, &other.coefs, rotation)
         }
 
         pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {
@@ -498,10 +596,69 @@ pub mod degree4 {
         }
     }
 
+    pub enum IrisRotation {
+        Center,
+        Left(usize),
+        Right(usize),
+    }
+
+    impl IrisRotation {
+        pub fn all() -> IrisRotationIter {
+            IrisRotationIter::new()
+        }
+    }
+
+    pub struct IrisRotationIter {
+        idx: isize,
+    }
+
+    impl Default for IrisRotationIter {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl IrisRotationIter {
+        pub fn new() -> Self {
+            Self {
+                idx: -(IrisCode::ROTATIONS_PER_DIRECTION as isize),
+            }
+        }
+    }
+
+    impl Iterator for IrisRotationIter {
+        type Item = IrisRotation;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            const LEFT: isize = -(IrisCode::ROTATIONS_PER_DIRECTION as isize);
+            const RIGHT: isize = IrisCode::ROTATIONS_PER_DIRECTION as isize;
+            match self.idx {
+                LEFT..=-1 => {
+                    let rot = IrisRotation::Left(-self.idx as usize);
+                    self.idx += 1;
+                    Some(rot)
+                }
+                0 => {
+                    self.idx += 1;
+                    Some(IrisRotation::Center)
+                }
+                1..=RIGHT => {
+                    let rot = IrisRotation::Right((self.idx) as usize);
+                    self.idx += 1;
+                    Some(rot)
+                }
+                _ => None,
+            }
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use crate::{
-            galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+            galois_engine::degree4::{
+                rotate_coefs_left, rotate_coefs_right, GaloisRingIrisCodeShare,
+                GaloisRingTrimmedMaskCodeShare, IrisRotation,
+            },
             iris_db::iris::IrisCodeArray,
             MASK_CODE_LENGTH,
         };
@@ -526,6 +683,39 @@ pub mod degree4 {
                 let dot = dot.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
                 let expected = (iris_db & iris_query).count_ones();
                 assert_eq!(dot, expected as u16);
+            }
+        }
+        #[test]
+        fn rotation_aware_dot_trick() {
+            let rng = &mut thread_rng();
+            for _ in 0..10 {
+                let iris_db = IrisCodeArray::random_rng(rng);
+                let iris_query = IrisCodeArray::random_rng(rng);
+                let mut shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
+                let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
+                query_shares
+                    .iter_mut()
+                    .for_each(|share| share.preprocess_iris_code_query_share());
+
+                // use these for the  test
+                let left = &shares[0];
+                let right = &query_shares[0];
+
+                // do rotation aware trick dot first
+                let mut dots = vec![];
+                for rotation in IrisRotation::all() {
+                    dots.push(left.rotation_aware_trick_dot(right, &rotation));
+                }
+
+                let left = &mut shares[0];
+                let right = &query_shares[0];
+                let mut dots2 = vec![];
+                rotate_coefs_left(&mut left.coefs, 16);
+                for _ in 0..31 {
+                    rotate_coefs_right(&mut left.coefs, 1);
+                    dots2.push(left.trick_dot(right));
+                }
+                assert_eq!(dots, dots2);
             }
         }
         #[test]

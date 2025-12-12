@@ -1,19 +1,17 @@
-use super::{
-    rot::VecRots, BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
-};
+use super::{BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT};
 use crate::{
+    execution::hawk_main::VecRotations,
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store},
     hnsw::VectorStore,
 };
 use eyre::Result;
 use futures::future::JoinAll;
-use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
 
 pub async fn is_match_batch(
-    search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
+    search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
     vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSession>>,
 ) -> Result<BothEyes<VecRequests<MapEdges<bool>>>> {
@@ -31,7 +29,7 @@ pub async fn is_match_batch(
 }
 
 async fn per_side(
-    queries: &VecRequests<VecRots<Aby3Query>>,
+    queries: &VecRequests<VecRotations<Aby3Query>>,
     missing_vector_ids: VecRequests<VecEdges<VectorId>>,
     sessions: &Vec<HawkSession>,
 ) -> Result<VecRequests<MapEdges<bool>>> {
@@ -42,7 +40,7 @@ async fn per_side(
         return Ok(VecRequests::new());
     }
     // A task is to compare one rotation to the vectors.
-    let n_tasks = n_requests * ROTATIONS;
+    let n_tasks = n_requests * VecRotations::<Aby3Query>::n_rotations();
     let n_sessions = sessions.len();
     assert_eq!(queries.len(), n_requests);
 
@@ -55,7 +53,7 @@ async fn per_side(
 
     // For each request, broadcast the vectors to the rotations.
     // Concatenate the tasks for all requests, to maximize parallelism.
-    let tasks = VecRots::flatten_broadcast(izip!(queries, missing_vector_ids));
+    let tasks = VecRotations::flatten_broadcast(izip!(queries, missing_vector_ids));
     assert_eq!(tasks.len(), n_tasks);
 
     // Prepare the tasks into one chunk per session.
@@ -74,7 +72,7 @@ async fn per_side(
     assert_eq!(results.len(), n_tasks);
 
     // Undo the flattening of rotations.
-    let results = VecRots::unflatten(results);
+    let results = VecRotations::unflatten(results);
 
     // Aggregate the results over rotations. ANY match.
     let results = results
@@ -139,7 +137,7 @@ fn unsplit_tasks<T>(chunks: Vec<std::result::Result<Result<Vec<T>>, JoinError>>)
         .map(|v| v.into_iter().flatten().collect())
 }
 
-fn aggregate_rotation_results(results: VecRots<MapEdges<bool>>) -> MapEdges<bool> {
+fn aggregate_rotation_results(results: VecRotations<MapEdges<bool>>) -> MapEdges<bool> {
     results.iter().fold(HashMap::new(), |mut acc, m| {
         for (v, is_match) in m {
             *acc.entry(*v).or_default() |= is_match;
@@ -155,6 +153,7 @@ mod test {
     use crate::execution::hawk_main::scheduler::parallelize;
     use crate::execution::hawk_main::test_utils::{init_iris_db, make_request};
     use crate::execution::hawk_main::{HawkActor, Orientation};
+    use tracing_test::traced_test;
 
     #[tokio::test]
     async fn test_split_tasks() {
@@ -177,6 +176,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_is_match_batch() -> Result<()> {
         let actors = setup_hawk_actors().await?;
 
@@ -188,7 +188,7 @@ mod test {
     async fn go_is_match_batch(mut actor: HawkActor) -> Result<HawkActor> {
         init_iris_db(&mut actor).await?;
 
-        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+        let sessions = actor.new_sessions().await?;
 
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
@@ -218,6 +218,7 @@ mod test {
         );
 
         // Do not drop the connections too early.
+        actor.sync_peers().await?;
         Ok(actor)
     }
 

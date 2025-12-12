@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:16d24a8e949cc7a1776545ae6ca9758a29b173e1" # v0.21.0
+image: "ghcr.io/worldcoin/iris-mpc:770afe31301605afae072608ed63a12022f7783f"
 
 environment: stage
 replicaCount: 1
@@ -35,13 +35,13 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 31
-    memory: 120Gi
+    cpu: 28
+    memory: 100Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
   requests:
-    cpu: 30
-    memory: 110Gi
+    cpu: 27
+    memory: 99Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
 
@@ -66,16 +66,6 @@ tolerations:
 keelPolling:
   # -- Specifies whether keel should poll for container updates
   enabled: true
-
-libsDir:
-  enabled: true
-  path: "/libs"
-  size: 2Gi
-  files:
-    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublasLt.so.12.2.5.6"
-      file: "libcublasLt.so.12.2.5.6"
-    - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublas.so.12.2.5.6"
-      file: "libcublas.so.12.2.5.6"
 
 preStop:
   # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent

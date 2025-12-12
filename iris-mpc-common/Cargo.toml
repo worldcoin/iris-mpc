@@ -26,7 +26,6 @@ aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
-dotenvy.workspace = true
 clap.workspace = true
 rand.workspace = true
 bytemuck.workspace = true
@@ -37,16 +36,13 @@ itertools.workspace = true
 base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-config = "0.14.0"
 tokio.workspace = true
 tracing.workspace = true
-tokio-util.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 sqlx.workspace = true
 telemetry-batteries.workspace = true
-axum.workspace = true
-
+config = { version = "0.15.19", default-features = false, features = ["json"] }
 chrono = { version = "0.4.38", features = ["serde"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
 sodiumoxide = "0.2.7"
@@ -59,35 +55,16 @@ url = "2"
 hex.workspace = true
 zeroize = "1.8.1"
 wiremock = "0.6.1"
-digest = "0.10.7"
-ring = "0.17.8"
-data-encoding = "2.6.0"
 bincode.workspace = true
 serde-big-array.workspace = true
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 num_cpus = "1.17.0"
-futures.workspace = true
-pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
-
+ampc-secret-sharing.workspace = true
+ampc-actor-utils.workspace = true
+ampc-server-utils.workspace = true
+ampc-anon-stats.workspace = true
 
 [dev-dependencies]
 float_eq = "1"
 aws-credential-types = "1.2.1"
-
-[[bin]]
-name = "key-manager"
-path = "src/bin/key_manager.rs"
-required-features = ["helpers"]
-
-[[bin]]
-name = "shares-encoding"
-path = "src/bin/shares_encoding.rs"
-
-[[bin]]
-name = "migrator"
-path = "src/bin/migrator.rs"
-
-[[bin]]
-name = "e2e-input-transform"
-path = "src/bin/e2e_input_transform.rs"

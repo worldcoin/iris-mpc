@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     steps:
@@ -116,4 +116,4 @@ jobs:
 
       - name: Build All Targets
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: cargo build --release --all-features --lib --bins --benches --examples
+        run: cargo build --release --all-features --workspace --lib --bins --benches --examples

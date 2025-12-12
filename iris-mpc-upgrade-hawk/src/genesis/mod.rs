@@ -1,3 +1,8 @@
+use ampc_server_utils::{
+    get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
+    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    BatchSyncSharedState, TaskMonitor,
+};
 use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
@@ -6,15 +11,12 @@ use aws_sdk_s3::{
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::server_coordination::BatchSyncSharedState;
+
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
-    helpers::{
-        shutdown_handler::ShutdownHandler, smpc_request, sync::Modification,
-        task_monitor::TaskMonitor,
-    },
+    helpers::{smpc_request, sync::Modification},
     postgres::{AccessMode, PostgresClient},
-    server_coordination as coordinator, IrisSerialId,
+    IrisSerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
@@ -222,6 +224,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         "Cleared modifications from the HNSW iris store",
     ));
 
+    // trigger manual shutdown to ensure the health check services terminate
+    shutdown_handler.trigger_manual_shutdown();
+
     Ok(())
 }
 
@@ -253,7 +258,7 @@ async fn exec_setup(
     let shutdown_handler = init_shutdown_handler(config).await;
 
     // Set background task monitor.
-    let mut task_monitor_bg = coordinator::init_task_monitor();
+    let mut task_monitor_bg = TaskMonitor::new();
 
     // Set service clients.
     let ((aws_s3_client, aws_rds_client), (iris_store, (hnsw_iris_store, graph_store))) =
@@ -312,23 +317,30 @@ async fn exec_setup(
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
+    let server_coord_config = &config
+        .server_coordination
+        .clone()
+        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await server start.
-    let is_ready_flag = coordinator::start_coordination_server(
-        config,
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+        server_coord_config,
         &mut task_monitor_bg,
         &shutdown_handler,
         &my_state,
-        batch_sync_shared_state,
+        Some(batch_sync_shared_state),
     )
     .await;
     task_monitor_bg.check_tasks();
 
+    let server_coord_config = &config
+        .server_coordination
+        .clone()
+        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await network state = UNREADY.
-    coordinator::wait_for_others_unready(config).await?;
+    wait_for_others_unready(server_coord_config, &verified_peers, &my_uuid).await?;
     log_info(String::from("Network status = UNREADY"));
-
     // Coordinator: await network state = HEALTHY.
-    coordinator::init_heartbeat_task(config, &mut task_monitor_bg, &shutdown_handler).await?;
+    init_heartbeat_task(server_coord_config, &mut task_monitor_bg, &shutdown_handler).await?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = HEALTHY"));
 
@@ -367,6 +379,7 @@ async fn exec_setup(
 
     // Initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
+    hawk_actor.sync_peers().await?;
     init_graph_from_stores(
         config,
         &iris_store,
@@ -380,8 +393,12 @@ async fn exec_setup(
     log_info(String::from("HNSW graph initialised from store"));
 
     // Coordinator: await network state = ready.
-    coordinator::set_node_ready(is_ready_flag);
-    coordinator::wait_for_others_ready(config).await?;
+    set_node_ready(is_ready_flag);
+    let ct = shutdown_handler.get_network_cancellation_token();
+    tokio::select! {
+        _ = ct.cancelled() => Err(eyre!("ready check failed")),
+        r = wait_for_others_ready(server_coord_config) => r
+    }?;
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = READY"));
 
@@ -871,7 +888,11 @@ async fn get_hawk_actor(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
-    let node_addresses: Vec<String> = config
+    let server_coord_config = config
+        .server_coordination
+        .as_ref()
+        .ok_or(eyre!("Missing server coordination config"))?;
+    let node_addresses: Vec<String> = server_coord_config
         .node_hostnames
         .iter()
         .zip(config.service_ports.iter())
@@ -881,6 +902,7 @@ async fn get_hawk_actor(
     let hawk_args = HawkArgs {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
+        outbound_addrs: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
@@ -899,7 +921,11 @@ async fn get_hawk_actor(
         hawk_args.party_index, node_addresses
     ));
 
-    HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await
+    HawkActor::from_cli(
+        &hawk_args,
+        shutdown_handler.get_network_cancellation_token(),
+    )
+    .await
 }
 
 /// Returns service clients used downstream.
@@ -1185,7 +1211,12 @@ async fn get_sync_result(
     my_state: &GenesisSyncState,
 ) -> Result<GenesisSyncResult> {
     let mut all_states = vec![my_state.clone()];
-    all_states.extend(coordinator::get_others_sync_state(config).await?);
+    let server_coord_config = config
+        .server_coordination
+        .as_ref()
+        .ok_or(eyre!("Missing server coordination config"))?;
+
+    all_states.extend(get_others_sync_state(server_coord_config).await?);
     let result = GenesisSyncResult::new(my_state.clone(), all_states);
 
     Ok(result)

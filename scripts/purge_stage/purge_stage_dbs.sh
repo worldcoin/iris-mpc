@@ -105,7 +105,10 @@ clean_mpc_database() {
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE persistent_state RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE modifications RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_entry RESTART IDENTITY;'"
-  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_links RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO anon_stats_mpc; TRUNCATE anon_stats_1d RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO anon_stats_mpc; TRUNCATE anon_stats_1d_lifted RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO anon_stats_mpc; TRUNCATE anon_stats_2d RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO anon_stats_mpc; TRUNCATE anon_stats_2d_lifted RESTART IDENTITY;'"
 
   # Clean up and restart deployment
   kubectl delete pod --force db-cleaner

@@ -10,49 +10,29 @@ repository.workspace = true
 [dependencies]
 aws-config.workspace = true
 aws-sdk-rds.workspace = true
-aws-sdk-sqs.workspace = true
 aws-sdk-s3.workspace = true
-aws-sdk-secretsmanager.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-static_assertions.workspace = true
-futures.workspace = true
 serde_json.workspace = true
-telemetry-batteries.workspace = true
 eyre.workspace = true
-clap.workspace = true
-bytemuck.workspace = true
-dotenvy.workspace = true
 rand.workspace = true
-base64.workspace = true
-uuid.workspace = true
-reqwest.workspace = true
-sodiumoxide = "0.2.7"
 iris-mpc = { path = "../iris-mpc" }
-iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 metrics = "0.22.1"
-metrics-exporter-statsd = "0.7"
 serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
 chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }
-async-trait.workspace = true
+ampc-server-utils.workspace = true
 
 [dev-dependencies]
-criterion = "0.5"
 thiserror.workspace = true
-tracing-test = "0.2.5"
 serial_test = "3.2.0"
 
 [features]
 default = []
 db_dependent = []
-
-[[bin]]
-name = "iris-mpc-hawk-genesis"
-path = "bin/iris_mpc_hawk_genesis.rs"

@@ -89,9 +89,9 @@ These profiles can also be used on the AWS console to switch to the appropriate 
 To access the k8s clusters, you need the AWS CLI configured with the profiles above. You can then use the following commands to get the k8s config for each cluster:
 
 ```bash
-AWS_PROFILE=worldcoin-smpcv-io-0-dev aws eks update-kubeconfig --name ampc-hnsw-dev-0 --region eu-central-1 --alias ampc-hnsw-dev-0
-AWS_PROFILE=worldcoin-smpcv-io-1-dev aws eks update-kubeconfig --name ampc-hnsw-dev-1 --region eu-central-1 --alias ampc-hnsw-dev-1
-AWS_PROFILE=worldcoin-smpcv-io-2-dev aws eks update-kubeconfig --name ampc-hnsw-dev-2 --region eu-central-1 --alias ampc-hnsw-dev-2
+AWS_PROFILE=worldcoin-smpcv-io-0-dev aws eks update-kubeconfig --name ampc-hnsw-0-dev --region eu-central-1 --alias ampc-hnsw-0-dev
+AWS_PROFILE=worldcoin-smpcv-io-1-dev aws eks update-kubeconfig --name ampc-hnsw-1-dev --region eu-central-1 --alias ampc-hnsw-1-dev
+AWS_PROFILE=worldcoin-smpcv-io-2-dev aws eks update-kubeconfig --name ampc-hnsw-2-dev --region eu-central-1 --alias ampc-hnsw-2-dev
 ```
 
 This will add the k8s config for each cluster to your `~/.kube/config` file. You can then use `kubectl` or any k8s visibility tool to interact with the clusters.
@@ -99,11 +99,11 @@ This will add the k8s config for each cluster to your `~/.kube/config` file. You
 You can switch between the clusters using the following commands:
 
 ```bash
-kubectl config use-context arn:aws:eks:eu-central-1:004304088310:cluster/ampc-hnsw-dev-0
+kubectl config use-context ampc-hnsw-0-dev
 # or use kubectx
-kubectx ampc-hnsw-dev-0
+kubectx ampc-hnsw-0-dev
 # check if everything is working
-kubectl -n ampc-hnsw-dev-0 get pods
+kubectl -n ampc-hnsw get pods
 ```
 
 Once you have the clusters in your config, you can then use either Lens or k9s to interact with them. In lens and k9s, you
@@ -139,7 +139,7 @@ To send test messages to the dev environment, you can use the `client` binary:
 # Don't forge to unset the AWS_ENDPOINT_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY from direnv!
 export AWS_PROFILE=worldcoin-smpcv-io-vpc-dev
 export AWS_REGION=eu-central-1
-cargo run --release --bin client -- \
+cargo run --release -p iris-mpc-bins --bin client -- \
    --request-topic-arn arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo \
    --requests-bucket-name wf-smpcv2-dev-sns-requests-v2 \
    --public-key-base-url "https://pki-smpcv2-dev.worldcoin.org" \

@@ -75,7 +75,7 @@ jobs:
     needs: docker
     # TODO: remove comment after PoC phase
     # if: github.event_name == 'release'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Install Foundry

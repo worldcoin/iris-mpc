@@ -13,50 +13,28 @@ aws-sdk-sns.workspace = true
 aws-sdk-sqs.workspace = true
 aws-sdk-s3.workspace = true
 aws-sdk-secretsmanager.workspace = true
-axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-static_assertions.workspace = true
-futures.workspace = true
 serde_json.workspace = true
-telemetry-batteries.workspace = true
 eyre.workspace = true
 clap.workspace = true
 bytemuck.workspace = true
-dotenvy.workspace = true
 rand.workspace = true
 base64.workspace = true
 uuid.workspace = true
-reqwest.workspace = true
-sodiumoxide = "0.2.7"
-iris-mpc-gpu = { path = "../iris-mpc-gpu" }
+sodiumoxide.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
-metrics = "0.22.1"
-metrics-exporter-statsd = "0.7"
+metrics.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
-chrono = "0.4.38"
+chrono.workspace = true
 sqlx.workspace = true
 bincode.workspace = true
 pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
-
-[dev-dependencies]
-criterion = "0.5"
+ampc-anon-stats.workspace = true
+ampc-server-utils.workspace = true
 
 [features]
 default = []
-
-[[bin]]
-name = "iris-mpc-gpu"
-path = "bin/server.rs"
-
-[[bin]]
-name = "iris-mpc-hawk"
-path = "bin/server/iris_mpc_hawk.rs"
-
-[[bin]]
-name = "client"
-path = "bin/client/client.rs"

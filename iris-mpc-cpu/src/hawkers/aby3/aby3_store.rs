@@ -1,25 +1,37 @@
 use crate::{
-    execution::{hawk_main::iris_worker::IrisPoolHandle, session::Session},
+    execution::{
+        hawk_main::iris_worker::IrisPoolHandle,
+        session::{Session, SessionHandles},
+    },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
-            batch_signed_lift_vec, conditionally_swap_distances,
+            batch_signed_lift_vec, conditionally_select_distances_with_plain_ids,
+            conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
             conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, oblivious_cross_compare,
+            lte_threshold_and_open, min_of_pair_batch, min_round_robin_batch,
+            oblivious_cross_compare, oblivious_cross_compare_lifted, open_ring,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
     shares::{
         bit::Bit,
         share::{DistanceShare, Share},
+        RingElement,
     },
 };
-use eyre::Result;
-use iris_mpc_common::vector_id::VectorId;
-use itertools::Itertools;
+use eyre::{OptionExt, Result};
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    vector_id::VectorId,
+};
+use itertools::{izip, Itertools};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
+
+mod distance_fn;
+pub use distance_fn::DistanceFn;
 
 /// Iris to be searcher or inserted into the store.
 ///
@@ -53,11 +65,21 @@ impl Aby3Query {
         Self::new(&iris)
     }
 
-    pub fn from_processed(iris: GaloisRingSharedIris, iris_proc: GaloisRingSharedIris) -> Self {
-        Self {
-            iris: Arc::new(iris),
-            iris_proc: Arc::new(iris_proc),
-        }
+    pub fn from_processed(
+        code: &GaloisRingIrisCodeShare,
+        mask: &GaloisRingTrimmedMaskCodeShare,
+        code_proc: &GaloisRingIrisCodeShare,
+        mask_proc: &GaloisRingTrimmedMaskCodeShare,
+    ) -> Self {
+        let iris = Arc::new(GaloisRingSharedIris {
+            code: code.clone(),
+            mask: mask.clone(),
+        });
+        let iris_proc = Arc::new(GaloisRingSharedIris {
+            code: code_proc.clone(),
+            mask: mask_proc.clone(),
+        });
+        Self { iris, iris_proc }
     }
 }
 
@@ -80,9 +102,25 @@ pub struct Aby3Store {
 
     /// used to spawn cpu bound tasks on a thread pool
     pub workers: IrisPoolHandle,
+
+    distance_fn: distance_fn::DistanceFn,
 }
 
 impl Aby3Store {
+    pub fn new(
+        storage: Aby3SharedIrisesRef,
+        session: Session,
+        workers: IrisPoolHandle,
+        distance_fn: DistanceFn,
+    ) -> Self {
+        Self {
+            storage,
+            session,
+            distance_fn,
+            workers,
+        }
+    }
+
     /// Converts distances from u16 secret shares to u32 shares.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn lift_distances(
@@ -101,6 +139,15 @@ impl Aby3Store {
             .collect::<Vec<_>>())
     }
 
+    /// Converts u16 additive sharing (from trick_dot output) to u32 replicated sharing.
+    async fn gr_to_lifted_distances(
+        &mut self,
+        ds_and_ts: Vec<RingElement<u16>>,
+    ) -> Result<Vec<DistanceShare<u32>>> {
+        let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
+        self.lift_distances(dist).await
+    }
+
     /// Computes the dot product of the iris codes and masks of the given pairs of irises.
     /// The input irises are given in the Shamir secret sharing scheme, while the output distances are additive replicated secret shares used in the ABY3 framework.
     ///
@@ -114,9 +161,8 @@ impl Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let ds_and_ts = self.workers.galois_ring_pairwise_distances(pairs).await?;
-        let distances = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
-        self.lift_distances(distances).await
+
+        self.distance_fn.eval_pairwise_distances(self, pairs).await
     }
 
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
@@ -172,6 +218,161 @@ impl Aby3Store {
 
         conditionally_swap_distances(&mut self.session, swap_bits, list, indices).await
     }
+
+    /// Obliviously computes the minimum distance of a given distance array.
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
+    pub async fn oblivious_min_distance(
+        &mut self,
+        distances: &[Aby3DistanceRef],
+    ) -> Result<Aby3DistanceRef> {
+        if distances.is_empty() {
+            eyre::bail!("Cannot compute minimum of empty list");
+        }
+        if distances.len() == 1 {
+            return Ok(distances[0].clone());
+        }
+        let mut res = distances.to_vec();
+        while res.len() > 16 {
+            // if the length is odd, we save the last distance to add it back later
+            let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
+            // create pairs from the remaining distances
+            let pairs: Vec<(_, _)> = res.into_iter().tuples().collect_vec();
+            // compute minimums of pairs
+            res = min_of_pair_batch(&mut self.session, &pairs).await?;
+            // if we saved a last distance, we need to add it back
+            if let Some(last_distance) = maybe_last_distance {
+                res.push(last_distance.clone());
+            }
+        }
+        min_round_robin_batch(&mut self.session, &res, res.len())
+            .await?
+            .pop()
+            .ok_or_eyre("Should not be here: distances are empty")
+    }
+
+    /// Obliviously computes the minimum distance and the corresponding vector id of a given array of pairs (id, distance).
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
+    pub async fn oblivious_argmin_distance(
+        &mut self,
+        distances: &[(Aby3VectorRef, Aby3DistanceRef)],
+    ) -> Result<(Aby3VectorRef, Aby3DistanceRef)> {
+        if distances.is_empty() {
+            eyre::bail!("Cannot compute minimum of empty list");
+        }
+        if distances.len() == 1 {
+            return Ok(distances[0].clone());
+        }
+
+        // Handle plain ids first
+        let mut plain_res = distances
+            .iter()
+            .enumerate()
+            .map(|(id, (_, distance))| (id as u32, distance.clone()))
+            .collect_vec();
+        let plain_maybe_last_distance = if plain_res.len() % 2 == 1 {
+            plain_res.pop()
+        } else {
+            None
+        };
+        let mut dist_pairs = plain_res
+            .iter()
+            .tuples()
+            .map(|((_, dist1), (_, dist2))| (dist1.clone(), dist2.clone()))
+            .collect_vec();
+        let mut control_bits =
+            oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
+        let (left_dist, right_dist) = plain_res.into_iter().tuples().unzip();
+        let mut res = conditionally_select_distances_with_plain_ids(
+            &mut self.session,
+            left_dist,
+            right_dist,
+            control_bits,
+        )
+        .await?;
+        // If we saved a last distance, we need to add it back
+        if let Some((id, dist)) = plain_maybe_last_distance {
+            let shared_id = Share::from_const(id, self.session.own_role());
+            res.push((shared_id, dist));
+        }
+
+        // Now handle distances with shared ids
+        while res.len() > 1 {
+            // if the length is odd, we save the last distance to add it back later
+            let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
+            // create pairs from the remaining distances
+            dist_pairs = res
+                .iter()
+                .tuples()
+                .map(|((_, dist1), (_, dist2))| (dist1.clone(), dist2.clone()))
+                .collect_vec();
+            // compute minimums of pairs
+            control_bits = oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
+            let (left_dist, right_dist) = res.into_iter().tuples().unzip();
+            res = conditionally_select_distances_with_shared_ids(
+                &mut self.session,
+                left_dist,
+                right_dist,
+                control_bits,
+            )
+            .await?;
+            // if we saved a last distance, we need to add it back
+            if let Some(dist) = maybe_last_distance {
+                res.push(dist);
+            }
+        }
+        // res is guaranteed to have length 1
+        let (shared_id, dist) = res
+            .pop()
+            .ok_or_eyre("Shouldn't be here: results are empty")?;
+        // open the id
+        let id = open_ring(&mut self.session, &[shared_id]).await?[0];
+        let res = (distances[id as usize].0, dist);
+        Ok(res)
+    }
+
+    /// Obliviously computes the minimum distance for each batch of given distances of the same size.
+    /// The input `distances` is a 2D matrix with dimensions: (rotations, batch).
+    /// `distances[r][i]` corresponds to the rth rotation of the ith item of the batch.
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
+    async fn oblivious_min_distance_batch(
+        &mut self,
+        distances: Vec<Vec<Aby3DistanceRef>>,
+    ) -> Result<Vec<Aby3DistanceRef>> {
+        if distances.is_empty() {
+            eyre::bail!("Cannot compute minimum of empty list");
+        }
+        let len = distances[0].len();
+        for (i, d) in distances.iter().enumerate() {
+            if d.len() != len {
+                eyre::bail!("All distance lists must have the same length. List at index {} has length {}, while the first list has length {}", i, d.len(), len);
+            }
+        }
+
+        let mut res = distances.to_vec();
+        while res.len() > 16 {
+            // if the length is odd, we save the last distance to add it back later
+            let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
+            let pairs = res
+                .into_iter()
+                .tuples()
+                .flat_map(|(a, b)| izip!(a, b).collect_vec())
+                .collect_vec();
+            // compute minimums of pairs
+            let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
+            res = flattened_res
+                .into_iter()
+                .chunks(len)
+                .into_iter()
+                .map(|chunk| chunk.collect())
+                .collect_vec();
+            // if we saved a last distance, we need to add it back
+            if let Some(last_distance) = maybe_last_distance {
+                res.push(last_distance.clone());
+            }
+        }
+        let flattened_distances = res.iter().flatten().cloned().collect_vec();
+        min_round_robin_batch(&mut self.session, &flattened_distances, res.len()).await
+    }
 }
 
 impl VectorStore for Aby3Store {
@@ -218,15 +419,7 @@ impl VectorStore for Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-
-        let pairs = pairs
-            .iter()
-            .map(|(q, v)| (q.iris_proc.clone(), *v))
-            .collect_vec();
-        let ds_and_ts = self.workers.dot_product_pairs(pairs).await?;
-
-        let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
-        self.lift_distances(dist).await
+        self.distance_fn.eval_distance_pairs(self, pairs).await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
@@ -238,14 +431,20 @@ impl VectorStore for Aby3Store {
         if vectors.is_empty() {
             return Ok(vec![]);
         }
+        self.distance_fn
+            .eval_distance_batch(self, query, vectors)
+            .await
+    }
 
-        let ds_and_ts = self
-            .workers
-            .dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
-            .await?;
-
-        let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
-        self.lift_distances(dist).await
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
+    async fn get_argmin_distance(
+        &mut self,
+        distances: &[(Self::VectorRef, Self::DistanceRef)],
+    ) -> Result<(Self::VectorRef, Self::DistanceRef)> {
+        if distances.is_empty() {
+            return Err(eyre::eyre!("Cannot get min of empty list"));
+        }
+        self.oblivious_argmin_distance(distances).await
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -348,7 +547,7 @@ mod tests {
                 let mut inserted = vec![];
                 // insert queries
                 for query in queries.iter() {
-                    let insertion_layer = db.select_layer_rng(&mut rng).unwrap();
+                    let insertion_layer = db.gen_layer_rng(&mut rng).unwrap();
                     let inserted_vector = db
                         .insert(&mut *store, &mut aby3_graph, query, insertion_layer)
                         .await
@@ -664,6 +863,208 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
+    async fn test_oblivious_min() -> Result<()> {
+        let list_len = 6_u32;
+        let mut plain_list = (0..list_len).map(|i| (i, 1)).collect_vec();
+        // place the smallest distance at index 3
+        plain_list.swap(5, 3);
+
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
+        let mut jobs = JoinSet::new();
+        for store in local_stores.iter_mut() {
+            let store = store.clone();
+            let plain_list = plain_list.clone();
+            jobs.spawn(async move {
+                let mut store_lock = store.lock().await;
+                let role = store_lock.session.own_role();
+                let list = plain_list
+                    .iter()
+                    .map(|(code_dist, mask_dist)| {
+                        DistanceShare::new(
+                            Share::from_const(*code_dist, role),
+                            Share::from_const(*mask_dist, role),
+                        )
+                    })
+                    .collect_vec();
+                store_lock.oblivious_min_distance(&list).await
+            });
+        }
+        let res = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let expected = plain_list
+            .into_iter()
+            .min_by(|a, b| (b.0 * a.1).cmp(&(a.0 * b.1)))
+            .unwrap();
+
+        let distance = {
+            let code_dot = (res[0].clone().code_dot + &res[1].code_dot + &res[2].code_dot)
+                .get_a()
+                .convert();
+            let mask_dot = (res[0].clone().mask_dot + &res[1].mask_dot + &res[2].mask_dot)
+                .get_a()
+                .convert();
+            (code_dot, mask_dot)
+        };
+        assert_eq!(distance, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_oblivious_argmin() -> Result<()> {
+        let list_len = 6_u32;
+        let mut plain_list = (0..list_len).map(|i| (i, (i, 1))).collect_vec();
+        // place the smallest distance at index 3
+        plain_list.swap(5, 3);
+
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
+        let mut jobs = JoinSet::new();
+        for store in local_stores.iter_mut() {
+            let store = store.clone();
+            let plain_list = plain_list.clone();
+            jobs.spawn(async move {
+                let mut store_lock = store.lock().await;
+                let role = store_lock.session.own_role();
+                let list = plain_list
+                    .iter()
+                    .map(|(id, (code_dist, mask_dist))| {
+                        (
+                            VectorId::from_serial_id(*id),
+                            DistanceShare::new(
+                                Share::from_const(*code_dist, role),
+                                Share::from_const(*mask_dist, role),
+                            ),
+                        )
+                    })
+                    .collect_vec();
+                store_lock.get_argmin_distance(&list).await
+            });
+        }
+        let res = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let expected = plain_list
+            .into_iter()
+            .min_by(|(_, a), (_, b)| (b.0 * a.1).cmp(&(a.0 * b.1)))
+            .unwrap();
+
+        let distance = {
+            let id = res[0].0;
+            assert_eq!(id, res[1].0);
+            assert_eq!(id, res[2].0);
+
+            let (id, dist) = res
+                .into_iter()
+                .reduce(|(acc_id, acc_d), (_, a_d)| {
+                    let code_dist = acc_d.code_dot + &a_d.code_dot;
+                    let mask_dist = acc_d.mask_dot + &a_d.mask_dot;
+                    (acc_id, DistanceShare::new(code_dist, mask_dist))
+                })
+                .unwrap();
+            let code_dot = dist.code_dot.get_a().convert();
+            let mask_dot = dist.mask_dot.get_a().convert();
+
+            (id.serial_id(), (code_dot, mask_dot))
+        };
+        assert_eq!(distance, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_oblivious_min_batch() -> Result<()> {
+        let list_len = 6_u32;
+        let num_lists = 3;
+        // create 3 lists of length 6
+        // [[(1,1), (2,1), (3,1), (4,1), (6,1), (5,1)],
+        // [(7,1), (8,1), (9,1), (12,1), (10,1), (11,1)],
+        // [(13,1), (14,1), (18,1), (15,1), (16,1), (17,1)]]
+        let mut flat_list = (1..=(list_len * num_lists)).map(|i| (i, 1)).collect_vec();
+        flat_list.swap(5, 4);
+        flat_list.swap(11, 9);
+        flat_list.swap(17, 14);
+        // [(1,1), (7,1), (13,1)],
+        // [(2,1), (8,1), (14,1)],
+        // [(3,1), (9,1), (18,1)],
+        // [(4,1), (12,1), (15,1)],
+        // [(6,1), (10,1), (16,1)],
+        // [(5,1), (11,1), (17,1)]
+        let mut plain_list = Vec::with_capacity(list_len as usize);
+        for i in 0..list_len {
+            let mut slice = Vec::with_capacity(num_lists as usize);
+            for j in 0..num_lists {
+                slice.push(flat_list[(i + list_len * j) as usize]);
+            }
+            plain_list.push(slice);
+        }
+
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
+        let mut jobs = JoinSet::new();
+        for store in local_stores.iter_mut() {
+            let store = store.clone();
+            let plain_list = plain_list.clone();
+            jobs.spawn(async move {
+                let mut store_lock = store.lock().await;
+                let role = store_lock.session.own_role();
+                let list = plain_list
+                    .iter()
+                    .map(|sub_list| {
+                        sub_list
+                            .iter()
+                            .map(|(code_dist, mask_dist)| {
+                                DistanceShare::new(
+                                    Share::from_const(*code_dist, role),
+                                    Share::from_const(*mask_dist, role),
+                                )
+                            })
+                            .collect_vec()
+                    })
+                    .collect_vec();
+                store_lock.oblivious_min_distance_batch(list).await
+            });
+        }
+        let res = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let expected = flat_list
+            .chunks_exact(list_len as usize)
+            .map(|sublist| {
+                sublist
+                    .iter()
+                    .min_by(|a, b| (b.0 * a.1).cmp(&(a.0 * b.1)))
+                    .unwrap()
+            })
+            .collect_vec();
+
+        for (i, exp) in expected.into_iter().enumerate() {
+            let distance = {
+                let code_dot =
+                    (res[0][i].clone().code_dot + &res[1][i].code_dot + &res[2][i].code_dot)
+                        .get_a()
+                        .convert();
+                let mask_dot =
+                    (res[0][i].clone().mask_dot + &res[1][i].mask_dot + &res[2][i].mask_dot)
+                        .get_a()
+                        .convert();
+                (code_dot, mask_dot)
+            };
+            assert_eq!(distance, *exp);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
     async fn test_gr_aby3_store_plaintext_batch() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_size = 10;
@@ -685,10 +1086,10 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&Arc::new(plaintext_database[0].clone()), &plaintext_inserts)
+            .eval_distance_batch(&plaintext_preps[0], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&Arc::new(plaintext_database[1].clone()), &plaintext_inserts)
+            .eval_distance_batch(&plaintext_preps[1], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -721,10 +1122,10 @@ mod tests {
             jobs.spawn(async move {
                 let mut store_lock = store.lock().await;
                 let dist1_aby3 = store_lock
-                    .eval_distance_batch(&player_preps[0].clone(), &player_inserts)
+                    .eval_distance_batch(&player_preps[0], &player_inserts)
                     .await?;
                 let dist2_aby3 = store_lock
-                    .eval_distance_batch(&player_preps[1].clone(), &player_inserts)
+                    .eval_distance_batch(&player_preps[1], &player_inserts)
                     .await?;
                 let dist_aby3 = dist1_aby3
                     .into_iter()

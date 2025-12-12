@@ -1,43 +1,48 @@
-use super::player::Identity;
 use crate::{
     execution::{
-        hawk_main::{insert::InsertPlanV, iris_worker::IrisPoolHandle, search::SearchIds},
-        local::generate_local_identities,
-        player::{Role, RoleAssignment},
+        hawk_main::{
+            insert::InsertPlanV,
+            iris_worker::IrisPoolHandle,
+            rot::{CenterOnly, Rotations, VecRotationSupport},
+            search::SearchIds,
+        },
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef,
+            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef, DistanceFn,
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{
-        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswParams, HnswSearcher, VectorStore,
-    },
-    network::tcp::{build_network_handle, NetworkHandle},
+    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
+    network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
-        ops::{compare_min_threshold_buckets, setup_replicated_prf, setup_shared_seed},
+        ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },
+};
+use ampc_actor_utils::{
+    network::config::TlsConfig, protocol::anon_stats::compare_min_threshold_buckets,
+};
+use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+use ampc_anon_stats::{
+    AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
+    BucketStatistics, BucketStatistics2D,
 };
 use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::{future::try_join_all, try_join};
 use intra_batch::intra_batch_is_match;
-use iris_mpc_common::job::Eye;
-use iris_mpc_common::{
-    config::TlsConfig,
-    helpers::{
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::{BucketStatistics, BucketStatistics2D},
-    },
-    vector_id::VectorId,
-};
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
     ROTATIONS,
+};
+use iris_mpc_common::{
+    helpers::smpc_request::{
+        REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    },
+    vector_id::VectorId,
 };
 use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
 use itertools::{izip, Itertools};
@@ -86,7 +91,17 @@ pub mod state_check;
 use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
-use rot::VecRots;
+
+/// The master switch to enable search-per-rotation or search-center-only.
+pub type SearchRotations = CenterOnly;
+/// The choice of distance function to use in the Aby3Store.
+pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
+    DistanceFn::MinimalRotation
+} else {
+    DistanceFn::Simple
+};
+/// Rotation support as configured by SearchRotations.
+pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
 
 #[derive(Clone, Parser)]
 #[allow(non_snake_case)]
@@ -96,6 +111,11 @@ pub struct HawkArgs {
 
     #[clap(short, long, value_delimiter = ',')]
     pub addresses: Vec<String>,
+
+    // address to connect to. allows for inserting
+    // a proxy between MPC parties for testing purposes.
+    #[clap(short, long, value_delimiter = ',')]
+    pub outbound_addrs: Vec<String>,
 
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
@@ -139,7 +159,6 @@ pub struct HawkActor {
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
     prf_key: Option<Arc<[u8; 16]>>,
-    role_assignments: Arc<HashMap<Role, Identity>>,
 
     // ---- My state ----
     /// A size used by the startup loader.
@@ -155,14 +174,17 @@ pub struct HawkActor {
     /// In a later step, these distances will be reduced to a single, minimum distance per query.
     distances_cache: BothEyes<DistanceCache>,
 
+    anon_stats_store: Option<AnonStatsStore>,
+
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
+    error_ct: CancellationToken,
     party_id: usize,
 }
 
 #[derive(Clone, Default)]
 struct DistanceCache {
-    distances_cache: Vec<Vec<DistanceShare<u32>>>,
+    distances_cache: Vec<(i64, Vec<DistanceShare<u32>>)>,
     total_size: usize,
 }
 
@@ -171,10 +193,10 @@ impl DistanceCache {
         self.total_size
     }
 
-    fn extend(&mut self, other: impl Iterator<Item = Vec<DistanceShare<u32>>>) {
+    fn extend(&mut self, other: impl Iterator<Item = (i64, Vec<DistanceShare<u32>>)>) {
         let mut count = 0;
         self.distances_cache
-            .extend(other.inspect(|v| count += v.len()));
+            .extend(other.inspect(|(_, v)| count += v.len()));
         self.total_size += count;
     }
 
@@ -183,8 +205,12 @@ impl DistanceCache {
         self.total_size = 0;
     }
 
-    fn as_slice(&self) -> &[Vec<DistanceShare<u32>>] {
-        &self.distances_cache
+    fn iter(&self) -> impl Iterator<Item = &(i64, Vec<DistanceShare<u32>>)> {
+        self.distances_cache.iter()
+    }
+
+    fn bundles(&self) -> impl Iterator<Item = &Vec<DistanceShare<u32>>> {
+        self.distances_cache.iter().map(|(_, bundle)| bundle)
     }
 }
 
@@ -293,10 +319,10 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            ct,
+            shutdown_ct,
             [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
@@ -305,32 +331,26 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        ct: CancellationToken,
+        shutdown_ct: CancellationToken,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        let search_params = HnswParams::new(
+        let searcher = Arc::new(HnswSearcher::new_standard(
             args.hnsw_param_ef_constr,
             args.hnsw_param_ef_search,
             args.hnsw_param_M,
-        );
-        let searcher = Arc::new(HnswSearcher {
-            params: search_params,
-        });
+        ));
 
-        let identities = generate_local_identities();
-
-        let role_assignments: RoleAssignment = identities
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (Role::new(index), id.clone()))
-            .collect();
-
-        let my_index = args.party_index;
-
-        let networking =
-            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
-                .await?;
+        let network_args = NetworkHandleArgs {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+            tls: args.tls.clone(),
+        };
+        let networking = build_network_handle(network_args, shutdown_ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -339,14 +359,18 @@ impl HawkActor {
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
-            my_index,
-            Eye::Left,
+            args.party_index,
+            Some(Eye::Left),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
         );
         let bucket_statistics_right = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
-            my_index,
-            Eye::Right,
+            args.party_index,
+            Some(Eye::Right),
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
         );
 
         Ok(HawkActor {
@@ -358,11 +382,16 @@ impl HawkActor {
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             distances_cache: [Default::default(), Default::default()],
-            role_assignments: Arc::new(role_assignments),
+            anon_stats_store: None,
             networking,
-            party_id: my_index,
+            party_id: args.party_index,
+            error_ct: CancellationToken::new(),
             workers_handle,
         })
+    }
+
+    pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
+        self.anon_stats_store = store;
     }
 
     pub fn searcher(&self) -> Arc<HnswSearcher> {
@@ -434,15 +463,8 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
-        let mut network_sessions = vec![];
-        for tcp_session in self.networking.make_sessions().await? {
-            network_sessions.push(NetworkSession {
-                session_id: tcp_session.id(),
-                role_assignments: self.role_assignments.clone(),
-                networking: Box::new(tcp_session),
-                own_role: Role::new(self.party_id),
-            });
-        }
+        let (mut network_sessions, ct) = self.networking.make_network_sessions().await?;
+        self.error_ct = ct;
         let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
 
         // todo: replace this with array_chunks::<2>() once that feature
@@ -473,6 +495,10 @@ impl HawkActor {
         Ok([l, r])
     }
 
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        self.networking.sync_peers().await
+    }
+
     fn create_session(
         &self,
         store_id: StoreId,
@@ -487,14 +513,15 @@ impl HawkActor {
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
-            let aby3_store = Aby3Store {
-                session: Session {
+            let aby3_store = Aby3Store::new(
+                storage,
+                Session {
                     network_session,
                     prf,
                 },
-                storage,
                 workers,
-            };
+                DISTANCE_FN,
+            );
 
             let hawk_session = HawkSession {
                 aby3_store: Arc::new(RwLock::new(aby3_store)),
@@ -539,7 +566,7 @@ impl HawkActor {
     async fn update_anon_stats(
         &mut self,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
@@ -558,9 +585,9 @@ impl HawkActor {
             .collect_vec()
     }
 
-    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<HawkInsertPlan>]) {
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRotations<HawkInsertPlan>]) {
         // maps query_id and db_id to a vector of distances.
-        let mut distances_with_ids: BTreeMap<(u32, u32), Vec<DistanceShare<u32>>> = BTreeMap::new();
+        let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
                 let last_layer_insert_plan = match insert_plan.plan.links.first() {
@@ -573,8 +600,9 @@ impl HawkActor {
 
                 for (vector_id, distance) in matches {
                     let distance_share = distance.clone();
+                    let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
-                        .entry((query_idx as u32, vector_id.serial_id()))
+                        .entry(match_id)
                         .or_default()
                         .push(distance_share);
                 }
@@ -587,16 +615,20 @@ impl HawkActor {
             self.distances_cache[side].total_size(),
             self.args.match_distances_buffer_size,
         );
-        self.distances_cache[side].extend(distances_with_ids.into_values());
+        self.distances_cache[side].extend(distances_with_ids.into_iter());
     }
 
     async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
         let start = Instant::now();
         let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
+        let bundles = self.distances_cache[side]
+            .bundles()
+            .cloned()
+            .collect::<Vec<_>>();
         let bucket_result_shares = compare_min_threshold_buckets(
             session,
             translated_thresholds.as_slice(),
-            self.distances_cache[side].as_slice(),
+            bundles.as_slice(),
         )
         .await?;
 
@@ -621,8 +653,48 @@ impl HawkActor {
                 MATCH_THRESHOLD_RATIO,
                 self.anonymized_bucket_statistics[side].next_start_time_utc_timestamp,
             );
+            self.persist_cached_distances(side).await?;
             self.distances_cache[side].clear();
         }
+        Ok(())
+    }
+
+    async fn persist_cached_distances(&self, side: usize) -> Result<()> {
+        let Some(store) = &self.anon_stats_store else {
+            return Ok(());
+        };
+
+        let bundles = self.distances_cache[side]
+            .iter()
+            .filter_map(|(match_id, shares)| {
+                if shares.is_empty() {
+                    None
+                } else {
+                    Some((*match_id, shares.clone()))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if bundles.is_empty() {
+            return Ok(());
+        }
+
+        let eye = match side {
+            LEFT => Eye::Left,
+            RIGHT => Eye::Right,
+            _ => return Err(eyre!("invalid side index {side}")),
+        };
+
+        let origin = AnonStatsOrigin {
+            side: Some(eye),
+            orientation: AnonStatsOrientation::Normal,
+            context: AnonStatsContext::HNSW,
+        };
+
+        store
+            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::Uniqueness)
+            .await?;
+
         Ok(())
     }
 
@@ -770,14 +842,15 @@ struct HawkJob {
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
     batch: BatchQuery,
-    queries: SearchQueries,
-    queries_mirror: SearchQueries,
+    queries: SearchQueries<SearchRotations>,
+    queries_mirror: SearchQueries<SearchRotations>,
     ids: SearchIds,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<BatchQuery> for HawkRequest {
+    #[allow(clippy::iter_skip_zero)]
     fn from(batch: BatchQuery) -> Self {
         let n_queries = batch.request_ids.len();
 
@@ -826,17 +899,10 @@ impl From<BatchQuery> for HawkRequest {
                     .map(|chunk| {
                         // Collect the rotations for one request.
                         chunk
+                            .skip(SearchRotations::N_SKIP)
+                            .take(SearchRotations::N_ROTATIONS)
                             .map(|(code, mask, code_proc, mask_proc)| {
-                                // Convert to the query type of Aby3Store
-                                let iris = Arc::new(GaloisRingSharedIris {
-                                    code: code.clone(),
-                                    mask: mask.clone(),
-                                });
-                                let iris_proc = Arc::new(GaloisRingSharedIris {
-                                    code: code_proc.clone(),
-                                    mask: mask_proc.clone(),
-                                });
-                                Aby3Query { iris, iris_proc }
+                                Aby3Query::from_processed(code, mask, code_proc, mask_proc)
                             })
                             .collect_vec()
                             .into()
@@ -883,9 +949,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_orient(
-        queries: SearchQueries,
+        queries: SearchQueries<SearchRotations>,
         workers: &BothEyes<IrisPoolHandle>,
-    ) -> SearchQueries {
+    ) -> SearchQueries<SearchRotations> {
         let (left, right) = join!(
             Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
             Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
@@ -894,9 +960,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_side(
-        requests: &VecRequests<VecRots<Aby3Query>>,
+        requests: &VecRequests<VecRotations<Aby3Query>>,
         worker: &IrisPoolHandle,
-    ) -> VecRequests<VecRots<Aby3Query>> {
+    ) -> VecRequests<VecRotations<Aby3Query>> {
         // Iterate over all the irises.
         let all_irises_iter = requests.iter().flat_map(|rots| {
             rots.iter()
@@ -968,7 +1034,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn queries(&self, orient: Orientation) -> SearchQueries {
+    fn queries(&self, orient: Orientation) -> SearchQueries<SearchRotations> {
         match orient {
             Orientation::Normal => self.queries.clone(),
             Orientation::Mirror => self.queries_mirror.clone(),
@@ -1011,7 +1077,7 @@ impl HawkRequest {
                         }
                     };
                     let query = Aby3Query::new_from_raw(iris);
-                    VecRots::new_center_only(query)
+                    VecRotationSupport::new_center_only(query)
                 })
                 .collect_vec()
         });
@@ -1364,8 +1430,12 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result =
-                    Self::handle_job(&mut hawk_actor, &mut sessions, job.request).await;
+                // check if there was a networking error
+                let error_ct = hawk_actor.error_ct.clone();
+                let job_result = tokio::select! {
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request) => r,
+                    _ = error_ct.cancelled() => Err(eyre!("networking error")),
+                };
 
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
@@ -1438,8 +1508,13 @@ impl HawkHandle {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results =
-                search::search(sessions_search, search_queries, search_ids, search_params).await?;
+            let search_results = search::search::<SearchRotations>(
+                sessions_search,
+                search_queries,
+                search_ids,
+                search_params,
+            )
+            .await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
@@ -1514,7 +1589,7 @@ impl HawkHandle {
     async fn handle_mutations(
         hawk_actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
+        search_results: BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
         request: &HawkRequest,
@@ -1640,6 +1715,7 @@ impl HawkHandle {
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
+            tracing::error!("job failed. recreating sessions");
             // There is some error so the sessions may be somehow invalid. Make new ones.
             *sessions = hawk_actor.new_session_groups().await?;
         }
@@ -1692,6 +1768,8 @@ mod tests {
                 let args = HawkArgs::parse_from([
                     "hawk_main",
                     "--addresses",
+                    &addresses.join(","),
+                    "--outbound-addrs",
                     &addresses.join(","),
                     "--party-index",
                     &index.to_string(),
@@ -1987,8 +2065,8 @@ mod tests {
 mod tests_db {
     use super::*;
     use crate::hnsw::{
-        graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
-        searcher::ConnectPlanLayerV,
+        graph::graph_store::test_utils::TestGraphPg,
+        searcher::{ConnectPlanLayerV, SetEntryPoint},
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -2006,10 +2084,14 @@ mod tests_db {
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
                     layers: vec![ConnectPlanLayer {
-                        neighbors: SortedEdgeIds::from_ascending_vec(vec![vectors[side]]),
-                        nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
+                        neighbors: vec![vectors[side]],
+                        nb_links: vec![vec![*vector]],
                     }],
-                    set_ep: i == side,
+                    set_ep: if i == side {
+                        SetEntryPoint::NewLayer
+                    } else {
+                        SetEntryPoint::False
+                    },
                 })
                 .map(Some)
                 .collect_vec()
@@ -2037,10 +2119,16 @@ mod tests_db {
             graph_tx.tx.commit().await?;
         }
 
+        let addresses = vec![
+            "0.0.0.0:1234".to_string(),
+            "0.0.0.0:1235".to_string(),
+            "0.0.0.0:1236".to_string(),
+        ];
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
             party_index: 0,
-            addresses: vec!["0.0.0.0:1234".to_string()],
+            addresses: addresses.clone(),
+            outbound_addrs: addresses,
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
@@ -2061,13 +2149,13 @@ mod tests_db {
         for (side, graph) in izip!(STORE_IDS, &hawk_actor.graph_store) {
             let side = side as usize; // Find some difference between sides.
 
-            let ep = graph.read().await.get_entry_point().await;
+            let ep = graph.read().await.get_first_entry_point().await;
             let expected_ep = vectors[side];
             assert_eq!(ep, Some((expected_ep, 0)), "Entry point is set");
 
             let links = graph.read().await.get_links(&vectors[2], 0).await;
             assert_eq!(
-                links.0,
+                links,
                 vec![expected_ep],
                 "vec_2 connects to the entry point"
             );
@@ -2081,7 +2169,7 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
+    use crate::hnsw::searcher::{ConnectPlanLayerV, SetEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
@@ -2090,10 +2178,10 @@ mod hawk_mutation_tests {
         ConnectPlan {
             inserted_vector: vector_id,
             layers: vec![ConnectPlanLayer {
-                neighbors: SortedEdgeIds::from_ascending_vec(vec![vector_id]),
-                nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
+                neighbors: vec![vector_id],
+                nb_links: vec![vec![vector_id]],
             }],
-            set_ep: false,
+            set_ep: SetEntryPoint::False,
         }
     }
 

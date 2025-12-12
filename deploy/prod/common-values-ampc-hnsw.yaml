@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:c5eb540e0a8a6d6998bd397dbe3ff7c161f35cd7"
+image: "ghcr.io/worldcoin/iris-mpc-cpu@sha256:e7f7c85ced4409f9121399d2e2b99a7e7b514f99c12a7774f905f8bd55e0a25f" # v0.22.0
 
 environment: prod
 replicaCount: 1
@@ -89,76 +89,3 @@ mountSSLCerts:
   enabled: true
   mountPath: /etc/ssl/private
 
-nginxSidecar:
-  enabled: true
-  port: 6443
-  ports:
-    - containerPort: 4100
-      name: tcp-4000
-      protocol: TCP
-    - containerPort: 4101
-      name: tcp-4001
-      protocol: TCP
-    - containerPort: 4102
-      name: tcp-4002
-      protocol: TCP
-  secrets:
-    enabled: true
-    volumeMount:
-      - name: nginx-certs
-        mountPath: /etc/nginx/cert
-    volume:
-      - name: nginx-certs
-        secret:
-          secretName: application
-          items:
-            - key: certificate.crt
-              path: certificate.crt
-            - key: key.pem
-              path: key.pem
-          optional: false
-  config:
-    nginx.conf: |
-      # Run nginx as non-root user - use /tmp for PID file
-      pid /tmp/nginx.pid;
-      worker_processes  auto;
-
-      # Send error logs to stderr
-      error_log /dev/stderr info;
-
-      events {
-          worker_connections 1024;
-      }
-
-      stream {
-          # Define a custom log format for stream context
-          log_format basic '$remote_addr [$time_local] '
-                          '$protocol $status $bytes_sent $bytes_received '
-                          '$session_time';
-
-          # Send access logs to stdout with custom format
-          access_log /dev/stdout basic;
-
-          ssl_certificate /etc/nginx/cert/certificate.crt;
-          ssl_certificate_key /etc/nginx/cert/key.pem;
-          ssl_protocols       TLSv1.3;
-          ssl_ciphers         HIGH:!aNULL:!MD5;
-
-          # TCP listener for port 4000
-          server {
-              listen 4100 ssl;
-              proxy_pass 127.0.0.1:4000;
-          }
-
-          # TCP listener for port 4001
-          server {
-              listen 4101 ssl;
-              proxy_pass 127.0.0.1:4001;
-          }
-
-          # TCP listener for port 4002
-          server {
-              listen 4102 ssl;
-              proxy_pass 127.0.0.1:4002;
-          }
-      }

@@ -4,24 +4,22 @@ use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::Itertools;
 use tokio::task::JoinSet;
+use tracing::info;
 
 use crate::{
-    execution::hawk_main::{
-        insert::{self, InsertPlanV},
-        BothEyes,
-    },
+    execution::hawk_main::insert::{self, InsertPlanV},
     hawkers::plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
     hnsw::{GraphMem, HnswSearcher},
 };
 
-pub type SharedPlaintextGraphs = BothEyes<GraphMem<PlaintextVectorRef>>;
-pub type SharedPlaintextStores = BothEyes<SharedPlaintextStore>;
+/// Number of entries to insert before reporting a new info log entry
+const REPORTING_INTERVAL: usize = 1000;
 
 pub async fn plaintext_parallel_batch_insert(
     graph: Option<GraphMem<PlaintextVectorRef>>,
     store: Option<SharedPlaintextStore>,
     irises: Vec<(IrisVectorId, IrisCode)>,
-    params: crate::hnsw::HnswParams,
+    searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
 ) -> Result<(GraphMem<PlaintextVectorRef>, SharedPlaintextStore)> {
@@ -29,7 +27,8 @@ pub async fn plaintext_parallel_batch_insert(
     let mut graph = Arc::new(graph.unwrap_or_default());
     let mut store = store.unwrap_or_default();
 
-    let searcher = HnswSearcher { params };
+    let mut inserted_count: usize = 0;
+    let mut reported_count: usize = 0;
 
     for batch in &irises.into_iter().enumerate().chunks(batch_size) {
         let mut jobs: JoinSet<Result<_>> = JoinSet::new();
@@ -43,7 +42,7 @@ pub async fn plaintext_parallel_batch_insert(
             let searcher = searcher.clone();
 
             jobs.spawn(async move {
-                let insertion_layer = searcher.select_layer_prf(&prf_seed, &(vector_id))?;
+                let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
                 let (links, set_ep) = searcher
                     .search_to_insert(&mut store, &graph, &query, insertion_layer)
@@ -56,6 +55,8 @@ pub async fn plaintext_parallel_batch_insert(
                 };
                 Ok((vector_id, insert_plan))
             });
+
+            inserted_count += 1;
         }
 
         let mut results: Vec<_> = jobs
@@ -72,8 +73,13 @@ pub async fn plaintext_parallel_batch_insert(
 
         // Unwrap Arc while inserting, then wrap again for the next batch
         let mut graph_temp = Arc::try_unwrap(graph).unwrap();
-        insert::insert(&mut store, &mut graph_temp, &searcher, plans, &ids).await?;
+        insert::insert(&mut store, &mut graph_temp, searcher, plans, &ids).await?;
         graph = Arc::new(graph_temp);
+
+        if inserted_count.saturating_sub(reported_count) >= REPORTING_INTERVAL {
+            info!("Inserted {inserted_count} iris codes...");
+            reported_count = inserted_count;
+        }
     }
 
     Ok((Arc::try_unwrap(graph).unwrap(), store))
@@ -82,10 +88,7 @@ pub async fn plaintext_parallel_batch_insert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        hawkers::plaintext_store::PlaintextStore,
-        hnsw::{HnswParams, HnswSearcher},
-    };
+    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::HnswSearcher};
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
@@ -166,7 +169,7 @@ mod tests {
             Some(graph),
             Some(store),
             irises.clone(),
-            HnswParams::new(64, 32, 32),
+            &searcher,
             batch_size,
             &prf_seed,
         )
@@ -194,7 +197,7 @@ mod tests {
             Some(graph),
             Some(store),
             irises.clone(),
-            HnswParams::new(64, 32, 32),
+            &searcher,
             batch_size,
             &prf_seed,
         )
