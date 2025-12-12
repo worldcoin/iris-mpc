@@ -85,16 +85,6 @@ iris-mpc-1:
     # -- Specifies whether keel should poll for container updates
     enabled: true
 
-  libsDir:
-    enabled: true
-    path: "/libs"
-    size: 2Gi
-    files:
-      - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublasLt.so.12.2.5.6"
-        file: "libcublasLt.so.12.2.5.6"
-      - path: "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libcublas.so.12.2.5.6"
-        file: "libcublas.so.12.2.5.6"
-
   preStop:
     # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
     sleepPeriod: 10
@@ -104,7 +94,7 @@ iris-mpc-1:
 
   env:
     - name: NCCL_SOCKET_IFNAME
-      value: "eth0"
+      value: "eth,ens"
 
     - name: NCCL_IB_DISABLE
       value: "1"
