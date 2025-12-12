@@ -15,4 +15,4 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@f2ba7abc2abebaf185c833c3961145a3c275caad
         with:
           log-level: "error"
-          rust-version: "1.85.0"
+          rust-version: "1.89.0"

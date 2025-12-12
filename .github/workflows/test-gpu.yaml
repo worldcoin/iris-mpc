@@ -97,7 +97,7 @@ jobs:
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.85.0
+          toolchain: 1.89.0
 
       - name: GPU Dependent Tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
