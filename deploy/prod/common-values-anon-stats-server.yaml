@@ -1,5 +1,5 @@
 # to be later updated to same release at iris-mpc
-image: "ghcr.io/worldcoin/anon-stats-server@sha256:b584e2e0d9906fbc78914b5df7596b97023232e4bdcd416bd96e88ae6f61da84" # v0.22.0
+image: "ghcr.io/worldcoin/anon-stats-server:v0.24.0@sha256:a438e6378b3368c7dde58b2c19b62bc944e084d3f83e1748538503d4df0c2824"
 
 environment: prod
 replicaCount: 1
@@ -63,7 +63,10 @@ resources:
 imagePullSecrets:
   - name: github-secret
 
-
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
