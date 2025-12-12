@@ -1,3 +1,16 @@
+FROM rust:1.85-alpine AS rust-builder
+
+RUN apk add --no-cache musl-dev musl-utils build-base openssl-dev curl protobuf-dev protoc
+RUN rustup target add x86_64-unknown-linux-musl
+WORKDIR /src
+COPY . .
+
+RUN apk add --no-cache openssl-libs-static
+ENV RUSTFLAGS="-C target-feature=+crt-static"
+RUN cargo build --release -p iris-mpc-bins --bin init-test-dbs --target x86_64-unknown-linux-musl
+
+##
+
 FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 
 # important files:
@@ -7,9 +20,7 @@ FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 # /docker-entrypoint-initdb.d/init-db-custom.sh
 
 # copy over programs and data used to initialize the volume on the first run
-
-# this has to be built first. no sense putting a mess in the dockerfile if ci/cd isn't using it.
-COPY ./target/release/init-test-dbs /bin/init-test-dbs
+COPY --from=rust-builder /src/target/x86_64-unknown-linux-musl/release/init-test-dbs /bin/init-test-dbs
 RUN chmod +x /bin/init-test-dbs
 
 # get the 2^20 iris codes. this is large but will be stored on disk.
@@ -24,5 +35,8 @@ RUN chmod +x /docker-entrypoint-initdb.d/init-db-custom.sh
 # copy a script to delete and recreate the CPU databases on every run
 COPY ./scripts/tools/pg-entrypoint-wrapper.sh /bin/pg-entrypoint-wrapper.sh
 RUN chmod +x /bin/pg-entrypoint-wrapper.sh
+
+COPY ./scripts/tools/cleanup-cpu-schemas.sh /bin/cleanup-cpu-schemas.sh
+RUN chmod +x /bin/cleanup-cpu-schemas.sh
 
 ENTRYPOINT ["/bin/pg-entrypoint-wrapper.sh"]
