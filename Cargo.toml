@@ -35,7 +35,7 @@ aws-sdk-rds = { version = "1.44.0" }
 aws-sdk-sns = { version = "1.44.0" }
 aws-sdk-sqs = { version = "1.36.0" }
 aws-sdk-s3 = { version = "1.65.0" }
-aws-sdk-secretsmanager = { version = "1.47.0" }
+aws-sdk-secretsmanager = { version = "1.94.0" }
 async-trait = "0.1.83"
 axum = "0.7"
 clap = { version = "4.5.51", features = ["derive", "env"] }
