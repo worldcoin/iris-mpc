@@ -259,7 +259,7 @@ pub async fn last_snapshot_timestamp(
         .list_objects(timestamps_path.as_str())
         .await?
         .into_iter()
-        .filter_map(|f| match f.split('/').last() {
+        .filter_map(|f| match f.split('/').next_back() {
             Some(file_name) => LastSnapshotDetails::new_from_str(file_name),
             _ => None,
         })

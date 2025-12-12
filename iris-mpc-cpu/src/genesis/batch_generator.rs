@@ -603,10 +603,10 @@ mod tests {
             all_identifiers.extend(identifiers.clone());
         }
         assert_eq!(batch_id, 10);
-        EXCLUSIONS.map(|id| {
+        for id in EXCLUSIONS {
             assert!(!all_identifiers.contains(&id));
             assert!(all_identifiers_for_indexation.contains(&id));
-        });
+        }
     }
 
     /// Test batch generation: store length=100 :: batch-size=10.

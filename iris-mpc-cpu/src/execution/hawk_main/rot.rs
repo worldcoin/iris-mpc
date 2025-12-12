@@ -12,6 +12,7 @@ pub trait Rotations: Send + Sync + 'static {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct AllRotations {}
 
 impl Rotations for AllRotations {

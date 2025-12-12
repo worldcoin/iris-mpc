@@ -3725,7 +3725,7 @@ pub fn prepare_or_policy_bitmap(
     or_rule_indices: Vec<Vec<u32>>,
     batch_size: usize,
 ) -> Vec<u64> {
-    let row_stride64 = (max_db_size + 63) / 64;
+    let row_stride64 = max_db_size.div_ceil(64);
     let total_size = row_stride64 * batch_size;
 
     // Create the bitmap on the host

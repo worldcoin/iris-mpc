@@ -158,10 +158,10 @@ pub struct ResetUpdateRequest {
 #[derive(Error, Debug)]
 pub enum ReceiveRequestError {
     #[error("Failed to read from request SQS: {0}")]
-    FailedToReadFromSQS(#[from] SdkError<ReceiveMessageError>),
+    FailedToReadFromSQS(#[from] Box<SdkError<ReceiveMessageError>>),
 
     #[error("Failed to delete request from SQS: {0}")]
-    FailedToDeleteFromSQS(#[from] SdkError<DeleteMessageError>),
+    FailedToDeleteFromSQS(#[from] Box<SdkError<DeleteMessageError>>),
 
     #[error("Failed to mark request as deleted in the database: {0}")]
     FailedToMarkRequestAsDeleted(#[from] Report),
@@ -190,6 +190,18 @@ pub enum ReceiveRequestError {
     BatchPollingTimeout(i32),
     #[error("Failed to parse shares: {0}")]
     FailedToProcessIrisShares(Report),
+}
+
+impl From<SdkError<ReceiveMessageError>> for ReceiveRequestError {
+    fn from(value: SdkError<ReceiveMessageError>) -> Self {
+        Self::FailedToReadFromSQS(Box::new(value))
+    }
+}
+
+impl From<SdkError<DeleteMessageError>> for ReceiveRequestError {
+    fn from(value: SdkError<DeleteMessageError>) -> Self {
+        Self::FailedToDeleteFromSQS(Box::new(value))
+    }
 }
 
 impl ReceiveRequestError {
