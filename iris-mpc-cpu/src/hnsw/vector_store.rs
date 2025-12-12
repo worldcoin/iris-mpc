@@ -1,4 +1,5 @@
-use eyre::{OptionExt, Result};
+use eyre::{bail, OptionExt, Result};
+use itertools::izip;
 use serde::Serialize;
 use std::{
     fmt::{Debug, Display},
@@ -6,17 +7,28 @@ use std::{
     str::FromStr,
 };
 
+use crate::hnsw::sorting::quickselect::run_quickselect_with_store;
+
 pub trait TransientRef: Clone + Debug + PartialEq + Eq + Hash + Sync {}
 
 impl<T> TransientRef for T where T: Clone + Debug + PartialEq + Eq + Hash + Sync {}
 
 pub trait Ref:
-    Clone + Debug + PartialEq + Eq + Hash + Sync + Serialize + for<'de> serde::Deserialize<'de>
+    Send + Sync + Clone + Debug + PartialEq + Eq + Hash + Serialize + for<'de> serde::Deserialize<'de>
 {
 }
 
 impl<T> Ref for T where
-    T: Clone + Debug + PartialEq + Eq + Hash + Sync + Serialize + for<'de> serde::Deserialize<'de>
+    T: Send
+        + Sync
+        + Clone
+        + Debug
+        + PartialEq
+        + Eq
+        + Hash
+        + Sync
+        + Serialize
+        + for<'de> serde::Deserialize<'de>
 {
 }
 
@@ -138,6 +150,67 @@ pub trait VectorStore: Debug {
             }
         }
         Ok(min_dist)
+    }
+
+    /// Produce a compacted neighborhood consisting of the `max_size` nearest
+    /// elements of `neighborhood` to `base_node`, where `neighborhood` is
+    /// unsorted.
+    async fn compact_neighborhood(
+        &mut self,
+        base_node: Self::VectorRef,
+        neighborhood: &[Self::VectorRef],
+        max_size: usize,
+    ) -> Result<Vec<Self::VectorRef>> {
+        if neighborhood.len() <= max_size {
+            return Ok(neighborhood.to_vec());
+        }
+
+        let query_ = self.vectors_as_queries(vec![base_node]).await;
+        let query = query_
+            .first()
+            .ok_or_eyre("Unexpected: vectors_as_queries returned empty list of queries")?;
+
+        let distances = self.eval_distance_batch(query, neighborhood).await?;
+
+        let trimmed_idxs = run_quickselect_with_store(self, &distances, max_size).await?;
+        let trimmed = trimmed_idxs
+            .into_iter()
+            .take(max_size)
+            .map(|idx| neighborhood[idx].clone())
+            .collect();
+
+        Ok(trimmed)
+    }
+
+    /// For each tuple of elements in sequence from the lists `base_nodes`,
+    /// `neighborhoods`, and `max_sizes`, produce a compacted neighborhood of
+    /// specified maximum size consisting of the nearest elements to the
+    /// specified base node.
+    ///
+    /// The default implementation is a loop over `compact_neighborhood`.
+    /// Override this for more efficient batch compaction.
+    async fn compact_neighborhood_batch(
+        &mut self,
+        base_nodes: &[Self::VectorRef],
+        neighborhoods: &[Vec<Self::VectorRef>],
+        max_sizes: &[usize],
+    ) -> Result<Vec<Vec<Self::VectorRef>>> {
+        if base_nodes.len() != neighborhoods.len() || base_nodes.len() != max_sizes.len() {
+            bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
+        }
+
+        // TODO could improve this to do a properly batched quickselect
+        let mut results = Vec::with_capacity(base_nodes.len());
+        for (base_node, neighborhood, max_size) in
+            izip!(base_nodes.iter().cloned(), neighborhoods, max_sizes)
+        {
+            results.push(
+                self.compact_neighborhood(base_node, neighborhood, *max_size)
+                    .await?,
+            );
+        }
+
+        Ok(results)
     }
 }
 
