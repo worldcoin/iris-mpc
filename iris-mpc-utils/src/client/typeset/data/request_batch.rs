@@ -5,6 +5,8 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
+use crate::client::typeset::data::request::RequestStatus;
+
 use super::{request::Request, response::ResponseBody};
 
 /// A data structure representing a batch of requests dispatched for system processing.
@@ -75,8 +77,14 @@ impl RequestBatch {
         &self.requests.len() + 1
     }
 
-    pub fn push(&mut self, request: Request) {
+    pub fn set_request(&mut self, request: Request) {
         self.requests_mut().push(request);
+    }
+
+    pub fn set_request_status(&mut self, new_state: RequestStatus) {
+        for request in self.requests_mut() {
+            request.set_status(new_state.clone());
+        }
     }
 }
 

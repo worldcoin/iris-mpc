@@ -4,7 +4,7 @@ mod traits;
 
 pub use data::{
     Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestBody, RequestFactory,
-    ResponseBody,
+    RequestStatus, ResponseBody,
 };
 pub use errors::ClientError;
 pub use traits::{Initialize, ProcessRequestBatch};

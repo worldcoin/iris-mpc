@@ -6,7 +6,9 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::super::typeset::{ClientError, ProcessRequestBatch, Request, RequestBatch, RequestBody};
+use super::super::typeset::{
+    ClientError, ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestStatus,
+};
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -49,7 +51,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
         // Enqueue & mark requests as enqueued.
         for idx in futures::future::try_join_all(tasks).await? {
             if let Some(request) = batch.requests_mut().get_mut(idx) {
-                request.set_status_enqueued();
+                request.set_status(RequestStatus::new_enqueued());
             }
         }
 

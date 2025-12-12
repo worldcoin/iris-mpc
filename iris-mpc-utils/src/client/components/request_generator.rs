@@ -55,10 +55,10 @@ impl RequestGenerator {
             match self.batch_kind {
                 RequestBatchKind::Simple(kind) => match kind {
                     RESET_CHECK_MESSAGE_TYPE => {
-                        batch.push(RequestFactory::new_reset_check(&batch));
+                        batch.set_request(RequestFactory::new_reset_check(&batch));
                     }
                     UNIQUENESS_MESSAGE_TYPE => {
-                        batch.push(RequestFactory::new_uniqueness(&batch));
+                        batch.set_request(RequestFactory::new_uniqueness(&batch));
                     }
                     IDENTITY_DELETION_MESSAGE_TYPE
                     | REAUTH_MESSAGE_TYPE
@@ -74,8 +74,8 @@ impl RequestGenerator {
                             }
                             _ => unreachable!(),
                         };
-                        batch.push(r1);
-                        batch.push(r2);
+                        batch.set_request(r1);
+                        batch.set_request(r2);
                     }
                     _ => panic!("Invalid batch kind"),
                 },

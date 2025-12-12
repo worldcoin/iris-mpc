@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use futures;
 use rand::{CryptoRng, Rng};
 
-use super::super::typeset::{ClientError, Initialize, ProcessRequestBatch, RequestBatch};
+use super::super::typeset::{
+    ClientError, Initialize, ProcessRequestBatch, RequestBatch, RequestStatus,
+};
 use crate::{
     aws::AwsClient, irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares,
 };
@@ -67,9 +69,7 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
         futures::future::try_join_all(tasks).await?;
 
         // Update state of requests.
-        for item in batch.requests_mut() {
-            item.set_status_data_uploaded();
-        }
+        batch.set_request_status(RequestStatus::new_shares_uploaded());
 
         Ok(())
     }

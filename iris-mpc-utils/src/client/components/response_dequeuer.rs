@@ -52,23 +52,22 @@ impl ProcessRequestBatch for ResponseDequeuer {
 
 impl From<&SqsMessageInfo> for ResponseBody {
     fn from(msg: &SqsMessageInfo) -> Self {
-        match msg.kind().as_str() {
-            IDENTITY_DELETION_MESSAGE_TYPE => {
-                ResponseBody::IdentityDeletion(serde_json::from_str(msg.body()).unwrap())
-            }
-            REAUTH_MESSAGE_TYPE => {
-                ResponseBody::Reauthorization(serde_json::from_str(msg.body()).unwrap())
-            }
-            RESET_CHECK_MESSAGE_TYPE => {
-                ResponseBody::ResetCheck(serde_json::from_str(msg.body()).unwrap())
-            }
-            RESET_UPDATE_MESSAGE_TYPE => {
-                ResponseBody::ResetUpdate(serde_json::from_str(msg.body()).unwrap())
-            }
-            UNIQUENESS_MESSAGE_TYPE => {
-                ResponseBody::Uniqueness(serde_json::from_str(msg.body()).unwrap())
-            }
-            _ => panic!("Unsupported system response type"),
+        let body = msg.body();
+        let kind = msg.kind().as_str();
+
+        macro_rules! parse_response {
+            ($variant:ident) => {
+                ResponseBody::$variant(serde_json::from_str(body).unwrap())
+            };
+        }
+
+        match kind {
+            IDENTITY_DELETION_MESSAGE_TYPE => parse_response!(IdentityDeletion),
+            REAUTH_MESSAGE_TYPE => parse_response!(Reauthorization),
+            RESET_CHECK_MESSAGE_TYPE => parse_response!(ResetCheck),
+            RESET_UPDATE_MESSAGE_TYPE => parse_response!(ResetUpdate),
+            UNIQUENESS_MESSAGE_TYPE => parse_response!(Uniqueness),
+            _ => panic!("Unsupported system response type: {kind}"),
         }
     }
 }
