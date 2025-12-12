@@ -62,7 +62,7 @@ impl Request {
         }
     }
 
-    pub fn info_mut(&mut self) -> &mut RequestInfo {
+    fn info_mut(&mut self) -> &mut RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
@@ -72,18 +72,8 @@ impl Request {
         }
     }
 
-    pub fn label(&self) -> &str {
-        match self {
-            Self::IdentityDeletion { .. } => "IdentityDeletion",
-            Self::Reauthorization { .. } => "Reauthorization",
-            Self::ResetCheck { .. } => "ResetCheck",
-            Self::ResetUpdate { .. } => "ResetUpdate",
-            Self::Uniqueness { .. } => "Uniqueness",
-        }
-    }
-
     /// Returns identifier to be assigned to associated iris shares.
-    pub fn shares_id(&self) -> Option<&uuid::Uuid> {
+    pub fn iris_shares_id(&self) -> Option<&uuid::Uuid> {
         match self {
             Self::IdentityDeletion { .. } => None,
             Self::Reauthorization { reauth_id, .. } => Some(reauth_id),
@@ -93,27 +83,23 @@ impl Request {
         }
     }
 
-    pub fn status(&self) -> &RequestStatus {
-        self.info().status()
-    }
-
     /// Returns true if a system response is deemed to be correlated with this system request.
     pub fn is_correlated(&self, response: &ResponseBody) -> bool {
         match (self, response) {
             (Self::IdentityDeletion { serial_id, .. }, ResponseBody::IdentityDeletion(result)) => {
-                result.serial_id == serial_id.unwrap()
+                serial_id.unwrap() == result.serial_id
             }
             (Self::Reauthorization { reauth_id, .. }, ResponseBody::Reauthorization(result)) => {
-                result.reauth_id == reauth_id.to_string()
+                reauth_id.to_string() == result.reauth_id
             }
             (Self::ResetCheck { reset_id, .. }, ResponseBody::ResetCheck(result)) => {
-                result.reset_id == reset_id.to_string()
+                reset_id.to_string() == result.reset_id
             }
             (Self::ResetUpdate { reset_id, .. }, ResponseBody::ResetUpdate(result)) => {
-                result.reset_id == reset_id.to_string()
+                reset_id.to_string() == result.reset_id
             }
             (Self::Uniqueness { signup_id, .. }, ResponseBody::Uniqueness(result)) => {
-                result.signup_id == signup_id.to_string()
+                signup_id.to_string() == result.signup_id
             }
             _ => false,
         }
@@ -121,12 +107,12 @@ impl Request {
 
     /// Returns true if request has been enqueued for system processing.
     pub fn is_enqueued(&self) -> bool {
-        matches!(self.status(), RequestStatus::Enqueued(_))
+        matches!(self.info().status(), RequestStatus::Enqueued(_))
     }
 
     /// Returns true if generated and not awaiting data returned from a parent request.
     pub fn is_enqueueable(&self) -> bool {
-        matches!(self.status(), RequestStatus::SharesUploaded(_))
+        matches!(self.info().status(), RequestStatus::SharesUploaded(_))
             && match self {
                 Self::IdentityDeletion { serial_id, .. } => serial_id.is_some(),
                 Self::Reauthorization { serial_id, .. } => serial_id.is_some(),
@@ -135,13 +121,18 @@ impl Request {
             }
     }
 
-    /// Sets a correlated response (if correlated).
-    pub fn maybe_set_correlation(&mut self, response: &ResponseBody) -> bool {
-        let is_correlated = self.is_correlated(response);
-        if is_correlated {
-            self.info_mut().set_correlation(response);
+    fn label(&self) -> &str {
+        match self {
+            Self::IdentityDeletion { .. } => "IdentityDeletion",
+            Self::Reauthorization { .. } => "Reauthorization",
+            Self::ResetCheck { .. } => "ResetCheck",
+            Self::ResetUpdate { .. } => "ResetUpdate",
+            Self::Uniqueness { .. } => "Uniqueness",
         }
-        is_correlated
+    }
+
+    pub fn set_correlation(&mut self, response: ResponseBody) {
+        self.info_mut().set_correlation(response);
     }
 
     pub fn set_status(&mut self, new_state: RequestStatus) {
@@ -233,6 +224,8 @@ pub enum RequestStatus {
 }
 
 impl RequestStatus {
+    pub const VARIANT_COUNT: usize = 4;
+
     pub fn new_correlated() -> Self {
         Self::Correlated(Instant::now())
     }

@@ -50,7 +50,7 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
             .iter_mut()
             .filter_map(|request| {
                 request
-                    .shares_id()
+                    .iris_shares_id()
                     .map(|id| (generate_iris_shares(self.rng_mut()), id))
             })
             .collect();

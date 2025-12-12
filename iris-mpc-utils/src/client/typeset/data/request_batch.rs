@@ -1,4 +1,4 @@
-use std::{fmt, time::Instant};
+use std::fmt;
 
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
@@ -17,9 +17,6 @@ pub struct RequestBatch {
 
     /// Requests in batch.
     requests: Vec<Request>,
-
-    /// Instant at point of instantiation.
-    time_new: Instant,
 }
 
 impl RequestBatch {
@@ -35,19 +32,14 @@ impl RequestBatch {
         &mut self.requests
     }
 
-    pub fn time_new(&self) -> &Instant {
-        &self.time_new
-    }
-
     pub fn new(batch_idx: usize, batch_size: usize) -> Self {
         Self {
             batch_idx,
             requests: Vec::with_capacity(batch_size * 2),
-            time_new: Instant::now(),
         }
     }
 
-    pub fn enqueued_mut(&mut self) -> impl Iterator<Item = &mut Request> {
+    fn enqueued_mut(&mut self) -> impl Iterator<Item = &mut Request> {
         self.requests_mut().iter_mut().filter(|r| r.is_enqueued())
     }
 
@@ -66,15 +58,11 @@ impl RequestBatch {
     pub fn maybe_set_correlation(&mut self, response: ResponseBody) -> bool {
         for request in self.enqueued_mut() {
             if request.is_correlated(&response) {
-                request.info_mut().set_correlation(&response);
+                request.set_correlation(response);
                 return true;
             }
         }
         false
-    }
-
-    pub fn next_item_idx(&self) -> usize {
-        &self.requests.len() + 1
     }
 
     pub fn set_request(&mut self, request: Request) {

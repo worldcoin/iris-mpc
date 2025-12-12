@@ -21,11 +21,14 @@ pub struct RequestInfo {
 
 impl RequestInfo {
     pub fn new(batch: &RequestBatch) -> Self {
+        let mut state_history = Vec::with_capacity(RequestStatus::VARIANT_COUNT);
+        state_history.push(RequestStatus::default());
+
         Self {
             batch_idx: batch.batch_idx(),
-            batch_item_idx: batch.next_item_idx(),
+            batch_item_idx: batch.requests().len() + 1,
             correlation_set: [const { None }; N_PARTIES],
-            state_history: Vec::from([RequestStatus::default()]),
+            state_history,
         }
     }
 
@@ -33,7 +36,7 @@ impl RequestInfo {
         self.correlation_set.iter().all(|c| c.is_some())
     }
 
-    pub fn set_correlation(&mut self, response: &ResponseBody) {
+    pub fn set_correlation(&mut self, response: ResponseBody) {
         self.correlation_set[response.node_id()] = Some(response.to_owned());
         tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
         if self.is_correlated() {
