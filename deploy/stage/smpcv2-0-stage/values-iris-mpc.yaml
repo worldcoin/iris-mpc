@@ -5,17 +5,11 @@ env:
   - name: NCCL_SOCKET_IFNAME
     value: "ens,eth"
 
-  - name: FI_EFA_USE_DEVICE_RDMA
-    value: "1"
-
   - name: NCCL_IB_CUDA_SUPPORT
     value: "1"
 
   - name: NCCL_COMM_ID
     value: "iris-mpc-node.1.stage.smpcv2.worldcoin.dev:4000"
-
-  - name: FI_PROVIDER
-    value: "efa"
 
   - name: NCCL_DEBUG
     value: "INFO"
