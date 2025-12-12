@@ -94,7 +94,7 @@ iris-mpc-2:
 
   env:
     - name: NCCL_SOCKET_IFNAME
-      value: "eth,ens"
+      value: "enp"
 
     - name: NCCL_IB_DISABLE
       value: "1"
