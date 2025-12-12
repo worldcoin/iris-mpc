@@ -295,9 +295,9 @@ impl GraphMem<IrisVectorId> {
 
         // Initialize entry points and truncate layers depending on the layer mode
         let entry_points = match searcher.layer_mode {
-            LayerMode::Standard | LayerMode::Bounded { .. } => {
-                if let LayerMode::Bounded { max_graph_layer } = searcher.layer_mode {
-                    nodes_for_nonzero_layers.truncate(max_graph_layer);
+            LayerMode::Standard { max_graph_layer } => {
+                if let Some(max_layer) = max_graph_layer {
+                    nodes_for_nonzero_layers.truncate(max_layer);
                 }
 
                 // Entry point is the first vector of the highest non-empty layer, or no

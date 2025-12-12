@@ -158,18 +158,10 @@ pub enum LayerMode {
     /// new node is inserted as the first item in a new highest layer.
     ///
     /// Graph search starts at the unique entry point.
-    Standard,
-
-    /// Bounded standard operation: maintains a single entry point and updates
-    /// it when a new node is inserted as the first item in a new highest layer.
-    /// Node insertion is bounded at a fixed maximum layer height.
-    ///
-    /// Graph search starts at the unique entry point.
-    Bounded {
-        /// Maximum layer for node insertion
-        max_graph_layer: usize,
+    Standard {
+        /// Maximum layer for node insertion, if any
+        max_graph_layer: Option<usize>,
     },
-
     /// Nodes are inserted at up to a maximum layer height, and any node which
     /// would be inserted at a higher layer than this is added to an ongoing
     /// list of entry points.
@@ -317,7 +309,9 @@ impl HnswSearcher {
     pub fn new_standard(ef_constr: usize, ef_search: usize, M: usize) -> Self {
         Self {
             params: HnswParams::new(ef_constr, ef_search, M),
-            layer_mode: LayerMode::Standard,
+            layer_mode: LayerMode::Standard {
+                max_graph_layer: None,
+            },
             layer_distribution: LayerDistribution::new_geometric_from_M(M),
         }
     }
@@ -401,7 +395,7 @@ impl HnswSearcher {
         insertion_layer: usize,
     ) -> Result<(N, usize, usize, UpdateEntryPoint)> {
         match self.layer_mode {
-            LayerMode::Standard => {
+            LayerMode::Standard { max_graph_layer } => {
                 let ep = graph.get_first_entry_point().await;
                 let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
 
@@ -409,27 +403,9 @@ impl HnswSearcher {
                 // if an entry point is present, and otherwise 0.
                 let n_layers = layer.map(|l| l + 1).unwrap_or(0);
 
-                // Set new entry point if layer is greater than entry point layer, or no entry point available
-                let update_ep = if layer.map(|l| insertion_layer > l).unwrap_or(true) {
-                    UpdateEntryPoint::SetUnique {
-                        layer: insertion_layer,
-                    }
-                } else {
-                    UpdateEntryPoint::False
-                };
-
-                Ok((W, n_layers, insertion_layer, update_ep))
-            }
-            LayerMode::Bounded { max_graph_layer } => {
-                let ep = graph.get_first_entry_point().await;
-                let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
-
-                // Layers are 0-indexed, so number of graph layers is one greater than the entry point layer
-                // if an entry point is present, and otherwise 0.
-                let n_layers = layer.map(|l| l + 1).unwrap_or(0);
-
-                // Truncate insertion layer at max graph layer.
-                let bounded_insertion_layer = insertion_layer.min(max_graph_layer);
+                // If maximum graph layer is specified, truncate insertion layer
+                let bounded_insertion_layer =
+                    insertion_layer.min(max_graph_layer.unwrap_or(usize::MAX));
 
                 // Set new entry point if layer is greater than entry point layer, or no entry point available.
                 let update_ep = if layer.map(|l| bounded_insertion_layer > l).unwrap_or(true) {

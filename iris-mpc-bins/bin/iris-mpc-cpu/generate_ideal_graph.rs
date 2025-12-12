@@ -90,12 +90,9 @@ async fn main() {
 
         // Check layers and entry points are valid for layer mode
         match searcher.layer_mode {
-            LayerMode::Standard => {
+            LayerMode::Standard { max_graph_layer } => {
                 assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-            }
-            LayerMode::Bounded { max_graph_layer } => {
-                assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-                assert!(graph.num_layers() <= max_graph_layer + 1);
+                assert!(graph.num_layers() <= max_graph_layer.unwrap_or(usize::MAX) + 1);
             }
             LayerMode::LinearScan { max_graph_layer } => {
                 assert!(graph.num_layers() <= max_graph_layer + 1);
