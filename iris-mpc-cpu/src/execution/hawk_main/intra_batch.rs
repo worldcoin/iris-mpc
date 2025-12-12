@@ -138,8 +138,10 @@ mod tests {
     use super::*;
     use crate::execution::hawk_main::test_utils::make_request_intra_match;
     use crate::execution::hawk_main::{HawkActor, Orientation};
+    use tracing_test::traced_test;
 
     #[tokio::test]
+    #[traced_test]
     async fn test_intra_batch_is_match() -> Result<()> {
         let actors = setup_hawk_actors().await?;
 
@@ -149,7 +151,7 @@ mod tests {
     }
 
     async fn go_intra_batch(mut actor: HawkActor) -> Result<HawkActor> {
-        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+        let sessions = actor.new_sessions().await?;
 
         let batch_size = 3;
         let request = make_request_intra_match(batch_size, actor.party_id);
@@ -169,6 +171,7 @@ mod tests {
                 }],
             ]
         );
+        actor.sync_peers().await?;
         Ok(actor)
     }
 }

@@ -160,6 +160,21 @@ iris-mpc-2:
     - name: SMPC__DATABASE__LOAD_PARALLELISM
       value: "8"
 
+    - name: SMPC__ANON_STATS_DATABASE__URL
+      valueFrom:
+        secretKeyRef:
+          key: DATABASE_AURORA_URL
+          name: application
+
+    - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__CREATE
+      value: "false"
+
+    - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
+      value: "8"
+
     - name: SMPC__REQUESTS_QUEUE_URL
       value: "http://sqs.$AWS_REGION.localhost.localstack.cloud:4566/000000000000/smpcv2-2-e2e.fifo"
 
@@ -175,8 +190,14 @@ iris-mpc-2:
     - name: SMPC__KMS_KEY_ARNS
       value: '["arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000002"]'
 
-    - name: SMPC__PARTY_ID
+    - name: SMPC__SERVER_COORDINATION__PARTY_ID
       value: "2"
+
+    - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+      value: '["iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.$ENV.svc.cluster.local"]'
+
+    - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+      value: $(IMAGE_NAME)
 
     - name: SMPC__PUBLIC_KEY_BASE_URL
       value: "http://wf-$ENV-public-keys.s3.localhost.localstack.cloud:4566"
@@ -285,11 +306,6 @@ iris-mpc-2:
       init.sh: |
         #!/usr/bin/env bash
         set -e
-
-        cd /libs
-
-        aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
-        aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
 
         key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
         key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys

@@ -13,6 +13,7 @@ ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-trait = "~0.1"
 aws-sdk-s3.workspace = true
+blake3 = "1"
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
@@ -26,7 +27,6 @@ iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 num-traits.workspace = true
-prost = "0.13"
 rand.workspace = true
 rand_distr = "0.4.3"
 rayon.workspace = true
@@ -35,12 +35,12 @@ serde.workspace = true
 serde_json.workspace = true
 siphasher = "1"
 socket2 = { version = "0.6.0", features = ["all"] }
+statrs = "0.18.0"
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tokio-util.workspace = true
-tonic = "0.12.3"
 metrics = "0.22.1"
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
@@ -59,18 +59,20 @@ backon = { version = "1.4.0", default-features = false, features = [
 rand_chacha = { version = "0.3", features = ["serde1"] }
 num_enum = "0.7.3"
 tokio-rustls = { version = "0.26.2" }
+ampc-secret-sharing.workspace = true
+ampc-actor-utils.workspace = true
+ampc-anon-stats.workspace = true
+ampc-server-utils.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
 
-[build-dependencies]
-tonic-build = "0.12.3"
-
 [features]
 db_dependent = []
 networking_metrics = []
+chacha_prf = []
 
 [[bench]]
 name = "hnsw"

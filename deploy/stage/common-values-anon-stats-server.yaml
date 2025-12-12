@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:9108d1affd585edd789b9f18fb9a70378382ce9f"
+image: "ghcr.io/worldcoin/anon-stats-server:770afe31301605afae072608ed63a12022f7783f"
 
 environment: stage
 replicaCount: 1
@@ -45,27 +45,27 @@ livenessProbe:
     port: health
 
 readinessProbe:
-  periodSeconds: 30
-  failureThreshold: 10
+  periodSeconds: 20
+  failureThreshold: 4
   httpGet:
     path: /health
     port: health
 
 resources:
   limits:
-    cpu: 4
-    memory: 16Gi
+    cpu: "2"
+    memory: 10Gi
   requests:
-    cpu: 4
-    memory: 16Gi
+    cpu: "2"
+    memory: 10Gi
 
 imagePullSecrets:
   - name: github-secret
-
-nodeSelector:
-  kubernetes.io/arch: amd64
 
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
 
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private

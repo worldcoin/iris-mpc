@@ -1,0 +1,17 @@
+graph_size = 1000
+irises_path = "data/store.ndjson"
+layer0_path = "store_ideal_knn_fhd.txt"
+prf_seed = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+echoice = "NaiveFHD"
+sanity_check = true
+
+[searcher]
+layer_mode = "Standard"
+layer_distribution = { Geometric = { layer_probability = 0.25 } }
+
+[searcher.params]
+M = [10, 10, 10, 10, 10]
+M_max = [10, 10, 10, 10, 10]
+ef_constr_search = [320, 320, 320, 320, 320]
+ef_constr_insert = [320, 320, 320, 320, 320]
+ef_search =  [320, 320, 320, 320, 320]

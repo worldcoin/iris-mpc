@@ -1,12 +1,12 @@
-use super::plaintext_store::Base64IrisCode;
+use crate::utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection};
 use crate::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{GraphMem, HnswSearcher},
 };
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use rand::rngs::ThreadRng;
-use serde_json::{self, Deserializer};
-use std::{fs::File, io::BufReader, sync::Arc};
+use std::path::Path;
+use std::sync::Arc;
 
 pub fn search(
     query: IrisCode,
@@ -43,7 +43,7 @@ pub fn insert(
         let mut rng = ThreadRng::default();
 
         let query = Arc::new(iris);
-        let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
+        let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
         searcher
             .insert(vector, graph, &query, insertion_layer)
             .await
@@ -78,7 +78,7 @@ pub fn fill_uniform_random(
 
         for idx in 0..num {
             let query = Arc::new(IrisCode::random_rng(&mut rng));
-            let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
+            let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
                 .insert(vector, graph, &query, insertion_layer)
                 .await
@@ -105,18 +105,13 @@ pub fn fill_from_ndjson_file(
     rt.block_on(async move {
         let mut rng = ThreadRng::default();
 
-        let file = File::open(filename).unwrap();
-        let reader = BufReader::new(file);
-
-        // Create an iterator over deserialized objects
-        let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-        let stream = super::limited_iterator(stream, limit);
+        let stream =
+            irises_from_ndjson_iter(Path::new(filename), limit, IrisSelection::All).unwrap();
 
         // Iterate over each deserialized object
-        for json_pt in stream {
-            let raw_query = (&json_pt.unwrap()).into();
+        for raw_query in stream {
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
+            let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
                 .insert(vector, graph, &query, insertion_layer)
                 .await

@@ -41,22 +41,26 @@ ring.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error = "*"
 sha2.workspace = true
 sodiumoxide = "0.2.7"
 sqlx.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 toml.workspace = true
+ampc-anon-stats.workspace = true
+ampc-server-utils.workspace = true
 tonic = "0.12.3"
 metrics.workspace = true
 metrics-exporter-statsd.workspace = true
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
-    "uuid",
-    "chrono",
-    "smallvec",
-    "tokio",
-    "serde",
-    "env-filter",
+  "uuid",
+  "chrono",
+  "smallvec",
+  "tokio",
+  "serde",
+  "env-filter",
 ] }
 tracing-subscriber.workspace = true
 uuid.workspace = true
@@ -68,7 +72,9 @@ iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
-iris-mpc-anon-stats-server = { path = "../iris-mpc-anon-stats-server" }
+blake3 = "1.8.2"
+aws-smithy-types = "1.2.9"
+clap_builder = "4.5.51"
 
 
 # ---------------------
@@ -148,6 +154,10 @@ path = "bin/iris-mpc-cpu/generate_ideal_neighborhoods.rs"
 name = "construct-graph-ptxt"
 path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
 
+[[bin]]
+name = "generate_ideal_graph"
+path = "bin/iris-mpc-cpu/generate_ideal_graph.rs"
+
 # ---------------------
 # binaries for iris-mpc-gpu
 # ---------------------
@@ -171,6 +181,11 @@ path = "bin/iris-mpc-upgrade/reshare-server.rs"
 [[bin]]
 name = "reshare-client"
 path = "bin/iris-mpc-upgrade/reshare-client.rs"
+
+[[bin]]
+name = "rerandomize-db"
+path = "bin/iris-mpc-upgrade/rerandomize_db.rs"
+
 
 # ---------------------
 # binaries for iris-mpc-upgrade-hawk

@@ -3,17 +3,29 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::state_check::SetHash,
+    hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        searcher::{ConnectPlan, ConnectPlanLayer},
+        searcher::{ConnectPlan, ConnectPlanLayer, LayerMode, SetEntryPoint},
         vector_store::Ref,
+        HnswSearcher,
     },
 };
-use itertools::izip;
+
+use eyre::Result;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use itertools::{izip, Itertools};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+    iter::once,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -31,9 +43,9 @@ pub struct EntryPoint<VectorRef> {
 /// An in-memory implementation of an HNSW hierarchical graph.
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
-pub struct GraphMem<V: Ref + Display + FromStr> {
+pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// Starting vector and layer for HNSW search
-    pub entry_point: Option<EntryPoint<V>>,
+    pub entry_points: Vec<EntryPoint<V>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
@@ -41,19 +53,19 @@ pub struct GraphMem<V: Ref + Display + FromStr> {
     pub layers: Vec<Layer<V>>,
 }
 
-impl<V: Ref + Display + FromStr> Clone for GraphMem<V> {
+impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
     fn clone(&self) -> Self {
         GraphMem {
-            entry_point: self.entry_point.clone(),
+            entry_points: self.entry_points.clone(),
             layers: self.layers.clone(),
         }
     }
 }
 
-impl<V: Ref + Display + FromStr> GraphMem<V> {
+impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     pub fn new() -> Self {
         GraphMem {
-            entry_point: None,
+            entry_points: vec![],
             layers: vec![],
         }
     }
@@ -62,12 +74,15 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         Arc::new(RwLock::new(self))
     }
 
-    pub fn from_precomputed(entry_point: Option<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
+    pub fn from_precomputed(entry_points: Vec<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
         GraphMem {
-            entry_point: entry_point.map(|ep| EntryPoint {
-                point: ep.0,
-                layer: ep.1,
-            }),
+            entry_points: entry_points
+                .into_iter()
+                .map(|ep| EntryPoint {
+                    point: ep.0,
+                    layer: ep.1,
+                })
+                .collect::<Vec<_>>(),
             layers,
         }
     }
@@ -76,14 +91,52 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         self.layers.clone()
     }
 
+    pub fn get_num_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Return a deterministically selected temporary entry point for the graph.
+    ///
+    /// This is currently defined as the vector with minimal id in the top
+    /// non-empty layer of the graph, or `None` if the graph is empty.
+    pub fn get_temporary_entry_point(&self) -> Option<(V, usize)> {
+        self.layers
+            .iter()
+            .enumerate()
+            .filter(|(_lc, layer)| !layer.links.is_empty())
+            .last()
+            .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (x.clone(), lc)))
+    }
+
+    pub fn get_ep_layer(&self) -> Option<Vec<V>> {
+        let v: Vec<_> = self
+            .entry_points
+            .iter()
+            .map(|ep| ep.point.clone())
+            .collect();
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    }
+
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
+        let insertion_layer = plan.layers.len() - 1;
+
         // If required, set vector as new entry point
-        if plan.set_ep {
-            let insertion_layer = plan.layers.len() - 1;
-            self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
-                .await;
+        match plan.set_ep {
+            SetEntryPoint::False => {}
+            SetEntryPoint::NewLayer => {
+                self.set_unique_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                    .await;
+            }
+            SetEntryPoint::AddToLayer => {
+                self.add_entry_point(plan.inserted_vector.clone(), insertion_layer)
+                    .await;
+            }
         }
 
         // Connect the new vector to its neighbors in each layer.
@@ -104,14 +157,28 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         self.set_links(q, plan.neighbors, lc).await;
     }
 
-    pub async fn get_entry_point(&self) -> Option<(V, usize)> {
-        self.entry_point
-            .as_ref()
+    pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
+        self.entry_points
+            .first()
             .map(|ep| (ep.point.clone(), ep.layer))
     }
 
-    pub async fn set_entry_point(&mut self, point: V, layer: usize) {
-        if let Some(previous) = self.entry_point.as_ref() {
+    pub async fn init_entry_points(&mut self, points: Vec<V>, layer: usize) {
+        self.entry_points = points
+            .into_iter()
+            .map(|point| EntryPoint { point, layer })
+            .collect()
+    }
+
+    pub async fn add_entry_point(&mut self, point: V, layer: usize) {
+        if let Some(previous) = self.entry_points.first() {
+            assert!(previous.layer == layer, "add_entry_point: layer mismatch");
+        }
+        self.entry_points.push(EntryPoint { point, layer });
+    }
+
+    pub async fn set_unique_entry_point(&mut self, point: V, layer: usize) {
+        if let Some(previous) = self.entry_points.first() {
             assert!(
                 previous.layer < layer,
                 "A new entry point should be on a higher layer than before."
@@ -122,16 +189,16 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
             self.layers.resize(layer + 1, Layer::new());
         }
 
-        self.entry_point = Some(EntryPoint { point, layer });
+        self.entry_points = vec![EntryPoint { point, layer }];
     }
 
-    pub async fn get_links(&self, base: &V, lc: usize) -> SortedEdgeIds<V> {
+    pub async fn get_links(&self, base: &V, lc: usize) -> Vec<V> {
         let layer = &self.layers[lc];
         layer.get_links(base).unwrap_or_default()
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
-    pub async fn set_links(&mut self, base: V, links: SortedEdgeIds<V>, lc: usize) {
+    pub async fn set_links(&mut self, base: V, links: Vec<V>, lc: usize) {
         if self.layers.len() < lc + 1 {
             self.layers.resize(lc + 1, Layer::new());
         }
@@ -145,7 +212,7 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
 
     pub fn checksum(&self) -> u64 {
         let mut set_hash = SetHash::default();
-        set_hash.add_unordered(&self.entry_point);
+        set_hash.add_unordered(&self.entry_points);
         for (lc, layer) in self.layers.iter().enumerate() {
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
@@ -153,16 +220,123 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
     }
 }
 
+impl GraphMem<IrisVectorId> {
+    /// Builds an idealized GraphMem, where all nearest-neighborhoods are exact.
+    ///
+    /// Layer 0 is built directly from a file (which generally is expensive to produce).
+    /// Nodes in Layer 0 will have `searcher.params.get_M_max(0)` neighbors, if this value is at
+    /// most equal to the number of neighbors per node found in the target file. Otherwise, the method panics.
+    ///
+    /// Higher layers are built from brute-force pairwise computations among all resident nodes. Layer `lc`
+    /// will have `searcher.params.get_M_max(lc)`, but consider that the graph might have a Linear-Scan layer.
+    ///
+    /// The searcher also computes the insertion layers for all nodes (using `prf_seed` for reproducibility).
+    /// The engine choice specifies the used distance (FHD or MinFHD).
+    pub fn ideal_from_irises(
+        irises: Vec<IrisCode>,
+        filepath: PathBuf, // File containing KNN results for layer 0
+        searcher: &HnswSearcher,
+        prf_seed: [u8; 16],
+        echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
+    ) -> Result<Self> {
+        let zero_layer = {
+            let mut results = read_knn_results_from_file(filepath).unwrap();
+            for result in results.iter_mut() {
+                result.truncate(searcher.params.get_M_max(0));
+            }
+            let results = results
+                .into_par_iter()
+                .map(|result| result.map(IrisVectorId::from_serial_id))
+                .collect::<Vec<_>>();
+            Layer::from_knn_results(results, irises.len())
+        };
+
+        let irises_with_vector_ids = izip!(
+            zero_layer.links.keys().cloned().sorted(),
+            irises.into_iter(),
+        )
+        .collect::<Vec<_>>();
+
+        // Collect nodes into layers they are inserted into (for layers > 0)
+        let mut nonzero_layers_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> =
+            BTreeMap::new();
+        for (vector_id, iris) in irises_with_vector_ids.iter() {
+            let layer = searcher.gen_layer_prf(&prf_seed, &vector_id)?;
+            // Insert node into layers 1 to insertion layer (or not if inserted in layer 0)
+            for l in 1..=layer {
+                nonzero_layers_map
+                    .entry(l)
+                    .or_default()
+                    .push((*vector_id, iris.clone()));
+            }
+        }
+
+        let mut nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> =
+            nonzero_layers_map.into_values().collect::<Vec<Vec<_>>>();
+
+        // Initialize entry points and truncate layers depending on the layer mode
+        let entry_points = match searcher.layer_mode {
+            LayerMode::Standard | LayerMode::Bounded { .. } => {
+                if let LayerMode::Bounded { max_graph_layer } = searcher.layer_mode {
+                    nodes_for_nonzero_layers.truncate(max_graph_layer);
+                }
+
+                // Entry point is the first vector of the highest non-empty layer, or no
+                // entry point if the graph is empty
+                once(&irises_with_vector_ids)
+                    .chain(nodes_for_nonzero_layers.iter())
+                    .last()
+                    .unwrap_or(&vec![])
+                    .first()
+                    .map(|(v, _)| vec![(*v, nodes_for_nonzero_layers.len())])
+                    .unwrap_or_default()
+            }
+            LayerMode::LinearScan { max_graph_layer } => {
+                // Entry points are the nodes inserted at the layer after `max_graph_layer`,
+                // found at index `max_graph_layer` in the list of nonzero layers
+                let entry_points = nodes_for_nonzero_layers
+                    .get(max_graph_layer)
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|(v, _)| (*v, max_graph_layer))
+                    .collect();
+
+                nodes_for_nonzero_layers.truncate(max_graph_layer);
+
+                entry_points
+            }
+        };
+
+        // Finally, run brute force algorithms to connect nodes in each layer
+        let nonzero_layers =
+            nodes_for_nonzero_layers
+                .into_iter()
+                .enumerate()
+                .map(|(i, layer_iris_data)| {
+                    Layer::ideal_from_irises(
+                        layer_iris_data,
+                        searcher.params.get_M_max(i + 1),
+                        echoice,
+                    )
+                });
+
+        Ok(GraphMem::from_precomputed(
+            entry_points,
+            once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
+        ))
+    }
+}
+
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
-pub struct Layer<V: Ref + Display + FromStr> {
+pub struct Layer<V: Ref + Display + FromStr + Ord> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    pub links: HashMap<V, SortedEdgeIds<V>>,
+    pub links: HashMap<V, Vec<V>>,
     set_hash: SetHash,
 }
 
-impl<V: Ref + Display + FromStr> Clone for Layer<V> {
+impl<V: Ref + Display + FromStr + Ord> Clone for Layer<V> {
     fn clone(&self) -> Self {
         Layer {
             links: self.links.clone(),
@@ -171,7 +345,7 @@ impl<V: Ref + Display + FromStr> Clone for Layer<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr> Layer<V> {
+impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     pub fn new() -> Self {
         Layer {
             links: HashMap::new(),
@@ -179,11 +353,11 @@ impl<V: Ref + Display + FromStr> Layer<V> {
         }
     }
 
-    pub fn get_links(&self, from: &V) -> Option<SortedEdgeIds<V>> {
+    pub fn get_links(&self, from: &V) -> Option<Vec<V>> {
         self.links.get(from).cloned()
     }
 
-    pub fn set_links(&mut self, from: V, links: SortedEdgeIds<V>) {
+    pub fn set_links(&mut self, from: V, links: Vec<V>) {
         self.set_hash.add_unordered((&from, &links));
 
         let previous = self.links.insert(from.clone(), links);
@@ -193,8 +367,36 @@ impl<V: Ref + Display + FromStr> Layer<V> {
         }
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V, SortedEdgeIds<V>> {
+    pub fn get_links_map(&self) -> &HashMap<V, Vec<V>> {
         &self.links
+    }
+
+    fn from_knn_results(results: Vec<KNNResult<V>>, n: usize) -> Self {
+        let mut ret = Layer::new();
+        for KNNResult { node, neighbors } in results.into_iter().take(n) {
+            ret.set_links(node, neighbors);
+        }
+        ret
+    }
+
+    /// Constructs a Layer from pairs of (vectorRef, iris) by computing
+    /// the ideal K-nearest neighbors for each such entry.
+    fn ideal_from_irises(iris_data: Vec<(V, IrisCode)>, k: usize, echoice: EngineChoice) -> Self {
+        let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
+        let n = irises.len();
+        let k = k.min(n - 1);
+
+        // Initialize the KNN algorithm;
+        let mut engine = Engine::init(echoice, irises, k, 1);
+        // Run the entire computation
+        let results = engine
+            .compute_chunk(n)
+            .into_iter()
+            // remap from engine 1-based indices to original vector ids
+            .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
+            .collect::<Vec<_>>();
+
+        Layer::from_knn_results(results, n)
     }
 }
 
@@ -208,14 +410,18 @@ impl<V: Ref + Display + FromStr> Layer<V> {
 /// - vector ids are re-mapped to remove blank entries left by deletions
 pub fn migrate<U, V, VecMap>(graph: GraphMem<U>, vector_map: VecMap) -> GraphMem<V>
 where
-    U: Ref + Display + FromStr,
-    V: Ref + Display + FromStr,
+    U: Ref + Display + FromStr + Ord,
+    V: Ref + Display + FromStr + Ord,
     VecMap: Fn(U) -> V + Copy,
 {
-    let new_entry_point = graph.entry_point.map(|ep| EntryPoint {
-        point: vector_map(ep.point),
-        layer: ep.layer,
-    });
+    let new_entry_point = graph
+        .entry_points
+        .iter()
+        .map(|ep| EntryPoint {
+            point: vector_map(ep.point.clone()),
+            layer: ep.layer,
+        })
+        .collect();
 
     let new_layers: Vec<_> = graph
         .layers
@@ -223,17 +429,14 @@ where
         .map(|v| {
             let mut layer = Layer::new();
             for (from, nbhd) in v.links.into_iter() {
-                layer.set_links(
-                    vector_map(from),
-                    SortedEdgeIds::from_ascending_vec(nbhd.0.into_iter().map(vector_map).collect()),
-                );
+                layer.set_links(vector_map(from), nbhd.into_iter().map(vector_map).collect());
             }
             layer
         })
         .collect();
 
     GraphMem::<V> {
-        entry_point: new_entry_point,
+        entry_points: new_entry_point,
         layers: new_layers,
     }
 }
@@ -252,6 +455,7 @@ mod tests {
     use aes_prng::AesRng;
     use eyre::Result;
     use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
+
     use rand::{RngCore, SeedableRng};
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -295,14 +499,6 @@ mod tests {
             Ok(hamming_distance(vector_0, vector_1))
         }
 
-        async fn eval_minimal_rotation_distance_batch(
-            &mut self,
-            _query: &Self::QueryRef,
-            _vectors: &[Self::VectorRef],
-        ) -> Result<Vec<Self::DistanceRef>> {
-            unimplemented!()
-        }
-
         async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
             Ok(*distance == 0)
         }
@@ -343,7 +539,7 @@ mod tests {
 
         for raw_query in raw_queries.db {
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
+            let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
@@ -378,7 +574,7 @@ mod tests {
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
+            let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
@@ -399,8 +595,8 @@ mod tests {
         let new_graph_store: GraphMem<<TestStore as VectorStore>::VectorRef> =
             migrate(graph_store.clone(), |v| point_ids_map[&v]);
 
-        let (entry_point, layer) = graph_store.get_entry_point().await.unwrap();
-        let (new_entry_point, new_layer) = new_graph_store.get_entry_point().await.unwrap();
+        let (entry_point, layer) = graph_store.get_first_entry_point().await.unwrap();
+        let (new_entry_point, new_layer) = new_graph_store.get_first_entry_point().await.unwrap();
 
         // Check that entry points are correct
         assert_eq!(layer, new_layer);

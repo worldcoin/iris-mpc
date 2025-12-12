@@ -1,0 +1,150 @@
+env:
+  - name: RUST_LOG
+    value: "info"
+
+  - name: SMPC__ENVIRONMENT
+    value: "stage"
+
+  - name: SMPC__SERVICE__SERVICE_NAME
+    value: "anon-stats-server-hnsw-2"
+
+  - name: SMPC__SNS_BUFFER_BUCKET_NAME
+    value: "wf-hnsw-stage-sns-buffer"
+
+  - name: SMPC__DB_URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_URL
+        name: application
+
+  - name: SMPC__HEALTHCHECK_PORTS
+    value: '["3000","3000","3000"]'
+
+  - name: SMPC__SERVICE_PORTS
+    value: '["4000","4001","4002"]'
+
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
+    value: "2"
+
+  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+    value: '["anon-stats-server.1.stage.hnsw.worldcoin.dev","anon-stats-server.2.stage.hnsw.worldcoin.dev","0.0.0.0"]'
+
+  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+    value: $(IMAGE_NAME)
+
+  - name: SMPC__RESULTS_TOPIC_ARN
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+
+  - name: SMPC__AWS__REGION
+    value: "eu-north-1"
+
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES
+    value: "5"
+
+  - name: SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS
+    value: "5000"
+
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS
+    value: "3"
+
+  - name: SMPC__SERVER_COORDINATION__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS
+    value: "10"
+
+  - name: SMPC__SERVICE__METRICS__HOST
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+
+  - name: SMPC__SERVICE__METRICS__PORT
+    value: "8125"
+
+  - name: SMPC__SERVICE__METRICS__QUEUE_SIZE
+    value: "5000"
+
+  - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
+    value: "256"
+
+  - name: SMPC__SERVICE__METRICS__PREFIX
+    value: "anon-stats-server-hnsw-2"
+
+  - name: SMPC__N_BUCKETS_1D
+    value: "375"
+
+  - name: SMPC__N_BUCKETS_2D
+    value: "375"
+
+  - name: SMPC__MIN_1D_JOB_SIZE_REAUTH
+    value: "10"
+
+  - name: SMPC__MIN_1D_JOB_SIZE
+    value: "64"
+
+  - name: SMPC__MIN_2D_JOB_SIZE_REAUTH
+    value: "10"
+
+  - name: SMPC__MIN_2D_JOB_SIZE
+    value: "64"
+
+  - name: SMPC__POLL_INTERVAL_SECS
+    value: "30"
+
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
+
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERTS
+    value: '["/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_2.crt"]'
+
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "anon-stats-server-hnsw-dns-records-updater"
+  env:
+    - name: PARTY_ID
+      value: "3"
+    - name: POD_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+
+      # Set up environment variables
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".stage.hnsw.worldcoin.dev --query "HostedZones[0].Id" --output text)
+
+      # Generate the JSON content in memory
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for anon-stats-server-hnsw pod",
+        "Changes": [
+          {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+              "Name": "anon-stats-server.$PARTY_ID.stage.hnsw.worldcoin.dev",
+              "TTL": 5,
+              "Type": "A",
+              "ResourceRecords": [{
+                "Value": "$POD_IP"
+              }]
+            }
+          }
+        ]
+      }
+      EOF
+      )
+
+      # Execute AWS CLI command with the generated JSON
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+
+
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+    - sg-009f4095359514cf3 # CHANGE THIS: hnsw-ampc-anon-stats-stage pod sg
