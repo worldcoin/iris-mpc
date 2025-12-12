@@ -5,7 +5,7 @@ use iris_mpc_common::helpers::smpc_request::{
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use super::request::Request;
+use super::{request::Request, response::ResponseBody};
 
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Debug)]
@@ -49,12 +49,26 @@ impl RequestBatch {
         self.requests_mut().iter_mut().filter(|r| r.is_enqueued())
     }
 
+    pub fn get_child_request(&self, _request: &Request) -> Option<&Request> {
+        unimplemented!()
+    }
+
     pub fn has_enqueued_items(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueued())
     }
 
     pub fn is_enqueueable(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueueable())
+    }
+
+    pub fn maybe_set_correlation(&mut self, response: ResponseBody) -> bool {
+        for request in self.enqueued_mut() {
+            if request.is_correlated(&response) {
+                request.info_mut().set_correlation(&response);
+                return true;
+            }
+        }
+        false
     }
 
     pub fn next_item_idx(&self) -> usize {

@@ -40,11 +40,8 @@ impl ProcessRequestBatch for ResponseDequeuer {
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
         while batch.has_enqueued_items() {
             for sqs_msg in self.aws_client.sqs_receive_messages(Some(1)).await? {
-                let response = ResponseBody::from(&sqs_msg);
-                for request in batch.enqueued_mut() {
-                    if request.maybe_set_correlation(&response) {
-                        self.aws_client.sqs_purge_message(&sqs_msg).await?;
-                    }
+                if batch.maybe_set_correlation(ResponseBody::from(&sqs_msg)) {
+                    self.aws_client.sqs_purge_message(&sqs_msg).await?;
                 }
             }
         }
