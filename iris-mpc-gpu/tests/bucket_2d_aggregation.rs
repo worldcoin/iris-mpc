@@ -182,7 +182,7 @@ mod bucket_2d_aggregation_test {
                 let left_reduced = left
                     .into_iter()
                     .reduce(|(c1, m1), (c2, m2)| {
-                        if (c1 as u64 * m2 as u64) > (c2 as u64 * m1 as u64) {
+                        if (c1 as i16 as i64 * m2 as i64) > (c2 as i16 as i64 * m1 as i64) {
                             (c1, m1)
                         } else {
                             (c2, m2)
@@ -192,7 +192,7 @@ mod bucket_2d_aggregation_test {
                 let right_reduced = right
                     .into_iter()
                     .reduce(|(c1, m1), (c2, m2)| {
-                        if (c1 as u64 * m2 as u64) > (c2 as u64 * m1 as u64) {
+                        if (c1 as i16 as i64 * m2 as i64) > (c2 as i16 as i64 * m1 as i64) {
                             (c1, m1)
                         } else {
                             (c2, m2)
@@ -200,10 +200,10 @@ mod bucket_2d_aggregation_test {
                     })
                     .unwrap();
                 (
-                    left_reduced.0 as u32,
-                    left_reduced.1 as u32,
-                    right_reduced.0 as u32,
-                    right_reduced.1 as u32,
+                    left_reduced.0 as i16 as i32 as u32,
+                    left_reduced.1 as i16 as i32 as u32,
+                    right_reduced.0 as i16 as i32 as u32,
+                    right_reduced.1 as i16 as i32 as u32,
                 )
             })
             .collect()

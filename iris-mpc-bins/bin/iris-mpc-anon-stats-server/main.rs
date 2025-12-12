@@ -1,4 +1,3 @@
-use ampc_anon_stats::anon_stats::iris_1d::{DistanceBundle1D, LiftedDistanceBundle1D};
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::types::Eye;
@@ -6,7 +5,8 @@ use ampc_anon_stats::{
     process_1d_anon_stats_job, process_1d_lifted_anon_stats_job, process_2d_anon_stats_job,
     start_coordination_server, sync_on_id_hash, sync_on_job_sizes, AnonStatsContext,
     AnonStatsMapping, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin,
-    AnonStatsServerConfig, AnonStatsStore, BucketStatistics, BucketStatistics2D, Opt,
+    AnonStatsServerConfig, AnonStatsStore, BucketStatistics, BucketStatistics2D, DistanceBundle1D,
+    LiftedDistanceBundle1D, Opt,
 };
 use ampc_server_utils::{
     init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
@@ -41,7 +41,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tokio::time::{interval, MissedTickBehavior};
-use tracing::{debug, info, warn};
+use tracing::{debug, event, info, warn};
 use uuid::Uuid;
 
 const GPU_1D_ORIGINS: [AnonStatsOrigin; 2] = [
@@ -195,12 +195,7 @@ impl AnonStatsProcessor {
             JobKind::Gpu2D | JobKind::Gpu2DReauth => 0,
         };
         let available = usize::try_from(available).unwrap_or(0);
-        info!(
-            "Available anon stats entries for {:?}, {:?}: {}",
-            origin,
-            Some(operation),
-            available
-        );
+
         if available == 0 {
             info!("No anon stats entries for {:?}", origin);
             return Ok(());
@@ -212,6 +207,9 @@ impl AnonStatsProcessor {
             JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
             _ => panic!("Invalid job kind for 1D job"),
         };
+
+        self.log_available_entries(available, required_min, origin, kind)
+            .await;
 
         if min_job_size < required_min {
             debug!(
@@ -259,13 +257,9 @@ impl AnonStatsProcessor {
                     Some(operation),
                 )
                 .await?;
-                info!(
-                    ?origin,
-                    ?kind,
-                    job_size,
-                    elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job",
-                );
+
+                self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
+                    .await;
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d(&ids).await?;
@@ -307,12 +301,9 @@ impl AnonStatsProcessor {
                     Some(operation),
                 )
                 .await?;
-                info!(
-                    ?origin,
-                    job_size,
-                    elapsed_ms = start.elapsed().as_millis(),
-                    "Completed 1D anon stats job"
-                );
+
+                self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
+                    .await;
 
                 self.publish_1d_stats(&stats).await?;
                 self.store.mark_anon_stats_processed_1d_lifted(&ids).await?;
@@ -346,6 +337,10 @@ impl AnonStatsProcessor {
             JobKind::Gpu2D => self.config.min_2d_job_size,
             _ => panic!("Invalid job kind for 2D job"),
         };
+
+        self.log_available_entries(available, required_min, origin, kind)
+            .await;
+
         if min_job_size < required_min {
             debug!(
                 ?origin,
@@ -393,12 +388,9 @@ impl AnonStatsProcessor {
         let start = Instant::now();
         let stats =
             process_2d_anon_stats_job(session, job, self.config.as_ref(), Some(operation)).await?;
-        info!(
-            ?origin,
-            job_size,
-            elapsed_ms = start.elapsed().as_millis(),
-            "Completed 2D anon stats job"
-        );
+
+        self.log_job_metrics("2d", origin, kind, job_size, start.elapsed())
+            .await;
 
         self.publish_2d_stats(&stats).await?;
         self.store.mark_anon_stats_processed_2d(&ids).await?;
@@ -481,6 +473,11 @@ impl AnonStatsProcessor {
             ?origin,
             "Exceeded sync mismatches threshold; clearing local anon stats queue"
         );
+        event!(
+            tracing::Level::ERROR,
+            ?origin,
+            "Exceeded sync mismatches threshold; clearing local anon stats queue"
+        );
 
         let cleared = match kind {
             JobKind::Gpu1D | JobKind::Gpu1DReauth => {
@@ -502,6 +499,74 @@ impl AnonStatsProcessor {
         info!(?origin, cleared, "Cleared unprocessed anon stats entries");
         self.sync_failures.insert((origin, operation), 0);
         Ok(())
+    }
+
+    async fn log_job_metrics(
+        &self,
+        metric_name_suffix: &str,
+        origin: AnonStatsOrigin,
+        kind: JobKind,
+        job_size: usize,
+        duration: Duration,
+    ) {
+        let duration_metric_name = format!("job_{}.duration", metric_name_suffix);
+        let job_size_metric_name = format!("job_{}.size", metric_name_suffix);
+
+        let side = match origin.side {
+            Some(eye) => format!("{:?}", eye),
+            None => "both".to_string(),
+        };
+
+        metrics::histogram!(
+            duration_metric_name,
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+            "side" => side.clone(),
+        )
+        .record(duration.as_millis() as f64);
+
+        metrics::histogram!(
+            job_size_metric_name,
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+            "side" => side,
+        )
+        .record(job_size as f64);
+
+        info!("Completed anon stats job of kind: {:?}", kind);
+    }
+
+    async fn log_available_entries(
+        &self,
+        available: usize,
+        required_min: usize,
+        origin: AnonStatsOrigin,
+        kind: JobKind,
+    ) {
+        let side = match origin.side {
+            Some(eye) => format!("{:?}", eye),
+            None => "both".to_string(),
+        };
+
+        metrics::gauge!(
+            "available_entries",
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+            "side" => side
+        )
+        .set(available as f64);
+
+        metrics::gauge!(
+            "required_min_entries",
+            "orientation" => format!("{:?}", origin.orientation),
+            "kind" => format!("{:?}", kind),
+        )
+        .set(required_min as f64);
+
+        debug!(
+            "Available entries for side {:?}, kind {:?}: {}",
+            origin, kind, available
+        );
     }
 }
 
@@ -590,7 +655,7 @@ async fn main() -> Result<()> {
         connection_parallelism: 8,
         request_parallelism: 8,
         sessions_per_request: 1,
-        tls: None,
+        tls: config.tls.clone(),
     };
     let ct = shutdown_handler.get_network_cancellation_token();
 

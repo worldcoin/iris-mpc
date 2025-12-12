@@ -185,9 +185,6 @@ env:
   - name: SMPC__TLS__ROOT_CERTS
     value: '["/usr/local/share/ca-certificates/ca_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_party_stage_2.crt"]'
 
-  - name: SMPC__TLS__CLIENT_ONLY_TLS
-    value: "false"
-
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"

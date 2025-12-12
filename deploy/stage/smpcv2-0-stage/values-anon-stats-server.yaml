@@ -88,6 +88,24 @@ env:
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
 
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
+
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERTS
+    value: '["/usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt"]'
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: "anon-stats-server"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "anonStatsServer"
+    effect: "NoSchedule"
 
 initContainer:
   enabled: true

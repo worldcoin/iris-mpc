@@ -452,7 +452,11 @@ impl TwoSidedDistanceCache {
                 };
                 let on_device = ChunkShare::new(on_device_a, on_device_b);
 
-                protocol.lift_u16_to_u32(&[on_device.as_view()], &mut result, &streams[..1]);
+                protocol.lift_u16_to_u32_signed(
+                    &mut [on_device.as_view()],
+                    &mut result,
+                    &streams[..1],
+                );
                 let result_a = dtoh_on_stream_sync(&result[0].a, &devices[0], &streams[0]).unwrap();
                 let result_b = dtoh_on_stream_sync(&result[0].b, &devices[0], &streams[0]).unwrap();
                 flattened_lifted_a.extend(result_a.into_iter().take(chunk_a.len()));
