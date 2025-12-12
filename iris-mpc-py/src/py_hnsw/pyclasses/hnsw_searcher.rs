@@ -32,7 +32,9 @@ impl PyHnswSearcher {
     #[staticmethod]
     pub fn new_uniform(M: usize, ef: usize) -> Self {
         let params = HnswParams::new_uniform(ef, M);
-        let layer_mode = LayerMode::Standard;
+        let layer_mode = LayerMode::Standard {
+            max_graph_layer: None,
+        };
         let layer_distribution = LayerDistribution::new_geometric_from_M(M);
         Self(HnswSearcher {
             params,
@@ -62,7 +64,9 @@ impl PyHnswSearcher {
             ef_constr_insert,
             ef_search,
         };
-        let layer_mode = LayerMode::Standard;
+        let layer_mode = LayerMode::Standard {
+            max_graph_layer: None,
+        };
         let layer_distribution = LayerDistribution::Geometric { layer_probability };
         Self(HnswSearcher {
             params,
