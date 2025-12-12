@@ -5,17 +5,27 @@ use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
-        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
-        HnswSearcher,
+        graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
+        GraphMem, HnswSearcher,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
-    py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
-    utils::constants::N_PARTIES,
+    utils::{
+        constants::N_PARTIES,
+        serialization::{
+            iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
+            types::iris_base64::Base64IrisCode,
+        },
+    },
 };
 use itertools::{izip, Itertools};
 use rand::{prelude::StdRng, SeedableRng};
 use serde_json::Deserializer;
-use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::{sync::mpsc, task::JoinSet};
 
 /// Default party ordinal identifer.
@@ -159,15 +169,19 @@ impl Args {
     }
 }
 
-// Convertor: Args -> HnswParams.
-impl From<&Args> for HnswParams {
+// Convertor: Args -> HnswSearcher.
+impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        let mut params = HnswParams::new(args.ef, args.ef, args.M);
+        let mut searcher = HnswSearcher::new_standard(args.ef, args.ef, args.M);
         if let Some(q) = args.layer_probability {
-            params.layer_probability = q;
+            match &mut searcher.layer_distribution {
+                LayerDistribution::Geometric { layer_probability } => {
+                    *layer_probability = q;
+                }
+            }
         }
 
-        params
+        searcher
     }
 }
 
@@ -185,7 +199,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("Parsing CLI arguments");
     let args = Args::parse();
-    let params = HnswParams::from(&args);
+    let searcher = HnswSearcher::from(&args);
 
     tracing::info!("Setting database connections");
     let dbs = init_dbs(&args).await;
@@ -215,8 +229,9 @@ async fn main() -> Result<()> {
         .into_iter::<Base64IrisCode>()
         .skip(2 * n_existing_irises)
         .map(|x| IrisCode::from(&x.unwrap()))
-        .tuples();
-    let stream = limited_iterator(stream, n_irises).chunks(SECRET_SHARING_BATCH_SIZE);
+        .tuples()
+        .take(n_irises.unwrap_or(usize::MAX))
+        .chunks(SECRET_SHARING_BATCH_SIZE);
 
     for (batch_idx, vectors_batch) in stream.into_iter().enumerate() {
         let vectors_batch: Vec<(_, _)> = vectors_batch.collect();
@@ -296,13 +311,12 @@ async fn main() -> Result<()> {
     tracing::info!("Initializing in-memory vectors from NDJSON file");
     let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
     if n_existing_irises > 0 {
-        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
-        let reader = BufReader::new(file);
-        let stream = Deserializer::from_reader(reader)
-            .into_iter::<Base64IrisCode>()
-            .take(2 * n_existing_irises);
-        for (count, json_pt) in stream.enumerate() {
-            let raw_query = (&json_pt.unwrap()).into();
+        let stream = irises_from_ndjson_iter(
+            Path::new(args.path_to_iris_codes.as_path()),
+            num_irises,
+            IrisSelection::All,
+        )?;
+        for (count, raw_query) in stream.enumerate() {
             let side = count % 2;
             let query = Arc::new(raw_query);
             vectors[side].insert(&query).await;
@@ -327,8 +341,8 @@ async fn main() -> Result<()> {
 
         let stream = Deserializer::from_reader(reader)
             .into_iter::<Base64IrisCode>()
-            .skip(2 * n_existing_irises);
-        let stream = limited_iterator(stream, num_irises.map(|x| 2 * x));
+            .skip(2 * n_existing_irises)
+            .take(num_irises.map(|x| 2 * x).unwrap_or(usize::MAX));
         for (idx, json_pt) in stream.enumerate() {
             let iris_code_query = (&json_pt.unwrap()).into();
             let serial_id = ((idx / 2) + 1 + n_existing_irises) as u32;
@@ -349,12 +363,11 @@ async fn main() -> Result<()> {
         vectors.into_iter(),
         graphs.into_iter(),
     ) {
-        let params = params.clone();
+        let searcher = searcher.clone();
         let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
         let skip_serial_ids = args.skip_insert_serial_ids.clone();
 
         jobs.spawn(async move {
-            let searcher = HnswSearcher { params };
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
@@ -372,7 +385,7 @@ async fn main() -> Result<()> {
                 let inserted_id = IrisVectorId::from_serial_id(serial_id);
                 vector_store.insert_with_id(inserted_id, query.clone());
 
-                let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
+                let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, set_ep) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;

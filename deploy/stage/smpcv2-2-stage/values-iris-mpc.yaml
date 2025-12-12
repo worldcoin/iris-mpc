@@ -6,7 +6,19 @@ env:
     value: "full"
 
   - name: NCCL_SOCKET_IFNAME
-    value: "eth0"
+    value: "ens,eth"
+
+  - name: NCCL_DEBUG
+    value: "INFO"
+
+  - name: NCCL_DEBUG_SUBSYS
+    value: "INIT,NET"
+
+  - name: FI_LOG_LEVEL
+    value: "INFO"
+
+  - name: NCCL_IB_CUDA_SUPPORT
+    value: "1"
 
   - name: NCCL_COMM_ID
     value: "iris-mpc-node.1.stage.smpcv2.worldcoin.dev:4000"
@@ -30,6 +42,21 @@ env:
     value: "true"
 
   - name: SMPC__DATABASE__LOAD_PARALLELISM
+    value: "8"
+
+  - name: SMPC__ANON_STATS_DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+
+  - name: SMPC__ANON_STATS_DATABASE__MIGRATE
+    value: "false"
+
+  - name: SMPC__ANON_STATS_DATABASE__CREATE
+    value: "false"
+
+  - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
     value: "8"
 
   - name: SMPC__AWS__REGION
@@ -62,8 +89,14 @@ env:
         key: KMS_KEYS
         name: application
 
-  - name: SMPC__PARTY_ID
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
     value: "2"
+
+  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
+    value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
+
+  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpcv2-stage.worldcoin.org"
@@ -93,7 +126,7 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1000" # "1200000"
+    value: "0" # "1200000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "100000" # "1300000"
@@ -101,11 +134,17 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
 
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "500"
+
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
 
+  - name: SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE
+    value: "64"
+
   - name: SMPC__N_BUCKETS
-    value: "10"
+    value: "375"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"
@@ -147,12 +186,6 @@ env:
 
   - name: SMPC__RETURN_PARTIAL_RESULTS
     value: "true"
-
-  - name: SMPC__NODE_HOSTNAMES
-    value: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
-
-  - name: SMPC__IMAGE_NAME
-    value: $(IMAGE_NAME)
 
   - name: SMPC__ENABLE_MODIFICATIONS_SYNC
     value: "true"
@@ -204,7 +237,3 @@ initContainer:
 
       # Execute AWS CLI command with the generated JSON
       aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
-
-      cd /libs
-      aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
-      aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .

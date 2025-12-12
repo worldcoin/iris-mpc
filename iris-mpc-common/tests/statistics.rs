@@ -1,9 +1,9 @@
 mod tests {
-    use chrono::{TimeZone, Utc};
-    use iris_mpc_common::{
-        helpers::statistics::{Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D},
-        job::Eye,
+    use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+    use ampc_anon_stats::{
+        AnonStatsOperation, Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D,
     };
+    use chrono::{TimeZone, Utc};
     use serde_json::{json, Value};
 
     #[test]
@@ -27,7 +27,9 @@ mod tests {
             n_buckets: 2,
             match_distances_buffer_size: 128,
             party_id: 999,
-            eye: Eye::Right,
+            operation: AnonStatsOperation::Uniqueness,
+            eye: Some(Eye::Right),
+            source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: known_start_time,
             end_time_utc_timestamp: Some(known_end_time),
             // This field is #[serde(skip_serializing)]
@@ -74,6 +76,7 @@ mod tests {
         assert_eq!(value["n_buckets"], json!(2));
         assert_eq!(value["match_distances_buffer_size"], json!(128));
         assert_eq!(value["is_mirror_orientation"], json!(false));
+        assert_eq!(value["source"], json!("aggregator"));
     }
 
     #[test]
@@ -94,7 +97,8 @@ mod tests {
             "eye": "Left",
             "start_time_utc_timestamp": 1700000000,
             "end_time_utc_timestamp": null,
-            "is_mirror_orientation": false
+            "is_mirror_orientation": false,
+            "operation": "Uniqueness",
         })
         .to_string();
 
@@ -108,7 +112,7 @@ mod tests {
         assert_eq!(stats.n_buckets, 1);
         assert_eq!(stats.match_distances_buffer_size, 1024);
         assert_eq!(stats.party_id, 123);
-        assert!(matches!(stats.eye, Eye::Left));
+        assert!(matches!(stats.eye, Some(Eye::Left)));
 
         // start_time_utc is with seconds, so check that
         let expected_start = Utc.timestamp_opt(1_700_000_000, 0).single().unwrap();
@@ -122,6 +126,8 @@ mod tests {
         assert_eq!(stats.next_start_time_utc_timestamp, None);
 
         assert!(!stats.is_mirror_orientation);
+        // default value for source enum
+        assert_eq!(stats.source, AnonStatsResultSource::Legacy);
     }
 
     #[test]
@@ -135,7 +141,8 @@ mod tests {
             n_buckets: 1,
             match_distances_buffer_size: 42,
             party_id: 777,
-            eye: Eye::Right,
+            eye: Some(Eye::Right),
+            source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
             end_time_utc_timestamp: Some(
                 Utc.timestamp_opt(1_700_000_000, 0).single().unwrap()
@@ -143,6 +150,7 @@ mod tests {
             ),
             next_start_time_utc_timestamp: None,
             is_mirror_orientation: false,
+            operation: AnonStatsOperation::Uniqueness,
         };
 
         // Serialize
@@ -165,7 +173,8 @@ mod tests {
         assert_eq!(roundtrip_stats.n_buckets, 1);
         assert_eq!(roundtrip_stats.match_distances_buffer_size, 42);
         assert_eq!(roundtrip_stats.party_id, 777);
-        assert!(matches!(roundtrip_stats.eye, Eye::Right));
+        assert!(matches!(roundtrip_stats.eye, Some(Eye::Right)));
+        assert_eq!(roundtrip_stats.operation, AnonStatsOperation::Uniqueness);
 
         // Timestamps (except next_start_time_utc) should match
         assert_eq!(
@@ -176,6 +185,8 @@ mod tests {
             roundtrip_stats.end_time_utc_timestamp,
             original_stats.end_time_utc_timestamp
         );
+
+        assert_eq!(roundtrip_stats.source, AnonStatsResultSource::Aggregator);
 
         // next_start_time_utc won't match because it was not serialized
         // So it should come back as None
@@ -200,7 +211,13 @@ mod tests {
         //   [2,3,7] ]
         let buckets_2d_cumulative = vec![1, 1, 2, 1, 2, 4, 2, 3, 7];
 
-        let mut stats = BucketStatistics2D::new(128, n, 42);
+        let mut stats = BucketStatistics2D::new(
+            128,
+            n,
+            42,
+            AnonStatsResultSource::Legacy,
+            Some(AnonStatsOperation::Uniqueness),
+        );
         stats.fill_buckets(&buckets_2d_cumulative, 1.0, None);
 
         // Expected per-cell histogram H (row-major, skipping zeros in output order):

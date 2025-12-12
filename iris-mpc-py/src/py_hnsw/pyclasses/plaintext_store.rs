@@ -1,7 +1,9 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use super::iris_code::PyIrisCode;
-use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, py_bindings};
+use iris_mpc_cpu::{
+    hawkers::plaintext_store::PlaintextStore, utils::serialization::iris_ndjson::IrisSelection,
+};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
@@ -51,13 +53,15 @@ impl PyPlaintextStore {
     #[staticmethod]
     #[pyo3(signature = (filename, len=None))]
     pub fn read_from_ndjson(filename: String, len: Option<usize>) -> PyResult<Self> {
-        let result = py_bindings::plaintext_store::from_ndjson_file(&filename, len)
-            .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
+        let result =
+            PlaintextStore::from_ndjson_file(Path::new(&filename), len, IrisSelection::All)
+                .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
         Ok(Self(result))
     }
 
     pub fn write_to_ndjson(&self, filename: String) -> PyResult<()> {
-        py_bindings::plaintext_store::to_ndjson_file(&self.0, &filename)
+        self.0
+            .to_ndjson_file(Path::new(&filename))
             .map_err(|_| PyIOError::new_err("Unable to write to file"))
     }
 }

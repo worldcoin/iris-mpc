@@ -23,8 +23,11 @@ num-traits.workspace = true
 rand.workspace = true
 static_assertions.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
+iris-mpc-cpu = { path = "../iris-mpc-cpu" }
 metrics = "0.22.1"
 memmap2.workspace = true
+ampc-anon-stats.workspace = true
+ampc-server-utils.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"

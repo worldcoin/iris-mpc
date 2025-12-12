@@ -70,11 +70,11 @@ impl DbContext {
         let mut graph_tx = self.graph_pg.tx().await?;
 
         let GraphMem {
-            entry_point,
+            entry_points: entry_point,
             layers,
         } = graph;
 
-        if let Some(EntryPoint { point, layer }) = entry_point {
+        if let Some(EntryPoint { point, layer }) = entry_point.first().cloned() {
             let mut graph_ops = graph_tx.with_graph(side);
             graph_ops.set_entry_point(point, layer).await?;
         }
@@ -312,7 +312,7 @@ impl DbContext {
                     .await?;
             }
             let links = links.edge_ids();
-            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            graph_ops.set_links(vectors[i], links.0.clone(), 0).await?;
         }
 
         tx.tx.commit().await?;

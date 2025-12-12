@@ -1,5 +1,5 @@
 use super::Differ;
-use crate::hnsw::{graph::neighborhood::SortedEdgeIds, vector_store::Ref};
+use crate::hnsw::vector_store::Ref;
 use std::{collections::HashSet, fmt::Display, ops::Add, str::FromStr};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -95,22 +95,16 @@ impl<V: Ref + Display> Display for DetailedJaccardReport<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr> Differ<V> for DetailedJaccardDiffer<V> {
+impl<V: Ref + Display + FromStr + Ord> Differ<V> for DetailedJaccardDiffer<V> {
     type Output = DetailedJaccardReport<V>;
 
     fn start_layer(&mut self, _layer_index: usize) {
         self.current_layer_details.clear();
     }
 
-    fn diff_neighborhood(
-        &mut self,
-        _layer_index: usize,
-        node: &V,
-        lhs: &SortedEdgeIds<V>,
-        rhs: &SortedEdgeIds<V>,
-    ) {
-        let lhs_set: HashSet<_> = lhs.0.iter().collect();
-        let rhs_set: HashSet<_> = rhs.0.iter().collect();
+    fn diff_neighborhood(&mut self, _layer_index: usize, node: &V, lhs: &[V], rhs: &[V]) {
+        let lhs_set: HashSet<_> = lhs.iter().collect();
+        let rhs_set: HashSet<_> = rhs.iter().collect();
         let intersection = lhs_set.intersection(&rhs_set).count();
         let union = lhs_set.union(&rhs_set).count();
         let node_state = JaccardState::new(intersection, union);
