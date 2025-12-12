@@ -454,6 +454,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "async_from"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b397bca84f93309aa3c1f6a8153678bfb260a6749a4be58dc5458d18e1bb517"
+dependencies = [
+ "async-trait",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1734,6 +1743,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "csv"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cd9d68cf7efc6ddfaaee42e7288d3a99d613d4b50f76ce9827ae0c6e14f938"
+dependencies = [
+ "csv-core",
+ "itoa",
+ "ryu",
+ "serde_core",
+]
+
+[[package]]
+name = "csv-core"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704a3c26996a80471189265814dbc2c257598b96b8a7feae2d31ace646bb9782"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "cudarc"
 version = "0.13.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1787,6 +1817,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
 dependencies = [
  "uuid",
+]
+
+[[package]]
+name = "delegate"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "780eb241654bf097afb00fc5f054a09b687dad862e485fdcf8399bb056565370"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1934,6 +1975,12 @@ checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "endian-type"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 
 [[package]]
 name = "enum-ordinalize"
@@ -2776,6 +2823,7 @@ dependencies = [
  "aes-prng",
  "ampc-anon-stats",
  "ampc-server-utils",
+ "async_from",
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-s3",
@@ -2789,6 +2837,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "csv",
  "cudarc",
  "data-encoding",
  "dotenvy",
@@ -2802,9 +2851,12 @@ dependencies = [
  "iris-mpc-store",
  "iris-mpc-upgrade",
  "iris-mpc-upgrade-hawk",
+ "iris-mpc-utils",
  "itertools 0.13.0",
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
+ "metrics-tracing-context",
+ "metrics-util 0.16.3",
  "rand",
  "reqwest",
  "ring",
@@ -2899,7 +2951,9 @@ dependencies = [
  "core_affinity",
  "criterion",
  "crossbeam",
+ "csv",
  "dashmap",
+ "delegate",
  "eyre",
  "futures",
  "iris-mpc-common",
@@ -2916,15 +2970,18 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "siphasher",
  "socket2 0.6.0",
  "sqlx",
+ "static_assertions",
  "statrs",
  "thiserror 1.0.65",
  "tokio",
  "tokio-rustls 0.26.2",
  "tokio-stream",
  "tokio-util",
+ "toml",
  "tracing",
  "tracing-forest",
  "tracing-subscriber",
@@ -3056,8 +3113,17 @@ dependencies = [
 name = "iris-mpc-utils"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-rds",
  "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "base64 0.22.1",
  "bincode",
+ "clap",
+ "dotenvy",
  "eyre",
  "iris-mpc",
  "iris-mpc-common",
@@ -3065,10 +3131,17 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "rand",
+ "rayon",
  "serde",
  "serde_json",
+ "sodiumoxide",
  "sqlx",
+ "thiserror 1.0.65",
+ "tokio",
+ "tokio-util",
+ "toml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3230,6 +3303,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lockfree-object-pool"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9374ef4228402d4b7e403e5838cb880d9ee663314b0a900d5a6aabf0c213552e"
+
+[[package]]
 name = "log"
 version = "0.4.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3343,7 +3422,7 @@ dependencies = [
  "indexmap 2.6.0",
  "ipnet",
  "metrics 0.23.0",
- "metrics-util",
+ "metrics-util 0.17.0",
  "quanta",
  "thiserror 1.0.65",
  "tokio",
@@ -3370,6 +3449,42 @@ dependencies = [
  "cadence",
  "metrics 0.23.0",
  "thiserror 1.0.65",
+]
+
+[[package]]
+name = "metrics-tracing-context"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb791d015f8947acf5a7f62bd28d00f289bb7ea98cfbe3ffec1d061eee12df12"
+dependencies = [
+ "indexmap 2.6.0",
+ "itoa",
+ "lockfree-object-pool",
+ "metrics 0.22.3",
+ "metrics-util 0.16.3",
+ "once_cell",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "metrics-util"
+version = "0.16.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b07a5eb561b8cbc16be2d216faf7757f9baf3bfb94dbb0fae3df8387a5bb47f"
+dependencies = [
+ "aho-corasick",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "indexmap 2.6.0",
+ "metrics 0.22.3",
+ "num_cpus",
+ "ordered-float",
+ "quanta",
+ "radix_trie",
+ "sketches-ddsketch",
 ]
 
 [[package]]
@@ -3473,6 +3588,15 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
+]
+
+[[package]]
+name = "nibble_vec"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
+dependencies = [
+ "smallvec",
 ]
 
 [[package]]
@@ -3777,6 +3901,15 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "ordered-float"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "outref"
@@ -4249,6 +4382,16 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "radix_trie"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c069c179fcdc6a2fe24d8d18305cf085fdbd4f922c041943e203685d6a1c58fd"
+dependencies = [
+ "endian-type",
+ "nibble_vec",
+]
 
 [[package]]
 name = "rand"

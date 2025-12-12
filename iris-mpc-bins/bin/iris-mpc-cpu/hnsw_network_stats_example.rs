@@ -7,7 +7,7 @@ use iris_mpc_cpu::{
         aby3_store::Aby3Query,
         test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
     },
-    hnsw::{metrics::network::NetworkFormatter, HnswSearcher},
+    hnsw::{metrics::network::NetworkFormatter, HnswSearcher, SortedNeighborhood},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::SeedableRng;
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut vector_store = vector_store.lock().await;
             let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
-                .insert(
+                .insert::<_, SortedNeighborhood<_>>(
                     &mut *vector_store,
                     &mut graph_store,
                     &query,
