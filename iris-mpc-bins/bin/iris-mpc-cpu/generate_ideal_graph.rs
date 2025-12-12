@@ -92,7 +92,9 @@ async fn main() {
         match searcher.layer_mode {
             LayerMode::Standard { max_graph_layer } => {
                 assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-                assert!(graph.num_layers() <= max_graph_layer.unwrap_or(usize::MAX) + 1);
+                assert!(
+                    graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX)
+                );
             }
             LayerMode::LinearScan { max_graph_layer } => {
                 assert!(graph.num_layers() <= max_graph_layer + 1);
