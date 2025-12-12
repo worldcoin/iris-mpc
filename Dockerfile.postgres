@@ -1,35 +1,12 @@
-FROM rust:1.85-alpine AS rust-builder
-
-RUN apk add --no-cache musl-dev musl-utils build-base openssl-dev curl protobuf-dev protoc
-RUN rustup target add x86_64-unknown-linux-musl
-WORKDIR /src
-COPY . .
-
-RUN apk add --no-cache openssl-libs-static
-ENV RUSTFLAGS="-C target-feature=+crt-static"
-RUN cargo build --release -p iris-mpc-bins --bin init-test-dbs --target x86_64-unknown-linux-musl
-
-##
-
 FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 
 # important files:
-# /opt/irises.dat
-# /bin/init-test-dbs
+# smpc_dev_0 1 and 2
 # /bin/pg-entrypoint-wrapper.sh
-# /docker-entrypoint-initdb.d/init-db-custom.sh
 
-# copy over programs and data used to initialize the volume on the first run
-COPY --from=rust-builder /src/target/x86_64-unknown-linux-musl/release/init-test-dbs /bin/init-test-dbs
-RUN chmod +x /bin/init-test-dbs
-
-# get the 2^20 iris codes. this is large but will be stored on disk.
-RUN apk add --no-cache curl
-RUN curl "https://drive.usercontent.google.com/download?id=1vjswOMB7Yn-f7TDOqfzQr1_ZS-ubSg4E&export=download&confirm=t" -o /opt/irises.dat
-
-# copy this script into a directory where the base docker container will run it when the volume is empty
-COPY ./scripts/tools/init-db-custom.sh /docker-entrypoint-initdb.d/init-db-custom.sh
-RUN chmod +x /docker-entrypoint-initdb.d/init-db-custom.sh
+COPY ./smpc_dev_0.sql /opt/smpc_dev_0.sql
+COPY ./smpc_dev_1.sql /opt/smpc_dev_1.sql
+COPY ./smpc_dev_2.sql /opt/smpc_dev_2.sql
 
 # ---
 # copy a script to delete and recreate the CPU databases on every run
