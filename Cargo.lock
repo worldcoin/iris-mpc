@@ -2804,7 +2804,7 @@ dependencies = [
  "iris-mpc-upgrade-hawk",
  "itertools 0.13.0",
  "metrics 0.22.3",
- "metrics-exporter-statsd 0.7.0",
+ "metrics-exporter-statsd",
  "rand",
  "reqwest",
  "ring",
@@ -2853,7 +2853,7 @@ dependencies = [
  "http 1.1.0",
  "itertools 0.13.0",
  "metrics 0.22.3",
- "metrics-exporter-statsd 0.7.0",
+ "metrics-exporter-statsd",
  "num_cpus",
  "percent-encoding",
  "rand",
@@ -3348,17 +3348,6 @@ dependencies = [
  "thiserror 1.0.65",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "metrics-exporter-statsd"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82bd7bb16e431f15d56a61b18ee34881cd9d427da7b4450d1a588c911c1d9ac3"
-dependencies = [
- "cadence",
- "metrics 0.22.3",
- "thiserror 1.0.65",
 ]
 
 [[package]]
@@ -5416,7 +5405,7 @@ dependencies = [
  "http 1.1.0",
  "metrics 0.23.0",
  "metrics-exporter-prometheus",
- "metrics-exporter-statsd 0.8.0",
+ "metrics-exporter-statsd",
  "opentelemetry",
  "opentelemetry-datadog",
  "opentelemetry-http",
