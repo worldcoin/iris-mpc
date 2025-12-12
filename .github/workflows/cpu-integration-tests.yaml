@@ -94,7 +94,7 @@ jobs:
 
       - name: Run docker compose
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
+        uses: hoverkraft-tech/compose-action@3846bcd61da338e9eaaf83e7ed0234a12b099b72
         continue-on-error: false
         env:
           COMPOSE_PROGRESS: plain          # no fancy TTY bars
