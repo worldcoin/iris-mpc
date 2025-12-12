@@ -5,7 +5,7 @@ use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{GraphMem, HnswSearcher},
+    hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
 };
 use rand::SeedableRng;
 
@@ -28,7 +28,12 @@ fn main() -> Result<()> {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             searcher
-                .insert(&mut vector, &mut graph, &query, insertion_layer)
+                .insert::<_, SortedNeighborhood<_>>(
+                    &mut vector,
+                    &mut graph,
+                    &query,
+                    insertion_layer,
+                )
                 .await?;
             if idx % 100 == 99 {
                 println!("{}", idx + 1);

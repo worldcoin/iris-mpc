@@ -4,15 +4,27 @@ use std::{
     str::FromStr,
 };
 
+use clap::ValueEnum;
+
 use super::{jaccard::JaccardState, Differ};
 use crate::hnsw::vector_store::Ref;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ValueEnum)]
 pub enum SortBy {
     /// Sorts nodes by their natural order (e.g., index).
     Index,
     /// Sorts nodes by Jaccard similarity, from least similar to most similar.
     Jaccard,
+}
+
+impl Display for SortBy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let s = match self {
+            SortBy::Index => "Index",
+            SortBy::Jaccard => "Jaccard",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 /// Contains the explicit differences between two neighborhoods for a single node.
@@ -35,13 +47,16 @@ pub struct LayerDiffResult<V: Ref> {
 impl<V: Ref + Display> Display for ExplicitDiff<V> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         for layer_result in &self.0 {
+            let nonempty_diffs: Vec<_> = layer_result
+                .diffs
+                .iter()
+                .filter(|(_, d)| !d.only_in_lhs.is_empty() || !d.only_in_rhs.is_empty())
+                .collect();
             writeln!(f, "--- Layer {} ---", layer_result.layer_index)?;
-            if layer_result.diffs.is_empty() {
+            if nonempty_diffs.is_empty() {
                 writeln!(f, "No differences found.")?;
-            }
-            for (node, diff) in &layer_result.diffs {
-                // Only print nodes that actually have differences.
-                if !diff.only_in_lhs.is_empty() || !diff.only_in_rhs.is_empty() {
+            } else {
+                for (node, diff) in nonempty_diffs {
                     writeln!(
                         f,
                         "Node: {} (Jaccard: {:.4})",

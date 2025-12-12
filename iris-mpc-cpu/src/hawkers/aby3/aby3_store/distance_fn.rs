@@ -1,14 +1,16 @@
 use super::{
     Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
 };
+use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, ROTATIONS};
 use itertools::Itertools;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
 pub enum DistanceFn {
-    Simple,
-    MinimalRotation,
+    Fhd,
+    MinFhd,
 }
 
 use serde::{Deserialize, Serialize};
@@ -17,8 +19,8 @@ use DistanceFn::*;
 impl DistanceFn {
     pub fn plaintext_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
         match self {
-            Simple => a.get_distance_fraction(b),
-            MinimalRotation => a.get_min_distance_fraction_rotation_aware(b),
+            Fhd => a.get_distance_fraction(b),
+            MinFhd => a.get_min_distance_fraction_rotation_aware(b),
         }
     }
 
@@ -28,8 +30,8 @@ impl DistanceFn {
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
         match self {
-            Simple => DistanceSimple::eval_pairwise_distances(store, pairs).await,
-            MinimalRotation => DistanceMinimalRotation::eval_pairwise_distances(store, pairs).await,
+            Fhd => DistanceSimple::eval_pairwise_distances(store, pairs).await,
+            MinFhd => DistanceMinimalRotation::eval_pairwise_distances(store, pairs).await,
         }
     }
 
@@ -39,8 +41,8 @@ impl DistanceFn {
         pairs: &[(Aby3Query, Aby3VectorRef)],
     ) -> Result<Vec<Aby3DistanceRef>> {
         match self {
-            Simple => DistanceSimple::eval_distance_pairs(store, pairs).await,
-            MinimalRotation => DistanceMinimalRotation::eval_distance_pairs(store, pairs).await,
+            Fhd => DistanceSimple::eval_distance_pairs(store, pairs).await,
+            MinFhd => DistanceMinimalRotation::eval_distance_pairs(store, pairs).await,
         }
     }
 
@@ -51,10 +53,8 @@ impl DistanceFn {
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<u32>>> {
         match self {
-            Simple => DistanceSimple::eval_distance_batch(store, query, vectors).await,
-            MinimalRotation => {
-                DistanceMinimalRotation::eval_distance_batch(store, query, vectors).await
-            }
+            Fhd => DistanceSimple::eval_distance_batch(store, query, vectors).await,
+            MinFhd => DistanceMinimalRotation::eval_distance_batch(store, query, vectors).await,
         }
     }
 }

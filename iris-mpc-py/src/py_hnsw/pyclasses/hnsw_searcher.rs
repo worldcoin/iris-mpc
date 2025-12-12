@@ -48,6 +48,7 @@ impl PyHnswSearcher {
     pub fn new_general(
         M: [usize; N_PARAM_LAYERS],
         M_max: [usize; N_PARAM_LAYERS],
+        M_limit: [usize; N_PARAM_LAYERS],
         ef_constr_search: [usize; N_PARAM_LAYERS],
         ef_constr_insert: [usize; N_PARAM_LAYERS],
         ef_search: [usize; N_PARAM_LAYERS],
@@ -56,6 +57,7 @@ impl PyHnswSearcher {
         let params = HnswParams {
             M,
             M_max,
+            M_limit,
             ef_constr_search,
             ef_constr_insert,
             ef_search,

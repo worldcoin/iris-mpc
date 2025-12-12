@@ -88,8 +88,8 @@ impl Step1 {
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
-                for vector_id in rotation.match_ids() {
-                    full_join.entry(vector_id).or_default()[side] = true;
+                for (vector_id, _) in rotation.matches.iter() {
+                    full_join.entry(*vector_id).or_default()[side] = true;
                 }
             }
         }
@@ -456,14 +456,14 @@ impl Filter {
 #[cfg(test)]
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
+    use ampc_secret_sharing::shares::DistanceShare;
+    use ampc_secret_sharing::Share;
+
     use crate::execution::hawk_main::rot::Rotations;
     use crate::execution::hawk_main::{HawkResult, InsertPlanV, SearchRotations, VecRotations};
     use crate::hawkers::aby3::aby3_store::Aby3Query;
-    use crate::hnsw::searcher::SetEntryPoint;
-    use crate::hnsw::SortedNeighborhood;
+    use crate::hnsw::searcher::UpdateEntryPoint;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
-    use crate::shares::share::DistanceShare;
-    use crate::shares::Share;
 
     use super::VectorId;
     use super::*;
@@ -700,16 +700,18 @@ mod tests {
         }
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
+            let links_unstructured = vec![chain!(match_ids.clone(), non_match_ids).collect_vec()];
+
             let insert_plan = HawkInsertPlan {
-                match_count: match_ids.len(),
+                matches: match_ids
+                    .iter()
+                    .cloned()
+                    .map(|v| (v, distance()))
+                    .collect::<Vec<_>>(),
                 plan: InsertPlanV {
                     query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
-                    links: vec![SortedNeighborhood::from_ascending_vec(
-                        chain!(match_ids, non_match_ids)
-                            .map(|v| (v, distance()))
-                            .collect_vec(),
-                    )],
-                    set_ep: SetEntryPoint::False,
+                    links: links_unstructured,
+                    update_ep: UpdateEntryPoint::False,
                 },
             };
             VecRotations::from(vec![insert_plan; SearchRotations::N_ROTATIONS])

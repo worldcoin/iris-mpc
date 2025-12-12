@@ -1,8 +1,7 @@
 use iris_mpc_common::IrisVectorId;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextVectorRef,
-    hnsw::graph::layered_graph::GraphMem,
-    utils::serialization::{read_bin, write_bin},
+    hawkers::plaintext_store::PlaintextVectorRef, hnsw::graph::layered_graph::GraphMem,
+    utils::serialization::graph,
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
 
@@ -19,14 +18,15 @@ impl PyGraphStore {
 
     #[staticmethod]
     pub fn read_from_bin(filename: String) -> PyResult<Self> {
-        let result =
-            read_bin(&filename).map_err(|_| PyIOError::new_err("Unable to read from file"))?;
+        let result = graph::try_read_graph_from_file(&filename)
+            .map_err(|_| PyIOError::new_err("Unable to read graph from file"))?;
 
         Ok(Self(result))
     }
 
     pub fn write_to_bin(&self, filename: String) -> PyResult<()> {
-        write_bin(&self.0, &filename).map_err(|_| PyIOError::new_err("Unable to write to file"))
+        graph::write_graph_to_file(&filename, self.0.clone())
+            .map_err(|e| PyIOError::new_err(format!("Unable to write to file :: {}", e)))
     }
 
     pub fn get_max_layer(&self) -> u32 {
