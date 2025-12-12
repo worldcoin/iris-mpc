@@ -30,7 +30,7 @@ use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
 
 const FSS_DEBUG_LOG_PATH: &str = "./fss_debug_batch_bits.log";
-const DEBUG_TARGET_IDX: usize = 815;
+const DEBUG_TARGET_IDX: usize = 3;
 
 #[inline]
 fn append_debug_line(line: &str) {
@@ -115,6 +115,34 @@ fn approx_bytes_int_vec(v: &[RingElement<u32>]) -> usize {
 #[inline]
 fn approx_bytes_bit_vec(v: &[RingElement<Bit>]) -> usize {
     v.len() // rough count: 1 byte per bit share
+}
+
+#[inline]
+fn sample_r_prime_masks(
+    session: &mut Session,
+    count: usize,
+    take_first: bool,
+) -> Vec<RingElement<u128>> {
+    let mut masks = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (first, second) = session.prf.gen_rands::<RingElement<u32>>().clone();
+        let chosen = if take_first { first } else { second };
+        masks.push(RingElement::<u128>(u128::from(chosen.0)));
+    }
+    masks
+}
+
+#[inline]
+fn mask_eval_bit(eval: u128, mask: RingElement<u128>) -> bool {
+    let masked = RingElement::<u128>(eval) ^ mask;
+    (masked.0 & 1) != 0
+}
+
+#[inline]
+fn consume_r_prime_masks(session: &mut Session, count: usize) {
+    for _ in 0..count {
+        let _ = session.prf.gen_rands::<RingElement<u32>>();
+    }
 }
 
 static FSS_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
@@ -220,11 +248,11 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         RingElement::<u32>::convert_vec_rev(v)
     }
 
-    // We test y ∈ [0, 2^31-1] where y = x + r_in + 2^31 (mod 2^32)
-    let p = InG::from(0u32);
-    //let q = InG::from((1u32 << 31) - 1);
-    let q = InG::from(1u32 << 31); // [0, 2^31)
     let n_half_u32: u32 = 1u32 << 31;
+    let n_half = InG::from(n_half_u32);
+    // Interval matches the original add_3_get_msb_fss_batch semantics.
+    let p = InG::from(1u32 << 31) + n_half;
+    let q = InG::from(u32::MAX) + n_half;
 
     match role {
         // =======================
@@ -244,6 +272,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
+            let r_prime_masks = sample_r_prime_masks(session, n, true);
 
             // Generate FSS keys locally using deterministic randomness from session PRF
             //metrics: measure the genkeys time
@@ -334,6 +363,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             let (bit0s_ringbit, _bit0s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
+                    let r_masks = &r_prime_masks;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
                         .into_par_iter()
                         .map(|i| {
@@ -355,11 +385,11 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
                             let f0 = icf_i.eval(false, key_i, fss_rs::group::int::U32Group(y.0));
                             let f0_u128 = u128::from_le_bytes(f0.0);
-                            let b = (f0_u128 & 1) != 0;
-                            log_target_bit(role, base_idx, i, "p0_eval", b);
+                            let bit_val = mask_eval_bit(f0_u128, r_masks[i]);
+                            log_target_bit(role, base_idx, i, "p0_eval", bit_val);
                             (
-                                RingElement(Bit::new(b)),
-                                RingElement(if b { 1u32 } else { 0u32 }),
+                                RingElement(Bit::new(bit_val)),
+                                RingElement(if bit_val { 1u32 } else { 0u32 }),
                             )
                         })
                         .collect();
@@ -373,13 +403,11 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                         log_target_y(role, base_idx, i, "p0_eval_y", y.0);
                         log_target_y_minus_half(role, base_idx, i, "p0_eval_y_minus_half", y.0);
                         let f0 = icf.eval(false, &my_keys[i], fss_rs::group::int::U32Group(y.0));
-                        //let f0_u128 = u128::from_be_bytes(f0.0);
                         let f0_u128 = u128::from_le_bytes(f0.0);
-                        let b = (f0_u128 & 1) != 0;
-                        log_target_bit(role, base_idx, i, "p0_eval", b);
-                        //let b = fss_out_bit(&f0.0);
-                        bit0s_ringbit.push(RingElement(Bit::new(b)));
-                        bit0s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                        let bit_val = mask_eval_bit(f0_u128, r_prime_masks[i]);
+                        log_target_bit(role, base_idx, i, "p0_eval", bit_val);
+                        bit0s_ringbit.push(RingElement(Bit::new(bit_val)));
+                        bit0s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                     }
                     (bit0s_ringbit, bit0s_u32)
                 }
@@ -409,9 +437,9 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                     );
 
                     let f0_u128 = u128::from_le_bytes(f0.0);
-                    let b = (f0_u128 & 1) != 0;
-                    bit0s_ringbit.push(RingElement(Bit::new(b)));
-                    bit0s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                    let bit_val = mask_eval_bit(f0_u128, r_prime_masks[i]);
+                    bit0s_ringbit.push(RingElement(Bit::new(bit_val)));
+                    bit0s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                 }
                 (bit0s_ringbit, bit0s_u32)
             };
@@ -503,6 +531,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
 
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
+            let r_prime_masks = sample_r_prime_masks(session, n, false);
 
             // Generate FSS keys locally using deterministic randomness from session PRF
             //metrics: measure the genkeys time
@@ -592,6 +621,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
             let (bit1s_ringbit, _bit1s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
+                    let r_masks = &r_prime_masks;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
                         .into_par_iter()
                         .map(|i| {
@@ -613,11 +643,11 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
                             let f1 = icf_i.eval(true, key_i, fss_rs::group::int::U32Group(y.0));
                             let f1_u128 = u128::from_le_bytes(f1.0);
-                            let b = (f1_u128 & 1) != 0;
-                            log_target_bit(role, base_idx, i, "p1_eval", b);
+                            let bit_val = mask_eval_bit(f1_u128, r_masks[i]);
+                            log_target_bit(role, base_idx, i, "p1_eval", bit_val);
                             (
-                                RingElement(Bit::new(b)),
-                                RingElement(if b { 1u32 } else { 0u32 }),
+                                RingElement(Bit::new(bit_val)),
+                                RingElement(if bit_val { 1u32 } else { 0u32 }),
                             )
                         })
                         .collect();
@@ -632,10 +662,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                         log_target_y_minus_half(role, base_idx, i, "p1_eval_y_minus_half", y.0);
                         let f1 = icf.eval(true, &my_keys[i], fss_rs::group::int::U32Group(y.0));
                         let f1_u128 = u128::from_le_bytes(f1.0);
-                        let b = (f1_u128 & 1) != 0;
-                        log_target_bit(role, base_idx, i, "p1_eval", b);
-                        bit1s_ringbit.push(RingElement(Bit::new(b)));
-                        bit1s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                        let bit_val = mask_eval_bit(f1_u128, r_prime_masks[i]);
+                        log_target_bit(role, base_idx, i, "p1_eval", bit_val);
+                        bit1s_ringbit.push(RingElement(Bit::new(bit_val)));
+                        bit1s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                     }
                     (bit1s_ringbit, bit1s_u32)
                 }
@@ -665,10 +695,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                     );
 
                     let f1_u128: u128 = u128::from_le_bytes(f1.0);
-                    let b = (f1_u128 & 1) != 0;
-                    log_target_bit(role, base_idx, i, "p1_eval", b);
-                    bit1s_ringbit.push(RingElement(Bit::new(b)));
-                    bit1s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                    let bit_val = mask_eval_bit(f1_u128, r_prime_masks[i]);
+                    log_target_bit(role, base_idx, i, "p1_eval", bit_val);
+                    bit1s_ringbit.push(RingElement(Bit::new(bit_val)));
+                    bit1s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                 }
                 (bit1s_ringbit, bit1s_u32)
             };
@@ -747,16 +777,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
         2 => {
             let base_idx = GLOBAL_FSS_BASE_IDX.fetch_add(n as u64, Ordering::Relaxed) as usize;
             log_batch_start(role, base_idx, n);
-            session
-                .network_session
-                .send_next(u64::new_network_element(RingElement(base_idx as u64)))
-                .await
-                .map_err(|e| eyre!("Dealer cannot send base_idx to P0: {e}"))?;
-            session
-                .network_session
-                .send_prev(u64::new_network_element(RingElement(base_idx as u64)))
-                .await
-                .map_err(|e| eyre!("Dealer cannot send base_idx to P1: {e}"))?;
+            consume_r_prime_masks(session, n);
             session
                 .network_session
                 .send_next(u64::new_network_element(RingElement(base_idx as u64)))
@@ -858,6 +879,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold_timers(
                 .zip(bit1s_ringbit.into_iter())
                 .map(|(b0, b1)| Share::new(b0, b1))
                 .collect();
+
             if n > 0 {
                 if let Some(local_idx) = (0..n).find(|i| base_idx + *i == DEBUG_TARGET_IDX) {
                     if let Some(b0) = out.get(local_idx) {
@@ -900,11 +922,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         RingElement::<u32>::convert_vec_rev(v)
     }
 
-    // We test y ∈ [0, 2^31-1] where y = x + r_in + 2^31 (mod 2^32)
-    let p = InG::from(0u32);
-    //let q = InG::from((1u32 << 31) - 1);
-    let q = InG::from(1u32 << 31); // [0, 2^31)
     let n_half_u32: u32 = 1u32 << 31;
+    let n_half = InG::from(n_half_u32);
+    let p = InG::from(1u32 << 31) + n_half;
+    let q = InG::from(u32::MAX) + n_half;
 
     match role {
         // =======================
@@ -913,6 +934,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         0 => {
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
+            let r_prime_masks = sample_r_prime_masks(session, n, true);
             // Generate FSS keys locally using deterministic randomness from session PRF
             let mut my_keys = Vec::with_capacity(n);
             for i in 0..n {
@@ -970,6 +992,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             let (bit0s_ringbit, _bit0s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
+                    let r_masks = &r_prime_masks;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
                         .into_par_iter()
                         .map(|i| {
@@ -989,10 +1012,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
                             let f0 = icf_i.eval(false, &key_i, fss_rs::group::int::U32Group(y.0));
                             let f0_u128 = u128::from_le_bytes(f0.0);
-                            let b = (f0_u128 & 1) != 0;
+                            let bit_val = mask_eval_bit(f0_u128, r_masks[i]);
                             (
-                                RingElement(Bit::new(b)),
-                                RingElement(if b { 1u32 } else { 0u32 }),
+                                RingElement(Bit::new(bit_val)),
+                                RingElement(if bit_val { 1u32 } else { 0u32 }),
                             )
                         })
                         .collect();
@@ -1004,12 +1027,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                         let x = &batch[i];
                         let y = x.a + d1r1_vec[i] + x.b + RingElement(n_half_u32);
                         let f0 = icf.eval(false, &my_keys[i], fss_rs::group::int::U32Group(y.0));
-                        //let f0_u128 = u128::from_be_bytes(f0.0);
                         let f0_u128 = u128::from_le_bytes(f0.0);
-                        let b = (f0_u128 & 1) != 0;
-                        //let b = fss_out_bit(&f0.0);
-                        bit0s_ringbit.push(RingElement(Bit::new(b)));
-                        bit0s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                        let bit_val = mask_eval_bit(f0_u128, r_prime_masks[i]);
+                        bit0s_ringbit.push(RingElement(Bit::new(bit_val)));
+                        bit0s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                     }
                     (bit0s_ringbit, bit0s_u32)
                 }
@@ -1024,9 +1045,9 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                     let y = x.a + d1r1_vec[i] + x.b + RingElement(n_half_u32);
                     let f0 = icf.eval(false, &my_keys[i], fss_rs::group::int::U32Group(y.0));
                     let f0_u128 = u128::from_le_bytes(f0.0);
-                    let b = (f0_u128 & 1) != 0;
-                    bit0s_ringbit.push(RingElement(Bit::new(b)));
-                    bit0s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                    let bit_val = mask_eval_bit(f0_u128, r_prime_masks[i]);
+                    bit0s_ringbit.push(RingElement(Bit::new(bit_val)));
+                    bit0s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                 }
                 (bit0s_ringbit, bit0s_u32)
             };
@@ -1073,6 +1094,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         1 => {
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
+            let r_prime_masks = sample_r_prime_masks(session, n, false);
             // Generate FSS keys locally using deterministic randomness from session PRF
             let mut my_keys = Vec::with_capacity(n);
             for i in 0..n {
@@ -1128,6 +1150,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
             let (bit1s_ringbit, _bit1s_u32) = {
                 if n >= parallel_threshold {
                     use rayon::prelude::*;
+                    let r_masks = &r_prime_masks;
                     let eval_pairs: Vec<(RingElement<Bit>, RingElement<u32>)> = (0..n)
                         .into_par_iter()
                         .map(|i| {
@@ -1147,10 +1170,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                             // Evaluate ICF; OutG is 16 bytes BE; take LSB as bit share
                             let f1 = icf_i.eval(true, &key_i, fss_rs::group::int::U32Group(y.0));
                             let f1_u128 = u128::from_le_bytes(f1.0);
-                            let b = (f1_u128 & 1) != 0;
+                            let bit_val = mask_eval_bit(f1_u128, r_masks[i]);
                             (
-                                RingElement(Bit::new(b)),
-                                RingElement(if b { 1u32 } else { 0u32 }),
+                                RingElement(Bit::new(bit_val)),
+                                RingElement(if bit_val { 1u32 } else { 0u32 }),
                             )
                         })
                         .collect();
@@ -1163,9 +1186,9 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                         let y = x.a + d2r2_vec[i] + x.b + RingElement(n_half_u32);
                         let f1 = icf.eval(true, &my_keys[i], fss_rs::group::int::U32Group(y.0));
                         let f1_u128 = u128::from_le_bytes(f1.0);
-                        let b = (f1_u128 & 1) != 0;
-                        bit1s_ringbit.push(RingElement(Bit::new(b)));
-                        bit1s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                        let bit_val = mask_eval_bit(f1_u128, r_prime_masks[i]);
+                        bit1s_ringbit.push(RingElement(Bit::new(bit_val)));
+                        bit1s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                     }
                     (bit1s_ringbit, bit1s_u32)
                 }
@@ -1179,9 +1202,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                     // Evaluate sequentially for the target index using the same icf to log value
                     let x = &batch[local_idx];
                     let y = x.a + d2r2_vec[local_idx] + x.b + RingElement(n_half_u32);
-                    let f1 = icf.eval(true, &my_keys[local_idx], fss_rs::group::int::U32Group(y.0));
+                    let f1 =
+                        icf.eval(true, &my_keys[local_idx], fss_rs::group::int::U32Group(y.0));
                     let f1_u128 = u128::from_le_bytes(f1.0);
-                    let b = (f1_u128 & 1) != 0;
+                    let b = mask_eval_bit(f1_u128, r_prime_masks[local_idx]);
                     append_debug_line(&format!(
                         "p1 target={} local={} bit={}",
                         debug_target_idx, local_idx, b
@@ -1198,9 +1222,9 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
                     let y = x.a + d2r2_vec[i] + x.b + RingElement(n_half_u32);
                     let f1 = icf.eval(true, &my_keys[i], fss_rs::group::int::U32Group(y.0));
                     let f1_u128: u128 = u128::from_le_bytes(f1.0);
-                    let b = (f1_u128 & 1) != 0;
-                    bit1s_ringbit.push(RingElement(Bit::new(b)));
-                    bit1s_u32.push(RingElement(if b { 1u32 } else { 0u32 }));
+                    let bit_val = mask_eval_bit(f1_u128, r_prime_masks[i]);
+                    bit1s_ringbit.push(RingElement(Bit::new(bit_val)));
+                    bit1s_u32.push(RingElement(if bit_val { 1u32 } else { 0u32 }));
                 }
                 (bit1s_ringbit, bit1s_u32)
             };
@@ -1247,6 +1271,7 @@ pub(crate) async fn add_3_get_msb_fss_batch_parallel_threshold(
         // =======================
         2 => {
             log_batch_start(role, base_idx, n);
+            consume_r_prime_masks(session, n);
             let mut sent_bytes = 0usize;
             let mut recv_bytes = 0usize;
             // Party 2 no longer generates or sends FSS keys - each party generates them locally
@@ -1351,6 +1376,7 @@ where
             log_batch_start(role, base_idx, n);
             //Generate all r2 prf key, keep the r0 keys for later
             // println!("party 0: Batch size is {}", batch_size);
+            let r_prime_masks = sample_r_prime_masks(session, batch_size, true);
             let mut d2r2_vec = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
                 d2r2_vec.push(x[i].b + RingElement(0)); // r2 assumed 0 in this deterministic variant
@@ -1379,10 +1405,8 @@ where
             // we need this below to handle signed numbers, if input is unsigned no need to add N/2
             let n_falf_u32 = 1u32 << 31;
             let n_half = InG::from(n_falf_u32);
-            // Interval: [0, 2^31) after shifting inputs by n/2 to handle signed values
-            // Matches the parallel path parameters
-            let p = InG::from(0u32);
-            let q = InG::from(1u32 << 31);
+            let p = InG::from(1u32 << 31) + n_half;
+            let q = InG::from(u32::MAX) + n_half;
 
             // Generate FSS keys locally using deterministic randomness
             let mut my_keys = Vec::with_capacity(batch_size);
@@ -1452,8 +1476,9 @@ where
                     .0,
                 ));
 
-                // Take only the LSB of the evaluation result as our bit share
-                f_x_0_bits.push(RingElement(Bit::new((temp_eval.0 & 1) != 0)));
+                // Take only the masked LSB of the evaluation result as our bit share
+                let bit_val = mask_eval_bit(temp_eval.0, r_prime_masks[i]);
+                f_x_0_bits.push(RingElement(Bit::new(bit_val)));
             }
 
             // Prepare them in a vector to send to dealer and next party
@@ -1559,6 +1584,7 @@ where
             log_batch_start(role, base_idx, n);
             // eprintln!("party 1: Batch size is {}", batch_size);
             std::io::stderr().flush().ok();
+            let r_prime_masks = sample_r_prime_masks(session, batch_size, false);
             let mut d1r1_vec = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
                 d1r1_vec.push(x[i].a + RingElement(0)); // r1 assumed 0 in this deterministic variant
@@ -1587,10 +1613,8 @@ where
             // we need this below to handle signed numbers, if input is unsigned no need to add N/2
             let n_falf_u32 = 1u32 << 31;
             let n_half = InG::from(n_falf_u32);
-            // Interval: [0, 2^31) after shifting inputs by n/2 to handle signed values
-            // Matches the parallel path parameters
-            let p = InG::from(0u32);
-            let q = InG::from(1u32 << 31);
+            let p = InG::from(1u32 << 31) + n_half;
+            let q = InG::from(u32::MAX) + n_half;
 
             // Generate FSS keys locally using deterministic randomness
             let mut my_keys = Vec::with_capacity(batch_size);
@@ -1660,8 +1684,9 @@ where
                     .0,
                 ));
 
-                // Take only the LSB of the evaluation result as our bit share
-                f_x_1_bits.push(RingElement(Bit::new((temp_eval.0 & 1) != 0)));
+                // Take only the masked LSB of the evaluation result as our bit share
+                let bit_val = mask_eval_bit(temp_eval.0, r_prime_masks[i]);
+                f_x_1_bits.push(RingElement(Bit::new(bit_val)));
             }
 
             // Prepare them in a vector to send to dealer and next party
@@ -1874,9 +1899,10 @@ pub(crate) async fn add_3_get_msb_fss_batch_pipelined(
 
     let role = session.own_role().index();
     let bucket_bound = 150;
-    let p = InG::from(0u32);
-    let q = InG::from(1u32 << 31);
     let n_half_u32: u32 = 1u32 << 31;
+    let n_half = InG::from(n_half_u32);
+    let p = InG::from(1u32 << 31) + n_half;
+    let q = InG::from(u32::MAX) + n_half;
 
     if batches.is_empty() {
         return Ok(());
