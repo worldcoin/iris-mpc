@@ -51,7 +51,7 @@ hex = "0.4.3"
 hkdf = "0.12.4"
 itertools = "0.13"
 metrics = "0.22.1"
-metrics-exporter-statsd = "0.7"
+metrics-exporter-statsd = "0.8"
 num-traits = "0.2"
 memmap2 = "0.9.5"
 serde = { version = "1.0", features = ["derive"] }
