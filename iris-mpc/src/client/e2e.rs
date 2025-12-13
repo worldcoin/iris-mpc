@@ -433,7 +433,7 @@ impl E2EClient {
                     .queue_url(response_queue_url.clone())
                     .send()
                     .await
-                    .context("Failed to receive message")?;
+                    .context("Failed to receive a message")?;
 
                 for msg in msg.messages.unwrap_or_default() {
                     counter += 1;

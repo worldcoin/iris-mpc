@@ -105,6 +105,7 @@ impl fmt::Display for CliOptions {
         write!(
             f,
             "
+------------------------------------------------------------------------
 Iris-MPC Service Client Options:
     aws_public_key_base_url
         {}
@@ -126,6 +127,7 @@ Iris-MPC Service Client Options:
         {:?}
     rng_seed
         {:?}
+------------------------------------------------------------------------
                 ",
             self.aws_public_key_base_url,
             self.aws_s3_request_bucket_name,

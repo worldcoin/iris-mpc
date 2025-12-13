@@ -1,11 +1,9 @@
-mod data_uploader;
 mod request_enqueuer;
 mod request_generator;
-mod response_correlator;
 mod response_dequeuer;
+mod shares_uploader;
 
-pub use data_uploader::DataUploader;
 pub use request_enqueuer::RequestEnqueuer;
 pub use request_generator::RequestGenerator;
-pub use response_correlator::ResponseCorrelator;
 pub use response_dequeuer::ResponseDequeuer;
+pub use shares_uploader::SharesUploader;
