@@ -54,28 +54,31 @@ impl RequestGenerator {
         for _ in 0..self.batch_size() {
             match self.batch_kind {
                 RequestBatchKind::Simple(kind) => match kind {
+                    IDENTITY_DELETION_MESSAGE_TYPE => {
+                        let r1 = RequestFactory::new_uniqueness(&batch);
+                        let r2 = RequestFactory::new_identity_deletion(&batch, &r1);
+                        batch.push_request(r1);
+                        batch.push_request(r2);
+                    }
                     RESET_CHECK_MESSAGE_TYPE => {
-                        batch.set_request(RequestFactory::new_reset_check(&batch));
+                        let r1 = RequestFactory::new_reset_check(&batch);
+                        batch.push_request(r1);
+                    }
+                    REAUTH_MESSAGE_TYPE => {
+                        let r1 = RequestFactory::new_uniqueness(&batch);
+                        let r2 = RequestFactory::new_reauthorisation(&batch, &r1);
+                        batch.push_request(r1);
+                        batch.push_request(r2);
+                    }
+                    RESET_UPDATE_MESSAGE_TYPE => {
+                        let r1 = RequestFactory::new_uniqueness(&batch);
+                        let r2 = RequestFactory::new_reset_update(&batch, &r1);
+                        batch.push_request(r1);
+                        batch.push_request(r2);
                     }
                     UNIQUENESS_MESSAGE_TYPE => {
-                        batch.set_request(RequestFactory::new_uniqueness(&batch));
-                    }
-                    IDENTITY_DELETION_MESSAGE_TYPE
-                    | REAUTH_MESSAGE_TYPE
-                    | RESET_UPDATE_MESSAGE_TYPE => {
                         let r1 = RequestFactory::new_uniqueness(&batch);
-                        let r2 = match kind {
-                            IDENTITY_DELETION_MESSAGE_TYPE => {
-                                RequestFactory::new_identity_deletion(&batch, &r1)
-                            }
-                            REAUTH_MESSAGE_TYPE => RequestFactory::new_reauthorisation(&batch, &r1),
-                            RESET_UPDATE_MESSAGE_TYPE => {
-                                RequestFactory::new_reset_update(&batch, &r1)
-                            }
-                            _ => unreachable!(),
-                        };
-                        batch.set_request(r1);
-                        batch.set_request(r2);
+                        batch.push_request(r1);
                     }
                     _ => panic!("Invalid batch kind"),
                 },

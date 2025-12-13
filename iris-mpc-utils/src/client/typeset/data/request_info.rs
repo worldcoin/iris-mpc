@@ -1,6 +1,10 @@
 use std::fmt;
 
-use super::{request::RequestStatus, request_batch::RequestBatch, response::ResponseBody};
+use super::{
+    request::{Request, RequestStatus},
+    request_batch::RequestBatch,
+    response::ResponseBody,
+};
 use crate::constants::N_PARTIES;
 
 /// Encapsulates common data pertinent to a system processing request.
@@ -15,20 +19,33 @@ pub struct RequestInfo {
     /// Correlated system responses returned by MPC nodes.
     correlation_set: [Option<ResponseBody>; N_PARTIES],
 
+    /// Universally unique request identifer.
+    request_id: uuid::Uuid,
+
+    /// Universally unique request identifer of parent request.
+    request_id_of_parent: Option<uuid::Uuid>,
+
     /// Set of processing states.
     state_history: Vec<RequestStatus>,
 }
 
 impl RequestInfo {
-    pub fn new(batch: &RequestBatch) -> Self {
-        let mut state_history = Vec::with_capacity(RequestStatus::VARIANT_COUNT);
-        state_history.push(RequestStatus::default());
+    pub fn request_id(&self) -> &uuid::Uuid {
+        &self.request_id
+    }
 
+    pub fn request_id_of_parent(&self) -> &Option<uuid::Uuid> {
+        &self.request_id_of_parent
+    }
+
+    pub fn new(batch: &RequestBatch, parent: Option<&Request>) -> Self {
         Self {
             batch_idx: batch.batch_idx(),
             batch_item_idx: batch.requests().len() + 1,
             correlation_set: [const { None }; N_PARTIES],
-            state_history,
+            request_id: uuid::Uuid::new_v4(),
+            request_id_of_parent: parent.map(|p| *p.info().request_id()),
+            state_history: vec![RequestStatus::default()],
         }
     }
 
@@ -36,16 +53,11 @@ impl RequestInfo {
         self.correlation_set.iter().all(|c| c.is_some())
     }
 
-    pub fn set_correlation(&mut self, response: ResponseBody) {
-        self.correlation_set[response.node_id()] = Some(response.to_owned());
-        tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
-        if self.is_correlated() {
-            self.set_status(RequestStatus::new_correlated());
-        }
+    pub fn set_correlation(&mut self, response: &ResponseBody) {
+        self.correlation_set[response.node_id()] = Some(response.clone());
     }
 
     pub fn set_status(&mut self, new_state: RequestStatus) {
-        tracing::info!("{} :: State -> {:?}", &self, new_state);
         self.state_history.push(new_state);
     }
 
@@ -56,6 +68,6 @@ impl RequestInfo {
 
 impl fmt::Display for RequestInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Request {}.{}", self.batch_idx, self.batch_item_idx)
+        write!(f, "Request-{}.{}", self.batch_idx, self.batch_item_idx)
     }
 }

@@ -70,7 +70,7 @@ impl AwsClient {
 impl AwsClient {
     /// Enqueues data to an S3 bucket.
     pub async fn s3_put_object(&self, s3_obj_info: &S3ObjectInfo) -> Result<(), AwsClientError> {
-        tracing::info!("AWS-S3: putting object -> {}", s3_obj_info);
+        tracing::debug!("AWS-S3: putting object -> {}", s3_obj_info);
         self.s3
             .put_object()
             .bucket(s3_obj_info.bucket())
@@ -106,7 +106,7 @@ impl AwsClient {
         &self,
         sns_msg_info: SnsMessageInfo,
     ) -> Result<(), AwsClientError> {
-        tracing::info!("AWS-SNS: publishing message -> {}", sns_msg_info);
+        tracing::debug!("AWS-SNS: publishing message -> {}", sns_msg_info);
         self.sns
             .publish()
             .topic_arn(self.config().sns_request_topic_arn())
@@ -131,7 +131,7 @@ impl AwsClient {
             .send()
             .await
             .map(|_| {
-                tracing::info!("AWS-SQS: purged message -> {}", sqs_msg.kind());
+                tracing::debug!("AWS-SQS: purged message -> {}", sqs_msg.kind());
             })
             .map_err(|e| {
                 tracing::error!("AWS-SQS: purged message -> error: {}", e);
@@ -141,7 +141,7 @@ impl AwsClient {
 
     /// Purges an SQS queue.
     pub async fn sqs_purge_queue(&self) -> Result<(), AwsClientError> {
-        tracing::info!("AWS-SQS: purging response queue");
+        tracing::debug!("AWS-SQS: purging response queue");
         self.sqs
             .purge_queue()
             .queue_url(self.config().sqs_response_queue_url())
@@ -177,7 +177,7 @@ impl AwsClient {
             .into_iter()
             .map(|msg| {
                 let msg = SqsMessageInfo::from(&msg);
-                tracing::info!("AWS-SQS: received message -> {}", msg);
+                tracing::debug!("AWS-SQS: received message -> {}", msg);
                 msg
             });
 

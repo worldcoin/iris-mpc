@@ -21,13 +21,13 @@ impl ResponseBody {
         }
     }
 
-    pub fn serial_id(&self) -> u32 {
+    pub fn iris_serial_id(&self) -> Option<u32> {
         match self {
-            Self::IdentityDeletion(result) => result.serial_id,
-            Self::Reauthorization(result) => result.serial_id,
-            Self::ResetCheck(_) => panic!("ResetCheck has no associated serial-id"),
-            Self::ResetUpdate(result) => result.serial_id,
-            Self::Uniqueness(result) => result.serial_id.unwrap(),
+            Self::IdentityDeletion(result) => Some(result.serial_id),
+            Self::Reauthorization(result) => Some(result.serial_id),
+            Self::ResetCheck(_) => None,
+            Self::ResetUpdate(result) => Some(result.serial_id),
+            Self::Uniqueness(result) => result.serial_id,
         }
     }
 }

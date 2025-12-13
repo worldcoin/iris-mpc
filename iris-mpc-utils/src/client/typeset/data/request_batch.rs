@@ -39,33 +39,70 @@ impl RequestBatch {
         }
     }
 
-    fn enqueued_mut(&mut self) -> impl Iterator<Item = &mut Request> {
-        self.requests_mut().iter_mut().filter(|r| r.is_enqueued())
+    pub fn correlate_and_update_child(&mut self, response: ResponseBody) -> Option<()> {
+        if let Some(idx_of_correlated) = self.get_idx_of_correlated(&response) {
+            self.requests_mut()[idx_of_correlated].set_correlation(&response);
+            if let Some(idx_of_child) = self.get_idx_of_child(idx_of_correlated) {
+                self.requests_mut()[idx_of_child].set_parent_data(&response);
+            }
+            Some(())
+        } else {
+            None
+        }
     }
 
-    pub fn get_child_request(&self, _request: &Request) -> Option<&Request> {
-        unimplemented!()
+    fn get_idx_of_correlated(&self, response: &ResponseBody) -> Option<usize> {
+        self.requests
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.is_correlation(response))
+            .map(|(idx, _)| idx)
     }
 
+    fn get_idx_of_child(&self, idx_of_parent: usize) -> Option<usize> {
+        let parent = &self.requests[idx_of_parent];
+        self.requests
+            .iter()
+            .enumerate()
+            .find(|(_, r)| match r.request_id_of_parent() {
+                Some(child_request_id) => child_request_id == parent.request_id(),
+                None => false,
+            })
+            .map(|(idx, _)| idx)
+    }
+
+    /// Returns true if there are any requests currently enqueued.
     pub fn has_enqueued_items(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueued())
     }
 
+    /// Returns true if there are any requests deemed enqueueable.
     pub fn is_enqueueable(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueueable())
     }
 
-    pub fn maybe_set_correlation(&mut self, response: ResponseBody) -> bool {
-        for request in self.enqueued_mut() {
-            if request.is_correlated(&response) {
-                request.set_correlation(response);
-                return true;
-            }
-        }
-        false
-    }
+    /// Updates a child request with data pulled from a parent's response.
+    // pub fn maybe_update_child(&mut self, parent: &Request) {
+    //     if let Some(child) = self.get_maybe_child_request(parent) {
+    //         match child {
+    //             Request::IdentityDeletion {
+    //                 uniqueness_serial_id,
+    //                 ..
+    //             } => *uniqueness_serial_id = parent.info().iris_serial_id(),
+    //             Request::Reauthorization {
+    //                 uniqueness_serial_id,
+    //                 ..
+    //             } => *uniqueness_serial_id = parent.info().iris_serial_id(),
+    //             Request::ResetUpdate {
+    //                 uniqueness_serial_id,
+    //                 ..
+    //             } => *uniqueness_serial_id = parent.info().iris_serial_id(),
+    //             _ => {}
+    //         }
+    //     }
+    // }
 
-    pub fn set_request(&mut self, request: Request) {
+    pub fn push_request(&mut self, request: Request) {
         self.requests_mut().push(request);
     }
 

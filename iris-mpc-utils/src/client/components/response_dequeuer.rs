@@ -9,7 +9,10 @@ use iris_mpc_common::helpers::smpc_request::{
 use super::super::typeset::{
     ClientError, Initialize, ProcessRequestBatch, RequestBatch, ResponseBody,
 };
-use crate::aws::{types::SqsMessageInfo, AwsClient};
+use crate::{
+    aws::{types::SqsMessageInfo, AwsClient},
+    constants::N_PARTIES,
+};
 
 /// A component responsible for dequeuing system responses from network egress queues.
 #[derive(Debug)]
@@ -39,8 +42,12 @@ impl Initialize for ResponseDequeuer {
 impl ProcessRequestBatch for ResponseDequeuer {
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
         while batch.has_enqueued_items() {
-            for sqs_msg in self.aws_client.sqs_receive_messages(Some(1)).await? {
-                if batch.maybe_set_correlation(ResponseBody::from(&sqs_msg)) {
+            for sqs_msg in self
+                .aws_client
+                .sqs_receive_messages(Some(N_PARTIES))
+                .await?
+            {
+                if let Some(_) = batch.correlate_and_update_child(ResponseBody::from(&sqs_msg)) {
                     self.aws_client.sqs_purge_message(&sqs_msg).await?;
                 }
             }

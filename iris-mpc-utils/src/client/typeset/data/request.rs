@@ -13,9 +13,9 @@ pub enum Request {
         // Standard request information.
         info: RequestInfo,
         // Iris serial identifier.
-        serial_id: Option<IrisSerialId>,
+        uniqueness_serial_id: Option<IrisSerialId>,
         // Iris sign-up identifier.
-        signup_id: uuid::Uuid,
+        uniqueness_signup_id: uuid::Uuid,
     },
     Reauthorization {
         // Standard request information.
@@ -23,9 +23,9 @@ pub enum Request {
         // Operation identifier.
         reauth_id: uuid::Uuid,
         // Iris serial identifier.
-        serial_id: Option<IrisSerialId>,
+        uniqueness_serial_id: Option<IrisSerialId>,
         // Iris sign-up identifier.
-        signup_id: uuid::Uuid,
+        uniqueness_signup_id: uuid::Uuid,
     },
     ResetCheck {
         // Standard request information.
@@ -39,9 +39,9 @@ pub enum Request {
         // Operation identifier.
         reset_id: uuid::Uuid,
         // Iris serial identifier.
-        serial_id: Option<IrisSerialId>,
+        uniqueness_serial_id: Option<IrisSerialId>,
         // Iris sign-up identifier.
-        signup_id: uuid::Uuid,
+        uniqueness_signup_id: uuid::Uuid,
     },
     Uniqueness {
         // Standard request information.
@@ -52,7 +52,7 @@ pub enum Request {
 }
 
 impl Request {
-    fn info(&self) -> &RequestInfo {
+    pub fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
@@ -84,11 +84,15 @@ impl Request {
     }
 
     /// Returns true if a system response is deemed to be correlated with this system request.
-    pub fn is_correlated(&self, response: &ResponseBody) -> bool {
+    pub fn is_correlation(&self, response: &ResponseBody) -> bool {
         match (self, response) {
-            (Self::IdentityDeletion { serial_id, .. }, ResponseBody::IdentityDeletion(result)) => {
-                serial_id.unwrap() == result.serial_id
-            }
+            (
+                Self::IdentityDeletion {
+                    uniqueness_serial_id: serial_id,
+                    ..
+                },
+                ResponseBody::IdentityDeletion(result),
+            ) => serial_id.unwrap() == result.serial_id,
             (Self::Reauthorization { reauth_id, .. }, ResponseBody::Reauthorization(result)) => {
                 reauth_id.to_string() == result.reauth_id
             }
@@ -106,6 +110,11 @@ impl Request {
     }
 
     /// Returns true if request has been enqueued for system processing.
+    pub fn is_correlated(&self) -> bool {
+        self.info().is_correlated()
+    }
+
+    /// Returns true if request has been enqueued for system processing.
     pub fn is_enqueued(&self) -> bool {
         matches!(self.info().status(), RequestStatus::Enqueued(_))
     }
@@ -114,9 +123,18 @@ impl Request {
     pub fn is_enqueueable(&self) -> bool {
         matches!(self.info().status(), RequestStatus::SharesUploaded(_))
             && match self {
-                Self::IdentityDeletion { serial_id, .. } => serial_id.is_some(),
-                Self::Reauthorization { serial_id, .. } => serial_id.is_some(),
-                Self::ResetUpdate { serial_id, .. } => serial_id.is_some(),
+                Self::IdentityDeletion {
+                    uniqueness_serial_id: serial_id,
+                    ..
+                } => serial_id.is_some(),
+                Self::Reauthorization {
+                    uniqueness_serial_id: serial_id,
+                    ..
+                } => serial_id.is_some(),
+                Self::ResetUpdate {
+                    uniqueness_serial_id: serial_id,
+                    ..
+                } => serial_id.is_some(),
                 _ => true,
             }
     }
@@ -131,11 +149,57 @@ impl Request {
         }
     }
 
-    pub fn set_correlation(&mut self, response: ResponseBody) {
+    pub fn request_id(&self) -> &uuid::Uuid {
+        self.info().request_id()
+    }
+
+    pub fn request_id_of_parent(&self) -> &Option<uuid::Uuid> {
+        self.info().request_id_of_parent()
+    }
+
+    pub fn set_correlation(&mut self, response: &ResponseBody) {
+        tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
         self.info_mut().set_correlation(response);
+        if self.is_correlated() {
+            self.set_status(RequestStatus::new_correlated());
+        }
+    }
+
+    pub fn set_parent_data(&mut self, response: &ResponseBody) {
+        match self {
+            Self::IdentityDeletion {
+                uniqueness_serial_id,
+                ..
+            } => match response {
+                ResponseBody::Uniqueness(result) => {
+                    *uniqueness_serial_id = result.serial_id;
+                }
+                _ => {}
+            },
+            Self::Reauthorization {
+                uniqueness_serial_id,
+                ..
+            } => match response {
+                ResponseBody::Uniqueness(result) => {
+                    *uniqueness_serial_id = result.serial_id;
+                }
+                _ => {}
+            },
+            Self::ResetUpdate {
+                uniqueness_serial_id,
+                ..
+            } => match response {
+                ResponseBody::Uniqueness(result) => {
+                    *uniqueness_serial_id = result.serial_id;
+                }
+                _ => {}
+            },
+            _ => panic!("Unsupported parent data"),
+        }
     }
 
     pub fn set_status(&mut self, new_state: RequestStatus) {
+        tracing::info!("{} :: State -> {}", &self, new_state);
         self.info_mut().set_status(new_state);
     }
 }
@@ -161,50 +225,56 @@ pub struct RequestFactory {}
 
 impl RequestFactory {
     pub fn new_identity_deletion(batch: &RequestBatch, parent: &Request) -> Request {
-        match parent {
-            Request::Uniqueness { signup_id, .. } => Request::IdentityDeletion {
-                info: RequestInfo::new(batch),
-                serial_id: None,
-                signup_id: *signup_id,
-            },
+        let signup_id = match parent {
+            Request::Uniqueness { signup_id, .. } => signup_id.clone(),
             _ => panic!("Invalid request parent"),
+        };
+
+        Request::IdentityDeletion {
+            info: RequestInfo::new(batch, Some(parent)),
+            uniqueness_serial_id: None,
+            uniqueness_signup_id: signup_id,
         }
     }
 
     pub fn new_reauthorisation(batch: &RequestBatch, parent: &Request) -> Request {
-        match parent {
-            Request::Uniqueness { signup_id, .. } => Request::Reauthorization {
-                info: RequestInfo::new(batch),
-                reauth_id: uuid::Uuid::new_v4(),
-                serial_id: None,
-                signup_id: *signup_id,
-            },
+        let signup_id = match parent {
+            Request::Uniqueness { signup_id, .. } => signup_id.clone(),
             _ => panic!("Invalid request parent"),
+        };
+
+        Request::Reauthorization {
+            info: RequestInfo::new(batch, Some(parent)),
+            reauth_id: uuid::Uuid::new_v4(),
+            uniqueness_serial_id: None,
+            uniqueness_signup_id: signup_id,
         }
     }
 
     pub fn new_reset_check(batch: &RequestBatch) -> Request {
         Request::ResetCheck {
-            info: RequestInfo::new(batch),
+            info: RequestInfo::new(batch, None),
             reset_id: uuid::Uuid::new_v4(),
         }
     }
 
     pub fn new_reset_update(batch: &RequestBatch, parent: &Request) -> Request {
-        match parent {
-            Request::Uniqueness { signup_id, .. } => Request::ResetUpdate {
-                info: RequestInfo::new(batch),
-                reset_id: uuid::Uuid::new_v4(),
-                serial_id: None,
-                signup_id: *signup_id,
-            },
+        let signup_id = match parent {
+            Request::Uniqueness { signup_id, .. } => signup_id.clone(),
             _ => panic!("Invalid request parent"),
+        };
+
+        Request::ResetUpdate {
+            info: RequestInfo::new(batch, Some(parent)),
+            reset_id: uuid::Uuid::new_v4(),
+            uniqueness_serial_id: None,
+            uniqueness_signup_id: signup_id,
         }
     }
 
     pub fn new_uniqueness(batch: &RequestBatch) -> Request {
         Request::Uniqueness {
-            info: RequestInfo::new(batch),
+            info: RequestInfo::new(batch, None),
             signup_id: uuid::Uuid::new_v4(),
         }
     }
@@ -237,10 +307,25 @@ impl RequestStatus {
     pub fn new_shares_uploaded() -> Self {
         Self::SharesUploaded(Instant::now())
     }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Correlated(_) => "Correlated",
+            Self::Enqueued(_) => "Enqueued",
+            Self::New(_) => "New",
+            Self::SharesUploaded(_) => "SharesUploaded",
+        }
+    }
 }
 
 impl Default for RequestStatus {
     fn default() -> Self {
         Self::New(Instant::now())
+    }
+}
+
+impl fmt::Display for RequestStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.label())
     }
 }
