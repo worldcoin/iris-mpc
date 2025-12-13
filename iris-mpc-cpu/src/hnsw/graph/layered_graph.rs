@@ -44,7 +44,15 @@ pub struct EntryPoint<VectorRef> {
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
-    /// Starting vector and layer for HNSW search
+    /// Entry points for HNSW search.
+    ///
+    /// If the graph is built by a searcher in `LinearScan` mode, this list will contain all nodes assigned
+    /// to an `insertion_level >= max_graph_layer`. The searcher uses `get_temporary_entry_point`
+    /// while no such node exists.
+    ///
+    /// If the graph is built by a searcher in `Standard` or `Bounded` mode this list
+    /// will contain a single entry point at any given time, which corresponds to a node
+    /// in the highest layer of the graph.
     pub entry_points: Vec<EntryPoint<V>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
@@ -132,6 +140,9 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     ///
     /// This is currently defined as the vector with minimal id in the top
     /// non-empty layer of the graph, or `None` if the graph is empty.
+    ///
+    /// This is intended to be used in LinearScan mode while the entry_points
+    /// list empty.
     pub fn get_temporary_entry_point(&self) -> Option<(V, usize)> {
         self.layers
             .iter()
@@ -141,7 +152,9 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (x.clone(), lc)))
     }
 
-    pub fn get_ep_layer(&self) -> Option<Vec<V>> {
+    /// Gets the list of entry points.
+    /// If this list is empty in LinearScan mode, `get_temporary_entry_point` may be used instead.
+    pub fn get_entry_points(&self) -> Option<Vec<V>> {
         let v: Vec<_> = self
             .entry_points
             .iter()
@@ -154,8 +167,10 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
     }
 
-    /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
-    /// graph.
+    /// Applies a `ConnectPlan` to finalize an insertion.
+    ///
+    /// This updates the graph's entry points set and connects the new vector to its
+    /// neighbors as specified in the plan.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
         // If required, set vector as new entry point
         match plan.update_ep {
@@ -295,9 +310,9 @@ impl GraphMem<IrisVectorId> {
 
         // Initialize entry points and truncate layers depending on the layer mode
         let entry_points = match searcher.layer_mode {
-            LayerMode::Standard | LayerMode::Bounded { .. } => {
-                if let LayerMode::Bounded { max_graph_layer } = searcher.layer_mode {
-                    nodes_for_nonzero_layers.truncate(max_graph_layer);
+            LayerMode::Standard { max_graph_layer } => {
+                if let Some(max_layer) = max_graph_layer {
+                    nodes_for_nonzero_layers.truncate(max_layer);
                 }
 
                 // Entry point is the first vector of the highest non-empty layer, or no
@@ -349,9 +364,10 @@ impl GraphMem<IrisVectorId> {
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct Layer<V: Ref + Display + FromStr + Ord> {
-    /// Map a base vector to its neighbors, including the distance between
-    /// base and neighbor.
+    /// Map a base vector to its neighbors.
     pub links: HashMap<V, Vec<V>>,
+    /// A checksum of the layer's links, used for state verification.
+    /// This hash is updated whenever links are modified.
     set_hash: SetHash,
 }
 

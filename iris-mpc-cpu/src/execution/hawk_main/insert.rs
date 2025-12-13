@@ -116,7 +116,7 @@ fn join_plans<V: VectorStore>(
     layer_mode: &LayerMode,
 ) -> Vec<Option<InsertPlanV<V>>> {
     match layer_mode {
-        LayerMode::Standard | LayerMode::Bounded { .. } => {
+        LayerMode::Standard { .. } => {
             // Requests to set unique entry point must have strictly increasing layer
             let mut current_max_ep_layer: Option<usize> = None;
             for plan in plans.iter_mut() {
@@ -145,9 +145,9 @@ fn validate_ep_updates<V: VectorStore>(
     plans: &Vec<Option<InsertPlanV<V>>>,
     layer_mode: &LayerMode,
 ) -> Result<()> {
-    // For standard and bounded modes, check that entry point updates have
-    // strictly increasing layers and no "append" updates
-    if let LayerMode::Standard | LayerMode::Bounded { .. } = layer_mode {
+    // For standard mode, check that entry point updates have strictly
+    // increasing layers and no "append" updates
+    if let LayerMode::Standard { .. } = layer_mode {
         let mut current_max_ep_layer: Option<usize> = None;
         for plan in plans {
             let Some(plan) = plan else { continue };
@@ -171,13 +171,17 @@ fn validate_ep_updates<V: VectorStore>(
         }
     }
 
-    // For bounded mode, check that all updates are at or below the layer bound
-    if let LayerMode::Bounded { max_graph_layer } = layer_mode {
+    // For standard mode with a layer bound specified, check that all updates
+    // are at or below the layer bound
+    if let LayerMode::Standard {
+        max_graph_layer: Some(max_layer),
+    } = layer_mode
+    {
         for plan in plans {
             let Some(plan) = plan else { continue };
 
             if let UpdateEntryPoint::SetUnique { layer } = plan.update_ep {
-                if layer > *max_graph_layer {
+                if layer > *max_layer {
                     bail!(
                         "InsertPlan sets entry point higher than layer bound in Bounded layer mode"
                     );
@@ -266,7 +270,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 2 },
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
 
         // increasing layer order
@@ -279,7 +285,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 1 },
                 UpdateEntryPoint::SetUnique { layer: 2 },
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
 
         // decreasing layer order
@@ -292,7 +300,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 2 },
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
 
         // exercise more complex case
@@ -317,7 +327,9 @@ mod tests {
                 UpdateEntryPoint::False,
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
     }
 
@@ -334,7 +346,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 2 },
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Bounded { max_graph_layer: 1 },
+            &LayerMode::Standard {
+                max_graph_layer: Some(1),
+            },
         );
     }
 
@@ -417,7 +431,9 @@ mod tests {
     /// Test ep validator Standard layer mode validity checks
     #[test]
     fn test_ep_updates_validator_standard() {
-        let standard_layer_mode = LayerMode::Standard;
+        let standard_layer_mode = LayerMode::Standard {
+            max_graph_layer: None,
+        };
 
         // Standard mode layers are strictly increasing
         test_validate_ep_updates_helper(
@@ -472,7 +488,9 @@ mod tests {
     /// Test ep validator Bounded layer mode validity checks
     #[test]
     fn test_ep_updates_validator_bounded() {
-        let bounded_layer_mode = LayerMode::Bounded { max_graph_layer: 3 };
+        let bounded_layer_mode = LayerMode::Standard {
+            max_graph_layer: Some(3),
+        };
 
         // Bounded mode layers are strictly increasing
         test_validate_ep_updates_helper(
