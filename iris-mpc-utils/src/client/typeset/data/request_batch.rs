@@ -43,7 +43,7 @@ impl RequestBatch {
         if let Some(idx_of_correlated) = self.get_idx_of_correlated(&response) {
             self.requests_mut()[idx_of_correlated].set_correlation(&response);
             if let Some(idx_of_child) = self.get_idx_of_child(idx_of_correlated) {
-                self.requests_mut()[idx_of_child].set_parent_data(&response);
+                self.requests_mut()[idx_of_child].set_data_from_parent_response(&response);
             }
             Some(())
         } else {

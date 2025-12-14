@@ -35,7 +35,7 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
-        _known_iris_serial_id: Option<IrisSerialId>,
+        known_iris_serial_id: Option<IrisSerialId>,
         rng_seed: R,
     ) -> Self {
         let aws_client = AwsClient::new(aws_client_config);
@@ -43,7 +43,12 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         Self {
             shares_uploader: SharesUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(batch_count, batch_kind, batch_size),
+            request_generator: RequestGenerator::new(
+                batch_count,
+                batch_kind,
+                batch_size,
+                known_iris_serial_id,
+            ),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
@@ -51,7 +56,11 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     pub async fn exec(&mut self) -> Result<(), ClientError> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
-            println!("Batch {}", batch.batch_idx());
+            println!(
+                "Batch {}: size={}",
+                batch.batch_idx(),
+                batch.requests().len()
+            );
             println!("------------------------------------------------------------------------");
             self.shares_uploader.process_batch(&mut batch).await?;
             while batch.is_enqueueable() {

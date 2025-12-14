@@ -60,7 +60,7 @@ struct CliOptions {
     environment: String,
 
     /// A known serial identifier that allows response correlation to be bypassed.
-    #[clap(long, default_value = "1")]
+    #[clap(long)]
     known_iris_serial_id: Option<IrisSerialId>,
 
     /// Number of request batches to process.

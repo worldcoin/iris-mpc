@@ -1,6 +1,9 @@
-use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+use iris_mpc_common::{
+    helpers::smpc_request::{
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    },
+    IrisSerialId,
 };
 
 use super::super::typeset::{
@@ -21,6 +24,9 @@ pub struct RequestGenerator {
 
     // Count of generated batches.
     generated_batch_count: usize,
+
+    // A known serial identifier that allows response correlation to be bypassed.
+    known_iris_serial_id: Option<IrisSerialId>,
 }
 
 impl RequestGenerator {
@@ -34,12 +40,14 @@ impl RequestGenerator {
         batch_count: usize,
         batch_kind: RequestBatchKind,
         batch_size: RequestBatchSize,
+        known_iris_serial_id: Option<IrisSerialId>,
     ) -> Self {
         Self {
             generated_batch_count: 0,
             batch_count,
             batch_kind,
             batch_size,
+            known_iris_serial_id,
         }
     }
 
@@ -55,30 +63,49 @@ impl RequestGenerator {
             match self.batch_kind {
                 RequestBatchKind::Simple(kind) => match kind {
                     IDENTITY_DELETION_MESSAGE_TYPE => {
-                        let r1 = RequestFactory::new_uniqueness(&batch);
-                        let r2 = RequestFactory::new_identity_deletion(&batch, &r1);
-                        batch.push_request(r1);
-                        batch.push_request(r2);
+                        if let Some(known_iris_serial_id) = self.known_iris_serial_id {
+                            batch.push_request(RequestFactory::new_identity_deletion_2(
+                                &batch,
+                                known_iris_serial_id,
+                            ));
+                        } else {
+                            let r1 = RequestFactory::new_uniqueness(&batch);
+                            let r2 = RequestFactory::new_identity_deletion_1(&batch, &r1);
+                            batch.push_request(r1);
+                            batch.push_request(r2);
+                        }
                     }
                     RESET_CHECK_MESSAGE_TYPE => {
-                        let r1 = RequestFactory::new_reset_check(&batch);
-                        batch.push_request(r1);
+                        batch.push_request(RequestFactory::new_reset_check(&batch));
                     }
                     REAUTH_MESSAGE_TYPE => {
-                        let r1 = RequestFactory::new_uniqueness(&batch);
-                        let r2 = RequestFactory::new_reauthorisation(&batch, &r1);
-                        batch.push_request(r1);
-                        batch.push_request(r2);
+                        if let Some(known_iris_serial_id) = self.known_iris_serial_id {
+                            batch.push_request(RequestFactory::new_reauthorisation_2(
+                                &batch,
+                                known_iris_serial_id,
+                            ));
+                        } else {
+                            let r1 = RequestFactory::new_uniqueness(&batch);
+                            let r2 = RequestFactory::new_reauthorisation_1(&batch, &r1);
+                            batch.push_request(r1);
+                            batch.push_request(r2);
+                        }
                     }
                     RESET_UPDATE_MESSAGE_TYPE => {
-                        let r1 = RequestFactory::new_uniqueness(&batch);
-                        let r2 = RequestFactory::new_reset_update(&batch, &r1);
-                        batch.push_request(r1);
-                        batch.push_request(r2);
+                        if let Some(known_iris_serial_id) = self.known_iris_serial_id {
+                            batch.push_request(RequestFactory::new_reset_update_2(
+                                &batch,
+                                known_iris_serial_id,
+                            ));
+                        } else {
+                            let r1 = RequestFactory::new_uniqueness(&batch);
+                            let r2 = RequestFactory::new_reset_update_1(&batch, &r1);
+                            batch.push_request(r1);
+                            batch.push_request(r2);
+                        }
                     }
                     UNIQUENESS_MESSAGE_TYPE => {
-                        let r1 = RequestFactory::new_uniqueness(&batch);
-                        batch.push_request(r1);
+                        batch.push_request(RequestFactory::new_uniqueness(&batch));
                     }
                     _ => panic!("Invalid batch kind"),
                 },
