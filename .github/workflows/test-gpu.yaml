@@ -105,6 +105,7 @@ jobs:
         run: cargo test -p iris-mpc-gpu --release --features gpu_dependent -- --test-threads=1
         shell: bash
         env:
+          RUST_MIN_STACK: 104857600
           NCCL_P2P_LEVEL: LOC
           NCCL_NET: Socket
           NCCL_P2P_DIRECT_DISABLE: 1
