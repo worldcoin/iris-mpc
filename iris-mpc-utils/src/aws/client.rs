@@ -228,13 +228,11 @@ mod tests {
         }
     }
 
-    #[ignore = "temporary"]
     #[tokio::test]
     async fn test_client_new() {
         AwsClient::new_1().await.assert_instance();
     }
 
-    #[ignore = "temporary"]
     #[tokio::test]
     async fn test_client_new_and_clone() {
         AwsClient::new_1().await.clone().assert_instance();

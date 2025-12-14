@@ -1,12 +1,15 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{config::Builder, Client as SQSClient};
+use aws_sdk_sqs::{config::Builder, config::Region, Client as SQSClient};
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+
+/// Default AWS region - typically used in unit tests.
+const AWS_DEFAULT_REGION: &str = "us-east-1";
 
 /// Encpasulates AWS service client configuration.
 #[derive(Clone, Debug)]
@@ -74,6 +77,9 @@ impl AwsClientConfig {
         sqs_response_queue_url: String,
         sqs_wait_time_seconds: usize,
     ) -> Self {
+        let config = get_sdk_config().await;
+        if config.region().is_none() {}
+
         Self {
             environment,
             public_key_base_url,
@@ -89,11 +95,32 @@ impl AwsClientConfig {
 
 /// Returns AWS SDK configuration from a node configuration instance.
 async fn get_sdk_config() -> aws_config::SdkConfig {
-    let retry_config = RetryConfig::standard().with_max_attempts(20);
-    aws_config::from_env()
-        .retry_config(retry_config)
-        .load()
-        .await
+    // Set retry config.
+    let retry_config = RetryConfig::standard().with_max_attempts(5);
+
+    // Load from ~/.aws.
+    // NOTE: this should be the only way of setting up AWS config.
+    if Path::new("~/.aws/config").exists() {
+        return aws_config::from_env()
+            .retry_config(retry_config)
+            .load()
+            .await;
+    // Load from env + region override.
+    } else {
+        let mut config_loader = aws_config::from_env().retry_config(retry_config);
+        config_loader = config_loader.region(Region::new(get_region()));
+        config_loader.load().await
+    }
+}
+
+fn get_region() -> String {
+    if std::env::var("AWS_REGION").is_ok() {
+        std::env::var("AWS_REGION").unwrap()
+    } else if std::env::var("AWS_DEFAULT_REGION").is_ok() {
+        std::env::var("AWS_DEFAULT_REGION").unwrap()
+    } else {
+        AWS_DEFAULT_REGION.to_string()
+    }
 }
 
 impl From<&AwsClientConfig> for SecretsManagerClient {
