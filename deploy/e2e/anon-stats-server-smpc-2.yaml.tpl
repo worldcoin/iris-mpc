@@ -1,6 +1,6 @@
 anon-stat-server-smpc-2:
   fullnameOverride: "anon-stat-server-smpc-2"
-
+  image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_ANON_STATS_SERVER_IMAGE_TAG"
   environment: $ENV
   replicaCount: 1
 
@@ -50,10 +50,6 @@ anon-stat-server-smpc-2:
       path: /health
       port: health
 
-    podSecurityContext:
-      runAsUser: 0
-      runAsNonRoot: false
-
   resources:
     limits:
       cpu: "2"
@@ -61,6 +57,7 @@ anon-stat-server-smpc-2:
     requests:
       cpu: "2"
       memory: 10Gi
+
   imagePullSecrets:
     - name: github-secret
 
