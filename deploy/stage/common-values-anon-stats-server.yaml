@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/anon-stats-server:v0.24.0@sha256:a438e6378b3368c7dde58b2c19b62bc944e084d3f83e1748538503d4df0c2824"
 
 environment: stage
-replicaCount: 1
+replicaCount: 0
 
 strategy:
   type: Recreate
