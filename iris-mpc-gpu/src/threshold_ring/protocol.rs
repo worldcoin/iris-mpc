@@ -35,33 +35,33 @@ impl<T> ChunkShare<T> {
         ChunkShare { a, b }
     }
 
-    pub fn as_view(&self) -> ChunkShareView<T> {
+    pub fn as_view(&self) -> ChunkShareView<'_, T> {
         ChunkShareView {
             a: self.a.slice(..),
             b: self.b.slice(..),
         }
     }
-    pub fn as_view_mut(&mut self) -> ChunkShareViewMut<T> {
+    pub fn as_view_mut(&mut self) -> ChunkShareViewMut<'_, T> {
         ChunkShareViewMut {
             a: self.a.slice_mut(..),
             b: self.b.slice_mut(..),
         }
     }
 
-    pub fn get_offset(&self, i: usize, chunk_size: usize) -> ChunkShareView<T> {
+    pub fn get_offset(&self, i: usize, chunk_size: usize) -> ChunkShareView<'_, T> {
         ChunkShareView {
             a: self.a.slice(i * chunk_size..(i + 1) * chunk_size),
             b: self.b.slice(i * chunk_size..(i + 1) * chunk_size),
         }
     }
-    pub fn get_offset_mut(&mut self, i: usize, chunk_size: usize) -> ChunkShareViewMut<T> {
+    pub fn get_offset_mut(&mut self, i: usize, chunk_size: usize) -> ChunkShareViewMut<'_, T> {
         ChunkShareViewMut {
             a: self.a.slice_mut(i * chunk_size..(i + 1) * chunk_size),
             b: self.b.slice_mut(i * chunk_size..(i + 1) * chunk_size),
         }
     }
 
-    pub fn get_range(&self, start: usize, end: usize) -> ChunkShareView<T> {
+    pub fn get_range(&self, start: usize, end: usize) -> ChunkShareView<'_, T> {
         ChunkShareView {
             a: self.a.slice(start..end),
             b: self.b.slice(start..end),
@@ -86,14 +86,14 @@ pub struct ChunkShareViewMut<'a, T> {
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a, T> ChunkShareView<'a, T> {
-    pub fn get_offset(&self, i: usize, chunk_size: usize) -> ChunkShareView<T> {
+    pub fn get_offset(&self, i: usize, chunk_size: usize) -> ChunkShareView<'_, T> {
         ChunkShareView {
             a: self.a.slice(i * chunk_size..(i + 1) * chunk_size),
             b: self.b.slice(i * chunk_size..(i + 1) * chunk_size),
         }
     }
 
-    pub fn get_range(&self, start: usize, end: usize) -> ChunkShareView<T> {
+    pub fn get_range(&self, start: usize, end: usize) -> ChunkShareView<'_, T> {
         ChunkShareView {
             a: self.a.slice(start..end),
             b: self.b.slice(start..end),
@@ -382,7 +382,10 @@ impl Buffers {
         std::mem::take(inp).unwrap()
     }
 
-    fn get_buffer_chunk<T>(inp: &[ChunkShare<T>], size: usize) -> Vec<ChunkShareView<T>> {
+    fn get_buffer_chunk<'a, T>(
+        inp: &'a [ChunkShare<T>],
+        size: usize,
+    ) -> Vec<ChunkShareView<'a, T>> {
         let mut res = Vec::with_capacity(inp.len());
         for inp in inp {
             res.push(inp.get_range(0, size));
@@ -400,7 +403,10 @@ impl Buffers {
         std::mem::take(inp).unwrap()
     }
 
-    fn get_single_buffer_chunk<T>(inp: &[CudaSlice<T>], size: usize) -> Vec<CudaView<T>> {
+    fn get_single_buffer_chunk<'a, T>(
+        inp: &'a [CudaSlice<T>],
+        size: usize,
+    ) -> Vec<CudaView<'a, T>> {
         let mut res = Vec::with_capacity(inp.len());
         for inp in inp {
             res.push(inp.slice(..size));
@@ -617,7 +623,7 @@ impl Circuits {
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let size = (self.chunk_size * bits + 7) / 8;
+        let size = (self.chunk_size * bits).div_ceil(8);
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
@@ -718,7 +724,7 @@ impl Circuits {
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let size = (self.chunk_size + 7) / 8;
+        let size = self.chunk_size.div_ceil(8);
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
@@ -744,7 +750,7 @@ impl Circuits {
     ) {
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let size = (x1.len() + 7) / 8;
+        let size = x1.len().div_ceil(8);
         let mut rand = unsafe { self.devs[idx].alloc::<u64>(size * 8).unwrap() };
         self.fill_rand_u64(&mut rand, idx, streams);
 
@@ -786,8 +792,7 @@ impl Circuits {
 
         // SAFETY: Only unsafe because memory is not initialized. But, we fill
         // afterwards.
-        let size = (x1.len() + 15) / 16;
-        let size = size * 16;
+        let size = x1.len().div_ceil(16) * 16;
         let mut my_rand = unsafe { dev.alloc::<u32>(size).unwrap() };
         let mut their_rand = unsafe { dev.alloc::<u32>(size).unwrap() };
 
@@ -873,7 +878,7 @@ impl Circuits {
         streams: &[CudaStream],
     ) -> CudaSlice<u64> {
         let data_len = input.len();
-        let keystream_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let keystream_size = data_len.div_ceil(8); // Multiple of 16 u32
         let mut keystream = unsafe { self.devs[idx].alloc::<u64>(keystream_size * 8).unwrap() };
         self.fill_my_rand_u64(&mut keystream, idx, streams);
         self.single_xor_assign_u64(
@@ -894,7 +899,7 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         let data_len = inout.len();
-        let keystream_size = (data_len + 7) / 8; // Multiple of 16 u32
+        let keystream_size = data_len.div_ceil(8); // Multiple of 16 u32
         let mut keystream = unsafe { self.devs[idx].alloc::<u64>(keystream_size * 8).unwrap() };
         self.fill_their_rand_u64(&mut keystream, idx, streams);
         self.single_xor_assign_u64(
@@ -914,7 +919,7 @@ impl Circuits {
         streams: &[CudaStream],
     ) -> CudaSlice<u32> {
         let data_len = input.len();
-        let keystream_size = (data_len + 15) / 16; // Multiple of 16 u32
+        let keystream_size = data_len.div_ceil(16); // Multiple of 16 u32
         let mut keystream = unsafe { self.devs[idx].alloc::<u32>(keystream_size * 16).unwrap() };
         self.rngs[idx].fill_my_rng_into(&mut keystream.slice_mut(..), &streams[idx]);
         self.single_xor_assign_u32(
@@ -935,7 +940,7 @@ impl Circuits {
         streams: &[CudaStream],
     ) {
         let data_len = inout.len();
-        let keystream_size = (data_len + 15) / 16; // Multiple of 16 u32
+        let keystream_size = data_len.div_ceil(16); // Multiple of 16 u32
         let mut keystream = unsafe { self.devs[idx].alloc::<u32>(keystream_size * 16).unwrap() };
         self.rngs[idx].fill_their_rng_into(&mut keystream.slice_mut(..), &streams[idx]);
         self.single_xor_assign_u32(
@@ -2492,7 +2497,7 @@ impl Circuits {
 
         let mut rand_offset = rand.slice(..);
 
-        let mut current_bitsize = 64;
+        let mut current_bitsize: usize = 64;
         while current_bitsize > 1 {
             current_bitsize >>= 1;
             unsafe {
@@ -2513,7 +2518,7 @@ impl Circuits {
                     )
                     .unwrap();
             }
-            let bytes = (current_bitsize + 7) / 8;
+            let bytes = current_bitsize.div_ceil(8);
             rand_offset = rand_offset.slice(bytes..); // Advance randomness
             self.send_receive_view_single_gpu(&mut res, 0, streams)
         }

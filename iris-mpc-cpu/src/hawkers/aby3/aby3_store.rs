@@ -448,7 +448,7 @@ impl VectorStore for Aby3Store {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(lte_threshold_and_open(&mut self.session, &[distance.clone()]).await?[0])
+        Ok(lte_threshold_and_open(&mut self.session, std::slice::from_ref(distance)).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]

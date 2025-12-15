@@ -34,8 +34,29 @@ mod e2e_test {
             .init();
     }
 
-    #[tokio::test]
-    async fn e2e_test() -> Result<()> {
+    #[test]
+    fn e2e_test() -> Result<()> {
+        // This test is stack-hungry in release mode; run it on a larger stack to
+        // avoid platform-dependent stack overflows on CI runners.
+        std::thread::Builder::new()
+            .name("gpu_e2e_test".to_string())
+            .stack_size(128 * 1024 * 1024)
+            .spawn(|| {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    // Also increase the runtime worker stack size since a lot of the
+                    // test logic runs on runtime threads.
+                    .thread_stack_size(64 * 1024 * 1024)
+                    .build()
+                    .expect("failed to build tokio runtime");
+                rt.block_on(e2e_test_async())
+            })
+            .expect("failed to spawn gpu_e2e_test thread")
+            .join()
+            .expect("gpu_e2e_test thread panicked")
+    }
+
+    async fn e2e_test_async() -> Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");

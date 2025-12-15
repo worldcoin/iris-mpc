@@ -25,7 +25,7 @@ mod extract_msb_mod_test {
     const CHUNK_SIZE: usize = INPUTS_PER_GPU_SIZE / 64;
     const B_BITS: u64 = 16;
 
-    fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
+    fn to_view<'a, T>(inp: &'a [ChunkShare<T>]) -> Vec<ChunkShareView<'a, T>> {
         let mut res = Vec::with_capacity(inp.len());
         for inp in inp {
             res.push(inp.as_view());
