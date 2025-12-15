@@ -657,7 +657,12 @@ async fn exec_indexation(
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
+            let start = Instant::now();
             tx_results.send(result).await?;
+            tracing::debug!(target: "searcher",
+                "time  to send tx_results: {}ms",
+                start.elapsed().as_millis()
+            );
             shutdown_handler.increment_batches_pending_completion();
             // Signal.
             log_info(format!(
