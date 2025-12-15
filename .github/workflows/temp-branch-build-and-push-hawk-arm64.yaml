@@ -1,10 +1,10 @@
-name: Branch - Anon stats server build and push docker image
+name: Branch - Hawk server build and push docker image
 
 on:
   push:
     branches:
       - "dev"
-      - "au/min-round-robin-size"
+      - "sw/test-linear-scan"
     paths-ignore:
       - "deploy/**"
 
