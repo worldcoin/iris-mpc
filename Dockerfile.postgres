@@ -4,14 +4,14 @@ FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 # smpc_dev_0 1 and 2
 # /bin/pg-entrypoint-wrapper.sh
 
-COPY ./smpc_dev_0.sql /opt/smpc_dev_0.sql
-COPY ./smpc_dev_1.sql /opt/smpc_dev_1.sql
-COPY ./smpc_dev_2.sql /opt/smpc_dev_2.sql
+# COPY ./smpc_dev_0.sql /opt/smpc_dev_0.sql
+# COPY ./smpc_dev_1.sql /opt/smpc_dev_1.sql
+# COPY ./smpc_dev_2.sql /opt/smpc_dev_2.sql
 
 # ---
 # copy a script to delete and recreate the CPU databases on every run
 COPY ./scripts/tools/pg-entrypoint-wrapper.sh /bin/pg-entrypoint-wrapper.sh
-RUN chmod +x /bin/pg-entrypoint-wrapper.sh
+RUN chmod 0755 /bin/pg-entrypoint-wrapper.sh
 
 COPY ./scripts/tools/cleanup-cpu-schemas.sh /bin/cleanup-cpu-schemas.sh
 RUN chmod +x /bin/cleanup-cpu-schemas.sh
