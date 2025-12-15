@@ -46,7 +46,7 @@ env:
     value: "_minfhd"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "2000000"
+    value: "2097152"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "96"
@@ -230,4 +230,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-  - sg-0b7cacc680e0f8e3b # smpc1-dev ampc-hnsw pod sg
+    - sg-0b7cacc680e0f8e3b # smpc1-dev ampc-hnsw pod sg
