@@ -11,7 +11,8 @@ concurrency:
 
 jobs:
   gpu-e2e:
-    runs-on: arc-public-gpu-amd64-runner
+    runs-on:
+      group: arc-public-gpu-amd64-runner
     timeout-minutes: 25
     permissions:
       contents: read
