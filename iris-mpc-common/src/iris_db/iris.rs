@@ -27,8 +27,8 @@ impl Default for IrisCodeArray {
 impl IrisCodeArray {
     pub const IRIS_CODE_SIZE: usize = 12800;
     pub const CODE_COLS: usize = 200;
-    pub const IRIS_CODE_SIZE_BYTES: usize = (Self::IRIS_CODE_SIZE + 7) / 8;
-    pub const IRIS_CODE_SIZE_U64: usize = (Self::IRIS_CODE_SIZE + 63) / 64;
+    pub const IRIS_CODE_SIZE_BYTES: usize = Self::IRIS_CODE_SIZE.div_ceil(8);
+    pub const IRIS_CODE_SIZE_U64: usize = Self::IRIS_CODE_SIZE.div_ceil(64);
     pub const ZERO: Self = IrisCodeArray([0; Self::IRIS_CODE_SIZE_U64]);
     pub const ONES: Self = IrisCodeArray([u64::MAX; Self::IRIS_CODE_SIZE_U64]);
     #[inline]

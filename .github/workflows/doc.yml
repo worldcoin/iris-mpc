@@ -17,7 +17,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - name: Get all test, doc and src files that have changed
         id: changed-files-yaml
@@ -58,11 +58,11 @@ jobs:
 
       - name: Install Rust
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: rustup toolchain install 1.85.0
+        run: rustup toolchain install 1.89.0
 
       - name: Set Rust  as default
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: rustup default 1.85.0
+        run: rustup default 1.89.0
 
       - name: Build Docs
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

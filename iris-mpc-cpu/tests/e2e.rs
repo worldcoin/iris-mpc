@@ -147,8 +147,26 @@ async fn start_hawk_node(
 }
 
 #[ignore = "Takes long time to run, in CI this is selected in a separate step"]
-#[tokio::test]
-async fn e2e_test() -> Result<()> {
+#[test]
+fn e2e_test() -> Result<()> {
+    // This test is stack-hungry in release mode; run it on a larger stack to
+    // avoid platform-dependent stack overflows.
+    std::thread::Builder::new()
+        .name("e2e_test".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime");
+            rt.block_on(e2e_test_async())
+        })
+        .expect("failed to spawn e2e_test thread")
+        .join()
+        .expect("e2e_test thread panicked")
+}
+
+async fn e2e_test_async() -> Result<()> {
     install_tracing();
 
     let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED, false);
