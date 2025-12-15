@@ -17,7 +17,7 @@ const PREVIOUS_SECRET_LABEL: &str = "AWSPREVIOUS";
 #[derive(Error, Debug)]
 pub enum SharesDecodingError {
     #[error("Secrets Manager error: {0}")]
-    SecretsManagerError(#[from] SdkError<GetSecretValueError>),
+    SecretsManagerError(#[from] Box<SdkError<GetSecretValueError>>),
     #[error("Secret string not found")]
     SecretStringNotFound,
     #[error(transparent)]
@@ -52,10 +52,26 @@ pub enum SharesDecodingError {
     PresigningConfigError(#[from] aws_sdk_s3::presigning::PresigningConfigError),
     #[error(transparent)]
     PresignedRequestError(
-        #[from] aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
+        #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>>,
     ),
     #[error("Upload share file error")]
     UploadS3Error,
+}
+
+impl From<SdkError<GetSecretValueError>> for SharesDecodingError {
+    fn from(value: SdkError<GetSecretValueError>) -> Self {
+        Self::SecretsManagerError(Box::new(value))
+    }
+}
+
+impl From<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>>
+    for SharesDecodingError
+{
+    fn from(
+        value: aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
+    ) -> Self {
+        Self::PresignedRequestError(Box::new(value))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -74,7 +90,7 @@ impl Zeroize for SharesEncryptionKeyPairs {
 impl Drop for SharesEncryptionKeyPairs {
     fn drop(&mut self) {
         self.current_key_pair.zeroize();
-        self.current_key_pair.zeroize();
+        self.previous_key_pair.zeroize();
     }
 }
 

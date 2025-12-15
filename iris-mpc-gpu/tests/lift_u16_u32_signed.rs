@@ -20,7 +20,7 @@ mod lift_u16_u32_signed_test {
     const DB_RNG_SEED: u64 = 0xdeadbeef;
     const INPUTS_PER_GPU_SIZE: usize = 64;
 
-    fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
+    fn to_view<'a, T>(inp: &'a [ChunkShare<T>]) -> Vec<ChunkShareView<'a, T>> {
         let mut res = Vec::with_capacity(inp.len());
         for inp in inp {
             res.push(inp.as_view());
