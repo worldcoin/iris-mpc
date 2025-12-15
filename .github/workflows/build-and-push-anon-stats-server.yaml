@@ -24,7 +24,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "anon-stats-server"
+  IMAGE_NAME: "worldcoin/anon-stats-server"
 
 jobs:
   docker:
