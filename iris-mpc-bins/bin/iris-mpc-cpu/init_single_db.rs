@@ -1,6 +1,29 @@
+use std::fs::File;
+use std::io::BufReader;
+use std::path::PathBuf;
+
+use clap::Parser;
+use eyre::Result;
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
+use iris_mpc_cpu::{
+    hnsw::graph::test_utils::DbContext,
+    protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
+    utils::serialization::types::iris_base64::Base64IrisCode,
+};
+use itertools::Itertools;
+use rand::{rngs::StdRng, SeedableRng};
+use serde_json::Deserializer;
+
+/// Number of iris code pairs to generate secret shares for at a time.
+const SECRET_SHARING_BATCH_SIZE: usize = 5000;
+
 #[allow(non_snake_case)]
 #[derive(Parser)]
 struct Args {
+    /// the peer in the MPC protocol
+    #[clap(long)]
+    party_id: usize,
+
     /// Postgres db schema
     #[clap(long)]
     db_schema: String,
@@ -13,11 +36,6 @@ struct Args {
     /// The source file for plaintext iris codes, in NDJSON file format.
     #[clap(long = "source")]
     path_to_iris_codes: PathBuf,
-
-    /// Location of temporary file storing PRNG intermediate state between runs
-    /// of this binary.
-    #[clap(long, default_value = ".prng_state")]
-    prng_state_file: PathBuf,
 
     /// The target number of left/right iris pairs to build the databases from.
     /// If existing entries are already in the database, then additional entries
@@ -56,7 +74,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("Parsing CLI arguments");
     let args = Args::parse();
-    let searcher = HnswSearcher::from(&args);
+    let party = args.party_id;
 
     tracing::info!("Setting database connections");
     let db = init_db(&args).await;
@@ -75,9 +93,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("⚓ ANCHOR: Converting plaintext iris codes locally into secret shares");
 
-    let mut batch: Vec<Vec<GaloisRingSharedIrisPair>> = (0..N_PARTIES)
-        .map(|_| Vec::with_capacity(SECRET_SHARING_BATCH_SIZE))
-        .collect();
+    let mut batch: Vec<GaloisRingSharedIrisPair> = Vec::with_capacity(SECRET_SHARING_BATCH_SIZE);
     let mut n_read: usize = 0;
 
     let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
@@ -102,19 +118,16 @@ async fn main() -> Result<()> {
                 GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, left.clone());
             let right_shares =
                 GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, right.clone());
-            for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
-                batch[party].push((shares_l, shares_r));
-            }
+            batch.push((left_shares[party].clone(), right_shares[party].clone()));
         }
 
-        let cur_batch_len = batch[0].len();
+        let cur_batch_len = batch.len();
         let last_idx = batch_idx * SECRET_SHARING_BATCH_SIZE + cur_batch_len + n_existing_irises;
 
-        for (db, shares) in izip!(&dbs, batch.iter_mut()) {
-            #[allow(clippy::drain_collect)]
-            let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
-            assert_eq!(end_serial_id, last_idx);
-        }
+        #[allow(clippy::drain_collect)]
+        let (_, end_serial_id) = db.persist_vector_shares(batch.drain(..).collect()).await?;
+        assert_eq!(end_serial_id, last_idx);
+
         tracing::info!(
             "Persisted {} locally generated shares",
             last_idx - n_existing_irises
@@ -127,5 +140,5 @@ async fn main() -> Result<()> {
 }
 
 async fn init_db(args: &Args) -> DbContext {
-    DbContext::new(args.db_url, args.db_schema)
+    DbContext::new(&args.db_url, &args.db_schema).await
 }
