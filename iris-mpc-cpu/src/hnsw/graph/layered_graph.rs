@@ -104,7 +104,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             .iter()
             .enumerate()
             .filter(|(_lc, layer)| !layer.links.is_empty())
-            .last()
+            .next_back()
             .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (x.clone(), lc)))
     }
 
