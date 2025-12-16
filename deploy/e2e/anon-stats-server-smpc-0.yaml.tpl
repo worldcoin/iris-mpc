@@ -1,6 +1,6 @@
 anon-stats-server-smpc-0:
   fullnameOverride: "anon-stats-server-smpc-0"
-  image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-anon-stats-server:$IRIS_MPC_ANON_STATS_SERVER_IMAGE_TAG"
+  image: "$IMAGE_REGISTRY_IRIS_MPC/anon-stats-server:$IRIS_MPC_ANON_STATS_SERVER_IMAGE_TAG"
   environment: $ENV
   replicaCount: 1
 
