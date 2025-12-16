@@ -1,4 +1,4 @@
-FROM ghcr.io/worldcoin/iris-mpc-cpu:3113465769188c52ebe4a51479a570ad46c5cfdf6-arm64
+FROM ghcr.io/worldcoin/iris-mpc-cpu:113465769188c52ebe4a51479a570ad46c5cfdf6-arm64
 
 USER 0
 COPY scripts/tools/init-single-db.sh /bin/entrypoint.sh
