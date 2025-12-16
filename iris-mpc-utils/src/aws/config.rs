@@ -77,9 +77,6 @@ impl AwsClientConfig {
         sqs_response_queue_url: String,
         sqs_wait_time_seconds: usize,
     ) -> Self {
-        let config = get_sdk_config().await;
-        if config.region().is_none() {}
-
         Self {
             environment,
             public_key_base_url,
