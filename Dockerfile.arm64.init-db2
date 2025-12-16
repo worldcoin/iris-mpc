@@ -1,0 +1,7 @@
+FROM ghcr.io/worldcoin/iris-mpc-cpu:3189b7bb71b7d1e15ae85a0770cb90c78f6e31c2-arm64
+
+COPY scripts/tools/init-single-db.sh /bin/entrypoint.sh
+RUN chmod +x /bin/entrypoint.sh
+
+USER 65534
+ENTRYPOINT ["/bin/entrypoint.sh"]

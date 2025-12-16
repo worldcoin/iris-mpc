@@ -55,4 +55,4 @@ jobs:
             ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.arm64.init-db
+          file: Dockerfile.arm64.init-db2
