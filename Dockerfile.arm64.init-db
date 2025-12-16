@@ -63,17 +63,7 @@ RUN update-ca-certificates
 COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/init-single-db /bin/init-single-db
 RUN curl "https://drive.usercontent.google.com/download?id=1je1stRXfVrHy2LRVcfg-SrRiz_yw33S4&export=download&confirm=t" -o /tmp/irises.ndjson
 
-# too lazy to make a new file
-COPY <<EOF /bin/entrypoint.sh
-#!/bin/sh
-exec /bin/init-single-db \
-  --party-id="$SMPC__SERVER_COORDINATION_PARTY_ID" \
-  --source=/tmp/irises.ndjson \
-  --db-url="$SMPC__CPU_DATABASE__URL" \
-  --db-schema="SMPC_minfhd2_dev_$SMPC__SERVER_COORDINATION_PARTY_ID" \
-  --target-db-size=1048576
-EOF
-
+COPY scripts/tools/init-single-db.sh /bin/entrypoint.sh
 RUN chmod +x /bin/entrypoint.sh
 
 USER 65534

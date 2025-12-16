@@ -14,7 +14,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: hawk-init-db-cpu
+  IMAGE_NAME: ${{ github.repository }}-cpu
 
 jobs:
   docker:
