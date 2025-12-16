@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "au/min-round-robin-size"
+      - "sw/build-iris-db"
     paths-ignore:
       - "deploy/**"
 
@@ -14,7 +14,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-cpu
+  IMAGE_NAME: hawk-init-db-cpu
 
 jobs:
   docker:
@@ -55,4 +55,4 @@ jobs:
             ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.arm64.hawk
+          file: Dockerfile.arm64.init-db
