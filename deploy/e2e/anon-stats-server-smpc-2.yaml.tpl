@@ -192,8 +192,9 @@ anon-stats-server-smpc-2:
       - name: MY_NODE_IP
         valueFrom:
           fieldRef:
-            fieldPath: status.hostIP
+            fieldPath: status.podIP
     configMap:
+      name: "anon-stats-server-init-2"
       init.sh: |
         #!/usr/bin/env bash
 
