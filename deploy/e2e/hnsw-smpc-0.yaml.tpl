@@ -300,7 +300,7 @@ hnsw-smpc-0:
 
         # Wait for GPU pods to complete key generation
         echo "Waiting for GPU pods to complete key generation..."
-        BUCKET_NAME="wf-e2e-public-keys"
+        BUCKET_NAME="wf-$ENV-public-keys"
         EXPECTED_KEYS=3
         TIMEOUT=120  # 2 minutes timeout
         SLEEP_INTERVAL=5
