@@ -1,4 +1,4 @@
-use std::{path::Path, time::Duration};
+use std::{env, path::Path, time::Duration};
 
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
@@ -92,32 +92,36 @@ impl AwsClientConfig {
 
 /// Returns AWS SDK configuration from a node configuration instance.
 async fn get_sdk_config() -> aws_config::SdkConfig {
-    // Set retry config.
-    let retry_config = RetryConfig::standard().with_max_attempts(5);
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap();
+    let aws_config_exists = Path::new(&home).join(".aws/config").exists();
 
-    // Load from ~/.aws.
-    // NOTE: this should be the only way of setting up AWS config.
-    if Path::new("~/.aws/config").exists() {
+    if aws_config_exists {
         return aws_config::from_env()
-            .retry_config(retry_config)
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
             .load()
             .await;
-    // Load from env + region override.
     } else {
-        let mut config_loader = aws_config::from_env().retry_config(retry_config);
-        config_loader = config_loader.region(Region::new(get_region()));
-        config_loader.load().await
+        aws_config::from_env()
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            .region(get_region())
+            .load()
+            .await
     }
 }
 
-fn get_region() -> String {
-    if std::env::var("AWS_REGION").is_ok() {
+/// Returns AWS SDK region configuration from env vars or default.
+fn get_region() -> Region {
+    let region = if std::env::var("AWS_REGION").is_ok() {
         std::env::var("AWS_REGION").unwrap()
     } else if std::env::var("AWS_DEFAULT_REGION").is_ok() {
         std::env::var("AWS_DEFAULT_REGION").unwrap()
     } else {
         AWS_DEFAULT_REGION.to_string()
-    }
+    };
+
+    Region::new(region)
 }
 
 impl From<&AwsClientConfig> for SecretsManagerClient {

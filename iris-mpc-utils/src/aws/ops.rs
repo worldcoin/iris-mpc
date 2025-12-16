@@ -59,9 +59,6 @@ impl AwsClient {
             &signup_id.to_string(),
             &shares,
         );
-        match self.s3_put_object(&s3_obj_info).await {
-            Ok(_) => Ok(s3_obj_info),
-            Err(e) => Err(e),
-        }
+        self.s3_put_object(&s3_obj_info).await.map(|_| s3_obj_info)
     }
 }

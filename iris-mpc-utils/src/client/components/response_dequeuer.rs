@@ -60,7 +60,7 @@ impl ProcessRequestBatch for ResponseDequeuer {
 impl From<&SqsMessageInfo> for ResponseBody {
     fn from(msg: &SqsMessageInfo) -> Self {
         let body = msg.body();
-        let kind = msg.kind().as_str();
+        let kind = msg.kind();
 
         macro_rules! parse_response {
             ($variant:ident) => {

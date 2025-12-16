@@ -36,3 +36,4 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+dirs = "6.0.0"

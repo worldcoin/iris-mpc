@@ -105,15 +105,15 @@ pub struct SqsMessageInfo {
 }
 
 impl SqsMessageInfo {
-    pub fn body(&self) -> &String {
+    pub fn body(&self) -> &str {
         &self.body
     }
 
-    pub fn kind(&self) -> &String {
+    pub fn kind(&self) -> &str {
         &self.kind
     }
 
-    pub fn receipt_handle(&self) -> &String {
+    pub fn receipt_handle(&self) -> &str {
         &self.receipt_handle
     }
 
