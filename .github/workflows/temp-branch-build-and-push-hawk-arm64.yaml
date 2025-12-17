@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "sw/test-linear-scan"
+      - "sw/test-standard-mode"
     paths-ignore:
       - "deploy/**"
 

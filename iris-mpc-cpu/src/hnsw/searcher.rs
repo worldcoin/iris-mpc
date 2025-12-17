@@ -327,7 +327,9 @@ impl HnswSearcher {
     ) -> Self {
         Self {
             params: HnswParams::new(ef_constr, ef_search, M),
-            layer_mode: LayerMode::LinearScan { max_graph_layer },
+            layer_mode: LayerMode::Standard {
+                max_graph_layer: Some(max_graph_layer),
+            },
             layer_distribution: LayerDistribution::new_geometric_from_M(M),
         }
     }
