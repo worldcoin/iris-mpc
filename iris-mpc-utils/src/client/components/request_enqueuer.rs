@@ -7,7 +7,7 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    ClientError, ProcessRequestBatch, Request, RequestBatch, RequestMessageBody,
+    ClientError, ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestStatus,
 };
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
@@ -28,48 +28,57 @@ impl RequestEnqueuer {
 
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
-    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
         // Set enqueue tasks.
         let tasks: Vec<_> = batch
             .requests()
             .iter()
-            .map(|request| {
+            .enumerate()
+            .filter(|(_, r)| r.is_enqueueable())
+            .map(|(idx, request)| {
                 let aws_client = &self.aws_client;
-                let sns_message_info = SnsMessageInfo::from(request);
+                let sns_msg_info = SnsMessageInfo::from(request);
                 async move {
                     aws_client
-                        .sns_publish_json(sns_message_info)
+                        .sns_publish_json(sns_msg_info)
                         .await
                         .map_err(ClientError::AwsServiceError)?;
-                    Ok::<(), ClientError>(())
+                    Ok::<usize, ClientError>(idx)
                 }
             })
             .collect();
 
-        // Execute tasks in parallel.
-        futures::future::try_join_all(tasks).await?;
+        // Enqueue & mark requests as enqueued.
+        for idx in futures::future::try_join_all(tasks).await? {
+            if let Some(request) = batch.requests_mut().get_mut(idx) {
+                request.set_status(RequestStatus::new_enqueued());
+            }
+        }
 
         Ok(())
     }
 }
 
-impl From<&Request> for RequestMessageBody {
+impl From<&Request> for RequestBody {
     fn from(request: &Request) -> Self {
         // TODO: serial ID from correlated uniqueness response
         match request {
-            Request::IdentityDeletion { .. } => {
-                Self::IdentityDeletion(IdentityDeletionRequest { serial_id: 2 })
-            }
+            Request::IdentityDeletion {
+                uniqueness_serial_id,
+                ..
+            } => Self::IdentityDeletion(IdentityDeletionRequest {
+                serial_id: uniqueness_serial_id.unwrap_or(1),
+            }),
             Request::Reauthorization {
                 reauth_id,
-                known_iris_serial_id,
+                uniqueness_serial_id,
                 ..
             } => Self::Reauthorization(ReAuthRequest {
                 batch_size: Some(1),
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
-                serial_id: known_iris_serial_id.unwrap_or(1),
-                use_or_rule: bool::default(),
+                serial_id: uniqueness_serial_id.unwrap_or(1),
+                use_or_rule: false,
             }),
             Request::ResetCheck { reset_id, .. } => Self::ResetCheck(ResetCheckRequest {
                 batch_size: Some(1),
@@ -78,17 +87,17 @@ impl From<&Request> for RequestMessageBody {
             }),
             Request::ResetUpdate {
                 reset_id,
-                known_iris_serial_id,
+                uniqueness_serial_id,
                 ..
             } => Self::ResetUpdate(ResetUpdateRequest {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
-                serial_id: known_iris_serial_id.unwrap_or(1),
+                serial_id: uniqueness_serial_id.unwrap_or(1),
             }),
             Request::Uniqueness { signup_id, .. } => Self::Uniqueness(UniquenessRequest {
                 batch_size: Some(1),
-                signup_id: signup_id.to_string(),
                 s3_key: signup_id.to_string(),
+                signup_id: signup_id.to_string(),
                 or_rule_serial_ids: None,
                 skip_persistence: None,
                 full_face_mirror_attacks_detection_enabled: Some(true),
@@ -100,28 +109,28 @@ impl From<&Request> for RequestMessageBody {
 
 impl From<&Request> for SnsMessageInfo {
     fn from(request: &Request) -> Self {
-        Self::from(RequestMessageBody::from(request))
+        Self::from(RequestBody::from(request))
     }
 }
 
-impl From<RequestMessageBody> for SnsMessageInfo {
-    fn from(body: RequestMessageBody) -> Self {
+impl From<RequestBody> for SnsMessageInfo {
+    fn from(body: RequestBody) -> Self {
         match body {
-            RequestMessageBody::IdentityDeletion(body) => Self::new(
+            RequestBody::IdentityDeletion(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 IDENTITY_DELETION_MESSAGE_TYPE,
                 &body,
             ),
-            RequestMessageBody::Reauthorization(body) => {
+            RequestBody::Reauthorization(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, REAUTH_MESSAGE_TYPE, &body)
             }
-            RequestMessageBody::ResetCheck(body) => {
+            RequestBody::ResetCheck(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, RESET_CHECK_MESSAGE_TYPE, &body)
             }
-            RequestMessageBody::ResetUpdate(body) => {
+            RequestBody::ResetUpdate(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, RESET_UPDATE_MESSAGE_TYPE, &body)
             }
-            RequestMessageBody::Uniqueness(body) => {
+            RequestBody::Uniqueness(body) => {
                 Self::new(ENROLLMENT_REQUEST_TYPE, UNIQUENESS_MESSAGE_TYPE, &body)
             }
         }

@@ -1,7 +1,18 @@
 use async_trait::async_trait;
+use serde_json;
 
-use super::super::typeset::{ClientError, ProcessRequestBatch, RequestBatch};
-use crate::aws::AwsClient;
+use iris_mpc_common::helpers::smpc_request::{
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+};
+
+use super::super::typeset::{
+    ClientError, Initialize, ProcessRequestBatch, RequestBatch, ResponseBody,
+};
+use crate::{
+    aws::{types::SqsMessageInfo, AwsClient},
+    constants::N_PARTIES,
+};
 
 /// A component responsible for dequeuing system responses from network egress queues.
 #[derive(Debug)]
@@ -18,14 +29,55 @@ impl ResponseDequeuer {
 }
 
 #[async_trait]
+impl Initialize for ResponseDequeuer {
+    async fn init(&mut self) -> Result<(), ClientError> {
+        self.aws_client
+            .sqs_purge_queue()
+            .await
+            .map_err(ClientError::AwsServiceError)
+    }
+}
+
+#[async_trait]
 impl ProcessRequestBatch for ResponseDequeuer {
-    async fn process_batch(&mut self, batch: &RequestBatch) -> Result<(), ClientError> {
-        // TODO: dequeue system responses until the entire
-        // batch is correlated or a timeout occurs.
-        for _request in batch.requests() {
-            self.aws_client.sqs_receive_message().await?;
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
+        while batch.has_enqueued_items() {
+            for sqs_msg in self
+                .aws_client
+                .sqs_receive_messages(Some(N_PARTIES))
+                .await?
+            {
+                if batch
+                    .correlate_and_update_child(ResponseBody::from(&sqs_msg))
+                    .is_some()
+                {
+                    self.aws_client.sqs_purge_message(&sqs_msg).await?;
+                }
+            }
         }
 
         Ok(())
+    }
+}
+
+impl From<&SqsMessageInfo> for ResponseBody {
+    fn from(msg: &SqsMessageInfo) -> Self {
+        let body = msg.body();
+        let kind = msg.kind();
+
+        macro_rules! parse_response {
+            ($variant:ident) => {
+                ResponseBody::$variant(serde_json::from_str(body).unwrap())
+            };
+        }
+
+        match kind {
+            IDENTITY_DELETION_MESSAGE_TYPE => parse_response!(IdentityDeletion),
+            REAUTH_MESSAGE_TYPE => parse_response!(Reauthorization),
+            RESET_CHECK_MESSAGE_TYPE => parse_response!(ResetCheck),
+            RESET_UPDATE_MESSAGE_TYPE => parse_response!(ResetUpdate),
+            UNIQUENESS_MESSAGE_TYPE => parse_response!(Uniqueness),
+            _ => panic!("Unsupported system response type: {kind}"),
+        }
     }
 }

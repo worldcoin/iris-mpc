@@ -1,7 +1,7 @@
 use iris_mpc_common::IrisSerialId;
 
 use super::super::typeset::{
-    ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
+    ClientError, RequestBatch, RequestBatchKind, RequestBatchSize, RequestFactory,
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -19,8 +19,7 @@ pub struct RequestGenerator {
     // Count of generated batches.
     generated_batch_count: usize,
 
-    /// A known Iris serial identifier used to by full response correlation.
-    /// Note: this is a temporary field until correlation is fully supported.
+    // A known serial identifier that allows response correlation to be bypassed.
     known_iris_serial_id: Option<IrisSerialId>,
 }
 
@@ -54,19 +53,16 @@ impl RequestGenerator {
 
         let batch_idx = self.generated_batch_count + 1;
         let mut batch = RequestBatch::new(batch_idx, self.batch_size());
-        for batch_item_idx in 1..(self.batch_size() + 1) {
-            batch.requests_mut().push(match self.batch_kind {
-                RequestBatchKind::Simple(batch_kind) => Request::new(
-                    batch_idx,
-                    batch_item_idx,
-                    batch_kind,
-                    self.known_iris_serial_id,
-                ),
-            });
+        for _ in 0..self.batch_size() {
+            match self.batch_kind {
+                RequestBatchKind::Simple(kind) => {
+                    let (request, maybe_parent) =
+                        RequestFactory::new_from_kind(&batch, kind, self.known_iris_serial_id);
+                    batch.push_requests(request, maybe_parent);
+                }
+            }
         }
         self.generated_batch_count += 1;
-
-        tracing::info!("{} :: Instantiated", batch);
 
         Ok(Some(batch))
     }

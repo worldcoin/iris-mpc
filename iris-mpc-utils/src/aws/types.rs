@@ -4,6 +4,7 @@ use serde::ser::Serialize;
 use serde_json;
 
 // Helper type encpasulating AWS-S3 object information.
+#[derive(Debug)]
 pub struct S3ObjectInfo {
     // S3 object data.
     body: Vec<u8>,
@@ -42,11 +43,12 @@ impl S3ObjectInfo {
 
 impl fmt::Display for S3ObjectInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "S3ObjectInfo:{}.{}", self.bucket, self.key)
+        write!(f, "{}", self.bucket)
     }
 }
 
 // Helper type encpasulating an AWS-SQS message.
+#[derive(Debug)]
 pub struct SnsMessageInfo {
     // SNS message body - a JSON encoded string.
     body: String,
@@ -85,6 +87,47 @@ impl SnsMessageInfo {
 
 impl fmt::Display for SnsMessageInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SnsMessageInfo:{}.{}", self.group_id, self.kind)
+        write!(f, "{}.{}", self.group_id, self.kind)
+    }
+}
+
+// Helper type encpasulating an AWS-SQS message.
+#[derive(Debug)]
+pub struct SqsMessageInfo {
+    // SNS message body - a JSON encoded string.
+    body: String,
+
+    // SQS message kind - e.g. "uniqueness".
+    kind: String,
+
+    // SQS message receipt handle for subsequent purging.
+    receipt_handle: String,
+}
+
+impl SqsMessageInfo {
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub fn receipt_handle(&self) -> &str {
+        &self.receipt_handle
+    }
+
+    pub fn new(kind: String, body: String, receipt_handle: String) -> Self {
+        Self {
+            body,
+            kind,
+            receipt_handle,
+        }
+    }
+}
+
+impl fmt::Display for SqsMessageInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.kind)
     }
 }

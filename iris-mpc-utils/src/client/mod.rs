@@ -4,9 +4,7 @@ use iris_mpc_common::IrisSerialId;
 
 use crate::aws::{AwsClient, AwsClientConfig};
 
-use components::{
-    DataUploader, RequestEnqueuer, RequestGenerator, ResponseCorrelator, ResponseDequeuer,
-};
+use components::{RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesUploader};
 pub use typeset::{
     ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
     RequestBatchSize,
@@ -18,22 +16,17 @@ mod typeset;
 /// A utility for enqueuing system requests & correlating with system responses.
 #[derive(Debug)]
 pub struct ServiceClient<R: Rng + CryptoRng + Send> {
-    // Component that uploads data to services prior to request processing.
-    data_uploader: DataUploader<R>,
-
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
     // Component that generates system requests.
     request_generator: RequestGenerator,
 
-    // Component that correlates system requests & responses.
-    #[allow(dead_code)]
-    response_correlator: ResponseCorrelator,
-
     // Component that dequeues system responses from system egress queues.
-    #[allow(dead_code)]
     response_dequeuer: ResponseDequeuer,
+
+    // Component that uploads iris shares to services prior to request processing.
+    shares_uploader: SharesUploader<R>,
 }
 
 impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
@@ -48,7 +41,7 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         let aws_client = AwsClient::new(aws_client_config);
 
         Self {
-            data_uploader: DataUploader::new(aws_client.clone(), rng_seed),
+            shares_uploader: SharesUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
             request_generator: RequestGenerator::new(
                 batch_count,
@@ -56,25 +49,31 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
                 batch_size,
                 known_iris_serial_id,
             ),
-            response_correlator: ResponseCorrelator::new(aws_client.clone()),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
 
     pub async fn exec(&mut self) -> Result<(), ClientError> {
-        tracing::info!("Executing ...");
-        while let Some(batch) = self.request_generator.next().await.unwrap() {
-            self.data_uploader.process_batch(&batch).await?;
-            self.request_enqueuer.process_batch(&batch).await?;
-            self.response_dequeuer.process_batch(&batch).await?;
+        while let Some(mut batch) = self.request_generator.next().await.unwrap() {
+            println!("------------------------------------------------------------------------");
+            println!(
+                "Batch {}: size={}",
+                batch.batch_idx(),
+                batch.requests().len()
+            );
+            println!("------------------------------------------------------------------------");
+            self.shares_uploader.process_batch(&mut batch).await?;
+            while batch.is_enqueueable() {
+                self.request_enqueuer.process_batch(&mut batch).await?;
+                self.response_dequeuer.process_batch(&mut batch).await?;
+            }
         }
 
         Ok(())
     }
 
     pub async fn init(&mut self) -> Result<(), ClientError> {
-        tracing::info!("Initializing ...");
-        for initializer in [self.data_uploader.init(), self.response_correlator.init()] {
+        for initializer in [self.shares_uploader.init(), self.response_dequeuer.init()] {
             initializer.await.map_err(|e| {
                 tracing::error!("Service client: component initialisation failed: {}", e);
                 ClientError::InitialisationError(e.to_string())
