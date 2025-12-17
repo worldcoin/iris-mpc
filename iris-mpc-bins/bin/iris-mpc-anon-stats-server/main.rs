@@ -222,16 +222,6 @@ impl AnonStatsProcessor {
             _ => panic!("Invalid job kind for 1D job"),
         };
 
-        if self.config.max_rows_per_job_1d < required_min {
-            warn!(
-                ?origin,
-                ?operation,
-                required_min,
-                cap = self.config.max_rows_per_job_1d,
-                "Configured 1D max_rows_per_job is lower than the minimum job size; no jobs will run"
-            );
-        }
-
         self.log_available_entries(available, required_min, origin, kind)
             .await;
 
@@ -375,16 +365,6 @@ impl AnonStatsProcessor {
             JobKind::Gpu2D => self.config.min_2d_job_size,
             _ => panic!("Invalid job kind for 2D job"),
         };
-
-        if self.config.max_rows_per_job_2d < required_min {
-            warn!(
-                ?origin,
-                ?operation,
-                required_min,
-                cap = self.config.max_rows_per_job_2d,
-                "Configured 2D max_rows_per_job is lower than the minimum job size; no jobs will run"
-            );
-        }
 
         self.log_available_entries(available, required_min, origin, kind)
             .await;
