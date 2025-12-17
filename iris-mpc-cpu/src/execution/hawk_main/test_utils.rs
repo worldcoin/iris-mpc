@@ -60,7 +60,6 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
         actor.iris_store[LEFT].write().await,
         actor.iris_store[RIGHT].write().await,
     ];
-    let layer_mode = actor.searcher().layer_mode.clone();
     for (share, _mirror) in shares {
         iris_stores[LEFT].append(Arc::new(share.clone()));
         // TODO: Different share.
@@ -86,7 +85,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                 update_ep: if i == 0 {
                     match layer_mode {
                         LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
-                        LayerMode::LinearScan { .. } => UpdateEntryPoint::Append { layer: 0 },
+                        LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
                     }
                 } else {
                     UpdateEntryPoint::False
