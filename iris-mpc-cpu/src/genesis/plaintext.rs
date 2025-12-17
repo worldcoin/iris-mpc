@@ -151,10 +151,11 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             .await?;
     }
 
-    let searcher = HnswSearcher::new_standard(
+    let searcher = HnswSearcher::new_linear_scan(
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
         state.config.hnsw_M,
+        1, // should match the constant LINEAR_SCAN_MAX_GRAPH_LAYER
     );
 
     let prf_key: [u8; 16] = state
