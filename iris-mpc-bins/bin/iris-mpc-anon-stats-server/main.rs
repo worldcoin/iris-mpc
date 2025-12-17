@@ -201,7 +201,21 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        let min_job_size = sync_on_job_sizes(session, available).await?;
+        // Cap the number of rows we consider for a single job to avoid fetching an
+        // unbounded amount of data when the backlog is large.
+        let available_capped = available.min(self.config.max_rows_per_job_1d);
+        if available_capped < available {
+            info!(
+                ?origin,
+                ?operation,
+                available,
+                available_capped,
+                cap = self.config.max_rows_per_job_1d,
+                "Capping 1D anon stats job fetch size"
+            );
+        }
+
+        let min_job_size = sync_on_job_sizes(session, available_capped).await?;
         let required_min = match kind {
             JobKind::Gpu1DReauth => self.config.min_1d_job_size_reauth,
             JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
@@ -331,7 +345,21 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        let min_job_size = sync_on_job_sizes(session, available).await?;
+        // Cap the number of rows we consider for a single job to avoid fetching an
+        // unbounded amount of data when the backlog is large.
+        let available_capped = available.min(self.config.max_rows_per_job_2d);
+        if available_capped < available {
+            info!(
+                ?origin,
+                ?operation,
+                available,
+                available_capped,
+                cap = self.config.max_rows_per_job_2d,
+                "Capping 2D anon stats job fetch size"
+            );
+        }
+
+        let min_job_size = sync_on_job_sizes(session, available_capped).await?;
         let required_min = match kind {
             JobKind::Gpu2DReauth => self.config.min_2d_job_size_reauth,
             JobKind::Gpu2D => self.config.min_2d_job_size,
