@@ -4,7 +4,7 @@ use uuid;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
-use super::{request_info::RequestInfo, response::ResponseBody};
+use super::{request_batch::RequestBatch, request_info::RequestInfo, response::ResponseBody};
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Clone, Debug)]
@@ -46,6 +46,13 @@ pub enum Request {
 }
 
 impl Request {
+    pub fn new_uniqueness(batch: &RequestBatch) -> Self {
+        Self::Uniqueness {
+            info: RequestInfo::new(batch, None),
+            signup_id: uuid::Uuid::new_v4(),
+        }
+    }
+
     pub fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
