@@ -17,7 +17,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - name: Get all test, doc and src files that have changed
         id: changed-files-yaml
@@ -97,7 +97,7 @@ jobs:
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.85.0
+          toolchain: 1.89.0
 
       - name: GPU Dependent Tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -105,6 +105,7 @@ jobs:
         run: cargo test -p iris-mpc-gpu --release --features gpu_dependent -- --test-threads=1
         shell: bash
         env:
+          RUST_MIN_STACK: 104857600
           NCCL_P2P_LEVEL: LOC
           NCCL_NET: Socket
           NCCL_P2P_DIRECT_DISABLE: 1

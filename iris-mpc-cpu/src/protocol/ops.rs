@@ -10,8 +10,7 @@ use crate::{
 };
 use ampc_actor_utils::fast_metrics::FastHistogram;
 use ampc_actor_utils::protocol::binary::{
-    and_product, bit_inject, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
-    single_extract_msb_u32,
+    and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k, open_bin, single_extract_msb,
 };
 // Import non-iris-specific protocol operations from ampc-common
 pub use ampc_actor_utils::protocol::ops::{
@@ -54,7 +53,7 @@ pub async fn greater_than_threshold(
         })
         .collect();
 
-    extract_msb_u32_batch(session, &diffs).await
+    extract_msb_batch(session, &diffs).await
 }
 
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
@@ -83,7 +82,7 @@ pub async fn lift_and_compare_threshold(
     x *= A as u32;
     y -= x;
 
-    single_extract_msb_u32(session, y).await
+    single_extract_msb(session, y).await
 }
 
 /// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
@@ -525,7 +524,7 @@ pub async fn cross_compare(
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
-    let bits = extract_msb_u32_batch(session, &diff).await?;
+    let bits = extract_msb_batch(session, &diff).await?;
     // Open the MSB
     let opened_b = open_bin(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
@@ -546,7 +545,7 @@ pub(crate) async fn oblivious_cross_compare(
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
-    extract_msb_u32_batch(session, &diff).await
+    extract_msb_batch(session, &diff).await
 }
 
 /// For every pair of distance shares (d1, d2), this computes the secret-shared bit d2 < d1 and lift it to u32 shares.

@@ -201,7 +201,21 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        let min_job_size = sync_on_job_sizes(session, available).await?;
+        // Cap the number of rows we consider for a single job to avoid fetching an
+        // unbounded amount of data when the backlog is large.
+        let available_capped = available.min(self.config.max_rows_per_job_1d);
+        if available_capped < available {
+            info!(
+                ?origin,
+                ?operation,
+                available,
+                available_capped,
+                cap = self.config.max_rows_per_job_1d,
+                "Capping 1D anon stats job fetch size"
+            );
+        }
+
+        let min_job_size = sync_on_job_sizes(session, available_capped).await?;
         let required_min = match kind {
             JobKind::Gpu1DReauth => self.config.min_1d_job_size_reauth,
             JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
@@ -331,7 +345,21 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
-        let min_job_size = sync_on_job_sizes(session, available).await?;
+        // Cap the number of rows we consider for a single job to avoid fetching an
+        // unbounded amount of data when the backlog is large.
+        let available_capped = available.min(self.config.max_rows_per_job_2d);
+        if available_capped < available {
+            info!(
+                ?origin,
+                ?operation,
+                available,
+                available_capped,
+                cap = self.config.max_rows_per_job_2d,
+                "Capping 2D anon stats job fetch size"
+            );
+        }
+
+        let min_job_size = sync_on_job_sizes(session, available_capped).await?;
         let required_min = match kind {
             JobKind::Gpu2DReauth => self.config.min_2d_job_size_reauth,
             JobKind::Gpu2D => self.config.min_2d_job_size,
@@ -623,7 +651,7 @@ async fn main() -> Result<()> {
     let verified_peers = Arc::new(Mutex::new(HashSet::new()));
     let uuid = Uuid::new_v4().to_string();
     let coordination_handles = start_coordination_server(
-        &server_coord_config,
+        server_coord_config,
         &mut background_tasks,
         verified_peers.clone(),
         uuid.clone(),
@@ -637,10 +665,10 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "8080".to_string());
     info!("Healthcheck server running on port {}", health_port);
 
-    wait_for_others_unready(&server_coord_config, &verified_peers, &uuid).await?;
+    wait_for_others_unready(server_coord_config, &verified_peers, &uuid).await?;
 
     init_heartbeat_task(
-        &server_coord_config,
+        server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
     )
@@ -670,7 +698,7 @@ async fn main() -> Result<()> {
         AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client, s3_client);
 
     coordination_handles.set_ready();
-    wait_for_others_ready(&server_coord_config)
+    wait_for_others_ready(server_coord_config)
         .await
         .wrap_err("waiting for other anon stats servers to become ready")?;
 

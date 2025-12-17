@@ -1,5 +1,5 @@
 #[cfg(feature = "gpu_dependent")]
-mod lift_u16_u32_test {
+mod lift_u16_u32_signed_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
         nccl::Id,
@@ -20,7 +20,7 @@ mod lift_u16_u32_test {
     const DB_RNG_SEED: u64 = 0xdeadbeef;
     const INPUTS_PER_GPU_SIZE: usize = 64;
 
-    fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
+    fn to_view<'a, T>(inp: &'a [ChunkShare<T>]) -> Vec<ChunkShareView<'a, T>> {
         let mut res = Vec::with_capacity(inp.len());
         for inp in inp {
             res.push(inp.as_view());
@@ -28,9 +28,13 @@ mod lift_u16_u32_test {
         res
     }
 
-    fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u16> {
+    fn sample_mask_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<i16> {
         (0..size)
-            .map(|_| rng.gen_range::<u16, _>(0..=IrisCodeArray::IRIS_CODE_SIZE as u16))
+            .map(|_| {
+                rng.gen_range::<i16, _>(
+                    -(IrisCodeArray::IRIS_CODE_SIZE as i16)..=IrisCodeArray::IRIS_CODE_SIZE as i16,
+                )
+            })
             .collect::<Vec<_>>()
     }
 
@@ -42,12 +46,12 @@ mod lift_u16_u32_test {
         (a, b, c)
     }
 
-    fn rep_share_vec<R: Rng>(value: &[u16], rng: &mut R) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
+    fn rep_share_vec<R: Rng>(value: &[i16], rng: &mut R) -> (Vec<u16>, Vec<u16>, Vec<u16>) {
         let mut a = Vec::with_capacity(value.len());
         let mut b = Vec::with_capacity(value.len());
         let mut c = Vec::with_capacity(value.len());
         for v in value.iter() {
-            let (a_, b_, c_) = rep_share(*v, rng);
+            let (a_, b_, c_) = rep_share(*v as u16, rng);
             a.push(a_);
             b.push(b_);
             c.push(c_);
@@ -79,8 +83,8 @@ mod lift_u16_u32_test {
         result
     }
 
-    fn real_result(mask_input: Vec<u16>) -> Vec<u32> {
-        mask_input.into_iter().map(|x| (x as u32)).collect()
+    fn real_result(mask_input: Vec<i16>) -> Vec<i32> {
+        mask_input.into_iter().map(|x| (x as i32)).collect()
     }
 
     fn open(
@@ -145,7 +149,7 @@ mod lift_u16_u32_test {
         mut party: Circuits,
         mask_share_a: Vec<u16>,
         mask_share_b: Vec<u16>,
-        real_result: Vec<u32>,
+        real_result: Vec<i32>,
     ) {
         let id = party.peer_id();
 
@@ -155,21 +159,19 @@ mod lift_u16_u32_test {
             .map(|dev| dev.fork_default_stream().unwrap())
             .collect::<Vec<_>>();
 
-        // Import to GPU
-        let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
-        tracing::info!("id = {}, Data is on GPUs!", id);
         tracing::info!("id = {}, Starting tests...", id);
 
         let mut error = false;
         for _ in 0..10 {
-            // Simulate Masks to be zero for this test
+            let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
+            tracing::info!("id = {}, Data is on GPUs!", id);
             let x_ = party.allocate_buffer::<u32>(INPUTS_PER_GPU_SIZE);
             let mut x = to_view(&x_);
-            let mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
+            let mut mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
             party.synchronize_streams(&streams);
 
             let now = Instant::now();
-            party.lift_u16_to_u32(&mask_gpu, &mut x, &streams);
+            party.lift_u16_to_u32_signed(&mut mask_gpu, &mut x, &streams);
             tracing::info!("id = {}, compute time: {:?}", id, now.elapsed());
 
             let now = Instant::now();
@@ -182,8 +184,8 @@ mod lift_u16_u32_test {
             );
 
             let mut correct = true;
-            for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
-                if r != r_ {
+            for (i, (&r, &r_)) in izip!(&result, &real_result).enumerate() {
+                if r != r_ as u32 {
                     correct = false;
                     tracing::error!("id = {}, Test failed on index: {}: {} != {}", id, i, r, r_);
                     error = true;
