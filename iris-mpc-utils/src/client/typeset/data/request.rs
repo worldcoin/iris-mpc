@@ -4,7 +4,7 @@ use uuid;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
-use super::{request_batch::RequestBatch, request_info::RequestInfo, response::ResponseBody};
+use super::{request_info::RequestInfo, response::ResponseBody};
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Clone, Debug)]
@@ -164,30 +164,27 @@ impl Request {
             Self::IdentityDeletion {
                 uniqueness_serial_id,
                 ..
-            } => match response {
-                ResponseBody::Uniqueness(result) => {
+            } => {
+                if let ResponseBody::Uniqueness(result) = response {
                     *uniqueness_serial_id = result.serial_id;
                 }
-                _ => {}
-            },
+            }
             Self::Reauthorization {
                 uniqueness_serial_id,
                 ..
-            } => match response {
-                ResponseBody::Uniqueness(result) => {
+            } => {
+                if let ResponseBody::Uniqueness(result) = response {
                     *uniqueness_serial_id = result.serial_id;
                 }
-                _ => {}
-            },
+            }
             Self::ResetUpdate {
                 uniqueness_serial_id,
                 ..
-            } => match response {
-                ResponseBody::Uniqueness(result) => {
+            } => {
+                if let ResponseBody::Uniqueness(result) = response {
                     *uniqueness_serial_id = result.serial_id;
                 }
-                _ => {}
-            },
+            }
             _ => panic!("Unsupported parent data"),
         }
     }
@@ -213,91 +210,6 @@ pub enum RequestBody {
     ResetCheck(smpc_request::ResetCheckRequest),
     ResetUpdate(smpc_request::ResetUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
-}
-
-pub struct RequestFactory {}
-
-impl RequestFactory {
-    pub fn new_identity_deletion_1(batch: &RequestBatch, parent: &Request) -> Request {
-        match parent {
-            Request::Uniqueness { .. } => {}
-            _ => panic!("Invalid request parent"),
-        };
-
-        Request::IdentityDeletion {
-            info: RequestInfo::new(batch, Some(parent)),
-            uniqueness_serial_id: None,
-        }
-    }
-
-    pub fn new_identity_deletion_2(
-        batch: &RequestBatch,
-        known_iris_serial_id: IrisSerialId,
-    ) -> Request {
-        Request::IdentityDeletion {
-            info: RequestInfo::new(batch, None),
-            uniqueness_serial_id: Some(known_iris_serial_id),
-        }
-    }
-
-    pub fn new_reauthorisation_1(batch: &RequestBatch, parent: &Request) -> Request {
-        match parent {
-            Request::Uniqueness { .. } => {}
-            _ => panic!("Invalid request parent"),
-        };
-
-        Request::Reauthorization {
-            info: RequestInfo::new(batch, Some(parent)),
-            reauth_id: uuid::Uuid::new_v4(),
-            uniqueness_serial_id: None,
-        }
-    }
-
-    pub fn new_reauthorisation_2(
-        batch: &RequestBatch,
-        known_iris_serial_id: IrisSerialId,
-    ) -> Request {
-        Request::Reauthorization {
-            info: RequestInfo::new(batch, None),
-            reauth_id: uuid::Uuid::new_v4(),
-            uniqueness_serial_id: Some(known_iris_serial_id),
-        }
-    }
-
-    pub fn new_reset_check(batch: &RequestBatch) -> Request {
-        Request::ResetCheck {
-            info: RequestInfo::new(batch, None),
-            reset_id: uuid::Uuid::new_v4(),
-        }
-    }
-
-    pub fn new_reset_update_1(batch: &RequestBatch, parent: &Request) -> Request {
-        match parent {
-            Request::Uniqueness { .. } => {}
-            _ => panic!("Invalid request parent"),
-        };
-
-        Request::ResetUpdate {
-            info: RequestInfo::new(batch, Some(parent)),
-            reset_id: uuid::Uuid::new_v4(),
-            uniqueness_serial_id: None,
-        }
-    }
-
-    pub fn new_reset_update_2(batch: &RequestBatch, known_iris_serial_id: IrisSerialId) -> Request {
-        Request::ResetUpdate {
-            info: RequestInfo::new(batch, None),
-            reset_id: uuid::Uuid::new_v4(),
-            uniqueness_serial_id: Some(known_iris_serial_id),
-        }
-    }
-
-    pub fn new_uniqueness(batch: &RequestBatch) -> Request {
-        Request::Uniqueness {
-            info: RequestInfo::new(batch, None),
-            signup_id: uuid::Uuid::new_v4(),
-        }
-    }
 }
 
 /// Enumeration over request processing states plus time of state change for statisitical purposes.

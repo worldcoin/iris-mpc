@@ -98,10 +98,10 @@ async fn get_sdk_config() -> aws_config::SdkConfig {
     let aws_config_exists = Path::new(&home).join(".aws/config").exists();
 
     if aws_config_exists {
-        return aws_config::from_env()
+        aws_config::from_env()
             .retry_config(RetryConfig::standard().with_max_attempts(5))
             .load()
-            .await;
+            .await
     } else {
         aws_config::from_env()
             .retry_config(RetryConfig::standard().with_max_attempts(5))

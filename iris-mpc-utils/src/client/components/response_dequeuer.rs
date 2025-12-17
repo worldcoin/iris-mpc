@@ -47,7 +47,10 @@ impl ProcessRequestBatch for ResponseDequeuer {
                 .sqs_receive_messages(Some(N_PARTIES))
                 .await?
             {
-                if let Some(_) = batch.correlate_and_update_child(ResponseBody::from(&sqs_msg)) {
+                if batch
+                    .correlate_and_update_child(ResponseBody::from(&sqs_msg))
+                    .is_some()
+                {
                     self.aws_client.sqs_purge_message(&sqs_msg).await?;
                 }
             }

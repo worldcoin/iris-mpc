@@ -81,29 +81,15 @@ impl RequestBatch {
         self.requests.iter().any(|r| r.is_enqueueable())
     }
 
-    /// Updates a child request with data pulled from a parent's response.
-    // pub fn maybe_update_child(&mut self, parent: &Request) {
-    //     if let Some(child) = self.get_maybe_child_request(parent) {
-    //         match child {
-    //             Request::IdentityDeletion {
-    //                 uniqueness_serial_id,
-    //                 ..
-    //             } => *uniqueness_serial_id = parent.info().iris_serial_id(),
-    //             Request::Reauthorization {
-    //                 uniqueness_serial_id,
-    //                 ..
-    //             } => *uniqueness_serial_id = parent.info().iris_serial_id(),
-    //             Request::ResetUpdate {
-    //                 uniqueness_serial_id,
-    //                 ..
-    //             } => *uniqueness_serial_id = parent.info().iris_serial_id(),
-    //             _ => {}
-    //         }
-    //     }
-    // }
-
     pub fn push_request(&mut self, request: Request) {
         self.requests_mut().push(request);
+    }
+
+    pub fn push_requests(&mut self, request: Request, parent: Option<Request>) {
+        self.requests_mut().push(request);
+        if let Some(request) = parent {
+            self.requests_mut().push(request);
+        }
     }
 
     pub fn set_request_status(&mut self, new_state: RequestStatus) {
