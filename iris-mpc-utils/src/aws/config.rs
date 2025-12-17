@@ -1,89 +1,127 @@
-use std::time::Duration;
+use std::{env, path::Path, time::Duration};
 
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{config::Builder, Client as SQSClient};
+use aws_sdk_sqs::{config::Builder, config::Region, Client as SQSClient};
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 
+/// Default AWS region - typically used in unit tests.
+const AWS_DEFAULT_REGION: &str = "us-east-1";
+
 /// Encpasulates AWS service client configuration.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AwsClientConfig {
     /// Execution environment.
     environment: String,
 
-    /// System request ingress queue URL.
+    /// Base URL for downloading node encryption public keys.
+    public_key_base_url: String,
+
+    /// S3: request ingress queue URL.
     s3_request_bucket_name: String,
 
-    /// Associated AWS SDK configuration.
+    /// SDK: associated AWS SDK configuration.
     sdk: SdkConfig,
 
-    /// System request ingress queue topic.
+    /// SNS: system request ingress queue topic.
     sns_request_topic_arn: String,
 
-    /// Polling interval between AWS SQS interactions.
+    /// SQS: long polling interval (seconds).
     sqs_long_poll_wait_time: usize,
 
-    /// System response eqgress queue URL.
+    /// SQS: system response eqgress queue URL.
     sqs_response_queue_url: String,
+
+    /// SQS: wait time (seconds) between receive message polling.
+    sqs_wait_time_seconds: usize,
 }
 
 impl AwsClientConfig {
-    pub fn environment(&self) -> &String {
+    pub(crate) fn environment(&self) -> &String {
         &self.environment
     }
 
-    pub fn s3_request_bucket_name(&self) -> &String {
+    pub(crate) fn public_key_base_url(&self) -> &String {
+        &self.public_key_base_url
+    }
+
+    pub(crate) fn s3_request_bucket_name(&self) -> &String {
         &self.s3_request_bucket_name
     }
 
-    pub fn sdk(&self) -> &SdkConfig {
+    pub(super) fn sdk(&self) -> &SdkConfig {
         &self.sdk
     }
 
-    pub fn sns_request_topic_arn(&self) -> &String {
+    pub(crate) fn sns_request_topic_arn(&self) -> &String {
         &self.sns_request_topic_arn
     }
 
-    pub fn sqs_long_poll_wait_time(&self) -> usize {
-        self.sqs_long_poll_wait_time
+    pub(crate) fn sqs_response_queue_url(&self) -> &String {
+        &self.sqs_response_queue_url
     }
 
-    pub fn sqs_response_queue_url(&self) -> &String {
-        &self.sqs_response_queue_url
+    pub(crate) fn sqs_wait_time_seconds(&self) -> usize {
+        self.sqs_wait_time_seconds
     }
 
     pub async fn new(
         environment: String,
+        public_key_base_url: String,
         s3_request_bucket_name: String,
         sns_request_topic_arn: String,
         sqs_long_poll_wait_time: usize,
         sqs_response_queue_url: String,
+        sqs_wait_time_seconds: usize,
     ) -> Self {
         Self {
-            environment: environment.to_owned(),
+            environment,
+            public_key_base_url,
             s3_request_bucket_name,
             sdk: get_sdk_config().await,
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
             sqs_response_queue_url,
+            sqs_wait_time_seconds,
         }
     }
 }
 
-impl Clone for AwsClientConfig {
-    fn clone(&self) -> Self {
-        Self {
-            environment: self.environment.clone(),
-            s3_request_bucket_name: self.s3_request_bucket_name.clone(),
-            sns_request_topic_arn: self.sns_request_topic_arn.clone(),
-            sqs_response_queue_url: self.sqs_response_queue_url.clone(),
-            sdk: self.sdk.clone(),
-            sqs_long_poll_wait_time: self.sqs_long_poll_wait_time,
-        }
+/// Returns AWS SDK configuration from a node configuration instance.
+async fn get_sdk_config() -> aws_config::SdkConfig {
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap();
+    let aws_config_exists = Path::new(&home).join(".aws/config").exists();
+
+    if aws_config_exists {
+        aws_config::from_env()
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            .load()
+            .await
+    } else {
+        aws_config::from_env()
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            .region(get_region())
+            .load()
+            .await
     }
+}
+
+/// Returns AWS SDK region configuration from env vars or default.
+fn get_region() -> Region {
+    let region = if std::env::var("AWS_REGION").is_ok() {
+        std::env::var("AWS_REGION").unwrap()
+    } else if std::env::var("AWS_DEFAULT_REGION").is_ok() {
+        std::env::var("AWS_DEFAULT_REGION").unwrap()
+    } else {
+        AWS_DEFAULT_REGION.to_string()
+    };
+
+    Region::new(region)
 }
 
 impl From<&AwsClientConfig> for SecretsManagerClient {
@@ -126,33 +164,44 @@ impl From<&AwsClientConfig> for SQSClient {
     }
 }
 
-/// Returns AWS SDK configuration from a node configuration instance.
-async fn get_sdk_config() -> aws_config::SdkConfig {
-    let retry_config = RetryConfig::standard().with_max_attempts(20);
-    aws_config::from_env()
-        .retry_config(retry_config)
-        .load()
+#[cfg(test)]
+impl AwsClientConfig {
+    #[cfg(test)]
+    pub(crate) async fn new_1() -> Self {
+        use crate::constants;
+
+        let environment = String::from(constants::DEFAULT_ENV);
+        let public_key_base_url = String::from(constants::AWS_PUBLIC_KEY_BASE_URL);
+        let s3_request_bucket_name = String::from(constants::AWS_S3_REQUEST_BUCKET_NAME);
+        let sns_request_topic_arn = String::from(constants::AWS_SNS_REQUEST_TOPIC_ARN);
+        let sqs_long_poll_wait_time = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
+        let sqs_response_queue_url = String::from(constants::AWS_SQS_RESPONSE_QUEUE_URL);
+        let sqs_wait_time_seconds = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
+
+        AwsClientConfig::new(
+            environment,
+            public_key_base_url,
+            s3_request_bucket_name,
+            sns_request_topic_arn,
+            sqs_long_poll_wait_time,
+            sqs_response_queue_url,
+            sqs_wait_time_seconds,
+        )
         .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::AwsClientConfig;
-    use crate::constants;
-
-    async fn create_config() -> AwsClientConfig {
-        AwsClientConfig::new(
-            constants::DEFAULT_ENV.to_string(),
-            constants::AWS_S3_REQUEST_BUCKET_NAME.to_string(),
-            constants::AWS_SNS_REQUEST_TOPIC_ARN.to_string(),
-            constants::AWS_SQS_LONG_POLL_WAIT_TIME,
-            constants::AWS_SQS_RESPONSE_QUEUE_URL.to_string(),
-        )
-        .await
-    }
 
     #[tokio::test]
     async fn test_config_new() {
-        let _ = create_config().await;
+        let _ = AwsClientConfig::new_1().await;
+    }
+
+    #[tokio::test]
+    async fn test_config_new_and_clone() {
+        let _ = AwsClientConfig::new_1().await.clone();
     }
 }

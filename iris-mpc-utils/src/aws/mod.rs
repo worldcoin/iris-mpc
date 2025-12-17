@@ -2,7 +2,9 @@ mod client;
 mod config;
 mod errors;
 mod factory;
+mod keys;
 mod ops;
+pub mod types;
 
 pub use client::AwsClient;
 pub use config::AwsClientConfig;

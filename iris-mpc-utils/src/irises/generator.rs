@@ -36,6 +36,7 @@ pub fn generate_iris_code_and_mask_shares<R: Rng + CryptoRng>(
 }
 
 /// Returns generated iris shares from an iris code using local randomness alongside its mirrored component.
+/// TODO: rationalize this with the source in shared_iris.rs in iris-mpc-cpu
 pub fn generate_iris_shares_locally<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
@@ -63,6 +64,7 @@ pub fn generate_iris_shares_locally<R: Rng + CryptoRng>(
 }
 
 /// Returns generated iris shares from an iris code using local randomness alongside its mirrored component.
+/// TODO: rationalize this with the source in shared_iris.rs in iris-mpc-cpu
 pub fn generate_iris_shares_locally_mirrored<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
