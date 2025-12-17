@@ -1034,6 +1034,16 @@ impl HnswSearcher {
         .instrument(eval_dist_span.clone())
         .await?;
 
+        let visited_nodes_metrics =
+            metrics::counter!("visited_nodes_count", &[("layer", lc.to_string())]);
+        let opened_nodes_metrics =
+            metrics::counter!("opened_nodes_count", &[("layer", lc.to_string())]);
+
+        let mut visited_nodes_count = 0;
+
+        opened_nodes_metrics.increment(init_opened.len() as u64);
+        visited_nodes_count += init_links.len();
+
         opened.extend(init_opened);
 
         W.insert_batch_and_trim(store, &init_links, ef)
@@ -1097,6 +1107,9 @@ impl HnswSearcher {
             .instrument(eval_dist_span.clone())
             .await?;
 
+            opened_nodes_metrics.increment(new_opened.len() as u64);
+            visited_nodes_count += c_links.len();
+
             debug!(
                 event_type = Operation::OpenNode.id(),
                 increment_amount = new_opened.len(),
@@ -1134,6 +1147,18 @@ impl HnswSearcher {
                 n_insertions, "Batch distances comparison filter"
             );
 
+            // TODO: refine this metric / make it more succinct (?)
+            let ins_rate: f64 = (ins_rate_denom as f64) / (INS_RATE_NUM as f64);
+            metrics::counter!(
+                "insertion_stats",
+                &[
+                    ("currently_visited", visited_nodes_count.to_string()),
+                    ("computed_ins_rate", ins_rate.to_string()),
+                    ("n_insertions", n_insertions.to_string()),
+                    ("depth", depth.to_string())
+                ]
+            );
+
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
             W.insert_batch_and_trim(store, &filtered_links, ef)
                 .instrument(insert_span.clone())
@@ -1166,6 +1191,8 @@ impl HnswSearcher {
             );
         }
 
+        visited_nodes_metrics.increment(visited_nodes_count as u64);
+
         let metrics_labels = [("layer", lc.to_string())];
         metrics::histogram!("search_depth", &metrics_labels).record(depth as f64);
         Ok(())
@@ -1193,7 +1220,9 @@ impl HnswSearcher {
         let insert_span =
             trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
+        let mut counter = 0;
         loop {
+            counter += 1;
             // Open the candidate node and visit its unvisited neighbors, computing
             // distances between the query and neighbors as a batch
             let mut c_links = HnswSearcher::open_node(store, graph, &c_vec, lc, q, &mut visited)
@@ -1214,6 +1243,7 @@ impl HnswSearcher {
 
             // If no neighbors are nearer, return current node; otherwise continue
             if n_vec == c_vec {
+                metrics::counter!("greedy_search_depth").increment(counter);
                 return Ok((c_vec, c_dist));
             } else {
                 (c_vec, c_dist) = (n_vec, n_dist);
