@@ -82,12 +82,6 @@ env:
   - name: SMPC__MIN_2D_JOB_SIZE
     value: "1024"
 
-  - name: SMPC__MAX_ROWS_PER_JOB_1D
-    value: "100000"
-
-  - name: SMPC__MAX_ROWS_PER_JOB_2D
-    value: "10000"
-
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
 
