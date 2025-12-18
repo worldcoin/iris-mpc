@@ -24,7 +24,7 @@ env:
     value: "1"
 
   - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
-    value: '["anon-stats-server.1.stage.hnsw.worldcoin.dev","0.0.0.0","anon-stats-server.3.stage.hnsw.worldcoin.dev"]'
+    value: '["anon-stats-server.0.stage.hnsw.worldcoin.dev","0.0.0.0","anon-stats-server.2.stage.hnsw.worldcoin.dev"]'
 
   - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
     value: $(IMAGE_NAME)
@@ -103,7 +103,7 @@ initContainer:
   name: "anon-stats-server-hnsw-dns-records-updater"
   env:
     - name: PARTY_ID
-      value: "2"
+      value: "1"
     - name: POD_IP
       valueFrom:
         fieldRef:
