@@ -10,7 +10,7 @@ use crate::client::typeset::data::request::RequestStatus;
 use super::{request::Request, response::ResponseBody};
 
 /// A data structure representing a batch of requests dispatched for system processing.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RequestBatch {
     /// Ordinal batch identifier to distinguish batches.
     batch_idx: usize,
@@ -32,10 +32,10 @@ impl RequestBatch {
         &mut self.requests
     }
 
-    pub fn new(batch_idx: usize, batch_size: usize) -> Self {
+    pub fn new(batch_idx: usize) -> Self {
         Self {
             batch_idx,
-            requests: Vec::with_capacity(batch_size * 2),
+            requests: Vec::new(),
         }
     }
 

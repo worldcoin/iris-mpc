@@ -9,7 +9,7 @@ use iris_mpc_common::{helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, IrisSerial
 
 use iris_mpc_utils::{
     aws::AwsClientConfig,
-    client::{RequestBatchKind, RequestBatchSize, ServiceClient},
+    client::{RequestBatchKind, RequestBatchSize, RequestGeneratorParams, ServiceClient},
 };
 
 #[tokio::main]
@@ -148,10 +148,7 @@ impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
         ServiceClient::new(
             AwsClientConfig::async_from(options.clone()).await,
-            options.request_batch_count,
-            options.request_batch_kind(),
-            options.request_batch_size(),
-            options.known_iris_serial_id,
+            RequestGeneratorParams::from(&options),
             options.rng_seed(),
         )
         .await
@@ -171,5 +168,16 @@ impl AsyncFrom<CliOptions> for AwsClientConfig {
             options.aws_sqs_wait_time_seconds,
         )
         .await
+    }
+}
+
+impl From<&CliOptions> for RequestGeneratorParams {
+    fn from(options: &CliOptions) -> Self {
+        RequestGeneratorParams::BatchKind {
+            batch_count: options.request_batch_count,
+            batch_size: options.request_batch_size(),
+            batch_kind: options.request_batch_kind(),
+            known_iris_serial_id: options.known_iris_serial_id,
+        }
     }
 }

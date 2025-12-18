@@ -4,6 +4,7 @@ use iris_mpc_common::IrisSerialId;
 
 use crate::aws::{AwsClient, AwsClientConfig};
 
+pub use components::RequestGeneratorParams;
 use components::{RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesUploader};
 pub use typeset::{
     ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
@@ -32,10 +33,7 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
 impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     pub async fn new(
         aws_client_config: AwsClientConfig,
-        batch_count: usize,
-        batch_kind: RequestBatchKind,
-        batch_size: RequestBatchSize,
-        known_iris_serial_id: Option<IrisSerialId>,
+        request_generator_params: RequestGeneratorParams,
         rng_seed: R,
     ) -> Self {
         let aws_client = AwsClient::new(aws_client_config);
@@ -43,12 +41,7 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         Self {
             shares_uploader: SharesUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(
-                batch_count,
-                batch_kind,
-                batch_size,
-                known_iris_serial_id,
-            ),
+            request_generator: RequestGenerator::new(request_generator_params),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
