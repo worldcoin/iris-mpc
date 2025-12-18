@@ -143,4 +143,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-    - sg-0c6d58cc85ebadac3 # CHANGE THIS: hnsw-ampc-anon-stats-stage pod sg
+    - sg-0c6d58cc85ebadac3
