@@ -14,7 +14,7 @@ env:
   - name: SMPC__DB_URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_URL
         name: application
 
   - name: SMPC__SERVICE_PORTS
@@ -143,5 +143,5 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-    - sg-009f4095359514cf3 # CHANGE THIS: hnsw-ampc-anon-stats-stage pod sg
+    - sg-0beac480d3e23411c
 
