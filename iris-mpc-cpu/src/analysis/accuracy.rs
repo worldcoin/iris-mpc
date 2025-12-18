@@ -5,7 +5,7 @@ use crate::{
     },
     hnsw::{
         graph::neighborhood::{UnsortedNeighborhood, WrappedNeighborhood},
-        searcher::{LayerDistribution, LayerMode, NeighborhoodMode},
+        searcher::{LayerDistribution, LayerMode, NeighborhoodMode, N_PARAM_LAYERS},
         GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
     },
     utils::serialization::{
@@ -310,19 +310,44 @@ pub enum GraphInit {
     BinFile { path: PathBuf, format: GraphFormat },
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum LayerValue<T> {
+    Single(T),
+    PerLayer(Vec<T>),
+}
+
 /// HNSW parameters for graph construction.
 #[derive(Clone, Debug, Deserialize)]
 #[allow(non_snake_case)]
 pub struct HnswConfig {
     pub ef_construction: usize,
-    pub ef_search: usize,
+    pub ef_search: LayerValue<usize>,
     pub M: usize,
     pub layer_mode: LayerMode,
 }
 
 impl From<&HnswConfig> for HnswSearcher {
     fn from(value: &HnswConfig) -> Self {
-        let params = HnswParams::new(value.ef_construction, value.ef_search, value.M);
+        let ef_search_first = *match &value.ef_search {
+            LayerValue::Single(val) => val,
+            LayerValue::PerLayer(vals) => vals.first().unwrap(),
+        };
+
+        // Start with a standard HnswParams. If ef_search is an array, use the first value.
+        let mut params = HnswParams::new(value.ef_construction, ef_search_first, value.M);
+
+        // If ef_search is an array, extend it if necessary, then override ef_search and ef_constr_search.
+        if let LayerValue::PerLayer(vals) = &value.ef_search {
+            let mut vals = vals.clone();
+            if vals.len() < N_PARAM_LAYERS {
+                let last = *vals.last().unwrap();
+                vals.resize(N_PARAM_LAYERS, last);
+            }
+            params.ef_search = vals.clone().try_into().unwrap();
+            params.ef_constr_search = vals.try_into().unwrap();
+        }
+
         let layer_mode = value.layer_mode.clone();
         let layer_distribution = LayerDistribution::new_geometric_from_M(value.M);
 
