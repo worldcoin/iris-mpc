@@ -144,12 +144,16 @@ where
     qs.perm
 }
 
-/// Runs quickselect for `data` using `oracle` to evaluate batches of comparisons.
-/// Returns a permutation `P` which satisfies `(i < k - 1) -> data[P[i]] <= data[P[k - 1]]`
-/// and `i >= k - 1 -> data[P[i] >= data[P[k - 1]]`.
+/// Runs quickselect for `data` using `oracle` to evaluate batches of
+/// comparisons.
 ///
-/// `oracle` should return true for pairs where `lhs < rhs` and false for others.
-pub async fn run_quickselect_with_store<V: VectorStore>(
+/// Returns a permutation `P` which satisfies `data[P[i]] <= data[P[k - 1]]` for
+/// values `i < k - 1`, and `data[P[i] >= data[P[k - 1]]` for values `i >= k -
+/// 1`.
+///
+/// `oracle` should return true for pairs where `lhs < rhs` and false for
+/// others.
+pub async fn run_quickselect_with_store<V: VectorStore + ?Sized>(
     store: &mut V,
     data: &[V::DistanceRef],
     k: usize,
