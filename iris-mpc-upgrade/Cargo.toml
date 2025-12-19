@@ -32,7 +32,7 @@ tonic = { version = "0.12.3", features = [
     "tls-native-roots",
     "transport",
 ] }
-prost = "0.13.3"
+prost = "0.14.1"
 sha2.workspace = true
 thiserror.workspace = true
 blake3 = "1.8.2"
