@@ -1,6 +1,6 @@
 anon-stats-server-smpc-1:
   fullnameOverride: "anon-stats-server-smpc-1"
-  image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-anon-stats-server:$IRIS_MPC_ANON_STATS_SERVER_IMAGE_TAG"
+  image: "$IMAGE_REGISTRY_IRIS_MPC/anon-stats-server:$IRIS_MPC_ANON_STATS_SERVER_IMAGE_TAG"
   environment: $ENV
   replicaCount: 1
 
@@ -63,10 +63,6 @@ anon-stats-server-smpc-1:
 
   imagePullSecrets:
     - name: github-secret
-
-  podSecurityContext:
-    runAsUser: 0
-    runAsNonRoot: false
 
   nodeSelector:
     kubernetes.io/arch: amd64

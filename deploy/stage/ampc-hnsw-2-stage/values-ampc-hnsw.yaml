@@ -102,9 +102,6 @@ env:
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
 
-  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_anon_stats_server_test"
-
   - name: SMPC__SERVER_COORDINATION__PARTY_ID
     value: "2"
 
