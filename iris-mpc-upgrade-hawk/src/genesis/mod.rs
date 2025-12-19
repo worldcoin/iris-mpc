@@ -644,6 +644,22 @@ async fn exec_indexation(
 
             last_indexed_id = batch.id_end();
 
+            // Optionally start per-batch pprof guard just before compute begins
+            let mut pprof_guard = None;
+            let pprof_freq = config.pprof_frequency.clamp(1, 1000);
+            let pprof_start = Instant::now();
+            if config.enable_pprof_per_batch {
+                match ProfilerGuardBuilder::default()
+                    .frequency(pprof_freq)
+                    .build()
+                {
+                    Ok(g) => pprof_guard = Some(g),
+                    Err(e) => tracing::warn!("pprof per-batch guard init failed: {:?}", e),
+                }
+            } else {
+                tracing::warn!("pprof not enabled");
+            }
+
             // Submit batch to Hawk handle for indexation.
             let request = JobRequest::new_batch_indexation(&batch);
             let result_future = hawk_handle.submit_request(request).await;
@@ -655,6 +671,65 @@ async fn exec_indexation(
                         err
                     )))
                 })??;
+
+// If enabled, stop pprof and upload artifacts tagged with batch info
+            if let Some(guard) = pprof_guard.take() {
+                let dur_secs = pprof_start.elapsed().as_secs();
+                let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
+                let party = format!("party{}", config.party_id);
+                let s3 = aws_clients.s3_client.clone();
+                let bucket = config.pprof_s3_bucket.clone();
+                let prefix = config.pprof_prefix.clone();
+                let run_id = config
+                    .pprof_run_id
+                    .clone()
+                    .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
+                let hash_prefix = hex::encode(&batch_hash[0..4]);
+
+                match guard.report().build() {
+                    Ok(report) => {
+                        if !config.pprof_profile_only {
+                            let mut svg = Vec::new();
+                            if let Err(e) = report.flamegraph(&mut svg) {
+                                tracing::warn!("pprof per-batch flamegraph error: {:?}", e);
+                            } else {
+                                let key = format!(
+                                    "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.flame.svg",
+                                    prefix, run_id, party, ts, hash_prefix, dur_secs, pprof_freq
+                                );
+                                let _ = upload_file_to_s3(&bucket, &key, s3.clone(), &svg).await;
+                            }
+                        }
+                        if !config.pprof_flame_only {
+                            match report.pprof() {
+                                Ok(profile) => {
+                                    let mut buf = Vec::new();
+                                    if let Err(e) = profile.encode(&mut buf) {
+                                        tracing::warn!(
+                                            "pprof per-batch protobuf encode error: {:?}",
+                                            e
+                                        );
+                                    } else {
+                                        let key = format!(
+                                            "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.profile.pprof",
+                                            prefix, run_id, party, ts, hash_prefix, dur_secs, pprof_freq
+                                        );
+                                        let _ =
+                                            upload_file_to_s3(&bucket, &key, s3.clone(), &buf).await;
+                                    }
+                                }
+                                Err(e) => tracing::warn!(
+                                    "pprof per-batch protobuf report error: {:?}",
+                                    e
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("pprof per-batch report build failed: {:?}", e),
+                }
+            } else {
+                tracing::warn!("no pprof guard");
+            }
 
             // Send results to processing thread responsible for persisting to database.
             let start = Instant::now();

@@ -715,6 +715,8 @@ async fn run_main_server_loop(
                     Ok(g) => pprof_guard = Some(g),
                     Err(e) => tracing::warn!("pprof per-batch guard init failed: {:?}", e),
                 }
+            } else {
+                tracing::warn!("pprof not enabled");
             }
 
             let result_future = hawk_handle.submit_batch_query(batch.clone());
@@ -780,6 +782,8 @@ async fn run_main_server_loop(
                     }
                     Err(e) => tracing::warn!("pprof per-batch report build failed: {:?}", e),
                 }
+            } else {
+                tracing::warn!("no pprof guard");
             }
 
             shutdown_handler.increment_batches_pending_completion()
