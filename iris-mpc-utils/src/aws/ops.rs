@@ -30,7 +30,6 @@ impl AwsClient {
         let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", environment);
         let s3_key = format!("{}_deleted_serial_ids.json", environment);
         let s3_obj = S3ObjectInfo::new(&s3_bucket, &s3_key, &data);
-
         self.s3_put_object(&s3_obj)
             .await
             .map_err(|e| AwsClientError::IrisDeletionsUploadError(e.to_string()))
@@ -60,12 +59,6 @@ impl AwsClient {
             &signup_id.to_string(),
             &shares,
         );
-        match self.s3_put_object(&s3_obj_info).await {
-            Ok(_) => {
-                tracing::info!("Shares encrypted and uploaded to S3");
-                Ok(s3_obj_info)
-            }
-            Err(e) => Err(e),
-        }
+        self.s3_put_object(&s3_obj_info).await.map(|_| s3_obj_info)
     }
 }

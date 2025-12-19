@@ -1,12 +1,15 @@
-use std::time::Duration;
+use std::{env, path::Path, time::Duration};
 
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{config::Builder, Client as SQSClient};
+use aws_sdk_sqs::{config::Builder, config::Region, Client as SQSClient};
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+
+/// Default AWS region - typically used in unit tests.
+const AWS_DEFAULT_REGION: &str = "us-east-1";
 
 /// Encpasulates AWS service client configuration.
 #[derive(Clone, Debug)]
@@ -89,11 +92,36 @@ impl AwsClientConfig {
 
 /// Returns AWS SDK configuration from a node configuration instance.
 async fn get_sdk_config() -> aws_config::SdkConfig {
-    let retry_config = RetryConfig::standard().with_max_attempts(20);
-    aws_config::from_env()
-        .retry_config(retry_config)
-        .load()
-        .await
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap();
+    let aws_config_exists = Path::new(&home).join(".aws/config").exists();
+
+    if aws_config_exists {
+        aws_config::from_env()
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            .load()
+            .await
+    } else {
+        aws_config::from_env()
+            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            .region(get_region())
+            .load()
+            .await
+    }
+}
+
+/// Returns AWS SDK region configuration from env vars or default.
+fn get_region() -> Region {
+    let region = if std::env::var("AWS_REGION").is_ok() {
+        std::env::var("AWS_REGION").unwrap()
+    } else if std::env::var("AWS_DEFAULT_REGION").is_ok() {
+        std::env::var("AWS_DEFAULT_REGION").unwrap()
+    } else {
+        AWS_DEFAULT_REGION.to_string()
+    };
+
+    Region::new(region)
 }
 
 impl From<&AwsClientConfig> for SecretsManagerClient {

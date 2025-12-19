@@ -1,29 +1,31 @@
 [irises]
 option = "NdjsonFile"
-path = "iris-mpc-cpu/data/store.ndjson"
+path = "data/store.ndjson"
 limit = 1000
 selection = "All"
 
 
 [graph]
 option = "GenerateDynamic"
-size = 1000
+size = 500
 
 [graph.gen_hnsw_config]
-ef_construction = 320
-ef_search = 320
-M = 8
+ef_construction = 65
+ef_search = 65
+M = 16
 layer_mode = { LinearScan = { max_graph_layer = 1 } }
 
 
 [analysis]
-sample_size = 50
+sample_size = 20
 seed = 123
-distance_fn = "min_fhd"  # Must be "fhd" or "min_fhd"
+distance_fn = "min_fhd"         # Must be "fhd" or "min_fhd"
+neighborhood_mode = "Unsorted"  # Must be "Sorted" or "Unsorted"
 k_neighbors = 128
-output_format = "rate"   # Must be "full_csv", "rate" or "histogram"
+mutations = [0.33, 0.37, 0.51]
+output_format = "rate"          # Must be "full_csv", "rate" or "histogram"
 output_path = "accuracy_results.csv"
-mutations = [0.125, 0.200, 0.333, 0.500]
+metrics_path = "metrics.csv"
 
 [analysis.rotations]
 start = -3
@@ -31,6 +33,6 @@ end = 4  # End of range is exclusive
 
 [analysis.search_hnsw_config]
 ef_construction = 320
-ef_search = 320
+ef_search = [70, 5]
 M = 256
 layer_mode = { LinearScan = { max_graph_layer = 1} }

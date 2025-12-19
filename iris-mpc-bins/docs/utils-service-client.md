@@ -100,11 +100,13 @@ cargo run --release --bin service-client -- \
     --aws-public-key-base-url "${AMPC_PUBLIC_KEY_BASE_URL}" \
     --aws-s3-request-bucket-name "${AMPC_S3_REQUEST_BUCKET}" \
     --aws-sns-request-topic-arn "${AMPC_SNS_REQUEST_TOPIC_ARN}" \
-    --aws-sqs-long-poll-wait-time "${AMPC_SQS_LONG_POLL_WAIT_TIME}" \
+    --aws-sqs-long-poll-wait-time 10 \
     --aws-sqs-response-queue-url "${AMPC_SQS_RESPONSE_QUEUE_URL}" \
+    --aws-sqs-wait-time-seconds 5 \
     --environment "dev" \
-    --request-batch-count 5 \
-    --request-batch-size 10 \
+    --request-batch-count 10 \
+    --request-batch-kind "${1:-uniqueness}" \
+    --request-batch-size 1
     --rng-seed 42
 
 popd

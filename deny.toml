@@ -17,6 +17,8 @@ ignore = [
     # Dependency of config-rs, they are not yet migrating of it, once they do we can bump the version and remove this exception
     # https://github.com/rust-cli/config-rs/issues/717
     { id = "RUSTSEC-2025-0120", reason = "No mature alternative available yet" },
+    # rustls-pemfile is required by reqwest and tonic, we will switch once they do
+    { id = "RUSTSEC-2025-0134", reason = "No mature alternative available yet" },
 ]
 
 [sources]

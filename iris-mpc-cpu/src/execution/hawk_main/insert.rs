@@ -9,11 +9,21 @@ use super::VecRequests;
 use eyre::{bail, Result};
 use itertools::izip;
 
-/// InsertPlan specifies where a query may be inserted into the HNSW graph.
+/// A low-level plan for inserting a query into the HNSW graph.
 ///
-/// The `links` field specifies the final desired links in each layer for the
-/// newly inserted query, and should already be trimmed to the desired length,
-/// e.g. typically the HNSW parameter M.
+/// An `InsertPlanV` represents the *desired* state of a new node's connections after
+/// it is added to the graph. It is created during the initial search phase that precedes
+/// the actual insertion.
+///
+/// The `links` field contains a list of neighbors for each layer of the HNSW graph that
+/// the new node will be a part of. These are the "ideal" neighbors found during the
+/// search. The list of links should already be trimmed to the desired length (e.g., the
+/// HNSW parameter `M`).
+///
+/// This struct is considered a "low-level" plan because it only specifies the outgoing
+/// connections from the new node. It does not include the reciprocal (bilateral) connections
+/// from the existing neighbors back to the new node. The final, complete set of graph
+/// modifications is represented by a `ConnectPlanV`, which is generated from this `InsertPlanV`.
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
@@ -106,7 +116,7 @@ fn join_plans<V: VectorStore>(
     layer_mode: &LayerMode,
 ) -> Vec<Option<InsertPlanV<V>>> {
     match layer_mode {
-        LayerMode::Standard | LayerMode::Bounded { .. } => {
+        LayerMode::Standard { .. } => {
             // Requests to set unique entry point must have strictly increasing layer
             let mut current_max_ep_layer: Option<usize> = None;
             for plan in plans.iter_mut() {
@@ -135,9 +145,9 @@ fn validate_ep_updates<V: VectorStore>(
     plans: &Vec<Option<InsertPlanV<V>>>,
     layer_mode: &LayerMode,
 ) -> Result<()> {
-    // For standard and bounded modes, check that entry point updates have
-    // strictly increasing layers and no "append" updates
-    if let LayerMode::Standard | LayerMode::Bounded { .. } = layer_mode {
+    // For standard mode, check that entry point updates have strictly
+    // increasing layers and no "append" updates
+    if let LayerMode::Standard { .. } = layer_mode {
         let mut current_max_ep_layer: Option<usize> = None;
         for plan in plans {
             let Some(plan) = plan else { continue };
@@ -161,13 +171,17 @@ fn validate_ep_updates<V: VectorStore>(
         }
     }
 
-    // For bounded mode, check that all updates are at or below the layer bound
-    if let LayerMode::Bounded { max_graph_layer } = layer_mode {
+    // For standard mode with a layer bound specified, check that all updates
+    // are at or below the layer bound
+    if let LayerMode::Standard {
+        max_graph_layer: Some(max_layer),
+    } = layer_mode
+    {
         for plan in plans {
             let Some(plan) = plan else { continue };
 
             if let UpdateEntryPoint::SetUnique { layer } = plan.update_ep {
-                if layer > *max_graph_layer {
+                if layer > *max_layer {
                     bail!(
                         "InsertPlan sets entry point higher than layer bound in Bounded layer mode"
                     );
@@ -256,7 +270,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 2 },
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
 
         // increasing layer order
@@ -269,7 +285,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 1 },
                 UpdateEntryPoint::SetUnique { layer: 2 },
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
 
         // decreasing layer order
@@ -282,7 +300,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 2 },
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
 
         // exercise more complex case
@@ -307,7 +327,9 @@ mod tests {
                 UpdateEntryPoint::False,
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Standard,
+            &LayerMode::Standard {
+                max_graph_layer: None,
+            },
         );
     }
 
@@ -324,7 +346,9 @@ mod tests {
                 UpdateEntryPoint::SetUnique { layer: 2 },
                 UpdateEntryPoint::False,
             ],
-            &LayerMode::Bounded { max_graph_layer: 1 },
+            &LayerMode::Standard {
+                max_graph_layer: Some(1),
+            },
         );
     }
 
@@ -407,7 +431,9 @@ mod tests {
     /// Test ep validator Standard layer mode validity checks
     #[test]
     fn test_ep_updates_validator_standard() {
-        let standard_layer_mode = LayerMode::Standard;
+        let standard_layer_mode = LayerMode::Standard {
+            max_graph_layer: None,
+        };
 
         // Standard mode layers are strictly increasing
         test_validate_ep_updates_helper(
@@ -462,7 +488,9 @@ mod tests {
     /// Test ep validator Bounded layer mode validity checks
     #[test]
     fn test_ep_updates_validator_bounded() {
-        let bounded_layer_mode = LayerMode::Bounded { max_graph_layer: 3 };
+        let bounded_layer_mode = LayerMode::Standard {
+            max_graph_layer: Some(3),
+        };
 
         // Bounded mode layers are strictly increasing
         test_validate_ep_updates_helper(
