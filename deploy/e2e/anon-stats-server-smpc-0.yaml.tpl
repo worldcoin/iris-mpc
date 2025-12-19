@@ -64,10 +64,6 @@ anon-stats-server-smpc-0:
   imagePullSecrets:
     - name: github-secret
 
-  podSecurityContext:
-    runAsUser: 0
-    runAsNonRoot: false
-
   nodeSelector:
     kubernetes.io/arch: amd64
 

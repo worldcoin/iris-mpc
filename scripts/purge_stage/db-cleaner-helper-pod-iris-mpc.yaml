@@ -4,8 +4,6 @@ metadata:
   name: db-cleaner
   namespace: iris-mpc
 spec:
-  securityContext:
-    runAsUser: 0
   containers:
     - securityContext:
         allowPrivilegeEscalation: false
