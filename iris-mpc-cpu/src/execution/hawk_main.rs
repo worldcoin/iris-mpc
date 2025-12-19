@@ -17,7 +17,7 @@ use crate::{
     },
     hnsw::{
         graph::graph_store,
-        searcher::{ConnectPlanV, NeighborhoodMode},
+        searcher::{ConnectPlanV, NeighborhoodMode, UpdateEntryPoint},
         GraphMem, HnswSearcher, VectorStore,
     },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -222,7 +222,7 @@ impl DistanceCache {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
@@ -1371,6 +1371,55 @@ impl HawkMutation {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub async fn persist2(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
+        // Group updates by side: side -> (key -> neighbors)
+        // Key: (serial_id, version_id, layer)
+        let mut updates_by_side: HashMap<StoreId, HashMap<(i64, i16, i16), Vec<_>>> =
+            HashMap::new();
+
+        for mutation in self.0 {
+            for (side, plan_opt) in izip!(STORE_IDS, mutation.plans) {
+                if let Some(plan) = plan_opt {
+                    // 1. Handle Entry Points (Sequential is fine here as they are rare)
+                    let mut graph = graph_tx.with_graph(side);
+                    match plan.update_ep {
+                        UpdateEntryPoint::False => {}
+                        UpdateEntryPoint::SetUnique { layer } => {
+                            graph.set_entry_point(plan.inserted_vector, layer).await?;
+                        }
+                        UpdateEntryPoint::Append { layer } => {
+                            graph.add_entry_point(plan.inserted_vector, layer).await?;
+                        }
+                    }
+
+                    // 2. Buffer Link Updates by side
+                    let side_map = updates_by_side.entry(side).or_default();
+                    for ((inserted_vector, lc), neighbors) in plan.updates {
+                        let key = (
+                            inserted_vector.serial_id() as i64,
+                            inserted_vector.version_id() as i16,
+                            lc as i16,
+                        );
+                        // Deduplicate: If multiple updates for the same node exist, last one wins
+                        side_map.insert(key, neighbors);
+                    }
+                }
+            }
+        }
+
+        // 3. Execute one batch per side
+        for (side, batch_updates) in updates_by_side {
+            if !batch_updates.is_empty() {
+                graph_tx
+                    .with_graph(side)
+                    .batch_set_links(batch_updates)
+                    .await?;
+            }
+        }
+
         Ok(())
     }
 }

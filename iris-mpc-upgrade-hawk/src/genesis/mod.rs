@@ -1071,12 +1071,11 @@ async fn get_results_thread(
                     let left_store = &imem_iris_stores_bg[LEFT];
                     let right_store = &imem_iris_stores_bg[RIGHT];
 
-                    let left_data = left_store
-                        .get_vectors_or_empty(vector_ids_to_persist.iter())
-                        .await;
-                    let right_data = right_store
-                        .get_vectors_or_empty(vector_ids_to_persist.iter())
-                        .await;
+                    // Parallelize fetching left and right iris data using tokio::join!
+                    let (left_data, right_data) = tokio::join!(
+                        left_store.get_vectors_or_empty(vector_ids_to_persist.iter()),
+                        right_store.get_vectors_or_empty(vector_ids_to_persist.iter())
+                    );
 
                     let codes_and_masks: Vec<StoredIrisRef> = vector_ids_to_persist
                             .iter()
@@ -1095,6 +1094,7 @@ async fn get_results_thread(
                             .collect();
 
                     let mut graph_tx = graph_store.tx().await?;
+
                     // Persist batch of Iris's to the HNSW graph store.
                     hnsw_iris_store
                         .insert_copy_irises(
@@ -1103,7 +1103,7 @@ async fn get_results_thread(
                             &codes_and_masks,
                         )
                         .await?;
-                    connect_plans.persist(&mut graph_tx).await?;
+                    connect_plans.persist2(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: batch-id={batch_id}"
                     ));
@@ -1156,7 +1156,7 @@ async fn get_results_thread(
                             &iris_data,
                         )
                         .await?;
-                    connect_plans.persist(&mut graph_tx).await?;
+                    connect_plans.persist2(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: modification-id={modification_id}"
                     ));

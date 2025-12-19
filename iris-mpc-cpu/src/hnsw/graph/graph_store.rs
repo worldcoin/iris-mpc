@@ -11,7 +11,7 @@ use futures::StreamExt;
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{error::BoxDynError, types::Json, PgConnection, Postgres, Row, Transaction};
-use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
+use std::{collections::HashMap, marker::PhantomData, ops::DerefMut, str::FromStr};
 use tokio::sync::mpsc;
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -417,6 +417,45 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         .execute(self.tx())
         .await
         .map_err(|e| eyre!("Failed to set links: {e}"))?;
+
+        Ok(())
+    }
+
+    pub async fn batch_set_links(
+        &mut self,
+        updates: HashMap<(i64, i16, i16), Vec<V::VectorRef>>,
+    ) -> Result<()> {
+        let mut serial_ids = Vec::with_capacity(updates.len());
+        let mut version_ids = Vec::with_capacity(updates.len());
+        let mut layers = Vec::with_capacity(updates.len());
+        let mut links_blobs = Vec::with_capacity(updates.len());
+        let graph_id = self.graph_id();
+
+        for ((sid, vid, layer), neighbors) in updates {
+            serial_ids.push(sid);
+            version_ids.push(vid as i32);
+            layers.push(layer);
+            links_blobs.push(bincode::serialize(&neighbors)?);
+        }
+
+        let table = self.links_table();
+
+        // We bind vectors of primitives.
+        // sqlx maps Vec<T> to Postgres T[] automatically.
+        sqlx::query(&format!(
+            "INSERT INTO {table} (graph_id, serial_id, version_id, layer, links)
+         SELECT $1, * FROM UNNEST($2::int8[], $3::int4[], $4::int2[], $5::bytea[])
+         ON CONFLICT (graph_id, serial_id, version_id, layer)
+         DO UPDATE SET links = EXCLUDED.links"
+        ))
+        .bind(graph_id) // $1: Single ID for the whole batch
+        .bind(&serial_ids) // $2: Array of BIGINT
+        .bind(&version_ids) // $3: Array of INTEGER
+        .bind(&layers) // $4: Array of SMALLINT
+        .bind(&links_blobs) // $5: Array of BYTEA
+        .execute(self.tx())
+        .await
+        .map_err(|e| eyre!("Failed to batch set links: {e}"))?;
 
         Ok(())
     }
