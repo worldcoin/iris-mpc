@@ -401,11 +401,17 @@ impl Aby3Store {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
 
+        let start = std::time::Instant::now();
         let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await;
+        let duration = start.elapsed();
+        tracing::info!("vectors_as_queries duration: {:?}", duration);
         let query_vec_pairs = izip!(base_node_queries, neighborhoods.iter())
             .flat_map(|(q, nbhd)| nbhd.iter().map(move |nb| (q.clone(), *nb)))
             .collect_vec();
+        let start = std::time::Instant::now();
         let distances = self.eval_distance_pairs(&query_vec_pairs).await?;
+        let duration = start.elapsed();
+        tracing::info!("eval_distance_pairs duration: {:?}", duration);
         let id_distances = neighborhoods
             .iter()
             .flatten()
@@ -424,6 +430,7 @@ impl Aby3Store {
         // Construct aggregated selection networks for top-k selection over all neighborhoods
         let mut total_items: usize = 0;
         let mut batched_network = SwapNetwork::new();
+        let network_start = std::time::Instant::now();
         for (nbhd, target_size) in izip!(neighborhoods.iter(), max_sizes.iter()) {
             let current_size = nbhd.len();
 
@@ -436,10 +443,18 @@ impl Aby3Store {
 
             total_items += current_size;
         }
+        let network_duration = network_start.elapsed();
+        tracing::info!(
+            "Aggregated selection network construction duration: {:?}",
+            network_duration
+        );
 
         // Oblivious application of batched selection networks
+        let start = std::time::Instant::now();
         let res_id_distances =
             apply_oblivious_swap_network(self, &id_distances, &batched_network).await?;
+        let duration = start.elapsed();
+        tracing::info!("apply_oblivious_swap_network duration: {:?}", duration);
 
         // Truncate results and unpack into individual vectors
         let mut unshuffled_truncated_shares = Vec::with_capacity(neighborhoods.len());
@@ -462,6 +477,7 @@ impl Aby3Store {
 
         // Batch shuffle
         let mut shuffled_shares_by_idx: BTreeMap<usize, Vec<_>> = BTreeMap::new();
+        let batch_start = std::time::Instant::now();
         for (_len, v) in shares_by_length.into_iter() {
             let (idxs, nbhds): (Vec<_>, Vec<_>) = v.into_iter().unzip();
 
@@ -473,6 +489,11 @@ impl Aby3Store {
                 shuffled_shares_by_idx.insert(idx, shuffled_nbhd);
             }
         }
+        let batch_duration = batch_start.elapsed();
+        tracing::info!(
+            "random_shuffle_batch (whole batch) duration: {:?}",
+            batch_duration
+        );
 
         // Open secret shared neighborhood vector ids
         let secret_nbhds = shuffled_shares_by_idx

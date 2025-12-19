@@ -1644,6 +1644,8 @@ impl HnswSearcher {
             let compacted_nbhds = store
                 .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
                 .await?;
+            //let compacted_nbhds = neighborhoods;
+
             let duration_compact = start_compact.elapsed();
             tracing::info!(
                 "compact_neighborhood_batch took {} ms",
