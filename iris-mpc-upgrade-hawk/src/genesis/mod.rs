@@ -14,7 +14,9 @@ use eyre::{bail, eyre, Report, Result};
 
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
-    helpers::{smpc_request, sync::Modification},
+    helpers::{
+        sha256::sha256_bytes, smpc_request, sqs_s3_helper::upload_file_to_s3, sync::Modification,
+    },
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
@@ -36,6 +38,8 @@ use iris_mpc_cpu::{
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
+use pprof::{protos::Message, ProfilerGuardBuilder};
+use sodiumoxide::hex;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -646,9 +650,9 @@ async fn exec_indexation(
 
             // Optionally start per-batch pprof guard just before compute begins
             let mut pprof_guard = None;
-            let pprof_freq = config.pprof_frequency.clamp(1, 1000);
+            let pprof_freq = ctx.config.pprof_frequency.clamp(1, 1000);
             let pprof_start = Instant::now();
-            if config.enable_pprof_per_batch {
+            if ctx.config.enable_pprof_per_batch {
                 match ProfilerGuardBuilder::default()
                     .frequency(pprof_freq)
                     .build()
@@ -676,19 +680,37 @@ async fn exec_indexation(
             if let Some(guard) = pprof_guard.take() {
                 let dur_secs = pprof_start.elapsed().as_secs();
                 let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
-                let party = format!("party{}", config.party_id);
-                let s3 = aws_clients.s3_client.clone();
-                let bucket = config.pprof_s3_bucket.clone();
-                let prefix = config.pprof_prefix.clone();
-                let run_id = config
+                let party = format!("party{}", ctx.config.party_id);
+
+                // Create AWS S3 client for pprof uploads
+                let region = ctx.config
+                    .clone()
+                    .aws
+                    .and_then(|aws| aws.region)
+                    .unwrap_or_else(|| DEFAULT_REGION.to_owned());
+                let region_provider = Region::new(region);
+                let shared_config = aws_config::from_env().region(region_provider).load().await;
+                let force_path_style = ctx.config.environment != ENV_PROD && ctx.config.environment != ENV_STAGE;
+                let s3_config = S3ConfigBuilder::from(&shared_config)
+                    .force_path_style(force_path_style)
+                    .build();
+                let s3 = S3Client::from_conf(s3_config);
+
+                let bucket = ctx.config.pprof_s3_bucket.clone();
+                let prefix = ctx.config.pprof_prefix.clone();
+                let run_id = ctx.config
                     .pprof_run_id
                     .clone()
                     .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
+
+                // Generate batch hash from batch data
+                let batch_info = format!("{}_{}_{}_{}", batch.batch_id, batch.id_start(), batch.id_end(), batch.size());
+                let batch_hash = sha256_bytes(batch_info);
                 let hash_prefix = hex::encode(&batch_hash[0..4]);
 
                 match guard.report().build() {
                     Ok(report) => {
-                        if !config.pprof_profile_only {
+                        if !ctx.config.pprof_profile_only {
                             let mut svg = Vec::new();
                             if let Err(e) = report.flamegraph(&mut svg) {
                                 tracing::warn!("pprof per-batch flamegraph error: {:?}", e);
@@ -700,7 +722,7 @@ async fn exec_indexation(
                                 let _ = upload_file_to_s3(&bucket, &key, s3.clone(), &svg).await;
                             }
                         }
-                        if !config.pprof_flame_only {
+                        if !ctx.config.pprof_flame_only {
                             match report.pprof() {
                                 Ok(profile) => {
                                     let mut buf = Vec::new();
