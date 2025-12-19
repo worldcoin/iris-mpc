@@ -63,10 +63,6 @@ resources:
 imagePullSecrets:
   - name: github-secret
 
-<<<<<<< HEAD
-
-=======
->>>>>>> main
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534

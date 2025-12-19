@@ -82,8 +82,6 @@ env:
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
 
-<<<<<<< HEAD
-=======
   - name: SMPC__TLS__PRIVATE_KEY
     value: "/etc/ssl/private/key.pem"
 
@@ -94,7 +92,6 @@ env:
     value: '["/usr/local/share/ca-certificates/ca_smpcv2_party_prod_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_prod_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_prod_2.crt"]'
 
 
->>>>>>> main
 nodeSelector:
   kubernetes.io/arch: amd64
   workload: "anon-stats-server"
