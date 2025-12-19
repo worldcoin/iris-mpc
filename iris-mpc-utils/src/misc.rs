@@ -1,16 +1,20 @@
-use bincode;
-use eyre::Result;
-use serde::{de::DeserializeOwned, Serialize};
-use serde_json;
 use std::{
     fs::File,
+    hash::{DefaultHasher, Hash, Hasher},
     io::{BufReader, BufWriter},
     path::Path,
 };
 
-/// Returns a message for logging.
-fn get_formatted_message(component: &str, msg: String) -> String {
-    format!("HNSW-UTILS :: {} :: {}", component, msg)
+use bincode;
+use eyre::Result;
+use serde::{de::DeserializeOwned, Serialize};
+use serde_json;
+
+/// Returns a hash computed over a type instance using `DefaultHasher`.
+pub fn compute_default_hash<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
 }
 
 /// Returns a boxed iterator over the first `limit` elements of `iter`.
@@ -22,50 +26,6 @@ where
         Some(num) => Box::new(iter.take(num)),
         None => Box::new(iter),
     }
-}
-
-/// Logs & returns a component error message.
-#[allow(dead_code)]
-pub fn log_error(component: &str, msg: String) -> String {
-    let msg = get_formatted_message(component, msg);
-
-    // In testing print to stdout.
-    #[cfg(test)]
-    println!("ERROR :: {}", msg);
-
-    // Trace as normal.
-    tracing::error!(msg);
-
-    msg
-}
-
-/// Logs & returns a component information message.
-#[allow(dead_code)]
-pub fn log_info(component: &str, msg: &str) -> String {
-    let msg = get_formatted_message(component, msg.to_string());
-
-    // In testing print to stdout.
-    #[cfg(test)]
-    println!("{}", msg);
-
-    // Trace as normal.
-    tracing::info!(msg);
-
-    msg
-}
-
-/// Logs & returns a component warning message.
-#[allow(dead_code)]
-pub fn log_warn(component: &str, msg: String) -> String {
-    let msg = get_formatted_message(component, msg);
-
-    // In testing print to stdout.
-    #[cfg(test)]
-    println!("WARN :: {}", msg);
-
-    tracing::warn!(msg);
-
-    msg
 }
 
 /// Reads binary data from a file & deserializes a domain type.

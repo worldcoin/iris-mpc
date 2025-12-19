@@ -5,34 +5,37 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use super::{
-    graph::neighborhood::SortedNeighborhoodV,
-    sorting::{binary_search::BinarySearch, swap_network::apply_swap_network, tree_min::tree_min},
+    sorting::{swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, SortedNeighborhood,
-    VectorStore,
+    graph::neighborhood::Neighborhood, metrics::ops_counter::Operation, VectorStore,
 };
 
 use crate::hnsw::GraphMem;
 
 use aes_prng::AesRng;
 use ampc_actor_utils::fast_metrics::FastHistogram;
-use eyre::{bail, eyre, Result};
+use eyre::{bail, eyre, OptionExt, Result};
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
+    iter::once,
 };
 use tracing::{debug, instrument, trace_span, Instrument};
 
 /// The number of explicitly provided parameters for different layers of HNSW
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
+
+/// Proportion by which `M_max` is multiplied to determine the compaction limit
+/// size `M_limit` by default.
+const DEFAULT_M_LIMIT_MULTIPLIER: f64 = 1.1;
 
 /// Struct specifying general parameters for HNSW search.
 ///
@@ -46,8 +49,12 @@ pub struct HnswParams {
     /// The number of neighbors for insertion
     pub M: [usize; N_PARAM_LAYERS],
 
-    /// Maximum number of neighbors allowed per graph node
+    /// Target maximum number of neighbors allowed per graph node
     pub M_max: [usize; N_PARAM_LAYERS],
+
+    /// Limit number of neighbors allowed per graph node; any neighborhood
+    /// larger than this size should be compacted to size at most `M_max`.
+    pub M_limit: [usize; N_PARAM_LAYERS],
 
     /// Exploration factor `ef` for search layers during construction
     pub ef_constr_search: [usize; N_PARAM_LAYERS],
@@ -75,6 +82,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
+        let M_limit_arr = M_max_arr.map(|m| (m as f64 * DEFAULT_M_LIMIT_MULTIPLIER) as usize);
         let ef_constr_search_arr = [1usize; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef_construction; N_PARAM_LAYERS];
         let mut ef_search_arr = [1usize; N_PARAM_LAYERS];
@@ -83,6 +91,7 @@ impl HnswParams {
         Self {
             M: M_arr,
             M_max: M_max_arr,
+            M_limit: M_limit_arr,
             ef_constr_search: ef_constr_search_arr,
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
@@ -95,6 +104,7 @@ impl HnswParams {
         let M_arr = [M; N_PARAM_LAYERS];
         let mut M_max_arr = [M; N_PARAM_LAYERS];
         M_max_arr[0] = 2 * M;
+        let M_limit_arr = M_max_arr.map(|m| (m as f64 * DEFAULT_M_LIMIT_MULTIPLIER) as usize);
         let ef_constr_search_arr = [ef; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef; N_PARAM_LAYERS];
         let ef_search_arr = [ef; N_PARAM_LAYERS];
@@ -102,6 +112,7 @@ impl HnswParams {
         Self {
             M: M_arr,
             M_max: M_max_arr,
+            M_limit: M_limit_arr,
             ef_constr_search: ef_constr_search_arr,
             ef_constr_insert: ef_constr_insert_arr,
             ef_search: ef_search_arr,
@@ -114,6 +125,10 @@ impl HnswParams {
 
     pub fn get_M_max(&self, lc: usize) -> usize {
         Self::get_val(&self.M_max, lc)
+    }
+
+    pub fn get_M_limit(&self, lc: usize) -> usize {
+        Self::get_val(&self.M_limit, lc)
     }
 
     pub fn get_ef_constr_search(&self, lc: usize) -> usize {
@@ -143,18 +158,10 @@ pub enum LayerMode {
     /// new node is inserted as the first item in a new highest layer.
     ///
     /// Graph search starts at the unique entry point.
-    Standard,
-
-    /// Bounded standard operation: maintains a single entry point and updates
-    /// it when a new node is inserted as the first item in a new highest layer.
-    /// Node insertion is bounded at a fixed maximum layer height.
-    ///
-    /// Graph search starts at the unique entry point.
-    Bounded {
-        /// Maximum layer for node insertion
-        max_graph_layer: usize,
+    Standard {
+        /// Maximum layer for node insertion, if any
+        max_graph_layer: Option<usize>,
     },
-
     /// Nodes are inserted at up to a maximum layer height, and any node which
     /// would be inserted at a higher layer than this is added to an ongoing
     /// list of entry points.
@@ -166,6 +173,12 @@ pub enum LayerMode {
         /// Maximum layer for node insertion
         max_graph_layer: usize,
     },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub enum NeighborhoodMode {
+    Sorted,
+    Unsorted,
 }
 
 /// Struct specifies the probability distribution used to generate insertion
@@ -222,13 +235,14 @@ impl LayerDistribution {
 ///
 /// Evaluation and comparison of vector distances are delegated to an implementor of the
 /// `VectorStore` trait, and management of the hierarchical graph is delegated to a `GraphMem`
-/// struct.
+/// struct. Queries and updates to the active neighbor candidate list are delegated to an implementor
+/// of the `Neighborhood` trait.
 ///
 /// Graph search in this implementation is optimized to reduce the number of sequential distance
 /// evaluation and distance comparison operations, because we use SMPC protocols to implement these
 /// basic ops and so the sequential latency introduced by back-and-forth network communication
 /// between protocol parties can become significant without batching of operations. See in
-/// particular the documentation for the `layer_search_batched` and `layer_search_greedy` functions
+/// particular the documentation for the `layer_search_batched_v2` and `layer_search_greedy` functions
 /// for details on these search optimizations.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HnswSearcher {
@@ -243,45 +257,50 @@ pub struct HnswSearcher {
 }
 
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
-pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlan<Vector> {
+pub struct ConnectPlan<Vector: Ord> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
-    /// The HNSW graph updates required by insertion. The insertion layer of the new vector
-    /// is `layers.len() - 1`.
-    pub layers: Vec<ConnectPlanLayer<Vector>>,
+    /// List of neighborhood updates to apply
+    pub updates: BTreeMap<(Vector, usize), Vec<Vector>>,
 
     // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
-    pub set_ep: SetEntryPoint,
+    pub update_ep: UpdateEntryPoint,
 }
 
-/// Represents the state updates required for insertion of a new node into a single layer of
-/// an HNSW hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlanLayer<Vector> {
-    /// The neighbors of the inserted vector
-    pub neighbors: Vec<Vector>,
+/// Represents a graph update of a single node's neighborhood in a graph, given
+/// by a tuple `(update_layer, update_vector, new_neighborhood)`.
+pub type NbhdUpdate<Vector> = (usize, Vector, Vec<Vector>);
 
-    /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
-    pub nb_links: Vec<Vec<Vector>>,
+/// Build the updates in the specified layer representing "`inserted_vector`
+/// is connected to `neighbors`", and "each item of `neighbors` is connected
+/// to links in the same index of `nb_links`"
+pub fn build_layer_updates<V: Clone + Ord>(
+    inserted_vector: V,
+    neighbors: Vec<V>,
+    nb_links: Vec<Vec<V>>,
+    layer: usize,
+) -> BTreeMap<(V, usize), Vec<V>> {
+    once(((inserted_vector, layer), neighbors.clone()))
+        .chain(izip!(neighbors, nb_links).map(|(nb, nb_nbs)| ((nb, layer), nb_nbs)))
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SetEntryPoint {
+pub enum UpdateEntryPoint {
     /// Do not update entry points based on inserted vector
     False,
 
-    /// On new layer, clear the existing entry point before inserting
-    NewLayer,
+    /// Set a new unique entry point
+    SetUnique { layer: usize },
 
-    /// On the top layer, add to the list of entry points
-    AddToLayer,
+    /// Add a new item to the set of entry points
+    Append { layer: usize },
 }
 
 #[allow(non_snake_case)]
@@ -291,7 +310,9 @@ impl HnswSearcher {
     pub fn new_standard(ef_constr: usize, ef_search: usize, M: usize) -> Self {
         Self {
             params: HnswParams::new(ef_constr, ef_search, M),
-            layer_mode: LayerMode::Standard,
+            layer_mode: LayerMode::Standard {
+                max_graph_layer: None,
+            },
             layer_distribution: LayerDistribution::new_geometric_from_M(M),
         }
     }
@@ -367,15 +388,15 @@ impl HnswSearcher {
     /// - Enum designating how to handle entry point update
     #[allow(non_snake_case)]
     #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
-    async fn search_init<V: VectorStore>(
+    async fn search_init<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(SortedNeighborhoodV<V>, usize, usize, SetEntryPoint)> {
+    ) -> Result<(N, usize, usize, UpdateEntryPoint)> {
         match self.layer_mode {
-            LayerMode::Standard => {
+            LayerMode::Standard { max_graph_layer } => {
                 let ep = graph.get_first_entry_point().await;
                 let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
 
@@ -383,34 +404,20 @@ impl HnswSearcher {
                 // if an entry point is present, and otherwise 0.
                 let n_layers = layer.map(|l| l + 1).unwrap_or(0);
 
-                // Set new entry point if layer is greater than entry point layer, or no entry point available
-                let set_ep = if layer.map(|l| insertion_layer > l).unwrap_or(true) {
-                    SetEntryPoint::NewLayer
-                } else {
-                    SetEntryPoint::False
-                };
-
-                Ok((W, n_layers, insertion_layer, set_ep))
-            }
-            LayerMode::Bounded { max_graph_layer } => {
-                let ep = graph.get_first_entry_point().await;
-                let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
-
-                // Layers are 0-indexed, so number of graph layers is one greater than the entry point layer
-                // if an entry point is present, and otherwise 0.
-                let n_layers = layer.map(|l| l + 1).unwrap_or(0);
-
-                // Truncate insertion layer at max graph layer.
-                let bounded_insertion_layer = insertion_layer.min(max_graph_layer);
+                // If maximum graph layer is specified, truncate insertion layer
+                let bounded_insertion_layer =
+                    insertion_layer.min(max_graph_layer.unwrap_or(usize::MAX));
 
                 // Set new entry point if layer is greater than entry point layer, or no entry point available.
-                let set_ep = if layer.map(|l| bounded_insertion_layer > l).unwrap_or(true) {
-                    SetEntryPoint::NewLayer
+                let update_ep = if layer.map(|l| bounded_insertion_layer > l).unwrap_or(true) {
+                    UpdateEntryPoint::SetUnique {
+                        layer: bounded_insertion_layer,
+                    }
                 } else {
-                    SetEntryPoint::False
+                    UpdateEntryPoint::False
                 };
 
-                Ok((W, n_layers, bounded_insertion_layer, set_ep))
+                Ok((W, n_layers, bounded_insertion_layer, update_ep))
             }
             LayerMode::LinearScan { max_graph_layer } => {
                 // Get all valid entry points
@@ -441,8 +448,7 @@ impl HnswSearcher {
                 } else {
                     let nearest_point =
                         Self::linear_search_min_distance(store, query, ep_vectors).await?;
-                    let mut W = SortedNeighborhood::new();
-                    W.edges.push(nearest_point);
+                    let W = N::from_singleton(nearest_point);
 
                     // Entry points are in layer `max_graph_layer`, so number of layers is one more since layers are 0-indexed.
                     let n_layers = max_graph_layer + 1;
@@ -454,13 +460,15 @@ impl HnswSearcher {
                 let bounded_insertion_layer = insertion_layer.min(max_graph_layer);
 
                 // Add query to entry points set if target insertion layer is greater than the max graph layer
-                let set_ep = if insertion_layer > max_graph_layer {
-                    SetEntryPoint::AddToLayer
+                let update_ep = if insertion_layer > max_graph_layer {
+                    UpdateEntryPoint::Append {
+                        layer: max_graph_layer,
+                    }
                 } else {
-                    SetEntryPoint::False
+                    UpdateEntryPoint::False
                 };
 
-                Ok((W, n_layers, bounded_insertion_layer, set_ep))
+                Ok((W, n_layers, bounded_insertion_layer, update_ep))
             }
         }
     }
@@ -471,26 +479,24 @@ impl HnswSearcher {
     ///
     /// If `ep` is specified as `None` (no entry point available), then returns
     /// an empty neighborhood and `None` for its layer.
-    async fn init_nbhd_from_ep<V: VectorStore>(
+    async fn init_nbhd_from_ep<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         ep: Option<(V::VectorRef, usize)>,
         query: &V::QueryRef,
-    ) -> Result<(SortedNeighborhoodV<V>, Option<usize>)> {
+    ) -> Result<(N, Option<usize>)> {
         if let Some((entry_point, layer)) = ep {
             let distance = store.eval_distance(query, &entry_point).await?;
 
-            let mut W = SortedNeighborhood::new();
-            W.insert(store, entry_point, distance).await?;
-
+            let W = N::from_singleton((entry_point, distance));
             Ok((W, Some(layer)))
         } else {
-            Ok((SortedNeighborhood::new(), None))
+            Ok((N::new(), None))
         }
     }
 
     /// Mutate `W` into the `ef` nearest neighbors of query vector `q` in layer `lc` using a
-    /// depth-first graph traversal. One of several concrete implementations is selected depending
+    /// graph traversal of layer `lc`. One of several concrete implementations is selected depending
     /// on `ef`. Terminates when `W` contains vectors which are the nearest to `q` among all
     /// traversed vertices and their neighbors.
     #[instrument(
@@ -499,11 +505,11 @@ impl HnswSearcher {
         fields(event_type = Operation::LayerSearch.id()),
         skip(store, graph, q, W))]
     #[allow(non_snake_case)]
-    async fn search_layer<V: VectorStore>(
+    async fn search_layer<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
-        W: &mut SortedNeighborhoodV<V>,
+        W: &mut N,
         ef: usize,
         lc: usize,
     ) -> Result<()> {
@@ -512,11 +518,9 @@ impl HnswSearcher {
                 bail!("ef cannot be 0");
             }
             1 => {
-                let start = W.get_nearest().ok_or(eyre!("W cannot be empty"))?;
+                let start = W.as_ref().first().ok_or(eyre!("W cannot be empty"))?;
                 let nearest = Self::layer_search_greedy(store, graph, q, start, lc).await?;
-
-                W.edges.clear();
-                W.edges.push(nearest);
+                *W = N::from_singleton(nearest);
             }
             2..32 => {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
@@ -540,16 +544,17 @@ impl HnswSearcher {
     /// neighbors inspected, which is recorded in an additional `HashSet` of
     /// vector ids.
     #[instrument(level = "debug", skip(store, graph, q, W))]
-    async fn layer_search_std<V: VectorStore>(
+    async fn layer_search_std<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
-        W: &mut SortedNeighborhoodV<V>,
+        W: &mut N,
         ef: usize,
         lc: usize,
     ) -> Result<()> {
         // The set of vectors which have been considered as potential neighbors
-        let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+        let mut visited =
+            HashSet::<V::VectorRef>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
 
         // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::<V::VectorRef>::new();
@@ -569,7 +574,7 @@ impl HnswSearcher {
         // Continue until all current entries in candidate nearest neighbors list have
         // been opened
         while let Some(c) = W
-            .edges
+            .as_ref()
             .iter()
             .map(|(c, _)| c)
             .find(|&c| !opened.contains(c))
@@ -583,23 +588,18 @@ impl HnswSearcher {
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
 
             for (e, eq) in c_links.into_iter() {
-                if W.len() == ef {
-                    // When W is full, we decide whether to replace the furthest element
-                    if store
+                // If W is full and node is not closest than current furthest,
+                // do nothing
+                if W.len() == ef
+                    && !store
                         .less_than(&eq, &fq)
                         .instrument(less_than_span.clone())
                         .await?
-                    {
-                        // Make room for the new better candidate...
-                        W.pop_furthest();
-                    } else {
-                        // ...or ignore the candidate and do not continue on this path.
-                        continue;
-                    }
+                {
+                    continue;
                 }
 
-                // Track the new candidate as a potential k-nearest
-                W.insert(store, e, eq)
+                W.insert_and_trim(store, e, eq, ef)
                     .instrument(insert_span.clone())
                     .await?;
 
@@ -615,7 +615,7 @@ impl HnswSearcher {
     }
 
     /// Run an HNSW layer search with batched operation. The algorithm mutates
-    /// the input sorted neighborhood `W` into the `ef` (approximate)
+    /// the input neighborhood `W` into the `ef` (approximate)
     /// nearest vectors to the query `q` in layer `lc` of the layered graph
     /// `graph`.
     ///
@@ -638,7 +638,7 @@ impl HnswSearcher {
     /// First, as `W` is initially filled up to size `ef`, the entire neighborhoods
     /// of nodes are inserted into `W` via a batched insertion operation
     /// such as a low-depth sorting network. (This functionality is provided
-    /// by `SortedNeighborhood::insert_batch`.) This continues
+    /// by `neighborhood::insert_batch`.) This continues
     /// until `W` has reached size `ef`, so that additional insertions will
     /// result in truncation of farthest elements.
     ///
@@ -690,13 +690,13 @@ impl HnswSearcher {
     /// inserted items in `W`. If no new entries are inserted in this
     /// clean-up step, then the graph traversal is complete, and the function
     /// returns.
-    #[instrument(level = "debug", skip(store, graph, q, W))]
     #[allow(dead_code)]
-    async fn layer_search_batched<V: VectorStore>(
+    #[instrument(level = "debug", skip(store, graph, q, W))]
+    async fn layer_search_batched<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
-        W: &mut SortedNeighborhoodV<V>,
+        W: &mut N,
         ef: usize,
         lc: usize,
     ) -> Result<()> {
@@ -704,13 +704,14 @@ impl HnswSearcher {
         let mut metric_edges = FastHistogram::new(&format!("search_edges_layer{}", lc));
 
         // The set of vectors which have been considered as potential neighbors
-        let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+        let mut visited =
+            HashSet::<V::VectorRef>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
 
         // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::<V::VectorRef>::new();
 
         // c: the current candidate to be opened, initialized to first entry of W
-        let (mut c, _cq) = W.get_nearest().ok_or(eyre!("W cannot be empty"))?.clone();
+        let (mut c, _cq) = W.as_ref().first().ok_or_eyre("W cannot be empty")?.clone();
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -759,7 +760,8 @@ impl HnswSearcher {
             if W.len() < ef && !c_links.is_empty() {
                 let n_insert = c_links.len().min(ef - W.len());
                 let batch: Vec<_> = c_links.drain(0..n_insert).collect();
-                W.insert_batch(store, &batch)
+                // TODO: collect and only call insert_batch once
+                W.insert_batch_and_trim(store, &batch, ef)
                     .instrument(insert_span.clone())
                     .await?;
             }
@@ -830,15 +832,15 @@ impl HnswSearcher {
                 // Process pending insertions queue if there are enough elements
                 while insertion_queue.len() >= insertion_batch_size {
                     let batch: Vec<_> = insertion_queue.drain(0..insertion_batch_size).collect();
-                    W.insert_batch(store, &batch)
+                    W.insert_batch_and_trim(store, &batch, ef)
                         .instrument(insert_span.clone())
                         .await?;
-                    W.trim_to_k_nearest(ef);
                 }
             }
 
             // Select next unopened nearest neighbor candidate to open
             let mut c_next = W
+                .as_ref()
                 .iter()
                 .map(|(c, _)| c)
                 .find(|&c| !opened.contains(c))
@@ -887,15 +889,15 @@ impl HnswSearcher {
 
                 // Step 2: insert new neighbors which have passed the filtering step
                 for chunk in insertion_queue.chunks(insertion_batch_size) {
-                    W.insert_batch(store, chunk)
+                    W.insert_batch_and_trim(store, chunk, ef)
                         .instrument(insert_span.clone())
                         .await?;
-                    W.trim_to_k_nearest(ef);
                 }
                 insertion_queue.clear();
 
                 // Step 3: try again to select an unopened candidate
                 c_next = W
+                    .as_ref()
                     .iter()
                     .map(|(c, _)| c)
                     .find(|&c| !opened.contains(c))
@@ -925,9 +927,7 @@ impl HnswSearcher {
     /// sequentially inspecting the neighbors of previously un-opened entries of
     /// `W` closest to `q`, inserting inspected nodes into `W` if they are
     /// nearer to `q` than the current farthest entry of `W` (or unconditionally
-    /// if `W` needs to be filled to size `ef`). The entries of `W` are stored
-    /// in sorted order of their distance to `q`, so new nodes are inserted into
-    /// `W` using a search/sort procedure.
+    /// if `W` needs to be filled to size `ef`).
     ///
     /// Distinct from the standard HNSW algorithm, this batched implementation
     /// opens and processes multiple candidate nodes in batches rather than
@@ -941,7 +941,7 @@ impl HnswSearcher {
     /// neighborhood from which the main search can proceed.  Once neighbors are
     /// chosen, the distances between all new neighbors and the search query are
     /// evaluated as a batch, and the nodes are organized into a candidate
-    /// neighborhood by a single sorting operation.
+    /// neighborhood. The specifics of this organization depend on the generic parameter `N`.
     ///
     /// Once `W` has size `ef`, the second phase of graph traversal starts. In
     /// this phase, batches of unopened elements of `W` are opened and
@@ -979,11 +979,11 @@ impl HnswSearcher {
     /// not allow batching of distance evaluation, which has become a
     /// significant latency bottleneck in practice.
     #[instrument(level = "debug", skip(store, graph, q, W))]
-    async fn layer_search_batched_v2<V: VectorStore>(
+    async fn layer_search_batched_v2<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         q: &V::QueryRef,
-        W: &mut SortedNeighborhoodV<V>,
+        W: &mut N,
         ef: usize,
         lc: usize,
     ) -> Result<()> {
@@ -994,7 +994,7 @@ impl HnswSearcher {
             trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
         // The set of vectors which have been considered as potential neighbors
-        let mut visited = HashSet::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+        let mut visited = HashSet::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
 
         // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::new();
@@ -1009,7 +1009,7 @@ impl HnswSearcher {
         // represents a breadth-first traversal of the graph, starting with W.
         // This is done initially without opening nodes so that all distances
         // can be computed in a single batch.
-        let mut init_nodes = Vec::from_iter(W.iter().map(|(e, _eq)| e.clone()));
+        let mut init_nodes = Vec::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
@@ -1034,12 +1034,21 @@ impl HnswSearcher {
         .instrument(eval_dist_span.clone())
         .await?;
 
+        let visited_nodes_metrics =
+            metrics::counter!("visited_nodes_count", &[("layer", lc.to_string())]);
+        let opened_nodes_metrics =
+            metrics::counter!("opened_nodes_count", &[("layer", lc.to_string())]);
+
+        let mut visited_nodes_count = 0;
+
+        opened_nodes_metrics.increment(init_opened.len() as u64);
+        visited_nodes_count += init_links.len();
+
         opened.extend(init_opened);
 
-        W.insert_batch(store, &init_links)
+        W.insert_batch_and_trim(store, &init_links, ef)
             .instrument(insert_span.clone())
             .await?;
-        W.trim_to_k_nearest(ef);
 
         // Target number of elements to insert into candidate neighborhood as a batch.
         //
@@ -1066,7 +1075,8 @@ impl HnswSearcher {
 
         // The current list of elements of `W` which are unopened
         let mut cur_unopened = Vec::from_iter(
-            W.iter()
+            W.as_ref()
+                .iter()
                 .map(|(c, _)| c)
                 .filter(|&c| !opened.contains(c))
                 .cloned(),
@@ -1096,6 +1106,9 @@ impl HnswSearcher {
             )
             .instrument(eval_dist_span.clone())
             .await?;
+
+            opened_nodes_metrics.increment(new_opened.len() as u64);
+            visited_nodes_count += c_links.len();
 
             debug!(
                 event_type = Operation::OpenNode.id(),
@@ -1134,11 +1147,22 @@ impl HnswSearcher {
                 n_insertions, "Batch distances comparison filter"
             );
 
+            // TODO: refine this metric / make it more succinct (?)
+            let ins_rate: f64 = (ins_rate_denom as f64) / (INS_RATE_NUM as f64);
+            metrics::counter!(
+                "insertion_stats",
+                &[
+                    ("currently_visited", visited_nodes_count.to_string()),
+                    ("computed_ins_rate", ins_rate.to_string()),
+                    ("n_insertions", n_insertions.to_string()),
+                    ("depth", depth.to_string())
+                ]
+            );
+
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
-            W.insert_batch(store, &filtered_links)
+            W.insert_batch_and_trim(store, &filtered_links, ef)
                 .instrument(insert_span.clone())
                 .await?;
-            W.trim_to_k_nearest(ef);
 
             // If measured insertion rate is too low, update the estimated insertion rate.
             //
@@ -1159,12 +1183,15 @@ impl HnswSearcher {
 
             // Refresh the list of currently unopened nodes in the candidate neighborhood `W`
             cur_unopened = Vec::from_iter(
-                W.iter()
+                W.as_ref()
+                    .iter()
                     .map(|(c, _)| c)
                     .filter(|&c| !opened.contains(c))
                     .cloned(),
             );
         }
+
+        visited_nodes_metrics.increment(visited_nodes_count as u64);
 
         let metrics_labels = [("layer", lc.to_string())];
         metrics::histogram!("search_depth", &metrics_labels).record(depth as f64);
@@ -1193,7 +1220,9 @@ impl HnswSearcher {
         let insert_span =
             trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
+        let mut counter = 0;
         loop {
+            counter += 1;
             // Open the candidate node and visit its unvisited neighbors, computing
             // distances between the query and neighbors as a batch
             let mut c_links = HnswSearcher::open_node(store, graph, &c_vec, lc, q, &mut visited)
@@ -1214,6 +1243,7 @@ impl HnswSearcher {
 
             // If no neighbors are nearer, return current node; otherwise continue
             if n_vec == c_vec {
+                metrics::counter!("greedy_search_depth").increment(counter);
                 return Ok((c_vec, c_dist));
             } else {
                 (c_vec, c_dist) = (n_vec, n_dist);
@@ -1321,15 +1351,15 @@ impl HnswSearcher {
     /// the `params` field of `self`. In the original specification of HNSW this uses a specified
     /// value for `ef` at layer 0 only, and `ef = 1` (greedy search) for all higher layers.
     #[allow(non_snake_case)]
-    pub async fn search<V: VectorStore>(
+    pub async fn search<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         k: usize,
-    ) -> Result<SortedNeighborhoodV<V>> {
+    ) -> Result<N> {
         // insertion layer doesn't matter here because set_ep is ignored
-        let (mut W, n_layers, _, _) = self.search_init(store, graph, query, 0).await?;
+        let (mut W, n_layers, _, _) = self.search_init::<_, N>(store, graph, query, 0).await?;
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
@@ -1337,25 +1367,25 @@ impl HnswSearcher {
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
         }
 
-        W.trim_to_k_nearest(k);
+        W.trim(store, k).await?;
         Ok(W)
     }
 
     /// Insert `query` into the HNSW index represented by `store` and `graph`.
     /// Return a `V::VectorRef` representing the inserted vector.
     #[instrument(level = "trace", skip_all, target = "searcher::cpu_time")]
-    pub async fn insert<V: VectorStoreMut>(
+    pub async fn insert<V: VectorStoreMut, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<V::VectorRef> {
-        let (neighbors, set_ep) = self
-            .search_to_insert(store, graph, query, insertion_layer)
+        let (neighbors, update_ep) = self
+            .search_to_insert::<_, N>(store, graph, query, insertion_layer)
             .await?;
         let inserted = store.insert(query).await;
-        self.insert_from_search_results(store, graph, inserted.clone(), neighbors, set_ep)
+        self.insert_from_search_results(store, graph, inserted.clone(), neighbors, update_ep)
             .await?;
         Ok(inserted)
     }
@@ -1368,10 +1398,10 @@ impl HnswSearcher {
     /// parameter in standard HNSW).
     ///
     /// The output is a vector of the nearest neighbors found in each insertion
-    /// layer, and a boolean indicating if the insertion sets the entry point.
+    /// layer and an enum specifying this insertion's effect on the graph's entry points.
     /// Nearest neighbors are provided in the output for each layer in which the
     /// query is to be inserted, including empty neighbor lists for insertion in
-    /// any layers higher than the current entry point.
+    /// any layers above the insertion layer.
     ///
     /// If no entry point is initialized for the index, then the insertion will
     /// set `query` as the index entry point.
@@ -1386,17 +1416,17 @@ impl HnswSearcher {
         skip(self, store, graph, query)
     )]
     #[allow(non_snake_case)]
-    pub async fn search_to_insert<V: VectorStore>(
+    pub async fn search_to_insert<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(Vec<SortedNeighborhoodV<V>>, SetEntryPoint)> {
+    ) -> Result<(Vec<N>, UpdateEntryPoint)> {
         // Initialize candidate neighborhood, index of highest search layer,
         // finalized layer of node insertion, and entry point update outcome.
-        let (mut W, n_layers, insertion_layer, set_ep) = self
-            .search_init(store, graph, query, insertion_layer)
+        let (mut W, n_layers, insertion_layer, update_ep) = self
+            .search_init::<_, N>(store, graph, query, insertion_layer)
             .await?;
 
         // Saved links for insertion layers
@@ -1424,188 +1454,261 @@ impl HnswSearcher {
         // If query is to be inserted at a new highest layer as a new entry
         // point, insert additional empty neighborhoods for any new layers
         for _ in links.len()..insertion_layer + 1 {
-            links.push(SortedNeighborhood::new());
+            links.push(N::new());
         }
 
         assert_eq!(links.len(), insertion_layer + 1);
 
-        Ok((links, set_ep))
+        Ok((links, update_ep))
     }
 
-    /// Prepare a `ConnectPlan` representing the updates required to insert `inserted_vector`
-    /// into `graph` with the specified neighbors `links` and setting the entry point of the
-    /// graph if `set_ep` is `true`.  The `links` vector contains the neighbor lists for the
-    /// newly inserted node in different graph layers in which it is to be inserted, starting
-    /// with layer 0.
-    ///
-    /// In this implementation, comparisons required for computing the insertion indices for
-    /// updated neighborhoods are done in batches.
+    /// Prepare a `ConnectPlan` representing the updates required to insert
+    /// `inserted_vector` into `graph` with the specified neighbors `links` and
+    /// to update the entry point according to the `update_ep` argument. The
+    /// `links` vector contains the neighbor lists for the newly inserted node
+    /// in different graph layers in which it is to be inserted, starting with
+    /// layer 0. Specified links are inserted as-is, without additional
+    /// truncation.
     ///
     /// This function call does *not* update `graph`.
     pub async fn insert_prepare<V: VectorStore>(
         &self,
+        // this may be used in the future to trim l_links
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
-        mut links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: SetEntryPoint,
+        links: Vec<Vec<V::VectorRef>>,
+        update_ep: UpdateEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
-        let mut plan = ConnectPlan {
-            inserted_vector: inserted_vector.clone(),
-            layers: vec![],
-            set_ep,
-        };
+        let updates = vec![(inserted_vector, links, update_ep)];
+        let mut r = self.insert_prepare_batch(store, graph, updates).await?;
+        let first = r.pop();
+        first.ok_or(eyre!("insert_prepare produced no connect plans"))
+    }
 
-        // Truncate search results to size M before insertion
-        for (lc, l_links) in links.iter_mut().enumerate() {
-            let M = self.params.get_M(lc);
-            l_links.trim_to_k_nearest(M);
+    /// Prepare connect plans for a batch of graph updates.
+    ///
+    /// Given a collection of updates, generates a sequence of `ConnectPlan`
+    /// structs representing the individual sequential updates from applying the
+    /// input updates one after another.  This involves computing the
+    /// intermediate state of neighborhoods modified by insertions, and
+    /// collecting this intermediate state in corresponding updates.
+    ///
+    /// After the `ConnectPlan` structs are created, the final state of all
+    /// updated neighborhoods is inspected to see if any are too large and need
+    /// to be compacted.  All such neighborhoods are compacted in one step at
+    /// the end of the function call.
+    ///
+    /// TODO: finalize batched operation of compaction to minimize latency.
+    ///
+    /// This function call does *not* update `graph`.
+    #[allow(clippy::type_complexity)]
+    pub async fn insert_prepare_batch<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &mut GraphMem<V::VectorRef>,
+        mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
+    ) -> Result<Vec<ConnectPlanV<V>>> {
+        if updates.is_empty() {
+            return Ok(Vec::new());
         }
 
-        struct NeighborUpdate<Query, Vector, Distance> {
-            /// The distance between the vector being inserted to a base vector.
-            nb_dist: Distance,
-            /// The base vector that we connect to. It is in "query" form to compare to `nb_links`.
-            nb_query: Query,
-            /// The neighborhood of the base vector.
-            nb_links: SortedEdgeIds<Vector>,
-            /// The current state of the search.
-            search: BinarySearch,
-        }
-
-        // Collect current neighborhoods of new neighbors in each layer and
-        // initialize binary search
-        let mut neighbors = Vec::new();
-        for (lc, l_links) in links.iter().enumerate() {
-            let nb_queries = store.vectors_as_queries(l_links.vectors_cloned()).await;
-
-            let mut l_neighbors = Vec::with_capacity(l_links.len());
-            for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
-                let nb_links = graph.get_links(nb, lc).await;
-                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links).await);
-                let search = BinarySearch {
-                    left: 0,
-                    right: nb_links.len(),
-                };
-                let neighbor = NeighborUpdate {
-                    nb_dist: nb_dist.clone(),
-                    nb_query,
-                    nb_links,
-                    search,
-                };
-                l_neighbors.push(neighbor);
-            }
-            neighbors.push(l_neighbors);
-        }
-
-        // Run searches until completion, executing comparisons in batches
-        let mut searches_ongoing: Vec<_> = neighbors
-            .iter_mut()
-            .flatten()
-            .filter(|n| !n.search.is_finished())
-            .collect();
-
-        while !searches_ongoing.is_empty() {
-            // Find the next batch of distances to evaluate.
-            // This is each base neighbor versus the next search position in its neighborhood.
-            let dist_batch = searches_ongoing
-                .iter()
-                .map(|n| {
-                    let cmp_idx = n.search.next().ok_or(eyre!("No next index found"))?;
-                    Ok((n.nb_query.clone(), n.nb_links[cmp_idx].clone()))
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            // Compute the distances.
-            let link_distances = store.eval_distance_pairs(&dist_batch).await?;
-
-            // Prepare a batch of less_than.
-            // This is |inserted--base| versus |base--neighborhood|.
-            let lt_batch = izip!(&searches_ongoing, link_distances)
-                .map(|(n, link_dist)| (n.nb_dist.clone(), link_dist))
-                .collect_vec();
-
-            // Compute the less_than.
-            let results = store.less_than_batch(&lt_batch).await?;
-
-            searches_ongoing
-                .iter_mut()
-                .zip(results)
-                .for_each(|(n, res)| {
-                    n.search.update(res);
-                });
-
-            searches_ongoing.retain(|n| !n.search.is_finished());
-        }
-
-        // Directly insert new vector into neighborhoods from search results
-        for (lc, l_neighbors) in neighbors.iter_mut().enumerate() {
-            let max_links = self.params.get_M_max(lc);
-            for n in l_neighbors.iter_mut() {
-                let insertion_idx = n.search.result().ok_or(eyre!("No insertion index found"))?;
-                n.nb_links.insert(insertion_idx, inserted_vector.clone());
-                n.nb_links.trim_to_k_nearest(max_links);
+        // Sort all neighborhoods by index
+        for (_, links, _) in updates.iter_mut() {
+            for l in links.iter_mut() {
+                l.sort();
             }
         }
 
-        // Generate ConnectPlanLayer structs
-        plan.layers = links
+        // Output connect plans
+        let mut output_plans: Vec<ConnectPlanV<V>> = Vec::new();
+        // Map from vector ids to output connect plan indices
+        let mut query_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
+
+        // Map `(vector_id, layer) -> Vec<query_id>` recording the query ids
+        // which are to be inserted into neighborhoods of nodes, and in what
+        // order.  Note input `vector_id` can be a `query_id` if the
+        // neighborhood of a subsequent query has been extended to include a
+        // previous query in the batch.  `BTreeMap` is used for deterministic
+        // iteration order.
+        let mut nbhd_updates: BTreeMap<
+            (<V as VectorStore>::VectorRef, usize),
+            Vec<<V as VectorStore>::VectorRef>,
+        > = BTreeMap::new();
+
+        // Final updated neighborhood associated with each modified `(vector_id, layer)`
+        let mut final_nbhds: BTreeMap<
+            (<V as VectorStore>::VectorRef, usize),
+            Vec<<V as VectorStore>::VectorRef>,
+        > = BTreeMap::new();
+
+        for (idx, (vec, links, update_ep)) in updates.iter().enumerate() {
+            // Initialize connect plan for output
+            output_plans.push(ConnectPlan {
+                inserted_vector: vec.clone(),
+                updates: BTreeMap::new(),
+                update_ep: update_ep.clone(),
+            });
+            // Record index of associated vector id
+            query_idxs.insert(vec.clone(), idx);
+
+            for (layer, neighbors) in links.iter().enumerate() {
+                // Add update for inserting node with outgoing edges in this layer
+                output_plans[idx]
+                    .updates
+                    .insert((vec.clone(), layer), neighbors.clone());
+
+                // Record neighborhood of new node as potential final neighborhood.
+                // (May be overwritten later if updated during batch.)
+                final_nbhds.insert((vec.clone(), layer), neighbors.clone());
+
+                // Record connections to existing nodes, organized by existing node
+                for nb in neighbors.iter() {
+                    nbhd_updates
+                        .entry((nb.clone(), layer))
+                        .or_default()
+                        .push(vec.clone());
+                }
+            }
+        }
+
+        for ((nb, layer), query_ids) in nbhd_updates {
+            // Identify the graph neighborhood of `nb` in layer `layer` prior to
+            // any updates in the batch
+            let mut nb_nbhd = if let Some(idx) = query_idxs.get(&nb) {
+                // `nb`` is a query id from the current batch
+                let update_entry = updates
+                    .get(*idx)
+                    .ok_or_eyre("Could not find associated update entry")?;
+                let nbhd = update_entry
+                    .1
+                    .get(layer)
+                    .ok_or_eyre("Update entry layer not present")?;
+                nbhd.clone()
+            } else {
+                let links = graph.get_links(&nb, layer).await;
+                store.only_valid_vectors(links).await
+            };
+
+            // For each individual update, in order, extend the neighborhood and
+            // add as update in the corresopnding connect plan
+            for query_id in query_ids {
+                // Get the output connect plan associated with `query_id`
+                let connect_plan_idx = *query_idxs
+                    .get(&query_id)
+                    .ok_or_eyre("Could not find associated connect plan index")?;
+                let connect_plan = output_plans
+                    .get_mut(connect_plan_idx)
+                    .ok_or_eyre("Could not find associated connect plan")?;
+
+                // Insert `query_id` into the existing index-sorted neighborhood
+                match nb_nbhd.binary_search(&query_id) {
+                    Err(i) => nb_nbhd.insert(i, query_id),
+                    Ok(_) => tracing::warn!("Attempted to add graph edge which was already present: {nb:?} -> {query_id:?} (layer {layer})"),
+                }
+
+                // Add update reflecting change to the existing neighborhood
+                connect_plan
+                    .updates
+                    .insert((nb.clone(), layer), nb_nbhd.clone());
+            }
+
+            final_nbhds.insert((nb, layer), nb_nbhd);
+        }
+
+        // Initial updates without compaction are complete.  Now see if any
+        // modified neighborhoods are too large.
+
+        let needs_compaction: BTreeMap<_, _> = final_nbhds
             .into_iter()
-            .zip(neighbors)
-            .map(|(l_links, l_neighbors)| ConnectPlanLayer {
-                neighbors: l_links.vectors_cloned(),
-                nb_links: l_neighbors.into_iter().map(|n| n.nb_links.0).collect_vec(),
-            })
+            .filter(|((_nb, layer), nb_nbhd)| nb_nbhd.len() > self.params.get_M_limit(*layer))
             .collect();
 
-        Ok(plan)
+        metrics::histogram!("neighborhooods_compacted").record(needs_compaction.len() as f64);
+        tracing::info!(
+            "Batch compacting {} oversized neighborhoods",
+            needs_compaction.len()
+        );
+
+        if !needs_compaction.is_empty() {
+            // Apply batch compaction
+            let (base_nodes, neighborhoods, max_sizes, layers): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
+                needs_compaction
+                    .into_iter()
+                    .map(|((nb, layer), nb_nbhd)| {
+                        (nb, nb_nbhd, self.params.get_M_max(layer), layer)
+                    })
+                    .multiunzip();
+            let compacted_nbhds = store
+                .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
+                .await?;
+
+            // Add updates for neighborhood compaction to last connect plan
+            let last_plan = output_plans
+                .last_mut()
+                .ok_or_eyre("Output plans unexpectedly empty")?;
+            for (id, layer, mut compacted_nbhd) in izip!(base_nodes, layers, compacted_nbhds) {
+                compacted_nbhd.sort();
+                last_plan.updates.insert((id, layer), compacted_nbhd);
+            }
+        }
+
+        Ok(output_plans)
     }
 
     /// Insert a vector using the search results from `search_to_insert`,
-    /// that is the nearest neighbor links at each insertion layer, and a flag
-    /// indicating whether the vector is to be inserted as the new entry point.
+    /// that is the nearest neighbor links at each insertion layer, and an enum
+    /// indicating the effect upon the graph's entry points
     #[instrument(
         level = "trace",
         target = "searcher::cpu_time",
         skip(self, store, graph, inserted_vector, links)
     )]
-    pub async fn insert_from_search_results<V: VectorStore>(
+    pub async fn insert_from_search_results<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         inserted_vector: V::VectorRef,
-        links: Vec<SortedNeighborhoodV<V>>,
-        set_ep: SetEntryPoint,
+        links: Vec<N>,
+        update_ep: UpdateEntryPoint,
     ) -> Result<()> {
+        // Trim and extract unstructured vector lists
+        let mut links_unstructured = Vec::new();
+        for (lc, mut l) in links.iter().cloned().enumerate() {
+            let m = self.params.get_M(lc);
+            l.trim(store, m).await?;
+            links_unstructured.push(l.edge_ids())
+        }
+
         let plan = self
-            .insert_prepare(store, graph, inserted_vector, links, set_ep)
+            .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
             .await?;
         graph.insert_apply(plan).await;
         Ok(())
     }
 
-    pub async fn is_match<V: VectorStore>(
+    pub async fn is_match<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        neighbors: &[SortedNeighborhoodV<V>],
+        neighbors: &[N],
     ) -> Result<bool> {
-        match neighbors
-            .first()
-            .and_then(|bottom_layer| bottom_layer.get_nearest())
-        {
-            None => Ok(false), // Empty database.
-            Some((_, smallest_distance)) => store.is_match(smallest_distance).await,
+        match neighbors.first() {
+            None => Ok(false),
+            Some(bottom_layer) => Ok(!bottom_layer.matches(store).await?.is_empty()),
         }
     }
 
-    pub async fn match_count<V: VectorStore>(
+    pub async fn matches<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        neighbors: &[SortedNeighborhoodV<V>],
-    ) -> Result<usize> {
+        neighbors: &[N],
+    ) -> Result<Vec<(V::VectorRef, V::DistanceRef)>> {
         match neighbors.first() {
-            None => Ok(0), // Empty database.
-            Some(bottom_layer) => bottom_layer.match_count(store).await,
+            None => Ok(vec![]),
+            Some(bottom_layer) => {
+                let matches = bottom_layer.matches(store).await?;
+                Ok(matches)
+            }
         }
     }
 }
@@ -1615,9 +1718,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem};
+    use crate::{
+        hawkers::plaintext_store::PlaintextStore,
+        hnsw::{GraphMem, SortedNeighborhood},
+    };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
+    use itertools::chain;
     use rand::SeedableRng;
     use tokio;
 
@@ -1635,15 +1742,26 @@ mod tests {
         // Insert the codes.
         for query in queries1.iter() {
             let insertion_layer = db.gen_layer_rng(rng)?;
-            let (neighbors, set_ep) = db
-                .search_to_insert(vector_store, graph_store, query, insertion_layer)
+            let (neighbors, update_ep) = db
+                .search_to_insert::<_, SortedNeighborhood<PlaintextStore>>(
+                    vector_store,
+                    graph_store,
+                    query,
+                    insertion_layer,
+                )
                 .await?;
             assert!(!db.is_match(vector_store, &neighbors).await?);
 
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
-            db.insert_from_search_results(vector_store, graph_store, inserted, neighbors, set_ep)
-                .await?;
+            db.insert_from_search_results(
+                vector_store,
+                graph_store,
+                inserted,
+                neighbors,
+                update_ep,
+            )
+            .await?;
         }
 
         let queries2 = IrisDB::new_random_rng(100, rng)
@@ -1655,13 +1773,20 @@ mod tests {
         // Insert the codes with helper function
         for query in queries2.iter() {
             let insertion_layer = db.gen_layer_rng(rng)?;
-            db.insert(vector_store, graph_store, query, insertion_layer)
-                .await?;
+            db.insert::<_, SortedNeighborhood<_>>(
+                vector_store,
+                graph_store,
+                query,
+                insertion_layer,
+            )
+            .await?;
         }
 
         // Search for the same codes and find matches.
         for query in queries1.iter().chain(queries2.iter()) {
-            let neighbors = db.search(vector_store, graph_store, query, 1).await?;
+            let neighbors = db
+                .search::<_, SortedNeighborhood<_>>(vector_store, graph_store, query, 1)
+                .await?;
             assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
 
@@ -1704,18 +1829,18 @@ mod tests {
         let vector_store_default = &mut PlaintextStore::new();
         let graph_store_default = &mut GraphMem::new();
 
-        for (insertion_layer, expected_nb_len, expected_set_ep) in [
-            (0, 1, SetEntryPoint::NewLayer),
-            (0, 1, SetEntryPoint::False),
-            (1, 2, SetEntryPoint::NewLayer),
-            (1, 2, SetEntryPoint::False),
-            (2, 3, SetEntryPoint::NewLayer),
-            (2, 3, SetEntryPoint::False),
+        for (insertion_layer, expected_nb_len, expected_update_ep) in [
+            (0, 1, UpdateEntryPoint::SetUnique { layer: 0 }),
+            (0, 1, UpdateEntryPoint::False),
+            (1, 2, UpdateEntryPoint::SetUnique { layer: 1 }),
+            (1, 2, UpdateEntryPoint::False),
+            (2, 3, UpdateEntryPoint::SetUnique { layer: 2 }),
+            (2, 3, UpdateEntryPoint::False),
         ] {
             let query = queries.next().unwrap();
 
-            let (neighbors, set_ep) = searcher_default
-                .search_to_insert(
+            let (neighbors, update_ep) = searcher_default
+                .search_to_insert::<_, SortedNeighborhood<PlaintextStore>>(
                     vector_store_default,
                     graph_store_default,
                     &query,
@@ -1724,10 +1849,10 @@ mod tests {
                 .await?;
 
             assert_eq!(neighbors.len(), expected_nb_len);
-            assert_eq!(set_ep, expected_set_ep);
+            assert_eq!(update_ep, expected_update_ep);
 
             searcher_default
-                .insert(
+                .insert::<_, SortedNeighborhood<_>>(
                     vector_store_default,
                     graph_store_default,
                     &query,
@@ -1742,19 +1867,19 @@ mod tests {
         let vector_store_linear = &mut PlaintextStore::new();
         let graph_store_linear = &mut GraphMem::new();
 
-        for (insertion_layer, expected_nb_len, expected_set_ep) in [
-            (0, 1, SetEntryPoint::False),
-            (0, 1, SetEntryPoint::False),
-            (1, 2, SetEntryPoint::False),
-            (1, 2, SetEntryPoint::False),
-            (2, 2, SetEntryPoint::AddToLayer),
-            (2, 2, SetEntryPoint::AddToLayer),
+        for (insertion_layer, expected_nb_len, expected_update_ep) in [
+            (0, 1, UpdateEntryPoint::False),
+            (0, 1, UpdateEntryPoint::False),
+            (1, 2, UpdateEntryPoint::False),
+            (1, 2, UpdateEntryPoint::False),
+            (2, 2, UpdateEntryPoint::Append { layer: 1 }),
+            (2, 2, UpdateEntryPoint::Append { layer: 1 }),
         ] {
             // Same queries used above
             let query = queries_copy.next().unwrap();
 
-            let (neighbors, set_ep) = searcher_linear
-                .search_to_insert(
+            let (neighbors, update_ep) = searcher_linear
+                .search_to_insert::<_, SortedNeighborhood<PlaintextStore>>(
                     vector_store_linear,
                     graph_store_linear,
                     &query,
@@ -1763,16 +1888,86 @@ mod tests {
                 .await?;
 
             assert_eq!(neighbors.len(), expected_nb_len);
-            assert_eq!(set_ep, expected_set_ep);
+            assert_eq!(update_ep, expected_update_ep);
 
             searcher_linear
-                .insert(
+                .insert::<_, SortedNeighborhood<_>>(
                     vector_store_linear,
                     graph_store_linear,
                     &query,
                     insertion_layer,
                 )
                 .await?;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_prepare_batch() -> Result<()> {
+        // Default mode
+        let searcher = HnswSearcher::new_linear_scan(64, 32, 2, 1);
+        let vector_store = &mut PlaintextStore::new();
+        let graph_store = &mut GraphMem::new();
+
+        let mut ids = vec![];
+
+        let mut rng = AesRng::seed_from_u64(42);
+        let iris_db = IrisDB::new_random_rng(10, &mut rng);
+
+        // Insert queries into the vector store
+        let queries = iris_db.db.into_iter().map(Arc::new);
+        for query in queries {
+            let id = vector_store.insert(&query).await;
+            ids.push(id);
+        }
+
+        // For vectors ids 1 to 5, insert into the graph with each other as neighbors
+        for (i, &vector_id) in ids[0..5].iter().enumerate() {
+            // Add all other vectors as neighbors (excluding self)
+            let nbs = Vec::from_iter(chain!(ids[0..i].iter(), ids[i + 1..5].iter()).cloned());
+
+            // Set entry point for first item
+            let update_ep = if i == 0 {
+                UpdateEntryPoint::SetUnique { layer: 0 }
+            } else {
+                UpdateEntryPoint::False
+            };
+
+            // Create connect plan for this vector at layer 0
+            let connect_plan = ConnectPlan {
+                inserted_vector: vector_id,
+                updates: BTreeMap::from_iter([((vector_id, 0), nbs)]),
+                update_ep,
+            };
+
+            // Apply the connect plan to the graph
+            graph_store.insert_apply(connect_plan).await;
+        }
+
+        // Create an update for inserting vector id 6
+        let next_id = ids[5];
+        let neighbors = vec![ids[0..5].to_vec()];
+        let updates = vec![(next_id, neighbors, UpdateEntryPoint::False)];
+
+        // Prepare the batch insertion
+        let connect_plans = searcher
+            .insert_prepare_batch(vector_store, graph_store, updates)
+            .await?;
+
+        // Verify the connect plan was created correctly
+        assert_eq!(connect_plans.len(), 1);
+        let plan = &connect_plans[0];
+        assert_eq!(plan.update_ep, UpdateEntryPoint::False);
+        assert_eq!(plan.updates.len(), 6); // 1 for vector id 6, and 5 others for its neighbors
+
+        // Verify that each neighbor's updated neighborhood has exactly 4
+        // elements (the original 4 neighbors plus the newly inserted vector,
+        // trimmed to M_max=4 in layer 0)
+        for ((id, _lc), nbhd) in &plan.updates {
+            if *id != next_id {
+                assert_eq!(nbhd.len(), 4);
+            }
         }
 
         Ok(())

@@ -90,12 +90,11 @@ async fn main() {
 
         // Check layers and entry points are valid for layer mode
         match searcher.layer_mode {
-            LayerMode::Standard => {
+            LayerMode::Standard { max_graph_layer } => {
                 assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-            }
-            LayerMode::Bounded { max_graph_layer } => {
-                assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-                assert!(graph.num_layers() <= max_graph_layer + 1);
+                assert!(
+                    graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX)
+                );
             }
             LayerMode::LinearScan { max_graph_layer } => {
                 assert!(graph.num_layers() <= max_graph_layer + 1);
@@ -126,8 +125,8 @@ async fn main() {
 
         let mut store = PlaintextStore::new();
         store.distance_fn = match config.echoice {
-            EngineChoice::NaiveFHD => DistanceFn::Simple,
-            EngineChoice::NaiveMinFHD => DistanceFn::MinimalRotation,
+            EngineChoice::NaiveFHD => DistanceFn::Fhd,
+            EngineChoice::NaiveMinFHD => DistanceFn::MinFhd,
         };
 
         for (i, iris) in irises.into_iter().enumerate() {

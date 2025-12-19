@@ -32,7 +32,10 @@ use crate::{
     },
     genesis::BatchSize,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
+    hnsw::{
+        graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
+        SortedNeighborhood,
+    },
 };
 
 /// Represents irises db table, mapping serial ids to version, and left and right iris codes.
@@ -148,10 +151,11 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             .await?;
     }
 
-    let searcher = HnswSearcher::new_standard(
+    let searcher = HnswSearcher::new_linear_scan(
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
         state.config.hnsw_M,
+        1, // should match the constant LINEAR_SCAN_MAX_GRAPH_LAYER
     );
 
     let prf_key: [u8; 16] = state
@@ -214,13 +218,27 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     let identifier = (vector_id, side);
                     let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                    let (links, set_ep) = searcher
-                        .search_to_insert(store, graph, &query, insertion_layer)
+                    let (links, update_ep) = searcher
+                        .search_to_insert::<_, SortedNeighborhood<_>>(
+                            store,
+                            graph,
+                            &query,
+                            insertion_layer,
+                        )
                         .await?;
+
+                    // Trim and extract unstructured vector lists
+                    let mut links_unstructured = Vec::new();
+                    for (lc, mut l) in links.into_iter().enumerate() {
+                        let m = searcher.params.get_M(lc);
+                        l.trim(store, m).await?;
+                        links_unstructured.push(l.edge_ids())
+                    }
+
                     let insert_plan = InsertPlanV {
                         query,
-                        links,
-                        set_ep,
+                        links: links_unstructured,
+                        update_ep,
                     };
 
                     insert::insert(
@@ -304,14 +322,27 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 let identifier = (vector_id, side);
                 let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                let (links, set_ep) = searcher
-                    .search_to_insert(store, graph, &query, insertion_layer)
+                let (links, update_ep) = searcher
+                    .search_to_insert::<_, SortedNeighborhood<_>>(
+                        store,
+                        graph,
+                        &query,
+                        insertion_layer,
+                    )
                     .await?;
+
+                // Trim and extract unstructured vector lists
+                let mut links_unstructured = Vec::new();
+                for (lc, mut l) in links.into_iter().enumerate() {
+                    let m = searcher.params.get_M(lc);
+                    l.trim(store, m).await?;
+                    links_unstructured.push(l.edge_ids())
+                }
 
                 let insert_plan: InsertPlanV<PlaintextStore> = InsertPlanV {
                     query,
-                    links,
-                    set_ep,
+                    links: links_unstructured,
+                    update_ep,
                 };
 
                 results.push(Some(insert_plan));
