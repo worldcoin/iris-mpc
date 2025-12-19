@@ -1,12 +1,9 @@
-name: Branch - Anon stats server build and push docker image
+name: Branch - No Op build and push docker image
 
 on:
   push:
     branches:
-      - "dev"
-      - "chore/rustc-1.89"
-    paths-ignore:
-      - "deploy/**"
+      - "sw/deploy-no-op"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
