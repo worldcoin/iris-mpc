@@ -36,7 +36,22 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-1"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_cpu1M"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "_gpu1M"
+
   - name: SMPC__CPU_DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
+
+  - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
@@ -227,4 +242,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-  - sg-0b7cacc680e0f8e3b # smpc1-dev ampc-hnsw pod sg
+    - sg-0b7cacc680e0f8e3b # smpc1-dev ampc-hnsw pod sg
