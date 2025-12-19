@@ -3,7 +3,7 @@ name: Branch - Anon stats server build and push docker image
 on:
   push:
     branches:
-      - "sw/build-iris-db"
+      - "sw/build-iris-db-genesis"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
