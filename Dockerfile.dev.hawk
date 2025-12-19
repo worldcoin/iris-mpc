@@ -19,8 +19,8 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 ENV RUSTUP_HOME="/root/.rustup"
 ENV CARGO_HOME="/root/.cargo"
-RUN rustup toolchain install 1.85.0
-RUN rustup default 1.85.0
+RUN rustup toolchain install 1.89.0
+RUN rustup default 1.89.0
 RUN rustup component add cargo
 RUN cargo install cargo-build-deps \
     && cargo install cargo-edit --version 0.13.6 --locked

@@ -38,7 +38,7 @@ jobs:
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
         id: cache-rust
         with:
           path: |
@@ -56,11 +56,11 @@ jobs:
 
       - name: Install Rust
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: rustup toolchain install 1.85.0
+        run: rustup toolchain install 1.89.0
 
       - name: Set Rust  as default
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: rustup default 1.85.0
+        run: rustup default 1.89.0
 
       - name: Install Rust clippy for checking clippy errors
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
