@@ -99,11 +99,23 @@ pub async fn insert<V: VectorStoreMut>(
         }
     }
 
+    // Time the insert_prepare_batch call
+    let start_prepare = std::time::Instant::now();
     let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
+    let duration_prepare = start_prepare.elapsed();
+    tracing::info!(
+        "insert_prepare_batch took {} ms",
+        duration_prepare.as_millis()
+    );
+
+    // Time the for loop applying plans
+    let start_apply = std::time::Instant::now();
     for (cp_idx, plan) in izip!(update_idxs, plans) {
         graph.insert_apply(plan.clone()).await;
         connect_plans[cp_idx].replace(plan);
     }
+    let duration_apply = start_apply.elapsed();
+    tracing::info!("insert_apply loop took {} ms", duration_apply.as_millis());
 
     Ok(connect_plans)
 }

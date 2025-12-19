@@ -1639,9 +1639,16 @@ impl HnswSearcher {
                         (nb, nb_nbhd, self.params.get_M_max(layer), layer)
                     })
                     .multiunzip();
+            // Time the compact_neighborhood_batch call
+            let start_compact = std::time::Instant::now();
             let compacted_nbhds = store
                 .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
                 .await?;
+            let duration_compact = start_compact.elapsed();
+            tracing::info!(
+                "compact_neighborhood_batch took {} ms",
+                duration_compact.as_millis()
+            );
 
             // Add updates for neighborhood compaction to last connect plan
             let last_plan = output_plans
