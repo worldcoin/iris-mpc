@@ -6,8 +6,6 @@ metadata:
 spec:
   nodeSelector:
     beta.kubernetes.io/instance-type: t3.2xlarge # Use migration node for db-cleaner
-  securityContext:
-    runAsUser: 0
   containers:
     - name: db-cleaner
       image: postgres

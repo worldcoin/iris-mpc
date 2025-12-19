@@ -22,7 +22,7 @@ mod lift_test {
     // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
     const INPUTS_PER_GPU_SIZE: usize = 12_507_136;
 
-    fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
+    fn to_view<'a, T>(inp: &'a [ChunkShare<T>]) -> Vec<ChunkShareView<'a, T>> {
         let mut res = Vec::with_capacity(inp.len());
         for inp in inp {
             res.push(inp.as_view());

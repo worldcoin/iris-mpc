@@ -1,4 +1,8 @@
+<<<<<<< HEAD:deploy/stage/common-values-anon-stats-server.yaml
 image: "ghcr.io/worldcoin/anon-stats-server:770afe31301605afae072608ed63a12022f7783f"
+=======
+image: "ghcr.io/worldcoin/anon-stats-server:v0.24.1@sha256:9d119acf7b3336d9244444dab51835611c500347d0c8d514eb72b5b952db4cd0"
+>>>>>>> main:deploy/stage/common-values-ampc-hnsw-anon-stats-server.yaml
 
 environment: stage
 replicaCount: 1
