@@ -58,6 +58,10 @@ struct Args {
     /// Skip insertion of specific serial IDs ... used primarily in genesis testing.
     #[clap(long, num_args = 1..)]
     skip_insert_serial_ids: Vec<u32>,
+
+    /// skip the first X irises in the file.
+    #[clap(long)]
+    skip: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -96,11 +100,13 @@ async fn main() -> Result<()> {
     let mut batch: Vec<GaloisRingSharedIrisPair> = Vec::with_capacity(SECRET_SHARING_BATCH_SIZE);
     let mut n_read: usize = 0;
 
+    let skip = args.skip.unwrap_or(2 * n_existing_irises);
+
     let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
     let reader = BufReader::new(file);
     let stream = Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
-        .skip(2 * n_existing_irises)
+        .skip(skip)
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples()
         .take(n_irises.unwrap_or(usize::MAX))
