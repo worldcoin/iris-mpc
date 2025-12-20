@@ -1,5 +1,13 @@
 #!/bin/sh
 
+curl "https://drive.usercontent.google.com/download?id=1je1stRXfVrHy2LRVcfg-SrRiz_yw33S4&export=download&confirm=t" -o /opt/irises.ndjson
+
+curl "https://drive.usercontent.google.com/download?id=1_73aeBjwJKDV1n6pYBi49BCUGl5UJKGh&export=download&confirm=t" -o /opt/irises-1k.ndjson
+
+curl "https://drive.usercontent.google.com/download?id=1vjswOMB7Yn-f7TDOqfzQr1_ZS-ubSg4E&export=download&confirm=t" -o /opt/graph.dat
+
+
+
 echo "starting"
 /bin/init-single-db \
   --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \

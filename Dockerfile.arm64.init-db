@@ -63,11 +63,6 @@ RUN update-ca-certificates
 
 COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/init-single-db /bin/init-single-db
 COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/graph-mem-cli /bin/graph-mem-cli
-RUN curl "https://drive.usercontent.google.com/download?id=1je1stRXfVrHy2LRVcfg-SrRiz_yw33S4&export=download&confirm=t" -o /opt/irises.ndjson
-
-RUN curl "https://drive.usercontent.google.com/download?id=1_73aeBjwJKDV1n6pYBi49BCUGl5UJKGh&export=download&confirm=t" -o /opt/irises-1k.ndjson
-
-RUN curl "https://drive.usercontent.google.com/download?id=1vjswOMB7Yn-f7TDOqfzQr1_ZS-ubSg4E&export=download&confirm=t" -o /opt/graph.dat
 
 COPY scripts/tools/init-single-db.sh /bin/entrypoint.sh
 RUN chmod +x /bin/entrypoint.sh
