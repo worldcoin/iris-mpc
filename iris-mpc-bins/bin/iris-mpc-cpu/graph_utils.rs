@@ -440,6 +440,7 @@ fn diff_graphs(
     if let Err(err) = node_equiv_result {
         println!("Graphs are not node-equivalent\n Reason: {:#?}", err);
     } else {
+        // TODO compare entry points
         match diff_spec {
             DiffSpec::Jaccard { num_display } => {
                 println!(
