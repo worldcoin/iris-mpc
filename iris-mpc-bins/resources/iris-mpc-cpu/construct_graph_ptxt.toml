@@ -1,0 +1,26 @@
+distance_fn = "min_fhd"
+hnsw_prf_seed = 42
+
+[irises]
+option = "NdjsonFile"
+path = "data/store.ndjson"
+limit = 1000
+selection = "All"
+
+# [graph]
+# path = "data/graph.dat"
+
+[searcher]
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[searcher.params]
+option = "Standard"
+ef_constr = 320
+ef_search = 320
+M = 256
+
+[output]
+base_directory = "data/"
+filename_stem = "graph-320-256"
+checkpoints = { Regular = 400 }
+# checkpoints = { Values = [400, 700, 900] }

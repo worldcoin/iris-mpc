@@ -48,7 +48,7 @@ pub enum IrisesConfig {
 pub async fn load_irises(config: IrisesConfig) -> Result<Vec<IrisCode>> {
     let irises = match config {
         IrisesConfig::Random { number, seed } => {
-            println!("Generating {} random iris codes...", number);
+            tracing::info!("Generating {} random iris codes...", number);
             let mut rng: Box<dyn RngCore> = if let Some(seed) = seed {
                 Box::new(StdRng::seed_from_u64(seed))
             } else {
@@ -64,7 +64,7 @@ pub async fn load_irises(config: IrisesConfig) -> Result<Vec<IrisCode>> {
             limit,
             selection,
         } => {
-            println!("Loading irises from NDJSON file: {}", path.display());
+            tracing::info!("Loading irises from NDJSON file: {}", path.display());
             irises_from_ndjson_iter(&path, limit, selection.unwrap_or(IrisSelection::All))?
                 .collect::<Vec<_>>()
         }
@@ -119,6 +119,7 @@ impl TryFrom<&SearcherConfig> for HnswSearcher {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "option")]
 #[allow(non_snake_case)]
 pub enum SearcherParams {
     Standard {

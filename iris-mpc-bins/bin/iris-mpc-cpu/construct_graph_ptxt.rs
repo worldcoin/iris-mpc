@@ -5,7 +5,6 @@ use eyre::{bail, Result};
 use iris_mpc_common::IrisVectorId;
 use itertools::{chain, Itertools};
 use serde::Deserialize;
-use tracing::info;
 
 use iris_mpc_cpu::{
     hawkers::{
@@ -18,6 +17,7 @@ use iris_mpc_cpu::{
         serialization::{graph::write_graph_to_file, load_toml},
     },
 };
+use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[allow(non_snake_case)]
 #[derive(Parser)]
@@ -29,20 +29,27 @@ struct Args {
 
 #[derive(Clone, Debug, Deserialize)]
 struct CliConfig {
+    /// Specification for iris codes to use in the construction.
     irises: IrisesConfig,
 
-    distance_fn: DistanceFn,
-
+    /// Path and version info for loading an initial graph from file.
     graph: Option<LoadGraphConfig>,
 
+    /// Configuration to specify HnswSearcher struct for graph construction.
     searcher: SearcherConfig,
 
+    /// Distance function for comparison of iris codes.
+    distance_fn: DistanceFn,
+
+    /// Seed value used for sampling graph layers for insertion.
     hnsw_prf_seed: Option<u64>,
 
+    /// Specifies the method of outputing graph data to file after construction.
     output: OutputGraphConfig,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
 enum OutputGraphConfig {
     Simple {
         path: PathBuf,
@@ -63,7 +70,7 @@ enum Checkpoints {
 impl Checkpoints {
     /// Return intervals of indices splitting the provided range at the checkpoints
     pub fn intervals_for_range(&self, start: usize, end: usize) -> Vec<(usize, usize)> {
-        if start <= end {
+        if start > end {
             return Vec::new();
         }
 
@@ -96,12 +103,17 @@ impl Checkpoints {
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().init();
+    let filter = EnvFilter::new("info,iris_mpc_cpu::hnsw=off");
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(filter))
+        .init();
 
     // parse args
     tracing::info!("Loading configuration from file");
     let cli = Args::parse();
     let config: CliConfig = load_toml(&cli.job_spec)?;
+    tracing::info!("Configuration loaded from {}", cli.job_spec.display());
 
     tracing::info!("Initializing searcher");
     let searcher: HnswSearcher = (&config.searcher).try_into()?;
@@ -131,7 +143,7 @@ async fn main() -> Result<()> {
                     .unwrap_or(0)
             })
             .unwrap_or(0);
-        tracing::info!("Loaded graph has {graph_max_id} nodes");
+        tracing::info!("Loaded graph has max node id {graph_max_id}");
         (graph, graph_max_id)
     } else {
         tracing::info!("Initializing graph");
@@ -140,6 +152,9 @@ async fn main() -> Result<()> {
 
     let start_idx = graph_max_id as usize;
     let end_idx = irises.len();
+
+    let first_id = irises[start_idx].0.serial_id();
+    let last_id = irises[end_idx - 1].0.serial_id();
 
     // insert irises which are already represented in the graph
     tracing::info!("Initializing vector store");
@@ -151,7 +166,7 @@ async fn main() -> Result<()> {
 
     match config.output {
         OutputGraphConfig::Simple { path } => {
-            info!("Building HNSW graph for indices {start_idx} to {end_idx}");
+            tracing::info!("Building HNSW graph for ids {first_id} to {last_id}");
             let new_irises = irises[(graph_max_id as usize)..].to_vec();
             (graph, _) = plaintext_parallel_batch_insert(
                 Some(graph),
@@ -163,7 +178,7 @@ async fn main() -> Result<()> {
             )
             .await?;
 
-            info!("Persisting HNSW graph to file");
+            tracing::info!("Persisting HNSW graph to file");
             write_graph_to_file(path, graph)?;
         }
         OutputGraphConfig::Checkpoints {
@@ -177,11 +192,22 @@ async fn main() -> Result<()> {
 
             let intervals = checkpoints.intervals_for_range(start_idx, end_idx);
 
-            info!("Building HNSW graph with checkpoints, for indices {start_idx} to {end_idx}");
+            tracing::info!("Building HNSW graph with checkpoints, for ids {first_id} to {last_id}");
+            for (checkpoint_idx, (i_start, i_end)) in intervals.iter().enumerate() {
+                tracing::info!(
+                    "Planned checkpoint {}: ids {} to {}",
+                    checkpoint_idx + 1,
+                    irises[*i_start].0.serial_id(),
+                    irises[*i_end - 1].0.serial_id(),
+                )
+            }
+
             for (checkpoint_idx, (i_start, i_end)) in intervals.into_iter().enumerate() {
-                info!(
-                    "Building graph checkpoint {} for indices {} to {}...",
-                    checkpoint_idx, i_start, i_end
+                tracing::info!(
+                    "Building graph checkpoint {} for ids {} to {}...",
+                    checkpoint_idx + 1,
+                    irises[i_start].0.serial_id(),
+                    irises[i_end - 1].0.serial_id(),
                 );
                 let i_new_irises = irises[i_start..i_end].to_vec();
                 (graph, store) = plaintext_parallel_batch_insert(
@@ -197,11 +223,13 @@ async fn main() -> Result<()> {
                 let filename = format!("{filename_stem}-{i_end}.dat");
                 let output_path = base_directory.join(filename.clone());
 
-                info!("Persisting HNSW graph to file: {filename}");
+                tracing::info!("Persisting HNSW graph to file: {filename}");
                 write_graph_to_file(output_path, graph.clone())?;
             }
         }
     }
+
+    tracing::info!("Done!");
 
     Ok(())
 }
