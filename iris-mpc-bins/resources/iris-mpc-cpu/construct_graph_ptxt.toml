@@ -1,4 +1,4 @@
-distance_fn = "min_fhd"
+distance_fn = "MinFhd"
 hnsw_prf_seed = 42
 
 [irises]
@@ -8,7 +8,7 @@ limit = 1000
 selection = "All"
 
 # [graph]
-# path = "data/graph.dat"
+# path = "data/starting-graph.dat"
 
 [searcher]
 layer_mode = { LinearScan = { max_graph_layer = 1 } }
@@ -20,7 +20,12 @@ ef_search = 320
 M = 256
 
 [output]
+
+# With checkpoints
 base_directory = "data/"
-filename_stem = "graph-320-256"
-checkpoints = { Regular = 400 }
+filename_stem = "graph-320-256-minfhd"
+checkpoints = { Regular = 250 }
 # checkpoints = { Values = [400, 700, 900] }
+
+# No checkpoints
+# path = "data/graph-320-256-minfhd-1000.dat"
