@@ -1,12 +1,15 @@
 use super::Batch;
 use crate::{
-    execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
+    execution::hawk_main::{
+        iris_worker::IrisPoolHandle, BothEyes, HawkMutation, VecRequests, LEFT, RIGHT,
+    },
     hawkers::aby3::aby3_store::Aby3Query,
 };
 use eyre::Result;
+use futures::future::try_join_all;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
 use std::{fmt, sync::Arc};
-use tokio::sync::oneshot;
+use tokio::{join, sync::oneshot};
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3Query>>;
@@ -58,6 +61,46 @@ impl JobRequest {
 
     pub fn new_modification(modification: Modification) -> Self {
         Self::Modification { modification }
+    }
+
+    pub async fn numa_realloc(
+        queries: Aby3BatchQueryRef,
+        workers: BothEyes<IrisPoolHandle>,
+    ) -> Aby3BatchQueryRef {
+        let (left, right) = join!(
+            Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
+            Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT]),
+        );
+        Arc::new([left, right])
+    }
+
+    async fn numa_realloc_side(
+        requests: &VecRequests<Aby3Query>,
+        worker: &IrisPoolHandle,
+    ) -> VecRequests<Aby3Query> {
+        // Iterate over all the irises.
+        let all_irises_iter = requests
+            .iter()
+            .flat_map(|query| [&query.iris, &query.iris_proc]);
+
+        // Go realloc the irises in parallel.
+        let tasks = all_irises_iter.map(|iris| worker.numa_realloc(iris.clone()).unwrap());
+
+        // Iterate over the results in the same order.
+        let mut new_irises_iter = try_join_all(tasks).await.unwrap().into_iter();
+
+        // Rebuild the same structure with the new irises.
+        let new_requests = requests
+            .iter()
+            .map(|_old_query| {
+                let iris = new_irises_iter.next().unwrap();
+                let iris_proc = new_irises_iter.next().unwrap();
+                Aby3Query { iris, iris_proc }
+            })
+            .collect::<Vec<_>>();
+
+        assert!(new_irises_iter.next().is_none());
+        new_requests
     }
 }
 
