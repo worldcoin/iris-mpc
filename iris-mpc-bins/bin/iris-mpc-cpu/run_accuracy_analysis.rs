@@ -48,8 +48,8 @@ async fn main() -> Result<()> {
     let recorder = DebuggingRecorder::new();
     let snapshotter = recorder.snapshotter();
 
-    let recorder = TracingContextLayer::only_allow(&["__query_id", "__mutation", "__rotation"])
-        .layer(recorder);
+    let recorder =
+        TracingContextLayer::only_allow(["__query_id", "__mutation", "__rotation"]).layer(recorder);
     metrics::set_global_recorder(recorder).expect("failed to install recorder");
 
     println!("Starting analysis...");
