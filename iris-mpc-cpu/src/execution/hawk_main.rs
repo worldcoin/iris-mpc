@@ -1535,7 +1535,7 @@ impl HawkMutation {
                     for ((inserted_vector, lc), neighbors) in plan.updates {
                         let key = (
                             inserted_vector.serial_id() as i64,
-                            inserted_vector.version_id() as i16,
+                            inserted_vector.version_id(),
                             lc as i16,
                         );
                         // Deduplicate: If multiple updates for the same node exist, last one wins
