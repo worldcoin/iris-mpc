@@ -1,7 +1,5 @@
 use rand::{CryptoRng, Rng};
 
-use iris_mpc_common::IrisSerialId;
-
 use crate::aws::{AwsClient, AwsClientConfig};
 
 pub use components::RequestGeneratorParams;
@@ -74,5 +72,39 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         }
 
         Ok(())
+    }
+}
+
+// impl<R: Rng + CryptoRng + Send> Default for ServiceClient<R> {
+//     fn default() -> Self {
+// Self::new(
+//     AwsClientConfig::new_1()
+//     RequestGeneratorParams::default(),
+//     rng_seed,
+// )
+//     }
+// }
+
+#[cfg(test)]
+mod tests {
+    use rand::{rngs::StdRng, SeedableRng};
+
+    use super::{AwsClientConfig, RequestGeneratorParams, ServiceClient};
+    // use crate::client::{RequestBatchKind, RequestBatchSize};
+
+    impl ServiceClient<StdRng> {
+        async fn new_1() -> Self {
+            ServiceClient::<StdRng>::new(
+                AwsClientConfig::new_1().await,
+                RequestGeneratorParams::default(),
+                StdRng::seed_from_u64(42),
+            )
+            .await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_new_1() {
+        let _ = ServiceClient::new_1().await;
     }
 }

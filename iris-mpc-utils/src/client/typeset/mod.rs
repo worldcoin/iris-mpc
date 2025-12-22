@@ -3,8 +3,8 @@ mod errors;
 mod traits;
 
 pub use data::{
-    Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestBody, RequestFactory,
-    RequestStatus, ResponseBody,
+    Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestBody, RequestStatus,
+    ResponseBody,
 };
 pub use errors::ClientError;
 pub use traits::{Initialize, ProcessRequestBatch};

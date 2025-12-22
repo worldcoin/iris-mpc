@@ -32,10 +32,10 @@ impl RequestBatch {
         &mut self.requests
     }
 
-    pub fn new(batch_idx: usize) -> Self {
+    pub fn new(batch_idx: usize, requests: Option<Vec<Request>>) -> Self {
         Self {
             batch_idx,
-            requests: Vec::new(),
+            requests: requests.unwrap_or(vec![]),
         }
     }
 
@@ -81,14 +81,19 @@ impl RequestBatch {
         self.requests.iter().any(|r| r.is_enqueueable())
     }
 
-    pub fn push_request(&mut self, request: Request) {
-        self.requests_mut().push(request);
+    /// Returns next batch item ordinal identifier.
+    pub fn next_item_idx(&self) -> usize {
+        &self.requests().len() + 1
     }
 
-    pub fn push_requests(&mut self, request: Request, parent: Option<Request>) {
-        self.requests_mut().push(request);
-        if let Some(request) = parent {
-            self.requests_mut().push(request);
+    /// Extends requests collection with child/parent requests..
+    pub fn push_child_and_maybe_parent(
+        &mut self,
+        (child, maybe_parent): (Request, Option<Request>),
+    ) {
+        self.requests_mut().push(child);
+        if let Some(parent) = maybe_parent {
+            self.requests_mut().push(parent);
         }
     }
 
@@ -145,5 +150,34 @@ impl fmt::Display for RequestBatchSize {
         match self {
             Self::Static(size) => write!(f, "{}", size),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RequestBatch;
+
+    impl RequestBatch {
+        pub fn new_1() -> Self {
+            Self::new(1, None)
+        }
+
+        pub fn new_2() -> Self {
+            Self::new(1, Some(vec![]))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_new_1() {
+        let batch = RequestBatch::new_1();
+        assert!(batch.batch_idx == 1);
+        assert!(batch.requests.len() == 0);
+    }
+
+    #[tokio::test]
+    async fn test_new_2() {
+        let batch = RequestBatch::new_2();
+        assert!(batch.batch_idx == 1);
+        assert!(batch.requests.len() == 0);
     }
 }

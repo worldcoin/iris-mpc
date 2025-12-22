@@ -46,10 +46,63 @@ pub enum Request {
 }
 
 impl Request {
-    pub fn new_uniqueness(batch: &RequestBatch) -> Self {
-        Self::Uniqueness {
-            info: RequestInfo::new(batch, None),
-            signup_id: uuid::Uuid::new_v4(),
+    pub fn new(
+        batch: &RequestBatch,
+        kind: &str,
+        parent: Option<&Request>,
+        uniqueness_serial_id: Option<IrisSerialId>,
+    ) -> Self {
+        match kind {
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => Self::IdentityDeletion {
+                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), parent),
+                uniqueness_serial_id,
+            },
+            smpc_request::REAUTH_MESSAGE_TYPE => Self::Reauthorization {
+                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
+                reauth_id: uuid::Uuid::new_v4(),
+                uniqueness_serial_id,
+            },
+            smpc_request::RESET_UPDATE_MESSAGE_TYPE => Self::ResetUpdate {
+                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
+                reset_id: uuid::Uuid::new_v4(),
+                uniqueness_serial_id,
+            },
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => Self::ResetCheck {
+                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
+                reset_id: uuid::Uuid::new_v4(),
+            },
+            smpc_request::UNIQUENESS_MESSAGE_TYPE => Self::Uniqueness {
+                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
+                signup_id: uuid::Uuid::new_v4(),
+            },
+            _ => panic!("Invalid request kind"),
+        }
+    }
+
+    pub fn new_and_maybe_parent(
+        batch: &RequestBatch,
+        kind: &str,
+        parent_serial_id: Option<IrisSerialId>,
+    ) -> (Request, Option<Request>) {
+        match kind {
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+            | smpc_request::REAUTH_MESSAGE_TYPE
+            | smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
+                if parent_serial_id.is_some() {
+                    (Request::new(batch, kind, None, parent_serial_id), None)
+                } else {
+                    let parent = Some(Self::new(
+                        batch,
+                        smpc_request::UNIQUENESS_MESSAGE_TYPE,
+                        None,
+                        None,
+                    ));
+                    let child = Request::new(batch, kind, parent.as_ref(), None);
+
+                    (child, parent)
+                }
+            }
+            _ => (Request::new(batch, kind, None, None), None),
         }
     }
 
@@ -266,5 +319,37 @@ impl Default for RequestStatus {
 impl fmt::Display for RequestStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.label())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Request, RequestBatch, RequestInfo};
+
+    impl Request {
+        pub fn new_uniqueness(batch: &RequestBatch) -> Self {
+            Self::Uniqueness {
+                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
+                signup_id: uuid::Uuid::new_v4(),
+            }
+        }
+
+        fn new_1() -> Self {
+            Self::new_uniqueness(&RequestBatch::new_1())
+        }
+
+        fn new_2() -> Self {
+            Self::new_uniqueness(&RequestBatch::new_1())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_new_1() {
+        let _ = Request::new_1();
+    }
+
+    #[tokio::test]
+    async fn test_new_2() {
+        let _ = Request::new_2();
     }
 }
