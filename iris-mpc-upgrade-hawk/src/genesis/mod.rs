@@ -1098,7 +1098,7 @@ async fn get_results_thread(
                             &codes_and_masks,
                         )
                         .await?;
-                    connect_plans.persist2(&mut graph_tx).await?;
+                    connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: batch-id={batch_id}"
                     ));
@@ -1151,7 +1151,7 @@ async fn get_results_thread(
                             &iris_data,
                         )
                         .await?;
-                    connect_plans.persist2(&mut graph_tx).await?;
+                    connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: modification-id={modification_id}"
                     ));

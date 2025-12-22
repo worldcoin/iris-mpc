@@ -1499,17 +1499,6 @@ impl HawkMutation {
 
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
-        for mutation in self.0 {
-            for (side, plan_opt) in izip!(STORE_IDS, mutation.plans) {
-                if let Some(plan) = plan_opt {
-                    graph_tx.with_graph(side).insert_apply(plan).await?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn persist2(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         // Group updates by side: side -> (key -> neighbors)
         // Key: (serial_id, version_id, layer)
         let mut updates_by_side: HashMap<StoreId, HashMap<(i64, i16, i16), Vec<_>>> =
