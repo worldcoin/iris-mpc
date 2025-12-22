@@ -1624,11 +1624,11 @@ impl HnswSearcher {
             .filter(|((_nb, layer), nb_nbhd)| nb_nbhd.len() > self.params.get_M_limit(*layer))
             .collect();
 
-        metrics::histogram!("neighborhooods_compacted").record(needs_compaction.len() as f64);
-        tracing::info!(
-            "Batch compacting {} oversized neighborhoods",
-            needs_compaction.len()
-        );
+        // metrics::histogram!("neighborhooods_compacted").record(needs_compaction.len() as f64);
+        // tracing::info!(
+        //     "Batch compacting {} oversized neighborhoods",
+        //     needs_compaction.len()
+        // );
 
         if !needs_compaction.is_empty() {
             // Apply batch compaction
