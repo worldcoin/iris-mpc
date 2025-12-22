@@ -227,3 +227,7 @@ path = "bin/iris-mpc-utils/write_node_config_toml.rs"
 [[bin]]
 name = "iris-mpc-anon-stats-server"
 path = "bin/iris-mpc-anon-stats-server/main.rs"
+
+[[bin]]
+name = "minimal-hawk-server"
+path = "bin/iris-mpc-cpu/minimal_server.rs"
