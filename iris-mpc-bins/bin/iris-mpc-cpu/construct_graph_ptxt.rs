@@ -126,6 +126,9 @@ async fn main() -> Result<()> {
         .enumerate()
         .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
         .collect();
+    if irises.is_empty() {
+        bail!("Iris DB is empty");
+    }
     tracing::info!("Loaded {} iris codes to memory", irises.len());
 
     let (mut graph, graph_max_id) = if let Some(graph_spec) = config.graph {
@@ -152,6 +155,14 @@ async fn main() -> Result<()> {
 
     let start_idx = graph_max_id as usize;
     let end_idx = irises.len();
+
+    if start_idx >= end_idx {
+        bail!(
+            "Graph max ID ({}) exceeds available iris codes ({})",
+            start_idx,
+            end_idx
+        );
+    }
 
     let first_id = irises[start_idx].0.serial_id();
     let last_id = irises[end_idx - 1].0.serial_id();
