@@ -1,9 +1,11 @@
 mod request;
 mod request_batch;
 mod request_info;
-mod response;
+mod request_status;
+mod smpc_payloads;
 
-pub use request::{Request, RequestBody, RequestStatus, UniquenessReference};
-pub use request_batch::{RequestBatch, RequestBatchKind, RequestBatchSize};
-pub use request_info::RequestInfo;
-pub use response::ResponseBody;
+pub(crate) use request::{Request, UniquenessReference};
+pub(crate) use request_batch::{RequestBatch, RequestBatchKind, RequestBatchSize};
+pub(crate) use request_info::RequestInfo;
+pub(crate) use request_status::RequestStatus;
+pub(crate) use smpc_payloads::{RequestPayload, ResponsePayload};

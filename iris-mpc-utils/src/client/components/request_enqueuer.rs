@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use iris_mpc_common::helpers::smpc_request;
 
 use super::super::typeset::{
-    ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestStatus, ServiceClientError,
+    ProcessRequestBatch, Request, RequestBatch, RequestPayload, RequestStatus, ServiceClientError,
     UniquenessReference,
 };
 use crate::aws::{types::SnsMessageInfo, AwsClient};
@@ -12,7 +12,7 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 /// A component responsible for enqueuing system requests upon network ingress queues.
 #[derive(Debug)]
-pub struct RequestEnqueuer {
+pub(crate) struct RequestEnqueuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
 }
@@ -48,7 +48,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
         // Enqueue & mark requests as enqueued.
         for idx in futures::future::try_join_all(tasks).await? {
             if let Some(request) = batch.requests_mut().get_mut(idx) {
-                request.set_status(RequestStatus::new_enqueued());
+                request.set_status(RequestStatus::Enqueued);
             }
         }
 
@@ -56,7 +56,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
     }
 }
 
-impl From<&Request> for RequestBody {
+impl From<&Request> for RequestPayload {
     fn from(request: &Request) -> Self {
         match request {
             Request::IdentityDeletion { uniqueness_ref, .. } => {
@@ -117,34 +117,34 @@ impl From<&Request> for RequestBody {
 
 impl From<&Request> for SnsMessageInfo {
     fn from(request: &Request) -> Self {
-        Self::from(RequestBody::from(request))
+        Self::from(RequestPayload::from(request))
     }
 }
 
-impl From<RequestBody> for SnsMessageInfo {
-    fn from(body: RequestBody) -> Self {
+impl From<RequestPayload> for SnsMessageInfo {
+    fn from(body: RequestPayload) -> Self {
         match body {
-            RequestBody::IdentityDeletion(body) => Self::new(
+            RequestPayload::IdentityDeletion(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
                 &body,
             ),
-            RequestBody::Reauthorization(body) => Self::new(
+            RequestPayload::Reauthorization(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::REAUTH_MESSAGE_TYPE,
                 &body,
             ),
-            RequestBody::ResetCheck(body) => Self::new(
+            RequestPayload::ResetCheck(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RESET_CHECK_MESSAGE_TYPE,
                 &body,
             ),
-            RequestBody::ResetUpdate(body) => Self::new(
+            RequestPayload::ResetUpdate(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RESET_UPDATE_MESSAGE_TYPE,
                 &body,
             ),
-            RequestBody::Uniqueness(body) => Self::new(
+            RequestPayload::Uniqueness(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::UNIQUENESS_MESSAGE_TYPE,
                 &body,

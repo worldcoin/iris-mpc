@@ -1,11 +1,13 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use iris_mpc_common::helpers::smpc_request;
 
-use super::{Request, RequestInfo, RequestStatus, ResponseBody, UniquenessReference};
+use super::{Request, RequestInfo, RequestStatus, ResponsePayload, UniquenessReference};
 
 /// A data structure representing a batch of requests dispatched for system processing.
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestBatch {
     /// Ordinal batch identifier to distinguish batches.
     batch_idx: usize,
@@ -15,26 +17,27 @@ pub struct RequestBatch {
 }
 
 impl RequestBatch {
-    pub fn batch_idx(&self) -> usize {
+    pub(crate) fn batch_idx(&self) -> usize {
         self.batch_idx
     }
 
-    pub fn requests(&self) -> &[Request] {
+    pub(crate) fn requests(&self) -> &[Request] {
         self.requests.as_slice()
     }
 
-    pub fn requests_mut(&mut self) -> &mut Vec<Request> {
+    pub(crate) fn requests_mut(&mut self) -> &mut Vec<Request> {
         &mut self.requests
     }
 
-    pub fn new(batch_idx: usize, requests: Vec<Request>) -> Self {
+    pub(crate) fn new(batch_idx: usize, requests: Vec<Request>) -> Self {
         Self {
             batch_idx,
             requests,
         }
     }
 
-    pub fn correlate_and_update_child(&mut self, response: ResponseBody) -> Option<()> {
+    /// Performs a correlation and then updates any child requests accordingly.
+    pub(crate) fn correlate_and_update_child(&mut self, response: ResponsePayload) -> Option<()> {
         if let Some(idx_of_correlated) = self.get_idx_of_correlated(&response) {
             self.requests_mut()[idx_of_correlated].set_correlation(&response);
             if let Some(idx_of_child) = self.get_idx_of_child(idx_of_correlated) {
@@ -46,7 +49,8 @@ impl RequestBatch {
         }
     }
 
-    fn get_idx_of_correlated(&self, response: &ResponseBody) -> Option<usize> {
+    /// Returns maybe ordinal identifier of a correlated request.
+    fn get_idx_of_correlated(&self, response: &ResponsePayload) -> Option<usize> {
         self.requests
             .iter()
             .enumerate()
@@ -54,110 +58,81 @@ impl RequestBatch {
             .map(|(idx, _)| idx)
     }
 
-    fn get_idx_of_child(&self, idx_of_parent: usize) -> Option<usize> {
-        let parent = &self.requests[idx_of_parent];
+    /// Maybe returns ordinal identifier a correlated request's child.
+    fn get_idx_of_child(&self, idx_of_correlated: usize) -> Option<usize> {
+        let correlated = &self.requests[idx_of_correlated];
         self.requests
             .iter()
             .enumerate()
-            .find(|(_, r)| match r.info().request_id_of_parent() {
-                Some(child_request_id) => child_request_id == parent.info().request_id(),
-                None => false,
-            })
+            .find(|(_, r)| r.is_child(correlated))
             .map(|(idx, _)| idx)
     }
 
     /// Returns true if there are any requests currently enqueued.
-    pub fn has_enqueued_items(&self) -> bool {
+    pub(crate) fn has_enqueued_items(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueued())
     }
 
     /// Returns true if there are any requests deemed enqueueable.
-    pub fn is_enqueueable(&self) -> bool {
+    pub(crate) fn is_enqueueable(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueueable())
     }
 
     /// Returns next batch item ordinal identifier.
-    pub fn next_item_idx(&self) -> usize {
+    pub(super) fn next_item_idx(&self) -> usize {
         &self.requests().len() + 1
     }
 
     /// Extends requests collection with a new IdentityDeletion request.
-    pub fn push_new_identity_deletion(&mut self, uniqueness_ref: UniquenessReference) {
-        let r = match uniqueness_ref {
-            UniquenessReference::RequestId(request_id_of_parent) => Request::IdentityDeletion {
-                info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
-                uniqueness_ref: uniqueness_ref.clone(),
-            },
-            UniquenessReference::IrisSerialId(_) => Request::IdentityDeletion {
-                info: RequestInfo::new(self, None),
-                uniqueness_ref: uniqueness_ref.clone(),
-            },
-        };
-
-        self.push_request(r);
+    pub(crate) fn push_new_identity_deletion(&mut self, uniqueness_ref: UniquenessReference) {
+        self.push_request(Request::IdentityDeletion {
+            info: RequestInfo::new(self),
+            uniqueness_ref,
+        });
     }
 
     /// Extends requests collection with a new Reauthorization request.
-    pub fn push_new_reauthorization(&mut self, uniqueness_ref: UniquenessReference) {
-        let r = match uniqueness_ref {
-            UniquenessReference::RequestId(request_id_of_parent) => Request::Reauthorization {
-                info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
-                reauth_id: uuid::Uuid::new_v4(),
-                uniqueness_ref: uniqueness_ref.clone(),
-            },
-            UniquenessReference::IrisSerialId(_) => Request::Reauthorization {
-                info: RequestInfo::new(self, None),
-                reauth_id: uuid::Uuid::new_v4(),
-                uniqueness_ref: uniqueness_ref.clone(),
-            },
-        };
-
-        self.push_request(r);
+    pub(crate) fn push_new_reauthorization(&mut self, uniqueness_ref: UniquenessReference) {
+        self.push_request(Request::Reauthorization {
+            info: RequestInfo::new(self),
+            reauth_id: uuid::Uuid::new_v4(),
+            uniqueness_ref: uniqueness_ref.clone(),
+        });
     }
 
     /// Extends requests collection with a new ResetCheck request.
-    pub fn push_new_reset_check(&mut self) {
+    pub(crate) fn push_new_reset_check(&mut self) {
         self.push_request(Request::ResetCheck {
-            info: RequestInfo::new(self, None),
+            info: RequestInfo::new(self),
             reset_id: uuid::Uuid::new_v4(),
         });
     }
 
     /// Extends requests collection with a new ResetUpdate request.
-    pub fn push_new_reset_update(&mut self, uniqueness_ref: UniquenessReference) {
-        let r = match uniqueness_ref {
-            UniquenessReference::RequestId(request_id_of_parent) => Request::ResetUpdate {
-                info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
-                reset_id: uuid::Uuid::new_v4(),
-                uniqueness_ref: uniqueness_ref.clone(),
-            },
-            UniquenessReference::IrisSerialId(_) => Request::ResetUpdate {
-                info: RequestInfo::new(self, None),
-                reset_id: uuid::Uuid::new_v4(),
-                uniqueness_ref: uniqueness_ref.clone(),
-            },
-        };
-
-        self.push_request(r);
+    pub(crate) fn push_new_reset_update(&mut self, uniqueness_ref: UniquenessReference) {
+        self.push_request(Request::ResetUpdate {
+            info: RequestInfo::new(self),
+            reset_id: uuid::Uuid::new_v4(),
+            uniqueness_ref,
+        });
     }
 
     /// Extends requests collection with a new Uniqueness request.
-    pub fn push_new_uniqueness(&mut self) -> Request {
-        let r = Request::Uniqueness {
-            info: RequestInfo::new(self, None),
-            signup_id: uuid::Uuid::new_v4(),
-        };
-        self.push_request(r.clone());
-
-        r
+    pub(crate) fn push_new_uniqueness(&mut self) -> uuid::Uuid {
+        let signup_id = uuid::Uuid::new_v4();
+        self.push_request(Request::Uniqueness {
+            info: RequestInfo::new(self),
+            signup_id,
+        });
+        signup_id
     }
 
     /// Extends requests collection.
-    pub fn push_request(&mut self, request: Request) {
+    fn push_request(&mut self, request: Request) {
         self.requests_mut().push(request);
     }
 
-    pub fn set_request_status(&mut self, new_state: RequestStatus) {
+    pub(crate) fn set_request_status(&mut self, new_state: RequestStatus) {
         for request in self.requests_mut() {
             request.set_status(new_state.clone());
         }
@@ -239,12 +214,13 @@ mod tests {
         /// New mixed batch with a parent refrenced by it's request id.
         pub fn new_2() -> Self {
             let mut batch = Self::default();
-            let uniqueness_ref =
-                UniquenessReference::RequestId(*batch.push_new_uniqueness().request_id());
-            batch.push_new_reauthorization(uniqueness_ref.clone());
-            batch.push_new_reset_check();
-            batch.push_new_reset_update(uniqueness_ref.clone());
-            batch.push_new_identity_deletion(uniqueness_ref.clone());
+            for _ in 0..10 {
+                let signup_id = batch.push_new_uniqueness();
+                batch.push_new_reauthorization(UniquenessReference::SignupId(signup_id));
+                batch.push_new_reset_check();
+                batch.push_new_reset_update(UniquenessReference::SignupId(signup_id));
+                batch.push_new_identity_deletion(UniquenessReference::SignupId(signup_id));
+            }
 
             batch
         }
@@ -252,11 +228,13 @@ mod tests {
         /// New mixed batch with a parent refrenced by it's correlated Iris serial id.
         pub fn new_3() -> Self {
             let mut batch = Self::default();
-            let uniqueness_ref = UniquenessReference::IrisSerialId(1);
-            batch.push_new_reauthorization(uniqueness_ref.clone());
-            batch.push_new_reset_check();
-            batch.push_new_reset_update(uniqueness_ref.clone());
-            batch.push_new_identity_deletion(uniqueness_ref.clone());
+            for _ in 0..10 {
+                let serial_id = 1;
+                batch.push_new_reauthorization(UniquenessReference::IrisSerialId(serial_id));
+                batch.push_new_reset_check();
+                batch.push_new_reset_update(UniquenessReference::IrisSerialId(serial_id));
+                batch.push_new_identity_deletion(UniquenessReference::IrisSerialId(serial_id));
+            }
 
             batch
         }
@@ -283,6 +261,13 @@ mod tests {
     async fn test_new_2() {
         let batch = RequestBatch::new_2();
         assert!(batch.batch_idx == 1);
-        assert!(batch.requests.len() == 5);
+        assert!(batch.requests.len() == 50);
+    }
+
+    #[tokio::test]
+    async fn test_new_3() {
+        let batch = RequestBatch::new_3();
+        assert!(batch.batch_idx == 1);
+        assert!(batch.requests.len() == 40);
     }
 }

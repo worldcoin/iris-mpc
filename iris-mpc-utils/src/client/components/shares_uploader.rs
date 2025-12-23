@@ -12,7 +12,7 @@ use crate::{
 /// A component responsible for uploading Iris shares to AWS services
 /// in advance of system request processing.
 #[derive(Debug)]
-pub struct SharesUploader<R: Rng + CryptoRng + Send> {
+pub(crate) struct SharesUploader<R: Rng + CryptoRng + Send> {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
 
@@ -69,7 +69,7 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
         futures::future::try_join_all(tasks).await?;
 
         // Update state of requests.
-        batch.set_request_status(RequestStatus::new_shares_uploaded());
+        batch.set_request_status(RequestStatus::SharesUploaded);
 
         Ok(())
     }

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::IrisSerialId;
 
+use super::RequestBatch;
+
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceClientConfiguration {
@@ -94,4 +96,6 @@ pub enum RequestBatchConfiguration {
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
     },
+    /// A pre-built known set of request batches.
+    KnownSet(Vec<RequestBatch>),
 }

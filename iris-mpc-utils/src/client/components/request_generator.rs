@@ -7,7 +7,7 @@ use super::super::typeset::{
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
 #[derive(Debug)]
-pub struct RequestGenerator {
+pub(crate) struct RequestGenerator {
     // Count of generated batches.
     generated_batch_count: usize,
 
@@ -118,10 +118,10 @@ fn push_new_uniqueness_maybe(
         smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => None,
         smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
         | smpc_request::REAUTH_MESSAGE_TYPE
-        | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(serial_id.map_or_else(
-            || UniquenessReference::RequestId(*batch.push_new_uniqueness().request_id()),
-            UniquenessReference::IrisSerialId,
-        )),
+        | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
+            Some(serial_id) => UniquenessReference::IrisSerialId(serial_id),
+            None => UniquenessReference::SignupId(batch.push_new_uniqueness()),
+        }),
         _ => panic!("Invalid request kind"),
     }
 }
@@ -161,6 +161,9 @@ impl From<ServiceClientConfiguration> for RequestGeneratorParams {
                 batch_kind: RequestBatchKind::from(batch_kind),
                 known_iris_serial_id: *known_iris_serial_id,
             },
+            RequestBatchConfiguration::KnownSet(request_batch_set) => {
+                Self::KnownSet(request_batch_set.clone())
+            }
         }
     }
 }
@@ -169,9 +172,10 @@ impl From<ServiceClientConfiguration> for RequestGeneratorParams {
 mod tests {
     use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
-    use crate::client::RequestBatch;
-
-    use super::{RequestBatchKind, RequestBatchSize, RequestGeneratorParams};
+    use super::{
+        super::super::typeset::{RequestBatch, RequestBatchKind, RequestBatchSize},
+        RequestGeneratorParams,
+    };
 
     impl RequestGeneratorParams {
         pub fn new_1() -> Self {

@@ -3,13 +3,10 @@ use rand::{CryptoRng, Rng};
 
 use crate::aws::{AwsClient, AwsClientConfig};
 
-pub use components::RequestGeneratorParams;
 use components::{RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesUploader};
-pub use typeset::{
-    config::{self, ServiceClientConfiguration},
-    Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
-    ServiceClientError,
-};
+use typeset::{config, Initialize, ProcessRequestBatch};
+
+pub use typeset::{config::ServiceClientConfiguration, ServiceClientError};
 
 mod components;
 mod typeset;
