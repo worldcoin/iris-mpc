@@ -75,16 +75,6 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     }
 }
 
-// impl<R: Rng + CryptoRng + Send> Default for ServiceClient<R> {
-//     fn default() -> Self {
-// Self::new(
-//     AwsClientConfig::new_1()
-//     RequestGeneratorParams::default(),
-//     rng_seed,
-// )
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
     use rand::{rngs::StdRng, SeedableRng};

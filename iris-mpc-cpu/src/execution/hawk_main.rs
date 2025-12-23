@@ -799,7 +799,7 @@ impl HawkActor {
     }
 
     /// Borrow the in-memory iris and graph stores to modify them.
-    pub async fn as_iris_loader(&mut self) -> (IrisLoader, GraphLoader) {
+    pub async fn as_iris_loader(&mut self) -> (IrisLoader<'_>, GraphLoader<'_>) {
         (
             IrisLoader {
                 party_id: self.party_id,

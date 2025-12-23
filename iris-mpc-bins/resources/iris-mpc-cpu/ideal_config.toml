@@ -1,6 +1,6 @@
 graph_size = 1000
 irises_path = "data/store.ndjson"
-layer0_path = "store_ideal_knn_fhd.txt"
+layer0_path = "resources/iris-mpc-cpu/store_ideal_knn_fhd.txt"
 prf_seed = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 echoice = "NaiveFHD"
 sanity_check = true

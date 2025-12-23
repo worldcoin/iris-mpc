@@ -30,9 +30,9 @@ jobs:
       digest: ${{ steps.docker-build.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
 
@@ -75,12 +75,12 @@ jobs:
     needs: docker
     # TODO: remove comment after PoC phase
     # if: github.event_name == 'release'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Install Foundry
         # https://github.com/foundry-rs/foundry-toolchain/releases/tag/v1.4.0
-        uses: foundry-rs/foundry-toolchain@50d5a8956f2e319df19e6b57539d7e2acb9f8c1e
+        uses: foundry-rs/foundry-toolchain@8b0419c685ef46cb79ec93fbdc131174afceb730
 
       - name: Sign the image digest
         # TODO: continue-on-error is only for the PoC phase, remove when use mainnet

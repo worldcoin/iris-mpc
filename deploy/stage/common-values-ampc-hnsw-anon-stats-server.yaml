@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:1bfaf4eaabbd1f4904261cd1ca1106660da4c90e"
+image: "ghcr.io/worldcoin/anon-stats-server:v0.24.1@sha256:9d119acf7b3336d9244444dab51835611c500347d0c8d514eb72b5b952db4cd0"
 
 environment: stage
 replicaCount: 1
@@ -62,16 +62,10 @@ resources:
 imagePullSecrets:
   - name: github-secret
 
-nodeSelector:
-  kubernetes.io/arch: amd64
-  workload: "anon-stats-server"
-
-tolerations:
-  - key: "dedicated"
-    operator: "Equal"
-    value: "anonStatsServer"
-    effect: "NoSchedule"
-
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private

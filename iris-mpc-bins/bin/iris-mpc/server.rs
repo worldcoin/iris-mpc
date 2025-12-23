@@ -194,7 +194,7 @@ async fn receive_batch(
             .queue_url(queue_url)
             .send()
             .await
-            .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
+            .map_err(ReceiveRequestError::from)?;
         if let Some(messages) = rcv_message_output.messages {
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
@@ -239,7 +239,7 @@ async fn receive_batch(
                             .receipt_handle(sqs_message.receipt_handle.unwrap())
                             .send()
                             .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                            .map_err(ReceiveRequestError::from)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
                         if batch_query
@@ -302,7 +302,7 @@ async fn receive_batch(
                             .receipt_handle(sqs_message.receipt_handle.unwrap())
                             .send()
                             .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                            .map_err(ReceiveRequestError::from)?;
 
                         if let Some(batch_size) = uniqueness_request.batch_size {
                             // Updating the batch size instantly makes it a bit unpredictable, since
@@ -411,7 +411,7 @@ async fn receive_batch(
                             .receipt_handle(sqs_message.receipt_handle.unwrap())
                             .send()
                             .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                            .map_err(ReceiveRequestError::from)?;
 
                         metrics::counter!("request.received", "type" => "reauth").increment(1);
 
@@ -524,7 +524,7 @@ async fn receive_batch(
                             .receipt_handle(sqs_message.receipt_handle.unwrap())
                             .send()
                             .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                            .map_err(ReceiveRequestError::from)?;
 
                         if config.enable_reset {
                             msg_counter += 1;
@@ -592,7 +592,7 @@ async fn receive_batch(
                             .receipt_handle(sqs_message.receipt_handle.unwrap())
                             .send()
                             .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                            .map_err(ReceiveRequestError::from)?;
 
                         if config.enable_reset {
                             // Fetch new iris shares from S3
@@ -674,7 +674,7 @@ async fn receive_batch(
                             .receipt_handle(sqs_message.receipt_handle.unwrap())
                             .send()
                             .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+                            .map_err(ReceiveRequestError::from)?;
                         tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                     }
                 }

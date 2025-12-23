@@ -329,7 +329,7 @@ impl<'a> BatchProcessor<'a> {
                 .queue_url(queue_url)
                 .send()
                 .await
-                .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
+                .map_err(ReceiveRequestError::from)?;
 
             if let Some(messages) = rcv_message_output.messages {
                 if messages.is_empty() {
@@ -870,7 +870,7 @@ impl<'a> BatchProcessor<'a> {
             .receipt_handle(sqs_message.receipt_handle.as_ref().unwrap())
             .send()
             .await
-            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+            .map_err(ReceiveRequestError::from)?;
         tracing::debug!("Deleted message: {:?}", sqs_message.message_id);
         Ok(())
     }
