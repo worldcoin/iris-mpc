@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "au/min-round-robin-size"
+      - "chore/rustc-1.89"
     paths-ignore:
       - "deploy/**"
 
