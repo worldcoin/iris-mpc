@@ -95,26 +95,3 @@ impl ServiceClientConfiguration {
         &self.request_batch
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use iris_mpc_common::helpers::smpc_request;
-
-//     use super::ServiceClientConfig;
-
-//     impl ServiceClientConfig {
-//         pub fn new_1() -> Self {
-//             Self::SimpleBatchKind {
-//                 batch_count: 1,
-//                 batch_size: 1,
-//                 batch_kind: smpc_request::UNIQUENESS_MESSAGE_TYPE.to_string(),
-//                 known_iris_serial_id: None,
-//             }
-//         }
-//     }
-
-//     #[tokio::test]
-//     async fn test_new_1() {
-//         let _ = ServiceClientConfig::new_1();
-//     }
-// }

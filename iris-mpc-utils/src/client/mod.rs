@@ -46,14 +46,13 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
             println!(
-                "Batch {}: size={}",
+                "Processing Batch {}: size={}",
                 batch.batch_idx(),
                 batch.requests().len()
             );
             println!("------------------------------------------------------------------------");
 
             self.shares_uploader.process_batch(&mut batch).await?;
-
             while batch.is_enqueueable() {
                 self.request_enqueuer.process_batch(&mut batch).await?;
                 self.response_dequeuer.process_batch(&mut batch).await?;
@@ -97,26 +96,3 @@ impl AsyncFrom<ServiceClientConfiguration> for AwsClientConfig {
         .await
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use rand::{rngs::StdRng, SeedableRng};
-
-//     use super::{AwsClientConfig, ServiceClient, ServiceClientConfig};
-
-//     impl ServiceClient<StdRng> {
-//         async fn new_1() -> Self {
-//             ServiceClient::<StdRng>::new(
-//                 AwsClientConfig::new_1().await,
-//                 ServiceClientConfig::new_1(),
-//                 StdRng::seed_from_u64(42),
-//             )
-//             .await
-//         }
-//     }
-
-//     #[tokio::test]
-//     async fn test_new_1() {
-//         let _ = ServiceClient::new_1().await;
-//     }
-// }
