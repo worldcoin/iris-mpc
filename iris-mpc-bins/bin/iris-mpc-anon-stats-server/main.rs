@@ -1,4 +1,3 @@
-use ampc_anon_stats::anon_stats::iris_1d::{DistanceBundle1D, LiftedDistanceBundle1D};
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::types::Eye;
