@@ -6,7 +6,8 @@ use super::super::typeset::{
     Initialize, ProcessRequestBatch, RequestBatch, RequestStatus, ServiceClientError,
 };
 use crate::{
-    aws::AwsClient, irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares,
+    aws::AwsClient, client::typeset::Request,
+    irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares,
 };
 
 /// A component responsible for uploading Iris shares to AWS services
@@ -49,9 +50,7 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
             .requests_mut()
             .iter_mut()
             .filter_map(|request| {
-                request
-                    .iris_shares_id()
-                    .map(|id| (generate_iris_shares(self.rng_mut()), id))
+                get_iris_shares_id(request).map(|id| (generate_iris_shares(self.rng_mut()), id))
             })
             .collect();
 
@@ -72,5 +71,16 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
         batch.set_request_status(RequestStatus::SharesUploaded);
 
         Ok(())
+    }
+}
+
+/// Returns identifier to be assigned to associated iris shares.
+fn get_iris_shares_id(request: &Request) -> Option<&uuid::Uuid> {
+    match request {
+        Request::IdentityDeletion { .. } => None,
+        Request::Reauthorization { reauth_id, .. } => Some(reauth_id),
+        Request::ResetCheck { reset_id, .. } => Some(reset_id),
+        Request::ResetUpdate { reset_id, .. } => Some(reset_id),
+        Request::Uniqueness { signup_id, .. } => Some(signup_id),
     }
 }

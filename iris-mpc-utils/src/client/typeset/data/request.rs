@@ -77,17 +77,6 @@ impl Request {
         }
     }
 
-    /// Returns identifier to be assigned to associated iris shares.
-    pub(crate) fn iris_shares_id(&self) -> Option<&uuid::Uuid> {
-        match self {
-            Self::IdentityDeletion { .. } => None,
-            Self::Reauthorization { reauth_id, .. } => Some(reauth_id),
-            Self::ResetCheck { reset_id, .. } => Some(reset_id),
-            Self::ResetUpdate { reset_id, .. } => Some(reset_id),
-            Self::Uniqueness { signup_id, .. } => Some(signup_id),
-        }
-    }
-
     /// Returns true if deemed a child of previous system request.
     pub(super) fn is_child(&self, parent: &Self) -> bool {
         // A child of a uniqueness request can be derived by comparing signup identifiers.
