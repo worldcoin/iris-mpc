@@ -8,9 +8,7 @@ use iris_mpc_common::{
     IrisSerialId,
 };
 
-use crate::client::typeset::{ParentUniquenessRequest, RequestInfo, RequestStatus};
-
-use super::{Request, ResponseBody};
+use super::{Request, RequestInfo, RequestStatus, ResponseBody, UniquenessReference};
 
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Clone, Debug)]
@@ -89,9 +87,9 @@ impl RequestBatch {
         &self.requests().len() + 1
     }
 
-    pub fn push_new(&mut self, kind: &str, parent: Option<ParentUniquenessRequest>) {
+    pub fn push_new(&mut self, kind: &str, parent: Option<UniquenessReference>) {
         assert!(
-            ParentUniquenessRequest::is_valid(kind, &parent),
+            UniquenessReference::is_valid(kind, &parent),
             "Invalid parent request association"
         );
 
@@ -116,37 +114,37 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new IdentityDeletion request.
-    pub fn push_new_identity_deletion(&mut self, parent: ParentUniquenessRequest) {
-        self.push_request(match parent {
-            ParentUniquenessRequest::RequestUuid(request_id_of_parent) => {
-                Request::IdentityDeletion {
-                    info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
-                    uniqueness_serial_id: None,
-                }
-            }
-            ParentUniquenessRequest::IrisSerialId(serial_id) => Request::IdentityDeletion {
-                info: RequestInfo::new(self, None),
-                uniqueness_serial_id: Some(serial_id),
+    pub fn push_new_identity_deletion(&mut self, uniqueness_ref: UniquenessReference) {
+        let r = match uniqueness_ref {
+            UniquenessReference::RequestId(request_id_of_parent) => Request::IdentityDeletion {
+                info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
+                uniqueness_ref: uniqueness_ref.clone(),
             },
-        });
+            UniquenessReference::IrisSerialId(_) => Request::IdentityDeletion {
+                info: RequestInfo::new(self, None),
+                uniqueness_ref: uniqueness_ref.clone(),
+            },
+        };
+
+        self.push_request(r);
     }
 
     /// Extends requests collection with a new Reauthorization request.
-    pub fn push_new_reauthorization(&mut self, parent: ParentUniquenessRequest) {
-        self.push_request(match parent {
-            ParentUniquenessRequest::RequestUuid(request_id_of_parent) => {
-                Request::Reauthorization {
-                    info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
-                    reauth_id: uuid::Uuid::new_v4(),
-                    uniqueness_serial_id: None,
-                }
-            }
-            ParentUniquenessRequest::IrisSerialId(serial_id) => Request::Reauthorization {
+    pub fn push_new_reauthorization(&mut self, uniqueness_ref: UniquenessReference) {
+        let r = match uniqueness_ref {
+            UniquenessReference::RequestId(request_id_of_parent) => Request::Reauthorization {
+                info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
+                reauth_id: uuid::Uuid::new_v4(),
+                uniqueness_ref: uniqueness_ref.clone(),
+            },
+            UniquenessReference::IrisSerialId(_) => Request::Reauthorization {
                 info: RequestInfo::new(self, None),
                 reauth_id: uuid::Uuid::new_v4(),
-                uniqueness_serial_id: Some(serial_id),
+                uniqueness_ref: uniqueness_ref.clone(),
             },
-        });
+        };
+
+        self.push_request(r);
     }
 
     /// Extends requests collection with a new ResetCheck request.
@@ -158,19 +156,21 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new ResetUpdate request.
-    pub fn push_new_reset_update(&mut self, parent: ParentUniquenessRequest) {
-        self.push_request(match parent {
-            ParentUniquenessRequest::RequestUuid(request_id_of_parent) => Request::ResetUpdate {
+    pub fn push_new_reset_update(&mut self, uniqueness_ref: UniquenessReference) {
+        let r = match uniqueness_ref {
+            UniquenessReference::RequestId(request_id_of_parent) => Request::ResetUpdate {
                 info: RequestInfo::new(self, Some(&request_id_of_parent.clone())),
                 reset_id: uuid::Uuid::new_v4(),
-                uniqueness_serial_id: None,
+                uniqueness_ref: uniqueness_ref.clone(),
             },
-            ParentUniquenessRequest::IrisSerialId(serial_id) => Request::ResetUpdate {
+            UniquenessReference::IrisSerialId(_) => Request::ResetUpdate {
                 info: RequestInfo::new(self, None),
                 reset_id: uuid::Uuid::new_v4(),
-                uniqueness_serial_id: Some(serial_id),
+                uniqueness_ref: uniqueness_ref.clone(),
             },
-        });
+        };
+
+        self.push_request(r);
     }
 
     /// Extends requests collection with a new Uniqueness request.
@@ -184,21 +184,20 @@ impl RequestBatch {
         r
     }
 
+    // Maybe extends collection with a uniqueness request to be referenced from other requests.
     pub fn push_new_uniqueness_maybe(
         &mut self,
         kind: &str,
         serial_id: Option<IrisSerialId>,
-    ) -> Option<ParentUniquenessRequest> {
+    ) -> Option<UniquenessReference> {
         match kind {
             smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => None,
             smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
             | smpc_request::REAUTH_MESSAGE_TYPE
-            | smpc_request::RESET_UPDATE_MESSAGE_TYPE => match serial_id {
-                None => Some(ParentUniquenessRequest::RequestUuid(
-                    *self.push_new_uniqueness().request_id(),
-                )),
-                Some(serial_id) => Some(ParentUniquenessRequest::IrisSerialId(serial_id)),
-            },
+            | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
+                None => UniquenessReference::RequestId(*self.push_new_uniqueness().request_id()),
+                Some(serial_id) => UniquenessReference::IrisSerialId(Some(serial_id)),
+            }),
             _ => panic!("Invalid request kind"),
         }
     }
@@ -272,7 +271,7 @@ impl fmt::Display for RequestBatchSize {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::ParentUniquenessRequest, RequestBatch};
+    use super::{super::UniquenessReference, RequestBatch};
 
     impl RequestBatch {
         /// New batch of 10 uniqueness requests.
@@ -288,12 +287,12 @@ mod tests {
         /// New mixed batch with a parent refrenced by it's request id.
         pub fn new_2() -> Self {
             let mut batch = Self::default();
-            let parent =
-                ParentUniquenessRequest::RequestUuid(*batch.push_new_uniqueness().request_id());
-            batch.push_new_reauthorization(parent.clone());
+            let uniqueness_ref =
+                UniquenessReference::RequestId(*batch.push_new_uniqueness().request_id());
+            batch.push_new_reauthorization(uniqueness_ref.clone());
             batch.push_new_reset_check();
-            batch.push_new_reset_update(parent.clone());
-            batch.push_new_identity_deletion(parent.clone());
+            batch.push_new_reset_update(uniqueness_ref.clone());
+            batch.push_new_identity_deletion(uniqueness_ref.clone());
 
             batch
         }
@@ -301,11 +300,11 @@ mod tests {
         /// New mixed batch with a parent refrenced by it's correlated Iris serial id.
         pub fn new_3() -> Self {
             let mut batch = Self::default();
-            let parent = ParentUniquenessRequest::IrisSerialId(1);
-            batch.push_new_reauthorization(parent.clone());
+            let uniqueness_ref = UniquenessReference::IrisSerialId(Some(1));
+            batch.push_new_reauthorization(uniqueness_ref.clone());
             batch.push_new_reset_check();
-            batch.push_new_reset_update(parent.clone());
-            batch.push_new_identity_deletion(parent.clone());
+            batch.push_new_reset_update(uniqueness_ref.clone());
+            batch.push_new_identity_deletion(uniqueness_ref.clone());
 
             batch
         }

@@ -12,16 +12,16 @@ pub enum Request {
     IdentityDeletion {
         // Standard request information.
         info: RequestInfo,
-        // Iris serial identifier.
-        uniqueness_serial_id: Option<IrisSerialId>,
+        // Weak reference to associated uniqueness.
+        uniqueness_ref: UniquenessReference,
     },
     Reauthorization {
         // Standard request information.
         info: RequestInfo,
         // Operation identifier.
         reauth_id: uuid::Uuid,
-        // Iris serial identifier.
-        uniqueness_serial_id: Option<IrisSerialId>,
+        // Weak reference to associated uniqueness.
+        uniqueness_ref: UniquenessReference,
     },
     ResetCheck {
         // Standard request information.
@@ -34,8 +34,8 @@ pub enum Request {
         info: RequestInfo,
         // Operation identifier.
         reset_id: uuid::Uuid,
-        // Iris serial identifier.
-        uniqueness_serial_id: Option<IrisSerialId>,
+        // Weak reference to associated uniqueness.
+        uniqueness_ref: UniquenessReference,
     },
     Uniqueness {
         // Standard request information.
@@ -85,23 +85,23 @@ impl Request {
     pub fn is_correlation(&self, response: &ResponseBody) -> bool {
         match (self, response) {
             (
-                Self::IdentityDeletion {
-                    uniqueness_serial_id: serial_id,
-                    ..
-                },
+                Self::IdentityDeletion { uniqueness_ref, .. },
                 ResponseBody::IdentityDeletion(result),
-            ) => serial_id.unwrap() == result.serial_id,
+            ) => matches!(
+                uniqueness_ref,
+                UniquenessReference::IrisSerialId(Some(serial_id)) if *serial_id == result.serial_id
+            ),
             (Self::Reauthorization { reauth_id, .. }, ResponseBody::Reauthorization(result)) => {
-                reauth_id.to_string() == result.reauth_id
+                result.reauth_id == reauth_id.to_string()
             }
             (Self::ResetCheck { reset_id, .. }, ResponseBody::ResetCheck(result)) => {
-                reset_id.to_string() == result.reset_id
+                result.reset_id == reset_id.to_string()
             }
             (Self::ResetUpdate { reset_id, .. }, ResponseBody::ResetUpdate(result)) => {
-                reset_id.to_string() == result.reset_id
+                result.reset_id == reset_id.to_string()
             }
             (Self::Uniqueness { signup_id, .. }, ResponseBody::Uniqueness(result)) => {
-                signup_id.to_string() == result.signup_id
+                result.signup_id == signup_id.to_string()
             }
             _ => false,
         }
@@ -121,18 +121,18 @@ impl Request {
     pub fn is_enqueueable(&self) -> bool {
         matches!(self.info().status(), RequestStatus::SharesUploaded(_))
             && match self {
-                Self::IdentityDeletion {
-                    uniqueness_serial_id: serial_id,
-                    ..
-                } => serial_id.is_some(),
-                Self::Reauthorization {
-                    uniqueness_serial_id: serial_id,
-                    ..
-                } => serial_id.is_some(),
-                Self::ResetUpdate {
-                    uniqueness_serial_id: serial_id,
-                    ..
-                } => serial_id.is_some(),
+                Self::IdentityDeletion { uniqueness_ref, .. } => match uniqueness_ref {
+                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.is_some(),
+                    _ => false,
+                },
+                Self::Reauthorization { uniqueness_ref, .. } => match uniqueness_ref {
+                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.is_some(),
+                    _ => false,
+                },
+                Self::ResetUpdate { uniqueness_ref, .. } => match uniqueness_ref {
+                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.is_some(),
+                    _ => false,
+                },
                 _ => true,
             }
     }
@@ -172,28 +172,19 @@ impl Request {
 
     pub fn set_data_from_parent_response(&mut self, response: &ResponseBody) {
         match self {
-            Self::IdentityDeletion {
-                uniqueness_serial_id,
-                ..
-            } => {
+            Self::IdentityDeletion { uniqueness_ref, .. } => {
                 if let ResponseBody::Uniqueness(result) = response {
-                    *uniqueness_serial_id = result.serial_id;
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id);
                 }
             }
-            Self::Reauthorization {
-                uniqueness_serial_id,
-                ..
-            } => {
+            Self::Reauthorization { uniqueness_ref, .. } => {
                 if let ResponseBody::Uniqueness(result) = response {
-                    *uniqueness_serial_id = result.serial_id;
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id);
                 }
             }
-            Self::ResetUpdate {
-                uniqueness_serial_id,
-                ..
-            } => {
+            Self::ResetUpdate { uniqueness_ref, .. } => {
                 if let ResponseBody::Uniqueness(result) = response {
-                    *uniqueness_serial_id = result.serial_id;
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id);
                 }
             }
             _ => panic!("Unsupported parent data"),
@@ -276,5 +267,30 @@ impl Default for RequestStatus {
 impl fmt::Display for RequestStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.label())
+    }
+}
+
+/// A set of variants over an associated uniqueness request. Pertinent when creating requests
+/// of the following types: identity_deletion ^ reauth ^ reset_update.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug)]
+pub enum UniquenessReference {
+    // A uniqueness request instance uuid yet to be correlated.
+    RequestId(uuid::Uuid),
+    // A serial identifier assigned from either a processed uniqueness result or a user input override.
+    IrisSerialId(Option<IrisSerialId>),
+}
+
+impl UniquenessReference {
+    pub fn is_valid(kind: &str, parent: &Option<Self>) -> bool {
+        match kind {
+            smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => {
+                parent.is_none()
+            }
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+            | smpc_request::REAUTH_MESSAGE_TYPE
+            | smpc_request::RESET_UPDATE_MESSAGE_TYPE => parent.is_some(),
+            _ => false,
+        }
     }
 }

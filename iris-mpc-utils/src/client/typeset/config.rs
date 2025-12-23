@@ -2,6 +2,26 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::IrisSerialId;
 
+/// Service client configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceClientConfiguration {
+    // Associated AWS services configuration.
+    aws: AwsConfiguration,
+
+    // Associated request batch generation configuration.
+    request_batch: RequestBatchConfiguration,
+}
+
+impl ServiceClientConfiguration {
+    pub fn aws(&self) -> &AwsConfiguration {
+        &self.aws
+    }
+
+    pub fn request_batch(&self) -> &RequestBatchConfiguration {
+        &self.request_batch
+    }
+}
+
 /// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AwsConfiguration {
@@ -74,24 +94,4 @@ pub enum RequestBatchConfiguration {
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
     },
-}
-
-/// Service client configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceClientConfiguration {
-    // Associated AWS services configuration.
-    aws: AwsConfiguration,
-
-    // Associated request batch generation configuration.
-    request_batch: RequestBatchConfiguration,
-}
-
-impl ServiceClientConfiguration {
-    pub fn aws(&self) -> &AwsConfiguration {
-        &self.aws
-    }
-
-    pub fn request_batch(&self) -> &RequestBatchConfiguration {
-        &self.request_batch
-    }
 }

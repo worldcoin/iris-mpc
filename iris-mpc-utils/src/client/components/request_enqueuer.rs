@@ -1,13 +1,10 @@
 use async_trait::async_trait;
 
-use iris_mpc_common::helpers::smpc_request::{
-    IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest,
-    UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
-};
+use iris_mpc_common::helpers::smpc_request;
 
 use super::super::typeset::{
     ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestStatus, ServiceClientError,
+    UniquenessReference,
 };
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
@@ -62,46 +59,60 @@ impl ProcessRequestBatch for RequestEnqueuer {
 impl From<&Request> for RequestBody {
     fn from(request: &Request) -> Self {
         match request {
-            Request::IdentityDeletion {
-                uniqueness_serial_id,
-                ..
-            } => Self::IdentityDeletion(IdentityDeletionRequest {
-                serial_id: uniqueness_serial_id.unwrap_or(1),
-            }),
+            Request::IdentityDeletion { uniqueness_ref, .. } => {
+                Self::IdentityDeletion(smpc_request::IdentityDeletionRequest {
+                    serial_id: match uniqueness_ref {
+                        UniquenessReference::IrisSerialId(maybe_serial_id) => {
+                            maybe_serial_id.unwrap()
+                        }
+                        _ => panic!("Invalid uniqueness reference"),
+                    },
+                })
+            }
             Request::Reauthorization {
                 reauth_id,
-                uniqueness_serial_id,
+                uniqueness_ref,
                 ..
-            } => Self::Reauthorization(ReAuthRequest {
+            } => Self::Reauthorization(smpc_request::ReAuthRequest {
                 batch_size: Some(1),
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
-                serial_id: uniqueness_serial_id.unwrap_or(1),
+                serial_id: match uniqueness_ref {
+                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.unwrap(),
+                    _ => panic!("Invalid uniqueness reference"),
+                },
                 use_or_rule: false,
             }),
-            Request::ResetCheck { reset_id, .. } => Self::ResetCheck(ResetCheckRequest {
-                batch_size: Some(1),
-                reset_id: reset_id.to_string(),
-                s3_key: reset_id.to_string(),
-            }),
+            Request::ResetCheck { reset_id, .. } => {
+                Self::ResetCheck(smpc_request::ResetCheckRequest {
+                    batch_size: Some(1),
+                    reset_id: reset_id.to_string(),
+                    s3_key: reset_id.to_string(),
+                })
+            }
             Request::ResetUpdate {
                 reset_id,
-                uniqueness_serial_id,
+                uniqueness_ref,
                 ..
-            } => Self::ResetUpdate(ResetUpdateRequest {
+            } => Self::ResetUpdate(smpc_request::ResetUpdateRequest {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
-                serial_id: uniqueness_serial_id.unwrap_or(1),
+                serial_id: match uniqueness_ref {
+                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.unwrap(),
+                    _ => panic!("Invalid uniqueness reference"),
+                },
             }),
-            Request::Uniqueness { signup_id, .. } => Self::Uniqueness(UniquenessRequest {
-                batch_size: Some(1),
-                s3_key: signup_id.to_string(),
-                signup_id: signup_id.to_string(),
-                or_rule_serial_ids: None,
-                skip_persistence: None,
-                full_face_mirror_attacks_detection_enabled: Some(true),
-                disable_anonymized_stats: None,
-            }),
+            Request::Uniqueness { signup_id, .. } => {
+                Self::Uniqueness(smpc_request::UniquenessRequest {
+                    batch_size: Some(1),
+                    s3_key: signup_id.to_string(),
+                    signup_id: signup_id.to_string(),
+                    or_rule_serial_ids: None,
+                    skip_persistence: None,
+                    full_face_mirror_attacks_detection_enabled: Some(true),
+                    disable_anonymized_stats: None,
+                })
+            }
         }
     }
 }
@@ -117,21 +128,29 @@ impl From<RequestBody> for SnsMessageInfo {
         match body {
             RequestBody::IdentityDeletion(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
-                IDENTITY_DELETION_MESSAGE_TYPE,
+                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
                 &body,
             ),
-            RequestBody::Reauthorization(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, REAUTH_MESSAGE_TYPE, &body)
-            }
-            RequestBody::ResetCheck(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, RESET_CHECK_MESSAGE_TYPE, &body)
-            }
-            RequestBody::ResetUpdate(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, RESET_UPDATE_MESSAGE_TYPE, &body)
-            }
-            RequestBody::Uniqueness(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, UNIQUENESS_MESSAGE_TYPE, &body)
-            }
+            RequestBody::Reauthorization(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::REAUTH_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestBody::ResetCheck(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_CHECK_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestBody::ResetUpdate(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestBody::Uniqueness(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::UNIQUENESS_MESSAGE_TYPE,
+                &body,
+            ),
         }
     }
 }
