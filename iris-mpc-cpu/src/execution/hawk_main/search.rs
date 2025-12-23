@@ -224,6 +224,8 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     searcher: &HnswSearcher,
     identifier: &H,
 ) -> Result<InsertPlanV<Aby3Store>> {
+    let start = Instant::now();
+
     let mut store = session.aby3_store.write().await;
     let graph = session.graph_store.clone().read_owned().await;
 
@@ -241,6 +243,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
         links_unstructured.push(l.edge_ids());
     }
 
+    metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
     Ok(InsertPlanV {
         query,
         links: links_unstructured,

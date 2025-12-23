@@ -33,6 +33,18 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
+  - name: SMPC__PARTY_ID
+    value: "2"
+
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_cpu1M"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "_gpu1M"
+
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-2"
 
@@ -42,8 +54,11 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
-  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_minfhd"
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
@@ -230,4 +245,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-  - sg-0f4a0e8452af84495 # smpc2-dev ampc-hnsw pod sg
+    - sg-0f4a0e8452af84495 # smpc2-dev ampc-hnsw pod sg
