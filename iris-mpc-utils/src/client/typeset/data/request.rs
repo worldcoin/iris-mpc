@@ -88,16 +88,8 @@ impl Request {
         }
     }
 
-    pub(super) fn request_id(&self) -> &uuid::Uuid {
-        self.info().request_id()
-    }
-
     /// Returns true if deemed a child of previous system request.
     pub(super) fn is_child(&self, parent: &Self) -> bool {
-        if self.request_id() == parent.request_id() {
-            return false;
-        }
-
         // A child of a uniqueness request can be derived by comparing signup identifiers.
         match self {
             Self::IdentityDeletion { uniqueness_ref, .. }

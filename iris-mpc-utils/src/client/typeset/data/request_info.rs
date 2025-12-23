@@ -17,18 +17,11 @@ pub struct RequestInfo {
     /// Correlated system responses returned by MPC nodes.
     correlation_set: [Option<ResponsePayload>; N_PARTIES],
 
-    /// Universally unique request identifer.
-    request_id: uuid::Uuid,
-
     /// Set of processing states.
     state_history: Vec<RequestStatus>,
 }
 
 impl RequestInfo {
-    pub(super) fn request_id(&self) -> &uuid::Uuid {
-        &self.request_id
-    }
-
     pub(super) fn new(batch: &RequestBatch) -> Self {
         let mut state_history = Vec::with_capacity(RequestStatus::VARIANT_COUNT);
         state_history.push(RequestStatus::default());
@@ -37,7 +30,6 @@ impl RequestInfo {
             batch_idx: batch.batch_idx(),
             batch_item_idx: batch.next_item_idx(),
             correlation_set: [const { None }; N_PARTIES],
-            request_id: uuid::Uuid::new_v4(),
             state_history,
         }
     }

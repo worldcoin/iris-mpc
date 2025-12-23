@@ -23,7 +23,7 @@ impl RequestGenerator {
         }
     }
 
-    pub fn new(config: ServiceClientConfiguration) -> Self {
+    pub(crate) fn new(config: ServiceClientConfiguration) -> Self {
         Self {
             generated_batch_count: 0,
             params: RequestGeneratorParams::from(config),
@@ -31,7 +31,7 @@ impl RequestGenerator {
     }
 
     /// Generates batches of request until exhausted.
-    pub async fn next(&mut self) -> Result<Option<RequestBatch>, ServiceClientError> {
+    pub(crate) async fn next(&mut self) -> Result<Option<RequestBatch>, ServiceClientError> {
         if self.generated_batch_count == self.batch_count() {
             return Ok(None);
         }
@@ -76,7 +76,7 @@ impl RequestGenerator {
 }
 
 /// Pushes a new request onto the batch.
-pub fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReference>) {
+fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReference>) {
     assert!(
         matches!(
             kind,
@@ -128,7 +128,7 @@ fn push_new_uniqueness_maybe(
 
 /// Set of variants over request generation inputs.
 #[derive(Debug)]
-pub enum RequestGeneratorParams {
+enum RequestGeneratorParams {
     /// Parameters permitting single kind batches to be generated.
     BatchKind {
         /// Number of request batches to generate.
