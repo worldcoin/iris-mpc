@@ -61,7 +61,6 @@ impl ProcessRequestBatch for RequestEnqueuer {
 
 impl From<&Request> for RequestBody {
     fn from(request: &Request) -> Self {
-        // TODO: serial ID from correlated uniqueness response
         match request {
             Request::IdentityDeletion {
                 uniqueness_serial_id,

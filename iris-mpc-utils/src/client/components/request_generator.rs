@@ -2,7 +2,7 @@ use iris_mpc_common::IrisSerialId;
 
 use super::super::typeset::{
     config::{RequestBatchConfiguration, ServiceClientConfiguration},
-    ParentUniquenessRequest, RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError,
+    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError,
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -51,36 +51,10 @@ impl RequestGenerator {
                 for _ in 0..batch_size {
                     match batch_kind {
                         RequestBatchKind::Simple(kind) => {
-                            match ParentUniquenessRequest::new_maybe(
-                                &batch,
-                                kind,
-                                *known_iris_serial_id,
-                            ) {
-                                Some(parent) => {
-                                    match parent {
-                                        ParentUniquenessRequest::Instance(request) => {
-                                            batch.push_new(
-                                                kind,
-                                                Some(ParentUniquenessRequest::Instance(
-                                                    request.clone(),
-                                                )),
-                                            );
-                                            batch.push_request(request);
-                                        }
-                                        ParentUniquenessRequest::IrisSerialId(serial_id) => {
-                                            batch.push_new(
-                                                kind,
-                                                Some(ParentUniquenessRequest::IrisSerialId(
-                                                    serial_id,
-                                                )),
-                                            );
-                                        }
-                                    };
-                                }
-                                None => {
-                                    batch.push_new(kind, None);
-                                }
-                            }
+                            // Push a parent uniqueness request (if appropriate).
+                            let parent =
+                                batch.push_new_uniqueness_maybe(kind, *known_iris_serial_id);
+                            batch.push_new(kind, parent);
                         }
                     }
                 }
