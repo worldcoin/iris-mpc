@@ -126,10 +126,10 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "0" # "1200000"
+    value: "120000" # "1200000"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "100000" # "1300000"
+    value: "1000000" # "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
