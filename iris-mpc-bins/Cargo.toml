@@ -27,6 +27,7 @@ aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
 base64.workspace = true
+bincode.workspace = true
 cudarc.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -38,6 +39,7 @@ futures.workspace = true
 hkdf.workspace = true
 itertools.workspace = true
 rand.workspace = true
+rayon.workspace = true
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
 ring.workspace = true
 rustls.workspace = true

@@ -78,7 +78,6 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=6bc0d57fa9ef4b69d3c71102870356b7c6248aa6#6bc0d57fa9ef4b69d3c71102870356b7c6248aa6"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -109,7 +108,6 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=6bc0d57fa9ef4b69d3c71102870356b7c6248aa6#6bc0d57fa9ef4b69d3c71102870356b7c6248aa6"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -135,7 +133,6 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=6bc0d57fa9ef4b69d3c71102870356b7c6248aa6#6bc0d57fa9ef4b69d3c71102870356b7c6248aa6"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -150,7 +147,6 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=6bc0d57fa9ef4b69d3c71102870356b7c6248aa6#6bc0d57fa9ef4b69d3c71102870356b7c6248aa6"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -2933,6 +2929,7 @@ dependencies = [
  "aws-smithy-types",
  "axum 0.7.7",
  "base64",
+ "bincode",
  "blake3",
  "chrono",
  "clap",
@@ -2958,6 +2955,7 @@ dependencies = [
  "metrics-tracing-context",
  "metrics-util 0.16.3",
  "rand",
+ "rayon",
  "reqwest",
  "ring",
  "rustls 0.23.35",

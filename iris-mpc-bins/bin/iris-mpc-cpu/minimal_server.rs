@@ -7,7 +7,7 @@ use std::{
 };
 
 use axum::{
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     response::{IntoResponse, Response},
     routing::post,
     Json, Router,
@@ -57,6 +57,8 @@ const DEMO_TRIGGER_DELAY_SECS: u64 = 5;
 const GRAPH_BUILD_BATCH_SIZE: usize = 256;
 /// PRF seed for deterministic layer assignment during graph building
 const GRAPH_PRF_SEED: [u8; 16] = [0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/// Number of elements per batch request
+const DEMO_BATCH_SIZE: usize = 64;
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 enum GraphCacheMode {
@@ -117,11 +119,15 @@ struct MinimalServerArgs {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct PartyRequestPayload {
-    request_id: String,
-    sns_id: String,
+    /// One request_id per element in the batch
+    request_ids: Vec<String>,
+    /// One sns_id per element in the batch
+    sns_ids: Vec<String>,
     skip_persistence: bool,
-    code: GaloisRingIrisCodeShare,
-    mask: GaloisRingIrisCodeShare,
+    /// One code share per element in the batch
+    codes: Vec<GaloisRingIrisCodeShare>,
+    /// One mask share per element in the batch
+    masks: Vec<GaloisRingIrisCodeShare>,
 }
 
 #[derive(Serialize)]
@@ -203,6 +209,9 @@ async fn main() -> Result<()> {
 
     let router = Router::new()
         .route("/job", post(handle_job))
+        // Increase body limit to 32MB to handle large batch payloads
+        // (64 GaloisRingIrisCodeShare items × 2 arrays × ~25KB each ≈ 3.2MB + JSON overhead)
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state.clone());
 
     let listener = TcpListener::bind(listen_addr)
@@ -256,18 +265,19 @@ async fn handle_job(
     Json(payload): Json<PartyRequestPayload>,
 ) -> Response {
     let start_time = std::time::Instant::now();
-    let request_id = payload.request_id.clone();
+    let batch_size = payload.codes.len();
+    let batch_id = Uuid::new_v4().to_string();
     info!(
         party = state.party_index,
-        %request_id,
-        sns_id = %payload.sns_id,
-        "Received job request"
+        %batch_id,
+        batch_size,
+        "Received batch job request"
     );
 
     let batch = match build_batch_from_payload(&payload) {
         Ok(batch) => batch,
         Err(err) => {
-            error!(party = state.party_index, %request_id, "failed to build batch: {:?}", err);
+            error!(party = state.party_index, %batch_id, "failed to build batch: {:?}", err);
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 format!("invalid payload: {err}"),
@@ -278,7 +288,8 @@ async fn handle_job(
 
     info!(
         party = state.party_index,
-        %request_id,
+        %batch_id,
+        batch_size,
         "Submitting batch to hawk"
     );
 
@@ -296,7 +307,8 @@ async fn handle_job(
             let total = result.matches.len();
             info!(
                 party = state.party_index,
-                %request_id,
+                %batch_id,
+                batch_size,
                 matches = match_count,
                 total,
                 elapsed_ms = elapsed.as_millis(),
@@ -305,10 +317,16 @@ async fn handle_job(
                 total,
                 elapsed
             );
-            (axum::http::StatusCode::OK, Json(JobResponse { request_id })).into_response()
+            (
+                axum::http::StatusCode::OK,
+                Json(JobResponse {
+                    request_id: batch_id,
+                }),
+            )
+                .into_response()
         }
         Err(err) => {
-            error!(party = state.party_index, %request_id, elapsed_ms = elapsed.as_millis(), "hawk job error after {:?}: {:?}", elapsed, err);
+            error!(party = state.party_index, %batch_id, elapsed_ms = elapsed.as_millis(), "hawk job error after {:?}: {:?}", elapsed, err);
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 format!("hawk job error: {err}"),
@@ -332,26 +350,37 @@ async fn handle_job(
 
 fn build_batch_from_payload(payload: &PartyRequestPayload) -> Result<BatchQuery> {
     let mut batch = BatchQuery::default();
-    batch.push_matching_request(
-        payload.sns_id.clone(),
-        payload.request_id.clone(),
-        UNIQUENESS_MESSAGE_TYPE,
-        BatchMetadata::default(),
-        vec![],
-        payload.skip_persistence,
-    );
 
-    let mask = GaloisRingTrimmedMaskCodeShare::from(&payload.mask);
-    let mask_mirrored = GaloisRingTrimmedMaskCodeShare::from(&payload.mask.mirrored_mask());
-    let shares = preprocess_iris_message_shares(
-        payload.code.clone(),
-        mask,
-        payload.code.mirrored_code(),
-        mask_mirrored,
-    )?;
+    for (i, ((sns_id, request_id), (code, mask))) in payload
+        .sns_ids
+        .iter()
+        .zip(payload.request_ids.iter())
+        .zip(payload.codes.iter().zip(payload.masks.iter()))
+        .enumerate()
+    {
+        batch.push_matching_request(
+            sns_id.clone(),
+            request_id.clone(),
+            UNIQUENESS_MESSAGE_TYPE,
+            BatchMetadata::default(),
+            vec![],
+            payload.skip_persistence,
+        );
 
-    // Pass the same shares for both eyes to work with existing infra
-    batch.push_matching_request_shares(shares.clone(), shares, true);
+        let trimmed_mask = GaloisRingTrimmedMaskCodeShare::from(mask);
+        let mask_mirrored = GaloisRingTrimmedMaskCodeShare::from(&mask.mirrored_mask());
+        let shares = preprocess_iris_message_shares(
+            code.clone(),
+            trimmed_mask,
+            code.mirrored_code(),
+            mask_mirrored,
+        )
+        .wrap_err_with(|| format!("failed to preprocess shares for element {}", i))?;
+
+        // Pass the same shares for both eyes to work with existing infra
+        batch.push_matching_request_shares(shares.clone(), shares, true);
+    }
+
     Ok(batch)
 }
 
@@ -366,13 +395,16 @@ async fn trigger_demo_request(
     info!(
         record_index,
         db_size = plain_db.db.len(),
+        batch_size = DEMO_BATCH_SIZE,
         "Initiator preparing demo request"
     );
     let payloads = build_party_payloads(&plain_db, record_index, demo_seed)?;
-    let request_id = payloads[0].request_id.clone();
-    info!(%request_id, "Sending demo request to all parties");
+    let batch_id = Uuid::new_v4().to_string();
+    info!(%batch_id, batch_size = DEMO_BATCH_SIZE, "Sending demo batch request to all parties");
 
-    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(600))
+        .build()?;
 
     let futs = control_urls
         .iter()
@@ -381,14 +413,14 @@ async fn trigger_demo_request(
         .enumerate()
         .map(|(party_idx, (url, payload))| {
             let client = client.clone();
-            let request_id = request_id.clone();
+            let batch_id = batch_id.clone();
             async move {
-                info!(party_idx, %url, %request_id, "Sending request to party");
+                info!(party_idx, %url, %batch_id, batch_size = DEMO_BATCH_SIZE, "Sending batch request to party");
                 let resp = client.post(&url).json(&payload).send().await?;
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 if status.is_success() {
-                    info!(party_idx, %status, %body, "Party responded successfully");
+                    info!(party_idx, %status, "Party responded successfully");
                 } else {
                     error!(party_idx, %status, %body, "Party responded with error");
                 }
@@ -400,7 +432,7 @@ async fn trigger_demo_request(
         });
 
     try_join_all(futs).await?;
-    info!(%request_id, "Demo request completed successfully");
+    info!(%batch_id, batch_size = DEMO_BATCH_SIZE, "Demo batch request completed successfully");
     Ok(())
 }
 
@@ -412,26 +444,41 @@ fn build_party_payloads(
     if plain_db.db.is_empty() {
         bail!("plain iris database is empty");
     }
-    let idx = record_index % plain_db.db.len();
-    let iris = plain_db
-        .db
-        .get(idx)
-        .ok_or_else(|| eyre!("missing iris at index {}", idx))?;
 
     let mut rng = StdRng::seed_from_u64(demo_seed);
-    let codes = GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, &mut rng);
-    let masks = GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, &mut rng);
 
-    let request_id = Uuid::new_v4().to_string();
-    let sns_id = format!("sns-{request_id}");
+    // Build batch of DEMO_BATCH_SIZE elements
+    let mut all_codes: Vec<[GaloisRingIrisCodeShare; 3]> = Vec::with_capacity(DEMO_BATCH_SIZE);
+    let mut all_masks: Vec<[GaloisRingIrisCodeShare; 3]> = Vec::with_capacity(DEMO_BATCH_SIZE);
+    let mut request_ids: Vec<String> = Vec::with_capacity(DEMO_BATCH_SIZE);
+    let mut sns_ids: Vec<String> = Vec::with_capacity(DEMO_BATCH_SIZE);
 
+    for i in 0..DEMO_BATCH_SIZE {
+        let idx = (record_index + i) % plain_db.db.len();
+        let iris = plain_db
+            .db
+            .get(idx)
+            .ok_or_else(|| eyre!("missing iris at index {}", idx))?;
+
+        let codes = GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, &mut rng);
+        let masks = GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, &mut rng);
+
+        all_codes.push(codes);
+        all_masks.push(masks);
+
+        let request_id = Uuid::new_v4().to_string();
+        sns_ids.push(format!("sns-{request_id}"));
+        request_ids.push(request_id);
+    }
+
+    // Transpose: from [batch][party] to [party][batch]
     Ok((0..3)
         .map(|party| PartyRequestPayload {
-            request_id: request_id.clone(),
-            sns_id: sns_id.clone(),
+            request_ids: request_ids.clone(),
+            sns_ids: sns_ids.clone(),
             skip_persistence: false,
-            code: codes[party].clone(),
-            mask: masks[party].clone(),
+            codes: all_codes.iter().map(|c| c[party].clone()).collect(),
+            masks: all_masks.iter().map(|m| m[party].clone()).collect(),
         })
         .collect())
 }

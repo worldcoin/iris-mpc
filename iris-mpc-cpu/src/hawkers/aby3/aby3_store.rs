@@ -365,30 +365,48 @@ impl Aby3Store {
             }
         }
 
-        let mut res = distances.to_vec();
+        // Use distances directly instead of cloning
+        let mut res = distances;
         while res.len() > MIN_ROUND_ROBIN_SIZE {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
-            let pairs = res
-                .into_iter()
-                .tuples()
-                .flat_map(|(a, b)| izip!(a, b).collect_vec())
-                .collect_vec();
+
+            // Pre-allocate pairs vector with exact capacity
+            let num_pairs = (res.len() / 2) * len;
+            let mut pairs = Vec::with_capacity(num_pairs);
+
+            // Build pairs by iterating through consecutive vector pairs
+            let mut iter = res.into_iter();
+            while let (Some(a), Some(b)) = (iter.next(), iter.next()) {
+                // Zip without intermediate allocation
+                for (ai, bi) in a.into_iter().zip(b) {
+                    pairs.push((ai, bi));
+                }
+            }
+
             // compute minimums of pairs
             let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
-            res = flattened_res
-                .into_iter()
-                .chunks(len)
-                .into_iter()
-                .map(|chunk| chunk.collect())
-                .collect_vec();
-            // if we saved a last distance, we need to add it back
+
+            // Reconstruct res from flattened results, pre-allocate outer vec
+            let num_result_vecs = flattened_res.len() / len;
+            let mut new_res = Vec::with_capacity(num_result_vecs + 1); // +1 for potential last_distance
+            let mut flattened_iter = flattened_res.into_iter();
+            for _ in 0..num_result_vecs {
+                let chunk: Vec<_> = flattened_iter.by_ref().take(len).collect();
+                new_res.push(chunk);
+            }
+            res = new_res;
+
+            // if we saved a last distance, we need to add it back (no clone needed, we own it)
             if let Some(last_distance) = maybe_last_distance {
-                res.push(last_distance.clone());
+                res.push(last_distance);
             }
         }
-        let flattened_distances = res.iter().flatten().cloned().collect_vec();
-        min_round_robin_batch(&mut self.session, &flattened_distances, res.len()).await
+
+        // Flatten by consuming the vecs (no clone)
+        let batch_size = res.len();
+        let flattened_distances: Vec<_> = res.into_iter().flatten().collect();
+        min_round_robin_batch(&mut self.session, &flattened_distances, batch_size).await
     }
 
     async fn compact_neighborhood_batch(

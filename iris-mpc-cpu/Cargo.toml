@@ -96,5 +96,9 @@ harness = false
 name = "dot"
 harness = false
 
+[[bench]]
+name = "rotation_aware"
+harness = false
+
 [[example]]
 name = "hnsw-ex"
