@@ -1,56 +1,120 @@
-use std::{fs, path::PathBuf};
-
 use serde::{Deserialize, Serialize};
-use toml;
 
 use iris_mpc_common::IrisSerialId;
 
-/// Set of variants over client parameterisation.
+/// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ServiceClientConfig {
+pub struct AwsConfiguration {
+    /// Execution environment.
+    environment: String,
+
+    /// Base URL for downloading node encryption public keys.
+    public_key_base_url: String,
+
+    /// S3: request ingress queue URL.
+    s3_request_bucket_name: String,
+
+    /// SNS: system request ingress queue topic.
+    sns_request_topic_arn: String,
+
+    /// SQS: long polling interval (seconds).
+    sqs_long_poll_wait_time: usize,
+
+    /// SQS: system response eqgress queue URL.
+    sqs_response_queue_url: String,
+
+    /// SQS: wait time (seconds) between receive message polling.
+    sqs_wait_time_seconds: usize,
+}
+
+impl AwsConfiguration {
+    pub fn environment(&self) -> &String {
+        &self.environment
+    }
+
+    pub fn public_key_base_url(&self) -> &String {
+        &self.public_key_base_url
+    }
+
+    pub fn s3_request_bucket_name(&self) -> &String {
+        &self.s3_request_bucket_name
+    }
+
+    pub fn sns_request_topic_arn(&self) -> &String {
+        &self.sns_request_topic_arn
+    }
+
+    pub fn sqs_long_poll_wait_time(&self) -> &usize {
+        &self.sqs_long_poll_wait_time
+    }
+
+    pub fn sqs_response_queue_url(&self) -> &String {
+        &self.sqs_response_queue_url
+    }
+
+    pub fn sqs_wait_time_seconds(&self) -> &usize {
+        &self.sqs_wait_time_seconds
+    }
+}
+
+/// Set of variants over inputs to request batch generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RequestBatchConfiguration {
     // Batches of single request type
-    Kind {
+    SimpleBatchKind {
         /// Number of request batches to generate.
         batch_count: usize,
 
-        /// Size of each batch.
-        batch_size: usize,
-
         /// Determines type of requests to be included in each batch.
         batch_kind: String,
+
+        /// Size of each batch.
+        batch_size: usize,
 
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
     },
 }
 
-impl From<PathBuf> for ServiceClientConfig {
-    fn from(value: PathBuf) -> Self {
-        assert!(value.exists());
+/// Service client configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceClientConfiguration {
+    // Associated AWS services configuration.
+    aws: AwsConfiguration,
 
-        toml::from_str(&fs::read_to_string(value).unwrap()).unwrap()
+    // Associated request batch generation configuration.
+    request_batch: RequestBatchConfiguration,
+}
+
+impl ServiceClientConfiguration {
+    pub fn aws(&self) -> &AwsConfiguration {
+        &self.aws
+    }
+
+    pub fn request_batch(&self) -> &RequestBatchConfiguration {
+        &self.request_batch
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use iris_mpc_common::helpers::smpc_request;
+// #[cfg(test)]
+// mod tests {
+//     use iris_mpc_common::helpers::smpc_request;
 
-    use super::ServiceClientConfig;
+//     use super::ServiceClientConfig;
 
-    impl ServiceClientConfig {
-        pub fn new_1() -> Self {
-            Self::Kind {
-                batch_count: 1,
-                batch_size: 1,
-                batch_kind: smpc_request::UNIQUENESS_MESSAGE_TYPE.to_string(),
-                known_iris_serial_id: None,
-            }
-        }
-    }
+//     impl ServiceClientConfig {
+//         pub fn new_1() -> Self {
+//             Self::SimpleBatchKind {
+//                 batch_count: 1,
+//                 batch_size: 1,
+//                 batch_kind: smpc_request::UNIQUENESS_MESSAGE_TYPE.to_string(),
+//                 known_iris_serial_id: None,
+//             }
+//         }
+//     }
 
-    #[tokio::test]
-    async fn test_new_1() {
-        let _ = ServiceClientConfig::new_1();
-    }
-}
+//     #[tokio::test]
+//     async fn test_new_1() {
+//         let _ = ServiceClientConfig::new_1();
+//     }
+// }

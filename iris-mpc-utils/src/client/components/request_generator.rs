@@ -1,8 +1,9 @@
 use iris_mpc_common::IrisSerialId;
 
 use super::super::typeset::{
+    config::{RequestBatchConfiguration, ServiceClientConfiguration},
     ParentUniquenessRequest, RequestBatch, RequestBatchKind, RequestBatchSize, RequestFactory,
-    ServiceClientConfig, ServiceClientError,
+    ServiceClientError,
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -23,7 +24,7 @@ impl RequestGenerator {
         }
     }
 
-    pub fn new(config: ServiceClientConfig) -> Self {
+    pub fn new(config: ServiceClientConfiguration) -> Self {
         Self {
             generated_batch_count: 0,
             params: RequestGeneratorParams::from(config),
@@ -127,19 +128,19 @@ pub enum RequestGeneratorParams {
     KnownSet(Vec<RequestBatch>),
 }
 
-impl From<ServiceClientConfig> for RequestGeneratorParams {
-    fn from(config: ServiceClientConfig) -> Self {
-        match config {
-            ServiceClientConfig::Kind {
+impl From<ServiceClientConfiguration> for RequestGeneratorParams {
+    fn from(config: ServiceClientConfiguration) -> Self {
+        match config.request_batch() {
+            RequestBatchConfiguration::SimpleBatchKind {
                 batch_count,
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
             } => Self::BatchKind {
-                batch_count,
-                batch_size: RequestBatchSize::Static(batch_size),
-                batch_kind: RequestBatchKind::from(&batch_kind),
-                known_iris_serial_id,
+                batch_count: *batch_count,
+                batch_size: RequestBatchSize::Static(*batch_size),
+                batch_kind: RequestBatchKind::from(batch_kind),
+                known_iris_serial_id: *known_iris_serial_id,
             },
         }
     }

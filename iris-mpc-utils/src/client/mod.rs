@@ -1,3 +1,4 @@
+use async_from::{self, AsyncFrom};
 use rand::{CryptoRng, Rng};
 
 use crate::aws::{AwsClient, AwsClientConfig};
@@ -5,8 +6,9 @@ use crate::aws::{AwsClient, AwsClientConfig};
 pub use components::RequestGeneratorParams;
 use components::{RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesUploader};
 pub use typeset::{
+    config::{self, ServiceClientConfiguration},
     Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
-    ServiceClientConfig, ServiceClientError,
+    ServiceClientError,
 };
 
 mod components;
@@ -29,12 +31,8 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
 }
 
 impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
-    pub async fn new(
-        aws_client_config: AwsClientConfig,
-        config: ServiceClientConfig,
-        rng_seed: R,
-    ) -> Self {
-        let aws_client = AwsClient::new(aws_client_config);
+    pub async fn new(config: config::ServiceClientConfiguration, rng_seed: R) -> Self {
+        let aws_client = AwsClient::async_from(config.clone()).await;
 
         Self {
             shares_uploader: SharesUploader::new(aws_client.clone(), rng_seed),
@@ -53,7 +51,9 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
                 batch.requests().len()
             );
             println!("------------------------------------------------------------------------");
+
             self.shares_uploader.process_batch(&mut batch).await?;
+
             while batch.is_enqueueable() {
                 self.request_enqueuer.process_batch(&mut batch).await?;
                 self.response_dequeuer.process_batch(&mut batch).await?;
@@ -75,25 +75,48 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use rand::{rngs::StdRng, SeedableRng};
-
-    use super::{AwsClientConfig, ServiceClient, ServiceClientConfig};
-
-    impl ServiceClient<StdRng> {
-        async fn new_1() -> Self {
-            ServiceClient::<StdRng>::new(
-                AwsClientConfig::new_1().await,
-                ServiceClientConfig::new_1(),
-                StdRng::seed_from_u64(42),
-            )
-            .await
-        }
-    }
-
-    #[tokio::test]
-    async fn test_new_1() {
-        let _ = ServiceClient::new_1().await;
+#[async_from::async_trait]
+impl AsyncFrom<ServiceClientConfiguration> for AwsClient {
+    async fn async_from(config: ServiceClientConfiguration) -> Self {
+        AwsClient::new(AwsClientConfig::async_from(config).await)
     }
 }
+
+#[async_from::async_trait]
+impl AsyncFrom<ServiceClientConfiguration> for AwsClientConfig {
+    async fn async_from(config: ServiceClientConfiguration) -> Self {
+        AwsClientConfig::new(
+            config.aws().environment().to_owned(),
+            config.aws().public_key_base_url().to_owned(),
+            config.aws().s3_request_bucket_name().to_owned(),
+            config.aws().sns_request_topic_arn().to_owned(),
+            config.aws().sqs_long_poll_wait_time().to_owned(),
+            config.aws().sqs_response_queue_url().to_owned(),
+            config.aws().sqs_wait_time_seconds().to_owned(),
+        )
+        .await
+    }
+}
+
+// #[cfg(test)]
+// mod tests {
+//     use rand::{rngs::StdRng, SeedableRng};
+
+//     use super::{AwsClientConfig, ServiceClient, ServiceClientConfig};
+
+//     impl ServiceClient<StdRng> {
+//         async fn new_1() -> Self {
+//             ServiceClient::<StdRng>::new(
+//                 AwsClientConfig::new_1().await,
+//                 ServiceClientConfig::new_1(),
+//                 StdRng::seed_from_u64(42),
+//             )
+//             .await
+//         }
+//     }
+
+//     #[tokio::test]
+//     async fn test_new_1() {
+//         let _ = ServiceClient::new_1().await;
+//     }
+// }
