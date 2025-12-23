@@ -121,18 +121,15 @@ impl Request {
     pub fn is_enqueueable(&self) -> bool {
         matches!(self.info().status(), RequestStatus::SharesUploaded(_))
             && match self {
-                Self::IdentityDeletion { uniqueness_ref, .. } => match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(_) => true,
-                    _ => false,
-                },
-                Self::Reauthorization { uniqueness_ref, .. } => match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(_) => true,
-                    _ => false,
-                },
-                Self::ResetUpdate { uniqueness_ref, .. } => match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(_) => true,
-                    _ => false,
-                },
+                Self::IdentityDeletion { uniqueness_ref, .. } => {
+                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                }
+                Self::Reauthorization { uniqueness_ref, .. } => {
+                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                }
+                Self::ResetUpdate { uniqueness_ref, .. } => {
+                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                }
                 _ => true,
             }
     }
@@ -237,8 +234,6 @@ pub enum RequestStatus {
 }
 
 impl RequestStatus {
-    pub const VARIANT_COUNT: usize = 4;
-
     pub fn new_correlated() -> Self {
         Self::Correlated(Instant::now())
     }
@@ -274,7 +269,7 @@ impl fmt::Display for RequestStatus {
 }
 
 /// A set of variants over an associated uniqueness request. Pertinent when creating requests
-/// of the following types: identity_deletion ^ reauth ^ reset_update.
+/// of the following types: IdentityDeletion ^ Reauthorization ^ ResetUpdate.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum UniquenessReference {
@@ -282,18 +277,4 @@ pub enum UniquenessReference {
     RequestId(uuid::Uuid),
     // A serial identifier assigned from either a processed uniqueness result or a user input override.
     IrisSerialId(IrisSerialId),
-}
-
-impl UniquenessReference {
-    pub fn is_valid(kind: &str, parent: &Option<Self>) -> bool {
-        match kind {
-            smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => {
-                parent.is_none()
-            }
-            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
-            | smpc_request::REAUTH_MESSAGE_TYPE
-            | smpc_request::RESET_UPDATE_MESSAGE_TYPE => parent.is_some(),
-            _ => false,
-        }
-    }
 }

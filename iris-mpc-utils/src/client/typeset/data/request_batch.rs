@@ -1,12 +1,6 @@
 use std::fmt;
 
-use iris_mpc_common::{
-    helpers::smpc_request::{
-        self, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
-    },
-    IrisSerialId,
-};
+use iris_mpc_common::helpers::smpc_request;
 
 use super::{Request, RequestInfo, RequestStatus, ResponseBody, UniquenessReference};
 
@@ -87,32 +81,6 @@ impl RequestBatch {
         &self.requests().len() + 1
     }
 
-    pub fn push_new(&mut self, kind: &str, parent: Option<UniquenessReference>) {
-        assert!(
-            UniquenessReference::is_valid(kind, &parent),
-            "Invalid parent request association"
-        );
-
-        match kind {
-            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                self.push_new_identity_deletion(parent.unwrap());
-            }
-            smpc_request::REAUTH_MESSAGE_TYPE => {
-                self.push_new_reauthorization(parent.unwrap());
-            }
-            smpc_request::RESET_CHECK_MESSAGE_TYPE => {
-                self.push_new_reset_check();
-            }
-            smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
-                self.push_new_reset_update(parent.unwrap());
-            }
-            smpc_request::UNIQUENESS_MESSAGE_TYPE => {
-                self.push_new_uniqueness();
-            }
-            _ => unreachable!(),
-        }
-    }
-
     /// Extends requests collection with a new IdentityDeletion request.
     pub fn push_new_identity_deletion(&mut self, uniqueness_ref: UniquenessReference) {
         let r = match uniqueness_ref {
@@ -184,24 +152,6 @@ impl RequestBatch {
         r
     }
 
-    // Maybe extends collection with a uniqueness request to be referenced from other requests.
-    pub fn push_new_uniqueness_maybe(
-        &mut self,
-        kind: &str,
-        serial_id: Option<IrisSerialId>,
-    ) -> Option<UniquenessReference> {
-        match kind {
-            smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => None,
-            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
-            | smpc_request::REAUTH_MESSAGE_TYPE
-            | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
-                None => UniquenessReference::RequestId(*self.push_new_uniqueness().request_id()),
-                Some(serial_id) => UniquenessReference::IrisSerialId(serial_id),
-            }),
-            _ => panic!("Invalid request kind"),
-        }
-    }
-
     /// Extends requests collection.
     pub fn push_request(&mut self, request: Request) {
         self.requests_mut().push(request);
@@ -244,11 +194,13 @@ impl fmt::Display for RequestBatchKind {
 impl From<&String> for RequestBatchKind {
     fn from(value: &String) -> Self {
         Self::Simple(match value.as_str() {
-            IDENTITY_DELETION_MESSAGE_TYPE => IDENTITY_DELETION_MESSAGE_TYPE,
-            REAUTH_MESSAGE_TYPE => REAUTH_MESSAGE_TYPE,
-            RESET_CHECK_MESSAGE_TYPE => RESET_CHECK_MESSAGE_TYPE,
-            RESET_UPDATE_MESSAGE_TYPE => RESET_UPDATE_MESSAGE_TYPE,
-            UNIQUENESS_MESSAGE_TYPE => UNIQUENESS_MESSAGE_TYPE,
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+            }
+            smpc_request::REAUTH_MESSAGE_TYPE => smpc_request::REAUTH_MESSAGE_TYPE,
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => smpc_request::RESET_CHECK_MESSAGE_TYPE,
+            smpc_request::RESET_UPDATE_MESSAGE_TYPE => smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+            smpc_request::UNIQUENESS_MESSAGE_TYPE => smpc_request::UNIQUENESS_MESSAGE_TYPE,
             _ => panic!("Unsupported request batch kind"),
         })
     }

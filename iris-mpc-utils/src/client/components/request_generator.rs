@@ -1,8 +1,8 @@
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::super::typeset::{
     config::{RequestBatchConfiguration, ServiceClientConfiguration},
-    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError,
+    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError, UniquenessReference,
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -51,10 +51,9 @@ impl RequestGenerator {
                 for _ in 0..batch_size {
                     match batch_kind {
                         RequestBatchKind::Simple(kind) => {
-                            // Push a parent uniqueness request (if appropriate).
                             let parent =
-                                batch.push_new_uniqueness_maybe(kind, *known_iris_serial_id);
-                            batch.push_new(kind, parent);
+                                push_new_uniqueness_maybe(&mut batch, kind, *known_iris_serial_id);
+                            push_new(&mut batch, kind, parent);
                         }
                     }
                 }
@@ -73,6 +72,57 @@ impl RequestGenerator {
 
     fn next_batch_idx(&self) -> usize {
         self.generated_batch_count + 1
+    }
+}
+
+/// Pushes a new request onto the batch.
+pub fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReference>) {
+    assert!(
+        matches!(
+            kind,
+            smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE if parent.is_none()
+        ) || matches!(
+            kind,
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE | smpc_request::RESET_UPDATE_MESSAGE_TYPE if parent.is_some()
+        ),
+        "Invalid parent request association"
+    );
+
+    match kind {
+        smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+            batch.push_new_identity_deletion(parent.unwrap());
+        }
+        smpc_request::REAUTH_MESSAGE_TYPE => {
+            batch.push_new_reauthorization(parent.unwrap());
+        }
+        smpc_request::RESET_CHECK_MESSAGE_TYPE => {
+            batch.push_new_reset_check();
+        }
+        smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
+            batch.push_new_reset_update(parent.unwrap());
+        }
+        smpc_request::UNIQUENESS_MESSAGE_TYPE => {
+            batch.push_new_uniqueness();
+        }
+        _ => unreachable!(),
+    }
+}
+
+// Maybe extends collection with a uniqueness request to be referenced from other requests.
+fn push_new_uniqueness_maybe(
+    batch: &mut RequestBatch,
+    kind: &str,
+    serial_id: Option<IrisSerialId>,
+) -> Option<UniquenessReference> {
+    match kind {
+        smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => None,
+        smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+        | smpc_request::REAUTH_MESSAGE_TYPE
+        | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(serial_id.map_or_else(
+            || UniquenessReference::RequestId(*batch.push_new_uniqueness().request_id()),
+            UniquenessReference::IrisSerialId,
+        )),
+        _ => panic!("Invalid request kind"),
     }
 }
 
