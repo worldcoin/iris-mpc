@@ -217,10 +217,6 @@ name = "service-client"
 path = "bin/iris-mpc-utils/exec_service_client.rs"
 
 [[bin]]
-name = "write-service-client-config"
-path = "bin/iris-mpc-utils/write_service_client_config.rs"
-
-[[bin]]
 name = "write-node-config-toml"
 path = "bin/iris-mpc-utils/write_node_config_toml.rs"
 
