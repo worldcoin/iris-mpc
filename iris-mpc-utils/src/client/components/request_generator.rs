@@ -1,7 +1,8 @@
 use iris_mpc_common::IrisSerialId;
 
 use super::super::typeset::{
-    ClientError, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
+    ClientError, ParentUniquenessRequest, RequestBatch, RequestBatchKind, RequestBatchSize,
+    RequestFactory,
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
@@ -46,15 +47,44 @@ impl RequestGenerator {
                 let batch_size = match batch_size {
                     RequestBatchSize::Static(size) => *size,
                 };
-                let mut batch = RequestBatch::new(batch_idx, None);
+                let mut batch = RequestBatch::new(batch_idx, vec![]);
                 for _ in 0..batch_size {
                     match batch_kind {
                         RequestBatchKind::Simple(kind) => {
-                            batch.push_child_and_maybe_parent(Request::new_and_maybe_parent(
+                            match ParentUniquenessRequest::new_maybe(
                                 &batch,
                                 kind,
                                 *known_iris_serial_id,
-                            ));
+                            ) {
+                                Some(parent) => {
+                                    match parent {
+                                        ParentUniquenessRequest::Instance(request) => {
+                                            batch.push_request(RequestFactory::new_request(
+                                                &batch,
+                                                kind,
+                                                Some(ParentUniquenessRequest::Instance(
+                                                    request.clone(),
+                                                )),
+                                            ));
+                                            batch.push_request(request);
+                                        }
+                                        ParentUniquenessRequest::IrisSerialId(serial_id) => {
+                                            batch.push_request(RequestFactory::new_request(
+                                                &batch,
+                                                kind,
+                                                Some(ParentUniquenessRequest::IrisSerialId(
+                                                    serial_id,
+                                                )),
+                                            ));
+                                        }
+                                    };
+                                }
+                                None => {
+                                    batch.push_request(RequestFactory::new_request(
+                                        &batch, kind, None,
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -97,25 +127,16 @@ pub enum RequestGeneratorParams {
     KnownSet(Vec<RequestBatch>),
 }
 
-impl Default for RequestGeneratorParams {
-    fn default() -> Self {
-        Self::BatchKind {
-            batch_count: 1,
-            batch_size: RequestBatchSize::Static(1),
-            batch_kind: RequestBatchKind::Simple("uniqueness"),
-            known_iris_serial_id: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
+    use crate::client::RequestBatch;
+
     use super::{RequestBatchKind, RequestBatchSize, RequestGeneratorParams};
 
     impl RequestGeneratorParams {
-        fn new_1() -> Self {
+        pub fn new_1() -> Self {
             Self::BatchKind {
                 batch_count: 1,
                 batch_size: RequestBatchSize::Static(1),
@@ -125,7 +146,11 @@ mod tests {
         }
 
         fn new_2() -> Self {
-            Self::KnownSet(vec![])
+            Self::KnownSet(vec![
+                RequestBatch::default(),
+                RequestBatch::default(),
+                RequestBatch::default(),
+            ])
         }
     }
 

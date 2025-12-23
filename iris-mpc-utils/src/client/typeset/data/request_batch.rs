@@ -7,7 +7,7 @@ use iris_mpc_common::helpers::smpc_request::{
 
 use crate::client::typeset::data::request::RequestStatus;
 
-use super::{request::Request, response::ResponseBody};
+use super::{Request, ResponseBody};
 
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Clone, Debug)]
@@ -32,10 +32,10 @@ impl RequestBatch {
         &mut self.requests
     }
 
-    pub fn new(batch_idx: usize, requests: Option<Vec<Request>>) -> Self {
+    pub fn new(batch_idx: usize, requests: Vec<Request>) -> Self {
         Self {
             batch_idx,
-            requests: requests.unwrap_or(vec![]),
+            requests,
         }
     }
 
@@ -64,8 +64,8 @@ impl RequestBatch {
         self.requests
             .iter()
             .enumerate()
-            .find(|(_, r)| match r.request_id_of_parent() {
-                Some(child_request_id) => child_request_id == parent.request_id(),
+            .find(|(_, r)| match r.info().request_id_of_parent() {
+                Some(child_request_id) => child_request_id == parent.info().request_id(),
                 None => false,
             })
             .map(|(idx, _)| idx)
@@ -86,21 +86,21 @@ impl RequestBatch {
         &self.requests().len() + 1
     }
 
-    /// Extends requests collection with child/parent requests..
-    pub fn push_child_and_maybe_parent(
-        &mut self,
-        (child, maybe_parent): (Request, Option<Request>),
-    ) {
-        self.requests_mut().push(child);
-        if let Some(parent) = maybe_parent {
-            self.requests_mut().push(parent);
-        }
+    /// Extends requests collection.
+    pub fn push_request(&mut self, request: Request) {
+        self.requests_mut().push(request);
     }
 
     pub fn set_request_status(&mut self, new_state: RequestStatus) {
         for request in self.requests_mut() {
             request.set_status(new_state.clone());
         }
+    }
+}
+
+impl Default for RequestBatch {
+    fn default() -> Self {
+        Self::new(1, vec![])
     }
 }
 
@@ -155,29 +155,93 @@ impl fmt::Display for RequestBatchSize {
 
 #[cfg(test)]
 mod tests {
-    use super::RequestBatch;
+    use super::{
+        super::{ParentUniquenessRequest, Request, RequestFactory},
+        RequestBatch,
+    };
 
     impl RequestBatch {
         pub fn new_1() -> Self {
-            Self::new(1, None)
+            let mut batch = Self::default();
+            for _ in 0..10 {
+                batch.push_new_uniqueness();
+            }
+
+            batch
         }
 
         pub fn new_2() -> Self {
-            Self::new(1, Some(vec![]))
+            let mut batch = Self::default();
+            let parent = ParentUniquenessRequest::Instance(batch.push_new_uniqueness());
+            batch.push_new_reauthorization(parent.clone());
+            batch.push_new_reset_check();
+            batch.push_new_reset_update(parent.clone());
+            batch.push_new_identity_deletion(parent.clone());
+
+            batch
         }
+
+        pub fn new_3() -> Self {
+            let mut batch = Self::default();
+            let parent = ParentUniquenessRequest::IrisSerialId(1);
+            batch.push_new_reauthorization(parent.clone());
+            batch.push_new_reset_check();
+            batch.push_new_reset_update(parent.clone());
+            batch.push_new_identity_deletion(parent.clone());
+
+            batch
+        }
+
+        pub fn push_new_identity_deletion(&mut self, parent: ParentUniquenessRequest) {
+            let r = RequestFactory::new_identity_deletion(self, parent);
+            self.requests_mut().push(r.clone());
+        }
+
+        pub fn push_new_reauthorization(&mut self, parent: ParentUniquenessRequest) {
+            let r = RequestFactory::new_reauthorisation(self, parent);
+            self.requests_mut().push(r.clone());
+        }
+
+        pub fn push_new_reset_check(&mut self) {
+            let r = RequestFactory::new_reset_check(self);
+            self.requests_mut().push(r.clone());
+        }
+
+        pub fn push_new_reset_update(&mut self, parent: ParentUniquenessRequest) {
+            let r = RequestFactory::new_reauthorisation(self, parent);
+            self.requests_mut().push(r.clone());
+        }
+
+        /// Extends requests collection with a new uniqueness request.
+        pub fn push_new_uniqueness(&mut self) -> Request {
+            let r = RequestFactory::new_uniqueness(self);
+            self.requests_mut().push(r.clone());
+
+            r
+        }
+    }
+
+    #[tokio::test]
+    async fn test_new_default() {
+        let batch = RequestBatch::default();
+        assert!(batch.batch_idx == 1);
+        assert!(batch.requests.is_empty());
     }
 
     #[tokio::test]
     async fn test_new_1() {
         let batch = RequestBatch::new_1();
         assert!(batch.batch_idx == 1);
-        assert!(batch.requests.len() == 0);
+        assert!(batch.requests.len() == 10);
+        for request in batch.requests {
+            assert!(request.is_uniqueness());
+        }
     }
 
     #[tokio::test]
     async fn test_new_2() {
         let batch = RequestBatch::new_2();
         assert!(batch.batch_idx == 1);
-        assert!(batch.requests.len() == 0);
+        assert!(batch.requests.len() == 5);
     }
 }

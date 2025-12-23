@@ -96,7 +96,7 @@ mod tests {
         async fn new_1() -> Self {
             ServiceClient::<StdRng>::new(
                 AwsClientConfig::new_1().await,
-                RequestGeneratorParams::default(),
+                RequestGeneratorParams::new_1(),
                 StdRng::seed_from_u64(42),
             )
             .await

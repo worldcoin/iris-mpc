@@ -4,7 +4,7 @@ use uuid;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
-use super::{request_batch::RequestBatch, request_info::RequestInfo, response::ResponseBody};
+use super::{request_info::RequestInfo, response::ResponseBody};
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Clone, Debug)]
@@ -46,66 +46,6 @@ pub enum Request {
 }
 
 impl Request {
-    pub fn new(
-        batch: &RequestBatch,
-        kind: &str,
-        parent: Option<&Request>,
-        uniqueness_serial_id: Option<IrisSerialId>,
-    ) -> Self {
-        match kind {
-            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => Self::IdentityDeletion {
-                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), parent),
-                uniqueness_serial_id,
-            },
-            smpc_request::REAUTH_MESSAGE_TYPE => Self::Reauthorization {
-                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
-                reauth_id: uuid::Uuid::new_v4(),
-                uniqueness_serial_id,
-            },
-            smpc_request::RESET_UPDATE_MESSAGE_TYPE => Self::ResetUpdate {
-                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
-                reset_id: uuid::Uuid::new_v4(),
-                uniqueness_serial_id,
-            },
-            smpc_request::RESET_CHECK_MESSAGE_TYPE => Self::ResetCheck {
-                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
-                reset_id: uuid::Uuid::new_v4(),
-            },
-            smpc_request::UNIQUENESS_MESSAGE_TYPE => Self::Uniqueness {
-                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
-                signup_id: uuid::Uuid::new_v4(),
-            },
-            _ => panic!("Invalid request kind"),
-        }
-    }
-
-    pub fn new_and_maybe_parent(
-        batch: &RequestBatch,
-        kind: &str,
-        parent_serial_id: Option<IrisSerialId>,
-    ) -> (Request, Option<Request>) {
-        match kind {
-            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
-            | smpc_request::REAUTH_MESSAGE_TYPE
-            | smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
-                if parent_serial_id.is_some() {
-                    (Request::new(batch, kind, None, parent_serial_id), None)
-                } else {
-                    let parent = Some(Self::new(
-                        batch,
-                        smpc_request::UNIQUENESS_MESSAGE_TYPE,
-                        None,
-                        None,
-                    ));
-                    let child = Request::new(batch, kind, parent.as_ref(), None);
-
-                    (child, parent)
-                }
-            }
-            _ => (Request::new(batch, kind, None, None), None),
-        }
-    }
-
     pub fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
@@ -135,6 +75,10 @@ impl Request {
             Self::ResetUpdate { reset_id, .. } => Some(reset_id),
             Self::Uniqueness { signup_id, .. } => Some(signup_id),
         }
+    }
+
+    pub fn request_id(&self) -> &uuid::Uuid {
+        self.info().request_id()
     }
 
     /// Returns true if a system response is deemed to be correlated with this system request.
@@ -193,24 +137,6 @@ impl Request {
             }
     }
 
-    fn label(&self) -> &str {
-        match self {
-            Self::IdentityDeletion { .. } => "IdentityDeletion",
-            Self::Reauthorization { .. } => "Reauthorization",
-            Self::ResetCheck { .. } => "ResetCheck",
-            Self::ResetUpdate { .. } => "ResetUpdate",
-            Self::Uniqueness { .. } => "Uniqueness",
-        }
-    }
-
-    pub fn request_id(&self) -> &uuid::Uuid {
-        self.info().request_id()
-    }
-
-    pub fn request_id_of_parent(&self) -> &Option<uuid::Uuid> {
-        self.info().request_id_of_parent()
-    }
-
     pub fn set_correlation(&mut self, response: &ResponseBody) {
         tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
         self.info_mut().set_correlation(response);
@@ -257,7 +183,13 @@ impl Request {
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}.{}", self.info(), self.label())
+        match self {
+            Self::IdentityDeletion { .. } => write!(f, "{}.IdentityDeletion", self.info()),
+            Self::Reauthorization { .. } => write!(f, "{}.Reauthorization", self.info()),
+            Self::ResetCheck { .. } => write!(f, "{}.ResetCheck", self.info()),
+            Self::ResetUpdate { .. } => write!(f, "{}.ResetUpdate", self.info()),
+            Self::Uniqueness { .. } => write!(f, "{}.Uniqueness", self.info()),
+        }
     }
 }
 
@@ -324,22 +256,42 @@ impl fmt::Display for RequestStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, RequestBatch, RequestInfo};
+    use super::{
+        super::{RequestBatch, RequestFactory},
+        Request,
+    };
 
     impl Request {
-        pub fn new_uniqueness(batch: &RequestBatch) -> Self {
-            Self::Uniqueness {
-                info: RequestInfo::new(batch.batch_idx(), batch.next_item_idx(), None),
-                signup_id: uuid::Uuid::new_v4(),
-            }
-        }
-
         fn new_1() -> Self {
-            Self::new_uniqueness(&RequestBatch::new_1())
+            let batch = RequestBatch::default();
+
+            RequestFactory::new_uniqueness(&batch)
         }
 
         fn new_2() -> Self {
-            Self::new_uniqueness(&RequestBatch::new_1())
+            let batch = RequestBatch::default();
+
+            RequestFactory::new_uniqueness(&batch)
+        }
+
+        pub fn is_identity_deletion(&self) -> bool {
+            matches!(self, Self::IdentityDeletion { .. })
+        }
+
+        pub fn is_reauthorization(&self) -> bool {
+            matches!(self, Self::Reauthorization { .. })
+        }
+
+        pub fn is_reset_check(&self) -> bool {
+            matches!(self, Self::ResetCheck { .. })
+        }
+
+        pub fn is_reset_update(&self) -> bool {
+            matches!(self, Self::ResetUpdate { .. })
+        }
+
+        pub fn is_uniqueness(&self) -> bool {
+            matches!(self, Self::Uniqueness { .. })
         }
     }
 

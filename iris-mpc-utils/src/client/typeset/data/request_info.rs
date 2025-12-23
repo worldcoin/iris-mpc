@@ -1,9 +1,6 @@
 use std::fmt;
 
-use super::{
-    request::{Request, RequestStatus},
-    response::ResponseBody,
-};
+use super::{RequestBatch, RequestStatus, ResponseBody};
 use crate::constants::N_PARTIES;
 
 /// Encapsulates common data pertinent to a system processing request.
@@ -37,13 +34,13 @@ impl RequestInfo {
         &self.request_id_of_parent
     }
 
-    pub fn new(batch_idx: usize, batch_item_idx: usize, parent: Option<&Request>) -> Self {
+    pub fn new(batch: &RequestBatch, request_id_of_parent: Option<&uuid::Uuid>) -> Self {
         Self {
-            batch_idx,
-            batch_item_idx,
+            batch_idx: batch.batch_idx(),
+            batch_item_idx: batch.next_item_idx(),
             correlation_set: [const { None }; N_PARTIES],
             request_id: uuid::Uuid::new_v4(),
-            request_id_of_parent: parent.map(|p| *p.info().request_id()),
+            request_id_of_parent: request_id_of_parent.copied(),
             state_history: vec![RequestStatus::default()],
         }
     }
