@@ -137,6 +137,31 @@ impl Request {
             }
     }
 
+    /// Returns true if request is an IdentityDeletion.
+    pub fn is_identity_deletion(&self) -> bool {
+        matches!(self, Self::IdentityDeletion { .. })
+    }
+
+    /// Returns true if request is a Reauthorization.
+    pub fn is_reauthorization(&self) -> bool {
+        matches!(self, Self::Reauthorization { .. })
+    }
+
+    /// Returns true if request is a ResetCheck.
+    pub fn is_reset_check(&self) -> bool {
+        matches!(self, Self::ResetCheck { .. })
+    }
+
+    /// Returns true if request is a ResetUpdate.
+    pub fn is_reset_update(&self) -> bool {
+        matches!(self, Self::ResetUpdate { .. })
+    }
+
+    /// Returns true if request is a Uniqueness.
+    pub fn is_uniqueness(&self) -> bool {
+        matches!(self, Self::Uniqueness { .. })
+    }
+
     pub fn set_correlation(&mut self, response: &ResponseBody) {
         tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
         self.info_mut().set_correlation(response);
@@ -251,57 +276,5 @@ impl Default for RequestStatus {
 impl fmt::Display for RequestStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.label())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        super::{RequestBatch, RequestFactory},
-        Request,
-    };
-
-    impl Request {
-        fn new_1() -> Self {
-            let batch = RequestBatch::default();
-
-            RequestFactory::new_uniqueness(&batch)
-        }
-
-        fn new_2() -> Self {
-            let batch = RequestBatch::default();
-
-            RequestFactory::new_uniqueness(&batch)
-        }
-
-        pub fn is_identity_deletion(&self) -> bool {
-            matches!(self, Self::IdentityDeletion { .. })
-        }
-
-        pub fn is_reauthorization(&self) -> bool {
-            matches!(self, Self::Reauthorization { .. })
-        }
-
-        pub fn is_reset_check(&self) -> bool {
-            matches!(self, Self::ResetCheck { .. })
-        }
-
-        pub fn is_reset_update(&self) -> bool {
-            matches!(self, Self::ResetUpdate { .. })
-        }
-
-        pub fn is_uniqueness(&self) -> bool {
-            matches!(self, Self::Uniqueness { .. })
-        }
-    }
-
-    #[tokio::test]
-    async fn test_new_1() {
-        let _ = Request::new_1();
-    }
-
-    #[tokio::test]
-    async fn test_new_2() {
-        let _ = Request::new_2();
     }
 }

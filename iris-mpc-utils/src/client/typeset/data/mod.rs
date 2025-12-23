@@ -6,5 +6,6 @@ mod response;
 
 pub use request::{Request, RequestBody, RequestStatus};
 pub use request_batch::{RequestBatch, RequestBatchKind, RequestBatchSize};
-pub use request_factory::{ParentUniquenessRequest, RequestFactory};
+pub use request_factory::ParentUniquenessRequest;
+pub use request_info::RequestInfo;
 pub use response::ResponseBody;

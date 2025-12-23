@@ -1,11 +1,11 @@
 use std::fmt;
 
 use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+    self, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
     RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
-use crate::client::typeset::data::request::RequestStatus;
+use crate::client::typeset::{ParentUniquenessRequest, RequestInfo, RequestStatus};
 
 use super::{Request, ResponseBody};
 
@@ -86,6 +86,97 @@ impl RequestBatch {
         &self.requests().len() + 1
     }
 
+    pub fn push_new(&mut self, kind: &str, parent: Option<ParentUniquenessRequest>) {
+        assert!(
+            ParentUniquenessRequest::is_valid(kind, &parent),
+            "Invalid parent request association"
+        );
+
+        match kind {
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                self.push_new_identity_deletion(parent.unwrap());
+            }
+            smpc_request::REAUTH_MESSAGE_TYPE => {
+                self.push_new_reauthorization(parent.unwrap());
+            }
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => {
+                self.push_new_reset_check();
+            }
+            smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
+                self.push_new_reset_update(parent.unwrap());
+            }
+            smpc_request::UNIQUENESS_MESSAGE_TYPE => {
+                self.push_new_uniqueness();
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Extends requests collection with a new IdentityDeletion request.
+    pub fn push_new_identity_deletion(&mut self, parent: ParentUniquenessRequest) {
+        self.push_request(match parent {
+            ParentUniquenessRequest::Instance(parent) => Request::IdentityDeletion {
+                info: RequestInfo::new(self, Some(parent.request_id())),
+                uniqueness_serial_id: None,
+            },
+            ParentUniquenessRequest::IrisSerialId(serial_id) => Request::IdentityDeletion {
+                info: RequestInfo::new(self, None),
+                uniqueness_serial_id: Some(serial_id),
+            },
+        });
+    }
+
+    /// Extends requests collection with a new Reauthorization request.
+    pub fn push_new_reauthorization(&mut self, parent: ParentUniquenessRequest) {
+        self.push_request(match parent {
+            ParentUniquenessRequest::Instance(parent) => Request::Reauthorization {
+                info: RequestInfo::new(self, Some(parent.request_id())),
+                reauth_id: uuid::Uuid::new_v4(),
+                uniqueness_serial_id: None,
+            },
+            ParentUniquenessRequest::IrisSerialId(serial_id) => Request::Reauthorization {
+                info: RequestInfo::new(self, None),
+                reauth_id: uuid::Uuid::new_v4(),
+                uniqueness_serial_id: Some(serial_id),
+            },
+        });
+    }
+
+    /// Extends requests collection with a new ResetCheck request.
+    pub fn push_new_reset_check(&mut self) {
+        self.push_request(Request::ResetCheck {
+            info: RequestInfo::new(self, None),
+            reset_id: uuid::Uuid::new_v4(),
+        });
+    }
+
+    /// Extends requests collection with a new ResetUpdate request.
+    pub fn push_new_reset_update(&mut self, parent: ParentUniquenessRequest) {
+        self.push_request(match parent {
+            ParentUniquenessRequest::Instance(parent) => Request::ResetUpdate {
+                info: RequestInfo::new(self, Some(parent.request_id())),
+                reset_id: uuid::Uuid::new_v4(),
+                uniqueness_serial_id: None,
+            },
+            ParentUniquenessRequest::IrisSerialId(serial_id) => Request::ResetUpdate {
+                info: RequestInfo::new(self, None),
+                reset_id: uuid::Uuid::new_v4(),
+                uniqueness_serial_id: Some(serial_id),
+            },
+        });
+    }
+
+    /// Extends requests collection with a new Uniqueness request.
+    pub fn push_new_uniqueness(&mut self) -> Request {
+        let r = Request::Uniqueness {
+            info: RequestInfo::new(self, None),
+            signup_id: uuid::Uuid::new_v4(),
+        };
+        self.push_request(r.clone());
+
+        r
+    }
+
     /// Extends requests collection.
     pub fn push_request(&mut self, request: Request) {
         self.requests_mut().push(request);
@@ -155,12 +246,10 @@ impl fmt::Display for RequestBatchSize {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::{ParentUniquenessRequest, Request, RequestFactory},
-        RequestBatch,
-    };
+    use super::{super::ParentUniquenessRequest, RequestBatch};
 
     impl RequestBatch {
+        /// New batch of 10 uniqueness requests.
         pub fn new_1() -> Self {
             let mut batch = Self::default();
             for _ in 0..10 {
@@ -170,6 +259,7 @@ mod tests {
             batch
         }
 
+        /// New mixed batch with a concrete parent.
         pub fn new_2() -> Self {
             let mut batch = Self::default();
             let parent = ParentUniquenessRequest::Instance(batch.push_new_uniqueness());
@@ -181,6 +271,7 @@ mod tests {
             batch
         }
 
+        /// New mixed batch with a parent refrenced by Iris serial id.
         pub fn new_3() -> Self {
             let mut batch = Self::default();
             let parent = ParentUniquenessRequest::IrisSerialId(1);
@@ -190,34 +281,6 @@ mod tests {
             batch.push_new_identity_deletion(parent.clone());
 
             batch
-        }
-
-        pub fn push_new_identity_deletion(&mut self, parent: ParentUniquenessRequest) {
-            let r = RequestFactory::new_identity_deletion(self, parent);
-            self.requests_mut().push(r.clone());
-        }
-
-        pub fn push_new_reauthorization(&mut self, parent: ParentUniquenessRequest) {
-            let r = RequestFactory::new_reauthorisation(self, parent);
-            self.requests_mut().push(r.clone());
-        }
-
-        pub fn push_new_reset_check(&mut self) {
-            let r = RequestFactory::new_reset_check(self);
-            self.requests_mut().push(r.clone());
-        }
-
-        pub fn push_new_reset_update(&mut self, parent: ParentUniquenessRequest) {
-            let r = RequestFactory::new_reauthorisation(self, parent);
-            self.requests_mut().push(r.clone());
-        }
-
-        /// Extends requests collection with a new uniqueness request.
-        pub fn push_new_uniqueness(&mut self) -> Request {
-            let r = RequestFactory::new_uniqueness(self);
-            self.requests_mut().push(r.clone());
-
-            r
         }
     }
 
