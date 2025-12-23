@@ -5,7 +5,8 @@ use super::{
 use crate::{
     execution::hawk_main::{
         insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, LEFT, RIGHT, STORE_IDS,
+        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, StoreId, LEFT, RIGHT,
+        STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -118,6 +119,15 @@ impl Handle {
                     vector_ids.len(),
                 ));
 
+                let queries = JobRequest::numa_realloc(
+                    queries,
+                    [
+                        actor.workers_handle(StoreId::Left),
+                        actor.workers_handle(StoreId::Right),
+                    ],
+                )
+                .await;
+
                 // Use all sessions per iris side to search for insertion indices per
                 // batch, number configured by `args.request_parallelism`.
 
@@ -189,8 +199,11 @@ impl Handle {
                     })
                     .collect_vec();
 
+                let search_start = Instant::now();
                 let results_ = parallelize(jobs_per_side.into_iter()).await?;
                 let results: [_; 2] = results_.try_into().unwrap();
+                metrics::histogram!("all_search_duration")
+                    .record(search_start.elapsed().as_secs_f64());
 
                 // Convert the results into SingleHawkMutation format
                 let [left_plans, right_plans] = results;
@@ -206,8 +219,11 @@ impl Handle {
                     });
                 }
 
-                metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
-                metrics::gauge!("genesis_batch_size").set(vector_ids.len() as f64);
+                metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
+                metrics::gauge!("db_size").set(actor.db_size().await as f64);
+                let query_count = vector_ids.len();
+                metrics::gauge!("search_queries_left").set(query_count as f64);
+                metrics::gauge!("search_queries_right").set(query_count as f64);
 
                 Ok(JobResult::new_batch_result(
                     batch_id,

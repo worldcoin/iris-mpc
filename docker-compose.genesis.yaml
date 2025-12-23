@@ -1,0 +1,46 @@
+services:
+  dev_db:
+    image: pg-local-build:latest # build from Dockerfile.postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    user: "postgres"
+    environment:
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+    volumes:
+      - dev_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 40s
+
+  localstack:
+    image: public.ecr.aws/localstack/localstack:4.9
+    depends_on:
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4566:4566"
+      - "127.0.0.1:4571:4571"
+    environment:
+      - SERVICES=kms,s3,secretsmanager,sqs,sns
+      - DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    healthcheck:
+      test: >-
+        sleep 10 &&
+        awslocal sqs list-queues &&
+        awslocal s3 ls &&
+        awslocal kms list-keys
+      interval: 5s
+      timeout: 25s
+      retries: 10
+
+    volumes:
+      - ./scripts/tools/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
+
+volumes:
+  dev_db_data:

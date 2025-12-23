@@ -14,7 +14,9 @@ use eyre::{bail, eyre, Report, Result};
 
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
-    helpers::{smpc_request, sync::Modification},
+    helpers::{
+        sha256::sha256_bytes, smpc_request, sqs_s3_helper::upload_file_to_s3, sync::Modification,
+    },
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
@@ -36,6 +38,8 @@ use iris_mpc_cpu::{
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
+use pprof::{protos::Message, ProfilerGuardBuilder};
+use sodiumoxide::hex;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -669,6 +673,22 @@ async fn exec_indexation(
 
             last_indexed_id = batch.id_end();
 
+            // Optionally start per-batch pprof guard just before compute begins
+            let mut pprof_guard = None;
+            let pprof_freq = ctx.config.pprof_frequency.clamp(1, 1000);
+            let pprof_start = Instant::now();
+            if ctx.config.enable_pprof_per_batch {
+                match ProfilerGuardBuilder::default()
+                    .frequency(pprof_freq)
+                    .build()
+                {
+                    Ok(g) => pprof_guard = Some(g),
+                    Err(e) => tracing::warn!("pprof per-batch guard init failed: {:?}", e),
+                }
+            } else {
+                tracing::warn!("pprof not enabled");
+            }
+
             // Submit batch to Hawk handle for indexation.
             let request = JobRequest::new_batch_indexation(&batch);
             let result_future = hawk_handle.submit_request(request).await;
@@ -682,7 +702,91 @@ async fn exec_indexation(
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
+            let start = Instant::now();
             tx_results.send(result).await?;
+            tracing::debug!(target: "searcher",
+                "time  to send tx_results: {}ms",
+                start.elapsed().as_millis()
+            );
+
+            // If enabled, stop pprof and upload artifacts tagged with batch info
+            if let Some(guard) = pprof_guard.take() {
+                let dur_secs = pprof_start.elapsed().as_secs();
+                let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
+                let party = format!("party{}", ctx.config.party_id);
+
+                // Create AWS S3 client for pprof uploads
+                let region = ctx.config
+                    .clone()
+                    .aws
+                    .and_then(|aws| aws.region)
+                    .unwrap_or_else(|| DEFAULT_REGION.to_owned());
+                let region_provider = Region::new(region);
+                let shared_config = aws_config::from_env().region(region_provider).load().await;
+                let force_path_style = ctx.config.environment != ENV_PROD && ctx.config.environment != ENV_STAGE;
+                let s3_config = S3ConfigBuilder::from(&shared_config)
+                    .force_path_style(force_path_style)
+                    .build();
+                let s3 = S3Client::from_conf(s3_config);
+
+                let bucket = ctx.config.pprof_s3_bucket.clone();
+                let prefix = ctx.config.pprof_prefix.clone();
+                let run_id = ctx.config
+                    .pprof_run_id
+                    .clone()
+                    .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
+
+                // Generate batch hash from batch data
+                let batch_info = format!("{}_{}_{}_{}", batch.batch_id, batch.id_start(), batch.id_end(), batch.size());
+                let batch_hash = sha256_bytes(batch_info);
+                let hash_prefix = hex::encode(&batch_hash[0..4]);
+
+                match guard.report().build() {
+                    Ok(report) => {
+                        if !ctx.config.pprof_profile_only {
+                            let mut svg = Vec::new();
+                            if let Err(e) = report.flamegraph(&mut svg) {
+                                tracing::warn!("pprof per-batch flamegraph error: {:?}", e);
+                            } else {
+                                let key = format!(
+                                    "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.flame.svg",
+                                    prefix, run_id, party, ts, hash_prefix, dur_secs, pprof_freq
+                                );
+                                let _ = upload_file_to_s3(&bucket, &key, s3.clone(), &svg).await;
+                            }
+                        }
+                        if !ctx.config.pprof_flame_only {
+                            match report.pprof() {
+                                Ok(profile) => {
+                                    let mut buf = Vec::new();
+                                    if let Err(e) = profile.encode(&mut buf) {
+                                        tracing::warn!(
+                                            "pprof per-batch protobuf encode error: {:?}",
+                                            e
+                                        );
+                                    } else {
+                                        let key = format!(
+                                            "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.profile.pprof",
+                                            prefix, run_id, party, ts, hash_prefix, dur_secs, pprof_freq
+                                        );
+                                        let _ =
+                                            upload_file_to_s3(&bucket, &key, s3.clone(), &buf).await;
+                                    }
+                                }
+                                Err(e) => tracing::warn!(
+                                    "pprof per-batch protobuf report error: {:?}",
+                                    e
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("pprof per-batch report build failed: {:?}", e),
+                }
+            } else {
+                tracing::warn!("no pprof guard");
+            }
+
+
             shutdown_handler.increment_batches_pending_completion();
             // Signal.
             log_info(format!(
@@ -1087,17 +1191,17 @@ async fn get_results_thread(
                     vector_ids_to_persist,
                     ..
                 } => {
+                   
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
                     // get iris shares to persist
                     let left_store = &imem_iris_stores_bg[LEFT];
                     let right_store = &imem_iris_stores_bg[RIGHT];
 
-                    let left_data = left_store
-                        .get_vectors_or_empty(vector_ids_to_persist.iter())
-                        .await;
-                    let right_data = right_store
-                        .get_vectors_or_empty(vector_ids_to_persist.iter())
-                        .await;
+                    // Parallelize fetching left and right iris data using tokio::join!
+                    let (left_data, right_data) = tokio::join!(
+                        left_store.get_vectors_or_empty(vector_ids_to_persist.iter()),
+                        right_store.get_vectors_or_empty(vector_ids_to_persist.iter())
+                    );
 
                     let codes_and_masks: Vec<StoredIrisRef> = vector_ids_to_persist
                             .iter()
@@ -1126,7 +1230,7 @@ async fn get_results_thread(
                                 &codes_and_masks,
                             )
                             .await?;
-                        connect_plans.persist(&mut graph_tx).await?;
+                        connect_plans.persist2(&mut graph_tx).await?;
                         log_info(format!(
                             "Job Results :: Persisted graph updates: batch-id={batch_id}"
                         ));
@@ -1184,7 +1288,7 @@ async fn get_results_thread(
                                 &iris_data,
                             )
                             .await?;
-                        connect_plans.persist(&mut graph_tx).await?;
+                        connect_plans.persist2(&mut graph_tx).await?;
                         log_info(format!(
                             "Job Results :: Persisted graph updates: modification-id={modification_id}"
                         ));

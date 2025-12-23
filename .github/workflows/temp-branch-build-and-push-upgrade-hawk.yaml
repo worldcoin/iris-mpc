@@ -4,21 +4,22 @@ on:
   push:
     branches:
       - "sw/genesis_minfhd6"
-      - "POP-2651/implement-and-test-table-coping-for-genesis-rollback"
+    paths-ignore:
+      - "deploy/**"
 
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "iris-mpc-genesis"
+  IMAGE_NAME: "${{ github.repository }}-genesis"
 
 jobs:
   docker:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-16core
+      labels: arm64-ubuntu-22.04-16core
     permissions:
       packages: write
       contents: read
@@ -26,9 +27,13 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Install Docker
+        run: |
+          curl -fsSL https://get.docker.com | sh
+          sudo usermod -aG docker $USER
+          sudo apt-get install acl
+          sudo setfacl --modify user:$USER:rw /var/run/docker.sock
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
       - name: Log in to the Container registry
@@ -43,8 +48,10 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          platforms: linux/amd64
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
+          platforms: linux/arm64
+          build-args: |
+            ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.genesis.hawk
