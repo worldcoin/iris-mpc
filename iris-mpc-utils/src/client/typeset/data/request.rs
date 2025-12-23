@@ -89,7 +89,7 @@ impl Request {
                 ResponseBody::IdentityDeletion(result),
             ) => matches!(
                 uniqueness_ref,
-                UniquenessReference::IrisSerialId(Some(serial_id)) if *serial_id == result.serial_id
+                UniquenessReference::IrisSerialId(serial_id) if *serial_id == result.serial_id
             ),
             (Self::Reauthorization { reauth_id, .. }, ResponseBody::Reauthorization(result)) => {
                 result.reauth_id == reauth_id.to_string()
@@ -122,15 +122,15 @@ impl Request {
         matches!(self.info().status(), RequestStatus::SharesUploaded(_))
             && match self {
                 Self::IdentityDeletion { uniqueness_ref, .. } => match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.is_some(),
+                    UniquenessReference::IrisSerialId(_) => true,
                     _ => false,
                 },
                 Self::Reauthorization { uniqueness_ref, .. } => match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.is_some(),
+                    UniquenessReference::IrisSerialId(_) => true,
                     _ => false,
                 },
                 Self::ResetUpdate { uniqueness_ref, .. } => match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.is_some(),
+                    UniquenessReference::IrisSerialId(_) => true,
                     _ => false,
                 },
                 _ => true,
@@ -162,6 +162,7 @@ impl Request {
         matches!(self, Self::Uniqueness { .. })
     }
 
+    /// Sets correlated response and maybe sets request state.
     pub fn set_correlation(&mut self, response: &ResponseBody) {
         tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
         self.info_mut().set_correlation(response);
@@ -170,27 +171,29 @@ impl Request {
         }
     }
 
+    /// Sets data extracted from a correlated response.
     pub fn set_data_from_parent_response(&mut self, response: &ResponseBody) {
         match self {
             Self::IdentityDeletion { uniqueness_ref, .. } => {
                 if let ResponseBody::Uniqueness(result) = response {
-                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id);
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id.unwrap());
                 }
             }
             Self::Reauthorization { uniqueness_ref, .. } => {
                 if let ResponseBody::Uniqueness(result) = response {
-                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id);
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id.unwrap());
                 }
             }
             Self::ResetUpdate { uniqueness_ref, .. } => {
                 if let ResponseBody::Uniqueness(result) = response {
-                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id);
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id.unwrap());
                 }
             }
             _ => panic!("Unsupported parent data"),
         }
     }
 
+    /// Updates request status.
     pub fn set_status(&mut self, new_state: RequestStatus) {
         tracing::info!("{} :: State -> {}", &self, new_state);
         self.info_mut().set_status(new_state);
@@ -278,7 +281,7 @@ pub enum UniquenessReference {
     // A uniqueness request instance uuid yet to be correlated.
     RequestId(uuid::Uuid),
     // A serial identifier assigned from either a processed uniqueness result or a user input override.
-    IrisSerialId(Option<IrisSerialId>),
+    IrisSerialId(IrisSerialId),
 }
 
 impl UniquenessReference {

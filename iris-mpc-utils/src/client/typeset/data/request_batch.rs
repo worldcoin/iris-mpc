@@ -196,7 +196,7 @@ impl RequestBatch {
             | smpc_request::REAUTH_MESSAGE_TYPE
             | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
                 None => UniquenessReference::RequestId(*self.push_new_uniqueness().request_id()),
-                Some(serial_id) => UniquenessReference::IrisSerialId(Some(serial_id)),
+                Some(serial_id) => UniquenessReference::IrisSerialId(serial_id),
             }),
             _ => panic!("Invalid request kind"),
         }
@@ -300,7 +300,7 @@ mod tests {
         /// New mixed batch with a parent refrenced by it's correlated Iris serial id.
         pub fn new_3() -> Self {
             let mut batch = Self::default();
-            let uniqueness_ref = UniquenessReference::IrisSerialId(Some(1));
+            let uniqueness_ref = UniquenessReference::IrisSerialId(1);
             batch.push_new_reauthorization(uniqueness_ref.clone());
             batch.push_new_reset_check();
             batch.push_new_reset_update(uniqueness_ref.clone());

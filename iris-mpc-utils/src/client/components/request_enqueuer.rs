@@ -62,9 +62,7 @@ impl From<&Request> for RequestBody {
             Request::IdentityDeletion { uniqueness_ref, .. } => {
                 Self::IdentityDeletion(smpc_request::IdentityDeletionRequest {
                     serial_id: match uniqueness_ref {
-                        UniquenessReference::IrisSerialId(maybe_serial_id) => {
-                            maybe_serial_id.unwrap()
-                        }
+                        UniquenessReference::IrisSerialId(serial_id) => *serial_id,
                         _ => panic!("Invalid uniqueness reference"),
                     },
                 })
@@ -78,7 +76,7 @@ impl From<&Request> for RequestBody {
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
                 serial_id: match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.unwrap(),
+                    UniquenessReference::IrisSerialId(serial_id) => *serial_id,
                     _ => panic!("Invalid uniqueness reference"),
                 },
                 use_or_rule: false,
@@ -98,7 +96,7 @@ impl From<&Request> for RequestBody {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
                 serial_id: match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(maybe_serial_id) => maybe_serial_id.unwrap(),
+                    UniquenessReference::IrisSerialId(serial_id) => *serial_id,
                     _ => panic!("Invalid uniqueness reference"),
                 },
             }),
