@@ -5,8 +5,8 @@ use crate::aws::{AwsClient, AwsClientConfig};
 pub use components::RequestGeneratorParams;
 use components::{RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesUploader};
 pub use typeset::{
-    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
-    RequestBatchSize,
+    Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
+    ServiceClientConfig, ServiceClientError,
 };
 
 mod components;
@@ -31,7 +31,7 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
 impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     pub async fn new(
         aws_client_config: AwsClientConfig,
-        request_generator_params: RequestGeneratorParams,
+        config: ServiceClientConfig,
         rng_seed: R,
     ) -> Self {
         let aws_client = AwsClient::new(aws_client_config);
@@ -39,12 +39,12 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         Self {
             shares_uploader: SharesUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(request_generator_params),
+            request_generator: RequestGenerator::new(config),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
 
-    pub async fn exec(&mut self) -> Result<(), ClientError> {
+    pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
             println!(
@@ -63,11 +63,11 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         Ok(())
     }
 
-    pub async fn init(&mut self) -> Result<(), ClientError> {
+    pub async fn init(&mut self) -> Result<(), ServiceClientError> {
         for initializer in [self.shares_uploader.init(), self.response_dequeuer.init()] {
             initializer.await.map_err(|e| {
                 tracing::error!("Service client: component initialisation failed: {}", e);
-                ClientError::InitialisationError(e.to_string())
+                ServiceClientError::InitialisationError(e.to_string())
             })?;
         }
 
@@ -79,14 +79,13 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
 mod tests {
     use rand::{rngs::StdRng, SeedableRng};
 
-    use super::{AwsClientConfig, RequestGeneratorParams, ServiceClient};
-    // use crate::client::{RequestBatchKind, RequestBatchSize};
+    use super::{AwsClientConfig, ServiceClient, ServiceClientConfig};
 
     impl ServiceClient<StdRng> {
         async fn new_1() -> Self {
             ServiceClient::<StdRng>::new(
                 AwsClientConfig::new_1().await,
-                RequestGeneratorParams::new_1(),
+                ServiceClientConfig::new_1(),
                 StdRng::seed_from_u64(42),
             )
             .await

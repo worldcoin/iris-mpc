@@ -3,7 +3,7 @@ use futures;
 use rand::{CryptoRng, Rng};
 
 use super::super::typeset::{
-    ClientError, Initialize, ProcessRequestBatch, RequestBatch, RequestStatus,
+    Initialize, ProcessRequestBatch, RequestBatch, RequestStatus, ServiceClientError,
 };
 use crate::{
     aws::AwsClient, irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares,
@@ -33,17 +33,17 @@ impl<R: Rng + CryptoRng + Send> SharesUploader<R> {
 
 #[async_trait]
 impl<R: Rng + CryptoRng + Send> Initialize for SharesUploader<R> {
-    async fn init(&mut self) -> Result<(), ClientError> {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
         self.aws_client
             .set_public_keyset()
             .await
-            .map_err(ClientError::AwsServiceError)
+            .map_err(ServiceClientError::AwsServiceError)
     }
 }
 
 #[async_trait]
 impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set shares to be uploaded.
         let shares: Vec<_> = batch
             .requests_mut()
@@ -63,7 +63,7 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
                 aws_client
                     .s3_upload_iris_shares(identifier, shares)
                     .await
-                    .map_err(ClientError::AwsServiceError)
+                    .map_err(ServiceClientError::AwsServiceError)
             })
             .collect();
         futures::future::try_join_all(tasks).await?;

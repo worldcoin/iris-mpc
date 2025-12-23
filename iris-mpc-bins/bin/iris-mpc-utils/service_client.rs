@@ -5,11 +5,11 @@ use clap::Parser;
 use eyre::Result;
 use rand::{rngs::StdRng, SeedableRng};
 
-use iris_mpc_common::{helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, IrisSerialId};
+use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use iris_mpc_utils::{
     aws::AwsClientConfig,
-    client::{RequestBatchKind, RequestBatchSize, RequestGeneratorParams, ServiceClient},
+    client::{ServiceClient, ServiceClientConfig},
 };
 
 #[tokio::main]
@@ -68,7 +68,7 @@ struct CliOptions {
     request_batch_count: usize,
 
     /// Number of request batches to process.
-    #[clap(long, default_value = UNIQUENESS_MESSAGE_TYPE)]
+    #[clap(long, default_value = smpc_request::UNIQUENESS_MESSAGE_TYPE)]
     request_batch_kind: String,
 
     /// Maximum size of each request batch.
@@ -81,15 +81,6 @@ struct CliOptions {
 }
 
 impl CliOptions {
-    fn request_batch_kind(&self) -> RequestBatchKind {
-        RequestBatchKind::from(&self.request_batch_kind)
-    }
-
-    fn request_batch_size(&self) -> RequestBatchSize {
-        // Currently defaults to static batches.
-        RequestBatchSize::Static(self.request_batch_size)
-    }
-
     #[allow(dead_code)]
     fn rng_seed(&self) -> StdRng {
         if self.rng_seed.is_some() {
@@ -136,8 +127,8 @@ Iris-MPC Service Client Options:
             self.aws_sqs_response_queue_url,
             self.environment,
             self.request_batch_count,
-            self.request_batch_kind(),
-            self.request_batch_size(),
+            self.request_batch_kind,
+            self.request_batch_size,
             self.rng_seed,
         )
     }
@@ -148,7 +139,7 @@ impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
         ServiceClient::new(
             AwsClientConfig::async_from(options.clone()).await,
-            RequestGeneratorParams::from(&options),
+            ServiceClientConfig::from(&options),
             options.rng_seed(),
         )
         .await
@@ -171,12 +162,12 @@ impl AsyncFrom<CliOptions> for AwsClientConfig {
     }
 }
 
-impl From<&CliOptions> for RequestGeneratorParams {
+impl From<&CliOptions> for ServiceClientConfig {
     fn from(options: &CliOptions) -> Self {
-        RequestGeneratorParams::BatchKind {
+        ServiceClientConfig::Kind {
             batch_count: options.request_batch_count,
-            batch_size: options.request_batch_size(),
-            batch_kind: options.request_batch_kind(),
+            batch_size: options.request_batch_size,
+            batch_kind: options.request_batch_kind.clone(),
             known_iris_serial_id: options.known_iris_serial_id,
         }
     }

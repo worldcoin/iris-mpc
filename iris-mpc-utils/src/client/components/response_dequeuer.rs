@@ -7,7 +7,7 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    ClientError, Initialize, ProcessRequestBatch, RequestBatch, ResponseBody,
+    Initialize, ProcessRequestBatch, RequestBatch, ResponseBody, ServiceClientError,
 };
 use crate::{
     aws::{types::SqsMessageInfo, AwsClient},
@@ -30,17 +30,17 @@ impl ResponseDequeuer {
 
 #[async_trait]
 impl Initialize for ResponseDequeuer {
-    async fn init(&mut self) -> Result<(), ClientError> {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
         self.aws_client
             .sqs_purge_queue()
             .await
-            .map_err(ClientError::AwsServiceError)
+            .map_err(ServiceClientError::AwsServiceError)
     }
 }
 
 #[async_trait]
 impl ProcessRequestBatch for ResponseDequeuer {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         while batch.has_enqueued_items() {
             for sqs_msg in self
                 .aws_client

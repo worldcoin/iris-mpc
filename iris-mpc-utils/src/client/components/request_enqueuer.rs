@@ -7,7 +7,7 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    ClientError, ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestStatus,
+    ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestStatus, ServiceClientError,
 };
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
@@ -28,7 +28,7 @@ impl RequestEnqueuer {
 
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set enqueue tasks.
         let tasks: Vec<_> = batch
             .requests()
@@ -42,8 +42,8 @@ impl ProcessRequestBatch for RequestEnqueuer {
                     aws_client
                         .sns_publish_json(sns_msg_info)
                         .await
-                        .map_err(ClientError::AwsServiceError)?;
-                    Ok::<usize, ClientError>(idx)
+                        .map_err(ServiceClientError::AwsServiceError)?;
+                    Ok::<usize, ServiceClientError>(idx)
                 }
             })
             .collect();

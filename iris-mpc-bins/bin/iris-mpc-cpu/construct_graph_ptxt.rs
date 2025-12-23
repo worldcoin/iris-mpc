@@ -11,10 +11,10 @@ use iris_mpc_cpu::{
         aby3::aby3_store::DistanceFn, build_plaintext::plaintext_parallel_batch_insert,
         plaintext_store::SharedPlaintextStore,
     },
-    hnsw::{searcher::LayerDistribution, GraphMem, HnswSearcher},
-    utils::serialization::{
-        iris_ndjson::{irises_from_ndjson, IrisSelection},
-        write_bin,
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
+    utils::{
+        cli::{IrisesConfig, LoadGraphConfig, SearcherConfig},
+        serialization::{graph::write_graph_to_file, load_toml},
     },
 };
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -27,17 +27,10 @@ struct Args {
     job_spec: PathBuf,
 }
 
-    /// The selection of iris codes to read from the input file.
-    #[clap(long, value_enum, default_value_t = IrisSelection::All)]
-    iris_selection: IrisSelection,
-
-    /// The distance function to use for graph construction.
-    #[clap(long, value_enum, default_value_t = DistanceFn::MinFhd)]
-    distance_fn: DistanceFn,
-
-    /// The target file for the constructed HNSW graph.
-    #[clap(long("target"))]
-    graph_path: PathBuf,
+#[derive(Clone, Debug, Deserialize)]
+struct CliConfig {
+    /// Specification for iris codes to use in the construction.
+    irises: IrisesConfig,
 
     /// Path and version info for loading an initial graph from file.
     graph: Option<LoadGraphConfig>,
@@ -126,15 +119,9 @@ async fn main() -> Result<()> {
     let searcher: HnswSearcher = (&config.searcher).try_into()?;
     let prf_seed = (config.hnsw_prf_seed.unwrap_or(0) as u128).to_le_bytes();
 
-    let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
-
-    info!("Reading iris codes from file");
-    let irises = irises_from_ndjson(
-        args.iris_codes_path.as_path(),
-        args.graph_size,
-        args.iris_selection,
-    )?;
-    let irises = irises
+    tracing::info!("Loading iris codes");
+    let irises_ = iris_mpc_cpu::utils::cli::load_irises(config.irises).await?;
+    let irises: Vec<_> = irises_
         .into_iter()
         .enumerate()
         .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
@@ -144,15 +131,27 @@ async fn main() -> Result<()> {
     }
     tracing::info!("Loaded {} iris codes to memory", irises.len());
 
-    let mut store = SharedPlaintextStore::new();
-    store.distance_fn = args.distance_fn;
-
-    let graph = GraphMem::new();
-
-    info!("Building HNSW graph over iris codes...");
-    let (graph, _) =
-        plaintext_parallel_batch_insert(Some(graph), Some(store), irises, &searcher, 1, &prf_seed)
-            .await?;
+    let (mut graph, graph_max_id) = if let Some(graph_spec) = config.graph {
+        tracing::info!("Loading graph from file");
+        let graph = graph_spec.read_graph_from_file()?;
+        let graph_max_id = graph
+            .get_layers()
+            .first()
+            .map(|layer_0| {
+                layer_0
+                    .links
+                    .keys()
+                    .map(|id| id.serial_id())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        tracing::info!("Loaded graph has max node id {graph_max_id}");
+        (graph, graph_max_id)
+    } else {
+        tracing::info!("Initializing graph");
+        (GraphMem::new(), 0)
+    };
 
     let start_idx = graph_max_id as usize;
     let end_idx = irises.len();

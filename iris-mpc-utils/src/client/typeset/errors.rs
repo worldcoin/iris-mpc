@@ -3,7 +3,7 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 #[allow(clippy::enum_variant_names)]
-pub enum ClientError {
+pub enum ServiceClientError {
     #[error("An AWS service error has occured: {0}")]
     AwsServiceError(#[from] AwsClientError),
 
