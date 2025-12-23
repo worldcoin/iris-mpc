@@ -1598,6 +1598,8 @@ impl HawkHandle {
         // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
 
+        let start = Instant::now();
+
         tracing::info!(
             "Processing an Hawk job with request types: {:?}, reauth targets: {:?}, skip persistence: {:?}, reauth use or rule: {:?}",
             request.batch.request_types,
@@ -1716,7 +1718,7 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-        tracing::info!("Finished processing a Hawk job…");
+        tracing::info!("Finished processing a Hawk job in {:?}", start.elapsed());
         Ok(results)
     }
 
