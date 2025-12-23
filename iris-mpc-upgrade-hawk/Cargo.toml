@@ -28,6 +28,8 @@ chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }
 ampc-server-utils.workspace = true
+pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
+sodiumoxide.workspace = true
 
 [dev-dependencies]
 thiserror.workspace = true

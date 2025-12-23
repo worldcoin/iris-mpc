@@ -1,0 +1,11 @@
+FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
+
+# ---
+# copy a script to delete and recreate the CPU databases on every run
+COPY ./scripts/tools/pg-entrypoint-wrapper.sh /bin/pg-entrypoint-wrapper.sh
+RUN chmod 0755 /bin/pg-entrypoint-wrapper.sh
+
+COPY ./scripts/tools/cleanup-cpu-schemas.sh /bin/cleanup-cpu-schemas.sh
+RUN chmod +x /bin/cleanup-cpu-schemas.sh
+
+ENTRYPOINT ["/bin/pg-entrypoint-wrapper.sh"]

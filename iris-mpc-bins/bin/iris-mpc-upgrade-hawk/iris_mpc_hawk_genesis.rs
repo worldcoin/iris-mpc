@@ -5,7 +5,7 @@ use iris_mpc_cpu::genesis::{log_error, log_info};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 // Default dynamic batch size.
-const DEFAULT_BATCH_SIZE: usize = 0;
+const DEFAULT_BATCH_SIZE: usize = 96;
 
 // Default batch error rate.
 const DEFAULT_BATCH_ERROR_RATE: usize = 128;
