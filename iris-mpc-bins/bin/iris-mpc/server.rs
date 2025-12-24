@@ -1317,8 +1317,7 @@ async fn server_main(config: Config) -> Result<()> {
         let anon_store = AnonStatsStore::new(&anon_client).await?;
         Some((anon_store, runtime_handle.clone()))
     } else {
-        tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
-        None
+        panic!("No database URL configured for anon stats storage");
     };
     let anon_stats_writer_for_actor = anon_stats_writer.clone();
 

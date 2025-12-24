@@ -21,7 +21,6 @@ use tracing_subscriber::{fmt::format::FmtSpan, layer::SubscriberExt, util::Subsc
 
 const DB_SIZE: usize = 1000;
 const NUM_BATCHES: usize = 30;
-const N_BUCKETS: usize = 8;
 const MATCH_DISTANCE_BUFFER_SIZE: usize = 64;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
 const HAWK_CONNECTION_PARALLELISM: usize = 1;
@@ -205,7 +204,6 @@ async fn e2e_anon_stats_test() -> Result<()> {
         numa: true,
         disable_persistence: false,
         match_distances_buffer_size: MATCH_DISTANCE_BUFFER_SIZE,
-        n_buckets: N_BUCKETS,
         tls: None,
     };
     let args1 = HawkArgs {

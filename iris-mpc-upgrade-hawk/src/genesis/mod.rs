@@ -911,7 +911,6 @@ async fn get_hawk_actor(
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
-        n_buckets: config.n_buckets,
         tls: config.tls.clone(),
         numa: config.hawk_numa,
     };

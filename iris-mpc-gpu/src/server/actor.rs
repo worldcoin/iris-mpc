@@ -937,7 +937,7 @@ impl ServerActor {
             self.full_scan_side
         );
 
-        let (partial_results_with_rotations_side1, _) = self.compare_query_against_db_and_self(
+        let partial_results_with_rotations_side1 = self.compare_query_against_db_and_self(
             &compact_device_queries_side1,
             &compact_device_sums_side1,
             &mut events,
@@ -1034,7 +1034,7 @@ impl ServerActor {
             }
         );
 
-        let (partial_results_with_rotations_side2, _) = if partial_matches_side1
+        let partial_results_with_rotations_side2 = if partial_matches_side1
             .iter()
             .any(|x| x.len() >= DB_CHUNK_SIZE)
         {
@@ -1802,7 +1802,7 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
         operations: &[AnonStatsOperation],
-    ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
+    ) -> PartialResultsWithRotations {
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
                 self.match_distances_buffer
@@ -1824,10 +1824,7 @@ impl ServerActor {
 
         // if the subset is completely empty, we can skip the whole process after we do the batch check
         if db_subset_idx.iter().all(|x| x.is_empty()) {
-            return (
-                HashMap::new(),
-                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()],
-            );
+            return HashMap::new();
         }
 
         // which database are we querying against
@@ -2039,8 +2036,7 @@ impl ServerActor {
         };
 
         self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
-
-        (partial_results_with_rotations, new_partial_match_buffer)
+        partial_results_with_rotations
     }
     #[allow(clippy::too_many_arguments)]
     fn compare_query_against_db_and_self(
@@ -2052,7 +2048,7 @@ impl ServerActor {
         batch_size: usize,
         orientation: Orientation,
         operations: &[AnonStatsOperation],
-    ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
+    ) -> PartialResultsWithRotations {
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
                 self.match_distances_buffer
@@ -2390,8 +2386,7 @@ impl ServerActor {
         };
 
         self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
-
-        (partial_results_with_rotations, new_partial_match_buffer)
+        partial_results_with_rotations
     }
 
     fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
@@ -2919,7 +2914,9 @@ impl ServerActor {
         let writer = match &self.anon_stats_writer {
             Some(writer) => writer,
             None => {
-                tracing::info!("No writer configured for anon stats caches");
+                tracing::error!(
+                    "No writer configured for anon stats caches, this should not happen"
+                );
                 return;
             }
         };

@@ -184,12 +184,6 @@ pub struct Config {
     #[serde(default = "default_match_distances_buffer_size_extra_percent")]
     pub match_distances_buffer_size_extra_percent: usize,
 
-    #[serde(default = "default_match_distances_2d_buffer_size")]
-    pub match_distances_2d_buffer_size: usize,
-
-    #[serde(default = "default_n_buckets")]
-    pub n_buckets: usize,
-
     #[serde(default)]
     pub enable_reauth: bool,
 
@@ -360,15 +354,6 @@ fn default_match_distances_buffer_size() -> usize {
 
 fn default_match_distances_buffer_size_extra_percent() -> usize {
     20
-}
-
-// Default size for the 2D match distances buffer, needs to be a multiple of 64 at least
-fn default_match_distances_2d_buffer_size() -> usize {
-    1 << 13 // 8192
-}
-
-fn default_n_buckets() -> usize {
-    375
 }
 
 fn default_hawk_request_parallelism() -> usize {
@@ -630,8 +615,6 @@ pub struct CommonConfig {
     luc_serial_ids_from_smpc_request: bool,
     match_distances_buffer_size: usize,
     match_distances_buffer_size_extra_percent: usize,
-    match_distances_2d_buffer_size: usize,
-    n_buckets: usize,
     enable_reauth: bool,
     enable_reset: bool,
     hawk_request_parallelism: usize,
@@ -713,8 +696,6 @@ impl From<Config> for CommonConfig {
             luc_serial_ids_from_smpc_request,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
-            n_buckets,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
@@ -776,8 +757,6 @@ impl From<Config> for CommonConfig {
             luc_serial_ids_from_smpc_request,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
-            n_buckets,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
