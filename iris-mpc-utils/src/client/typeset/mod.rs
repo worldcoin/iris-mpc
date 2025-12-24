@@ -8,4 +8,4 @@ pub(crate) use data::{
     ResponsePayload, UniquenessReference,
 };
 pub use errors::ServiceClientError;
-pub(crate) use traits::{GenerateShares, Initialize, ProcessRequestBatch};
+pub(crate) use traits::{Initialize, ProcessRequestBatch};

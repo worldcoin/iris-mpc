@@ -71,11 +71,7 @@ Iris-MPC Service Client Options:
 #[async_from::async_trait]
 impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
     async fn async_from(options: CliOptions) -> Self {
-        ServiceClient::<StdRng>::new(
-            ServiceClientConfiguration::from(&options),
-            options.rng_seed(),
-        )
-        .await
+        ServiceClient::<StdRng>::new(ServiceClientConfiguration::from(&options)).await
     }
 }
 

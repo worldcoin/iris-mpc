@@ -1,86 +1,76 @@
 use std::path::PathBuf;
 
-use async_trait::async_trait;
 use rand::{CryptoRng, Rng};
 
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
-use super::super::typeset::GenerateShares;
-use crate::irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares;
-use crate::types::IrisCodeAndMaskShares;
+use crate::{
+    irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares,
+    types::IrisCodeAndMaskShares,
+};
 
-/// Generates shares from on the fly compute resource.
 #[derive(Debug)]
-pub(crate) struct SharesGeneratorFromCompute<R: Rng + CryptoRng + Send> {
-    /// Entropy source.
-    rng: R,
+pub(crate) enum SharesGenerator1<R: Rng + CryptoRng + Send> {
+    /// Generates shares from on the fly compute resource.
+    FromRng { rng: R },
+    /// Generates shares by reading from a static file.
+    #[allow(dead_code)]
+    FromFile { path_to_ndjson_file: PathBuf },
 }
 
-impl<R: Rng + CryptoRng + Send> SharesGeneratorFromCompute<R> {
-    fn rng_mut(&mut self) -> &mut R {
-        &mut self.rng
-    }
-
-    pub(crate) fn new(rng: R) -> Self {
-        Self { rng }
-    }
-}
-
-#[async_trait]
-impl<R: Rng + CryptoRng + Send> GenerateShares for SharesGeneratorFromCompute<R> {
-    async fn generate(&mut self) -> BothEyes<IrisCodeAndMaskShares> {
-        generate_iris_shares(self.rng_mut())
-    }
-}
-
-/// Generates shares by reading from a static file.
-#[derive(Debug)]
-pub(crate) struct SharesGeneratorFromFile {
-    /// Path to an NDJSON file containing pre computed shares.
-    path_to_ndjson_file: PathBuf,
-}
-
-impl SharesGeneratorFromFile {
-    pub(crate) fn new(path_to_ndjson_file: PathBuf) -> Self {
-        Self {
+impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
+    pub fn new_file(path_to_ndjson_file: PathBuf) -> Self {
+        Self::FromFile {
             path_to_ndjson_file,
         }
     }
+
+    pub fn new_rng(rng: R) -> Self {
+        Self::FromRng { rng }
+    }
 }
 
-#[async_trait]
-impl GenerateShares for SharesGeneratorFromFile {
-    async fn generate(&mut self) -> BothEyes<IrisCodeAndMaskShares> {
-        unimplemented!()
+impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
+    pub fn generate(&mut self) -> BothEyes<IrisCodeAndMaskShares> {
+        match self {
+            Self::FromFile {
+                path_to_ndjson_file: _,
+            } => {
+                unimplemented!()
+            }
+            Self::FromRng { rng } => generate_iris_shares(rng),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
-    use super::{SharesGeneratorFromCompute, SharesGeneratorFromFile};
+    use super::SharesGenerator1;
     use crate::fsys::local::get_path_to_ndjson;
 
-    impl SharesGeneratorFromCompute<StdRng> {
+    impl SharesGenerator1<StdRng> {
         pub(crate) fn new_1() -> Self {
-            Self::new(StdRng::from_entropy())
+            Self::new_rng(StdRng::from_entropy())
         }
     }
 
-    impl SharesGeneratorFromFile {
-        pub(crate) fn new_1() -> Self {
-            Self::new(get_path_to_ndjson())
+    impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
+        pub(crate) fn new_2() -> Self {
+            let path_to_ndjson_file = get_path_to_ndjson();
+
+            Self::new_file(path_to_ndjson_file)
         }
     }
 
     #[tokio::test]
     async fn test_new_from_compute() {
-        let _ = SharesGeneratorFromCompute::<StdRng>::new_1();
+        let _ = SharesGenerator1::new_1();
     }
 
-    #[tokio::test]
-    async fn test_new_from_file() {
-        let _ = SharesGeneratorFromFile::new_1();
-    }
+    // #[tokio::test]
+    // async fn test_new_from_file<R: Rng + CryptoRng + Send>() {
+    //     let _: SharesGenerator1<R> = SharesGenerator1::new_2();
+    // }
 }

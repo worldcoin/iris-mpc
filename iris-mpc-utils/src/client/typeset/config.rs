@@ -12,6 +12,9 @@ pub struct ServiceClientConfiguration {
 
     // Associated request batch generation configuration.
     request_batch: RequestBatchConfiguration,
+
+    // Associated Iris shares generator configuration.
+    shares_generator: SharesGeneratorConfiguration,
 }
 
 impl ServiceClientConfiguration {
@@ -21,6 +24,10 @@ impl ServiceClientConfiguration {
 
     pub fn request_batch(&self) -> &RequestBatchConfiguration {
         &self.request_batch
+    }
+
+    pub fn shares_generator(&self) -> &SharesGeneratorConfiguration {
+        &self.shares_generator
     }
 }
 
@@ -98,4 +105,13 @@ pub enum RequestBatchConfiguration {
     },
     /// A pre-built known set of request batches.
     KnownSet(Vec<RequestBatch>),
+}
+
+/// Set of variants over inputs to iris shares generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SharesGeneratorConfiguration {
+    /// Shares are generated from a pre-built file.
+    FromFile { path_to_ndjson_file: String },
+    /// Shares are generated via a random number generator.
+    FromRng { rng_seed: Option<u64> },
 }

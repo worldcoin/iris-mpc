@@ -5,7 +5,7 @@ mod shares_generator;
 mod shares_uploader;
 
 pub(crate) use request_enqueuer::RequestEnqueuer;
-pub(crate) use request_generator::RequestGenerator;
+pub(crate) use request_generator::{RequestGenerator, RequestGeneratorParams};
 pub(crate) use response_dequeuer::ResponseDequeuer;
-pub(crate) use shares_generator::{SharesGeneratorFromCompute, SharesGeneratorFromFile};
+pub(crate) use shares_generator::SharesGenerator1;
 pub(crate) use shares_uploader::SharesUploader;
