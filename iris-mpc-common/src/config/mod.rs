@@ -80,9 +80,6 @@ pub struct Config {
     #[serde(default = "default_shares_bucket_name")]
     pub shares_bucket_name: String,
 
-    #[serde(default = "default_sns_buffer_bucket_name")]
-    pub sns_buffer_bucket_name: String,
-
     #[serde(default)]
     pub clear_db_before_init: bool,
 
@@ -183,21 +180,6 @@ pub struct Config {
 
     #[serde(default = "default_match_distances_buffer_size_extra_percent")]
     pub match_distances_buffer_size_extra_percent: usize,
-
-    #[serde(default = "default_match_distances_2d_buffer_size")]
-    pub match_distances_2d_buffer_size: usize,
-
-    #[serde(default = "default_n_buckets")]
-    pub n_buckets: usize,
-
-    #[serde(default)]
-    pub enable_sending_anonymized_stats_message: bool,
-
-    #[serde(default)]
-    pub enable_sending_mirror_anonymized_stats_message: bool,
-
-    #[serde(default)]
-    pub enable_sending_anonymized_stats_2d_message: bool,
 
     #[serde(default)]
     pub enable_reauth: bool,
@@ -334,10 +316,6 @@ fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
 }
 
-fn default_sns_buffer_bucket_name() -> String {
-    "wf-smpcv2-prod-sns-buffer".to_string()
-}
-
 fn default_schema_name() -> String {
     "SMPC".to_string()
 }
@@ -369,15 +347,6 @@ fn default_match_distances_buffer_size() -> usize {
 
 fn default_match_distances_buffer_size_extra_percent() -> usize {
     20
-}
-
-// Default size for the 2D match distances buffer, needs to be a multiple of 64 at least
-fn default_match_distances_2d_buffer_size() -> usize {
-    1 << 13 // 8192
-}
-
-fn default_n_buckets() -> usize {
-    375
 }
 
 fn default_hawk_request_parallelism() -> usize {
@@ -621,7 +590,6 @@ pub struct CommonConfig {
     processing_timeout_secs: u64,
     public_key_base_url: String,
     shares_bucket_name: String,
-    sns_buffer_bucket_name: String,
     clear_db_before_init: bool,
     init_db_size: usize,
     max_db_size: usize,
@@ -639,11 +607,6 @@ pub struct CommonConfig {
     luc_serial_ids_from_smpc_request: bool,
     match_distances_buffer_size: usize,
     match_distances_buffer_size_extra_percent: usize,
-    match_distances_2d_buffer_size: usize,
-    n_buckets: usize,
-    enable_sending_anonymized_stats_message: bool,
-    enable_sending_mirror_anonymized_stats_message: bool,
-    enable_sending_anonymized_stats_2d_message: bool,
     enable_reauth: bool,
     enable_reset: bool,
     hawk_request_parallelism: usize,
@@ -697,7 +660,6 @@ impl From<Config> for CommonConfig {
             processing_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
-            sns_buffer_bucket_name,
             clear_db_before_init,
             init_db_size,
             max_db_size,
@@ -725,11 +687,6 @@ impl From<Config> for CommonConfig {
             luc_serial_ids_from_smpc_request,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
-            n_buckets,
-            enable_sending_anonymized_stats_message,
-            enable_sending_mirror_anonymized_stats_message,
-            enable_sending_anonymized_stats_2d_message,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
@@ -774,7 +731,6 @@ impl From<Config> for CommonConfig {
             processing_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
-            sns_buffer_bucket_name,
             clear_db_before_init,
             init_db_size,
             max_db_size,
@@ -791,11 +747,6 @@ impl From<Config> for CommonConfig {
             luc_serial_ids_from_smpc_request,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
-            n_buckets,
-            enable_sending_anonymized_stats_message,
-            enable_sending_mirror_anonymized_stats_message,
-            enable_sending_anonymized_stats_2d_message,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,

@@ -198,9 +198,6 @@ iris-mpc-2:
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
 
-    - name: SMPC__SNS_BUFFER_BUCKET_NAME
-      value: "wf-smpcv2-stage-sns-buffer"
-
     - name: SMPC__CLEAR_DB_BEFORE_INIT
       value: "true"
 
@@ -212,12 +209,6 @@ iris-mpc-2:
 
     - name: SMPC__MAX_BATCH_SIZE
       value: "64"
-
-    - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-      value: "64"
-
-    - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-      value: "true"
 
     - name: SMPC__ENABLE_REAUTH
       value: "true"
