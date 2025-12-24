@@ -284,18 +284,6 @@ async fn receive_batch(
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
 
-                        // If any request in the batch asks to disable anonymized statistics,
-                        // apply it for the whole batch.
-                        if let Some(disable) = uniqueness_request.disable_anonymized_stats {
-                            if disable && !batch_query.disable_anonymized_stats {
-                                batch_query.disable_anonymized_stats = true;
-                                tracing::debug!(
-                                    "Disabling anonymized statistics for current batch due to request {}",
-                                    uniqueness_request.signup_id
-                                );
-                            }
-                        }
-
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -1350,8 +1338,6 @@ async fn server_main(config: Config) -> Result<()> {
             config.max_batch_size,
             config.match_distances_buffer_size,
             config.match_distances_buffer_size_extra_percent,
-            config.match_distances_2d_buffer_size,
-            config.n_buckets,
             config.return_partial_results,
             config.disable_persistence,
             config.enable_debug_timing,
@@ -1418,43 +1404,38 @@ async fn server_main(config: Config) -> Result<()> {
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
-            merged_results,
-            request_ids,
-            request_types,
-            metadata,
-            matches,
-            matches_with_skip_persistence,
-            match_ids,
-            full_face_mirror_match_ids,
-            partial_match_ids_left,
-            partial_match_ids_right,
-            partial_match_rotation_indices_left,
-            partial_match_rotation_indices_right,
-            full_face_mirror_partial_match_ids_left,
-            full_face_mirror_partial_match_ids_right,
-            partial_match_counters_left,
-            partial_match_counters_right,
-            full_face_mirror_partial_match_counters_left,
-            full_face_mirror_partial_match_counters_right,
-            left_iris_requests,
-            right_iris_requests,
-            deleted_ids,
-            matched_batch_request_ids,
-            anonymized_bucket_statistics_left,
-            anonymized_bucket_statistics_right,
-            anonymized_bucket_statistics_left_mirror,
-            anonymized_bucket_statistics_right_mirror,
-            successful_reauths,
-            reauth_target_indices,
-            reauth_or_rule_used,
-            reset_update_indices,
-            reset_update_request_ids,
-            reset_update_shares,
-            mut modifications,
-            actor_data: _,
-            full_face_mirror_attack_detected,
-            anonymized_bucket_statistics_2d,
-        }) = rx.recv().await
+                           merged_results,
+                           request_ids,
+                           request_types,
+                           metadata,
+                           matches,
+                           matches_with_skip_persistence,
+                           match_ids,
+                           full_face_mirror_match_ids,
+                           partial_match_ids_left,
+                           partial_match_ids_right,
+                           partial_match_rotation_indices_left,
+                           partial_match_rotation_indices_right,
+                           full_face_mirror_partial_match_ids_left,
+                           full_face_mirror_partial_match_ids_right,
+                           partial_match_counters_left,
+                           partial_match_counters_right,
+                           full_face_mirror_partial_match_counters_left,
+                           full_face_mirror_partial_match_counters_right,
+                           left_iris_requests,
+                           right_iris_requests,
+                           deleted_ids,
+                           matched_batch_request_ids,
+                           successful_reauths,
+                           reauth_target_indices,
+                           reauth_or_rule_used,
+                           reset_update_indices,
+                           reset_update_request_ids,
+                           reset_update_shares,
+                           mut modifications,
+                           actor_data: _,
+                           full_face_mirror_attack_detected,
+                       }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
 
@@ -1566,7 +1547,7 @@ async fn server_main(config: Config) -> Result<()> {
                     // Find the indices of non-matching queries in the batch.
                     |(query_idx, is_match)| {
                         if !is_match {
-                                Some(query_idx)
+                            Some(query_idx)
                         } else {
                             // Check for full face mirror attack (only for UNIQUENESS requests) and log it.
                             if request_types[query_idx] == UNIQUENESS_MESSAGE_TYPE && full_face_mirror_attack_detected[query_idx]
@@ -1768,7 +1749,7 @@ async fn server_main(config: Config) -> Result<()> {
                         &dummy_deletion_shares.0,
                         &dummy_deletion_shares.1,
                     )
-                    .await?;
+                        .await?;
                 }
 
                 // persist reset_update results into db
@@ -1788,7 +1769,7 @@ async fn server_main(config: Config) -> Result<()> {
                         &shares.code_right,
                         &shares.mask_right,
                     )
-                    .await?;
+                        .await?;
                 }
             }
 
@@ -1796,7 +1777,7 @@ async fn server_main(config: Config) -> Result<()> {
 
             for memory_serial_id in memory_serial_ids {
                 tracing::info!("Inserted serial_id: {}", memory_serial_id+1);
-                metrics::gauge!("results_inserted.latest_serial_id").set((memory_serial_id +1) as f64);
+                metrics::gauge!("results_inserted.latest_serial_id").set((memory_serial_id + 1) as f64);
             }
 
             tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
@@ -1808,7 +1789,7 @@ async fn server_main(config: Config) -> Result<()> {
                 &uniqueness_result_attributes,
                 UNIQUENESS_MESSAGE_TYPE,
             )
-            .await?;
+                .await?;
 
             tracing::info!("Sending {} reauth results", reauth_results.len());
             send_results_to_sns(
@@ -1819,7 +1800,7 @@ async fn server_main(config: Config) -> Result<()> {
                 &reauth_result_attributes,
                 REAUTH_MESSAGE_TYPE,
             )
-            .await?;
+                .await?;
 
             tracing::info!(
                 "Sending {} identity deletion results",
@@ -1833,7 +1814,7 @@ async fn server_main(config: Config) -> Result<()> {
                 &identity_deletion_result_attributes,
                 IDENTITY_DELETION_MESSAGE_TYPE,
             )
-            .await?;
+                .await?;
 
             if !reset_check_results.is_empty() {
                 tracing::info!("Sending {} reset check results", reset_check_results.len());
@@ -1845,7 +1826,7 @@ async fn server_main(config: Config) -> Result<()> {
                     &reset_check_result_attributes,
                     RESET_CHECK_MESSAGE_TYPE,
                 )
-                .await?;
+                    .await?;
             }
 
             if !reset_update_results.is_empty() {
@@ -1861,107 +1842,8 @@ async fn server_main(config: Config) -> Result<()> {
                     &reset_update_result_attributes,
                     RESET_UPDATE_MESSAGE_TYPE,
                 )
-                .await?;
+                    .await?;
             }
-
-            if (config_bg.enable_sending_anonymized_stats_message)
-                && (!anonymized_bucket_statistics_left.buckets.is_empty()
-                    || !anonymized_bucket_statistics_right.buckets.is_empty())
-            {
-                tracing::info!("Sending anonymized stats results");
-                let anonymized_statistics_results = [
-                    anonymized_bucket_statistics_left,
-                    anonymized_bucket_statistics_right,
-                ];
-                // transform to vector of string ands remove None values
-                let anonymized_statistics_results = anonymized_statistics_results
-                    .iter()
-                    .map(|anonymized_bucket_statistics| {
-                        serde_json::to_string(anonymized_bucket_statistics)
-                            .wrap_err("failed to serialize anonymized statistics result")
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                send_results_to_sns(
-                    anonymized_statistics_results,
-                    &metadata,
-                    &sns_client_bg,
-                    &config_bg,
-                    &anonymized_statistics_attributes,
-                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-                )
-                .await?;
-            }
-
-            // Send mirror orientation statistics separately with their own flag
-            if (config_bg.enable_sending_mirror_anonymized_stats_message)
-                && (!anonymized_bucket_statistics_left_mirror.buckets.is_empty()
-                    || !anonymized_bucket_statistics_right_mirror.buckets.is_empty())
-            {
-                tracing::info!("Sending mirror orientation anonymized stats results");
-                let mirror_anonymized_statistics_results = [
-                    anonymized_bucket_statistics_left_mirror,
-                    anonymized_bucket_statistics_right_mirror,
-                ];
-                // transform to vector of string
-                let mirror_anonymized_statistics_results = mirror_anonymized_statistics_results
-                    .iter()
-                    .map(|anonymized_bucket_statistics| {
-                        serde_json::to_string(anonymized_bucket_statistics)
-                            .wrap_err("failed to serialize mirror anonymized statistics result")
-                    })
-                    .collect::<eyre::Result<Vec<_>>>()?;
-
-                send_results_to_sns(
-                    mirror_anonymized_statistics_results,
-                    &metadata,
-                    &sns_client_bg,
-                    &config_bg,
-                    &anonymized_statistics_attributes,
-                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-                )
-                .await?;
-            }
-
-            // Send 2D anonymized statistics if present with their own flag
-            if config_bg.enable_sending_anonymized_stats_2d_message
-                && !anonymized_bucket_statistics_2d.buckets.is_empty()
-            {
-                tracing::info!("Sending 2D anonymized stats results");
-                let serialized = serde_json::to_string(&anonymized_bucket_statistics_2d)
-                    .wrap_err("failed to serialize 2D anonymized statistics result")?;
-
-                // offloading 2D anon stats file to s3 to avoid sending large messages to SNS
-                // with 2D stats we were exceeding the SNS message size limit
-                let now_ms = Utc::now().timestamp_millis();
-                let sha = iris_mpc_common::helpers::sha256::sha256_bytes(&serialized);
-                let content_hash =  hex::encode(sha);
-                let s3_key = format!("stats2d/{}_{}.json", now_ms, content_hash);
-
-                upload_file_to_s3(
-                    &config_bg.sns_buffer_bucket_name,
-                    &s3_key,
-                    s3_client_bg.clone(),
-                    serialized.as_bytes(),
-                )
-                .await
-                .wrap_err("failed to upload 2D anonymized statistics to s3")?;
-
-                // Publish only the S3 key to SNS
-                let payload = serde_json::to_string(&serde_json::json!({
-                    "s3_key": s3_key,
-                }))?;
-                send_results_to_sns(
-                    vec![payload],
-                    &metadata,
-                    &sns_client_bg,
-                    &config_bg,
-                    &anonymized_statistics_2d_attributes,
-                    ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE,
-                )
-                .await?;
-            }
-
             shutdown_handler_bg.decrement_batches_pending_completion();
         }
 

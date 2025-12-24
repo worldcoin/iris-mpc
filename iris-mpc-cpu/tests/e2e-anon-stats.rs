@@ -224,8 +224,7 @@ async fn e2e_anon_stats_test() -> Result<()> {
     let mut handle0 = handle0?;
     let mut handle1 = handle1?;
     let mut handle2 = handle2?;
-    let mut test_case_generator =
-        SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, true, 0.0);
+    let mut test_case_generator = SimpleAnonStatsTestGenerator::new(test_db, internal_seed, true);
 
     tracing::info!("Setup done, starting tests");
     test_case_generator
