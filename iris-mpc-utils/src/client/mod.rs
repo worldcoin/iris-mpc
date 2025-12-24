@@ -6,7 +6,7 @@ use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 use crate::aws::{AwsClient, AwsClientConfig};
 
 use components::{
-    RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator1,
+    RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
     SharesUploader,
 };
 use typeset::{config, Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
@@ -39,7 +39,7 @@ impl ServiceClient<StdRng> {
         Self {
             shares_uploader: SharesUploader::new(
                 aws_client.clone(),
-                SharesGenerator1::from(&config),
+                SharesGenerator::from(&config),
             ),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
             request_generator: RequestGenerator::new(RequestGeneratorParams::from(&config)),
@@ -125,14 +125,14 @@ impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
     }
 }
 
-impl From<&ServiceClientConfiguration> for SharesGenerator1<StdRng> {
+impl From<&ServiceClientConfiguration> for SharesGenerator<StdRng> {
     fn from(config: &ServiceClientConfiguration) -> Self {
         match config.shares_generator() {
             config::SharesGeneratorConfiguration::FromFile {
                 path_to_ndjson_file,
             } => {
                 tracing::info!("Parsing config: Shares generator from file");
-                SharesGenerator1::new_file(PathBuf::from(path_to_ndjson_file))
+                SharesGenerator::new_file(PathBuf::from(path_to_ndjson_file))
             }
             config::SharesGeneratorConfiguration::FromRng { rng_seed } => {
                 tracing::info!("Parsing config: Shares generator from RNG");
@@ -143,7 +143,7 @@ impl From<&ServiceClientConfiguration> for SharesGenerator1<StdRng> {
                     StdRng::from_entropy()
                 };
 
-                SharesGenerator1::<StdRng>::new_rng(rng_seed)
+                SharesGenerator::<StdRng>::new_rng(rng_seed)
             }
         }
     }

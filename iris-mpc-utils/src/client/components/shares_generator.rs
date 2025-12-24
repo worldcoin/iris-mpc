@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(crate) enum SharesGenerator1<R: Rng + CryptoRng + Send> {
+pub(crate) enum SharesGenerator<R: Rng + CryptoRng + Send> {
     /// Generates shares from on the fly compute resource.
     FromRng { rng: R },
     /// Generates shares by reading from a static file.
@@ -18,7 +18,7 @@ pub(crate) enum SharesGenerator1<R: Rng + CryptoRng + Send> {
     FromFile { path_to_ndjson_file: PathBuf },
 }
 
-impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
+impl<R: Rng + CryptoRng + Send> SharesGenerator<R> {
     pub fn new_file(path_to_ndjson_file: PathBuf) -> Self {
         Self::FromFile {
             path_to_ndjson_file,
@@ -30,7 +30,7 @@ impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
     }
 }
 
-impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
+impl<R: Rng + CryptoRng + Send> SharesGenerator<R> {
     pub fn generate(&mut self) -> BothEyes<IrisCodeAndMaskShares> {
         match self {
             Self::FromFile {
@@ -47,26 +47,24 @@ impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
 mod tests {
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
-    use super::SharesGenerator1;
+    use super::SharesGenerator;
     use crate::fsys::local::get_path_to_ndjson;
 
-    impl SharesGenerator1<StdRng> {
+    impl SharesGenerator<StdRng> {
         pub(crate) fn new_1() -> Self {
             Self::new_rng(StdRng::from_entropy())
         }
     }
 
-    impl<R: Rng + CryptoRng + Send> SharesGenerator1<R> {
+    impl<R: Rng + CryptoRng + Send> SharesGenerator<R> {
         pub(crate) fn new_2() -> Self {
-            let path_to_ndjson_file = get_path_to_ndjson();
-
-            Self::new_file(path_to_ndjson_file)
+            Self::new_file(get_path_to_ndjson())
         }
     }
 
     #[tokio::test]
     async fn test_new_from_compute() {
-        let _ = SharesGenerator1::new_1();
+        let _ = SharesGenerator::new_1();
     }
 
     // #[tokio::test]

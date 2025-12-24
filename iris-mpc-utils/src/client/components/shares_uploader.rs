@@ -6,7 +6,7 @@ use super::{
     super::typeset::{
         Initialize, ProcessRequestBatch, RequestBatch, RequestStatus, ServiceClientError,
     },
-    SharesGenerator1,
+    SharesGenerator,
 };
 use crate::{aws::AwsClient, client::typeset::Request};
 
@@ -18,11 +18,11 @@ pub(crate) struct SharesUploader<R: Rng + CryptoRng + Send> {
     aws_client: AwsClient,
 
     /// Iris shares provider.
-    shares_generator: SharesGenerator1<R>,
+    shares_generator: SharesGenerator<R>,
 }
 
 impl<R: Rng + CryptoRng + Send> SharesUploader<R> {
-    pub fn new(aws_client: AwsClient, shares_generator: SharesGenerator1<R>) -> Self {
+    pub fn new(aws_client: AwsClient, shares_generator: SharesGenerator<R>) -> Self {
         Self {
             aws_client,
             shares_generator,
@@ -79,19 +79,19 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::shares_generator::SharesGenerator1, SharesUploader};
+    use super::{super::shares_generator::SharesGenerator, SharesUploader};
     use crate::aws::AwsClient;
     use rand::{rngs::StdRng, CryptoRng, Rng};
 
     impl SharesUploader<StdRng> {
         pub async fn new_1() -> Self {
-            Self::new(AwsClient::new_1().await, SharesGenerator1::new_1())
+            Self::new(AwsClient::new_1().await, SharesGenerator::new_1())
         }
     }
 
     impl<R: Rng + CryptoRng + Send> SharesUploader<R> {
         pub async fn new_2() -> Self {
-            Self::new(AwsClient::new_1().await, SharesGenerator1::new_2())
+            Self::new(AwsClient::new_1().await, SharesGenerator::new_2())
         }
     }
 
