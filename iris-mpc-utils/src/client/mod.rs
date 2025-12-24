@@ -1,10 +1,15 @@
+use std::path::PathBuf;
+
 use async_from::{self, AsyncFrom};
 use rand::{CryptoRng, Rng};
 
 use crate::aws::{AwsClient, AwsClientConfig};
 
-use components::{RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesUploader};
-use typeset::{config, Initialize, ProcessRequestBatch};
+use components::{
+    RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesGeneratorFromCompute,
+    SharesGeneratorFromFile, SharesUploader,
+};
+use typeset::{config, GenerateShares, Initialize, ProcessRequestBatch};
 
 pub use typeset::{config::ServiceClientConfiguration, ServiceClientError};
 
@@ -13,7 +18,7 @@ mod typeset;
 
 /// A utility for enqueuing system requests & correlating with system responses.
 #[derive(Debug)]
-pub struct ServiceClient<R: Rng + CryptoRng + Send> {
+pub struct ServiceClient<GS: GenerateShares + Send> {
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
@@ -24,21 +29,39 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
     response_dequeuer: ResponseDequeuer,
 
     // Component that uploads iris shares to services prior to request processing.
-    shares_uploader: SharesUploader<R>,
+    shares_uploader: SharesUploader<GS>,
 }
 
-impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
-    pub async fn new(config: config::ServiceClientConfiguration, rng_seed: R) -> Self {
+impl<R: Rng + CryptoRng + Send> ServiceClient<SharesGeneratorFromCompute<R>> {
+    pub async fn new_from_compute(config: config::ServiceClientConfiguration, rng_seed: R) -> Self {
         let aws_client = AwsClient::async_from(config.clone()).await;
 
         Self {
-            shares_uploader: SharesUploader::new(aws_client.clone(), rng_seed),
+            shares_uploader: SharesUploader::new_from_compute(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
             request_generator: RequestGenerator::new(config),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
+}
 
+impl ServiceClient<SharesGeneratorFromFile> {
+    pub async fn new_from_file(
+        config: config::ServiceClientConfiguration,
+        path_to_ndjson_file: PathBuf,
+    ) -> Self {
+        let aws_client = AwsClient::async_from(config.clone()).await;
+
+        Self {
+            shares_uploader: SharesUploader::new_from_file(aws_client.clone(), path_to_ndjson_file),
+            request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
+            request_generator: RequestGenerator::new(config),
+            response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
+        }
+    }
+}
+
+impl<GS: GenerateShares + Send> ServiceClient<GS> {
     pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");

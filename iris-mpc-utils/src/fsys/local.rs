@@ -31,15 +31,14 @@ pub fn get_path_to_node_config(
     )
 }
 
+/// Returns path to an NDJSON file.
+pub fn get_path_to_ndjson() -> PathBuf {
+    get_path_to_assets().join("iris-codes-plaintext/20250710-1k.ndjson")
+}
+
 /// Returns path to root directory.
 pub fn get_path_to_root() -> PathBuf {
     Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).into()
-}
-
-/// Returns path to a service client config file.
-pub fn get_path_to_service_client_config(config_idx: usize) -> PathBuf {
-    get_path_to_assets()
-        .join(format!("service-client-config/service-client-config-{config_idx}.toml",).as_str())
 }
 
 /// Returns path to sub-directory.
