@@ -1,14 +1,12 @@
+use async_from::{self, AsyncFrom};
 use rand::{CryptoRng, Rng};
-
-use iris_mpc_common::IrisSerialId;
 
 use crate::aws::{AwsClient, AwsClientConfig};
 
 use components::{RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesUploader};
-pub use typeset::{
-    ClientError, Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind,
-    RequestBatchSize,
-};
+use typeset::{config, Initialize, ProcessRequestBatch};
+
+pub use typeset::{config::ServiceClientConfiguration, ServiceClientError};
 
 mod components;
 mod typeset;
@@ -30,38 +28,27 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
 }
 
 impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
-    pub async fn new(
-        aws_client_config: AwsClientConfig,
-        batch_count: usize,
-        batch_kind: RequestBatchKind,
-        batch_size: RequestBatchSize,
-        known_iris_serial_id: Option<IrisSerialId>,
-        rng_seed: R,
-    ) -> Self {
-        let aws_client = AwsClient::new(aws_client_config);
+    pub async fn new(config: config::ServiceClientConfiguration, rng_seed: R) -> Self {
+        let aws_client = AwsClient::async_from(config.clone()).await;
 
         Self {
             shares_uploader: SharesUploader::new(aws_client.clone(), rng_seed),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(
-                batch_count,
-                batch_kind,
-                batch_size,
-                known_iris_serial_id,
-            ),
+            request_generator: RequestGenerator::new(config),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
 
-    pub async fn exec(&mut self) -> Result<(), ClientError> {
+    pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
             println!(
-                "Batch {}: size={}",
+                "Processing Batch {}: size={}",
                 batch.batch_idx(),
                 batch.requests().len()
             );
             println!("------------------------------------------------------------------------");
+
             self.shares_uploader.process_batch(&mut batch).await?;
             while batch.is_enqueueable() {
                 self.request_enqueuer.process_batch(&mut batch).await?;
@@ -72,14 +59,37 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
         Ok(())
     }
 
-    pub async fn init(&mut self) -> Result<(), ClientError> {
+    pub async fn init(&mut self) -> Result<(), ServiceClientError> {
         for initializer in [self.shares_uploader.init(), self.response_dequeuer.init()] {
             initializer.await.map_err(|e| {
                 tracing::error!("Service client: component initialisation failed: {}", e);
-                ClientError::InitialisationError(e.to_string())
+                ServiceClientError::InitialisationError(e.to_string())
             })?;
         }
 
         Ok(())
+    }
+}
+
+#[async_from::async_trait]
+impl AsyncFrom<ServiceClientConfiguration> for AwsClient {
+    async fn async_from(config: ServiceClientConfiguration) -> Self {
+        AwsClient::new(AwsClientConfig::async_from(config).await)
+    }
+}
+
+#[async_from::async_trait]
+impl AsyncFrom<ServiceClientConfiguration> for AwsClientConfig {
+    async fn async_from(config: ServiceClientConfiguration) -> Self {
+        AwsClientConfig::new(
+            config.aws().environment().to_owned(),
+            config.aws().public_key_base_url().to_owned(),
+            config.aws().s3_request_bucket_name().to_owned(),
+            config.aws().sns_request_topic_arn().to_owned(),
+            config.aws().sqs_long_poll_wait_time().to_owned(),
+            config.aws().sqs_response_queue_url().to_owned(),
+            config.aws().sqs_wait_time_seconds().to_owned(),
+        )
+        .await
     }
 }

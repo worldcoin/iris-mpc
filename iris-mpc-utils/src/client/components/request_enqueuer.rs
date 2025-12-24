@@ -1,13 +1,10 @@
 use async_trait::async_trait;
 
-use iris_mpc_common::helpers::smpc_request::{
-    IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest,
-    UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
-};
+use iris_mpc_common::helpers::smpc_request;
 
 use super::super::typeset::{
-    ClientError, ProcessRequestBatch, Request, RequestBatch, RequestBody, RequestStatus,
+    ProcessRequestBatch, Request, RequestBatch, RequestPayload, RequestStatus, ServiceClientError,
+    UniquenessReference,
 };
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
@@ -15,7 +12,7 @@ const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 /// A component responsible for enqueuing system requests upon network ingress queues.
 #[derive(Debug)]
-pub struct RequestEnqueuer {
+pub(crate) struct RequestEnqueuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
 }
@@ -28,7 +25,7 @@ impl RequestEnqueuer {
 
 #[async_trait]
 impl ProcessRequestBatch for RequestEnqueuer {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set enqueue tasks.
         let tasks: Vec<_> = batch
             .requests()
@@ -42,8 +39,8 @@ impl ProcessRequestBatch for RequestEnqueuer {
                     aws_client
                         .sns_publish_json(sns_msg_info)
                         .await
-                        .map_err(ClientError::AwsServiceError)?;
-                    Ok::<usize, ClientError>(idx)
+                        .map_err(ServiceClientError::AwsServiceError)?;
+                    Ok::<usize, ServiceClientError>(idx)
                 }
             })
             .collect();
@@ -51,7 +48,7 @@ impl ProcessRequestBatch for RequestEnqueuer {
         // Enqueue & mark requests as enqueued.
         for idx in futures::future::try_join_all(tasks).await? {
             if let Some(request) = batch.requests_mut().get_mut(idx) {
-                request.set_status(RequestStatus::new_enqueued());
+                request.set_status(RequestStatus::Enqueued);
             }
         }
 
@@ -59,80 +56,99 @@ impl ProcessRequestBatch for RequestEnqueuer {
     }
 }
 
-impl From<&Request> for RequestBody {
+impl From<&Request> for RequestPayload {
     fn from(request: &Request) -> Self {
-        // TODO: serial ID from correlated uniqueness response
         match request {
-            Request::IdentityDeletion {
-                uniqueness_serial_id,
-                ..
-            } => Self::IdentityDeletion(IdentityDeletionRequest {
-                serial_id: uniqueness_serial_id.unwrap_or(1),
-            }),
+            Request::IdentityDeletion { uniqueness_ref, .. } => {
+                Self::IdentityDeletion(smpc_request::IdentityDeletionRequest {
+                    serial_id: match uniqueness_ref {
+                        UniquenessReference::IrisSerialId(serial_id) => *serial_id,
+                        _ => panic!("Invalid uniqueness reference"),
+                    },
+                })
+            }
             Request::Reauthorization {
                 reauth_id,
-                uniqueness_serial_id,
+                uniqueness_ref,
                 ..
-            } => Self::Reauthorization(ReAuthRequest {
+            } => Self::Reauthorization(smpc_request::ReAuthRequest {
                 batch_size: Some(1),
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
-                serial_id: uniqueness_serial_id.unwrap_or(1),
+                serial_id: match uniqueness_ref {
+                    UniquenessReference::IrisSerialId(serial_id) => *serial_id,
+                    _ => panic!("Invalid uniqueness reference"),
+                },
                 use_or_rule: false,
             }),
-            Request::ResetCheck { reset_id, .. } => Self::ResetCheck(ResetCheckRequest {
-                batch_size: Some(1),
-                reset_id: reset_id.to_string(),
-                s3_key: reset_id.to_string(),
-            }),
+            Request::ResetCheck { reset_id, .. } => {
+                Self::ResetCheck(smpc_request::ResetCheckRequest {
+                    batch_size: Some(1),
+                    reset_id: reset_id.to_string(),
+                    s3_key: reset_id.to_string(),
+                })
+            }
             Request::ResetUpdate {
                 reset_id,
-                uniqueness_serial_id,
+                uniqueness_ref,
                 ..
-            } => Self::ResetUpdate(ResetUpdateRequest {
+            } => Self::ResetUpdate(smpc_request::ResetUpdateRequest {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
-                serial_id: uniqueness_serial_id.unwrap_or(1),
+                serial_id: match uniqueness_ref {
+                    UniquenessReference::IrisSerialId(serial_id) => *serial_id,
+                    _ => panic!("Invalid uniqueness reference"),
+                },
             }),
-            Request::Uniqueness { signup_id, .. } => Self::Uniqueness(UniquenessRequest {
-                batch_size: Some(1),
-                s3_key: signup_id.to_string(),
-                signup_id: signup_id.to_string(),
-                or_rule_serial_ids: None,
-                skip_persistence: None,
-                full_face_mirror_attacks_detection_enabled: Some(true),
-                disable_anonymized_stats: None,
-            }),
+            Request::Uniqueness { signup_id, .. } => {
+                Self::Uniqueness(smpc_request::UniquenessRequest {
+                    batch_size: Some(1),
+                    s3_key: signup_id.to_string(),
+                    signup_id: signup_id.to_string(),
+                    or_rule_serial_ids: None,
+                    skip_persistence: None,
+                    full_face_mirror_attacks_detection_enabled: Some(true),
+                    disable_anonymized_stats: None,
+                })
+            }
         }
     }
 }
 
 impl From<&Request> for SnsMessageInfo {
     fn from(request: &Request) -> Self {
-        Self::from(RequestBody::from(request))
+        Self::from(RequestPayload::from(request))
     }
 }
 
-impl From<RequestBody> for SnsMessageInfo {
-    fn from(body: RequestBody) -> Self {
+impl From<RequestPayload> for SnsMessageInfo {
+    fn from(body: RequestPayload) -> Self {
         match body {
-            RequestBody::IdentityDeletion(body) => Self::new(
+            RequestPayload::IdentityDeletion(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
-                IDENTITY_DELETION_MESSAGE_TYPE,
+                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
                 &body,
             ),
-            RequestBody::Reauthorization(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, REAUTH_MESSAGE_TYPE, &body)
-            }
-            RequestBody::ResetCheck(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, RESET_CHECK_MESSAGE_TYPE, &body)
-            }
-            RequestBody::ResetUpdate(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, RESET_UPDATE_MESSAGE_TYPE, &body)
-            }
-            RequestBody::Uniqueness(body) => {
-                Self::new(ENROLLMENT_REQUEST_TYPE, UNIQUENESS_MESSAGE_TYPE, &body)
-            }
+            RequestPayload::Reauthorization(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::REAUTH_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::ResetCheck(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_CHECK_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::ResetUpdate(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::Uniqueness(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::UNIQUENESS_MESSAGE_TYPE,
+                &body,
+            ),
         }
     }
 }

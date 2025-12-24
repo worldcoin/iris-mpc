@@ -80,13 +80,26 @@ unset AWS_ENDPOINT_URL
 unset AWS_REGION
 unset AWS_SECRET_ACCESS_KEY
 export AWS_PROFILE="worldcoin-smpcv-io-vpc-dev"
+```
 
-# AMPC: CLI args.
-export AMPC_PUBLIC_KEY_BASE_URL="https://pki-smpcv2-dev.worldcoin.org"
-export AMPC_S3_REQUEST_BUCKET="wf-smpcv2-dev-sns-requests-v2"
-export AMPC_SQS_LONG_POLL_WAIT_TIME=10
-export AMPC_SQS_RESPONSE_QUEUE_URL="https://sqs.eu-central-1.amazonaws.com/238407200320/hnsw-smpc-results.fifo"
-export AMPC_SNS_REQUEST_TOPIC_ARN=arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo
+## Step 4: Setup Local Configuration File
+
+Copy following to `~/.hnsw/config/service-client-dev-staging-0.toml`.
+
+```
+[aws]
+environment = "dev"
+public_key_base_url = "https://pki-smpcv2-dev.worldcoin.org"
+s3_request_bucket_name = "wf-smpcv2-dev-sns-requests-v2"
+sns_request_topic_arn = "arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo"
+sqs_long_poll_wait_time = 10
+sqs_response_queue_url = "https://sqs.eu-central-1.amazonaws.com/238407200320/hnsw-smpc-results.fifo"
+sqs_wait_time_seconds = 5
+
+[request_batch.SimpleBatchKind]
+batch_count = 1
+batch_size = 1
+batch_kind = "uniqueness"
 ```
 
 ## Step 5: Setup Local Execution Script
@@ -97,16 +110,7 @@ Copy following to `~/.hnsw/exec/exec_service_client.sh` & **edit accordingly**.
 pushd "YOUR-WORKING-DIRECTORY/iris-mpc/iris-mpc-bins"
 
 cargo run --release --bin service-client -- \
-    --aws-public-key-base-url "${AMPC_PUBLIC_KEY_BASE_URL}" \
-    --aws-s3-request-bucket-name "${AMPC_S3_REQUEST_BUCKET}" \
-    --aws-sns-request-topic-arn "${AMPC_SNS_REQUEST_TOPIC_ARN}" \
-    --aws-sqs-long-poll-wait-time 10 \
-    --aws-sqs-response-queue-url "${AMPC_SQS_RESPONSE_QUEUE_URL}" \
-    --aws-sqs-wait-time-seconds 5 \
-    --environment "dev" \
-    --request-batch-count 10 \
-    --request-batch-kind "${1:-uniqueness}" \
-    --request-batch-size 1
+    --path-to-config-file "${HOME}/.hnsw/config/service-client-dev-staging-0.toml"
     --rng-seed 42
 
 popd

@@ -7,7 +7,7 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    ClientError, Initialize, ProcessRequestBatch, RequestBatch, ResponseBody,
+    Initialize, ProcessRequestBatch, RequestBatch, ResponsePayload, ServiceClientError,
 };
 use crate::{
     aws::{types::SqsMessageInfo, AwsClient},
@@ -16,7 +16,7 @@ use crate::{
 
 /// A component responsible for dequeuing system responses from network egress queues.
 #[derive(Debug)]
-pub struct ResponseDequeuer {
+pub(crate) struct ResponseDequeuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
 }
@@ -30,17 +30,17 @@ impl ResponseDequeuer {
 
 #[async_trait]
 impl Initialize for ResponseDequeuer {
-    async fn init(&mut self) -> Result<(), ClientError> {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
         self.aws_client
             .sqs_purge_queue()
             .await
-            .map_err(ClientError::AwsServiceError)
+            .map_err(ServiceClientError::AwsServiceError)
     }
 }
 
 #[async_trait]
 impl ProcessRequestBatch for ResponseDequeuer {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         while batch.has_enqueued_items() {
             for sqs_msg in self
                 .aws_client
@@ -48,7 +48,7 @@ impl ProcessRequestBatch for ResponseDequeuer {
                 .await?
             {
                 if batch
-                    .correlate_and_update_child(ResponseBody::from(&sqs_msg))
+                    .correlate_and_update_child(ResponsePayload::from(&sqs_msg))
                     .is_some()
                 {
                     self.aws_client.sqs_purge_message(&sqs_msg).await?;
@@ -60,14 +60,14 @@ impl ProcessRequestBatch for ResponseDequeuer {
     }
 }
 
-impl From<&SqsMessageInfo> for ResponseBody {
+impl From<&SqsMessageInfo> for ResponsePayload {
     fn from(msg: &SqsMessageInfo) -> Self {
         let body = msg.body();
         let kind = msg.kind();
 
         macro_rules! parse_response {
             ($variant:ident) => {
-                ResponseBody::$variant(serde_json::from_str(body).unwrap())
+                ResponsePayload::$variant(serde_json::from_str(body).unwrap())
             };
         }
 

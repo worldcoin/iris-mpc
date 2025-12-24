@@ -3,16 +3,17 @@ use futures;
 use rand::{CryptoRng, Rng};
 
 use super::super::typeset::{
-    ClientError, Initialize, ProcessRequestBatch, RequestBatch, RequestStatus,
+    Initialize, ProcessRequestBatch, RequestBatch, RequestStatus, ServiceClientError,
 };
 use crate::{
-    aws::AwsClient, irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares,
+    aws::AwsClient, client::typeset::Request,
+    irises::generate_iris_code_and_mask_shares_both_eyes as generate_iris_shares,
 };
 
 /// A component responsible for uploading Iris shares to AWS services
 /// in advance of system request processing.
 #[derive(Debug)]
-pub struct SharesUploader<R: Rng + CryptoRng + Send> {
+pub(crate) struct SharesUploader<R: Rng + CryptoRng + Send> {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
 
@@ -33,25 +34,23 @@ impl<R: Rng + CryptoRng + Send> SharesUploader<R> {
 
 #[async_trait]
 impl<R: Rng + CryptoRng + Send> Initialize for SharesUploader<R> {
-    async fn init(&mut self) -> Result<(), ClientError> {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
         self.aws_client
             .set_public_keyset()
             .await
-            .map_err(ClientError::AwsServiceError)
+            .map_err(ServiceClientError::AwsServiceError)
     }
 }
 
 #[async_trait]
 impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ClientError> {
+    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set shares to be uploaded.
         let shares: Vec<_> = batch
             .requests_mut()
             .iter_mut()
             .filter_map(|request| {
-                request
-                    .iris_shares_id()
-                    .map(|id| (generate_iris_shares(self.rng_mut()), id))
+                get_iris_shares_id(request).map(|id| (generate_iris_shares(self.rng_mut()), id))
             })
             .collect();
 
@@ -63,14 +62,25 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
                 aws_client
                     .s3_upload_iris_shares(identifier, shares)
                     .await
-                    .map_err(ClientError::AwsServiceError)
+                    .map_err(ServiceClientError::AwsServiceError)
             })
             .collect();
         futures::future::try_join_all(tasks).await?;
 
         // Update state of requests.
-        batch.set_request_status(RequestStatus::new_shares_uploaded());
+        batch.set_request_status(RequestStatus::SharesUploaded);
 
         Ok(())
+    }
+}
+
+/// Returns identifier to be assigned to associated iris shares.
+fn get_iris_shares_id(request: &Request) -> Option<&uuid::Uuid> {
+    match request {
+        Request::IdentityDeletion { .. } => None,
+        Request::Reauthorization { reauth_id, .. } => Some(reauth_id),
+        Request::ResetCheck { reset_id, .. } => Some(reset_id),
+        Request::ResetUpdate { reset_id, .. } => Some(reset_id),
+        Request::Uniqueness { signup_id, .. } => Some(signup_id),
     }
 }
