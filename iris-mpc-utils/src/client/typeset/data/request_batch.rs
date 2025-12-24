@@ -39,9 +39,10 @@ impl RequestBatch {
     /// Performs a correlation and then updates any child requests accordingly.
     pub(crate) fn correlate_and_update_child(&mut self, response: ResponsePayload) -> Option<()> {
         if let Some(idx_of_correlated) = self.get_idx_of_correlated(&response) {
-            self.requests_mut()[idx_of_correlated].set_correlation(&response);
-            if let Some(idx_of_child) = self.get_idx_of_child(idx_of_correlated) {
-                self.requests_mut()[idx_of_child].set_data_from_parent_response(&response);
+            if let Some(_) = self.requests_mut()[idx_of_correlated].set_correlation(&response) {
+                if let Some(idx_of_child) = self.get_idx_of_child(idx_of_correlated) {
+                    self.requests_mut()[idx_of_child].set_data_from_parent_response(&response);
+                }
             }
             Some(())
         } else {

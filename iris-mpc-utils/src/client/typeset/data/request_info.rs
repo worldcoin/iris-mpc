@@ -34,7 +34,7 @@ impl RequestInfo {
         }
     }
 
-    pub(super) fn is_correlated(&self) -> bool {
+    pub(super) fn is_fully_correlated(&self) -> bool {
         self.correlation_set.iter().all(|c| c.is_some())
     }
 

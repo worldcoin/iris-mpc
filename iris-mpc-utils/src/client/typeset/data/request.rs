@@ -121,11 +121,6 @@ impl Request {
     }
 
     /// Returns true if request has been enqueued for system processing.
-    fn is_correlated(&self) -> bool {
-        self.info().is_correlated()
-    }
-
-    /// Returns true if request has been enqueued for system processing.
     pub(super) fn is_enqueued(&self) -> bool {
         matches!(self.info().status(), RequestStatus::Enqueued)
     }
@@ -148,12 +143,12 @@ impl Request {
     }
 
     /// Sets correlated response and maybe sets request state.
-    pub(super) fn set_correlation(&mut self, response: &ResponsePayload) {
+    pub(super) fn set_correlation(&mut self, response: &ResponsePayload) -> Option<()> {
         tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
         self.info_mut().set_correlation(response);
-        if self.is_correlated() {
+        self.info().is_fully_correlated().then(|| {
             self.set_status(RequestStatus::Correlated);
-        }
+        })
     }
 
     /// Sets data extracted from a correlated response.
