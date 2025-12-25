@@ -9,11 +9,13 @@ use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
     SharesUploader,
 };
-use typeset::{config, Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
+use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
 
-pub use typeset::{config::ServiceClientConfiguration, ServiceClientError};
+pub use config::{AwsConfiguration, ServiceClientConfiguration};
+pub use typeset::ServiceClientError;
 
 mod components;
+mod config;
 mod typeset;
 
 /// A utility for enqueuing system requests & correlating with system responses.
@@ -32,17 +34,20 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
     shares_uploader: SharesUploader<R>,
 }
 
-impl ServiceClient<StdRng> {
-    pub async fn new(config: config::ServiceClientConfiguration) -> Self {
-        let aws_client = AwsClient::async_from(config.clone()).await;
+impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
+    pub async fn new(
+        client_config: ServiceClientConfiguration,
+        aws_config: AwsConfiguration,
+    ) -> Self {
+        let aws_client = AwsClient::async_from(aws_config).await;
 
         Self {
             shares_uploader: SharesUploader::new(
                 aws_client.clone(),
-                SharesGenerator::from(&config),
+                SharesGenerator::<R>::from(&client_config),
             ),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(RequestGeneratorParams::from(&config)),
+            request_generator: RequestGenerator::new(RequestGeneratorParams::from(&client_config)),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
@@ -82,23 +87,23 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<ServiceClientConfiguration> for AwsClient {
-    async fn async_from(config: ServiceClientConfiguration) -> Self {
+impl AsyncFrom<AwsConfiguration> for AwsClient {
+    async fn async_from(config: AwsConfiguration) -> Self {
         AwsClient::new(AwsClientConfig::async_from(config).await)
     }
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<ServiceClientConfiguration> for AwsClientConfig {
-    async fn async_from(config: ServiceClientConfiguration) -> Self {
+impl AsyncFrom<AwsConfiguration> for AwsClientConfig {
+    async fn async_from(config: AwsConfiguration) -> Self {
         AwsClientConfig::new(
-            config.aws().environment().to_owned(),
-            config.aws().public_key_base_url().to_owned(),
-            config.aws().s3_request_bucket_name().to_owned(),
-            config.aws().sns_request_topic_arn().to_owned(),
-            config.aws().sqs_long_poll_wait_time().to_owned(),
-            config.aws().sqs_response_queue_url().to_owned(),
-            config.aws().sqs_wait_time_seconds().to_owned(),
+            config.environment().to_owned(),
+            config.public_key_base_url().to_owned(),
+            config.s3_request_bucket_name().to_owned(),
+            config.sns_request_topic_arn().to_owned(),
+            config.sqs_long_poll_wait_time().to_owned(),
+            config.sqs_response_queue_url().to_owned(),
+            config.sqs_wait_time_seconds().to_owned(),
         )
         .await
     }
@@ -125,7 +130,7 @@ impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
     }
 }
 
-impl From<&ServiceClientConfiguration> for SharesGenerator<StdRng> {
+impl<R: Rng + CryptoRng + Send> From<&ServiceClientConfiguration> for SharesGenerator<R> {
     fn from(config: &ServiceClientConfiguration) -> Self {
         match config.shares_generator() {
             config::SharesGeneratorConfiguration::FromFile {
@@ -143,7 +148,7 @@ impl From<&ServiceClientConfiguration> for SharesGenerator<StdRng> {
                     StdRng::from_entropy()
                 };
 
-                SharesGenerator::<StdRng>::new_rng(rng_seed)
+                SharesGenerator::<R>::new_rng(rng_seed)
             }
         }
     }
