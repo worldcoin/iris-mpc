@@ -205,7 +205,6 @@ impl DistanceComparator {
         batch_size: usize,
         max_bucket_distances: usize,
         streams: &[CudaStream],
-        disable_anonymized_stats: bool,
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -257,7 +256,6 @@ impl DistanceComparator {
                             batch_id,
                             self.query_length,
                             self.max_db_size as u64,
-                            disable_anonymized_stats as u32,
                         ),
                     )
                     .unwrap();
@@ -287,7 +285,6 @@ impl DistanceComparator {
         max_bucket_distances: usize,
         streams: &[CudaStream],
         index_mapping: &[Vec<u32>],
-        disable_anonymized_stats: bool,
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -345,7 +342,6 @@ impl DistanceComparator {
                             batch_id,
                             self.query_length,
                             self.max_db_size as u64,
-                            disable_anonymized_stats as u32,
                         ),
                     )
                     .unwrap();

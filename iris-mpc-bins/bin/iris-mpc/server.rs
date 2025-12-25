@@ -280,18 +280,6 @@ async fn receive_batch(
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
 
-                        // If any request in the batch asks to disable anonymized statistics,
-                        // apply it for the whole batch.
-                        if let Some(disable) = uniqueness_request.disable_anonymized_stats {
-                            if disable && !batch_query.disable_anonymized_stats {
-                                batch_query.disable_anonymized_stats = true;
-                                tracing::debug!(
-                                    "Disabling anonymized statistics for current batch due to request {}",
-                                    uniqueness_request.signup_id
-                                );
-                            }
-                        }
-
                         client
                             .delete_message()
                             .queue_url(queue_url)

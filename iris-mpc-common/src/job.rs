@@ -102,9 +102,6 @@ pub struct BatchQuery {
 
     // Boolean value for mirror attack detection enabled
     pub full_face_mirror_attacks_detection_enabled: bool,
-
-    // If true, anonymized statistics (1D, 2D, and mirror-orientation) are disabled for this batch.
-    pub disable_anonymized_stats: bool,
 }
 
 impl BatchQuery {
