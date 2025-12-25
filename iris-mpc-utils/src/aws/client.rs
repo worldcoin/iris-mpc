@@ -224,10 +224,6 @@ mod tests {
         }
 
         async fn new_1() -> Self {
-            // Ensure the AWS SDK has a region in test environments (CI/dev machines may not have
-            // AWS_REGION configured).
-            std::env::set_var("AWS_REGION", "us-east-1");
-            std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
             Self::new(AwsClientConfig::new_1().await)
         }
     }
