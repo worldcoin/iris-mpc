@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures;
-use rand::{CryptoRng, Rng};
+use rand::{CryptoRng, Rng, SeedableRng};
 
 use super::{
     super::typeset::{
@@ -13,7 +13,7 @@ use crate::{aws::AwsClient, client::typeset::Request};
 /// A component responsible for uploading Iris shares to AWS services
 /// in advance of system request processing.
 #[derive(Debug)]
-pub(crate) struct SharesUploader<R: Rng + CryptoRng + Send> {
+pub(crate) struct SharesUploader<R: Rng + CryptoRng + SeedableRng + Send> {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
 
@@ -21,7 +21,7 @@ pub(crate) struct SharesUploader<R: Rng + CryptoRng + Send> {
     shares_generator: SharesGenerator<R>,
 }
 
-impl<R: Rng + CryptoRng + Send> SharesUploader<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> SharesUploader<R> {
     pub fn new(aws_client: AwsClient, shares_generator: SharesGenerator<R>) -> Self {
         Self {
             aws_client,
@@ -31,7 +31,7 @@ impl<R: Rng + CryptoRng + Send> SharesUploader<R> {
 }
 
 #[async_trait]
-impl<R: Rng + CryptoRng + Send> Initialize for SharesUploader<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> Initialize for SharesUploader<R> {
     async fn init(&mut self) -> Result<(), ServiceClientError> {
         self.aws_client
             .set_public_keyset()
@@ -41,7 +41,7 @@ impl<R: Rng + CryptoRng + Send> Initialize for SharesUploader<R> {
 }
 
 #[async_trait]
-impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> ProcessRequestBatch for SharesUploader<R> {
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set shares to be uploaded.
         let mut shares: Vec<_> = Vec::new();
@@ -81,7 +81,7 @@ impl<R: Rng + CryptoRng + Send> ProcessRequestBatch for SharesUploader<R> {
 mod tests {
     use super::{super::shares_generator::SharesGenerator, SharesUploader};
     use crate::aws::AwsClient;
-    use rand::{rngs::StdRng, CryptoRng, Rng};
+    use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
     impl SharesUploader<StdRng> {
         pub async fn new_1() -> Self {
@@ -89,7 +89,7 @@ mod tests {
         }
     }
 
-    impl<R: Rng + CryptoRng + Send> SharesUploader<R> {
+    impl<R: Rng + CryptoRng + SeedableRng + Send> SharesUploader<R> {
         pub async fn new_2() -> Self {
             Self::new(AwsClient::new_1().await, SharesGenerator::new_2())
         }

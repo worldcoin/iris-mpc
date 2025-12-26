@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rand::{CryptoRng, Rng};
+use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(crate) enum SharesGenerator<R: Rng + CryptoRng + Send> {
+pub(crate) enum SharesGenerator<R: Rng + CryptoRng + SeedableRng + Send> {
     /// Generates shares from on the fly compute resource.
     FromRng { rng: R },
     /// Generates shares by reading from a static file.
@@ -18,7 +18,7 @@ pub(crate) enum SharesGenerator<R: Rng + CryptoRng + Send> {
     FromFile { path_to_ndjson_file: PathBuf },
 }
 
-impl<R: Rng + CryptoRng + Send> SharesGenerator<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
     pub fn new_file(path_to_ndjson_file: PathBuf) -> Self {
         Self::FromFile {
             path_to_ndjson_file,
@@ -30,7 +30,7 @@ impl<R: Rng + CryptoRng + Send> SharesGenerator<R> {
     }
 }
 
-impl<R: Rng + CryptoRng + Send> SharesGenerator<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
     pub fn generate(&mut self) -> BothEyes<IrisCodeAndMaskShares> {
         match self {
             Self::FromFile {
@@ -56,7 +56,7 @@ mod tests {
         }
     }
 
-    impl<R: Rng + CryptoRng + Send> SharesGenerator<R> {
+    impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
         pub(crate) fn new_2() -> Self {
             Self::new_file(get_path_to_ndjson())
         }
@@ -68,7 +68,7 @@ mod tests {
     }
 
     // #[tokio::test]
-    // async fn test_new_from_file<R: Rng + CryptoRng + Send>() {
+    // async fn test_new_from_file<R: Rng + CryptoRng + SeedableRng + Send>() {
     //     let _: SharesGenerator1<R> = SharesGenerator1::new_2();
     // }
 }

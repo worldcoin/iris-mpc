@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use async_from::{self, AsyncFrom};
-use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
+use rand::{CryptoRng, Rng, SeedableRng};
 
 use crate::aws::{AwsClient, AwsClientConfig};
 
@@ -20,7 +20,7 @@ mod typeset;
 
 /// A utility for enqueuing system requests & correlating with system responses.
 #[derive(Debug)]
-pub struct ServiceClient<R: Rng + CryptoRng + Send> {
+pub struct ServiceClient<R: Rng + CryptoRng + SeedableRng + Send> {
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
 
@@ -34,7 +34,7 @@ pub struct ServiceClient<R: Rng + CryptoRng + Send> {
     shares_uploader: SharesUploader<R>,
 }
 
-impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
     pub async fn new(
         client_config: ServiceClientConfiguration,
         aws_config: AwsConfiguration,
@@ -53,7 +53,7 @@ impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
     }
 }
 
-impl<R: Rng + CryptoRng + Send> ServiceClient<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
     pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
@@ -117,20 +117,26 @@ impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
-            } => Self::BatchKind {
-                batch_count: *batch_count,
-                batch_size: RequestBatchSize::Static(*batch_size),
-                batch_kind: RequestBatchKind::from(batch_kind),
-                known_iris_serial_id: *known_iris_serial_id,
-            },
+            } => {
+                tracing::info!("Parsing config: Request batch set from simple kind");
+                Self::BatchKind {
+                    batch_count: *batch_count,
+                    batch_size: RequestBatchSize::Static(*batch_size),
+                    batch_kind: RequestBatchKind::from(batch_kind),
+                    known_iris_serial_id: *known_iris_serial_id,
+                }
+            }
             config::RequestBatchConfiguration::KnownSet(request_batch_set) => {
+                tracing::info!("Parsing config: Request batch set from known set");
                 Self::KnownSet(request_batch_set.clone())
             }
         }
     }
 }
 
-impl<R: Rng + CryptoRng + Send> From<&ServiceClientConfiguration> for SharesGenerator<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
+    for SharesGenerator<R>
+{
     fn from(config: &ServiceClientConfiguration) -> Self {
         match config.shares_generator() {
             config::SharesGeneratorConfiguration::FromFile {
@@ -143,9 +149,9 @@ impl<R: Rng + CryptoRng + Send> From<&ServiceClientConfiguration> for SharesGene
                 tracing::info!("Parsing config: Shares generator from RNG");
 
                 let rng_seed = if rng_seed.is_some() {
-                    StdRng::seed_from_u64(rng_seed.unwrap())
+                    R::seed_from_u64(rng_seed.unwrap())
                 } else {
-                    StdRng::from_entropy()
+                    R::from_entropy()
                 };
 
                 SharesGenerator::<R>::new_rng(rng_seed)
