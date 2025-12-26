@@ -41,6 +41,10 @@ anon-stats-server-smpc-2:
       path: /health
       port: health
 
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+
   livenessProbe:
     httpGet:
       path: /health
