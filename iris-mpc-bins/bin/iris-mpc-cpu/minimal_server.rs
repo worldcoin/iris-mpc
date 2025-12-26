@@ -128,6 +128,9 @@ struct PartyRequestPayload {
     codes: Vec<GaloisRingIrisCodeShare>,
     /// One mask share per element in the batch
     masks: Vec<GaloisRingIrisCodeShare>,
+    /// Expected database indices for verification (0-indexed)
+    #[serde(default)]
+    expected_indices: Vec<u32>,
 }
 
 #[derive(Serialize)]
@@ -267,6 +270,7 @@ async fn handle_job(
     let start_time = std::time::Instant::now();
     let batch_size = payload.codes.len();
     let batch_id = Uuid::new_v4().to_string();
+    let expected_indices = payload.expected_indices.clone();
     info!(
         party = state.party_index,
         %batch_id,
@@ -305,6 +309,18 @@ async fn handle_job(
         Ok(result) => {
             let match_count = result.matches.iter().filter(|m| **m).count();
             let total = result.matches.len();
+
+            // Verify results against expected indices if provided
+            if !expected_indices.is_empty() {
+                verify_match_results(
+                    state.party_index,
+                    &batch_id,
+                    &expected_indices,
+                    &result.matches,
+                    &result.match_ids,
+                );
+            }
+
             info!(
                 party = state.party_index,
                 %batch_id,
@@ -346,6 +362,75 @@ async fn handle_job(
     }
 
     response
+}
+
+/// Verify that match results correspond to expected database indices.
+fn verify_match_results(
+    party_index: usize,
+    batch_id: &str,
+    expected_indices: &[u32],
+    matches: &[bool],
+    match_ids: &[Vec<u32>],
+) {
+    let mut correct = 0;
+    let mut wrong = 0;
+    let mut missing = 0;
+
+    for (i, &expected_idx) in expected_indices.iter().enumerate() {
+        let matched = matches.get(i).copied().unwrap_or(false);
+        let ids = match_ids.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
+
+        if !matched {
+            error!(
+                party = party_index,
+                %batch_id,
+                query_index = i,
+                expected_db_index = expected_idx,
+                "VERIFICATION FAILED: Query did not match (expected db index {})",
+                expected_idx
+            );
+            missing += 1;
+        } else if ids.contains(&expected_idx) {
+            correct += 1;
+        } else {
+            error!(
+                party = party_index,
+                %batch_id,
+                query_index = i,
+                expected_db_index = expected_idx,
+                actual_match_ids = ?ids,
+                "VERIFICATION FAILED: Match IDs don't contain expected db index {}",
+                expected_idx
+            );
+            wrong += 1;
+        }
+    }
+
+    let total = expected_indices.len();
+    if wrong == 0 && missing == 0 {
+        info!(
+            party = party_index,
+            %batch_id,
+            correct,
+            total,
+            "VERIFICATION PASSED: All {} queries matched expected db indices",
+            total
+        );
+    } else {
+        error!(
+            party = party_index,
+            %batch_id,
+            correct,
+            wrong,
+            missing,
+            total,
+            "VERIFICATION FAILED: {}/{} correct, {} wrong match IDs, {} missing matches",
+            correct,
+            total,
+            wrong,
+            missing
+        );
+    }
 }
 
 fn build_batch_from_payload(payload: &PartyRequestPayload) -> Result<BatchQuery> {
@@ -452,6 +537,7 @@ fn build_party_payloads(
     let mut all_masks: Vec<[GaloisRingIrisCodeShare; 3]> = Vec::with_capacity(DEMO_BATCH_SIZE);
     let mut request_ids: Vec<String> = Vec::with_capacity(DEMO_BATCH_SIZE);
     let mut sns_ids: Vec<String> = Vec::with_capacity(DEMO_BATCH_SIZE);
+    let mut expected_indices: Vec<u32> = Vec::with_capacity(DEMO_BATCH_SIZE);
 
     for i in 0..DEMO_BATCH_SIZE {
         let idx = (record_index + i) % plain_db.db.len();
@@ -469,7 +555,18 @@ fn build_party_payloads(
         let request_id = Uuid::new_v4().to_string();
         sns_ids.push(format!("sns-{request_id}"));
         request_ids.push(request_id);
+
+        // match_ids are 0-indexed
+        expected_indices.push(idx as u32);
     }
+
+    info!(
+        "Built payloads for {} queries from db indices {}..{} (expected indices {:?})",
+        DEMO_BATCH_SIZE,
+        record_index,
+        (record_index + DEMO_BATCH_SIZE - 1) % plain_db.db.len(),
+        &expected_indices[..expected_indices.len().min(5)]
+    );
 
     // Transpose: from [batch][party] to [party][batch]
     Ok((0..3)
@@ -479,6 +576,7 @@ fn build_party_payloads(
             skip_persistence: false,
             codes: all_codes.iter().map(|c| c[party].clone()).collect(),
             masks: all_masks.iter().map(|m| m[party].clone()).collect(),
+            expected_indices: expected_indices.clone(),
         })
         .collect())
 }

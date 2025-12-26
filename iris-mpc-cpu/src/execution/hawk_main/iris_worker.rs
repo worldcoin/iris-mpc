@@ -385,7 +385,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let result = rotation_aware_pairwise_distance_prerotated(&query, targets);
+                let result = rotation_aware_pairwise_distance(&query, targets);
                 let _ = rsp.send(result);
             }
 

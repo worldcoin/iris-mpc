@@ -2,6 +2,7 @@
 
 DB_SIZE="${1:-1000}"
 FORCE="${2:-}"
+PERF="${3:-}"
 HOSTS=("aws0" "aws1" "aws2")
 
 prefix_logs() {
@@ -30,8 +31,8 @@ done
 
 for idx in "${!HOSTS[@]}"; do
   host="${HOSTS[$idx]}"
-  echo "Starting party ${idx} on ${host} (db_size=${DB_SIZE}, force=${FORCE:-no})..."
-  ssh "ec2-user@${host}" "bash ~/run-minimal-server.sh ${idx} ${DB_SIZE} ${FORCE}" 2>&1 | prefix_logs "${host}" &
+  echo "Starting party ${idx} on ${host} (db_size=${DB_SIZE}, force=${FORCE:-no}, perf=${PERF:-no})..."
+  ssh "ec2-user@${host}" "bash ~/run-minimal-server.sh ${idx} ${DB_SIZE} ${FORCE} ${PERF}" 2>&1 | prefix_logs "${host}" &
 done
 
 echo "All parties started. Waiting for request to complete..."

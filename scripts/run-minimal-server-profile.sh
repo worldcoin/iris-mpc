@@ -8,7 +8,7 @@ set -euo pipefail
 # Supports delayed profiling: start the server, wait for startup, then attach samply.
 
 usage() {
-  echo "Usage: $0 <party-index 0|1|2> [db-size] [profile-delay-secs] [profile-output-dir]"
+  echo "Usage: $0 <party-index 0|1|2> [db-size] [profile-delay-secs] [profile-output-dir] [perf]"
   echo ""
   echo "This script profiles the minimal server using samply."
   echo ""
@@ -19,6 +19,7 @@ usage() {
   echo "                      Use this to skip profiling startup/connection establishment."
   echo "                      Recommended: 5-10 seconds for larger DBs."
   echo "  profile-output-dir  Directory to save profiles (default: /home/ec2-user/profiles)"
+  echo "  perf                Pass 'perf' to run with perf stat for memory bandwidth analysis"
   echo ""
   echo "After profiling, use view-profile-tunnel.sh to view the profile locally."
   exit 1
@@ -32,6 +33,7 @@ PARTY_INDEX="$1"
 DB_SIZE="${2:-1000}"
 PROFILE_DELAY="${3:-0}"
 PROFILE_DIR="${4:-/home/ec2-user/profiles}"
+PERF="${5:-}"
 
 if [[ "${PARTY_INDEX}" != "0" && "${PARTY_INDEX}" != "1" && "${PARTY_INDEX}" != "2" ]]; then
   echo "party-index must be 0, 1, or 2"
@@ -72,10 +74,12 @@ echo "Profile delay: ${PROFILE_DELAY}s"
 echo ""
 
 # Build the server command
-SERVER_CMD="${BIN_PATH} \
+BASE_CMD="${BIN_PATH} \
   --party-index ${PARTY_INDEX} \
   --addresses ${ADDRS} \
   --outbound-addrs ${ADDRS} \
+  --request-parallelism 96 \
+  --connection-parallelism 16 \
   --hnsw-param-m 256 \
   --hnsw-param-ef-constr 320 \
   --hnsw-param-ef-search 320 \
@@ -84,6 +88,15 @@ SERVER_CMD="${BIN_PATH} \
   --db-size ${DB_SIZE} \
   --single-request \
   ${INITIATOR_FLAG}"
+
+PERF_OUTPUT="/home/ec2-user/perf-stats-party-${PARTY_INDEX}.txt"
+if [[ "${PERF}" == "perf" ]]; then
+  echo "Running with perf stat for memory bandwidth analysis..."
+  echo "Perf output will be saved to: ${PERF_OUTPUT}"
+  SERVER_CMD="perf stat -o ${PERF_OUTPUT} -e cache-misses,cache-references,L1-dcache-load-misses,LLC-load-misses,LLC-store-misses,cycles,instructions ${BASE_CMD}"
+else
+  SERVER_CMD="${BASE_CMD}"
+fi
 
 if [[ "${PROFILE_DELAY}" -gt 0 ]]; then
   # Delayed profiling mode: start server, wait, then attach samply
@@ -110,7 +123,6 @@ if [[ "${PROFILE_DELAY}" -gt 0 ]]; then
   samply record \
     --save-only \
     --output "${PROFILE_OUTPUT}" \
-    --rate 10000 \
     --pid "${SERVER_PID}"
   
   # Wait for server to finish (it should exit after single request)

@@ -6,12 +6,14 @@ set -euo pipefail
 
 DB_SIZE="${1:-1000}"
 PROFILE_DELAY="${2:-5}"
+PERF="${3:-}"
 HOSTS=("aws0" "aws1" "aws2")
 PROFILE_HOST="aws0"
 
 echo "=== Running All Minimal Servers (Profiling on ${PROFILE_HOST} only) ==="
 echo "DB Size: ${DB_SIZE}"
 echo "Profile Delay: ${PROFILE_DELAY}s"
+echo "Perf: ${PERF:-no}"
 echo ""
 
 prefix_logs() {
@@ -65,9 +67,10 @@ echo "Starting servers (profiling on ${PROFILE_HOST} only)..."
 for idx in "${!HOSTS[@]}"; do
   host="${HOSTS[$idx]}"
   if [[ "${host}" == "${PROFILE_HOST}" ]]; then
-    echo "Starting party ${idx} on ${host} WITH PROFILING (delay=${PROFILE_DELAY}s)..."
-    ssh "ec2-user@${host}" "bash ~/run-minimal-server-profile.sh ${idx} ${DB_SIZE} ${PROFILE_DELAY}" 2>&1 | prefix_logs "${host}" &
+    echo "Starting party ${idx} on ${host} WITH PROFILING (delay=${PROFILE_DELAY}s, perf=${PERF:-no})..."
+    ssh "ec2-user@${host}" "bash ~/run-minimal-server-profile.sh ${idx} ${DB_SIZE} ${PROFILE_DELAY} /home/ec2-user/profiles ${PERF}" 2>&1 | prefix_logs "${host}" &
   else
+    # Don't pass perf to non-profile hosts (perf may not be installed)
     echo "Starting party ${idx} on ${host} (no profiling)..."
     ssh "ec2-user@${host}" "bash ~/run-minimal-server.sh ${idx} ${DB_SIZE}" 2>&1 | prefix_logs "${host}" &
   fi
