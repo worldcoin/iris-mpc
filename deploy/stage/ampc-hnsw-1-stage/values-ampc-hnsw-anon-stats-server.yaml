@@ -6,7 +6,7 @@ env:
     value: "stage"
 
   - name: SMPC__SERVICE__SERVICE_NAME
-    value: "anon-stats-server-hnsw-2"
+    value: "anon-stats-server-hnsw-1"
 
   - name: SMPC__SNS_BUFFER_BUCKET_NAME
     value: "wf-hnsw-stage-sns-buffer"
@@ -14,20 +14,17 @@ env:
   - name: SMPC__DB_URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_URL
         name: application
-
-  - name: SMPC__HEALTHCHECK_PORTS
-    value: '["3000","3000","3000"]'
 
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
 
   - name: SMPC__SERVER_COORDINATION__PARTY_ID
-    value: "2"
+    value: "1"
 
   - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
-    value: '["anon-stats-server.1.stage.hnsw.worldcoin.dev","anon-stats-server.2.stage.hnsw.worldcoin.dev","0.0.0.0"]'
+    value: '["anon-stats-server.0.stage.hnsw.worldcoin.dev","0.0.0.0","anon-stats-server.2.stage.hnsw.worldcoin.dev"]'
 
   - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
     value: $(IMAGE_NAME)
@@ -68,7 +65,7 @@ env:
     value: "256"
 
   - name: SMPC__SERVICE__METRICS__PREFIX
-    value: "anon-stats-server-hnsw-2"
+    value: "anon-stats-server-hnsw-1"
 
   - name: SMPC__N_BUCKETS_1D
     value: "375"
@@ -100,14 +97,13 @@ env:
   - name: SMPC__TLS__ROOT_CERTS
     value: '["/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_2.crt"]'
 
-
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
   name: "anon-stats-server-hnsw-dns-records-updater"
   env:
     - name: PARTY_ID
-      value: "3"
+      value: "1"
     - name: POD_IP
       valueFrom:
         fieldRef:
@@ -147,4 +143,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-    - sg-009f4095359514cf3 # CHANGE THIS: hnsw-ampc-anon-stats-stage pod sg
+    - sg-0c6d58cc85ebadac3

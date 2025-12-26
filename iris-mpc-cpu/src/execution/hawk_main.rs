@@ -1,3 +1,65 @@
+//! Implements the main execution logic for the MPC protocol on the CPU.
+//!
+//! This module orchestrates the multi-party computation for iris matching using an HNSW
+//! (Hierarchical Navigable Small World) graph. It is responsible for managing the state
+//! of the MPC node, handling network communication, processing batches of queries, and
+//! interacting with the underlying cryptographic and data storage layers.
+//!
+//! The central component is the [`HawkActor`], which acts as a state machine for the
+//! entire process. It manages connections to other MPC parties, holds the in-memory
+//! HNSW graphs, and processes incoming jobs.
+//!
+//! Key responsibilities of this module include:
+//! - **Initialization**: Setting up network connections and initializing shared cryptographic state (e.g., PRF keys).
+//! - **Session Management**: Creating [`HawkSession`]s to handle parallel MPC operations.
+//!   Each session encapsulates the necessary cryptographic context for a
+//!   single thread of work.
+//! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of requests of the
+//!   usual types: Uniqueness, ResetCheck, ResetUpdate, Reauth and Deletion.
+//!   . This involves:
+//!     - Searching the HNSW graph for nearest neighbors of a given iris, both for matching and graph insertion purposes.
+//!     - Performing secret-shared distance evaluations and comparisons using the ABY3 protocol.
+//!     - Deciding whether a query results in a match, an insertion, or a re-authentication.
+//! - **State Mutation**: Applying changes to the HNSW graph (inserting new nodes) and
+//!   persisting these changes to the database.
+//! - **Anonymized Statistics**: Collecting distance data to generate privacy-preserving
+//!   statistics on match distributions.
+//!
+//! # Configuration Master Switches
+//!
+//! This module uses several compile-time constants that act as "master switches" to control
+//! fundamental trade-offs between performance, accuracy, and privacy in the protocol.
+//! These switches are typically configured for a specific deployment and are not expected
+//! to change at runtime.
+//!
+//! NOTE: As of Dec 9th 2025, the choice of optimal configuration for production deployment is still being researched.
+//!
+//! ### 1. HNSW Entry Point Strategy
+//!
+//! - **`Standard`**: The HNSW search starts from a single, pre-defined entry point.
+//! - **`LinearScan`**: The HNSW search begins by evaluating a set of entry points
+//!   candidates and choosing the one closest to the query vector.
+//!
+//! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
+
+//! ### 2. Distance Function: `MinFhd` vs. `Fhd`
+//!
+//! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance.
+//! - **`MinFhd` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
+//!   distance across a set of predefined rotations.
+//!
+//! The distance is determined by the `DISTANCE_FN` constant, which gets passed to the vector store constructor.
+//! DISTANCE_FN itself is initialized from the choice of rotations included in search (SearchRotations type alias).
+//! Center-only implies MinFhd while searching explicitly for rotated irises implies Fhd.
+//!
+//! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
+//!
+//! This strategy governs how nearest neighbors candidate lists are managed during HNSW graph traversal.
+//! - **`Sorted`**: Maintains a sorted list of candidates.
+//! - **`Unsorted`**: Maintains an unsorted list of candidates.
+//!
+//! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
+
 use crate::{
     execution::{
         hawk_main::{
@@ -10,11 +72,16 @@ use crate::{
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef, DistanceFn,
+            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
+            Aby3VectorRef, DistanceFn,
         },
         shared_irises::SharedIrises,
     },
-    hnsw::{graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswSearcher, VectorStore},
+    hnsw::{
+        graph::graph_store,
+        searcher::{ConnectPlanV, NeighborhoodMode},
+        GraphMem, HnswSearcher, VectorStore,
+    },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
@@ -94,14 +161,20 @@ use is_match_batch::is_match_batch;
 
 /// The master switch to enable search-per-rotation or search-center-only.
 pub type SearchRotations = CenterOnly;
-/// The choice of distance function to use in the Aby3Store.
-pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
-    DistanceFn::MinimalRotation
-} else {
-    DistanceFn::Simple
-};
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
+
+/// The choice of distance function to use in the Aby3Store.
+pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
+    DistanceFn::MinFhd
+} else {
+    DistanceFn::Fhd
+};
+
+/// The choice of HNSW candidate list strategy
+pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
+
+const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
 #[derive(Clone, Parser)]
 #[allow(non_snake_case)]
@@ -147,38 +220,63 @@ pub struct HawkArgs {
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
 
+    /// Enables NUMA-aware optimizations.
     #[clap(long, default_value_t = false)]
     pub numa: bool,
 }
 
-/// HawkActor manages the state of the HNSW database and connections to other
-/// MPC nodes.
+/// Manages the state and execution of the HNSW-based MPC protocol.
+///
+/// The `HawkActor` is the central component for the CPU-based matching engine. It orchestrates
+/// MPC sessions, manages the HNSW graphs and iris data stores for both eyes, and handles
+/// incoming requests. It is designed to be a long-lived object that holds
+/// the entire state of the MPC node.
+///
+/// # Responsibilities
+/// - **State Management:** Holds in-memory HNSW graphs (`graph_store`) and the underlying
+///   shared iris data (`iris_store`).
+/// - **Session Management:** Creates and manages `HawkSession`s, which provide the
+///   cryptographic context for MPC operations.
+/// - **Request Handling:** Processes `HawkRequest` batches.
+/// - **Persistence:** Coordinates with `GraphPg` to load the HNSW graph from and persist updates
+///   to a Postgres database.
+/// - **Anonymized Statistics:** Collects and aggregates distance data to generate anonymized
+///   statistics about match distributions.
 pub struct HawkActor {
+    /// Command-line arguments and configuration for the actor.
     args: HawkArgs,
-
-    // ---- Shared setup ----
+    // ---- Shared MPC & HNSW setup ----
+    /// The HNSW searcher, containing parameters and logic for graph traversal.
     searcher: Arc<HnswSearcher>,
+    /// An override for the shared HNSW PRF.
+    /// If it is Some(`key``), `key` is used.
+    /// If it is None, the parties mutually derive the PRF key.
+    /// See `get_or_init_prf_key`.
     prf_key: Option<Arc<[u8; 16]>>,
-
-    // ---- My state ----
-    /// A size used by the startup loader.
+    // ---- Core State ----
+    /// A size used by the start-up loader.
     loader_db_size: usize,
+    /// In-memory storage for the secret-shared iris codes for both left and right eyes.
     iris_store: BothEyes<Aby3SharedIrisesRef>,
+    /// In-memory HNSW graphs for both left and right eyes.
     graph_store: BothEyes<GraphRef>,
+    /// Handles to the iris worker pools for NUMA-aware data processing.
     workers_handle: BothEyes<IrisPoolHandle>,
+    /// Aggregates statistics for anonymized reporting on match distance distributions.
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 
-    /// ---- Distances cache ----
-    /// Cache of distances for each eye.
-    /// Eye -> List of Lists of distances, where the inner list is all distances for rotations of a query.
-    /// In a later step, these distances will be reduced to a single, minimum distance per query.
+    /// Caches computed distances for anonymized statistics before they are processed and cleared.
     distances_cache: BothEyes<DistanceCache>,
 
+    /// An optional store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
 
-    // ---- My network setup ----
+    // ---- Networking ----
+    /// Handle for managing network connections and creating MPC sessions with peers.
     networking: Box<dyn NetworkHandle>,
+    /// A cancellation token to signal errors and gracefully shut down network activity.
     error_ct: CancellationToken,
+    /// The index of this MPC party (0, 1, or 2).
     party_id: usize,
 }
 
@@ -238,10 +336,11 @@ impl TryFrom<usize> for StoreId {
     }
 }
 
-// TODO: Merge with the same in iris-mpc-gpu.
-// Orientation enum to indicate the orientation of the iris code during the batch processing.
-// Normal: Normal orientation of the iris code.
-// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
+/// Orientation enum to indicate the orientation of the iris code during the batch processing.
+/// Normal: Normal orientation of the iris code.
+/// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
+/// TODO: Merge with the same in iris-mpc-gpu.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
     Normal = 0,
@@ -284,7 +383,15 @@ type Aby3Ref = Arc<RwLock<Aby3Store>>;
 type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 
-/// HawkSession is a unit of parallelism when operating on the HawkActor.
+/// A container for state required to perform parallel MPC operations.
+///
+/// A `HawkSession` encapsulates the necessary context for a single thread of execution
+/// within the protocol. This includes a reference to the underlying ABY3 store
+/// (which manages secret-shared data and cryptographic primitives) and the HNSW graph.
+/// Multiple sessions can be created to parallelize operations across a batch of requests.
+///
+/// All sessions operate on the same shared `graph_store` and `iris_store` held by the `HawkActor`.
+/// All sessions keep a copy of the HNSW PRF key (mostly used for generating insertion layers).
 #[derive(Clone)]
 pub struct HawkSession {
     pub aby3_store: Aby3Ref,
@@ -294,29 +401,27 @@ pub struct HawkSession {
 
 pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef);
 
+/// A high-level plan for inserting a query into the HNSW graph after a search.
+///
+/// This struct is created as a result of the search phase that precedes an insertion.
+/// It bundles the low-level `InsertPlanV` with the matches found during the search.
+/// The `InsertPlanV` specifies the ideal connections for the new node, while the `matches`
+/// are used for further processing, such as determining if the query is a full match or needs
+/// to be inserted.
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
     pub plan: InsertPlanV<Aby3Store>,
-    pub match_count: usize,
+    pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
 }
 
-/// ConnectPlan specifies how to connect a new node to the HNSW graph.
-/// This includes the updates to the neighbors' own neighbor lists, including
-/// bilateral edges.
+/// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
+///
+/// A `ConnectPlan` is the final output of the insertion preparation phase (`HnswSearcher::insert_prepare_batch`).
+/// Unlike `InsertPlanV`, which specifies the *desired* neighbors for the new node, `ConnectPlan`
+/// represents the full set of atomic graph updates required. This includes not only the new
+/// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
+/// new one. It is the definitive set of changes that will be applied to the graph storage.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
-
-impl HawkInsertPlan {
-    pub fn match_ids(&self) -> Vec<VectorId> {
-        self.plan
-            .links
-            .iter()
-            .take(1)
-            .flat_map(|bottom_layer| bottom_layer.iter())
-            .take(self.match_count)
-            .map(|(id, _)| *id)
-            .collect_vec()
-    }
-}
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -335,10 +440,11 @@ impl HawkActor {
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        let searcher = Arc::new(HnswSearcher::new_standard(
+        let searcher = Arc::new(HnswSearcher::new_linear_scan(
             args.hnsw_param_ef_constr,
             args.hnsw_param_ef_search,
             args.hnsw_param_M,
+            LINEAR_SCAN_MAX_GRAPH_LAYER,
         ));
 
         let network_args = NetworkHandleArgs {
@@ -420,8 +526,8 @@ impl HawkActor {
     /// mutually derived with other MPC parties in PROD environments.
     ///
     /// This PRF key is used to determine insertion heights for new elements added to the
-    /// HNSW graphs, so is configured to be equal across all sessions, and initialized once
-    /// upon startup of the `HawkActor` instance.
+    /// HNSW graphs, so is configured to be equal across all sessions, and is initialized every time
+    /// `new_sessions` is called.
     async fn get_or_init_prf_key(
         &mut self,
         network_session: &mut NetworkSession,
@@ -590,13 +696,7 @@ impl HawkActor {
         let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
-                let last_layer_insert_plan = match insert_plan.plan.links.first() {
-                    Some(neighbors) => neighbors,
-                    None => continue,
-                };
-
-                // only insert_plan.match_count neighbors are actually matches.
-                let matches = last_layer_insert_plan.iter().take(insert_plan.match_count);
+                let matches = insert_plan.matches.clone();
 
                 for (vector_id, distance) in matches {
                     let distance_share = distance.clone();
@@ -838,12 +938,25 @@ struct HawkJob {
     return_channel: oneshot::Sender<Result<HawkResult>>,
 }
 
-/// HawkRequest contains a batch of items to search.
+/// Represents a batch of queries to be processed by the `HawkActor`.
+///
+/// This struct encapsulates all the data required for a single batch operation, including
+/// uniqueness checks, re-authentications, and potential insertions. It is constructed
+/// from a `BatchQuery` and contains the iris data for both normal and mirrored orientations.
+///
+/// The `queries` and `queries_mirror` fields hold secret-shared iris codes that have been
+/// prepared for MPC. The `Normal` orientation is used for standard matching against the
+/// database, while the `Mirror` orientation is used to detect full-face mirror attacks by
+/// matching the left query iris against the right iris database and vice-versa.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
+    /// The original `BatchQuery` containing request metadata and raw iris data.
     batch: BatchQuery,
+    /// Secret-shared iris queries for normal matching (left vs. left, right vs. right).
     queries: SearchQueries<SearchRotations>,
+    /// Secret-shared iris queries for mirror-attack detection (left vs. right, right vs. left).
     queries_mirror: SearchQueries<SearchRotations>,
+    /// The identifiers for each request in the batch.
     ids: SearchIds,
 }
 
@@ -930,6 +1043,17 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
+    /// Reallocates iris data to be local to the NUMA node of the worker threads.
+    ///
+    /// On NUMA (Non-Uniform Memory Access) architectures, memory is divided into nodes,
+    /// and accessing memory on a remote node is slower than accessing local memory.
+    /// This function optimizes performance by moving the secret-shared iris data for an
+    /// incoming request to the same NUMA node where the cryptographic computations will
+    /// be performed.
+    ///
+    /// It dispatches reallocation tasks to the `IrisPoolHandle` worker pools.
+    /// The workers, which are pinned to specific CPU
+    /// cores, handle the memory copy, ensuring data locality for subsequent processing.
     async fn numa_realloc(self, workers: BothEyes<IrisPoolHandle>) -> Self {
         // TODO: Result<Self>
         let start = Instant::now();
@@ -1470,7 +1594,8 @@ impl HawkHandle {
             .numa_realloc(hawk_actor.workers_handle.clone())
             .await;
 
-        // Deletions.
+        // All deletions in a batch are applied at the beginning of batch processing
+        // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
 
         tracing::info!(
@@ -1481,10 +1606,12 @@ impl HawkHandle {
             request.batch.reauth_use_or_rule,
         );
 
+        // Compute search results for a given orientation and compute matching information
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
-                // The store to find vector ids (same left or right).
+                // Choice of LEFT store here is arbitrary, because it's only used for VectorId bookkeeping.
+                // The two sides are in sync w.r.t stored vector ids.
                 let store = hawk_actor.iris_store[LEFT].read().await;
                 (
                     request.luc_ids(&store),
@@ -1492,6 +1619,8 @@ impl HawkHandle {
                 )
             };
 
+            // Job that computes intra-batch matches. Note that it is awaited later, allowing it
+            // to run in parallel with the HNSW searches.
             let intra_results = {
                 let sessions_intra = sessions.for_intra_batch(orient);
                 let search_queries = search_queries.clone();
@@ -1500,26 +1629,28 @@ impl HawkHandle {
                 )
             };
 
-            // Search for nearest neighbors.
-            // For both eyes, all requests, and rotations.
+            // Search for nearest neighbors for all requests, all rotations (if applicable) and both eyes.
             let sessions_search = &sessions.for_search(orient);
             let search_ids = &request.ids;
             let search_params = SearchParams {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
+
             let search_results = search::search::<SearchRotations>(
                 sessions_search,
                 search_queries,
                 search_ids,
                 search_params,
+                NEIGHBORHOOD_MODE,
             )
             .await?;
 
+            // Organize results per orientation. Consult the matching module for details on organizing steps.
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
 
-                // Go fetch the missing vector IDs and calculate their is_match.
+                // Fetch the missing vector IDs for each side and calculate their is_match.
                 let missing_is_match =
                     is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
                         .await?;
@@ -1530,6 +1661,7 @@ impl HawkHandle {
             Ok((search_results, match_result))
         };
 
+        // Search for both orientations
         let (search_results, match_result) = {
             let start = Instant::now();
             let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
@@ -1538,6 +1670,7 @@ impl HawkHandle {
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
+            // Apply final organization + decision step, using results for both orientations
             (search_normal, matches_normal.step3(matches_mirror))
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
@@ -1548,6 +1681,7 @@ impl HawkHandle {
         tracing::info!("Updated anonymized statistics.");
 
         // Reset Updates. Find how to insert the new irises into the graph.
+        // TODO: Parallelize with the other searches
         let resets = search_to_reset(hawk_actor, sessions_mutations, &request).await?;
 
         // Insert into the in memory stores.
@@ -1599,7 +1733,7 @@ impl HawkHandle {
         let decisions = match_result.decisions();
         let requests_order = &request.batch.requests_order;
 
-        // The vector IDs of reauths and resets, or None for uniqueness insertions.
+        // Fetch targeted vector IDs of reauths and resets (None for uniqueness insertions).
         let update_ids = requests_order
             .iter()
             .map(|req_index| match req_index {
@@ -1646,14 +1780,15 @@ impl HawkHandle {
                 unique_insertions_persistence_skipped.len()
             );
 
+            // Collect the HNSW insertion plans for all mutating decisions
             let insert_plans = requests_order
                 .iter()
                 .map(|req_index| match req_index {
-                    // If the decision is a mutation, return the insertion plan.
                     RequestIndex::UniqueReauthResetCheck(i) => decisions[*i]
                         .is_mutation()
                         .then(|| search_results[*i].center().clone()),
                     RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
+                    // Deletions were handled earlier in handle_job
                     RequestIndex::Deletion(_) => None,
                 })
                 .collect_vec();
@@ -1726,7 +1861,6 @@ impl HawkHandle {
         // validate that the RNGs have not diverged
         // TODO: debug serialization issues encountered with this function and then re-enable
         // HawkSession::prf_check(&sessions.for_search).await?;
-
         Ok(())
     }
 }
@@ -1773,6 +1907,10 @@ mod tests {
                     &addresses.join(","),
                     "--party-index",
                     &index.to_string(),
+                    "--hnsw-param-ef-constr",
+                    &320.to_string(),
+                    "--hnsw-param-m",
+                    &256.to_string(),
                 ]);
 
                 // Make the test async.
@@ -2066,9 +2204,8 @@ mod tests_db {
     use super::*;
     use crate::hnsw::{
         graph::graph_store::test_utils::TestGraphPg,
-        searcher::{ConnectPlanLayerV, SetEntryPoint},
+        searcher::{build_layer_updates, UpdateEntryPoint},
     };
-    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
@@ -2083,14 +2220,16 @@ mod tests_db {
                 .enumerate()
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
-                    layers: vec![ConnectPlanLayer {
-                        neighbors: vec![vectors[side]],
-                        nb_links: vec![vec![*vector]],
-                    }],
-                    set_ep: if i == side {
-                        SetEntryPoint::NewLayer
+                    updates: build_layer_updates(
+                        *vector,
+                        vec![vectors[side]],
+                        vec![vec![*vector]],
+                        0,
+                    ),
+                    update_ep: if i == side {
+                        UpdateEntryPoint::SetUnique { layer: 0 }
                     } else {
-                        SetEntryPoint::False
+                        UpdateEntryPoint::False
                     },
                 })
                 .map(Some)
@@ -2169,19 +2308,14 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::{ConnectPlanLayerV, SetEntryPoint};
+    use crate::hnsw::searcher::{build_layer_updates, UpdateEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
-
-    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
         ConnectPlan {
             inserted_vector: vector_id,
-            layers: vec![ConnectPlanLayer {
-                neighbors: vec![vector_id],
-                nb_links: vec![vec![vector_id]],
-            }],
-            set_ep: SetEntryPoint::False,
+            updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
+            update_ep: UpdateEntryPoint::False,
         }
     }
 

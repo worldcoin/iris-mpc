@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
-    hnsw::searcher::{ConnectPlan, ConnectPlanLayer, SetEntryPoint},
+    hnsw::searcher::{build_layer_updates, ConnectPlan, LayerMode, UpdateEntryPoint},
     protocol::shared_iris::GaloisRingSharedIris,
     utils::constants::N_PARTIES,
 };
@@ -60,7 +60,6 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
         actor.iris_store[LEFT].write().await,
         actor.iris_store[RIGHT].write().await,
     ];
-
     for (share, _mirror) in shares {
         iris_stores[LEFT].append(Arc::new(share.clone()));
         // TODO: Different share.
@@ -72,7 +71,7 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
 /// Populate the graphs such that all vectors are reachable.
 pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
     let db_size = 5;
-
+    let layer_mode = actor.searcher().layer_mode.clone();
     let id = |i: usize| VectorId::from_0_index(i as u32);
     let next = |i: usize| (i + 1) % db_size;
     let edges = |i: usize| vec![id(next(i))];
@@ -82,14 +81,14 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
         for i in 0..db_size {
             let plan = ConnectPlan {
                 inserted_vector: id(i),
-                layers: vec![ConnectPlanLayer {
-                    neighbors: edges(i),
-                    nb_links: vec![edges(next(i))],
-                }],
-                set_ep: if i == 0 {
-                    SetEntryPoint::NewLayer
+                updates: build_layer_updates(id(i), edges(i), vec![edges(next(i))], 0),
+                update_ep: if i == 0 {
+                    match layer_mode {
+                        LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
+                        LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
+                    }
                 } else {
-                    SetEntryPoint::False
+                    UpdateEntryPoint::False
                 },
             };
             graph.insert_apply(plan).await;

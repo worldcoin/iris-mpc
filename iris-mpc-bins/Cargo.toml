@@ -18,6 +18,7 @@ helpers = [
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+async_from = "0.2.0"
 axum.workspace = true
 aws-config = { workspace = true, optional = true }
 aws-sdk-kms = { workspace = true, optional = true }
@@ -29,6 +30,7 @@ base64.workspace = true
 cudarc.workspace = true
 chrono.workspace = true
 clap.workspace = true
+csv = "*"
 data-encoding.workspace = true
 dotenvy.workspace = true
 eyre.workspace = true
@@ -52,6 +54,8 @@ ampc-anon-stats.workspace = true
 ampc-server-utils.workspace = true
 tonic = "0.12.3"
 metrics.workspace = true
+metrics-tracing-context = "0.15.0"
+metrics-util.workspace = true
 metrics-exporter-statsd.workspace = true
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
@@ -72,6 +76,7 @@ iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
+iris-mpc-utils = { path = "../iris-mpc-utils" }
 blake3 = "1.8.2"
 aws-smithy-types = "1.2.9"
 clap_builder = "4.5.51"
@@ -155,8 +160,16 @@ name = "construct-graph-ptxt"
 path = "bin/iris-mpc-cpu/construct_graph_ptxt.rs"
 
 [[bin]]
+name = "run-accuracy-analysis"
+path = "bin/iris-mpc-cpu/run_accuracy_analysis.rs"
+
+[[bin]]
 name = "generate_ideal_graph"
 path = "bin/iris-mpc-cpu/generate_ideal_graph.rs"
+
+[[bin]]
+name = "graph-utils"
+path = "bin/iris-mpc-cpu/graph_utils.rs"
 
 # ---------------------
 # binaries for iris-mpc-gpu
@@ -198,6 +211,10 @@ path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
 # ---------------------
 # binaries for iris-mpc-utils
 # ---------------------
+
+[[bin]]
+name = "service-client"
+path = "bin/iris-mpc-utils/service_client.rs"
 
 [[bin]]
 name = "write-node-config-toml"
