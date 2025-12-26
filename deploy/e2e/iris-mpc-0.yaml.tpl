@@ -156,6 +156,9 @@ iris-mpc-0:
           key: DATABASE_AURORA_URL
           name: application
 
+    - name: SMPC__ANON_STATS_SCHEMA_NAME
+      value: "anon_stats_smpcv2_0"
+
     - name: SMPC__ANON_STATS_DATABASE__MIGRATE
       value: "false"
 

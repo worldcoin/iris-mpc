@@ -116,7 +116,7 @@ anon-stats-server-smpc-2:
           name: application
 
     - name: SMPC__DB_SCHEMA_NAME
-      value: "anon_stats_smpc_2"
+      value: "anon_stats_smpcv2_2"
 
     - name: SMPC__SERVICE_PORTS
       value: '["4000","4001","4002"]'
