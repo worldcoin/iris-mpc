@@ -41,6 +41,10 @@ anon-stats-server-smpc-2:
       path: /health
       port: health
 
+  podSecurityContext:
+    runAsUser: 65534
+    runAsGroup: 65534
+
   livenessProbe:
     httpGet:
       path: /health
@@ -111,6 +115,9 @@ anon-stats-server-smpc-2:
           key: DATABASE_AURORA_URL
           name: application
 
+    - name: SMPC__DB_SCHEMA_NAME
+      value: "anon_stats_smpcv2_2"
+
     - name: SMPC__SERVICE_PORTS
       value: '["4000","4001","4002"]'
 
@@ -168,7 +175,7 @@ anon-stats-server-smpc-2:
       value: "10"
 
     - name: SMPC__MIN_1D_JOB_SIZE
-      value: "64"
+      value: "1"
 
     - name: SMPC__MIN_2D_JOB_SIZE_REAUTH
       value: "10"
@@ -188,8 +195,9 @@ anon-stats-server-smpc-2:
       - name: MY_NODE_IP
         valueFrom:
           fieldRef:
-            fieldPath: status.hostIP
+            fieldPath: status.podIP
     configMap:
+      name: "anon-stats-server-init-2"
       init.sh: |
         #!/usr/bin/env bash
 
