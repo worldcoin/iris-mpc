@@ -213,9 +213,6 @@ iris-mpc-0:
     - name: SMPC__MAX_BATCH_SIZE
       value: "64"
 
-    - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
-      value: "500"
-
     - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
       value: "64"
 
