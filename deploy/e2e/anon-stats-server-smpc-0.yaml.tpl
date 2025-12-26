@@ -175,7 +175,7 @@ anon-stats-server-smpc-0:
       value: "10"
 
     - name: SMPC__MIN_1D_JOB_SIZE
-      value: "64"
+      value: "1"
 
     - name: SMPC__MIN_2D_JOB_SIZE_REAUTH
       value: "10"
