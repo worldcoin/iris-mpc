@@ -111,6 +111,9 @@ anon-stats-server-smpc-0:
           key: DATABASE_AURORA_URL
           name: application
 
+    - name: SMPC__DB_SCHEMA_NAME
+      value: "anon_stats_smpc_0"
+
     - name: SMPC__SERVICE_PORTS
       value: '["4000","4001","4002"]'
 
