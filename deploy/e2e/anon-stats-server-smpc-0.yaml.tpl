@@ -42,8 +42,8 @@ anon-stats-server-smpc-0:
       port: health
 
   podSecurityContext:
-    seccompProfile:
-      type: RuntimeDefault
+    runAsUser: 65534
+    runAsGroup: 65534
 
   livenessProbe:
     httpGet:
