@@ -186,11 +186,11 @@ impl E2EClient {
             self.encryption_public_keys.push(public_key);
         }
 
-        self.sqs_client
-            .purge_queue()
-            .queue_url(self.response_queue_url.clone())
-            .send()
-            .await?;
+        // self.sqs_client
+        //     .purge_queue()
+        //     .queue_url(self.response_queue_url.clone())
+        //     .send()
+        //     .await?;
 
         // Load data from File if configured
         if let Some(file_path) = &self.data_from_file {
