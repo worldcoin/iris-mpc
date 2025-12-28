@@ -183,9 +183,10 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        let mut responses = Vec::with_capacity((vector_ids.len() + 31) / 32);
+        const CHUNK_SIZE: usize = 64;
 
-        for chunk in vector_ids.chunks(32) {
+        let mut responses = Vec::with_capacity((vector_ids.len() + CHUNK_SIZE - 1) / CHUNK_SIZE);
+        for chunk in vector_ids.chunks(CHUNK_SIZE) {
             let (tx, rx) = oneshot::channel();
             let task = IrisTask::RotationAwareDotProductBatch {
                 query: query.clone(),
@@ -195,7 +196,6 @@ impl IrisPoolHandle {
             self.get_next_worker().send(task)?;
             responses.push(rx);
         }
-
         let results = futures::future::try_join_all(responses).await?;
         let results = results.into_iter().flatten().collect();
 
