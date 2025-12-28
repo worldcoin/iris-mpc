@@ -1010,6 +1010,172 @@ where
     additive_shares
 }
 
+/// Row-major prerotated query for L1 cache efficiency.
+/// Layout: [row0_rot0..rot30][row1_rot0..rot30]...
+pub struct PrerotatedQueryRowMajor {
+    /// code: 16 rows × 31 rotations × 800 elements
+    code_data: Box<[u16]>,
+    /// mask: 8 rows × 31 rotations × 800 elements
+    mask_data: Box<[u16]>,
+}
+
+impl PrerotatedQueryRowMajor {
+    const ROW_SIZE: usize = 800;
+    const CODE_ROWS: usize = 16;
+    const MASK_ROWS: usize = 8;
+
+    pub fn new(query: &ArcIris) -> Self {
+        let rotation_amounts: [isize; ROTATIONS] = {
+            let mut amounts = [0isize; ROTATIONS];
+            for i in 0..15 {
+                amounts[i] = ((15 - i) * 4) as isize;
+            }
+            amounts[15] = 0;
+            for i in 1..=15 {
+                amounts[15 + i] = -((i * 4) as isize);
+            }
+            amounts
+        };
+
+        fn rotate_row(row: &[u16], amount: isize) -> Vec<u16> {
+            let len = row.len();
+            let effective = ((amount % len as isize) + len as isize) as usize % len;
+            let mut result = vec![0u16; len];
+            result[..len - effective].copy_from_slice(&row[effective..]);
+            result[len - effective..].copy_from_slice(&row[..effective]);
+            result
+        }
+
+        // Row-major layout: [row][rotation][element]
+        let mut code_data =
+            vec![0u16; Self::CODE_ROWS * ROTATIONS * Self::ROW_SIZE].into_boxed_slice();
+        let mut mask_data =
+            vec![0u16; Self::MASK_ROWS * ROTATIONS * Self::ROW_SIZE].into_boxed_slice();
+
+        for row_idx in 0..Self::CODE_ROWS {
+            let src_row =
+                &query.code.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
+            for rot_idx in 0..ROTATIONS {
+                let rotated = rotate_row(src_row, rotation_amounts[rot_idx]);
+                let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
+                code_data[dst_offset..dst_offset + Self::ROW_SIZE].copy_from_slice(&rotated);
+            }
+        }
+
+        for row_idx in 0..Self::MASK_ROWS {
+            let src_row =
+                &query.mask.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
+            for rot_idx in 0..ROTATIONS {
+                let rotated = rotate_row(src_row, rotation_amounts[rot_idx]);
+                let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
+                mask_data[dst_offset..dst_offset + Self::ROW_SIZE].copy_from_slice(&rotated);
+            }
+        }
+
+        Self {
+            code_data,
+            mask_data,
+        }
+    }
+
+    /// Get all 31 rotations of a code row (contiguous in memory - 50KB)
+    #[inline]
+    fn code_row_rotations(&self, row_idx: usize) -> &[u16] {
+        let start = row_idx * ROTATIONS * Self::ROW_SIZE;
+        let end = start + ROTATIONS * Self::ROW_SIZE;
+        &self.code_data[start..end]
+    }
+
+    /// Get all 31 rotations of a mask row (contiguous in memory - 50KB)
+    #[inline]
+    fn mask_row_rotations(&self, row_idx: usize) -> &[u16] {
+        let start = row_idx * ROTATIONS * Self::ROW_SIZE;
+        let end = start + ROTATIONS * Self::ROW_SIZE;
+        &self.mask_data[start..end]
+    }
+}
+
+/// Row-major rotation-aware distance - processes row-by-row for L1 cache efficiency.
+pub fn rotation_aware_pairwise_distance_rowmajor<'a, I>(
+    query: &'a ArcIris,
+    targets: I,
+) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    const ROW_SIZE: usize = 800;
+    const CODE_ROWS: usize = 16;
+    const MASK_ROWS: usize = 8;
+
+    let target_count = targets.len();
+    let mut additive_shares = vec![RingElement(0u16); 2 * ROTATIONS * target_count];
+
+    let prerotated = PrerotatedQueryRowMajor::new(query);
+    let targets: Vec<_> = targets.collect();
+
+    // Process row-by-row: all 31 rotations of one row stay in L1
+    for row_idx in 0..CODE_ROWS {
+        let query_rows = prerotated.code_row_rotations(row_idx); // 50KB, fits in L1
+
+        for (target_idx, target_opt) in targets.iter().enumerate() {
+            if let Some(target) = target_opt {
+                let target_row = &target.code.coefs[row_idx * ROW_SIZE..(row_idx + 1) * ROW_SIZE];
+
+                for rot_idx in 0..ROTATIONS {
+                    let query_row = &query_rows[rot_idx * ROW_SIZE..(rot_idx + 1) * ROW_SIZE];
+                    let partial = simple_dot_product(query_row, target_row);
+                    let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2;
+                    additive_shares[result_idx] =
+                        RingElement(additive_shares[result_idx].0.wrapping_add(partial));
+                }
+            }
+        }
+    }
+
+    // Process mask rows - accumulate first, multiply by 2 later
+    for row_idx in 0..MASK_ROWS {
+        let query_rows = prerotated.mask_row_rotations(row_idx);
+
+        for (target_idx, target_opt) in targets.iter().enumerate() {
+            if let Some(target) = target_opt {
+                let target_row = &target.mask.coefs[row_idx * ROW_SIZE..(row_idx + 1) * ROW_SIZE];
+
+                for rot_idx in 0..ROTATIONS {
+                    let query_row = &query_rows[rot_idx * ROW_SIZE..(rot_idx + 1) * ROW_SIZE];
+                    let partial = simple_dot_product(query_row, target_row);
+                    let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2 + 1;
+                    additive_shares[result_idx] =
+                        RingElement(additive_shares[result_idx].0.wrapping_add(partial));
+                }
+            }
+        }
+    }
+
+    // Multiply mask results by 2
+    for target_idx in 0..target_count {
+        if targets[target_idx].is_some() {
+            for rot_idx in 0..ROTATIONS {
+                let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2 + 1;
+                additive_shares[result_idx] = RingElement(2) * additive_shares[result_idx];
+            }
+        }
+    }
+
+    // Handle None targets
+    for (target_idx, target_opt) in targets.iter().enumerate() {
+        if target_opt.is_none() {
+            let (a, b) = SHARE_OF_MAX_DISTANCE;
+            for rot_idx in 0..ROTATIONS {
+                let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2;
+                additive_shares[result_idx] = RingElement(a);
+                additive_shares[result_idx + 1] = RingElement(b);
+            }
+        }
+    }
+
+    additive_shares
+}
+
 pub fn non_existent_distance() -> Vec<RingElement<u16>> {
     vec![
         RingElement(SHARE_OF_MAX_DISTANCE.0),
@@ -1500,6 +1666,72 @@ mod tests {
                 orig, prerot,
                 "Mismatch at index {}: original={:?}, prerotated={:?}",
                 i, orig, prerot
+            );
+        }
+    }
+
+    #[test]
+    fn test_rotation_aware_pairwise_distance_rowmajor_correctness() {
+        use iris_mpc_common::iris_db::iris::IrisCode;
+
+        let mut rng = AesRng::seed_from_u64(456);
+
+        // Generate query
+        let query_iris = IrisCode::random_rng(&mut rng);
+        let query_shares =
+            GaloisRingSharedIris::generate_shares_locally(&mut rng, query_iris.clone());
+        let query = Arc::new(query_shares[0].clone());
+
+        // Generate targets with Some and None values
+        let target_irises: Vec<_> = (0..10).map(|_| IrisCode::random_rng(&mut rng)).collect();
+        let target_shares: Vec<_> = target_irises
+            .iter()
+            .map(|iris| {
+                let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone());
+                Arc::new(shares[0].clone())
+            })
+            .collect();
+
+        // Create iterator with mix of Some and None
+        let targets_with_none: Vec<Option<&Arc<GaloisRingSharedIris>>> = vec![
+            Some(&target_shares[0]),
+            None,
+            Some(&target_shares[1]),
+            Some(&target_shares[2]),
+            None,
+            Some(&target_shares[3]),
+            Some(&target_shares[4]),
+            Some(&target_shares[5]),
+            None,
+            Some(&target_shares[6]),
+        ];
+
+        // Compute using original
+        let original_result =
+            rotation_aware_pairwise_distance(&query, targets_with_none.clone().into_iter());
+
+        // Compute using rowmajor
+        let rowmajor_result =
+            rotation_aware_pairwise_distance_rowmajor(&query, targets_with_none.into_iter());
+
+        // Results should be identical
+        assert_eq!(
+            original_result.len(),
+            rowmajor_result.len(),
+            "Length mismatch: original={}, rowmajor={}",
+            original_result.len(),
+            rowmajor_result.len()
+        );
+
+        for (i, (orig, rowmaj)) in original_result
+            .iter()
+            .zip(rowmajor_result.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                orig, rowmaj,
+                "Mismatch at index {}: original={:?}, rowmajor={:?}",
+                i, orig, rowmaj
             );
         }
     }
