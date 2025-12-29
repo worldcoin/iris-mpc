@@ -190,7 +190,6 @@ async fn e2e_test_async() -> Result<()> {
         hnsw_prf_key: None,
         disable_persistence: false,
         match_distances_buffer_size: 64,
-        n_buckets: 10,
         tls: None,
         numa: true,
     };
