@@ -1240,15 +1240,14 @@ async fn get_results_thread(
                         log_info(format!(
                             "Job Results :: Persisted last indexed id: batch-id={batch_id}"
                         ));
+                        // Update metrics with persistence status
                         metrics::counter!("genesis_batches_persisted").increment(1);
+                        metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
                     } else {
                         log_info(format!(
                             "Job Results :: Persistence disabled, skipping database writes for batch-id={batch_id}"
                         ));
                     }
-
-                    // Update metrics with persistence status
-                    metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
 
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
@@ -1275,7 +1274,7 @@ async fn get_results_thread(
 
                     if !disable_persistence {
                         let mut graph_tx = graph_store_bg.tx().await?;
-                        let iris_data =StoredIrisRef {
+                        let iris_data = StoredIrisRef {
                                         id: vector_id_to_persist.serial_id() as i64,
                                         left_code: &left_iris.code.coefs,
                                         left_mask: &left_iris.mask.coefs,
