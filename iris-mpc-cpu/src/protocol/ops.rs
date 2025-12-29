@@ -1013,69 +1013,88 @@ where
 /// Row-major prerotated query for L1 cache efficiency.
 /// Layout: [row0_rot0..rot30][row1_rot0..rot30]...
 pub struct PrerotatedQueryRowMajor {
-    /// code: 16 rows × 31 rotations × 800 elements
-    code_data: Box<[u16]>,
-    /// mask: 8 rows × 31 rotations × 800 elements
-    mask_data: Box<[u16]>,
+    /// code: 16 rows × 31 rotations × 800 elements = 396,800 u16s (~793KB)
+    code_data: Vec<u16>,
+    /// mask: 8 rows × 31 rotations × 800 elements = 198,400 u16s (~397KB)
+    mask_data: Vec<u16>,
 }
 
 impl PrerotatedQueryRowMajor {
-    const ROW_SIZE: usize = 800;
-    const CODE_ROWS: usize = 16;
-    const MASK_ROWS: usize = 8;
+    pub const ROW_SIZE: usize = 800;
+    pub const CODE_ROWS: usize = 16;
+    pub const MASK_ROWS: usize = 8;
+    const CODE_SIZE: usize = Self::CODE_ROWS * ROTATIONS * Self::ROW_SIZE;
+    const MASK_SIZE: usize = Self::MASK_ROWS * ROTATIONS * Self::ROW_SIZE;
 
-    pub fn new(query: &ArcIris) -> Self {
-        let rotation_amounts: [isize; ROTATIONS] = {
-            let mut amounts = [0isize; ROTATIONS];
-            for i in 0..15 {
-                amounts[i] = ((15 - i) * 4) as isize;
-            }
-            amounts[15] = 0;
-            for i in 1..=15 {
-                amounts[15 + i] = -((i * 4) as isize);
-            }
-            amounts
-        };
-
-        fn rotate_row(row: &[u16], amount: isize) -> Vec<u16> {
-            let len = row.len();
-            let effective = ((amount % len as isize) + len as isize) as usize % len;
-            let mut result = vec![0u16; len];
-            result[..len - effective].copy_from_slice(&row[effective..]);
-            result[len - effective..].copy_from_slice(&row[..effective]);
-            result
+    /// Rotation amounts for each of the 31 rotations.
+    const ROTATION_AMOUNTS: [usize; ROTATIONS] = {
+        let mut amounts = [0usize; ROTATIONS];
+        // Left rotations: rotate left by 60, 56, ..., 4 elements
+        let mut i = 0;
+        while i < 15 {
+            amounts[i] = (15 - i) * 4;
+            i += 1;
         }
+        // Center: no rotation
+        amounts[15] = 0;
+        // Right rotations: rotate right by 4, 8, ..., 60 (i.e., left by 796, 792, ..., 740)
+        let mut i = 1;
+        while i <= 15 {
+            amounts[15 + i] = 800 - i * 4;
+            i += 1;
+        }
+        amounts
+    };
 
-        // Row-major layout: [row][rotation][element]
-        let mut code_data =
-            vec![0u16; Self::CODE_ROWS * ROTATIONS * Self::ROW_SIZE].into_boxed_slice();
-        let mut mask_data =
-            vec![0u16; Self::MASK_ROWS * ROTATIONS * Self::ROW_SIZE].into_boxed_slice();
+    /// Rotate row directly into destination buffer (zero allocations).
+    #[inline]
+    fn rotate_row_into(src: &[u16], dst: &mut [u16], left_amount: usize) {
+        let len = src.len();
+        debug_assert_eq!(dst.len(), len);
+        debug_assert!(left_amount < len);
+        // Rotate left by `left_amount`: [left_amount..] ++ [..left_amount]
+        let (first, second) = src.split_at(left_amount);
+        dst[..second.len()].copy_from_slice(second);
+        dst[second.len()..].copy_from_slice(first);
+    }
 
+    /// Create a new buffer (allocates memory).
+    fn new_buffer() -> Self {
+        Self {
+            code_data: vec![0u16; Self::CODE_SIZE],
+            mask_data: vec![0u16; Self::MASK_SIZE],
+        }
+    }
+
+    /// Fill the buffer with rotated query data (reuses existing allocation).
+    fn fill(&mut self, query: &ArcIris) {
+        // Process code rows - write directly into destination (no intermediate allocations)
         for row_idx in 0..Self::CODE_ROWS {
             let src_row =
                 &query.code.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
             for rot_idx in 0..ROTATIONS {
-                let rotated = rotate_row(src_row, rotation_amounts[rot_idx]);
                 let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
-                code_data[dst_offset..dst_offset + Self::ROW_SIZE].copy_from_slice(&rotated);
+                let dst = &mut self.code_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
             }
         }
 
+        // Process mask rows - write directly into destination (no intermediate allocations)
         for row_idx in 0..Self::MASK_ROWS {
             let src_row =
                 &query.mask.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
             for rot_idx in 0..ROTATIONS {
-                let rotated = rotate_row(src_row, rotation_amounts[rot_idx]);
                 let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
-                mask_data[dst_offset..dst_offset + Self::ROW_SIZE].copy_from_slice(&rotated);
+                let dst = &mut self.mask_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
             }
         }
+    }
 
-        Self {
-            code_data,
-            mask_data,
-        }
+    pub fn new(query: &ArcIris) -> Self {
+        let mut buf = Self::new_buffer();
+        buf.fill(query);
+        buf
     }
 
     /// Get all 31 rotations of a code row (contiguous in memory - 50KB)
@@ -1095,7 +1114,13 @@ impl PrerotatedQueryRowMajor {
     }
 }
 
+// Thread-local storage for reusable prerotated query buffers
+thread_local! {
+    static PREROTATED_BUFFER: std::cell::RefCell<Option<PrerotatedQueryRowMajor>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Row-major rotation-aware distance - processes row-by-row for L1 cache efficiency.
+/// Uses thread-local buffer reuse to minimize allocations at high thread counts.
 pub fn rotation_aware_pairwise_distance_rowmajor<'a, I>(
     query: &'a ArcIris,
     targets: I,
@@ -1103,14 +1128,34 @@ pub fn rotation_aware_pairwise_distance_rowmajor<'a, I>(
 where
     I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
 {
-    const ROW_SIZE: usize = 800;
-    const CODE_ROWS: usize = 16;
-    const MASK_ROWS: usize = 8;
-
     let target_count = targets.len();
     let mut additive_shares = vec![RingElement(0u16); 2 * ROTATIONS * target_count];
 
-    let prerotated = PrerotatedQueryRowMajor::new(query);
+    // Use thread-local buffer to avoid allocation per call
+    PREROTATED_BUFFER.with(|cell| {
+        let mut borrowed = cell.borrow_mut();
+        let prerotated = borrowed.get_or_insert_with(PrerotatedQueryRowMajor::new_buffer);
+        prerotated.fill(query);
+        rotation_aware_inner(prerotated, targets, &mut additive_shares);
+    });
+
+    additive_shares
+}
+
+/// Inner implementation that works with a borrowed prerotated buffer.
+#[inline(never)]
+fn rotation_aware_inner<'a, I>(
+    prerotated: &PrerotatedQueryRowMajor,
+    targets: I,
+    additive_shares: &mut [RingElement<u16>],
+) where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    const ROW_SIZE: usize = PrerotatedQueryRowMajor::ROW_SIZE;
+    const CODE_ROWS: usize = PrerotatedQueryRowMajor::CODE_ROWS;
+    const MASK_ROWS: usize = PrerotatedQueryRowMajor::MASK_ROWS;
+
+    let target_count = additive_shares.len() / (2 * ROTATIONS);
     let targets: Vec<_> = targets.collect();
 
     // Process row-by-row: all 31 rotations of one row stay in L1
@@ -1172,8 +1217,6 @@ where
             }
         }
     }
-
-    additive_shares
 }
 
 pub fn non_existent_distance() -> Vec<RingElement<u16>> {
