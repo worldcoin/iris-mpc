@@ -206,12 +206,8 @@ impl AnonStatsProcessor {
         let available_capped = available.min(self.config.max_rows_per_job_1d);
         if available_capped < available {
             info!(
-                ?origin,
-                ?operation,
-                available,
-                available_capped,
-                cap = self.config.max_rows_per_job_1d,
-                "Capping 1D anon stats job fetch size"
+                "Capping 1D anon stats job fetch size: available = {}, capped = {}, cap = {}",
+                available, available_capped, self.config.max_rows_per_job_1d
             );
         }
 
@@ -222,17 +218,10 @@ impl AnonStatsProcessor {
             _ => panic!("Invalid job kind for 1D job"),
         };
 
-        self.log_available_entries(available, required_min, origin, kind)
+        self.log_available_entries(min_job_size, required_min, origin, kind)
             .await;
 
         if min_job_size < required_min {
-            debug!(
-                ?origin,
-                available,
-                min_job_size,
-                required = required_min,
-                "Not enough entries yet for 1D anon stats job"
-            );
             return Ok(());
         }
 
@@ -350,12 +339,8 @@ impl AnonStatsProcessor {
         let available_capped = available.min(self.config.max_rows_per_job_2d);
         if available_capped < available {
             info!(
-                ?origin,
-                ?operation,
-                available,
-                available_capped,
-                cap = self.config.max_rows_per_job_2d,
-                "Capping 2D anon stats job fetch size"
+                "Capping 1D anon stats job fetch size: available = {}, capped = {}, cap = {}",
+                available, available_capped, self.config.max_rows_per_job_1d
             );
         }
 
@@ -366,17 +351,10 @@ impl AnonStatsProcessor {
             _ => panic!("Invalid job kind for 2D job"),
         };
 
-        self.log_available_entries(available, required_min, origin, kind)
+        self.log_available_entries(min_job_size, required_min, origin, kind)
             .await;
 
         if min_job_size < required_min {
-            debug!(
-                ?origin,
-                available,
-                min_job_size,
-                required = required_min,
-                "Not enough entries yet for 2D anon stats job"
-            );
             return Ok(());
         }
 
@@ -566,7 +544,7 @@ impl AnonStatsProcessor {
 
     async fn log_available_entries(
         &self,
-        available: usize,
+        min_job_size: usize,
         required_min: usize,
         origin: AnonStatsOrigin,
         kind: JobKind,
@@ -582,7 +560,7 @@ impl AnonStatsProcessor {
             "kind" => format!("{:?}", kind),
             "side" => side
         )
-        .set(available as f64);
+        .set(min_job_size as f64);
 
         metrics::gauge!(
             "required_min_entries",
@@ -591,9 +569,9 @@ impl AnonStatsProcessor {
         )
         .set(required_min as f64);
 
-        debug!(
-            "Available entries for side {:?}, kind {:?}: {}",
-            origin, kind, available
+        info!(
+            "Available syncable entries for side {:?}, orientation {:?}, kind {:?}: {}/{}",
+            origin.side, origin.orientation, kind, min_job_size, required_min
         );
     }
 }
