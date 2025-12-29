@@ -156,6 +156,9 @@ iris-mpc-1:
           key: DATABASE_AURORA_URL
           name: application
 
+    - name: SMPC__ANON_STATS_SCHEMA_NAME
+      value: "anon_stats_smpcv2_1"
+
     - name: SMPC__ANON_STATS_DATABASE__MIGRATE
       value: "false"
 
@@ -212,6 +215,18 @@ iris-mpc-1:
 
     - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
       value: "64"
+
+    - name: SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE
+      value: "64"
+
+    - name: SMPC__N_BUCKETS
+      value: "375"
+
+    - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+      value: "500"
+
+    - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
+      value: "true"
 
     - name: SMPC__ENABLE_REAUTH
       value: "true"
