@@ -160,16 +160,16 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     log_info(String::from("Setup complete."));
     log_info(format!(
-        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
+        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}\n  Persistence enabled: {}",
         args.max_indexation_id,
         args.batch_size,
         args.batch_size_error_rate,
         args.perform_snapshot,
         args.use_backup_as_source,
+        !config.disable_persistence,
     ));
 
     // Phase 1: apply delta.
-
     hawk_handle = exec_delta(
         &config,
         &ctx,
@@ -195,8 +195,14 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     log_info(String::from("Indexation complete."));
 
     // Phase 3: database backup.
-    log_info(String::from("Database backup begins"));
-    exec_database_backup(graph_store.clone()).await?;
+    if !config.disable_persistence {
+        log_info(String::from("Database backup begins"));
+        exec_database_backup(graph_store.clone()).await?;
+    } else {
+        log_info(String::from(
+            "Database backup skipped (persistence disabled)",
+        ));
+    }
 
     // Phase 4: snapshot.
     if !args.perform_snapshot {
@@ -208,21 +214,27 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     // Clear modifications from the HNSW iris store
     // This is because after a genesis run - there should be no modifications left in the HNSW iris store
-    let mut tx = hnsw_iris_store.tx().await?;
-    hnsw_iris_store
-        .clear_modifications_table(&mut tx)
-        .await
-        .map_err(|err| {
-            eyre!(log_error(format!(
-                "Failed to clear modifications: {:?}",
-                err
-            )))
-        })?;
-    tx.commit().await?;
+    if !config.disable_persistence {
+        let mut tx = hnsw_iris_store.tx().await?;
+        hnsw_iris_store
+            .clear_modifications_table(&mut tx)
+            .await
+            .map_err(|err| {
+                eyre!(log_error(format!(
+                    "Failed to clear modifications: {:?}",
+                    err
+                )))
+            })?;
+        tx.commit().await?;
 
-    log_info(String::from(
-        "Cleared modifications from the HNSW iris store",
-    ));
+        log_info(String::from(
+            "Cleared modifications from the HNSW iris store",
+        ));
+    } else {
+        log_info(String::from(
+            "Persistence disabled, skipping modifications table cleanup",
+        ));
+    }
 
     // trigger manual shutdown to ensure the health check services terminate
     shutdown_handler.trigger_manual_shutdown();
@@ -357,6 +369,11 @@ async fn exec_setup(
 
     // If use_backup_as_source is set, restore graph tables from backup
     if args.use_backup_as_source && last_indexed_id != 0 {
+        if config.disable_persistence {
+            log_warn(String::from(
+                "Persistence is disabled but use_backup_as_source is set - proceeding with backup restore"
+            ));
+        }
         exec_use_backup_as_source(
             last_indexed_id,
             &graph_store_arc,
@@ -426,6 +443,7 @@ async fn exec_setup(
         graph_store_arc.clone(),
         &mut task_monitor_bg,
         &shutdown_handler,
+        config.disable_persistence,
     )
     .await?;
     task_monitor_bg.check_tasks();
@@ -545,11 +563,18 @@ async fn exec_delta(
             shutdown_handler.wait_for_pending_batches_completion().await;
             log_info(String::from("All delta modifications have been processed"));
 
-            log_info(format!( "Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
-            let mut graph_tx = graph_store.tx().await?;
-            set_last_indexed_modification_id(&mut graph_tx.tx, *max_modification_persist_id)
-                .await?;
-            graph_tx.tx.commit().await?;
+            if !config.disable_persistence {
+                log_info(format!( "Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
+                let mut graph_tx = graph_store.tx().await?;
+                set_last_indexed_modification_id(&mut graph_tx.tx, *max_modification_persist_id)
+                    .await?;
+                graph_tx.tx.commit().await?;
+            } else {
+                log_info(
+                    "Persistence disabled, skipping last indexed modification ID update"
+                        .to_string(),
+                );
+            }
 
             Ok(hawk_handle)
         }
@@ -1046,6 +1071,7 @@ async fn get_results_thread(
     graph_store: Arc<GraphPg<Aby3Store>>,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
+    disable_persistence: bool,
 ) -> Result<Sender<JobResult>> {
     let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
@@ -1088,31 +1114,37 @@ async fn get_results_thread(
                             })
                             .collect();
 
-                    let mut graph_tx = graph_store.tx().await?;
+                    if !disable_persistence {
+                        let mut graph_tx = graph_store.tx().await?;
 
-                    // Persist batch of Iris's to the HNSW graph store.
-                    hnsw_iris_store
-                        .insert_copy_irises(
-                            &mut graph_tx.tx,
-                            &vector_ids_to_persist,
-                            &codes_and_masks,
-                        )
-                        .await?;
-                    connect_plans.persist(&mut graph_tx).await?;
-                    log_info(format!(
-                        "Job Results :: Persisted graph updates: batch-id={batch_id}"
-                    ));
-                    let mut db_tx = graph_tx.tx;
-                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
-                    db_tx.commit().await?;
-                    log_info(format!(
-                        "Job Results :: Persisted last indexed id: batch-id={batch_id}"
-                    ));
+                        // Persist batch of Iris's to the HNSW graph store.
+                        hnsw_iris_store
+                            .insert_copy_irises(
+                                &mut graph_tx.tx,
+                                &vector_ids_to_persist,
+                                &codes_and_masks,
+                            )
+                            .await?;
+                        connect_plans.persist(&mut graph_tx).await?;
+                        log_info(format!(
+                            "Job Results :: Persisted graph updates: batch-id={batch_id}"
+                        ));
+                        let mut db_tx = graph_tx.tx;
+                        set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                        db_tx.commit().await?;
+                        log_info(format!(
+                            "Job Results :: Persisted last indexed id: batch-id={batch_id}"
+                        ));
+                        metrics::counter!("genesis_batches_persisted").increment(1);
+                    } else {
+                        log_info(format!(
+                            "Job Results :: Persistence disabled, skipping database writes for batch-id={batch_id}"
+                        ));
+                    }
 
-                    log_info(format!(
-                        "Job Results :: Persisted to dB: batch-id={batch_id}"
-                    ));
+                    // Update metrics with persistence status
                     metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
+
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
@@ -1136,36 +1168,39 @@ async fn get_results_thread(
                         .get_vector_or_empty(&vector_id_to_persist)
                         .await;
 
-                    let mut graph_tx = graph_store_bg.tx().await?;
-                    let iris_data =StoredIrisRef {
-                                    id: vector_id_to_persist.serial_id() as i64,
-                                    left_code: &left_iris.code.coefs,
-                                    left_mask: &left_iris.mask.coefs,
-                                    right_code: &right_iris.code.coefs,
-                                    right_mask: &right_iris.mask.coefs,
-                                };
-                    // We should ensure that the vector_id_to_persist is matching the inserted serial id
-                    hnsw_iris_store.update_iris_with_version_id(
-                            Some(&mut graph_tx.tx),
-                            vector_id_to_persist.version_id(),
-                            &iris_data,
-                        )
-                        .await?;
-                    connect_plans.persist(&mut graph_tx).await?;
-                    log_info(format!(
-                        "Job Results :: Persisted graph updates: modification-id={modification_id}"
-                    ));
+                    if !disable_persistence {
+                        let mut graph_tx = graph_store_bg.tx().await?;
+                        let iris_data =StoredIrisRef {
+                                        id: vector_id_to_persist.serial_id() as i64,
+                                        left_code: &left_iris.code.coefs,
+                                        left_mask: &left_iris.mask.coefs,
+                                        right_code: &right_iris.code.coefs,
+                                        right_mask: &right_iris.mask.coefs,
+                                    };
+                        // We should ensure that the vector_id_to_persist is matching the inserted serial id
+                        hnsw_iris_store.update_iris_with_version_id(
+                                Some(&mut graph_tx.tx),
+                                vector_id_to_persist.version_id(),
+                                &iris_data,
+                            )
+                            .await?;
+                        connect_plans.persist(&mut graph_tx).await?;
+                        log_info(format!(
+                            "Job Results :: Persisted graph updates: modification-id={modification_id}"
+                        ));
 
-                    let mut db_tx = graph_tx.tx;
-                    set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
-                    db_tx.commit().await?;
-                    log_info(format!(
-                        "Job Results :: Persisted last indexed modification id: modification_id={modification_id}"
-                    ));
-
-                    log_info(format!(
-                        "Job Results :: Persisted to dB: modification_id={modification_id}"
-                    ));
+                        let mut db_tx = graph_tx.tx;
+                        set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
+                        db_tx.commit().await?;
+                        log_info(format!(
+                            "Job Results :: Persisted last indexed modification id: modification-id={modification_id}"
+                        ));
+                        metrics::counter!("genesis_modifications_persisted").increment(1);
+                    } else {
+                        log_info(format!(
+                            "Job Results :: Persistence disabled, skipping database writes for modification-id={modification_id}"
+                        ));
+                    }
 
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
