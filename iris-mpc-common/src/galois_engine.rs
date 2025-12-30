@@ -71,33 +71,40 @@ pub mod degree4 {
         let mut s2: u64 = 0;
         let mut s3: u64 = 0;
 
+        // use raw pointers because get_unchecked() took up a large chunk of space in
+        // the flamechart
         let n = left.len();
-        let mut i = 0;
-        while i + 4 <= n {
-            unsafe {
-                let a0 = *left.get_unchecked(i) as u64;
-                let b0 = *right.get_unchecked(i) as u64;
-                let a1 = *left.get_unchecked(i + 1) as u64;
-                let b1 = *right.get_unchecked(i + 1) as u64;
-                let a2 = *left.get_unchecked(i + 2) as u64;
-                let b2 = *right.get_unchecked(i + 2) as u64;
-                let a3 = *left.get_unchecked(i + 3) as u64;
-                let b3 = *right.get_unchecked(i + 3) as u64;
+        unsafe {
+            let mut left_ptr = left.as_ptr();
+            let mut right_ptr = right.as_ptr();
+            let left_end = left_ptr.add(n);
+
+            // Process 4 elements at a time
+            while left_ptr.add(4) <= left_end {
+                let a0 = *left_ptr as u64;
+                let b0 = *right_ptr as u64;
+                let a1 = *left_ptr.add(1) as u64;
+                let b1 = *right_ptr.add(1) as u64;
+                let a2 = *left_ptr.add(2) as u64;
+                let b2 = *right_ptr.add(2) as u64;
+                let a3 = *left_ptr.add(3) as u64;
+                let b3 = *right_ptr.add(3) as u64;
 
                 s0 += a0 * b0;
                 s1 += a1 * b1;
                 s2 += a2 * b2;
                 s3 += a3 * b3;
-            }
-            i += 4;
-        }
 
-        // this should not trigger because left and right are chunked by code_cols * 4
-        while i < n {
-            unsafe {
-                s0 += (*left.get_unchecked(i) as u64) * (*right.get_unchecked(i) as u64);
+                left_ptr = left_ptr.add(4);
+                right_ptr = right_ptr.add(4);
             }
-            i += 1;
+
+            // this should not trigger because left and right are chunked by code_cols * 4
+            while left_ptr < left_end {
+                s0 += (*left_ptr as u64) * (*right_ptr as u64);
+                left_ptr = left_ptr.add(1);
+                right_ptr = right_ptr.add(1);
+            }
         }
 
         s0 + s1 + s2 + s3
