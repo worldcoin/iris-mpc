@@ -59,6 +59,50 @@ pub mod degree4 {
         sum
     }
 
+    // optimized to allow easily computing:
+    // sum = sum.wrapping_add(left.wrapping_mul(right)) in a loop over the
+    // elements of left and right.
+    // using u64 to avoid overflow when doing this on a 12800 element array
+    #[inline(always)]
+    fn dot_u16_u64(left: &[u16], right: &[u16]) -> u64 {
+        debug_assert_eq!(left.len(), right.len());
+        let mut s0: u64 = 0;
+        let mut s1: u64 = 0;
+        let mut s2: u64 = 0;
+        let mut s3: u64 = 0;
+
+        let n = left.len();
+        let mut i = 0;
+        while i + 4 <= n {
+            unsafe {
+                let a0 = *left.get_unchecked(i) as u64;
+                let b0 = *right.get_unchecked(i) as u64;
+                let a1 = *left.get_unchecked(i + 1) as u64;
+                let b1 = *right.get_unchecked(i + 1) as u64;
+                let a2 = *left.get_unchecked(i + 2) as u64;
+                let b2 = *right.get_unchecked(i + 2) as u64;
+                let a3 = *left.get_unchecked(i + 3) as u64;
+                let b3 = *right.get_unchecked(i + 3) as u64;
+
+                s0 += a0 * b0;
+                s1 += a1 * b1;
+                s2 += a2 * b2;
+                s3 += a3 * b3;
+            }
+            i += 4;
+        }
+
+        // this should not trigger because left and right are chunked by code_cols * 4
+        while i < n {
+            unsafe {
+                s0 += (*left.get_unchecked(i) as u64) * (*right.get_unchecked(i) as u64);
+            }
+            i += 1;
+        }
+
+        s0 + s1 + s2 + s3
+    }
+
     // iterate over left.coefs as though it has been rotated according to the iris rotation.
     // this involves chunking by CODE_COLS * 4 and then rotating the chunk
     // the rotation is accomplished by operating over two slices
@@ -73,27 +117,21 @@ pub mod degree4 {
             IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
         };
 
-        let mut sum = 0u16;
+        let mut sum = 0u64;
         let chunk_size = CODE_COLS * 4;
 
-        for (left_slice, right_slice) in left
-            .chunks_exact(chunk_size)
-            .zip(right.chunks_exact(chunk_size))
-        {
-            // Split the rotation into two contiguous loops,
-            // allowing the compiler to vectorize
-            let (left1, left2) = left_slice.split_at(skip);
-            let (right1, right2) = right_slice.split_at(chunk_size - skip);
-
-            for (l, r) in left1.iter().zip(right2.iter()) {
-                sum = sum.wrapping_add(l.wrapping_mul(*r));
-            }
-
-            for (l, r) in left2.iter().zip(right1.iter()) {
-                sum = sum.wrapping_add(l.wrapping_mul(*r));
-            }
+        for base in (0..D).step_by(chunk_size) {
+            sum += dot_u16_u64(
+                &left[base..base + skip],
+                &right[base + (chunk_size - skip)..base + chunk_size],
+            );
+            sum += dot_u16_u64(
+                &left[base + skip..base + chunk_size],
+                &right[base..base + (chunk_size - skip)],
+            );
         }
-        sum
+
+        sum as u16
     }
 
     pub fn rotation_aware_trick_dot_padded(
