@@ -974,7 +974,6 @@ fn rotation_aware_inner<'a, I>(
     const CODE_ROWS: usize = PrerotatedQueryRowMajor::CODE_ROWS;
     const MASK_ROWS: usize = PrerotatedQueryRowMajor::MASK_ROWS;
 
-    let target_count = additive_shares.len() / (2 * ROTATIONS);
     let targets: Vec<_> = targets.collect();
 
     // Process row-by-row: all 31 rotations of one row stay in L1
@@ -1015,24 +1014,20 @@ fn rotation_aware_inner<'a, I>(
         }
     }
 
-    // Multiply mask results by 2
-    for target_idx in 0..target_count {
-        if targets[target_idx].is_some() {
-            for rot_idx in 0..ROTATIONS {
-                let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2 + 1;
-                additive_shares[result_idx] = RingElement(2) * additive_shares[result_idx];
-            }
-        }
-    }
-
-    // Handle None targets
+    // Multiply mask results by 2 for Some targets, set max distance for None targets
     for (target_idx, target_opt) in targets.iter().enumerate() {
-        if target_opt.is_none() {
+        let base_idx = target_idx * ROTATIONS * 2;
+        if target_opt.is_some() {
+            for rot_idx in 0..ROTATIONS {
+                let mask_idx = base_idx + rot_idx * 2 + 1;
+                additive_shares[mask_idx] = RingElement(2) * additive_shares[mask_idx];
+            }
+        } else {
             let (a, b) = SHARE_OF_MAX_DISTANCE;
             for rot_idx in 0..ROTATIONS {
-                let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2;
-                additive_shares[result_idx] = RingElement(a);
-                additive_shares[result_idx + 1] = RingElement(b);
+                let code_idx = base_idx + rot_idx * 2;
+                additive_shares[code_idx] = RingElement(a);
+                additive_shares[code_idx + 1] = RingElement(b);
             }
         }
     }
@@ -1538,7 +1533,7 @@ mod tests {
         let (max_code, max_mask) = SHARE_OF_MAX_DISTANCE;
         // Second target is None, so indices 31*2..31*4 should all be max distance
         for rot in 0..ROTATIONS {
-            let idx = 1 * ROTATIONS * 2 + rot * 2;
+            let idx = ROTATIONS * 2 + rot * 2;
             assert_eq!(
                 result_rowmajor[idx].0, max_code,
                 "Code at rotation {} should be max",
