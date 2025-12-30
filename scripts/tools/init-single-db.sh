@@ -28,7 +28,7 @@ echo "gpu1M init done"
     --source "/tmp/irises-1k.ndjson" \
     --db-url "$SMPC__CPU_DATABASE__URL" \
     --db-schema "genesis_gpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID" \
-    --target-db-size 1049576 \
+    --target-db-size 1059576 \
     --skip 0
 echo "100K irises added to gpu"
 /bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph.dat restore-db
