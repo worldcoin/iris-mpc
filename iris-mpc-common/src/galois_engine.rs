@@ -81,14 +81,14 @@ pub mod degree4 {
 
             // Process 4 elements at a time
             while left_ptr.add(4) <= left_end {
-                let a0 = *left_ptr as u16;
-                let b0 = *right_ptr as u16;
-                let a1 = *left_ptr.add(1) as u16;
-                let b1 = *right_ptr.add(1) as u16;
-                let a2 = *left_ptr.add(2) as u16;
-                let b2 = *right_ptr.add(2) as u16;
-                let a3 = *left_ptr.add(3) as u16;
-                let b3 = *right_ptr.add(3) as u16;
+                let a0 = *left_ptr;
+                let b0 = *right_ptr;
+                let a1 = *left_ptr.add(1);
+                let b1 = *right_ptr.add(1);
+                let a2 = *left_ptr.add(2);
+                let b2 = *right_ptr.add(2);
+                let a3 = *left_ptr.add(3);
+                let b3 = *right_ptr.add(3);
 
                 s0 = s0.wrapping_add(a0.wrapping_mul(b0));
                 s1 = s1.wrapping_add(a1.wrapping_mul(b1));
