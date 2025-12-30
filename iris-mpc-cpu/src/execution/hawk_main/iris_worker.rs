@@ -183,7 +183,7 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        const CHUNK_SIZE: usize = 32;
+        const CHUNK_SIZE: usize = 128;
         let mut responses = Vec::with_capacity(vector_ids.len().div_ceil(CHUNK_SIZE));
 
         for chunk in vector_ids.chunks(CHUNK_SIZE) {
