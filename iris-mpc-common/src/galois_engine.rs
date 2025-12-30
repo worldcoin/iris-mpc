@@ -64,12 +64,12 @@ pub mod degree4 {
     // elements of left and right.
     // using u64 to avoid overflow when doing this on a 12800 element array
     #[inline(always)]
-    fn dot_u16_u64(left: &[u16], right: &[u16]) -> u64 {
+    fn dot_u16(left: &[u16], right: &[u16]) -> u16 {
         debug_assert_eq!(left.len(), right.len());
-        let mut s0: u64 = 0;
-        let mut s1: u64 = 0;
-        let mut s2: u64 = 0;
-        let mut s3: u64 = 0;
+        let mut s0: u16 = 0;
+        let mut s1: u16 = 0;
+        let mut s2: u16 = 0;
+        let mut s3: u16 = 0;
 
         // use raw pointers because get_unchecked() took up a large chunk of space in
         // the flamechart
@@ -81,19 +81,19 @@ pub mod degree4 {
 
             // Process 4 elements at a time
             while left_ptr.add(4) <= left_end {
-                let a0 = *left_ptr as u64;
-                let b0 = *right_ptr as u64;
-                let a1 = *left_ptr.add(1) as u64;
-                let b1 = *right_ptr.add(1) as u64;
-                let a2 = *left_ptr.add(2) as u64;
-                let b2 = *right_ptr.add(2) as u64;
-                let a3 = *left_ptr.add(3) as u64;
-                let b3 = *right_ptr.add(3) as u64;
+                let a0 = *left_ptr as u16;
+                let b0 = *right_ptr as u16;
+                let a1 = *left_ptr.add(1) as u16;
+                let b1 = *right_ptr.add(1) as u16;
+                let a2 = *left_ptr.add(2) as u16;
+                let b2 = *right_ptr.add(2) as u16;
+                let a3 = *left_ptr.add(3) as u16;
+                let b3 = *right_ptr.add(3) as u16;
 
-                s0 += a0 * b0;
-                s1 += a1 * b1;
-                s2 += a2 * b2;
-                s3 += a3 * b3;
+                s0 = s0.wrapping_add(a0.wrapping_mul(b0));
+                s1 = s1.wrapping_add(a1.wrapping_mul(b1));
+                s2 = s2.wrapping_add(a2.wrapping_mul(b2));
+                s3 = s3.wrapping_add(a3.wrapping_mul(b3));
 
                 left_ptr = left_ptr.add(4);
                 right_ptr = right_ptr.add(4);
@@ -101,13 +101,13 @@ pub mod degree4 {
 
             // this should not trigger because left and right are chunked by code_cols * 4
             while left_ptr < left_end {
-                s0 += (*left_ptr as u64) * (*right_ptr as u64);
+                s0 = s0.wrapping_add((*left_ptr).wrapping_mul(*right_ptr));
                 left_ptr = left_ptr.add(1);
                 right_ptr = right_ptr.add(1);
             }
         }
 
-        s0 + s1 + s2 + s3
+        s0.wrapping_add(s1).wrapping_add(s2).wrapping_add(s3)
     }
 
     // iterate over left.coefs as though it has been rotated according to the iris rotation.
@@ -124,21 +124,21 @@ pub mod degree4 {
             IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
         };
 
-        let mut sum = 0u64;
+        let mut sum = 0u16;
         let chunk_size = CODE_COLS * 4;
 
         for base in (0..D).step_by(chunk_size) {
-            sum += dot_u16_u64(
+            sum = sum.wrapping_add(dot_u16(
                 &left[base..base + skip],
                 &right[base + (chunk_size - skip)..base + chunk_size],
-            );
-            sum += dot_u16_u64(
+            ));
+            sum = sum.wrapping_add(dot_u16(
                 &left[base + skip..base + chunk_size],
                 &right[base..base + (chunk_size - skip)],
-            );
+            ));
         }
 
-        sum as u16
+        sum
     }
 
     pub fn rotation_aware_trick_dot_padded(
