@@ -47,8 +47,8 @@ pub async fn greater_than_threshold(
     let diffs: Vec<Share<u32>> = distances
         .iter()
         .map(|d| {
-            let x = d.mask_dot.clone() * A as u32;
-            let y = d.code_dot.clone() * B as u32;
+            let x = d.mask_dot * A as u32;
+            let y = d.code_dot * B as u32;
             y - x
         })
         .collect();
@@ -172,7 +172,7 @@ async fn select_shared_slices_by_bits(
             .iter()
             .zip(right_chunk.iter())
             .map(|(left, right)| {
-                let diff = left.clone() - right.clone();
+                let diff = *left - *right;
                 session.prf.gen_zero_share() + c.a * diff.a + c.b * diff.a + c.a * diff.b
             })
             .collect_vec()
@@ -218,8 +218,8 @@ async fn conditionally_select_distance(
         .iter()
         .zip(control_bits.iter())
         .flat_map(|((d1, d2), c)| {
-            let code = d1.code_dot.clone() - d2.code_dot.clone();
-            let mask = d1.mask_dot.clone() - d2.mask_dot.clone();
+            let code = d1.code_dot - d2.code_dot;
+            let mask = d1.mask_dot - d2.mask_dot;
             let code_mul_a =
                 session.prf.gen_zero_share() + c.a * code.a + c.b * code.a + c.a * code.b;
             let mask_mul_a =
@@ -247,8 +247,8 @@ async fn conditionally_select_distance(
         // add the d2 shares
         .zip(distances.iter())
         .map(|(res, (_, d2))| DistanceShare {
-            code_dot: res.code_dot + &d2.code_dot,
-            mask_dot: res.mask_dot + &d2.mask_dot,
+            code_dot: res.code_dot + d2.code_dot,
+            mask_dot: res.mask_dot + d2.mask_dot,
         })
         .collect())
 }
@@ -292,7 +292,7 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
     // Select ids first: c * (left_id - right_id) + right_id
     let ids = izip!(left_ids, right_ids, control_bits).map(|(left_id, right_id, c)| {
         let diff = left_id.wrapping_sub(right_id);
-        let mut res = c.clone() * RingElement(diff);
+        let mut res = c * RingElement(diff);
         res.add_assign_const_role(right_id, session.own_role());
         res
     });
@@ -321,11 +321,11 @@ pub(crate) async fn conditionally_select_distances_with_shared_ids(
 
     let left_dist = left_distances
         .into_iter()
-        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
         .collect_vec();
     let right_dist = right_distances
         .into_iter()
-        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
         .collect_vec();
     let distances =
         select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 3)
@@ -360,7 +360,7 @@ pub async fn conditionally_swap_distances_plain_ids(
         .iter()
         .map(|(id, d)| {
             let shared_index = Share::from_const(*id, role);
-            (shared_index, d.clone())
+            (shared_index, *d)
         })
         .collect_vec();
     // Lift swap bits to u32 shares
@@ -371,7 +371,7 @@ pub async fn conditionally_swap_distances_plain_ids(
     let distances_to_swap = indices
         .iter()
         .filter_map(|(idx1, idx2)| match (list.get(*idx1), list.get(*idx2)) {
-            (Some((_, d1)), Some((_, d2))) => Some((d1.clone(), d2.clone())),
+            (Some((_, d1)), Some((_, d2))) => Some((*d1, *d2)),
             _ => None,
         })
         .collect_vec();
@@ -384,8 +384,8 @@ pub async fn conditionally_swap_distances_plain_ids(
         .zip(first_distances.iter())
         .map(|(d_pair, first_d)| {
             DistanceShare::new(
-                d_pair.0.code_dot + d_pair.1.code_dot - &first_d.code_dot,
-                d_pair.0.mask_dot + d_pair.1.mask_dot - &first_d.mask_dot,
+                d_pair.0.code_dot + d_pair.1.code_dot - first_d.code_dot,
+                d_pair.0.mask_dot + d_pair.1.mask_dot - first_d.mask_dot,
             )
         })
         .collect_vec();
@@ -402,7 +402,7 @@ pub async fn conditionally_swap_distances_plain_ids(
         let id2 = list[*idx2].0;
         // Only propagate index and skip version id.
         // This computation is local as indices are public.
-        let first_id = bit * id1 + not_bit.clone() * id2;
+        let first_id = bit * id1 + not_bit * id2;
         let second_id = bit * id2 + not_bit * id1;
         encrypted_list[*idx1] = (first_id, first_d);
         encrypted_list[*idx2] = (second_id, second_d);
@@ -451,9 +451,9 @@ pub async fn conditionally_swap_distances(
             let (id1, d1) = &list[*idx1];
             let (id2, d2) = &list[*idx2];
 
-            let id = mul_share_a(id1.clone(), id2.clone(), sb);
-            let code_dot_a = mul_share_a(d1.code_dot.clone(), d2.code_dot.clone(), sb);
-            let mask_dot_a = mul_share_a(d1.mask_dot.clone(), d2.mask_dot.clone(), sb);
+            let id = mul_share_a(*id1, *id2, sb);
+            let code_dot_a = mul_share_a(d1.code_dot, d2.code_dot, sb);
+            let mask_dot_a = mul_share_a(d1.mask_dot, d2.mask_dot, sb);
             [id, code_dot_a, mask_dot_a]
         })
         .collect();
@@ -485,15 +485,15 @@ pub async fn conditionally_swap_distances(
             let (id2, dist2) = &list[*idx2];
             // first tuple element = c * (d1 - d2) + d2
             // second tuple element = d1 - c * (d1 - d2)
-            let first_id = res_id.clone() + id2;
-            let second_id = id1.clone() - res_id;
+            let first_id = res_id + *id2;
+            let second_id = *id1 - res_id;
             let first_distance = DistanceShare {
-                code_dot: res_dist.code_dot.clone() + &dist2.code_dot,
-                mask_dot: res_dist.mask_dot.clone() + &dist2.mask_dot,
+                code_dot: res_dist.code_dot + dist2.code_dot,
+                mask_dot: res_dist.mask_dot + dist2.mask_dot,
             };
             let second_distance = DistanceShare {
-                code_dot: dist1.code_dot.clone() - res_dist.code_dot,
-                mask_dot: dist1.mask_dot.clone() - res_dist.mask_dot,
+                code_dot: dist1.code_dot - res_dist.code_dot,
+                mask_dot: dist1.mask_dot - res_dist.mask_dot,
             };
             ((first_id, first_distance), (second_id, second_distance))
         })
@@ -650,8 +650,8 @@ pub(crate) async fn min_round_robin_batch(
     for i_batch in 0..num_batches {
         for i in 0..batch_size {
             for j in (i + 1)..batch_size {
-                let distance_i = distances[i * num_batches + i_batch].clone();
-                let distance_j = distances[j * num_batches + i_batch].clone();
+                let distance_i = distances[i * num_batches + i_batch];
+                let distance_j = distances[j * num_batches + i_batch];
                 pairs.push((distance_i, distance_j));
             }
         }
@@ -685,7 +685,7 @@ pub(crate) async fn min_round_robin_batch(
                 let value = match i.cmp(&j) {
                     Ordering::Less => {
                         batch_counter += 1;
-                        batch[batch_counter - 1].clone()
+                        batch[batch_counter - 1]
                     }
                     Ordering::Equal => Share::from_const(Bit::new(true), session.own_role()),
                     Ordering::Greater => batch_matrix[i].get_at(j).not(),
@@ -1307,18 +1307,17 @@ mod tests {
                     &mut session,
                     &[(
                         DistanceShare {
-                            code_dot: four_shares[0].clone(),
-                            mask_dot: four_shares[1].clone(),
+                            code_dot: four_shares[0],
+                            mask_dot: four_shares[1],
                         },
                         DistanceShare {
-                            code_dot: four_shares[2].clone(),
-                            mask_dot: four_shares[3].clone(),
+                            code_dot: four_shares[2],
+                            mask_dot: four_shares[3],
                         },
                     )],
                 )
                 .await
-                .unwrap()[0]
-                    .clone();
+                .unwrap()[0];
 
                 open_single(&mut session, out_shared).await.unwrap()
             });

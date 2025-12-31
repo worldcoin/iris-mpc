@@ -150,9 +150,7 @@ impl Aby3Store {
         let distances = batch_signed_lift_vec(&mut self.session, distances).await?;
         Ok(distances
             .chunks(2)
-            .map(|dot_products| {
-                DistanceShare::new(dot_products[0].clone(), dot_products[1].clone())
-            })
+            .map(|dot_products| DistanceShare::new(dot_products[0], dot_products[1]))
             .collect::<Vec<_>>())
     }
 
@@ -246,7 +244,7 @@ impl Aby3Store {
             eyre::bail!("Cannot compute minimum of empty list");
         }
         if distances.len() == 1 {
-            return Ok(distances[0].clone());
+            return Ok(distances[0]);
         }
         let mut res = distances.to_vec();
         while res.len() > MIN_ROUND_ROBIN_SIZE {
@@ -258,7 +256,7 @@ impl Aby3Store {
             res = min_of_pair_batch(&mut self.session, &pairs).await?;
             // if we saved a last distance, we need to add it back
             if let Some(last_distance) = maybe_last_distance {
-                res.push(last_distance.clone());
+                res.push(last_distance);
             }
         }
         min_round_robin_batch(&mut self.session, &res, res.len())
@@ -277,14 +275,14 @@ impl Aby3Store {
             eyre::bail!("Cannot compute minimum of empty list");
         }
         if distances.len() == 1 {
-            return Ok(distances[0].clone());
+            return Ok(distances[0]);
         }
 
         // Handle plain ids first
         let mut plain_res = distances
             .iter()
             .enumerate()
-            .map(|(id, (_, distance))| (id as u32, distance.clone()))
+            .map(|(id, (_, distance))| (id as u32, *distance))
             .collect_vec();
         let plain_maybe_last_distance = if plain_res.len() % 2 == 1 {
             plain_res.pop()
@@ -294,7 +292,7 @@ impl Aby3Store {
         let mut dist_pairs = plain_res
             .iter()
             .tuples()
-            .map(|((_, dist1), (_, dist2))| (dist1.clone(), dist2.clone()))
+            .map(|((_, dist1), (_, dist2))| (*dist1, *dist2))
             .collect_vec();
         let mut control_bits =
             oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
@@ -320,7 +318,7 @@ impl Aby3Store {
             dist_pairs = res
                 .iter()
                 .tuples()
-                .map(|((_, dist1), (_, dist2))| (dist1.clone(), dist2.clone()))
+                .map(|((_, dist1), (_, dist2))| (*dist1, *dist2))
                 .collect_vec();
             // compute minimums of pairs
             control_bits = oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
@@ -602,7 +600,7 @@ impl VectorStore for Aby3Store {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> Result<bool> {
-        Ok(cross_compare(&mut self.session, &[(distance1.clone(), distance2.clone())]).await?[0])
+        Ok(cross_compare(&mut self.session, &[(*distance1, *distance2)]).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
@@ -1019,20 +1017,16 @@ mod tests {
         expected_list.swap(3, 5);
 
         for (i, exp) in expected_list.iter().enumerate() {
-            let id = (res[0][i].clone().0 + &res[1][i].0 + &res[2][i].0)
-                .get_a()
-                .convert();
+            let id = (res[0][i].0 + res[1][i].0 + res[2][i].0).get_a().convert();
             assert_eq!(id, exp.0.index());
 
             let distance = {
-                let code_dot =
-                    (res[0][i].clone().1.code_dot + &res[1][i].1.code_dot + &res[2][i].1.code_dot)
-                        .get_a()
-                        .convert();
-                let mask_dot =
-                    (res[0][i].clone().1.mask_dot + &res[1][i].1.mask_dot + &res[2][i].1.mask_dot)
-                        .get_a()
-                        .convert();
+                let code_dot = (res[0][i].1.code_dot + res[1][i].1.code_dot + res[2][i].1.code_dot)
+                    .get_a()
+                    .convert();
+                let mask_dot = (res[0][i].1.mask_dot + res[1][i].1.mask_dot + res[2][i].1.mask_dot)
+                    .get_a()
+                    .convert();
                 (code_dot, mask_dot)
             };
             assert_eq!(distance, exp.1);
@@ -1080,10 +1074,10 @@ mod tests {
             .unwrap();
 
         let distance = {
-            let code_dot = (res[0].clone().code_dot + &res[1].code_dot + &res[2].code_dot)
+            let code_dot = (res[0].code_dot + res[1].code_dot + res[2].code_dot)
                 .get_a()
                 .convert();
-            let mask_dot = (res[0].clone().mask_dot + &res[1].mask_dot + &res[2].mask_dot)
+            let mask_dot = (res[0].mask_dot + res[1].mask_dot + res[2].mask_dot)
                 .get_a()
                 .convert();
             (code_dot, mask_dot)
@@ -1142,8 +1136,8 @@ mod tests {
             let (id, dist) = res
                 .into_iter()
                 .reduce(|(acc_id, acc_d), (_, a_d)| {
-                    let code_dist = acc_d.code_dot + &a_d.code_dot;
-                    let mask_dist = acc_d.mask_dot + &a_d.mask_dot;
+                    let code_dist = acc_d.code_dot + a_d.code_dot;
+                    let mask_dist = acc_d.mask_dot + a_d.mask_dot;
                     (acc_id, DistanceShare::new(code_dist, mask_dist))
                 })
                 .unwrap();
@@ -1227,14 +1221,12 @@ mod tests {
 
         for (i, exp) in expected.into_iter().enumerate() {
             let distance = {
-                let code_dot =
-                    (res[0][i].clone().code_dot + &res[1][i].code_dot + &res[2][i].code_dot)
-                        .get_a()
-                        .convert();
-                let mask_dot =
-                    (res[0][i].clone().mask_dot + &res[1][i].mask_dot + &res[2][i].mask_dot)
-                        .get_a()
-                        .convert();
+                let code_dot = (res[0][i].code_dot + res[1][i].code_dot + res[2][i].code_dot)
+                    .get_a()
+                    .convert();
+                let mask_dot = (res[0][i].mask_dot + res[1][i].mask_dot + res[2][i].mask_dot)
+                    .get_a()
+                    .convert();
                 (code_dot, mask_dot)
             };
             assert_eq!(distance, *exp);
@@ -1410,7 +1402,7 @@ mod tests {
                     "Vectors should match with themselves and not with the others"
                 );
 
-                let distances_to_none = vec![distances[2].clone(), distances[2 + n_vecs].clone()];
+                let distances_to_none = vec![distances[2], distances[2 + n_vecs]];
                 let pairs = distances_to_none
                     .into_iter()
                     .cartesian_product(distances)

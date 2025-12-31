@@ -699,7 +699,7 @@ impl HawkActor {
                 let matches = insert_plan.matches.clone();
 
                 for (vector_id, distance) in matches {
-                    let distance_share = distance.clone();
+                    let distance_share = distance;
                     let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
                         .entry(match_id)
