@@ -38,12 +38,10 @@ async fn run_jobs(
         jobs.spawn(async move {
             let mut player_session = player_session.lock().await;
             for _ in 0..num_iterations {
-                let ds_and_ts = batch_signed_lift_vec(
-                    &mut player_session,
-                    vec![d1i, d2i, t1i, t2i],
-                )
-                .await
-                .unwrap();
+                let ds_and_ts =
+                    batch_signed_lift_vec(&mut player_session, vec![d1i, d2i, t1i, t2i])
+                        .await
+                        .unwrap();
                 cross_compare(
                     &mut player_session,
                     &[(
