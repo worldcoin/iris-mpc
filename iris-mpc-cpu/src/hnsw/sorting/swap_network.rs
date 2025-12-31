@@ -201,7 +201,7 @@ pub async fn apply_oblivious_swap_network(
                     current_list_distances.get(*idx2),
                 ) {
                     // swap order to check for strict inequality d1 > d2
-                    (Some(&d1), Some(&d2)) => Some((d2.clone(), d1.clone())),
+                    (Some(&d1), Some(&d2)) => Some((*d2, *d1)),
                     _ => None,
                 }
             })
