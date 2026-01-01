@@ -518,6 +518,7 @@ pub async fn conditionally_swap_distances(
     Ok(swapped_list)
 }
 
+// consider putting this in ampc-common next to oblivious_cross_compare()
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 and opens it.
 ///
 /// The less-than operator is implemented in 2 steps:
