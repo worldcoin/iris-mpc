@@ -212,79 +212,68 @@ impl<'a> BatchProcessor<'a> {
             return Ok(None);
         }
 
-        loop {
-            let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
+        let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
 
-            // Determine the number of messages to poll based on synchronized state
-            let mut own_state =
-                get_own_batch_sync_state(self.config, self.client, current_batch_id)
-                    .await
-                    .map_err(ReceiveRequestError::BatchSyncError)?;
-
-            // Update the shared state with our current state
-            {
-                let mut shared_state = self.batch_sync_shared_state.lock().await;
-                // we are here for the first time, set everything
-                if shared_state.batch_id != own_state.batch_id {
-                    shared_state.batch_id = own_state.batch_id;
-                    shared_state.messages_to_poll = own_state.messages_to_poll;
-                } else if shared_state.messages_to_poll == 0 {
-                    // we have been here before, only update messages_to_poll if it was 0, otherwise other parties could have state mismatches
-                    shared_state.messages_to_poll = own_state.messages_to_poll;
-                } else {
-                    // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
-                    own_state.messages_to_poll = shared_state.messages_to_poll;
-                }
-                tracing::info!(
-                    "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
-                    shared_state.batch_id,
-                    shared_state.messages_to_poll,
-                );
-            }
-
-            let server_coord_config = self.config.server_coordination.as_ref().ok_or(
-                ReceiveRequestError::BatchSyncError(eyre::eyre!(
-                    "Server coordination config is missing"
-                )),
-            )?;
-
-            let all_states = get_batch_sync_states(
-                server_coord_config,
-                Some(&own_state),
-                self.config.batch_sync_polling_timeout_secs,
-            )
+        // Determine the number of messages to poll based on synchronized state
+        let mut own_state = get_own_batch_sync_state(self.config, self.client, current_batch_id)
             .await
             .map_err(ReceiveRequestError::BatchSyncError)?;
 
-            let batch_sync_result = BatchSyncResult::new(own_state, all_states);
-            let messages_to_poll = batch_sync_result.messages_to_poll();
-
-            tracing::info!(
-                "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
-                current_batch_id,
-                messages_to_poll,
-                self.config.max_batch_size
-            );
-
-            // Poll the determined number of messages
-            if messages_to_poll > 0 {
-                self.poll_exact_messages(messages_to_poll).await?;
-                break;
+        // Update the shared state with our current state
+        {
+            let mut shared_state = self.batch_sync_shared_state.lock().await;
+            // we are here for the first time, set everything
+            if shared_state.batch_id != own_state.batch_id {
+                shared_state.batch_id = own_state.batch_id;
+                shared_state.messages_to_poll = own_state.messages_to_poll;
+            } else if shared_state.messages_to_poll == 0 {
+                // we have been here before, only update messages_to_poll if it was 0, otherwise other parties could have state mismatches
+                shared_state.messages_to_poll = own_state.messages_to_poll;
             } else {
-                tracing::info!(
-                    "Batch ID: {}. No messages to poll based on sync state. Will re-check after a short delay.",
-                    current_batch_id
-                );
-                if self.shutdown_handler.is_shutting_down() {
-                    tracing::info!(
-                        "Stopping batch receive during polling wait due to shutdown signal..."
-                    );
-                    return Ok(None);
-                }
-                // Reduce sleep time when no messages are available
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
+                own_state.messages_to_poll = shared_state.messages_to_poll;
             }
+            tracing::info!(
+                "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
+                shared_state.batch_id,
+                shared_state.messages_to_poll,
+            );
         }
+
+        let server_coord_config =
+            self.config
+                .server_coordination
+                .as_ref()
+                .ok_or(ReceiveRequestError::BatchSyncError(eyre::eyre!(
+                    "Server coordination config is missing"
+                )))?;
+
+        let all_states = get_batch_sync_states(
+            server_coord_config,
+            Some(&own_state),
+            self.config.batch_sync_polling_timeout_secs,
+        )
+        .await
+        .map_err(ReceiveRequestError::BatchSyncError)?;
+
+        let batch_sync_result = BatchSyncResult::new(own_state, all_states);
+        let messages_to_poll = batch_sync_result.messages_to_poll();
+
+        // Ensure we poll at least min_batch_size messages.
+        // All parties apply the same formula, so they agree on the target.
+        let target_to_poll = std::cmp::max(messages_to_poll, self.config.min_batch_size as u32);
+
+        tracing::info!(
+            "Batch ID: {}. Synced messages_to_poll={}, target={} (min_batch_size: {}, max_batch_size: {}).",
+            current_batch_id,
+            messages_to_poll,
+            target_to_poll,
+            self.config.min_batch_size,
+            self.config.max_batch_size
+        );
+
+        // poll_exact_messages handles waiting for messages and shutdown
+        self.poll_exact_messages(target_to_poll).await?;
 
         // Process all parse tasks
         self.process_parse_tasks().await?;
