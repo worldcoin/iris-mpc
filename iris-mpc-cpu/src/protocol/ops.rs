@@ -1073,10 +1073,6 @@ pub async fn lte_threshold_and_open(
         .await
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-/// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
-/// each party needs to send its entire share to the next and previous party.
-pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
 
 // todo: consolidate with ampc-common
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
