@@ -56,6 +56,7 @@ pub async fn greater_than_threshold(
     extract_msb_batch(session, &diffs).await
 }
 
+// todo: consolidate with ampc-common
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
 pub fn translate_threshold_a(t: f64) -> u32 {
     assert!(
@@ -85,6 +86,7 @@ pub async fn lift_and_compare_threshold(
     single_extract_msb(session, y).await
 }
 
+// todo: consolidate with ampc-common
 /// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
 /// (VecShare) of 32-bit values.
 pub async fn batch_signed_lift(
@@ -105,6 +107,7 @@ pub async fn batch_signed_lift(
     Ok(lifted_values)
 }
 
+// todo: consolidate with ampc-common
 /// Wrapper over batch_signed_lift that lifts a vector (Vec) of 16-bit shares to
 /// a vector (Vec) of 32-bit shares.
 pub async fn batch_signed_lift_vec(
@@ -119,6 +122,7 @@ pub async fn batch_signed_lift_vec(
 /// The cross product is computed as (d2.code_dist * d1.mask_dist - d1.code_dist * d2.mask_dist) and the result is shared.
 ///
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
+// todo: consolidate with ampc-common
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub(crate) async fn cross_mul(
     session: &mut Session,
@@ -199,6 +203,7 @@ async fn select_shared_slices_by_bits(
 /// otherwise it selects the second distance share (d2).
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
+// todo: consolidate with ampc-common
 async fn conditionally_select_distance(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
@@ -538,6 +543,7 @@ pub async fn cross_compare(
 /// 2. The most significant bit of the result is extracted.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
+// todo: consolidate with ampc-common
 pub(crate) async fn oblivious_cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
@@ -556,6 +562,7 @@ pub(crate) async fn oblivious_cross_compare(
 /// 2. The most significant bit of the result is extracted.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
+// todo: consolidate with ampc-common
 pub(crate) async fn oblivious_cross_compare_lifted(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
@@ -569,6 +576,7 @@ pub(crate) async fn oblivious_cross_compare_lifted(
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
+// todo: consolidate with ampc-common
 pub(crate) async fn min_of_pair_batch(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
@@ -1060,7 +1068,12 @@ pub async fn lte_threshold_and_open(
         .await
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+/// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
+/// each party needs to send its entire share to the next and previous party.
+pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
 
+// todo: consolidate with ampc-common
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 /// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
 /// each party needs to send its entire share to the next and previous party.
