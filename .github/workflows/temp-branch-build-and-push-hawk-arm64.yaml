@@ -3,7 +3,7 @@ name: Branch - Anon stats server build and push docker image
 on:
   push:
     branches:
-      - "ps/try-dev-cluster"
+      - "ps/min-batch-size"
     paths-ignore:
       - "deploy/**"
 
