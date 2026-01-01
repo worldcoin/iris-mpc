@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "dev"
+      - "ps/min-batch-size"
       - "chore/rustc-1.89"
     paths-ignore:
       - "deploy/**"
