@@ -901,7 +901,7 @@ mod tests {
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
-    use ampc_actor_utils::protocol::prf::Prf;
+    use ampc_actor_utils::protocol::{ops::batch_signed_lift_vec, prf::Prf};
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
