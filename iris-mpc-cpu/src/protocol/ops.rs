@@ -1,24 +1,23 @@
 use crate::{
     execution::session::{Session, SessionHandles},
     protocol::shared_iris::ArcIris,
-    shares::{
-        bit::Bit,
-        ring_impl::{RingElement, VecRingElement},
-        share::{reconstruct_distance_vector, DistanceShare, Share},
-        vecshare::VecShare,
-    },
 };
 use ampc_actor_utils::fast_metrics::FastHistogram;
+pub use ampc_actor_utils::protocol::ops::{
+    galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
+    sub_pub,
+};
 use ampc_actor_utils::protocol::{
     binary::{
         and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k, open_bin, single_extract_msb,
     },
     ops::{conditionally_select_distance, cross_mul, oblivious_cross_compare},
 };
-// Import non-iris-specific protocol operations from ampc-common
-pub use ampc_actor_utils::protocol::ops::{
-    galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
-    sub_pub,
+pub use ampc_secret_sharing::shares::{
+    bit::Bit,
+    ring_impl::{RingElement, VecRingElement},
+    share::{reconstruct_distance_vector, DistanceShare, Share},
+    vecshare::VecShare,
 };
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
