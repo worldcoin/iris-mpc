@@ -155,19 +155,19 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
     let (left_ids, left_dist): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
     let (right_ids, right_dist): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
     let n = left_dist.len();
-    let mut left_flat = Vec::with_capacity(2 * n);
-    let mut right_flat = Vec::with_capacity(2 * n);
+    let mut left_dist = Vec::with_capacity(2 * n);
+    let mut right_dist = Vec::with_capacity(2 * n);
     for d in &left_dist {
-        left_flat.push(d.code_dot);
-        left_flat.push(d.mask_dot);
+        left_dist.push(d.code_dot);
+        left_dist.push(d.mask_dot);
     }
     for d in &right_dist {
-        right_flat.push(d.code_dot);
-        right_flat.push(d.mask_dot);
+        right_dist.push(d.code_dot);
+        right_dist.push(d.mask_dot);
     }
 
     let distances =
-        select_shared_slices_by_bits(session, &left_flat, &right_flat, &control_bits, 2)
+        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 2)
             .await?
             .into_iter()
             .tuples()
