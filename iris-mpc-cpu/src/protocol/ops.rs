@@ -107,7 +107,6 @@ async fn select_shared_slices_by_bits(
         control_bits.iter()
     )
     .flat_map(|(left_chunk, right_chunk, c)| {
-        // todo: replace with rng::fill
         left_chunk
             .iter()
             .zip(right_chunk.iter())
@@ -315,7 +314,6 @@ pub async fn conditionally_swap_distances(
     // A helper closure to compute the difference of two input shares and prepare the a part of the product of this difference and the control bit.
     let mut mul_share_a = |x: Share<u32>, y: Share<u32>, sb: &Share<u32>| -> RingElement<u32> {
         let diff = x - y;
-        // todo: replace with rng::fill
         session.prf.gen_zero_share() + sb.a * diff.a + sb.b * diff.a + sb.a * diff.b
     };
 
@@ -544,7 +542,6 @@ pub(crate) async fn min_round_robin_batch(
             for i in 0..batch_size {
                 let distance = &distances[i * num_batches + i_batch];
                 let b = &selection_bits.shares()[i_batch * batch_size + i];
-                // todo: replace with rng::fill
                 let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
                 let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
                 shares_a.push(code_a);
