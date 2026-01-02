@@ -2,7 +2,6 @@ use crate::{
     execution::session::{Session, SessionHandles},
     protocol::shared_iris::ArcIris,
 };
-use ampc_actor_utils::fast_metrics::FastHistogram;
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
     sub_pub,
@@ -13,6 +12,7 @@ use ampc_actor_utils::protocol::{
     },
     ops::{conditionally_select_distance, cross_mul, oblivious_cross_compare},
 };
+use ampc_actor_utils::{fast_metrics::FastHistogram, protocol::prf::batch_generate_prf};
 pub use ampc_secret_sharing::shares::{
     bit::Bit,
     ring_impl::{RingElement, VecRingElement},
@@ -101,28 +101,28 @@ async fn select_shared_slices_by_bits(
     // If control bit is 1, select left_value, else select right_value.
     // res = c * (left_value - right_value) + right_value
     // Compute c * (left_value - right_value)
-    let res_a: VecRingElement<u32> = izip!(
+    let mut res_a = Vec::with_capacity(left_values.len()); // avoid extra allocations from flat_map
+    let my_prf = batch_generate_prf(session.prf.get_my_prf(), left_values.len());
+    let prev_prf = batch_generate_prf(session.prf.get_prev_prf(), left_values.len());
+    for (left_chunk, right_chunk, c, my_prf_chunk, prev_prf_chunk) in izip!(
         left_values.chunks(slice_size),
         right_values.chunks(slice_size),
-        control_bits.iter()
-    )
-    .flat_map(|(left_chunk, right_chunk, c)| {
-        // todo: replace with rng::fill
-        left_chunk
-            .iter()
-            .zip(right_chunk.iter())
-            .map(|(left, right)| {
-                let diff = *left - *right;
-                session.prf.gen_zero_share() + c.a * diff.a + c.b * diff.a + c.a * diff.b
-            })
-            .collect_vec()
-    })
-    .collect();
+        control_bits.iter(),
+        my_prf.0.chunks(slice_size),
+        prev_prf.0.chunks(slice_size),
+    ) {
+        for (left, right, my_prf, prev_prf) in
+            izip!(left_chunk, right_chunk, my_prf_chunk, prev_prf_chunk)
+        {
+            let diff = *left - *right;
+            let zero_share = *my_prf - *prev_prf; // equivalent to gen_zero_share
+            res_a.push(zero_share + c.a * diff.a + c.b * diff.a + c.a * diff.b);
+        }
+    }
 
+    let res_a = VecRingElement(res_a);
     let network = &mut session.network_session;
-
     network.send_ring_vec_next(&res_a).await?;
-
     let res_b = network.receive_ring_vec_prev().await?;
 
     // Pack networking messages into shares and
