@@ -154,17 +154,20 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
     // Now select distances
     let (left_ids, left_dist): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
     let (right_ids, right_dist): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
-    let left_dist = left_dist
-        .into_iter()
-        .flat_map(|d| [d.code_dot, d.mask_dot])
-        .collect_vec();
-    let right_dist = right_dist
-        .into_iter()
-        .flat_map(|d| [d.code_dot, d.mask_dot])
-        .collect_vec();
+    let n = left_dist.len();
+    let mut left_flat = Vec::with_capacity(2 * n);
+    let mut right_flat = Vec::with_capacity(2 * n);
+    for d in &left_dist {
+        left_flat.push(d.code_dot);
+        left_flat.push(d.mask_dot);
+    }
+    for d in &right_dist {
+        right_flat.push(d.code_dot);
+        right_flat.push(d.mask_dot);
+    }
 
     let distances =
-        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 2)
+        select_shared_slices_by_bits(session, &left_flat, &right_flat, &control_bits, 2)
             .await?
             .into_iter()
             .tuples()
@@ -200,16 +203,21 @@ pub(crate) async fn conditionally_select_distances_with_shared_ids(
         eyre::bail!("Distances must not be empty");
     }
 
-    let left_dist = left_distances
-        .into_iter()
-        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
-        .collect_vec();
-    let right_dist = right_distances
-        .into_iter()
-        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
-        .collect_vec();
+    let n = left_distances.len();
+    let mut left_flat = Vec::with_capacity(3 * n);
+    let mut right_flat = Vec::with_capacity(3 * n);
+    for (id, d) in &left_distances {
+        left_flat.push(*id);
+        left_flat.push(d.code_dot);
+        left_flat.push(d.mask_dot);
+    }
+    for (id, d) in &right_distances {
+        right_flat.push(*id);
+        right_flat.push(d.code_dot);
+        right_flat.push(d.mask_dot);
+    }
     let distances =
-        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 3)
+        select_shared_slices_by_bits(session, &left_flat, &right_flat, &control_bits, 3)
             .await?
             .into_iter()
             .tuples()
@@ -249,13 +257,12 @@ pub async fn conditionally_swap_distances_plain_ids(
         .await?
         .inner();
 
-    let distances_to_swap = indices
-        .iter()
-        .filter_map(|(idx1, idx2)| match (list.get(*idx1), list.get(*idx2)) {
-            (Some((_, d1)), Some((_, d2))) => Some((*d1, *d2)),
-            _ => None,
-        })
-        .collect_vec();
+    let mut distances_to_swap = Vec::with_capacity(indices.len());
+    for (idx1, idx2) in indices {
+        if let (Some((_, d1)), Some((_, d2))) = (list.get(*idx1), list.get(*idx2)) {
+            distances_to_swap.push((*d1, *d2));
+        }
+    }
     // Select the first distance in each pair based on the control bits
     let first_distances =
         conditionally_select_distance(session, &distances_to_swap, &swap_bits_u32).await?;
@@ -277,14 +284,14 @@ pub async fn conditionally_swap_distances_plain_ids(
         first_distances,
         second_distances
     ) {
-        let mut not_bit = -bit;
+        let mut not_bit = -*bit;
         not_bit.add_assign_const_role(1, role);
         let id1 = list[*idx1].0;
         let id2 = list[*idx2].0;
         // Only propagate index and skip version id.
         // This computation is local as indices are public.
-        let first_id = bit * id1 + not_bit * id2;
-        let second_id = bit * id2 + not_bit * id1;
+        let first_id = *bit * id1 + not_bit * id2;
+        let second_id = *bit * id2 + not_bit * id1;
         encrypted_list[*idx1] = (first_id, first_d);
         encrypted_list[*idx2] = (second_id, second_d);
     }
@@ -312,12 +319,12 @@ pub async fn conditionally_swap_distances(
         .await?
         .inner();
 
-    // A helper closure to compute the difference of two input shares and prepare the a part of the product of this difference and the control bit.
-    let mut mul_share_a = |x: Share<u32>, y: Share<u32>, sb: &Share<u32>| -> RingElement<u32> {
-        let diff = x - y;
-        // todo: replace with rng::fill
-        session.prf.gen_zero_share() + sb.a * diff.a + sb.b * diff.a + sb.a * diff.b
-    };
+    // Batch PRF generation for zero shares
+    let n = indices.len();
+    let my_prf = batch_generate_prf(session.prf.get_my_prf(), 3 * n);
+    let prev_prf = batch_generate_prf(session.prf.get_prev_prf(), 3 * n);
+    // Pre-allocate buffer for res_a
+    let mut res_a = Vec::with_capacity(3 * n);
 
     // Conditional swapping:
     // If control bit c is 1, return (d1, d2); otherwise, (d2, d1), which can be computed as:
@@ -326,28 +333,36 @@ pub async fn conditionally_swap_distances(
     // We need to do it for ids, code_dot and mask_dot.
 
     // Compute c * (d1-d2)
-    let res_a: VecRingElement<u32> = indices
-        .iter()
-        .zip(swap_bits_u32.iter())
-        .flat_map(|((idx1, idx2), sb)| {
-            let (id1, d1) = &list[*idx1];
-            let (id2, d2) = &list[*idx2];
+    for ((idx1, idx2), sb, my_prf_chunk, prev_prf_chunk) in izip!(
+        indices,
+        swap_bits_u32.iter(),
+        my_prf.0.chunks(3),
+        prev_prf.0.chunks(3)
+    ) {
+        let (id1, d1) = &list[*idx1];
+        let (id2, d2) = &list[*idx2];
+        let diff_id = *id1 - *id2;
+        let diff_code = d1.code_dot - d2.code_dot;
+        let diff_mask = d1.mask_dot - d2.mask_dot;
 
-            let id = mul_share_a(*id1, *id2, sb);
-            let code_dot_a = mul_share_a(d1.code_dot, d2.code_dot, sb);
-            let mask_dot_a = mul_share_a(d1.mask_dot, d2.mask_dot, sb);
-            [id, code_dot_a, mask_dot_a]
-        })
-        .collect();
+        // A helper loop to compute the difference of two input shares and prepare the a part of the product of this difference and the control bit.
+        for (diff, my_prf, prev_prf) in izip!(
+            [diff_id, diff_code, diff_mask].iter(),
+            my_prf_chunk,
+            prev_prf_chunk
+        ) {
+            let zero_share = *my_prf - *prev_prf;
+            res_a.push(zero_share + sb.a * diff.a + sb.b * diff.a + sb.a * diff.b);
+        }
+    }
+    let res_a = VecRingElement(res_a);
 
     let network = &mut session.network_session;
-
     network.send_ring_vec_next(&res_a).await?;
-
     let res_b = network.receive_ring_vec_prev().await?;
 
     // Finally compute the swapped tuples.
-    let swapped_distances = izip!(res_a, res_b)
+    let swapped_distances = izip!(res_a.0, res_b)
         // combine a and b part into shares
         .map(|(a, b)| Share::new(a, b))
         // combine the code and mask parts into DistanceShare
@@ -539,14 +554,24 @@ pub(crate) async fn min_round_robin_batch(
     let selection_bits: VecShare<u32> = bit_inject(session, selection_bits).await?;
     // Multiply distance shares with selection bits to zero out non-minimum distances.
     let selected_distances = {
-        let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
+        let total = 2 * distances.len();
+        let mut my_prf = batch_generate_prf(session.prf.get_my_prf(), total)
+            .0
+            .into_iter();
+        let mut prev_prf = batch_generate_prf(session.prf.get_prev_prf(), total)
+            .0
+            .into_iter();
+        let mut shares_a = VecRingElement::with_capacity(total);
         for i_batch in 0..num_batches {
             for i in 0..batch_size {
                 let distance = &distances[i * num_batches + i_batch];
                 let b = &selection_bits.shares()[i_batch * batch_size + i];
-                // todo: replace with rng::fill
-                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
-                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
+                // Safety of unwrap()
+                // the prfs are guaranteed to have length equal to num_batches * batch_size * 2
+                let code_a =
+                    my_prf.next().unwrap() - prev_prf.next().unwrap() + b * &distance.code_dot;
+                let mask_a =
+                    my_prf.next().unwrap() - prev_prf.next().unwrap() + b * &distance.mask_dot;
                 shares_a.push(code_a);
                 shares_a.push(mask_a);
             }
