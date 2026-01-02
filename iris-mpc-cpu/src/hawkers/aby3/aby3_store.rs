@@ -366,29 +366,38 @@ impl Aby3Store {
             }
         }
 
-        let mut res = distances.to_vec();
+        let mut res = distances;
+        let mut pairs = Vec::with_capacity(len * (res.len() / 2));
         while res.len() > MIN_ROUND_ROBIN_SIZE {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
-            let pairs = res
-                .into_iter()
-                .tuples()
-                .flat_map(|(a, b)| izip!(a, b).collect_vec())
-                .collect_vec();
+
+            // Build pairs for min_of_pair_batch
+            pairs.clear();
+            for ab in res.chunks_exact(2) {
+                let (a, b) = (&ab[0], &ab[1]);
+                for (x, y) in izip!(a, b) {
+                    pairs.push((*x, *y));
+                }
+            }
+
             // compute minimums of pairs
             let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
-            res = flattened_res
-                .into_iter()
-                .chunks(len)
-                .into_iter()
-                .map(|chunk| chunk.collect())
-                .collect_vec();
+
+            // Rebuild res as Vec<Vec<_>>
+            res.clear();
+            res.reserve(flattened_res.len() / len + maybe_last_distance.as_ref().map_or(0, |_| 1));
+            for chunk in flattened_res.chunks(len) {
+                res.push(chunk.to_vec());
+            }
             // if we saved a last distance, we need to add it back
             if let Some(last_distance) = maybe_last_distance {
-                res.push(last_distance.clone());
+                res.push(last_distance);
             }
         }
-        let flattened_distances = res.iter().flatten().cloned().collect_vec();
+        // Only flatten res once at the end
+        let mut flattened_distances = Vec::with_capacity(res.len() * len);
+        flattened_distances.extend(res.into_iter().flatten());
         min_round_robin_batch(&mut self.session, &flattened_distances, res.len()).await
     }
 
