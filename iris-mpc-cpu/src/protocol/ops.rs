@@ -101,9 +101,10 @@ async fn select_shared_slices_by_bits(
     // If control bit is 1, select left_value, else select right_value.
     // res = c * (left_value - right_value) + right_value
     // Compute c * (left_value - right_value)
-    let mut res_a = Vec::with_capacity(left_values.len()); // avoid extra allocations from flat_map
-    let my_prf = batch_generate_prf(session.prf.get_my_prf(), left_values.len());
-    let prev_prf = batch_generate_prf(session.prf.get_prev_prf(), left_values.len());
+    let v_len = left_values.len();
+    let mut res_a = Vec::with_capacity(v_len); // avoid extra allocations from flat_map
+    let my_prf = batch_generate_prf(session.prf.get_my_prf(), v_len);
+    let prev_prf = batch_generate_prf(session.prf.get_prev_prf(), v_len);
     for (left_chunk, right_chunk, c, my_prf_chunk, prev_prf_chunk) in izip!(
         left_values.chunks(slice_size),
         right_values.chunks(slice_size),
@@ -152,16 +153,16 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
     }
 
     // Now select distances
-    let (left_ids, left_dist): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
-    let (right_ids, right_dist): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
-    let n = left_dist.len();
-    let mut left_dist = Vec::with_capacity(2 * n);
-    let mut right_dist = Vec::with_capacity(2 * n);
-    for d in &left_dist {
+    let (left_ids, left_distances): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
+    let (right_ids, right_distances): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
+    let v_len = left_distances.len();
+    let mut left_dist = Vec::with_capacity(2 * v_len);
+    let mut right_dist = Vec::with_capacity(2 * v_len);
+    for d in &left_distances {
         left_dist.push(d.code_dot);
         left_dist.push(d.mask_dot);
     }
-    for d in &right_dist {
+    for d in &right_distances {
         right_dist.push(d.code_dot);
         right_dist.push(d.mask_dot);
     }
