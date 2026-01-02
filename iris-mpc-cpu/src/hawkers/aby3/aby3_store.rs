@@ -396,9 +396,10 @@ impl Aby3Store {
             }
         }
         // Only flatten res once at the end
-        let mut flattened_distances = Vec::with_capacity(res.len() * len);
+        let res_len = res.len();
+        let mut flattened_distances = Vec::with_capacity(res_len * len);
         flattened_distances.extend(res.into_iter().flatten());
-        min_round_robin_batch(&mut self.session, &flattened_distances, res.len()).await
+        min_round_robin_batch(&mut self.session, &flattened_distances, res_len).await
     }
 
     async fn compact_neighborhood_batch(
