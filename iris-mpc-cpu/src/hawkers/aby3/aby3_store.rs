@@ -14,11 +14,10 @@ use crate::{
     },
     protocol::{
         ops::{
-            batch_signed_lift_vec, conditionally_select_distances_with_plain_ids,
+            conditionally_select_distances_with_plain_ids,
             conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
             conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, min_of_pair_batch, min_round_robin_batch,
-            oblivious_cross_compare, oblivious_cross_compare_lifted, open_ring,
+            lte_threshold_and_open, min_round_robin_batch, open_ring,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -27,6 +26,10 @@ use crate::{
         share::{DistanceShare, Share},
         RingElement,
     },
+};
+use ampc_actor_utils::protocol::ops::{
+    batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
+    oblivious_cross_compare_lifted,
 };
 use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
