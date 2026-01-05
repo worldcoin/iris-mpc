@@ -85,12 +85,15 @@ pub mod degree4 {
             let (left1, left2) = left_slice.split_at(skip);
             let (right1, right2) = right_slice.split_at(chunk_size - skip);
 
-            for (l, r) in left1.iter().zip(right2.iter()) {
-                sum = sum.wrapping_add(l.wrapping_mul(*r));
+            assert_eq!(left1.len(), right2.len());
+            assert_eq!(left2.len(), right1.len());
+
+            for i in 0..left1.len() {
+                sum = sum.wrapping_add(left1[i].wrapping_mul(right2[i]));
             }
 
-            for (l, r) in left2.iter().zip(right1.iter()) {
-                sum = sum.wrapping_add(l.wrapping_mul(*r));
+            for i in 0..left2.len() {
+                sum = sum.wrapping_add(left2[i].wrapping_mul(right1[i]));
             }
         }
         sum
