@@ -1,18 +1,18 @@
 use std::{
-    fs::{self, File},
-    io::{BufReader, Error},
+    fs::{self},
+    io::Error,
     path::Path,
 };
 
 use itertools::{IntoChunks, Itertools};
+use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
-use serde_json;
 
 use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 
-use crate::{constants::N_PARTIES, irises::convertor};
+use crate::{constants::N_PARTIES, fsys, irises::convertor};
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
 enum IrisSelectionStrategy {
@@ -25,25 +25,20 @@ enum IrisSelectionStrategy {
 }
 
 /// Returns iterator over base64 encoded Iris codes deserialized from an ndjson file.
-#[allow(dead_code)]
 pub fn read_b64_iris_codes(
     path_to_ndjson: &Path,
     n_to_skip: usize,
     n_to_take: usize,
 ) -> Result<impl Iterator<Item = Base64IrisCode>, Error> {
-    let handle = File::open(path_to_ndjson).unwrap();
-    let reader = BufReader::new(handle);
-    let iterable = serde_json::Deserializer::from_reader(reader)
-        .into_iter::<Base64IrisCode>()
-        .skip(n_to_skip)
-        .map(|res| res.unwrap())
-        .take(n_to_take);
+    let iterable =
+        fsys::reader::read_json_iter::<Base64IrisCode>(path_to_ndjson, n_to_skip, n_to_take)
+            .unwrap()
+            .map(|res| res.unwrap());
 
     Ok(iterable)
 }
 
 /// Returns chunked iterator over base64 encoded Iris codes deserialized from an ndjson file.
-#[allow(dead_code)]
 pub fn read_b64_iris_codes_chunks(
     path_to_ndjson: &Path,
     n_to_skip: usize,
@@ -58,7 +53,6 @@ pub fn read_b64_iris_codes_chunks(
 }
 
 /// Returns iterator over Iris codes deserialized from an ndjson file.
-#[allow(dead_code)]
 pub fn read_iris_codes(
     path_to_ndjson: &Path,
     n_to_skip: usize,
@@ -72,7 +66,6 @@ pub fn read_iris_codes(
 }
 
 /// Returns chunked iterator over Iris codes deserialized from an ndjson file.
-#[allow(dead_code)]
 pub fn read_iris_codes_chunks(
     path_to_ndjson: &Path,
     n_to_skip: usize,
@@ -87,31 +80,28 @@ pub fn read_iris_codes_chunks(
 }
 
 /// Returns iterator over Iris shares deserialized from a stream of Iris Code pairs.
-#[allow(dead_code)]
-pub fn read_iris_shares(
+pub fn read_iris_shares<'a, R: Rng + CryptoRng + 'a>(
     path_to_ndjson: &Path,
-    n_to_read: usize,
     n_to_skip: usize,
-    rng_state: u64,
-) -> Result<impl Iterator<Item = Box<[GaloisRingSharedIris; N_PARTIES]>>, Error> {
-    let iterable = read_iris_codes(path_to_ndjson, n_to_read, n_to_skip)
+    n_to_take: usize,
+    rng: &'a mut R,
+) -> Result<impl Iterator<Item = [GaloisRingSharedIris; N_PARTIES]> + 'a, Error> {
+    let iterable = read_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
         .unwrap()
-        .map(move |code_pair| convertor::to_galois_ring_shares(rng_state, &code_pair));
+        .map(move |iris_code| convertor::to_galois_ring_shares(rng, iris_code));
 
     Ok(iterable)
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
-#[allow(dead_code)]
-#[allow(clippy::type_complexity)]
-pub fn read_iris_shares_chunks(
+pub fn read_iris_shares_chunks<'a, R: Rng + CryptoRng + 'a>(
     path_to_ndjson: &Path,
-    n_to_read: usize,
     n_to_skip: usize,
+    n_to_take: usize,
     chunk_size: usize,
-    rng_state: u64,
-) -> Result<IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIris; N_PARTIES]>>>, Error> {
-    let iterable = read_iris_shares(path_to_ndjson, n_to_read, n_to_skip, rng_state)
+    rng: &'a mut R,
+) -> Result<IntoChunks<impl Iterator<Item = [GaloisRingSharedIris; N_PARTIES]> + 'a>, Error> {
+    let iterable = read_iris_shares(path_to_ndjson, n_to_skip, n_to_take, rng)
         .unwrap()
         .chunks(chunk_size);
 
@@ -128,11 +118,22 @@ pub fn read_node_config(path_to_config: &Path) -> Result<NodeConfig, Error> {
 
 #[cfg(test)]
 mod tests {
+    use rand::{rngs::StdRng, SeedableRng};
+
     use super::{
         read_b64_iris_codes, read_b64_iris_codes_chunks, read_iris_codes, read_iris_codes_chunks,
         read_iris_shares, read_iris_shares_chunks,
     };
     use crate::fsys::local::get_path_to_ndjson;
+
+    const N_TO_SKIP: usize = 900;
+    const N_TO_TAKE: usize = 100;
+    const CHUNK_SIZE: usize = 10;
+    const RNG_SEED: u64 = 42;
+
+    fn get_rng() -> StdRng {
+        StdRng::seed_from_u64(RNG_SEED)
+    }
 
     #[tokio::test]
     async fn test_ndjson_file_exists() {
@@ -141,12 +142,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_b64_iris_codes() {
-        for _ in read_b64_iris_codes(&get_path_to_ndjson(), 900, 100).unwrap() {}
+        for _ in read_b64_iris_codes(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE).unwrap() {}
     }
 
     #[tokio::test]
     async fn test_read_b64_iris_codes_chunks() {
-        for chunk in read_b64_iris_codes_chunks(&get_path_to_ndjson(), 900, 100, 10)
+        for chunk in read_b64_iris_codes_chunks(&get_path_to_ndjson(), N_TO_SKIP, 100, 10)
             .unwrap()
             .into_iter()
         {
@@ -156,12 +157,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_iris_codes() {
-        for _ in read_iris_codes(&get_path_to_ndjson(), 900, 100).unwrap() {}
+        for _ in read_iris_codes(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE).unwrap() {}
     }
 
     #[tokio::test]
     async fn test_read_iris_codes_chunks() {
-        for chunk in read_iris_codes_chunks(&get_path_to_ndjson(), 900, 100, 10)
+        for chunk in read_iris_codes_chunks(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE, 10)
             .unwrap()
             .into_iter()
         {
@@ -171,14 +172,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_iris_shares() {
-        for _ in read_iris_shares(&get_path_to_ndjson(), 900, 100, 42).unwrap() {}
+        for _ in
+            read_iris_shares(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE, &mut get_rng()).unwrap()
+        {
+        }
     }
 
     #[tokio::test]
     async fn test_read_iris_shares_chunks() {
-        for chunk in read_iris_shares_chunks(&get_path_to_ndjson(), 900, 100, 10, 42)
-            .unwrap()
-            .into_iter()
+        for chunk in read_iris_shares_chunks(
+            &get_path_to_ndjson(),
+            N_TO_SKIP,
+            N_TO_TAKE,
+            CHUNK_SIZE,
+            &mut get_rng(),
+        )
+        .unwrap()
+        .into_iter()
         {
             for _ in chunk {}
         }

@@ -16,6 +16,16 @@ pub enum NodeExecutionHost {
     Docker,
 }
 
+impl NodeExecutionHost {
+    /// Returns name of execution host specific assets subdirectory.
+    pub(crate) fn assets_subdirectory() -> &'static str {
+        match NodeExecutionHost::default() {
+            NodeExecutionHost::BareMetal => "baremetal",
+            NodeExecutionHost::Docker => "docker",
+        }
+    }
+}
+
 impl Default for NodeExecutionHost {
     fn default() -> Self {
         match Path::new("/.dockerenv").exists() {

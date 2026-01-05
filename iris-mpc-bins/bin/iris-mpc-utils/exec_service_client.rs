@@ -10,7 +10,7 @@ use iris_mpc_utils::{
         AwsConfiguration, ServiceClient as Client,
         ServiceClientConfiguration as ClientConfiguration,
     },
-    fsys::reader::read_toml_config,
+    fsys::reader::read_toml,
 };
 
 #[tokio::main]
@@ -83,14 +83,14 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for Client<R
 
 impl From<&CliOptions> for ClientConfiguration {
     fn from(options: &CliOptions) -> Self {
-        read_toml_config::<ClientConfiguration>(options.path_to_config().as_path())
+        read_toml::<ClientConfiguration>(options.path_to_config().as_path())
             .expect("Failed to read service client configuration file")
     }
 }
 
 impl From<&CliOptions> for AwsConfiguration {
     fn from(options: &CliOptions) -> Self {
-        read_toml_config::<AwsConfiguration>(options.path_to_config_aws().as_path())
+        read_toml::<AwsConfiguration>(options.path_to_config_aws().as_path())
             .expect("Failed to read service client AWS configuration file")
     }
 }

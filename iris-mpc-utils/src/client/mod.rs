@@ -112,14 +112,14 @@ impl AsyncFrom<AwsConfiguration> for AwsClientConfig {
 impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
     fn from(config: &ServiceClientConfiguration) -> Self {
         match config.request_batch() {
-            config::RequestBatchConfiguration::SimpleBatchKind {
+            config::RequestBatchConfiguration::Simple {
                 batch_count,
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
             } => {
                 tracing::info!("Parsing config: Request batch set from simple kind");
-                Self::BatchKind {
+                Self::Simple {
                     batch_count: *batch_count,
                     batch_size: RequestBatchSize::Static(*batch_size),
                     batch_kind: RequestBatchKind::from(batch_kind),

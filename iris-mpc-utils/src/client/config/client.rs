@@ -28,7 +28,7 @@ impl ServiceClientConfiguration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RequestBatchConfiguration {
     // Batches of single request type
-    SimpleBatchKind {
+    Simple {
         /// Number of request batches to generate.
         batch_count: usize,
 
