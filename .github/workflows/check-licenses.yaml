@@ -1,17 +1,15 @@
 name: Check Cargo Dependencies
 on:
-  pull_request:
-  workflow_dispatch:
   push:
     branches:
       - main
-      - prod
-    tags:
-      - "**"
+  pull_request:
 
 jobs:
   cargo-deny:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # pin@v5.0.0
       - uses: EmbarkStudios/cargo-deny-action@f2ba7abc2abebaf185c833c3961145a3c275caad

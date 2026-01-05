@@ -181,6 +181,8 @@ pub struct ServerActor {
     anonymized_bucket_statistics_2d: BucketStatistics2D,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
+    // Per-batch flag propagated from SQS to disable anonymized statistics collection and computation
+    disable_anonymized_stats_for_current_batch: bool,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -581,6 +583,7 @@ impl ServerActor {
             full_scan_side_switching_enabled,
             both_side_match_distances_buffer,
             anonymized_bucket_statistics_2d,
+            disable_anonymized_stats_for_current_batch: false,
         })
     }
 
@@ -690,6 +693,8 @@ impl ServerActor {
         orientation: Orientation,
         previous_results: Option<ServerJobResult>,
     ) -> Result<ServerJobResult> {
+        // Apply the per-batch anonymized statistics flag from the incoming batch
+        self.disable_anonymized_stats_for_current_batch = batch.disable_anonymized_stats;
         let now = Instant::now();
         // we only want to perform deletions and reset updates for the first query
         // this ensures we do not perform the same request twice and enables faster processing
@@ -709,12 +714,13 @@ impl ServerActor {
             .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
             .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} reset_update, {} deletion requests",
+            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} reset_update, {} deletion requests. anon stats disabled for batch: {}",
             batch.request_types.len() - n_reauths - n_reset_checks,
             n_reauths,
             n_reset_checks,
             batch.reset_update_request_ids.len(),
             batch.deletion_requests_indices.len(),
+            self.disable_anonymized_stats_for_current_batch
         );
 
         let mut batch = batch;
@@ -1605,92 +1611,94 @@ impl ServerActor {
         }
 
         // Attempt for 2D anonymized bucket statistics calculation
-        let (one_sided_distance_cache_left, one_sided_distance_cache_right) =
-            if self.full_scan_side == Eye::Left {
-                (
-                    one_sided_distance_cache_side1,
-                    one_sided_distance_cache_side2,
-                )
-            } else {
-                (
-                    one_sided_distance_cache_side2,
-                    one_sided_distance_cache_side1,
-                )
-            };
-        let two_sided_match_distances = one_sided_distance_cache_left
-            .into_iter()
-            .zip(one_sided_distance_cache_right)
-            .map(|(left, right)| TwoSidedDistanceCache::merge(left, right))
-            .collect::<Vec<_>>();
-
-        for (new, cache) in two_sided_match_distances
-            .into_iter()
-            .zip(self.both_side_match_distances_buffer.iter_mut())
-        {
-            cache.extend(new);
-        }
-
-        // check if we have enough results to calculate 2D bucket statistics
-        let match_distance_2d_count = self
-            .both_side_match_distances_buffer
-            .iter()
-            .map(|x| x.len())
-            .sum::<usize>();
-        tracing::info!(
-            "Match distance 2D count: {match_distance_2d_count}/{}",
-            self.match_distances_2d_buffer_size
-        );
-        if match_distance_2d_count >= self.match_distances_2d_buffer_size {
-            tracing::info!("Calculating bucket statistics for both sides");
-            let mut both_side_match_distances_buffer =
-                vec![TwoSidedDistanceCache::default(); self.device_manager.device_count()];
-            std::mem::swap(
-                &mut self.both_side_match_distances_buffer,
-                &mut both_side_match_distances_buffer,
-            );
-
-            let min_distance_cache = TwoSidedDistanceCache::into_min_distance_cache(
-                both_side_match_distances_buffer,
-                &mut self.phase2_2d_buckets,
-                &self.streams[0],
-            );
-            let thresholds = (1..=self.n_buckets)
-                .map(|x: usize| {
-                    Circuits::translate_threshold_a(
-                        MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
-                    ) as u16
-                })
+        if !self.disable_anonymized_stats_for_current_batch {
+            let (one_sided_distance_cache_left, one_sided_distance_cache_right) =
+                if self.full_scan_side == Eye::Left {
+                    (
+                        one_sided_distance_cache_side1,
+                        one_sided_distance_cache_side2,
+                    )
+                } else {
+                    (
+                        one_sided_distance_cache_side2,
+                        one_sided_distance_cache_side1,
+                    )
+                };
+            let two_sided_match_distances = one_sided_distance_cache_left
+                .into_iter()
+                .zip(one_sided_distance_cache_right)
+                .map(|(left, right)| TwoSidedDistanceCache::merge(left, right))
                 .collect::<Vec<_>>();
 
-            let buckets_2d = min_distance_cache.compute_buckets(
-                &mut self.phase2_2d_buckets,
-                &self.streams[0],
-                &thresholds,
+            for (new, cache) in two_sided_match_distances
+                .into_iter()
+                .zip(self.both_side_match_distances_buffer.iter_mut())
+            {
+                cache.extend(new);
+            }
+
+            // check if we have enough results to calculate 2D bucket statistics
+            let match_distance_2d_count = self
+                .both_side_match_distances_buffer
+                .iter()
+                .map(|x| x.len())
+                .sum::<usize>();
+            tracing::info!(
+                "Match distance 2D count: {match_distance_2d_count}/{}",
+                self.match_distances_2d_buffer_size
             );
-            tracing::info!("Bucket statistics calculated");
-            let mut buckets_2d_string = String::new();
-            for (i, bucket) in buckets_2d.iter().enumerate() {
-                let left_idx = i / self.n_buckets;
-                let right_idx = i % self.n_buckets;
-                let step = 0.375 / self.n_buckets as f64;
-                buckets_2d_string += &format!(
-                    "Bucket ({:.3}-{:.3},{:.3}-{:.3}): {}\n",
-                    left_idx as f64 * step,
-                    (left_idx + 1) as f64 * step,
-                    right_idx as f64 * step,
-                    (right_idx + 1) as f64 * step,
-                    bucket
+            if match_distance_2d_count >= self.match_distances_2d_buffer_size {
+                tracing::info!("Calculating bucket statistics for both sides");
+                let mut both_side_match_distances_buffer =
+                    vec![TwoSidedDistanceCache::default(); self.device_manager.device_count()];
+                std::mem::swap(
+                    &mut self.both_side_match_distances_buffer,
+                    &mut both_side_match_distances_buffer,
+                );
+
+                let min_distance_cache = TwoSidedDistanceCache::into_min_distance_cache(
+                    both_side_match_distances_buffer,
+                    &mut self.phase2_2d_buckets,
+                    &self.streams[0],
+                );
+                let thresholds = (1..=self.n_buckets)
+                    .map(|x: usize| {
+                        Circuits::translate_threshold_a(
+                            MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
+                        ) as u16
+                    })
+                    .collect::<Vec<_>>();
+
+                let buckets_2d = min_distance_cache.compute_buckets(
+                    &mut self.phase2_2d_buckets,
+                    &self.streams[0],
+                    &thresholds,
+                );
+                tracing::info!("Bucket statistics calculated");
+                let mut buckets_2d_string = String::new();
+                for (i, bucket) in buckets_2d.iter().enumerate() {
+                    let left_idx = i / self.n_buckets;
+                    let right_idx = i % self.n_buckets;
+                    let step = 0.375 / self.n_buckets as f64;
+                    buckets_2d_string += &format!(
+                        "Bucket ({:.3}-{:.3},{:.3}-{:.3}): {}\n",
+                        left_idx as f64 * step,
+                        (left_idx + 1) as f64 * step,
+                        right_idx as f64 * step,
+                        (right_idx + 1) as f64 * step,
+                        bucket
+                    );
+                }
+                tracing::info!("Bucket statistics calculated:\n{}", buckets_2d_string);
+
+                // Fill the 2D anonymized statistics structure for propagation
+                self.anonymized_bucket_statistics_2d.fill_buckets(
+                    &buckets_2d,
+                    MATCH_THRESHOLD_RATIO,
+                    self.anonymized_bucket_statistics_left
+                        .next_start_time_utc_timestamp,
                 );
             }
-            tracing::info!("Bucket statistics calculated:\n{}", buckets_2d_string);
-
-            // Fill the 2D anonymized statistics structure for propagation
-            self.anonymized_bucket_statistics_2d.fill_buckets(
-                &buckets_2d,
-                MATCH_THRESHOLD_RATIO,
-                self.anonymized_bucket_statistics_left
-                    .next_start_time_utc_timestamp,
-            );
         }
 
         // Instead of sending to return_channel, we'll return this at the end
@@ -1811,6 +1819,10 @@ impl ServerActor {
     }
 
     fn try_calculate_bucket_stats(&mut self, eye_db: Eye, orientation: Orientation) {
+        // Respect per-batch flag to disable anonymized statistics
+        if self.disable_anonymized_stats_for_current_batch {
+            return;
+        }
         // we use the batch_streams for this
         let streams = &self.streams[0];
 
@@ -2333,6 +2345,7 @@ impl ServerActor {
                         / 100,
                     &self.streams[0],
                     db_subset_idx,
+                    self.disable_anonymized_stats_for_current_batch,
                 );
                 self.phase2.return_result_buffer(res);
             }
@@ -2655,6 +2668,7 @@ impl ServerActor {
                                 * (100 + self.match_distances_buffer_size_extra_percent)
                                 / 100,
                             request_streams,
+                            self.disable_anonymized_stats_for_current_batch,
                         );
                         self.phase2.return_result_buffer(res);
                     }
@@ -2970,6 +2984,7 @@ fn open(
     batch_size: usize,
     max_bucket_distances: usize,
     streams: &[CudaStream],
+    disable_anonymized_stats: bool,
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
@@ -3015,6 +3030,7 @@ fn open(
         batch_size,
         max_bucket_distances,
         streams,
+        disable_anonymized_stats,
     );
 }
 
@@ -3040,6 +3056,7 @@ fn open_subset_results(
     max_bucket_distances: usize,
     streams: &[CudaStream],
     index_mapping: &[Vec<u32>],
+    disable_anonymized_stats: bool,
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
@@ -3085,6 +3102,7 @@ fn open_subset_results(
         max_bucket_distances,
         streams,
         index_mapping,
+        disable_anonymized_stats,
     );
 }
 

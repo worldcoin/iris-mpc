@@ -131,7 +131,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         return Ok(());
     }
 
-    let mut hawk_actor = init_hawk_actor(&config).await?;
+    let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
 
     load_database(
         &config,
@@ -390,7 +390,10 @@ async fn sync_sqs_queues(
 
 /// Initialize main Hawk actor process for handling query batches using HNSW
 /// approximate k-nearest neighbors graph search.
-async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
+async fn init_hawk_actor(
+    config: &Config,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<HawkActor> {
     let node_addresses: Vec<String> = config
         .node_hostnames
         .iter()
@@ -420,7 +423,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
         node_addresses
     );
 
-    HawkActor::from_cli(&hawk_args).await
+    HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await
 }
 
 /// Loads iris code shares & HNSW graph from Postgres and/or S3.

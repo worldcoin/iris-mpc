@@ -11,6 +11,7 @@ use itertools::Itertools;
 use rand::SeedableRng;
 use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
@@ -19,14 +20,13 @@ use crate::{
         searcher::{ConnectPlan, ConnectPlanLayer},
     },
     protocol::shared_iris::GaloisRingSharedIris,
+    utils::constants::N_PARTIES,
 };
 
 use super::{
     scheduler::parallelize, tests::batch_of_party, HawkActor, HawkArgs, HawkRequest, VectorId,
     LEFT, RIGHT,
 };
-
-const N_PARTIES: usize = 3;
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
     let go = |addresses: Vec<String>, index: usize| {
@@ -42,7 +42,7 @@ pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
             // Make the test async.
             sleep(Duration::from_millis(index as u64)).await;
 
-            HawkActor::from_cli(&args).await
+            HawkActor::from_cli(&args, CancellationToken::new()).await
         }
     };
 

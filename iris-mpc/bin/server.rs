@@ -281,6 +281,18 @@ async fn receive_batch(
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
 
+                        // If any request in the batch asks to disable anonymized statistics,
+                        // apply it for the whole batch.
+                        if let Some(disable) = uniqueness_request.disable_anonymized_stats {
+                            if disable && !batch_query.disable_anonymized_stats {
+                                batch_query.disable_anonymized_stats = true;
+                                tracing::debug!(
+                                    "Disabling anonymized statistics for current batch due to request {}",
+                                    uniqueness_request.signup_id
+                                );
+                            }
+                        }
+
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -818,7 +830,7 @@ async fn main() -> Result<()> {
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
     println!("Init tracing");
-    let _tracing_shutdown_handle = match initialize_tracing(&config) {
+    let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
         Ok(handle) => handle,
         Err(e) => {
             eprintln!("Failed to initialize tracing: {:?}", e);
@@ -1626,8 +1638,8 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reset check result");
 
-                    // Mark the reset check modification as completed. 
-                    // Note that reset_check is only a query and does not persist anything into the database. 
+                    // Mark the reset check modification as completed.
+                    // Note that reset_check is only a query and does not persist anything into the database.
                     // We store modification so that the SNS result can be replayed.
                     modifications
                         .get_mut(&RequestId(reset_id))

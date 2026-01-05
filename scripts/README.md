@@ -24,7 +24,7 @@ This is used currently for local only. It is the default mode of operation, in w
 First, you need to generate some test data for the Genesis mode. This is done by running the following command:
 
 ```bash
-cargo run --bin --release generate_benchmark_data
+cargo run --bin --release generate-benchmark-data
 ```
 
 ```bash

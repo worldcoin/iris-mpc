@@ -19,6 +19,12 @@ impl<T: IntRing2k> Share<T> {
         Self { a, b }
     }
 
+    pub fn from_const(value: T, role: Role) -> Self {
+        let mut res = Self::zero();
+        res.add_assign_const_role(value, role);
+        res
+    }
+
     pub fn add_assign_const_role(&mut self, other: T, role: Role) {
         match role.index() {
             0 => self.a += RingElement(other),

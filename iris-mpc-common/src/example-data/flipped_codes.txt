@@ -10,7 +10,7 @@ import base64
 def random_template():
   mock_iris_code = np.random.randint(0, 2, (16, 200, 2, 2)).astype(bool)
   mock_mask_code = np.random.randint(0, 2, (16, 200, 2)).astype(bool)
-  mock_mask_code = np.stack([mock_mask_code, mock_mask_code], axis=-1) 
+  mock_mask_code = np.stack([mock_mask_code, mock_mask_code], axis=-1)
   return (mock_iris_code, mock_mask_code)
 
 def flip_v_mc(array):

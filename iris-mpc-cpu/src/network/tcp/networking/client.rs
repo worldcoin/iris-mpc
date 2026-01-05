@@ -14,7 +14,7 @@ pub struct TlsClient {
     tls_connector: TlsConnector,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TcpClient {}
 
 impl TlsClient {
@@ -33,12 +33,6 @@ impl TlsClient {
 
         let tls_connector = TlsConnector::from(Arc::new(client_config));
         Ok(Self { tls_connector })
-    }
-}
-
-impl TcpClient {
-    pub fn new() -> Self {
-        Self {}
     }
 }
 
@@ -79,17 +73,6 @@ pub type DynStream = Box<dyn NetworkConnection>;
 pub struct BoxTcpClient(pub TcpClient);
 #[async_trait]
 impl Client for BoxTcpClient {
-    type Output = DynStream;
-    async fn connect(&self, url: String) -> Result<Self::Output> {
-        let stream = self.0.connect(url).await?;
-        Ok(Box::new(stream))
-    }
-}
-
-#[derive(Clone)]
-pub struct BoxTlsClient(pub TlsClient);
-#[async_trait]
-impl Client for BoxTlsClient {
     type Output = DynStream;
     async fn connect(&self, url: String) -> Result<Self::Output> {
         let stream = self.0.connect(url).await?;

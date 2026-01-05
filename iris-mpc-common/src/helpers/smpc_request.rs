@@ -118,6 +118,8 @@ pub struct UniquenessRequest {
     pub or_rule_serial_ids: Option<Vec<u32>>,
     pub skip_persistence: Option<bool>,
     pub full_face_mirror_attacks_detection_enabled: Option<bool>,
+    // If true, do not collect or compute anonymized statistics for this batch.
+    pub disable_anonymized_stats: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

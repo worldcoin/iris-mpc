@@ -56,7 +56,3 @@ db_dependent = []
 [[bin]]
 name = "iris-mpc-hawk-genesis"
 path = "bin/iris_mpc_hawk_genesis.rs"
-
-[[bin]]
-name = "write-node-config-toml"
-path = "bin/write_node_config_toml.rs"

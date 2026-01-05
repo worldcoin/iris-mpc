@@ -201,7 +201,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
 /// To run this benchmark, you need to generate the data first by running the
 /// following commands:
 ///
-/// cargo run --release --bin generate_benchmark_data
+/// cargo run --release --bin generate-benchmark-data
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);

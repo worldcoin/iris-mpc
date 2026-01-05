@@ -557,6 +557,7 @@ impl E2EClient {
             or_rule_serial_ids: None,
             skip_persistence: None,
             full_face_mirror_attacks_detection_enabled: Some(true),
+            disable_anonymized_stats: None,
         };
 
         let message_attributes = {

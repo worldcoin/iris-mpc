@@ -58,7 +58,7 @@ pub struct LocalRuntime {
 }
 
 impl LocalRuntime {
-    pub(crate) async fn mock_setup(network_t: NetworkType) -> Result<Self> {
+    pub async fn mock_setup(network_t: NetworkType) -> Result<Self> {
         let num_parties = 3;
         let identities = generate_local_identities();
         let mut seeds = Vec::new();

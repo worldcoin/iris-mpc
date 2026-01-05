@@ -1,13 +1,15 @@
 [workspace]
 members = [
     "iris-mpc",
+    "iris-mpc-common",
     "iris-mpc-cpu",
     "iris-mpc-gpu",
-    "iris-mpc-common",
-    "iris-mpc-upgrade",
-    "iris-mpc-store",
     "iris-mpc-py",
+    "iris-mpc-store",
+    "iris-mpc-upgrade",
     "iris-mpc-upgrade-hawk",
+    "iris-mpc-utils",
+    "iris-mpc-anon-stats-server",
 ]
 resolver = "2"
 

@@ -1,0 +1,132 @@
+name: Enforce prod deploy approvals
+
+on:
+  pull_request:
+
+jobs:
+  check-approvals:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Check approvals for deploy/prod changes
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Configuration - modify these values as needed
+            const protectedPath = 'deploy/prod';
+
+            // Define approval groups - each group must have at least one approval
+            approversGroupA = [
+              'philsippl',
+              'eaypek-tfh',
+              'carlomazzaferro',
+              'wojciechsromek',
+              'leonanos8',
+              'danielle-tfh'
+            ];
+
+            approversGroupB = [
+              'camelop',      // UC Berkeley
+              'stneng',       // UC Berkeley
+              'jweberphipps', // UC Berkeley
+              'Tedlar',       // Nethermind
+              '0xDones',      // Nethermind
+              'matilote',     // Nethermind
+              'nmjustinchan', // Nethermind
+              'reneraab',     // FAU
+              'SyrineSlim',   // FAU
+              'sebhlr'        // FAU
+            ];
+
+            const approvalGroups = new Map([
+              ['Group A', approversGroupA],
+              ['Group B', approversGroupB]
+            ]);
+
+            const pull_number = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+            core.info(`Checking PR #${pull_number} in ${owner}/${repo}`);
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+            });
+            core.info(`Found ${files.length} changed files`);
+            const fileNames = files.map(f => f.filename).join(', ');
+            core.info(`Changed files: ${fileNames}`);
+
+            const touchesProdDeploy = files.some((file) =>
+              file.filename === protectedPath || file.filename.startsWith(`${protectedPath}/`)
+            );
+            core.info(`Touches ${protectedPath}: ${touchesProdDeploy}`);
+
+            if (!touchesProdDeploy) {
+              core.info(`No changes in ${protectedPath} detected. Skipping approval requirements.`);
+              return;
+            }
+            core.info(`Changes in ${protectedPath} detected. Checking approval requirements.`);
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number,
+            });
+            core.info(`Found ${reviews.length} total reviews`);
+
+            const latestReviewStateByUser = new Map();
+            for (const review of reviews) {
+              if (!review.user || !review.user.login) {
+                core.info(`Skipping review without user info: ${JSON.stringify(review)}`);
+                continue;
+              }
+              core.info(`Review from ${review.user.login}: ${review.state}`);
+              latestReviewStateByUser.set(review.user.login, review.state);
+            }
+            core.info(`Latest review states: ${JSON.stringify(Object.fromEntries(latestReviewStateByUser))}`);
+
+            const approvedLogins = Array.from(latestReviewStateByUser.entries())
+              .filter(([, state]) => state === 'APPROVED')
+              .map(([login]) => login);
+            core.info(`Approved logins: [${approvedLogins.join(', ')}] (${approvedLogins.length} total)`);
+
+            if (approvedLogins.length < 2) {
+              core.setFailed(`Changes to ${protectedPath} require at least two approvals. Found: ${approvedLogins.length}`);
+              return;
+            }
+            core.info('✓ Minimum approval count requirement met (2+ approvals)');
+
+            // Log group configurations
+            for (const [groupName, members] of approvalGroups) {
+              core.info(`${groupName} members: [${members.join(', ')}]`);
+            }
+
+            // Check approvals for each group
+            const groupApprovalStatus = new Map();
+            const groupApprovers = new Map();
+
+            for (const [groupName, members] of approvalGroups) {
+              const approvers = approvedLogins.filter((login) => members.includes(login));
+              const hasApproval = approvers.length > 0;
+
+              groupApprovers.set(groupName, approvers);
+              groupApprovalStatus.set(groupName, hasApproval);
+
+              core.info(`${groupName} approvers: [${approvers.join(', ')}] - Has approval: ${hasApproval}`);
+            }
+
+            // Check if all groups have at least one approval
+            const missingGroups = Array.from(groupApprovalStatus.entries())
+              .filter(([, hasApproval]) => !hasApproval)
+              .map(([groupName]) => groupName);
+
+            if (missingGroups.length > 0) {
+              core.setFailed(`Changes to ${protectedPath} require approvals from ALL designated groups. Missing: ${missingGroups.join(', ')}`);
+              return;
+            }
+
+            core.info(`✓ Required approvals detected from all ${approvalGroups.size} groups.`);
+            core.info('🎉 All approval requirements satisfied!');

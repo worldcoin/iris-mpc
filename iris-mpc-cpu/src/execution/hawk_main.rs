@@ -67,13 +67,14 @@ use tokio::{
     join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
 };
+use tokio_util::sync::CancellationToken;
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-pub(crate) mod insert;
+pub mod insert;
 mod intra_batch;
-pub(crate) mod iris_worker;
+pub mod iris_worker;
 mod is_match_batch;
 mod matching;
 mod reset;
@@ -292,9 +293,10 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
+            ct,
             [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
@@ -303,6 +305,7 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
+        ct: CancellationToken,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
@@ -326,7 +329,8 @@ impl HawkActor {
         let my_index = args.party_index;
 
         let networking =
-            build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
+            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
+                .await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -1489,6 +1493,15 @@ impl HawkHandle {
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
 
+        // if we sent the bucket statistics, clear them.
+        for side in [LEFT, RIGHT] {
+            if !hawk_actor.anonymized_bucket_statistics[side].is_empty() {
+                hawk_actor.anonymized_bucket_statistics[side]
+                    .buckets
+                    .clear();
+            }
+        }
+
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
         let query_count = results.batch.request_ids.len();
@@ -1644,7 +1657,7 @@ impl HawkHandle {
 
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
-    let hawk_actor = HawkActor::from_cli(&args).await?;
+    let hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
     HawkHandle::new(hawk_actor).await
 }
 
@@ -1656,6 +1669,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
+        utils::constants::N_PARTIES,
     };
     use aes_prng::AesRng;
     use futures::future::JoinAll;
@@ -1690,10 +1704,9 @@ mod tests {
             }
         };
 
-        let n_parties = 3;
-        let addresses = get_free_local_addresses(n_parties).await?;
+        let addresses = get_free_local_addresses(N_PARTIES).await?;
 
-        let handles = (0..n_parties)
+        let handles = (0..N_PARTIES)
             .map(|i| go(addresses.clone(), i))
             .map(tokio::spawn)
             .collect::<JoinAll<_>>()
@@ -1719,7 +1732,7 @@ mod tests {
             .collect_vec();
 
         // Unzip: party -> iris_id -> (share, share_mirrored)
-        let irises = (0..n_parties)
+        let irises = (0..N_PARTIES)
             .map(|party_index| {
                 irises
                     .iter()
@@ -1802,7 +1815,7 @@ mod tests {
         };
 
         let failed_request_i = 1;
-        let all_results = parallelize((0..n_parties).map(|party_i| {
+        let all_results = parallelize((0..N_PARTIES).map(|party_i| {
             // Mess with the shares to make one request fail.
             let mut shares = irises[party_i].clone();
             shares[failed_request_i].0 = GaloisRingSharedIris::dummy_for_party(party_i);
@@ -1823,7 +1836,7 @@ mod tests {
 
         let batch_2 = batch_0;
 
-        let all_results = parallelize((0..n_parties).map(|party_i| {
+        let all_results = parallelize((0..N_PARTIES).map(|party_i| {
             let batch = batch_of_party(&batch_2, &irises[party_i]);
             let mut handle = handles[party_i].clone();
             async move { handle.submit_batch_query(batch).await.await }
@@ -2040,7 +2053,7 @@ mod tests_db {
             disable_persistence: false,
             tls: None,
         };
-        let mut hawk_actor = HawkActor::from_cli(&args).await?;
+        let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
         graph_loader.load_graph_store(&graph_store, 2).await?;
 

@@ -18,6 +18,7 @@ aws-config.workspace = true
 aws-sdk-rds.workspace = true
 aws-sdk-s3.workspace = true
 bincode.workspace = true
+blake3 = "1"
 bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
@@ -105,8 +106,12 @@ harness = false
 name = "hnsw-ex"
 
 [[bin]]
-name = "generate_benchmark_data"
+name = "generate-benchmark-data"
 path = "bin/generate_benchmark_data.rs"
+
+[[bin]]
+name = "graph-mem-cli"
+path = "bin/graph_mem_cli.rs"
 
 [[bin]]
 name = "hawk_main"
@@ -123,10 +128,6 @@ path = "bin/hnsw_network_stats_example.rs"
 [[bin]]
 name = "init-test-dbs"
 path = "bin/init_test_dbs.rs"
-
-[[bin]]
-name = "graph-mem-cli"
-path = "bin/graph_mem_cli.rs"
 
 [[bin]]
 name = "local_hnsw"

@@ -26,6 +26,8 @@ jobs:
       contents: read
       attestations: write
       id-token: write
+    outputs:
+      digest: ${{ steps.docker-build.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -35,7 +37,7 @@ jobs:
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
 
       - name: Log in to the Container registry
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -53,18 +55,42 @@ jobs:
 
       - name: Build and Push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        id: docker-build
         with:
           context: .
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ secrets.AWS_ECR }}:${{ github.sha }}
-            ${{ secrets.AWS_ECR }}:latest
+            ${{ secrets.AWS_ECR_IRIS_MPC }}:${{ github.sha }}
+            ${{ secrets.AWS_ECR_IRIS_MPC }}:latest
             ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
-            ${{ github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR, github.event.release.tag_name) || '' }}
+            ${{ github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR_IRIS_MPC, github.event.release.tag_name) || '' }}
           build-args: |
             ARCHITECTURE=x86_64
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+  sign:
+    needs: docker
+    # TODO: remove comment after PoC phase
+    # if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Foundry
+        # https://github.com/foundry-rs/foundry-toolchain/releases/tag/v1.4.0
+        uses: foundry-rs/foundry-toolchain@50d5a8956f2e319df19e6b57539d7e2acb9f8c1e
+
+      - name: Sign the image digest
+        # TODO: continue-on-error is only for the PoC phase, remove when use mainnet
+        continue-on-error: true
+        env:
+          WEB_PRIVATE_KEY: ${{ secrets.SMART_CONTAINER_REGISTRY_KEY }}
+          DIGEST: ${{ needs.docker.outputs.digest }}
+        run: |
+          cast send 0x0F054e3666F2e7E4Ce345f55f0d7aeE513aC5540 \
+            --from 0x9A7aeeC57b8C354a0d0229f3792282f6F7004A59 \
+            --private-key $WEB_PRIVATE_KEY \
+            --rpc-url https://worldchain-sepolia.g.alchemy.com/public \
+            "addAllowedHash(bytes32)" ${DIGEST:7}

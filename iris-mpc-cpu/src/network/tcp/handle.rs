@@ -13,15 +13,23 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use eyre::Result;
 use iris_mpc_common::fast_metrics::FastHistogram;
-use std::io;
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    io,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
         mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
-        oneshot,
+        oneshot, Mutex,
     },
 };
+use tokio_util::sync::CancellationToken;
 
 const BUFFER_CAPACITY: usize = 32 * 1024;
 const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
@@ -69,9 +77,11 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         reconnector: Reconnector<T>,
         connections: PeerConnections<T>,
         config: TcpConfig,
+        ct: CancellationToken,
     ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
+        let conn_state = ConnectionState::new();
         for (peer_id, connections) in connections {
             let mut m = HashMap::new();
             for (stream_id, connection) in connections {
@@ -79,11 +89,14 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
                 let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
                 m.insert(stream_id, cmd_tx);
 
+                let ct2 = ct.clone();
                 tokio::spawn(manage_connection(
                     connection,
                     rc,
                     config.get_sessions_for_stream(&stream_id),
                     cmd_rx,
+                    ct2,
+                    conn_state.clone(),
                 ));
             }
             ch_map.insert(peer_id.clone(), m);
@@ -220,6 +233,8 @@ async fn manage_connection<T: NetworkConnection>(
     reconnector: Reconnector<T>,
     num_sessions: usize,
     mut cmd_ch: UnboundedReceiver<Cmd>,
+    ct: CancellationToken,
+    conn_state: ConnectionState,
 ) {
     let Connection {
         peer,
@@ -257,35 +272,55 @@ async fn manage_connection<T: NetworkConnection>(
     // when new sessions are requested, also tear down and stand up the forwarders.
     loop {
         let r_writer = writer.as_mut().expect("writer should be Some");
-        let r_outbound = &mut outbound_rx;
-        let outbound_task = async move {
-            let r = handle_outbound_traffic(r_writer, r_outbound, num_sessions).await;
-            tracing::warn!("handle_outbound_traffic exited: {r:?}");
-        };
+        let outbound_task = handle_outbound_traffic(r_writer, &mut outbound_rx, num_sessions);
 
         let r_reader = reader.as_mut().expect("reader should be Some");
-        let r_inbound = &inbound_forwarder;
-        let inbound_task = async move {
-            let r = handle_inbound_traffic(r_reader, r_inbound).await;
-            tracing::warn!("handle_inbound_traffic exited: {r:?}");
-        };
+        let inbound_task = handle_inbound_traffic(r_reader, &inbound_forwarder);
 
         enum Evt {
             Cmd(Cmd),
             Disconnected,
+            Shutdown,
         }
         let event = tokio::select! {
             maybe_cmd = cmd_ch.recv() => {
                 match maybe_cmd {
                     Some(cmd) => Evt::Cmd(cmd),
                     None => {
-                        tracing::info!("cmd channel closed");
+                        // basically means the networking stack was shut down before a command was received.
+                        if conn_state.exited() {
+                            tracing::info!("cmd channel closed");
+                        };
+                        ct.cancel();
                         return;
                     }
                 }
             }
-            _ = inbound_task => Evt::Disconnected,
-            _ = outbound_task => Evt::Disconnected,
+            r = inbound_task => {
+                if ct.is_cancelled() {
+                    Evt::Shutdown
+                } else if let Err(e) = r {
+                    if conn_state.incr_reconnect().await {
+                        tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
+                    }
+                    Evt::Disconnected
+                } else {
+                    unreachable!();
+                }
+            },
+            r = outbound_task => {
+                if ct.is_cancelled() {
+                    Evt::Shutdown
+                } else if let Err(e) = r {
+                     if conn_state.incr_reconnect().await {
+                        tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
+                    }
+                    Evt::Disconnected
+                } else {
+                    unreachable!();
+                }
+            },
+            _ = ct.cancelled() => Evt::Shutdown,
         };
 
         // update the Arcs depending on the event. wait for reconnect if needed.
@@ -314,21 +349,35 @@ async fn manage_connection<T: NetworkConnection>(
                     )
                     .await
                     {
-                        tracing::error!("reconnect failed: {e:?}");
+                        tracing::debug!("reconnect failed: {e:?}");
                         return;
                     };
                     rsp.send(Ok(())).unwrap();
                 }
             },
             Evt::Disconnected => {
-                tracing::info!("reconnecting to {:?}: {:?}", peer, stream_id);
+                tracing::debug!("reconnecting to {:?}: {:?}", peer, stream_id);
                 if let Err(e) =
                     reconnect_and_replace(&reconnector, &peer, stream_id, &mut reader, &mut writer)
                         .await
                 {
-                    tracing::error!("reconnect failed: {e:?}");
+                    if conn_state.exited() {
+                        if ct.is_cancelled() {
+                            tracing::info!("shutting down TCP/TLS networking stack");
+                        } else {
+                            tracing::error!("reconnect failed: {e:?}");
+                        }
+                    }
                     return;
-                };
+                } else if conn_state.decr_reconnect().await {
+                    tracing::info!("all connections re-established");
+                }
+            }
+            Evt::Shutdown => {
+                if conn_state.exited() {
+                    tracing::info!("shutting down TCP/TLS networking stack");
+                }
+                return;
             }
         }
     }
@@ -412,17 +461,11 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
             }
         }
 
-        if let Err(e) = write_buf(stream, &mut buf).await {
-            tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
-            return Err(e);
-        }
+        write_buf(stream, &mut buf).await?
     }
 
     if !buf.is_empty() {
-        if let Err(e) = write_buf(stream, &mut buf).await {
-            tracing::error!(error=%e, "Failed to flush buffer when outbound_rx closed");
-            return Err(e);
-        }
+        write_buf(stream, &mut buf).await?
     }
     // the channel will not receive any more commands
     tracing::debug!("outbound_rx closed");
@@ -493,7 +536,10 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
                     }
                 }
                 Err(e) => {
-                    tracing::error!("failed to deserialize message: {e}");
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("failed to deserialize message: {e}"),
+                    ));
                 }
             };
         } else {
@@ -514,4 +560,73 @@ async fn write_buf<T: NetworkConnection>(
     stream.flush().await?;
     buf.clear();
     Ok(())
+}
+
+// state which is shared by all connections. used to reduce the number of logs
+// emitted upon loss of network connectivity.
+#[derive(Clone)]
+struct ConnectionState {
+    inner: Arc<ConnectionStateInner>,
+}
+
+impl ConnectionState {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(ConnectionStateInner::new()),
+        }
+    }
+
+    fn exited(&self) -> bool {
+        self.inner
+            .exited
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    async fn incr_reconnect(&self) -> bool {
+        self.inner.reconnecting.increment().await
+    }
+
+    async fn decr_reconnect(&self) -> bool {
+        self.inner.reconnecting.decrement().await
+    }
+}
+
+struct ConnectionStateInner {
+    reconnecting: Counter,
+    exited: AtomicBool,
+}
+
+impl ConnectionStateInner {
+    fn new() -> Self {
+        Self {
+            reconnecting: Counter::new(),
+            exited: AtomicBool::new(false),
+        }
+    }
+}
+
+struct Counter {
+    num: Mutex<usize>,
+}
+
+impl Counter {
+    fn new() -> Self {
+        Self { num: Mutex::new(0) }
+    }
+
+    // returns true if num was zero
+    async fn increment(&self) -> bool {
+        let mut l = self.num.lock().await;
+        *l += 1;
+        *l == 1
+    }
+
+    // returns true if num was one before decrementing
+    async fn decrement(&self) -> bool {
+        let mut l = self.num.lock().await;
+        let r = *l == 1;
+        *l = l.saturating_sub(1);
+        r
+    }
 }

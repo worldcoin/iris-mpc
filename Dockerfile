@@ -23,7 +23,7 @@ RUN rustup toolchain install 1.85.0
 RUN rustup default 1.85.0
 RUN rustup component add cargo
 RUN cargo install cargo-build-deps \
-    && cargo install cargo-edit --version 0.13.6
+    && cargo install cargo-edit --version 0.13.6 --locked
 
 FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc

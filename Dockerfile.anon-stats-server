@@ -1,0 +1,44 @@
+FROM --platform=linux/amd64 ubuntu:22.04 as build-image
+
+WORKDIR /src
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    protobuf-compiler \
+    wget
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH "/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME "/root/.rustup"
+ENV CARGO_HOME "/root/.cargo"
+RUN rustup toolchain install 1.85.0
+RUN rustup default 1.85.0
+RUN rustup component add cargo
+RUN cargo install cargo-build-deps \
+    && cargo install cargo-edit --version 0.13.6 --locked
+
+FROM --platform=linux/amd64 build-image as build-app
+WORKDIR /src/iris-mpc
+COPY . .
+
+RUN cargo build --release --target x86_64-unknown-linux-gnu --bin iris-mpc-anon-stats-server
+
+FROM --platform=linux/amd64 ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y ca-certificates awscli
+COPY certs /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
+COPY --from=build-app /src/iris-mpc/target/x86_64-unknown-linux-gnu/release/iris-mpc-anon-stats-server /bin/iris-mpc-anon-stats-server
+
+USER 65534
+ENTRYPOINT ["/bin/iris-mpc-anon-stats-server"]

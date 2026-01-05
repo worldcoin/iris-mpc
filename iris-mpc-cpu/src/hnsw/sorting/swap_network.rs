@@ -1,4 +1,8 @@
-use crate::hnsw::VectorStore;
+use crate::{
+    hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Store},
+    hnsw::VectorStore,
+    shares::Share,
+};
 use eyre::{eyre, Result};
 use itertools::Itertools;
 
@@ -141,4 +145,47 @@ pub async fn apply_swap_network<V: VectorStore>(
     }
 
     Ok(())
+}
+
+/// Function obliviously applies the supplied swap network `network` to the list of
+/// tuples containing ids and distances between iris vectors as `(u32, Aby3DistanceRef)`.
+/// An 'Aby3Store' object executes comparisons via MPC for each layer in batches.
+/// Note that output is secret-shared, even for unchanged elements of the list.
+/// This implies that all vector ids are considered secret-shared after the first layer,
+/// which might introduce an additional throughput overhead.
+/// For example, for a swap network implementing the tournament method to find the minimum of a list of length N,
+/// this throughput overhead is O(1).
+pub async fn apply_oblivious_swap_network(
+    store: &mut Aby3Store,
+    list: &[(u32, Aby3DistanceRef)],
+    network: &SwapNetwork,
+) -> Result<Vec<(Share<u32>, Aby3DistanceRef)>> {
+    let mut encrypted_list = vec![];
+    for (layer_id, layer) in network.layers.iter().enumerate() {
+        let distances: Vec<_> = layer
+            .iter()
+            .filter_map(
+                |(idx1, idx2): &(usize, usize)| match (list.get(*idx1), list.get(*idx2)) {
+                    // swap order to check for strict inequality d1 > d2
+                    (Some((_, d1)), Some((_, d2))) => Some((d2.clone(), d1.clone())),
+                    _ => None,
+                },
+            )
+            .collect();
+        // Computes d1 > d2 without opening as in less_than_batch
+        let comp_results = store.oblivious_less_than_batch(&distances).await?;
+        encrypted_list = if layer_id == 0 {
+            // First layer: input ids are in plaintext, so we can use the more efficient plain_ids version.
+            store
+                .oblivious_swap_batch_plain_ids(comp_results, list, layer)
+                .await?
+        } else {
+            // Following layers: input ids are secret shared
+            store
+                .oblivious_swap_batch(comp_results, &encrypted_list, layer)
+                .await?
+        };
+    }
+
+    Ok(encrypted_list)
 }
