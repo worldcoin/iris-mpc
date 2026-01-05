@@ -8,7 +8,7 @@ use iris_mpc_common::config::Config as NodeConfig;
 use super::reader;
 use crate::{
     constants::PARTY_INDICES,
-    types::{NodeConfigSet, NodeExecutionHost, PartyIdx},
+    types::{NetConfig, NodeExecutionHost, PartyIdx},
 };
 
 /// Returns path to an asset within the crate assets sub-directory.
@@ -58,7 +58,7 @@ pub fn read_node_config(
 }
 
 /// Returns network wide configuration deserialized from a set of toml files.
-pub fn read_node_config_set(config_kind: &str, config_idx: usize) -> Result<NodeConfigSet, Error> {
+pub fn read_node_config_set(config_kind: &str, config_idx: usize) -> Result<NetConfig, Error> {
     Ok(PARTY_INDICES
         .iter()
         .map(|party_idx| read_node_config(config_kind, config_idx, party_idx).unwrap())

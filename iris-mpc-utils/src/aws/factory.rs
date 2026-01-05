@@ -26,13 +26,13 @@ pub fn create_iris_code_party_shares(
     r_code: [GaloisRingIrisCodeShare; N_PARTIES],
     r_mask: [GaloisRingIrisCodeShare; N_PARTIES],
 ) -> IrisCodePartyShares {
-    let parties = create_iris_code_shares_json(l_code, l_mask, r_code, r_mask);
+    let party_shares = create_iris_code_party_shares_json(l_code, l_mask, r_code, r_mask);
 
-    IrisCodePartyShares::new(signup_id.to_string(), parties.to_vec())
+    IrisCodePartyShares::new(signup_id.to_string(), party_shares.to_vec())
 }
 
 /// Converts iris code shares into a JSON representation.
-pub fn create_iris_code_shares_json(
+pub fn create_iris_code_party_shares_json(
     l_code: [GaloisRingIrisCodeShare; N_PARTIES],
     l_mask: [GaloisRingIrisCodeShare; N_PARTIES],
     r_code: [GaloisRingIrisCodeShare; N_PARTIES],
@@ -77,10 +77,12 @@ pub fn create_iris_party_shares_for_s3(
 #[cfg(test)]
 mod tests {
     use super::{
-        create_iris_code_party_shares, create_iris_code_shares_json,
+        create_iris_code_party_shares, create_iris_code_party_shares_json,
         create_iris_party_shares_for_s3,
     };
-    use crate::{constants::N_PARTIES, irises::generate_iris_code_and_mask_shares_both_eyes};
+    use crate::{
+        constants::N_PARTIES, irises::generate_iris_code_and_mask_party_shares_for_both_eyes,
+    };
     use rand::{rngs::StdRng, SeedableRng};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
     use uuid::Uuid;
@@ -93,7 +95,7 @@ mod tests {
     fn test_create_iris_code_party_shares() {
         // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
         let mut rng = StdRng::from_entropy();
-        let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
+        let [l, r] = generate_iris_code_and_mask_party_shares_for_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
         let signup_id = Uuid::new_v4();
@@ -104,17 +106,17 @@ mod tests {
     fn test_create_iris_code_shares_json() {
         // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
         let mut rng = StdRng::from_entropy();
-        let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
+        let [l, r] = generate_iris_code_and_mask_party_shares_for_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
-        let _ = create_iris_code_shares_json(l_code, l_mask, r_code, r_mask);
+        let _ = create_iris_code_party_shares_json(l_code, l_mask, r_code, r_mask);
     }
 
     #[test]
     fn test_create_party_shares_for_s3() {
         // let [l_code, l_mask, r_code, r_mask] = create_iris_code_and_mask_shares_for_both_eyes();
         let mut rng = StdRng::from_entropy();
-        let [l, r] = generate_iris_code_and_mask_shares_both_eyes(&mut rng);
+        let [l, r] = generate_iris_code_and_mask_party_shares_for_both_eyes(&mut rng);
         let [l_code, l_mask] = l;
         let [r_code, r_mask] = r;
         let signup_id = Uuid::new_v4();
