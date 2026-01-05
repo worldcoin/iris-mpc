@@ -10,7 +10,11 @@ use iris_mpc_common::{IrisVectorId, ROTATIONS};
 use iris_mpc_cpu::execution::hawk_main::iris_worker::init_workers;
 use iris_mpc_cpu::hawkers::shared_irises::SharedIrises;
 use iris_mpc_cpu::protocol::{
-    ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
+    ops::{
+        galois_ring_pairwise_distance, rotation_aware_pairwise_distance,
+        rotation_aware_pairwise_distance_rowmajor,
+    },
+    shared_iris::{ArcIris, GaloisRingSharedIris},
 };
 use itertools::Itertools;
 use rand::seq::index::sample;
@@ -679,8 +683,138 @@ pub fn bench_worker_pool(c: &mut Criterion) {
     g.finish();
 }
 
+/// Benchmark comparing rotation_aware_pairwise_distance vs rotation_aware_pairwise_distance_rowmajor.
+/// Tests with different target counts and thread configurations to match production usage.
+pub fn bench_rotation_aware_pairwise_distance(c: &mut Criterion) {
+    let rng = &mut thread_rng();
+    let num_cpus = num_cpus::get_physical();
+
+    // Generate a large dataset of preprocessed queries and targets
+    // Targets don't need preprocessing; only queries do (matching production usage)
+    let dataset_size = 10000;
+
+    // Generate targets (no preprocessing needed - these are stored vectors)
+    let targets: Vec<ArcIris> = (0..dataset_size)
+        .map(|_| {
+            let iris = IrisCode::random_rng(rng);
+            Arc::new(GaloisRingSharedIris::generate_shares_locally(rng, iris)[0].clone())
+        })
+        .collect();
+
+    // Generate preprocessed queries (as they would come from incoming requests)
+    let queries: Vec<ArcIris> = (0..100)
+        .map(|_| {
+            let iris = IrisCode::random_rng(rng);
+            let mut share = GaloisRingSharedIris::generate_shares_locally(rng, iris)[0].clone();
+            share.code.preprocess_iris_code_query_share();
+            share.mask.preprocess_mask_code_query_share();
+            Arc::new(share)
+        })
+        .collect();
+
+    let target_counts = [32, 64, 128, 256, 512];
+    let thread_configs = [1, num_cpus / 2, num_cpus];
+
+    for &num_targets in &target_counts {
+        for &num_threads in &thread_configs {
+            if num_threads == 0 {
+                continue;
+            }
+
+            let pool = ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .build()
+                .unwrap();
+
+            let mut g = c.benchmark_group(format!(
+                "rotation_aware_pairwise_distance/targets={}/threads={}",
+                num_targets, num_threads
+            ));
+            g.throughput(Throughput::Elements(
+                (num_targets * ROTATIONS * num_threads) as u64,
+            ));
+            g.sample_size(20);
+
+            // Benchmark original implementation
+            g.bench_function("original", |b| {
+                pool.install(|| {
+                    b.iter_batched(
+                        || {
+                            // Setup: select random query and random targets per thread
+                            (0..num_threads)
+                                .map(|i| {
+                                    let mut thread_rng = StdRng::seed_from_u64(i as u64);
+                                    let query_idx = thread_rng.gen_range(0..queries.len());
+                                    let target_indices: Vec<usize> = (0..num_targets)
+                                        .map(|_| thread_rng.gen_range(0..targets.len()))
+                                        .collect();
+                                    (query_idx, target_indices)
+                                })
+                                .collect::<Vec<_>>()
+                        },
+                        |workloads| {
+                            workloads
+                                .into_par_iter()
+                                .map(|(query_idx, target_indices)| {
+                                    let query = &queries[query_idx];
+                                    let target_refs: Vec<&ArcIris> =
+                                        target_indices.iter().map(|&i| &targets[i]).collect();
+                                    black_box(rotation_aware_pairwise_distance(
+                                        query,
+                                        target_refs.iter().map(|t| Some(*t)),
+                                    ))
+                                })
+                                .collect::<Vec<_>>()
+                        },
+                        BatchSize::SmallInput,
+                    )
+                })
+            });
+
+            // Benchmark row-major implementation
+            g.bench_function("rowmajor", |b| {
+                pool.install(|| {
+                    b.iter_batched(
+                        || {
+                            // Setup: select random query and random targets per thread
+                            (0..num_threads)
+                                .map(|i| {
+                                    let mut thread_rng = StdRng::seed_from_u64(i as u64);
+                                    let query_idx = thread_rng.gen_range(0..queries.len());
+                                    let target_indices: Vec<usize> = (0..num_targets)
+                                        .map(|_| thread_rng.gen_range(0..targets.len()))
+                                        .collect();
+                                    (query_idx, target_indices)
+                                })
+                                .collect::<Vec<_>>()
+                        },
+                        |workloads| {
+                            workloads
+                                .into_par_iter()
+                                .map(|(query_idx, target_indices)| {
+                                    let query = &queries[query_idx];
+                                    let target_refs: Vec<&ArcIris> =
+                                        target_indices.iter().map(|&i| &targets[i]).collect();
+                                    black_box(rotation_aware_pairwise_distance_rowmajor(
+                                        query,
+                                        target_refs.iter().map(|t| Some(*t)),
+                                    ))
+                                })
+                                .collect::<Vec<_>>()
+                        },
+                        BatchSize::SmallInput,
+                    )
+                })
+            });
+
+            g.finish();
+        }
+    }
+}
+
 criterion_group!(
     benches,
+    bench_rotation_aware_pairwise_distance,
     bench_worker_pool,
     bench_batch_trick_dot,
     bench_trick_dot,

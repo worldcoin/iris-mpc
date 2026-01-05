@@ -30,25 +30,23 @@ async fn run_jobs(
         // each vec of shares is of length 3 - per 3PC. the sessions were created
         // so that if split by 3, each chunk has the same session id, and each idx
         // corresponds to a party.
-        let d1i = d1[index % 3].clone();
-        let d2i = d2[index % 3].clone();
-        let t1i = t1[index % 3].clone();
-        let t2i = t2[index % 3].clone();
+        let d1i = d1[index % 3];
+        let d2i = d2[index % 3];
+        let t1i = t1[index % 3];
+        let t2i = t2[index % 3];
         let player_session = player_session.clone();
         jobs.spawn(async move {
             let mut player_session = player_session.lock().await;
             for _ in 0..num_iterations {
-                let ds_and_ts = batch_signed_lift_vec(
-                    &mut player_session,
-                    vec![d1i.clone(), d2i.clone(), t1i.clone(), t2i.clone()],
-                )
-                .await
-                .unwrap();
+                let ds_and_ts =
+                    batch_signed_lift_vec(&mut player_session, vec![d1i, d2i, t1i, t2i])
+                        .await
+                        .unwrap();
                 cross_compare(
                     &mut player_session,
                     &[(
-                        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
-                        DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        DistanceShare::new(ds_and_ts[0], ds_and_ts[1]),
+                        DistanceShare::new(ds_and_ts[2], ds_and_ts[3]),
                     )],
                 )
                 .await
