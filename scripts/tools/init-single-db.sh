@@ -2,7 +2,8 @@
 
 curl "https://drive.usercontent.google.com/download?id=1je1stRXfVrHy2LRVcfg-SrRiz_yw33S4&export=download&confirm=t" -o /tmp/irises.ndjson
 
-curl "https://drive.usercontent.google.com/download?id=1_73aeBjwJKDV1n6pYBi49BCUGl5UJKGh&export=download&confirm=t" -o /tmp/irises-1k.ndjson
+# actually 10k
+curl "https://drive.usercontent.google.com/download?id=1rhFOU81cJUuastLBHHCSUNf2c1x7J_tC&export=download&confirm=t" -o /tmp/irises-1k.ndjson
 
 curl "https://drive.usercontent.google.com/download?id=1vjswOMB7Yn-f7TDOqfzQr1_ZS-ubSg4E&export=download&confirm=t" -o /tmp/graph.dat
 
