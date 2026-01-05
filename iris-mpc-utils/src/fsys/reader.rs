@@ -15,5 +15,6 @@ where
     }
 
     let content = fs::read_to_string(path_to_config)?;
+
     toml::from_str(&content).map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))
 }

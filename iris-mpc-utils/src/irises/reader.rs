@@ -94,11 +94,11 @@ pub fn read_iris_shares(
     n_to_skip: usize,
     rng_state: u64,
 ) -> Result<impl Iterator<Item = Box<[GaloisRingSharedIris; N_PARTIES]>>, Error> {
-    let stream = read_iris_codes(path_to_ndjson, n_to_read, n_to_skip)
+    let iterable = read_iris_codes(path_to_ndjson, n_to_read, n_to_skip)
         .unwrap()
         .map(move |code_pair| convertor::to_galois_ring_shares(rng_state, &code_pair));
 
-    Ok(stream)
+    Ok(iterable)
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
@@ -111,11 +111,11 @@ pub fn read_iris_shares_chunks(
     chunk_size: usize,
     rng_state: u64,
 ) -> Result<IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIris; N_PARTIES]>>>, Error> {
-    let stream = read_iris_shares(path_to_ndjson, n_to_read, n_to_skip, rng_state)
+    let iterable = read_iris_shares(path_to_ndjson, n_to_read, n_to_skip, rng_state)
         .unwrap()
         .chunks(chunk_size);
 
-    Ok(stream)
+    Ok(iterable)
 }
 
 /// Returns node configuration deserialized from a toml file.
@@ -124,4 +124,63 @@ pub fn read_node_config(path_to_config: &Path) -> Result<NodeConfig, Error> {
     assert!(path_to_config.exists());
 
     Ok(toml::from_str(&fs::read_to_string(path_to_config)?).unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        read_b64_iris_codes, read_b64_iris_codes_chunks, read_iris_codes, read_iris_codes_chunks,
+        read_iris_shares, read_iris_shares_chunks,
+    };
+    use crate::fsys::local::get_path_to_ndjson;
+
+    #[tokio::test]
+    async fn test_ndjson_file_exists() {
+        assert!(get_path_to_ndjson().exists());
+    }
+
+    #[tokio::test]
+    async fn test_read_b64_iris_codes() {
+        for _ in read_b64_iris_codes(&get_path_to_ndjson(), 900, 100).unwrap() {}
+    }
+
+    #[tokio::test]
+    async fn test_read_b64_iris_codes_chunks() {
+        for chunk in read_b64_iris_codes_chunks(&get_path_to_ndjson(), 900, 100, 10)
+            .unwrap()
+            .into_iter()
+        {
+            for _ in chunk {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_iris_codes() {
+        for _ in read_iris_codes(&get_path_to_ndjson(), 900, 100).unwrap() {}
+    }
+
+    #[tokio::test]
+    async fn test_read_iris_codes_chunks() {
+        for chunk in read_iris_codes_chunks(&get_path_to_ndjson(), 900, 100, 10)
+            .unwrap()
+            .into_iter()
+        {
+            for _ in chunk {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_iris_shares() {
+        for _ in read_iris_shares(&get_path_to_ndjson(), 900, 100, 42).unwrap() {}
+    }
+
+    #[tokio::test]
+    async fn test_read_iris_shares_chunks() {
+        for chunk in read_iris_shares_chunks(&get_path_to_ndjson(), 900, 100, 10, 42)
+            .unwrap()
+            .into_iter()
+        {
+            for _ in chunk {}
+        }
+    }
 }
