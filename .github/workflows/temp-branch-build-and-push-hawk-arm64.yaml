@@ -3,7 +3,7 @@ name: Branch - Anon stats server build and push docker image
 on:
   push:
     branches:
-      - "sw/try-faster-bit-inject2"
+      - "sw/genesis_minfhd6"
     paths-ignore:
       - "deploy/**"
 
