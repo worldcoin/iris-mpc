@@ -709,16 +709,16 @@ impl PrerotatedQueryRowMajor {
         let mut amounts = [0usize; ROTATIONS];
         // Left rotations: rotate left by 60, 56, ..., 4 elements
         let mut i = 0;
-        while i < 15 {
-            amounts[i] = (15 - i) * 4;
+        while i < 6 {
+            amounts[i] = (6 - i) * 4;
             i += 1;
         }
         // Center: no rotation
-        amounts[15] = 0;
+        amounts[6] = 0;
         // Right rotations: rotate right by 4, 8, ..., 60 (i.e., left by 796, 792, ..., 740)
         let mut i = 1;
-        while i <= 15 {
-            amounts[15 + i] = 800 - i * 4;
+        while i <= 6 {
+            amounts[6 + i] = 800 - i * 4;
             i += 1;
         }
         amounts
