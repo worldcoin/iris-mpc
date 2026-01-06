@@ -3,7 +3,8 @@
 //! of two hosts. Each device pair gets its separate NCCL comm channel, with the
 //! host device being rank 0. It also starts a HTTP server on the host on port
 //! 3000 to exchange the NCCL COMM_IDs. Host: NCCL_DEBUG=INFO cargo run
-//! --release --bin nccl 0 Node: NCCL_DEBUG=INFO cargo run --release --bin nccl
+//! --release -p iris-mpc-bins --bin nccl 0 Node: NCCL_DEBUG=INFO cargo run
+//! --release -p iris-mpc-bins --bin nccl
 //! {1,2} HOST_IP:3000
 
 use axum::{extract::Path, routing::get, Router};

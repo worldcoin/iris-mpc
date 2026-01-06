@@ -1,7 +1,7 @@
 use crate::{
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
-        ops::{galois_ring_pairwise_distance, pairwise_distance},
+        ops::{galois_ring_pairwise_distance, pairwise_distance, rotation_aware_pairwise_distance},
         shared_iris::ArcIris,
     },
     shares::RingElement,
@@ -44,6 +44,11 @@ enum IrisTask {
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
     DotProductBatch {
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
+    RotationAwareDotProductBatch {
         query: ArcIris,
         vector_ids: Vec<VectorId>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -112,6 +117,55 @@ impl IrisPoolHandle {
             rsp: tx,
         };
         self.submit(task, rx).await
+    }
+
+    pub async fn rotation_aware_dot_product_batch(
+        &mut self,
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let start = Instant::now();
+
+        let mut responses = Vec::with_capacity(vector_ids.len());
+        for id in vector_ids {
+            let (tx, rx) = oneshot::channel();
+            let task = IrisTask::RotationAwareDotProductBatch {
+                query: query.clone(),
+                vector_ids: vec![id],
+                rsp: tx,
+            };
+            self.get_next_worker().send(task)?;
+            responses.push(rx);
+        }
+        let results = futures::future::try_join_all(responses).await?;
+        let results = results.into_iter().flatten().collect();
+
+        self.metric_latency.record(start.elapsed().as_secs_f64());
+        Ok(results)
+    }
+
+    pub async fn bench_batch_dot(
+        &mut self,
+        per_worker: usize,
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let mut responses = Vec::with_capacity(vector_ids.len() / per_worker);
+        for vector_id_chunk in vector_ids.chunks(per_worker) {
+            let (tx, rx) = oneshot::channel();
+            let task = IrisTask::RotationAwareDotProductBatch {
+                query: query.clone(),
+                vector_ids: vector_id_chunk.to_vec(),
+                rsp: tx,
+            };
+            self.get_next_worker().send(task)?;
+            responses.push(rx);
+        }
+
+        let r = futures::future::try_join_all(responses).await?;
+        let flattened = r.into_iter().flatten().collect();
+
+        Ok(flattened)
     }
 
     pub async fn galois_ring_pairwise_distances(
@@ -239,6 +293,17 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
+            }
+
+            IrisTask::RotationAwareDotProductBatch {
+                query,
+                vector_ids,
+                rsp,
+            } => {
+                let store = iris_store.data.blocking_read();
+                let targets = vector_ids.iter().map(|v| store.get_vector(v));
+                let result = rotation_aware_pairwise_distance(&query, targets);
+                let _ = rsp.send(result);
             }
 
             IrisTask::RingPairwiseDistance { input, rsp } => {

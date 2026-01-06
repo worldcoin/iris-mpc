@@ -1,90 +1,72 @@
-// prf.rs — fast PRF with ChaCha20 backend while keeping PrfSeed = [u8; 16] on the wire.
-//
-// Why this file:
-// - Keeps your external types the same: PrfSeed = [u8; 16].
-// - NetworkValue::PrfKey([u8; 16]) continues to compile.
-// - LocalRuntime::new_with_network_type(..., Vec<PrfSeed>, ...) now expects Vec<[u8; 16]>.
-// - Internally expands 16-byte seeds into 32-bytes for ChaCha20 (deterministic via BLAKE3).
-//
-// Dependencies (Cargo.toml):
-//   rand = "0.8"
-//   rand_core = "0.6"
-//   rand_chacha = "0.3"
-//   blake3 = "1"
-
 use crate::shares::{int_ring::IntRing2k, ring_impl::RingElement};
-use rand::rngs::OsRng;
 use rand::{distributions::Standard, prelude::Distribution, Rng, SeedableRng};
-use rand_chacha::rand_core;
-use rand_core::RngCore;
 
-// Keep the old name visible to the rest of the codebase.
-pub use rand_chacha::ChaCha20Rng as AesRng;
+#[cfg(not(feature = "chacha_prf"))]
+type PrfRng = aes_prng::AesRng;
 
-/// Wire / external seed type. Stays 16 bytes to match existing code and messages.
+#[cfg(feature = "chacha_prf")]
+type PrfRng = rand_chacha::ChaCha20Rng;
+
 pub type PrfSeed = [u8; 16];
-
-/// Internal 32-byte seed for ChaCha20.
-type PrfSeed32 = <AesRng as SeedableRng>::Seed; // [u8; 32]
-
-#[inline]
-fn expand_seed_16_to_32(short: PrfSeed) -> PrfSeed32 {
-    use blake3::Hasher;
-    let mut h = Hasher::new();
-    h.update(&short);
-    let digest = h.finalize(); // 32 bytes
-    let mut out = [0u8; 32];
-    out.copy_from_slice(digest.as_bytes());
-    out
-}
 
 #[derive(Clone, Debug)]
 pub struct Prf {
-    pub my_prf: AesRng,
-    pub prev_prf: AesRng,
+    pub my_prf: PrfRng,
+    pub prev_prf: PrfRng,
 }
 
 impl Default for Prf {
     fn default() -> Self {
-        let my16 = Prf::gen_seed();
-        let prev16 = Prf::gen_seed();
-        Self::new(my16, prev16)
+        Self {
+            my_prf: PrfRng::from_entropy(),
+            prev_prf: PrfRng::from_entropy(),
+        }
     }
 }
 
 impl Prf {
-    /// Construct from 16-byte seeds (wire format). Internally expanded to 32 bytes.
+    #[cfg(feature = "chacha_prf")]
     pub fn new(my_key: PrfSeed, prev_key: PrfSeed) -> Self {
         let my_seed32 = expand_seed_16_to_32(my_key);
         let prev_seed32 = expand_seed_16_to_32(prev_key);
         Self {
-            my_prf: AesRng::from_seed(my_seed32),
-            prev_prf: AesRng::from_seed(prev_seed32),
+            my_prf: PrfRng::from_seed(Self::expand_seed(my_key)),
+            prev_prf: PrfRng::from_seed(Self::expand_seed(prev_key)),
         }
     }
 
-    /// Generate a fresh 16-byte seed from OS CSPRNG (wire format).
-    #[inline]
-    pub fn gen_seed() -> PrfSeed {
-        let mut s = [0u8; 16];
-        OsRng.fill_bytes(&mut s);
-        s
-        // Note: Security is bounded by 128 bits of entropy here (wire format).
-        // Internally we expand to 256-bit ChaCha seeds via BLAKE3.
+    #[cfg(not(feature = "chacha_prf"))]
+    pub fn new(my_key: PrfSeed, prev_key: PrfSeed) -> Self {
+        Self {
+            my_prf: PrfRng::from_seed(my_key),
+            prev_prf: PrfRng::from_seed(prev_key),
+        }
     }
 
-    /// Accessors
-    #[inline]
-    pub fn get_my_prf(&mut self) -> &mut AesRng {
+    #[cfg(feature = "chacha_prf")]
+    fn expand_seed(seed: PrfSeed) -> [u8; 32] {
+        use blake3::Hasher;
+        let mut h = Hasher::new();
+        h.update(&seed);
+        let digest = h.finalize();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(digest.as_bytes());
+        out
+    }
+
+    pub fn get_my_prf(&mut self) -> &mut PrfRng {
         &mut self.my_prf
     }
 
-    #[inline]
-    pub fn get_prev_prf(&mut self) -> &mut AesRng {
+    pub fn get_prev_prf(&mut self) -> &mut PrfRng {
         &mut self.prev_prf
     }
 
-    /// Draw one sample from each stream.
+    pub fn gen_seed() -> PrfSeed {
+        let mut rng = PrfRng::from_entropy();
+        rng.gen::<PrfSeed>()
+    }
+
     pub fn gen_rands<T>(&mut self) -> (T, T)
     where
         Standard: Distribution<T>,

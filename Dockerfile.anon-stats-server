@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04 as build-image
+FROM --platform=linux/amd64 public.ecr.aws/ubuntu/ubuntu:22.04 as build-image
 
 WORKDIR /src
 RUN apt-get update && apt-get install -y \
@@ -29,7 +29,7 @@ FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
-RUN cargo build --release --target x86_64-unknown-linux-gnu --bin iris-mpc-anon-stats-server
+RUN cargo build -p iris-mpc-bins --release --target x86_64-unknown-linux-gnu --bin iris-mpc-anon-stats-server
 
 FROM --platform=linux/amd64 ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive

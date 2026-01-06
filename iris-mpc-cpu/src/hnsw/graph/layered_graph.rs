@@ -139,7 +139,7 @@ impl<V: Ref + Display + FromStr> GraphMem<V> {
         layer.set_links(base, links);
     }
 
-    pub async fn num_layers(&self) -> usize {
+    pub fn num_layers(&self) -> usize {
         self.layers.len()
     }
 
@@ -293,6 +293,14 @@ mod tests {
             let vector_0 = self.points[query].data;
             let vector_1 = self.points[vector].data;
             Ok(hamming_distance(vector_0, vector_1))
+        }
+
+        async fn eval_minimal_rotation_distance_batch(
+            &mut self,
+            _query: &Self::QueryRef,
+            _vectors: &[Self::VectorRef],
+        ) -> Result<Vec<Self::DistanceRef>> {
+            unimplemented!()
         }
 
         async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
