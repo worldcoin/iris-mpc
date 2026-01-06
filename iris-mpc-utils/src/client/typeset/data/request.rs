@@ -158,7 +158,16 @@ impl Request {
             | Self::Reauthorization { uniqueness_ref, .. }
             | Self::ResetUpdate { uniqueness_ref, .. } => {
                 if let ResponsePayload::Uniqueness(result) = response {
-                    *uniqueness_ref = UniquenessReference::IrisSerialId(result.serial_id.unwrap());
+                    let serial_id = result
+                        .serial_id
+                        .or_else(|| {
+                            result
+                                .matched_serial_ids
+                                .as_ref()
+                                .and_then(|matched| matched.first().copied())
+                        })
+                        .expect("Unmatched uniqueness request.");
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(serial_id);
                 }
             }
             _ => panic!("Unsupported parent data"),
