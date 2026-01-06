@@ -49,7 +49,26 @@ pub enum RequestBatchConfiguration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SharesGeneratorConfiguration {
     /// Shares are generated from a pre-built file.
-    FromFile { path_to_ndjson_file: String },
+    FromFile {
+        // Path to an NDJSON file.
+        path_to_ndjson_file: String,
+
+        // Instruction in respect of Iris code selection.
+        selection_strategy: IrisCodeSelectionStrategy,
+    },
     /// Shares are generated via a random number generator.
-    FromRng { rng_seed: Option<u64> },
+    FromRng {
+        // An optional RNG seed.
+        rng_seed: Option<u64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IrisCodeSelectionStrategy {
+    // All Iris codes are selected.
+    All,
+    // Every other Iris code is selected beginning at an even offset.
+    Even,
+    // Every other Iris code is selected beginning at an odd offset.
+    Odd,
 }

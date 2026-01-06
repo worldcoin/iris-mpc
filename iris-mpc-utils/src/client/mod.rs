@@ -7,7 +7,7 @@ use crate::aws::{AwsClient, AwsClientConfig};
 
 use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
-    SharesUploader,
+    SharesGeneratorParams, SharesUploader,
 };
 use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
 
@@ -47,7 +47,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
                 SharesGenerator::<R>::from(&client_config),
             ),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::new(RequestGeneratorParams::from(&client_config)),
+            request_generator: RequestGenerator::from(&client_config),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
@@ -109,6 +109,12 @@ impl AsyncFrom<AwsConfiguration> for AwsClientConfig {
     }
 }
 
+impl From<&ServiceClientConfiguration> for RequestGenerator {
+    fn from(config: &ServiceClientConfiguration) -> Self {
+        Self::new(RequestGeneratorParams::from(config))
+    }
+}
+
 impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
     fn from(config: &ServiceClientConfiguration) -> Self {
         match config.request_batch() {
@@ -138,23 +144,25 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
     for SharesGenerator<R>
 {
     fn from(config: &ServiceClientConfiguration) -> Self {
+        Self::new(SharesGeneratorParams::<R>::from(config))
+    }
+}
+
+impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
+    for SharesGeneratorParams<R>
+{
+    fn from(config: &ServiceClientConfiguration) -> Self {
         match config.shares_generator() {
             config::SharesGeneratorConfiguration::FromFile {
                 path_to_ndjson_file,
+                ..
             } => {
                 tracing::info!("Parsing config: Shares generator from file");
-                SharesGenerator::new_file(PathBuf::from(path_to_ndjson_file))
+                SharesGeneratorParams::new_file(PathBuf::from(path_to_ndjson_file))
             }
             config::SharesGeneratorConfiguration::FromRng { rng_seed } => {
                 tracing::info!("Parsing config: Shares generator from RNG");
-
-                let rng_seed = if rng_seed.is_some() {
-                    R::seed_from_u64(rng_seed.unwrap())
-                } else {
-                    R::from_entropy()
-                };
-
-                SharesGenerator::<R>::new_rng(rng_seed)
+                SharesGeneratorParams::<R>::new_rng(*rng_seed)
             }
         }
     }
