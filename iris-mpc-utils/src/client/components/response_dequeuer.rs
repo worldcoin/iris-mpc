@@ -22,13 +22,6 @@ pub(crate) struct ResponseDequeuer {
     aws_client: AwsClient,
 }
 
-impl ResponseDequeuer {
-    /// Constructor.
-    pub fn new(aws_client: AwsClient) -> Self {
-        Self { aws_client }
-    }
-}
-
 #[async_trait]
 impl Initialize for ResponseDequeuer {
     async fn init(&mut self) -> Result<(), ServiceClientError> {
@@ -65,6 +58,10 @@ impl ProcessRequestBatch for ResponseDequeuer {
 }
 
 impl ResponseDequeuer {
+    pub fn new(aws_client: AwsClient) -> Self {
+        Self { aws_client }
+    }
+
     /// Attempts to correlate an SQS response with a previously dispatched request.  If correlated
     /// then sets the corrleation and updates a child request (if found).
     fn maybe_correlate_response_and_update_child_request(
@@ -90,6 +87,7 @@ impl ResponseDequeuer {
         }
     }
 
+    /// Attempts to update a child request with data returned from it's parent's response.
     fn maybe_update_child_request(&mut self, request: &mut Request, response: &ResponsePayload) {
         match request {
             Request::IdentityDeletion { uniqueness_ref, .. }

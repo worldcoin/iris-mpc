@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
+use async_trait::async_trait;
 use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
-use super::super::config::IrisCodeSelectionStrategy;
+use super::super::{
+    config::IrisCodeSelectionStrategy,
+    typeset::{Initialize, ServiceClientError},
+};
 use crate::{constants::N_PARTIES, irises::generate_iris_code_and_mask_party_shares_for_both_eyes};
 
 /// Encapsulates logic for generating Iris shares.
@@ -13,6 +17,18 @@ use crate::{constants::N_PARTIES, irises::generate_iris_code_and_mask_party_shar
 pub(crate) struct SharesGenerator<R: Rng + CryptoRng + SeedableRng + Send> {
     // Parameters determining how shares are generated.
     params: SharesGeneratorParams<R>,
+}
+
+#[async_trait]
+impl<R: Rng + CryptoRng + SeedableRng + Send> Initialize for SharesGenerator<R> {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
+        match self.params {
+            SharesGeneratorParams::FromFile { .. } => {
+                unimplemented!()
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
