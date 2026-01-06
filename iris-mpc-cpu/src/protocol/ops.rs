@@ -1,6 +1,6 @@
 use super::binary::{
-    bit_inject_ot_2round, extract_msb_u32_batch, extract_msb_u32_batch_fss, lift, mul_lift_2k,
-    open_bin, open_bin_fss, single_extract_msb_u32,
+    bit_inject_ot_2round, extract_msb_u16_batch_fss, extract_msb_u32_batch,
+    extract_msb_u32_batch_fss, lift, mul_lift_2k, open_bin, open_bin_fss, single_extract_msb_u32,
 };
 use crate::{
     execution::session::{NetworkSession, Session, SessionHandles},
@@ -711,6 +711,17 @@ pub async fn lte_threshold_and_open_u16(
 ) -> Result<Vec<bool>> {
     let bits = extract_msb_u16_batch(session, distances).await?;
     open_bin(session, &bits)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert()).collect())
+}
+
+/// Same as above but using fss
+pub async fn lte_threshold_and_open_u16_fss(
+    session: &mut Session,
+    distances: &[Share<u16>],
+) -> Result<Vec<bool>> {
+    let bits = extract_msb_u16_batch_fss(session, distances).await?;
+    open_bin_fss(session, &bits)
         .await
         .map(|v| v.into_iter().map(|x| x.convert()).collect())
 }
