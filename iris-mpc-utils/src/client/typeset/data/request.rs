@@ -143,35 +143,12 @@ impl Request {
     }
 
     /// Sets correlated response and maybe sets request state.
-    pub(super) fn set_correlation(&mut self, response: &ResponsePayload) -> Option<()> {
+    pub(crate) fn set_correlation(&mut self, response: &ResponsePayload) -> Option<()> {
         tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
         self.info_mut().set_correlation(response);
         self.info().is_fully_correlated().then(|| {
             self.set_status(RequestStatus::Correlated);
         })
-    }
-
-    /// Sets data extracted from a correlated response.
-    pub(super) fn set_data_from_parent_response(&mut self, response: &ResponsePayload) {
-        match self {
-            Self::IdentityDeletion { uniqueness_ref, .. }
-            | Self::Reauthorization { uniqueness_ref, .. }
-            | Self::ResetUpdate { uniqueness_ref, .. } => {
-                if let ResponsePayload::Uniqueness(result) = response {
-                    let serial_id = result
-                        .serial_id
-                        .or_else(|| {
-                            result
-                                .matched_serial_ids
-                                .as_ref()
-                                .and_then(|matched| matched.first().copied())
-                        })
-                        .expect("Unmatched uniqueness request.");
-                    *uniqueness_ref = UniquenessReference::IrisSerialId(serial_id);
-                }
-            }
-            _ => panic!("Unsupported parent data"),
-        }
     }
 
     /// Updates request status.
