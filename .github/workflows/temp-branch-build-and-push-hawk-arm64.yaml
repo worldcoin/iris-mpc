@@ -3,7 +3,8 @@ name: Branch - Anon stats server build and push docker image
 on:
   push:
     branches:
-      - "sw/try-faster-bit-inject2"
+      - "dev"
+      - "chore/rustc-1.89"
     paths-ignore:
       - "deploy/**"
 
