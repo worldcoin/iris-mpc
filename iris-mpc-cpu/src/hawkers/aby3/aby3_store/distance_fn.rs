@@ -22,7 +22,7 @@ impl DistanceFn {
     pub fn plaintext_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
         match self {
             Fhd => a.get_distance_fraction(b),
-            MinFhd => a.get_min_distance_fraction_rotation_aware(b),
+            MinFhd => a.get_min_distance_fraction_rotation_aware::<MIN_FHD_ROTATIONS>(b),
         }
     }
 

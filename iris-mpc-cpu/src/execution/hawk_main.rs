@@ -65,7 +65,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{CenterOnly, Rotations, VecRotationSupport},
+            rot::{CenterOnly, Rotations, TernarySplit, VecRotationSupport},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
@@ -161,8 +161,8 @@ use is_match_batch::is_match_batch;
 
 /// Configuration of distance function and rotation handling.
 pub const DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
-pub const MIN_FHD_ROTATIONS: usize = 31;
-pub type SearchRotations = CenterOnly;
+pub const MIN_FHD_ROTATIONS: usize = 5;
+pub type SearchRotations = TernarySplit;
 
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;

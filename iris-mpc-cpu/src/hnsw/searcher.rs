@@ -1782,12 +1782,14 @@ mod tests {
             .await?;
         }
 
+        let mut i = 0;
         // Search for the same codes and find matches.
         for query in queries1.iter().chain(queries2.iter()) {
             let neighbors = db
                 .search::<_, SortedNeighborhood<_>>(vector_store, graph_store, query, 1)
                 .await?;
-            assert!(db.is_match(vector_store, &[neighbors]).await?);
+            assert!(db.is_match(vector_store, &[neighbors]).await?, "{}", i);
+            i += 1;
         }
 
         Ok(())
