@@ -7,8 +7,10 @@ pub trait Rotations: Send + Sync + 'static {
     /// The number of rotations.
     const N_ROTATIONS: usize;
 
-    /// The argument of `iter::skip` that selects the requested rotations.
-    const N_SKIP: usize;
+    /// Takes an index in `[0, 31]` and returns whether it corresponds to one of the
+    /// rotations used by the implementer.
+    /// Assumes the usual ordering: `-15, -14 .. 0 .. 14, 15`.
+    fn is_active_rotation(index: usize) -> bool;
 }
 
 #[derive(Clone, Debug)]
@@ -18,7 +20,9 @@ pub struct AllRotations {}
 impl Rotations for AllRotations {
     const N_ROTATIONS: usize = ROTATIONS;
 
-    const N_SKIP: usize = 0;
+    fn is_active_rotation(_: usize) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -27,7 +31,20 @@ pub struct CenterOnly {}
 impl Rotations for CenterOnly {
     const N_ROTATIONS: usize = 1;
 
-    const N_SKIP: usize = ROTATIONS / 2;
+    fn is_active_rotation(index: usize) -> bool {
+        index == 15
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TernarySplit {}
+
+impl Rotations for TernarySplit {
+    const N_ROTATIONS: usize = 3;
+
+    fn is_active_rotation(index: usize) -> bool {
+        [5, 15, 25].contains(&index)
+    }
 }
 
 /// VecRotationSupport is an abstraction for functions that work with or without rotations,

@@ -1,9 +1,11 @@
+use crate::execution::hawk_main::MIN_FHD_ROTATIONS;
+
 use super::{
     Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
 };
 use clap::ValueEnum;
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, ROTATIONS};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use itertools::Itertools;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
@@ -155,12 +157,12 @@ impl DistanceMinimalRotation {
 /// With rotation r and batch item i:
 ///     `input[r + i * ROTATIONS] == output[r][i]`
 fn transpose_from_flat(distances: &[Aby3DistanceRef]) -> Vec<Vec<Aby3DistanceRef>> {
-    (0..ROTATIONS)
+    (0..MIN_FHD_ROTATIONS)
         .map(|i| {
             distances
                 .iter()
                 .skip(i)
-                .step_by(ROTATIONS)
+                .step_by(MIN_FHD_ROTATIONS)
                 .cloned()
                 .collect()
         })

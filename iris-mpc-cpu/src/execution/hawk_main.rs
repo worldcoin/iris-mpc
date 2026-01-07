@@ -159,17 +159,13 @@ use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RAT
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
-/// The master switch to enable search-per-rotation or search-center-only.
+/// Configuration of distance function and rotation handling.
+pub const DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
+pub const MIN_FHD_ROTATIONS: usize = 31;
 pub type SearchRotations = CenterOnly;
+
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
-
-/// The choice of distance function to use in the Aby3Store.
-pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
-    DistanceFn::MinFhd
-} else {
-    DistanceFn::Fhd
-};
 
 /// The choice of HNSW candidate list strategy
 pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
@@ -1012,9 +1008,11 @@ impl From<BatchQuery> for HawkRequest {
                     .map(|chunk| {
                         // Collect the rotations for one request.
                         chunk
-                            .skip(SearchRotations::N_SKIP)
-                            .take(SearchRotations::N_ROTATIONS)
-                            .map(|(code, mask, code_proc, mask_proc)| {
+                            .enumerate()
+                            .filter(|(rot_index, _)| {
+                                SearchRotations::is_active_rotation(*rot_index)
+                            })
+                            .map(|(_, (code, mask, code_proc, mask_proc))| {
                                 Aby3Query::from_processed(code, mask, code_proc, mask_proc)
                             })
                             .collect_vec()
