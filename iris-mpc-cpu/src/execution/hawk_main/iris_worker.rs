@@ -386,7 +386,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let result = rotation_aware_pairwise_distance_rowmajor(&query, targets);
+                let result = rotation_aware_pairwise_distance_rowmajor::<31, _>(&query, targets);
                 let _ = rsp.send(result);
             }
 
@@ -396,7 +396,8 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::RotationAwarePairwiseDistance { pair, rsp } => {
-                let r = rotation_aware_pairwise_distance(&pair.0, iter::once(Some(&pair.1)));
+                let r =
+                    rotation_aware_pairwise_distance::<31, _>(&pair.0, iter::once(Some(&pair.1)));
                 let _ = rsp.send(r);
             }
         }
