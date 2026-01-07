@@ -16,7 +16,6 @@ async-trait = "~0.1"
 aws-sdk-s3.workspace = true
 blake3 = "1"
 bincode.workspace = true
-blake3 = "1"
 bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
@@ -62,6 +61,7 @@ backon = { version = "1.4.0", default-features = false, features = [
 rand_chacha = { version = "0.3", features = ["serde1"] }
 num_enum = "0.7.3"
 tokio-rustls = { version = "0.26.2" }
+ark-std = "0.5.0"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }

@@ -98,14 +98,14 @@ impl Prf {
 // Optional helpers if you ever need them elsewhere:
 
 /// Expand a slice of 16-byte seeds to 32-byte seeds (not used here, but handy).
-#[allow(dead_code)]
-pub fn expand_seeds_vec_16_to_32(seeds16: Vec<PrfSeed>) -> Vec<PrfSeed32> {
-    seeds16.into_iter().map(expand_seed_16_to_32).collect()
-}
+// #[allow(dead_code)]
+// pub fn expand_seeds_vec_16_to_32(seeds16: Vec<PrfSeed>) -> Vec<PrfSeed> {
+//     seeds16.into_iter().map(expand_seed_16_to_32).collect()
+// }
 
 /// Derive a 16-byte key from a 32-byte seed (domain-separated), if needed for wire formats.
 #[allow(dead_code)]
-pub fn derive_key16_from_seed32(seed32: PrfSeed32) -> PrfSeed {
+pub fn derive_key16_from_seed32(seed32: PrfSeed) -> PrfSeed {
     use blake3::Hasher;
     let mut h = Hasher::new();
     h.update(b"prf:seed32->key16");
