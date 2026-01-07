@@ -1507,8 +1507,8 @@ impl HawkMutation {
         for mutation in self.0 {
             for (side, plan_opt) in izip!(STORE_IDS, mutation.plans) {
                 if let Some(plan) = plan_opt {
-                    // 1. Handle Entry Points (Sequential is fine here as they are rare)
                     let mut graph = graph_tx.with_graph(side);
+                    // Updating entry points sequentially is fine in practice
                     match plan.update_ep {
                         UpdateEntryPoint::False => {}
                         UpdateEntryPoint::SetUnique { layer } => {
@@ -1519,7 +1519,7 @@ impl HawkMutation {
                         }
                     }
 
-                    // 2. Buffer Link Updates by side
+                    // Buffer link updates by side
                     let side_map = updates_by_side.entry(side).or_default();
                     for ((inserted_vector, lc), neighbors) in plan.updates {
                         let key = (
@@ -1527,14 +1527,14 @@ impl HawkMutation {
                             inserted_vector.version_id(),
                             lc as i16,
                         );
-                        // Deduplicate: If multiple updates for the same node exist, last one wins
+                        // Deduplicate: If multiple updates for the same node exist, the last one wins
                         side_map.insert(key, neighbors);
                     }
                 }
             }
         }
 
-        // 3. Execute one batch per side
+        // Execute one batch per side
         for (side, batch_updates) in updates_by_side {
             if !batch_updates.is_empty() {
                 graph_tx
