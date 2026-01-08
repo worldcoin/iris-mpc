@@ -2021,8 +2021,8 @@ where
 
             // Draw r1 + r2 (aka r_in) before doing parallelization
 
-            let mut r1_keys = Vec::with_capacity(batch_size);
-            let mut r2_keys = Vec::with_capacity(batch_size);
+            let mut r1_keys = vec![RingElement(0u16); batch_size];
+            let mut r2_keys = vec![RingElement(0u16); batch_size];
             for j in 0..batch_size {
                 let (_r2, _r1) = session.prf.gen_rands::<RingElement<u16>>().clone();
                 r2_keys[j] = RingElement(0);
@@ -2416,8 +2416,8 @@ pub(crate) async fn extract_msb_u16_batch_fss(
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
     for batch in x.chunks(batch_size) {
         tracing::debug!("Inside extract_msb_u16_fss, batch size: {}", batch.len());
-        let batch_out = add_3_get_msb_fss_batch_parallel_u16(session, batch).await?;
-        // let batch_out = add_3_get_msb_fss_batch_u16(session, batch).await?;
+        // let batch_out = add_3_get_msb_fss_batch_parallel_u16(session, batch).await?;
+        let batch_out = add_3_get_msb_fss_batch_u16(session, batch).await?;
         vec_of_msb_shares.extend(batch_out);
     }
     Ok(vec_of_msb_shares)
