@@ -139,7 +139,7 @@ impl DistanceMinimalRotation {
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<u32>>> {
-        let task_gauge = gauge!("tasks::eval_dist_batch");
+        let task_gauge = gauge!("tasks.eval_dist_batch");
         task_gauge.increment(1.0);
 
         let ds_and_ts = store

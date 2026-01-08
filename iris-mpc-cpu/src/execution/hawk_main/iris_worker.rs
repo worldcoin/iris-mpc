@@ -187,7 +187,7 @@ impl IrisPoolHandle {
         const CHUNK_SIZE: usize = 128;
         let mut responses = Vec::with_capacity(vector_ids.len().div_ceil(CHUNK_SIZE));
 
-        let gauge = gauge!("iris_workers::chunks");
+        let gauge = gauge!("iris_workers.chunks");
         let mut num_chunks = 0;
         for chunk in vector_ids.chunks(CHUNK_SIZE) {
             num_chunks += 1;
@@ -326,7 +326,7 @@ pub fn init_workers(
 
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, numa: bool) {
     while let Ok(task) = ch.recv() {
-        let gauge = gauge!("iris_workers::active");
+        let gauge = gauge!("iris_workers.active");
         gauge.increment(1.0);
         match task {
             IrisTask::Realloc { iris, rsp } => {
