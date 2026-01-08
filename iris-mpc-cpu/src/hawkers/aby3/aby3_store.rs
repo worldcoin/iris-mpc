@@ -386,7 +386,6 @@ impl Aby3Store {
 
             // Rebuild res as Vec<Vec<_>>
             res.clear();
-            res.reserve(flattened_res.len() / len + maybe_last_distance.as_ref().map_or(0, |_| 1));
             for chunk in flattened_res.chunks(len) {
                 res.push(chunk.to_vec());
             }
