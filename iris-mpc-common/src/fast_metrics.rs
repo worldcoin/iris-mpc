@@ -81,6 +81,40 @@ impl FastHistogram {
         self.max = f64::NEG_INFINITY;
         self.start = Instant::now();
     }
+
+    /// Get the current count of recorded values (before flushing).
+    pub fn get_count(&self) -> u64 {
+        self.count
+    }
+
+    /// Get the current sum of recorded values (before flushing).
+    pub fn get_sum(&self) -> f64 {
+        self.sum
+    }
+
+    /// Get the minimum recorded value (before flushing).
+    pub fn get_min(&self) -> f64 {
+        self.min
+    }
+
+    /// Get the maximum recorded value (before flushing).
+    pub fn get_max(&self) -> f64 {
+        self.max
+    }
+
+    /// Get the average of recorded values (before flushing).
+    pub fn get_avg(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum / self.count as f64
+        }
+    }
+
+    /// Get the metric name.
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl Clone for FastHistogram {

@@ -2190,26 +2190,61 @@ fn to_bit_from_u128(msb_xored: RingElement<u128>) -> Result<Bit, Error> {
 }
 
 /// Print a summary of timing statistics for the FSS operations.
-/// This function flushes all pending metrics and logs cumulative statistics across all threads.
+/// This function flushes all pending metrics and prints cumulative statistics for:
+/// - PRG key generation
+/// - ICF evaluation
+/// - Network operations (send/receive)
 pub fn print_fss_timing_summary() {
     FSS_PRG_KEYGEN_METRICS.with(|m| {
         let mut metrics = m.borrow_mut();
         metrics.flush();
+        let count = metrics.get_count();
+        let sum = metrics.get_sum();
+        let min = metrics.get_min();
+        let max = metrics.get_max();
+        let avg = metrics.get_avg();
+
+        if count > 0 {
+            tracing::info!(
+                "FSS PRG Key Generation: count={}, sum={:.2}µs, min={:.2}µs, max={:.2}µs, avg={:.2}µs",
+                count, sum, min, max, avg
+            );
+        }
     });
 
     FSS_ICF_EVAL_METRICS.with(|m| {
         let mut metrics = m.borrow_mut();
         metrics.flush();
+        let count = metrics.get_count();
+        let sum = metrics.get_sum();
+        let min = metrics.get_min();
+        let max = metrics.get_max();
+        let avg = metrics.get_avg();
+
+        if count > 0 {
+            tracing::info!(
+                "FSS ICF Evaluation: count={}, sum={:.2}µs, min={:.2}µs, max={:.2}µs, avg={:.2}µs",
+                count, sum, min, max, avg
+            );
+        }
     });
 
     FSS_NETWORK_METRICS.with(|m| {
         let mut metrics = m.borrow_mut();
         metrics.flush();
-    });
+        let count = metrics.get_count();
+        let sum = metrics.get_sum();
+        let min = metrics.get_min();
+        let max = metrics.get_max();
+        let avg = metrics.get_avg();
 
-    tracing::info!(
-        "FSS Timing Summary: PRG keygen, ICF evaluation, and network operations are tracked in metrics."
-    );
+        if count > 0 {
+            tracing::info!(
+                "FSS Network Operations: count={}, sum={:.2}µs, min={:.2}µs, max={:.2}µs, avg={:.2}µs",
+                count, sum, min, max, avg
+            );
+        }
+    });
 }
 
 #[cfg(test)]
