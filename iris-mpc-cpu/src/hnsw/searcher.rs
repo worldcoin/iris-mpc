@@ -1809,9 +1809,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db_linear_scan_m() -> Result<()> {
-        let mut db = HnswSearcher::new_linear_scan(64, 32, 8, 1);
-        // Ensure the top layer gets exercised by increasing the layer probability (1/4 instead of 1/M)
-        db.layer_distribution = LayerDistribution::new_geometric_from_M(4);
+        let db = HnswSearcher::new_linear_scan(64, 32, 4, 1);
 
         hnsw_db_helper(db, 0).await
     }

@@ -161,7 +161,7 @@ use is_match_batch::is_match_batch;
 
 /// Configuration of distance function and rotation handling.
 pub const DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
-pub const MIN_FHD_ROTATIONS: usize = 5;
+pub const MIN_FHD_ROTATIONS: usize = 11;
 pub type SearchRotations = TernarySplit;
 
 /// Rotation support as configured by SearchRotations.
