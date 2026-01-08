@@ -8,10 +8,11 @@ use crate::{
         vecshare::VecShare,
     },
 };
-use ampc_actor_utils::fast_metrics::FastHistogram;
 use ampc_actor_utils::protocol::binary::{
-    and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k, open_bin, single_extract_msb,
+    and_product, bit_inject, extract_msb_batch, extract_msb_mod_2k, lift, lift_40, mul_lift_2k,
+    open_bin, single_extract_msb,
 };
+use ampc_actor_utils::{fast_metrics::FastHistogram, protocol::binary::extract_msb};
 // Import non-iris-specific protocol operations from ampc-common
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
@@ -63,6 +64,173 @@ pub fn translate_threshold_a(t: f64) -> u32 {
         "Threshold must be in the range [0, 1]"
     );
     ((1. - 2. * t) * (B as f64)) as u32
+}
+
+fn extract_bits(packed_bits: VecShare<u64>, res_len: usize) -> Result<Vec<Share<Bit>>> {
+    let mut res = Vec::with_capacity(res_len);
+    'outer: for bit_batch in packed_bits.into_iter() {
+        let (a, b) = bit_batch.get_ab();
+        for i in 0..64 {
+            res.push(Share::new(a.get_bit_as_bit(i), b.get_bit_as_bit(i)));
+            if res.len() == res_len {
+                break 'outer;
+            }
+        }
+    }
+    Ok(res)
+}
+
+// Implements the currently used threhsold comparison protocol
+pub async fn compare_threshold_masked_many(
+    session: &mut Session,
+    distances: &[DistanceShare<u16>],
+) -> Result<Vec<Share<Bit>>> {
+    let mask_shares = distances.iter().map(|d| d.mask_dot).collect_vec();
+    let mut diffs = lift(session, VecShare::new_vec(mask_shares)).await?;
+
+    for (x, d) in diffs.iter_mut().zip(distances) {
+        *x *= A as u32;
+        *x -= mul_lift_2k::<B_BITS>(&d.code_dot);
+    }
+    let packed_bits = extract_msb(session, diffs).await?;
+    extract_bits(packed_bits, distances.len())
+}
+
+// Implements the proposed normalized threhsold comparison protocol
+pub async fn compare_threshold_normalized_masked_many(
+    session: &mut Session,
+    distances: &[DistanceShare<u16>],
+) -> Result<Vec<Share<Bit>>> {
+    // Lift both code and mask distances in MPC
+    let mut to_lift = Vec::with_capacity(distances.len() * 2);
+    for d in distances.iter() {
+        to_lift.push(d.mask_dot.to_owned());
+    }
+    // the code_dot require a signed lift
+    for d in distances.iter() {
+        // Compute (code + 2^{15}) % 2^{16}, to make values positive.
+        let mut code = d.code_dot.to_owned();
+        code.add_assign_const_role(1 << 15, session.own_role());
+        to_lift.push(code);
+    }
+    let mut lifted = lift_40(session, VecShare::new_vec(to_lift)).await?;
+    let (mut masks, mut codes) = lifted.split_at_mut(distances.len());
+    // Postprocess the signed lift
+    for code in codes.iter_mut() {
+        // Now we got shares of d1' over 2^64 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
+        // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
+        // get signed shares over 2^{64}
+        code.add_assign_const_role(-(1i64 << 15) as u64, session.own_role());
+    }
+
+    // The multiplications results
+    let pow40 = 1u64 << 40;
+    let mask40 = pow40 - 1;
+    let mut muls = VecRingElement::with_capacity(distances.len() * 2);
+    for (c, m) in codes.iter().zip(masks.iter()) {
+        let ml_dot = c * m + session.prf.gen_zero_share(); // ml * hd
+        let ml_square = m * m + session.prf.gen_zero_share(); // ml * ml
+        muls.push(ml_dot & mask40);
+        muls.push(ml_square & mask40);
+    }
+    let network = &mut session.network_session;
+    network.send_ring_vec_next(&muls).await?;
+    let muls_b: VecRingElement<_> = network.receive_ring_vec_prev().await?;
+
+    // Compute the threshold equation
+    for ((mask, code), (ma, mb)) in masks
+        .iter_mut()
+        .zip(codes.iter())
+        .zip(muls.0.chunks_exact(2).zip(muls_b.0.chunks_exact(2)))
+    {
+        let mc = Share::new(ma[0], mb[0]);
+        let mm = Share::new(ma[1], mb[1]);
+
+        mask.add_assign_const_role(pow40 + pow40, session.own_role()); // For the subtraction mod 2^40
+        *mask *= 159744;
+        *mask += mm * 5;
+        *mask -= mc * 50;
+        *mask -= code * 368640;
+        mask.a &= RingElement(mask40);
+        mask.b &= RingElement(mask40);
+    }
+    lifted.truncate(distances.len());
+
+    // Extract MSB
+    let packed_bits = extract_msb_mod_2k::<_, 35>(session, lifted).await?;
+    extract_bits(packed_bits, distances.len())
+}
+
+// Implements the proposed normalized threhsold comparison protocol, where the threshold is given as 0.001 * threshold_factor. The threshold_factor must be in [1, 375].
+pub async fn compare_threshold_normalized_masked_many_with_t(
+    session: &mut Session,
+    distances: &[DistanceShare<u16>],
+    threshold_factor: u16,
+) -> Result<Vec<Share<Bit>>> {
+    assert!(
+        threshold_factor != 0 && threshold_factor <= 375,
+        "Threshold factor must be in the range [1, 375]"
+    );
+
+    // Lift both code and mask distances in MPC
+    let mut to_lift = Vec::with_capacity(distances.len() * 2);
+    for d in distances.iter() {
+        to_lift.push(d.mask_dot.to_owned());
+    }
+    // the code_dot require a signed lift
+    for d in distances.iter() {
+        // Compute (code + 2^{15}) % 2^{16}, to make values positive.
+        let mut code = d.code_dot.to_owned();
+        code.add_assign_const_role(1 << 15, session.own_role());
+        to_lift.push(code);
+    }
+    let mut lifted = lift_40(session, VecShare::new_vec(to_lift)).await?;
+    let (mut masks, mut codes) = lifted.split_at_mut(distances.len());
+    // Postprocess the signed lift
+    for code in codes.iter_mut() {
+        // Now we got shares of d1' over 2^64 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
+        // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
+        // get signed shares over 2^{64}
+        code.add_assign_const_role(-(1i64 << 15) as u64, session.own_role());
+    }
+
+    // The multiplications results
+    let pow40 = 1u64 << 40;
+    let mask40 = pow40 - 1;
+    let mut muls = VecRingElement::with_capacity(distances.len() * 2);
+    for (c, m) in codes.iter().zip(masks.iter()) {
+        let ml_dot = c * m + session.prf.gen_zero_share(); // ml * hd
+        let ml_square = m * m + session.prf.gen_zero_share(); // ml * ml
+        muls.push(ml_dot & mask40);
+        muls.push(ml_square & mask40);
+    }
+    let network = &mut session.network_session;
+    network.send_ring_vec_next(&muls).await?;
+    let muls_b: VecRingElement<_> = network.receive_ring_vec_prev().await?;
+
+    // Compute the threshold equation
+    let term_a = 3870720 - 8192 * (threshold_factor as u64);
+    for ((mask, code), (ma, mb)) in masks
+        .iter_mut()
+        .zip(codes.iter())
+        .zip(muls.0.chunks_exact(2).zip(muls_b.0.chunks_exact(2)))
+    {
+        let mc = Share::new(ma[0], mb[0]);
+        let mm = Share::new(ma[1], mb[1]);
+
+        mask.add_assign_const_role(pow40 + pow40, session.own_role()); // For the subtraction mod 2^40
+        *mask *= term_a;
+        *mask += mm * 25;
+        *mask -= mc * 250;
+        *mask -= code * 1843200;
+        mask.a &= RingElement(mask40);
+        mask.b &= RingElement(mask40);
+    }
+    lifted.truncate(distances.len());
+
+    // Extract MSB
+    let packed_bits = extract_msb_mod_2k::<_, 38>(session, lifted).await?;
+    extract_bits(packed_bits, distances.len())
 }
 
 /// The same as compare_threshold, but the input shares are 16-bit and lifted to
@@ -1107,7 +1275,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use ampc_actor_utils::protocol::prf::Prf;
-    use iris_mpc_common::iris_db::db::IrisDB;
+    use iris_mpc_common::{iris_db::db::IrisDB, IRIS_CODE_LENGTH};
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
     use rand_distr::{Distribution, Standard};
@@ -1545,5 +1713,204 @@ mod tests {
                 rot
             );
         }
+    }
+
+    fn gen_db_and_distance_share<R: Rng>(
+        num: usize,
+        rng: &mut R,
+    ) -> ([Vec<u16>; 2], [Vec<DistanceShare<u16>>; 3]) {
+        let mut result = [
+            Vec::with_capacity(num),
+            Vec::with_capacity(num),
+            Vec::with_capacity(num),
+        ];
+        let mut db = [Vec::with_capacity(num), Vec::with_capacity(num)];
+
+        for _ in 0..num {
+            let code_dot: u16 =
+                rng.gen_range(-(IRIS_CODE_LENGTH as i16)..=IRIS_CODE_LENGTH as i16) as u16;
+            let mask_dot: u16 = rng.gen_range(0..=IRIS_CODE_LENGTH as u16);
+
+            db[0].push(code_dot);
+            db[1].push(mask_dot);
+
+            let a = rng.gen();
+            let b = rng.gen();
+            let c = RingElement(code_dot) - a - b;
+            let code1 = Share::new(a, c);
+            let code2 = Share::new(b, a);
+            let code3 = Share::new(c, b);
+
+            let a = rng.gen();
+            let b = rng.gen();
+            let c = RingElement(mask_dot) - a - b;
+            let mask1 = Share::new(a, c);
+            let mask2 = Share::new(b, a);
+            let mask3 = Share::new(c, b);
+
+            result[0].push(DistanceShare {
+                code_dot: code1,
+                mask_dot: mask1,
+            });
+            result[1].push(DistanceShare {
+                code_dot: code2,
+                mask_dot: mask2,
+            });
+            result[2].push(DistanceShare {
+                code_dot: code3,
+                mask_dot: mask3,
+            });
+        }
+        (db, result)
+    }
+
+    #[tokio::test]
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    async fn test_threshold(#[case] seed: u64) {
+        let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
+        let mut rng = AesRng::seed_from_u64(seed);
+
+        const DB_SIZE: usize = 100;
+        let ([codes, masks], distance_shares_per_party) =
+            gen_db_and_distance_share(DB_SIZE, &mut rng);
+
+        // plain results
+        let mut result_plain = Vec::with_capacity(DB_SIZE);
+        for (code, mask) in codes.into_iter().zip(masks) {
+            let code = code as i16 as i32;
+            let mask = mask as i32;
+            let res = mask * A as i32 - code * B as i32;
+            let bit32 = (res >> 31) & 1 == 1;
+            result_plain.push(Bit::new(bit32));
+        }
+
+        let mut jobs = JoinSet::new();
+        for (session, shares) in sessions.into_iter().zip(distance_shares_per_party) {
+            jobs.spawn(async move {
+                let mut player_session = session.lock().await;
+                let result = compare_threshold_masked_many(&mut player_session, &shares)
+                    .await
+                    .unwrap();
+                let opened = open_bin(&mut player_session, &result).await.unwrap();
+                opened
+            });
+        }
+
+        let output0 = jobs.join_next().await.unwrap().unwrap();
+        let output1 = jobs.join_next().await.unwrap().unwrap();
+        let output2 = jobs.join_next().await.unwrap().unwrap();
+        assert_eq!(output0, output1);
+        assert_eq!(output0, output2);
+        assert_eq!(output0.len(), DB_SIZE);
+        assert_eq!(output0, result_plain);
+    }
+
+    #[tokio::test]
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    async fn test_normalization_threshold(#[case] seed: u64) {
+        let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
+        let mut rng = AesRng::seed_from_u64(seed);
+
+        const DB_SIZE: usize = 100;
+        let ([codes, masks], distance_shares_per_party) =
+            gen_db_and_distance_share(DB_SIZE, &mut rng);
+
+        // plain results
+        let pow40 = 1i64 << 40;
+        let mask40 = pow40 - 1;
+        let mut result_plain = Vec::with_capacity(DB_SIZE);
+        for (code, mask) in codes.into_iter().zip(masks) {
+            let code = code as i16 as i64;
+            let mask = mask as i64;
+            let res = (159744 * mask + 5 * mask * mask + pow40 - 50 * mask * code + pow40
+                - 368640 * code)
+                & mask40;
+            let bit40 = (res >> 39) & 1 == 1;
+            let bit35 = (res >> 34) & 1 == 1;
+            assert_eq!(bit40, bit35);
+            result_plain.push(Bit::new(bit40));
+        }
+
+        let mut jobs = JoinSet::new();
+        for (session, shares) in sessions.into_iter().zip(distance_shares_per_party) {
+            jobs.spawn(async move {
+                let mut player_session = session.lock().await;
+                let result = compare_threshold_normalized_masked_many(&mut player_session, &shares)
+                    .await
+                    .unwrap();
+                let opened = open_bin(&mut player_session, &result).await.unwrap();
+                opened
+            });
+        }
+
+        let output0 = jobs.join_next().await.unwrap().unwrap();
+        let output1 = jobs.join_next().await.unwrap().unwrap();
+        let output2 = jobs.join_next().await.unwrap().unwrap();
+        assert_eq!(output0, output1);
+        assert_eq!(output0, output2);
+        assert_eq!(output0.len(), DB_SIZE);
+        assert_eq!(output0, result_plain);
+    }
+
+    #[tokio::test]
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    async fn test_normalization_threshold_with_t(#[case] seed: u64) {
+        let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
+        let mut rng = AesRng::seed_from_u64(seed);
+
+        let threshold = rng.gen_range(1..=375);
+        const DB_SIZE: usize = 100;
+        let ([codes, masks], distance_shares_per_party) =
+            gen_db_and_distance_share(DB_SIZE, &mut rng);
+
+        // plain results
+        let pow40 = 1i64 << 40;
+        let mask40 = pow40 - 1;
+        let term_a = 3870720 - 8192 * (threshold as i64);
+        let mut result_plain = Vec::with_capacity(DB_SIZE);
+        for (code, mask) in codes.into_iter().zip(masks) {
+            let code = code as i16 as i64;
+            let mask = mask as i64;
+            let res = (term_a * mask + 25 * mask * mask + pow40 - 250 * mask * code + pow40
+                - 1843200 * code)
+                & mask40;
+            let bit40 = (res >> 39) & 1 == 1;
+            let bit38 = (res >> 37) & 1 == 1;
+            assert_eq!(bit40, bit38);
+            result_plain.push(Bit::new(bit40));
+        }
+
+        let mut jobs = JoinSet::new();
+        for (session, shares) in sessions.into_iter().zip(distance_shares_per_party) {
+            jobs.spawn(async move {
+                let mut player_session = session.lock().await;
+                let result = compare_threshold_normalized_masked_many_with_t(
+                    &mut player_session,
+                    &shares,
+                    threshold,
+                )
+                .await
+                .unwrap();
+                let opened = open_bin(&mut player_session, &result).await.unwrap();
+                opened
+            });
+        }
+
+        let output0 = jobs.join_next().await.unwrap().unwrap();
+        let output1 = jobs.join_next().await.unwrap().unwrap();
+        let output2 = jobs.join_next().await.unwrap().unwrap();
+        assert_eq!(output0, output1);
+        assert_eq!(output0, output2);
+        assert_eq!(output0.len(), DB_SIZE);
+        assert_eq!(output0, result_plain);
     }
 }
