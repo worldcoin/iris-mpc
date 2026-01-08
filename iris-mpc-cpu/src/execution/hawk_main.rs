@@ -89,7 +89,8 @@ use crate::{
     },
 };
 use ampc_actor_utils::{
-    network::config::TlsConfig, protocol::anon_stats::compare_min_threshold_buckets,
+    network::config::TlsConfig,
+    protocol::{anon_stats::compare_min_threshold_buckets, ops::translate_threshold_a},
 };
 use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
 use ampc_anon_stats::{
@@ -155,7 +156,7 @@ pub(crate) mod scheduler;
 pub(crate) mod search;
 mod session_groups;
 pub mod state_check;
-use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
+use crate::protocol::ops::{open_ring, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
