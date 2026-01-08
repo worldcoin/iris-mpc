@@ -3215,6 +3215,7 @@ name = "iris-mpc-utils"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "async_from",
  "aws-config",
  "aws-sdk-rds",
  "aws-sdk-s3",
