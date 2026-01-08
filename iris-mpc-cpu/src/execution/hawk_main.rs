@@ -42,15 +42,20 @@
 //!
 //! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
 
-//! ### 2. Distance Function: `MinFhd` vs. `Fhd`
+//! ### 2. Distance Function and base rotations
 //!
-//! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance.
-//! - **`MinFhd` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
-//!   distance across a set of predefined rotations.
+//! There are two choices of distance function:
 //!
-//! The distance is determined by the `DISTANCE_FN` constant, which gets passed to the vector store constructor.
-//! DISTANCE_FN itself is initialized from the choice of rotations included in search (SearchRotations type alias).
-//! Center-only implies MinFhd while searching explicitly for rotated irises implies Fhd.
+//! - **`FHD` (Fractional Hamming Distance)**: Computes the standard fractional Hamming distance.
+//! - **`MinFHDX` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
+//!   FHD distance across rotation amounts `-X, -(X-1).. 0 .. (X - 1), X`.
+//!   
+//! The choice of distant is set by the constant `HAWK_DISTANCE_FN`.
+//! One must also set the `HAWK_MINFHD_ROTATIONS` constant, which refers to the total rotations considered by MinFHD.
+//! Note that one should set it to `2 * X + 1` to work with `MinFHDX`.
+//! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
+//! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
+//! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinFhd5 encodes the set `{-10, 0, 10}`.
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
@@ -159,26 +164,29 @@ use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RAT
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
-/// Configuration of distance function and rotation handling.
+/// Distance function used by the HawkActor
 pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
-pub const HAWK_MINFHD_ROTATIONS: usize = 11; // MinFhd5
+/// Number of rotations considered by the MinFhd distance.
+/// Not used for non-MinFhd distance, but should be set to `1`.
+pub const HAWK_MINFHD_ROTATIONS: usize = 11;
+/// Bitmask of base rotations, i.e rotations of the query for which
+/// the HawkActor will launch independent HNSW searches.
 pub const HAWK_BASE_ROTATIONS_MASK: u32 = CENTER_AND_10_MASK;
 
 // --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MINFHD_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
 const _: () = {
-    // If HAWK_DISTANCE_FN is DistanceFn::Fhd, then HAWK_MINFHD_ROTATIONS must be 1
     match HAWK_DISTANCE_FN {
         DistanceFn::Fhd => {
-            if HAWK_MINFHD_ROTATIONS != 1 {
-                panic!(
-                    "If HAWK_DISTANCE_FN is DistanceFn::Fhd, then HAWK_MINFHD_ROTATIONS must be 1"
-                );
-            }
-            if HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
+            // For Fhd the base rotations should consist of all 31 rotations.
+            // HAWK_MINFHD_ROTATIONS is not actually used in this case, but it must be set to 1.
+            if HAWK_MINFHD_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
                 panic!();
             }
         }
         _ => match HAWK_MINFHD_ROTATIONS {
+            // Variants correspond to "full" minfhd, minfhd5 and minfhd6.
+            // The former requires center-only as base, while the latter two
+            // require -10, 0, 10 as base rotations for searches.
             31 => {
                 if HAWK_BASE_ROTATIONS_MASK != CENTER_ONLY_MASK {
                     panic!();
