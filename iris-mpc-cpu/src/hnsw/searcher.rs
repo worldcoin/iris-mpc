@@ -1723,7 +1723,6 @@ mod tests {
         hnsw::{GraphMem, SortedNeighborhood},
     };
     use aes_prng::AesRng;
-    use aws_sdk_s3::config::Layer;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::chain;
     use rand::SeedableRng;
@@ -1783,14 +1782,12 @@ mod tests {
             .await?;
         }
 
-        let mut i = 0;
         // Search for the same codes and find matches.
         for query in queries1.iter().chain(queries2.iter()) {
             let neighbors = db
                 .search::<_, SortedNeighborhood<_>>(vector_store, graph_store, query, 1)
                 .await?;
-            assert!(db.is_match(vector_store, &[neighbors]).await?, "{}", i);
-            i += 1;
+            assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
 
         Ok(())
