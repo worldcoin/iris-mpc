@@ -15,6 +15,7 @@ use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
 use iris_mpc_common::vector_id::VectorId;
+use metrics::gauge;
 use std::{
     cmp, iter,
     sync::{
@@ -186,20 +187,24 @@ impl IrisPoolHandle {
         const CHUNK_SIZE: usize = 128;
         let mut responses = Vec::with_capacity(vector_ids.len().div_ceil(CHUNK_SIZE));
 
+        let gauge = gauge!("iris_workers::chunks");
+        let mut num_chunks = 0;
         for chunk in vector_ids.chunks(CHUNK_SIZE) {
+            num_chunks += 1;
             let (tx, rx) = oneshot::channel();
             let task = IrisTask::RotationAwareDotProductBatch {
                 query: query.clone(),
                 vector_ids: chunk.to_vec(),
                 rsp: tx,
             };
+            gauge.increment(1.0);
             self.get_next_worker().send(task)?;
             responses.push(rx);
         }
 
         let results = futures::future::try_join_all(responses).await?;
         let results = results.into_iter().flatten().collect();
-
+        gauge.decrement(num_chunks as f64);
         self.metric_latency.record(start.elapsed().as_secs_f64());
         Ok(results)
     }
@@ -321,6 +326,8 @@ pub fn init_workers(
 
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, numa: bool) {
     while let Ok(task) = ch.recv() {
+        let gauge = gauge!("iris_workers::active");
+        gauge.increment(1.0);
         match task {
             IrisTask::Realloc { iris, rsp } => {
                 // Re-allocate from this thread.
@@ -400,6 +407,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 let _ = rsp.send(r);
             }
         }
+        gauge.decrement(1.0);
     }
 }
 

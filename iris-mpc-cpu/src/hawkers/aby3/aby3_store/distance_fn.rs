@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use super::{
     Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
 };
@@ -13,6 +15,7 @@ pub enum DistanceFn {
     MinFhd,
 }
 
+use metrics::gauge;
 use serde::{Deserialize, Serialize};
 use DistanceFn::*;
 
@@ -136,14 +139,19 @@ impl DistanceMinimalRotation {
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<u32>>> {
+        let task_gauge = gauge!("tasks::eval_dist_batch");
+        task_gauge.increment(1.0);
+
         let ds_and_ts = store
             .workers
             .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        store
+        let r = store
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
-            .await
+            .await;
+        task_gauge.decrement(1.0);
+        r
     }
 }
 
