@@ -119,6 +119,7 @@ use matching::{
     OnlyOrBoth::{Both, Only},
     RequestType, UniquenessRequest,
 };
+use metrics::gauge;
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
@@ -1592,6 +1593,9 @@ impl HawkHandle {
 
         // ---- Request Handler ----
         tokio::spawn(async move {
+            gauge!("iris_workers.chunks").set(0.0);
+            gauge!("iris_workers.active").set(0.0);
+            gauge!("tasks.eval_distance_batch").set(0.0);
             while let Some(job) = rx.recv().await {
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
