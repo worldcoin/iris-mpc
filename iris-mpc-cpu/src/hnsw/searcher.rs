@@ -1723,6 +1723,7 @@ mod tests {
         hnsw::{GraphMem, SortedNeighborhood},
     };
     use aes_prng::AesRng;
+    use aws_sdk_s3::config::Layer;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::chain;
     use rand::SeedableRng;
@@ -1811,8 +1812,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db_linear_scan_m() -> Result<()> {
-        // Ensure the top layer gets exercised by setting low `M` value
-        let db = HnswSearcher::new_linear_scan(64, 32, 4, 1);
+        let mut db = HnswSearcher::new_linear_scan(64, 32, 8, 1);
+        // Ensure the top layer gets exercised by increasing the layer probability (1/4 instead of 1/M)
+        db.layer_distribution = LayerDistribution::new_geometric_from_M(4);
 
         hnsw_db_helper(db, 0).await
     }
