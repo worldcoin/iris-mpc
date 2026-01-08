@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
-use crate::{IRIS_CODE_LENGTH, ROTATIONS};
+use crate::IRIS_CODE_LENGTH;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use bytemuck::cast_slice;
 use eyre::bail;

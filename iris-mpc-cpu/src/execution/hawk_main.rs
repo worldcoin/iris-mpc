@@ -65,7 +65,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{CenterOnly, Rotations, TernarySplit, VecRotationSupport},
+            rot::{Rotations, TernarySplit, VecRotationSupport},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
