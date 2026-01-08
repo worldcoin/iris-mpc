@@ -1,5 +1,5 @@
 use crate::{
-    execution::hawk_main::MIN_FHD_ROTATIONS,
+    execution::hawk_main::HAWK_MINFHD_ROTATIONS,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
         ops::{
@@ -387,7 +387,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let result = rotation_aware_pairwise_distance_rowmajor::<MIN_FHD_ROTATIONS, _>(
+                let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MINFHD_ROTATIONS, _>(
                     &query, targets,
                 );
                 let _ = rsp.send(result);
@@ -399,7 +399,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::RotationAwarePairwiseDistance { pair, rsp } => {
-                let r = rotation_aware_pairwise_distance::<MIN_FHD_ROTATIONS, _>(
+                let r = rotation_aware_pairwise_distance::<HAWK_MINFHD_ROTATIONS, _>(
                     &pair.0,
                     iter::once(Some(&pair.1)),
                 );

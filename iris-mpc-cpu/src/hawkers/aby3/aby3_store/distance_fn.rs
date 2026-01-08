@@ -1,4 +1,4 @@
-use crate::execution::hawk_main::MIN_FHD_ROTATIONS;
+use crate::execution::hawk_main::HAWK_MINFHD_ROTATIONS;
 
 use super::{
     Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
@@ -22,7 +22,7 @@ impl DistanceFn {
     pub fn plaintext_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
         match self {
             Fhd => a.get_distance_fraction(b),
-            MinFhd => a.get_min_distance_fraction_rotation_aware::<MIN_FHD_ROTATIONS>(b),
+            MinFhd => a.get_min_distance_fraction_rotation_aware::<HAWK_MINFHD_ROTATIONS>(b),
         }
     }
 
@@ -157,12 +157,12 @@ impl DistanceMinimalRotation {
 /// With rotation r and batch item i:
 ///     `input[r + i * ROTATIONS] == output[r][i]`
 fn transpose_from_flat(distances: &[Aby3DistanceRef]) -> Vec<Vec<Aby3DistanceRef>> {
-    (0..MIN_FHD_ROTATIONS)
+    (0..HAWK_MINFHD_ROTATIONS)
         .map(|i| {
             distances
                 .iter()
                 .skip(i)
-                .step_by(MIN_FHD_ROTATIONS)
+                .step_by(HAWK_MINFHD_ROTATIONS)
                 .cloned()
                 .collect()
         })

@@ -65,7 +65,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{Rotations, TernarySplit, VecRotationSupport},
+            rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
@@ -160,12 +160,44 @@ use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
 /// Configuration of distance function and rotation handling.
-pub const DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
-pub const MIN_FHD_ROTATIONS: usize = 11;
-pub type SearchRotations = TernarySplit;
+pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
+pub const HAWK_MINFHD_ROTATIONS: usize = 11; // MinFhd5
+pub const HAWK_BASE_ROTATIONS_MASK: u32 = CENTER_AND_10_MASK;
+
+// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MINFHD_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
+const _: () = {
+    // If HAWK_DISTANCE_FN is DistanceFn::Fhd, then HAWK_MINFHD_ROTATIONS must be 1
+    match HAWK_DISTANCE_FN {
+        DistanceFn::Fhd => {
+            if HAWK_MINFHD_ROTATIONS != 1 {
+                panic!(
+                    "If HAWK_DISTANCE_FN is DistanceFn::Fhd, then HAWK_MINFHD_ROTATIONS must be 1"
+                );
+            }
+            if HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
+                panic!();
+            }
+        }
+        _ => match HAWK_MINFHD_ROTATIONS {
+            31 => {
+                if HAWK_BASE_ROTATIONS_MASK != CENTER_ONLY_MASK {
+                    panic!();
+                }
+            }
+            11 | 13 => {
+                if HAWK_BASE_ROTATIONS_MASK != CENTER_AND_10_MASK {
+                    panic!();
+                }
+            }
+            _ => {
+                panic!();
+            }
+        },
+    }
+};
 
 /// Rotation support as configured by SearchRotations.
-pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
+pub type VecRotations<T> = VecRotationSupport<T, HAWK_BASE_ROTATIONS_MASK>;
 
 /// The choice of HNSW candidate list strategy
 pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
@@ -622,7 +654,7 @@ impl HawkActor {
                     prf,
                 },
                 workers,
-                DISTANCE_FN,
+                HAWK_DISTANCE_FN,
             );
 
             let hawk_session = HawkSession {
@@ -949,9 +981,9 @@ pub struct HawkRequest {
     /// The original `BatchQuery` containing request metadata and raw iris data.
     batch: BatchQuery,
     /// Secret-shared iris queries for normal matching (left vs. left, right vs. right).
-    queries: SearchQueries<SearchRotations>,
+    queries: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
     /// Secret-shared iris queries for mirror-attack detection (left vs. right, right vs. left).
-    queries_mirror: SearchQueries<SearchRotations>,
+    queries_mirror: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
     /// The identifiers for each request in the batch.
     ids: SearchIds,
 }
@@ -1010,7 +1042,7 @@ impl From<BatchQuery> for HawkRequest {
                         chunk
                             .enumerate()
                             .filter(|(rot_index, _)| {
-                                SearchRotations::is_active_rotation(*rot_index)
+                                ((HAWK_BASE_ROTATIONS_MASK >> rot_index) & 1) > 0
                             })
                             .map(|(_, (code, mask, code_proc, mask_proc))| {
                                 Aby3Query::from_processed(code, mask, code_proc, mask_proc)
@@ -1071,9 +1103,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_orient(
-        queries: SearchQueries<SearchRotations>,
+        queries: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
         workers: &BothEyes<IrisPoolHandle>,
-    ) -> SearchQueries<SearchRotations> {
+    ) -> SearchQueries<HAWK_BASE_ROTATIONS_MASK> {
         let (left, right) = join!(
             Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
             Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
@@ -1156,7 +1188,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn queries(&self, orient: Orientation) -> SearchQueries<SearchRotations> {
+    fn queries(&self, orient: Orientation) -> SearchQueries<HAWK_BASE_ROTATIONS_MASK> {
         match orient {
             Orientation::Normal => self.queries.clone(),
             Orientation::Mirror => self.queries_mirror.clone(),
@@ -1673,7 +1705,7 @@ impl HawkHandle {
                 do_match: true,
             };
 
-            let search_results = search::search::<SearchRotations>(
+            let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
                 sessions_search,
                 search_queries,
                 search_ids,
