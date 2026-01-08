@@ -27,6 +27,15 @@ thread_local! {
     static ROUNDS_METRICS: RefCell<FastHistogram> = RefCell::new(
         FastHistogram::new("smpc.rounds")
     );
+    static FSS_PRG_KEYGEN_METRICS: RefCell<FastHistogram> = RefCell::new(
+        FastHistogram::new("fss.prg_keygen_micros")
+    );
+    static FSS_ICF_EVAL_METRICS: RefCell<FastHistogram> = RefCell::new(
+        FastHistogram::new("fss.icf_eval_micros")
+    );
+    static FSS_NETWORK_METRICS: RefCell<FastHistogram> = RefCell::new(
+        FastHistogram::new("fss.network_micros")
+    );
 }
 
 use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
@@ -1433,18 +1442,24 @@ where
                 // this should be wrapping addition, implemented by RingElement
 
                 // Now we're ready to call eval
+                let prg_start = std::time::Instant::now();
                 let prg =
                     Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
+                let prg_elapsed = prg_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
+                FSS_PRG_KEYGEN_METRICS.with(|m| m.borrow_mut().record(prg_elapsed));
+
                 let icf = Icf::new(p, q, prg);
                 //Call eval & convert from from ByteGroup<16> to RingElement<u128>
-                let temp_eval = RingElement::<u128>(u128::from_le_bytes(
-                    icf.eval(
-                        false,
-                        &k_fss_0_icshare,
-                        fss_rs::group::int::U16Group(d_plus_r.0),
-                    )
-                    .0,
-                ));
+                let icf_start = std::time::Instant::now();
+                let eval_result = icf.eval(
+                    false,
+                    &k_fss_0_icshare,
+                    fss_rs::group::int::U16Group(d_plus_r.0),
+                );
+                let icf_elapsed = icf_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
+                FSS_ICF_EVAL_METRICS.with(|m| m.borrow_mut().record(icf_elapsed));
+
+                let temp_eval = RingElement::<u128>(u128::from_le_bytes(eval_result.0));
 
                 // Add the respective r_prime and add to the vector of results and take only the LSB
                 // Make them RingElements so it's easy to send to network
@@ -1461,6 +1476,7 @@ where
                 .collect();
 
             let cloned_f_0_res_network = f_0_res_network.clone();
+            let net_start = std::time::Instant::now();
             session // send to party 1
                 .network_session
                 .send_next(NetworkValue::vec_to_network(cloned_f_0_res_network))
@@ -1476,6 +1492,8 @@ where
                 Ok(v) => NetworkValue::vec_from_network(v),
                 Err(e) => return Err(eyre!("Party 0 cannot receive bit shares from party 1: {e}")),
             }?;
+            let net_elapsed = net_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
+            FSS_NETWORK_METRICS.with(|m| m.borrow_mut().record(net_elapsed));
 
             // Convert Vec<NetworkValue> to Vec<RingElement<Bit>>
             let f_x_1_bits: Vec<RingElement<Bit>> = f_x_1_bits_net
@@ -1554,18 +1572,24 @@ where
                 // this should be wrapping addition, implemented by RingElement
 
                 // Now we're ready to call eval
+                let prg_start = std::time::Instant::now();
                 let prg =
                     Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
+                let prg_elapsed = prg_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
+                FSS_PRG_KEYGEN_METRICS.with(|m| m.borrow_mut().record(prg_elapsed));
+
                 let icf = Icf::new(p, q, prg);
                 //Call eval & convert from from ByteGroup<16> to RingElement<u128>
-                let temp_eval = RingElement::<u128>(u128::from_le_bytes(
-                    icf.eval(
-                        true,
-                        &k_fss_1_icshare,
-                        fss_rs::group::int::U16Group(d_plus_r.0),
-                    )
-                    .0,
-                ));
+                let icf_start = std::time::Instant::now();
+                let eval_result = icf.eval(
+                    true,
+                    &k_fss_1_icshare,
+                    fss_rs::group::int::U16Group(d_plus_r.0),
+                );
+                let icf_elapsed = icf_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
+                FSS_ICF_EVAL_METRICS.with(|m| m.borrow_mut().record(icf_elapsed));
+
+                let temp_eval = RingElement::<u128>(u128::from_le_bytes(eval_result.0));
 
                 // Add the respective r_prime and add to the vector of results and take only the LSB
                 // Make them RingElements so it's easy to send to network
@@ -1582,6 +1606,7 @@ where
                 .collect();
 
             let cloned_f_1_res_network = f_1_res_network.clone();
+            let net_start = std::time::Instant::now();
             session // send to party 0
                 .network_session
                 .send_prev(NetworkValue::vec_to_network(cloned_f_1_res_network))
@@ -1597,6 +1622,8 @@ where
                 Ok(v) => NetworkValue::vec_from_network(v),
                 Err(e) => return Err(eyre!("Party 0 cannot receive bit shares from party 1: {e}")),
             }?;
+            let net_elapsed = net_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
+            FSS_NETWORK_METRICS.with(|m| m.borrow_mut().record(net_elapsed));
 
             // Convert Vec<NetworkValue> to Vec<RingElement<Bit>>
             let f_x_0_bits: Vec<RingElement<Bit>> = f_x_0_bits_net
@@ -1661,6 +1688,7 @@ where
             }
 
             // Send the flattened FSS keys to parties 0 and 1, so they can do Eval
+            let net_start = std::time::Instant::now();
             session
                 .network_session
                 .send_next(NetworkInt::new_network_vec(k_fss_0_vec_flat))
@@ -1691,6 +1719,8 @@ where
                 Ok(v) => NetworkValue::vec_from_network(v),
                 Err(e) => return Err(eyre!("Party 0 cannot receive bit shares from party 1: {e}")),
             }?;
+            let net_elapsed = net_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
+            FSS_NETWORK_METRICS.with(|m| m.borrow_mut().record(net_elapsed));
 
             // Convert Vec<NetworkValue> to Vec<RingElement<Bit>>
             let f_x_1_bits: Vec<RingElement<Bit>> = f_x_1_bits_net
@@ -2540,6 +2570,29 @@ fn to_bit_from_u128(msb_xored: RingElement<u128>) -> Result<Bit, Error> {
     } else {
         Err(eyre!("expected a Bit (0/1), got {}", msb_xored))
     }
+}
+
+/// Print a summary of timing statistics for the FSS operations.
+/// This function flushes all pending metrics and logs cumulative statistics across all threads.
+pub fn print_fss_timing_summary() {
+    FSS_PRG_KEYGEN_METRICS.with(|m| {
+        let mut metrics = m.borrow_mut();
+        metrics.flush();
+    });
+
+    FSS_ICF_EVAL_METRICS.with(|m| {
+        let mut metrics = m.borrow_mut();
+        metrics.flush();
+    });
+
+    FSS_NETWORK_METRICS.with(|m| {
+        let mut metrics = m.borrow_mut();
+        metrics.flush();
+    });
+
+    tracing::info!(
+        "FSS Timing Summary: PRG keygen, ICF evaluation, and network operations are tracked in metrics."
+    );
 }
 
 #[cfg(test)]
