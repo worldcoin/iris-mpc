@@ -545,8 +545,10 @@ async fn exec_delta(
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
+            let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
+            done_rx.await?;
         }
 
         Ok(())
@@ -682,6 +684,7 @@ async fn exec_indexation(
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
+            let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
             // Signal.
@@ -690,6 +693,7 @@ async fn exec_indexation(
                 batch,
                 now.elapsed().as_secs_f64(),
             ));
+            done_rx.await?;
             now = Instant::now();
         }
         Ok(())
@@ -1085,6 +1089,7 @@ async fn get_results_thread(
                     connect_plans,
                     last_serial_id,
                     vector_ids_to_persist,
+                    done_tx,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
@@ -1144,6 +1149,7 @@ async fn get_results_thread(
                         ));
                     }
 
+                    let _ = done_tx.send(());
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
@@ -1151,6 +1157,7 @@ async fn get_results_thread(
                     modification_id,
                     connect_plans,
                     vector_id_to_persist,
+                    done_tx,
                 } => {
                     log_info(format!(
                         "Job Results :: Received: modification-id={modification_id} for serial-id={}",
@@ -1201,6 +1208,7 @@ async fn get_results_thread(
                         ));
                     }
 
+                    let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
             }
