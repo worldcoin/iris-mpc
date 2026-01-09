@@ -143,7 +143,7 @@ pub async fn eval_vector_distance(
     point2.mask.preprocess_mask_code_query_share();
     let pairs = vec![Some((point1.clone(), Arc::new(point2)))];
     let dist = store.eval_pairwise_distances(pairs).await?;
-    Ok(dist[0].clone())
+    Ok(dist[0])
 }
 
 // TODO Since GraphMem no longer caches distances, this function is now just a

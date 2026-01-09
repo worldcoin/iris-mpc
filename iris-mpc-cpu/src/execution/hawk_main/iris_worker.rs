@@ -3,7 +3,7 @@ use crate::{
     protocol::{
         ops::{
             galois_ring_pairwise_distance, non_existent_distance, pairwise_distance,
-            rotation_aware_pairwise_distance,
+            rotation_aware_pairwise_distance, rotation_aware_pairwise_distance_rowmajor,
         },
         shared_iris::ArcIris,
     },
@@ -183,7 +183,7 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        const CHUNK_SIZE: usize = 32;
+        const CHUNK_SIZE: usize = 128;
         let mut responses = Vec::with_capacity(vector_ids.len().div_ceil(CHUNK_SIZE));
 
         for chunk in vector_ids.chunks(CHUNK_SIZE) {
@@ -386,7 +386,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let result = rotation_aware_pairwise_distance(&query, targets);
+                let result = rotation_aware_pairwise_distance_rowmajor(&query, targets);
                 let _ = rsp.send(result);
             }
 

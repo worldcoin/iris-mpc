@@ -47,8 +47,8 @@ pub async fn greater_than_threshold(
     let diffs: Vec<Share<u32>> = distances
         .iter()
         .map(|d| {
-            let x = d.mask_dot.clone() * A as u32;
-            let y = d.code_dot.clone() * B as u32;
+            let x = d.mask_dot * A as u32;
+            let y = d.code_dot * B as u32;
             y - x
         })
         .collect();
@@ -172,7 +172,7 @@ async fn select_shared_slices_by_bits(
             .iter()
             .zip(right_chunk.iter())
             .map(|(left, right)| {
-                let diff = left.clone() - right.clone();
+                let diff = *left - *right;
                 session.prf.gen_zero_share() + c.a * diff.a + c.b * diff.a + c.a * diff.b
             })
             .collect_vec()
@@ -218,8 +218,8 @@ async fn conditionally_select_distance(
         .iter()
         .zip(control_bits.iter())
         .flat_map(|((d1, d2), c)| {
-            let code = d1.code_dot.clone() - d2.code_dot.clone();
-            let mask = d1.mask_dot.clone() - d2.mask_dot.clone();
+            let code = d1.code_dot - d2.code_dot;
+            let mask = d1.mask_dot - d2.mask_dot;
             let code_mul_a =
                 session.prf.gen_zero_share() + c.a * code.a + c.b * code.a + c.a * code.b;
             let mask_mul_a =
@@ -247,8 +247,8 @@ async fn conditionally_select_distance(
         // add the d2 shares
         .zip(distances.iter())
         .map(|(res, (_, d2))| DistanceShare {
-            code_dot: res.code_dot + &d2.code_dot,
-            mask_dot: res.mask_dot + &d2.mask_dot,
+            code_dot: res.code_dot + d2.code_dot,
+            mask_dot: res.mask_dot + d2.mask_dot,
         })
         .collect())
 }
@@ -292,7 +292,7 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
     // Select ids first: c * (left_id - right_id) + right_id
     let ids = izip!(left_ids, right_ids, control_bits).map(|(left_id, right_id, c)| {
         let diff = left_id.wrapping_sub(right_id);
-        let mut res = c.clone() * RingElement(diff);
+        let mut res = c * RingElement(diff);
         res.add_assign_const_role(right_id, session.own_role());
         res
     });
@@ -321,11 +321,11 @@ pub(crate) async fn conditionally_select_distances_with_shared_ids(
 
     let left_dist = left_distances
         .into_iter()
-        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
         .collect_vec();
     let right_dist = right_distances
         .into_iter()
-        .flat_map(|(id, d)| [id, d.code_dot.clone(), d.mask_dot.clone()])
+        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
         .collect_vec();
     let distances =
         select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 3)
@@ -360,7 +360,7 @@ pub async fn conditionally_swap_distances_plain_ids(
         .iter()
         .map(|(id, d)| {
             let shared_index = Share::from_const(*id, role);
-            (shared_index, d.clone())
+            (shared_index, *d)
         })
         .collect_vec();
     // Lift swap bits to u32 shares
@@ -371,7 +371,7 @@ pub async fn conditionally_swap_distances_plain_ids(
     let distances_to_swap = indices
         .iter()
         .filter_map(|(idx1, idx2)| match (list.get(*idx1), list.get(*idx2)) {
-            (Some((_, d1)), Some((_, d2))) => Some((d1.clone(), d2.clone())),
+            (Some((_, d1)), Some((_, d2))) => Some((*d1, *d2)),
             _ => None,
         })
         .collect_vec();
@@ -384,8 +384,8 @@ pub async fn conditionally_swap_distances_plain_ids(
         .zip(first_distances.iter())
         .map(|(d_pair, first_d)| {
             DistanceShare::new(
-                d_pair.0.code_dot + d_pair.1.code_dot - &first_d.code_dot,
-                d_pair.0.mask_dot + d_pair.1.mask_dot - &first_d.mask_dot,
+                d_pair.0.code_dot + d_pair.1.code_dot - first_d.code_dot,
+                d_pair.0.mask_dot + d_pair.1.mask_dot - first_d.mask_dot,
             )
         })
         .collect_vec();
@@ -402,7 +402,7 @@ pub async fn conditionally_swap_distances_plain_ids(
         let id2 = list[*idx2].0;
         // Only propagate index and skip version id.
         // This computation is local as indices are public.
-        let first_id = bit * id1 + not_bit.clone() * id2;
+        let first_id = bit * id1 + not_bit * id2;
         let second_id = bit * id2 + not_bit * id1;
         encrypted_list[*idx1] = (first_id, first_d);
         encrypted_list[*idx2] = (second_id, second_d);
@@ -451,9 +451,9 @@ pub async fn conditionally_swap_distances(
             let (id1, d1) = &list[*idx1];
             let (id2, d2) = &list[*idx2];
 
-            let id = mul_share_a(id1.clone(), id2.clone(), sb);
-            let code_dot_a = mul_share_a(d1.code_dot.clone(), d2.code_dot.clone(), sb);
-            let mask_dot_a = mul_share_a(d1.mask_dot.clone(), d2.mask_dot.clone(), sb);
+            let id = mul_share_a(*id1, *id2, sb);
+            let code_dot_a = mul_share_a(d1.code_dot, d2.code_dot, sb);
+            let mask_dot_a = mul_share_a(d1.mask_dot, d2.mask_dot, sb);
             [id, code_dot_a, mask_dot_a]
         })
         .collect();
@@ -485,15 +485,15 @@ pub async fn conditionally_swap_distances(
             let (id2, dist2) = &list[*idx2];
             // first tuple element = c * (d1 - d2) + d2
             // second tuple element = d1 - c * (d1 - d2)
-            let first_id = res_id.clone() + id2;
-            let second_id = id1.clone() - res_id;
+            let first_id = res_id + *id2;
+            let second_id = *id1 - res_id;
             let first_distance = DistanceShare {
-                code_dot: res_dist.code_dot.clone() + &dist2.code_dot,
-                mask_dot: res_dist.mask_dot.clone() + &dist2.mask_dot,
+                code_dot: res_dist.code_dot + dist2.code_dot,
+                mask_dot: res_dist.mask_dot + dist2.mask_dot,
             };
             let second_distance = DistanceShare {
-                code_dot: dist1.code_dot.clone() - res_dist.code_dot,
-                mask_dot: dist1.mask_dot.clone() - res_dist.mask_dot,
+                code_dot: dist1.code_dot - res_dist.code_dot,
+                mask_dot: dist1.mask_dot - res_dist.mask_dot,
             };
             ((first_id, first_distance), (second_id, second_distance))
         })
@@ -650,8 +650,8 @@ pub(crate) async fn min_round_robin_batch(
     for i_batch in 0..num_batches {
         for i in 0..batch_size {
             for j in (i + 1)..batch_size {
-                let distance_i = distances[i * num_batches + i_batch].clone();
-                let distance_j = distances[j * num_batches + i_batch].clone();
+                let distance_i = distances[i * num_batches + i_batch];
+                let distance_j = distances[j * num_batches + i_batch];
                 pairs.push((distance_i, distance_j));
             }
         }
@@ -685,7 +685,7 @@ pub(crate) async fn min_round_robin_batch(
                 let value = match i.cmp(&j) {
                     Ordering::Less => {
                         batch_counter += 1;
-                        batch[batch_counter - 1].clone()
+                        batch[batch_counter - 1]
                     }
                     Ordering::Equal => Share::from_const(Bit::new(true), session.own_role()),
                     Ordering::Greater => batch_matrix[i].get_at(j).not(),
@@ -827,6 +827,220 @@ where
         metric_per_pair_duration.record(duration);
     });
     additive_shares
+}
+
+/// Row-major prerotated query for L1 cache efficiency.
+/// Layout: [row0_rot0..rot30][row1_rot0..rot30]...
+pub struct PrerotatedQueryRowMajor {
+    /// code: 16 rows × 31 rotations × 800 elements = 396,800 u16s (~793KB)
+    code_data: Vec<u16>,
+    /// mask: 8 rows × 31 rotations × 800 elements = 198,400 u16s (~397KB)
+    mask_data: Vec<u16>,
+}
+
+impl PrerotatedQueryRowMajor {
+    pub const ROW_SIZE: usize = 800;
+    pub const CODE_ROWS: usize = 16;
+    pub const MASK_ROWS: usize = 8;
+    const CODE_SIZE: usize = Self::CODE_ROWS * ROTATIONS * Self::ROW_SIZE;
+    const MASK_SIZE: usize = Self::MASK_ROWS * ROTATIONS * Self::ROW_SIZE;
+
+    /// Rotation amounts for each of the 31 rotations.
+    const ROTATION_AMOUNTS: [usize; ROTATIONS] = {
+        let mut amounts = [0usize; ROTATIONS];
+        // Left rotations: rotate left by 60, 56, ..., 4 elements
+        let mut i = 0;
+        while i < 15 {
+            amounts[i] = (15 - i) * 4;
+            i += 1;
+        }
+        // Center: no rotation
+        amounts[15] = 0;
+        // Right rotations: rotate right by 4, 8, ..., 60 (i.e., left by 796, 792, ..., 740)
+        let mut i = 1;
+        while i <= 15 {
+            amounts[15 + i] = 800 - i * 4;
+            i += 1;
+        }
+        amounts
+    };
+
+    /// Rotate row directly into destination buffer (zero allocations).
+    #[inline]
+    fn rotate_row_into(src: &[u16], dst: &mut [u16], left_amount: usize) {
+        let len = src.len();
+        debug_assert_eq!(dst.len(), len);
+        debug_assert!(left_amount < len);
+        // Rotate left by `left_amount`: [left_amount..] ++ [..left_amount]
+        let (first, second) = src.split_at(left_amount);
+        dst[..second.len()].copy_from_slice(second);
+        dst[second.len()..].copy_from_slice(first);
+    }
+
+    /// Create a new buffer (allocates memory).
+    fn new_buffer() -> Self {
+        Self {
+            code_data: vec![0u16; Self::CODE_SIZE],
+            mask_data: vec![0u16; Self::MASK_SIZE],
+        }
+    }
+
+    /// Fill the buffer with rotated query data (reuses existing allocation).
+    fn fill(&mut self, query: &ArcIris) {
+        // Process code rows - write directly into destination (no intermediate allocations)
+        for row_idx in 0..Self::CODE_ROWS {
+            let src_row =
+                &query.code.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
+            for rot_idx in 0..ROTATIONS {
+                let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
+                let dst = &mut self.code_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
+            }
+        }
+
+        // Process mask rows - write directly into destination (no intermediate allocations)
+        for row_idx in 0..Self::MASK_ROWS {
+            let src_row =
+                &query.mask.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
+            for rot_idx in 0..ROTATIONS {
+                let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
+                let dst = &mut self.mask_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
+            }
+        }
+    }
+
+    pub fn new(query: &ArcIris) -> Self {
+        let mut buf = Self::new_buffer();
+        buf.fill(query);
+        buf
+    }
+
+    /// Get all 31 rotations of a code row (contiguous in memory - 50KB)
+    #[inline]
+    fn code_row_rotations(&self, row_idx: usize) -> &[u16] {
+        let start = row_idx * ROTATIONS * Self::ROW_SIZE;
+        let end = start + ROTATIONS * Self::ROW_SIZE;
+        &self.code_data[start..end]
+    }
+
+    /// Get all 31 rotations of a mask row (contiguous in memory - 50KB)
+    #[inline]
+    fn mask_row_rotations(&self, row_idx: usize) -> &[u16] {
+        let start = row_idx * ROTATIONS * Self::ROW_SIZE;
+        let end = start + ROTATIONS * Self::ROW_SIZE;
+        &self.mask_data[start..end]
+    }
+}
+
+// Thread-local storage for reusable prerotated query buffers
+thread_local! {
+    static PREROTATED_BUFFER: std::cell::RefCell<Option<PrerotatedQueryRowMajor>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Row-major rotation-aware distance - processes row-by-row for L1 cache efficiency.
+/// Uses thread-local buffer reuse to minimize allocations at high thread counts.
+pub fn rotation_aware_pairwise_distance_rowmajor<'a, I>(
+    query: &'a ArcIris,
+    targets: I,
+) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    let target_count = targets.len();
+    let mut additive_shares = vec![RingElement(0u16); 2 * ROTATIONS * target_count];
+
+    // Use thread-local buffer to avoid allocation per call
+    PREROTATED_BUFFER.with(|cell| {
+        let mut borrowed = cell.borrow_mut();
+        let prerotated = borrowed.get_or_insert_with(PrerotatedQueryRowMajor::new_buffer);
+        prerotated.fill(query);
+        rotation_aware_inner(prerotated, targets, &mut additive_shares);
+    });
+
+    additive_shares
+}
+
+/// Inner implementation that works with a borrowed prerotated buffer.
+#[inline(never)]
+fn rotation_aware_inner<'a, I>(
+    prerotated: &PrerotatedQueryRowMajor,
+    targets: I,
+    additive_shares: &mut [RingElement<u16>],
+) where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    const ROW_SIZE: usize = PrerotatedQueryRowMajor::ROW_SIZE;
+    const CODE_ROWS: usize = PrerotatedQueryRowMajor::CODE_ROWS;
+    const MASK_ROWS: usize = PrerotatedQueryRowMajor::MASK_ROWS;
+
+    let targets: Vec<_> = targets.collect();
+
+    // Process row-by-row: all 31 rotations of one row stay in L1
+    for row_idx in 0..CODE_ROWS {
+        let query_rows = prerotated.code_row_rotations(row_idx); // 50KB, fits in L1
+
+        for (target_idx, target_opt) in targets.iter().enumerate() {
+            if let Some(target) = target_opt {
+                let target_row = &target.code.coefs[row_idx * ROW_SIZE..(row_idx + 1) * ROW_SIZE];
+
+                for rot_idx in 0..ROTATIONS {
+                    let query_row = &query_rows[rot_idx * ROW_SIZE..(rot_idx + 1) * ROW_SIZE];
+                    let partial = simple_dot_product(query_row, target_row);
+                    let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2;
+                    additive_shares[result_idx] =
+                        RingElement(additive_shares[result_idx].0.wrapping_add(partial));
+                }
+            }
+        }
+    }
+
+    // Process mask rows - accumulate first, multiply by 2 later
+    for row_idx in 0..MASK_ROWS {
+        let query_rows = prerotated.mask_row_rotations(row_idx);
+
+        for (target_idx, target_opt) in targets.iter().enumerate() {
+            if let Some(target) = target_opt {
+                let target_row = &target.mask.coefs[row_idx * ROW_SIZE..(row_idx + 1) * ROW_SIZE];
+
+                for rot_idx in 0..ROTATIONS {
+                    let query_row = &query_rows[rot_idx * ROW_SIZE..(rot_idx + 1) * ROW_SIZE];
+                    let partial = simple_dot_product(query_row, target_row);
+                    let result_idx = target_idx * ROTATIONS * 2 + rot_idx * 2 + 1;
+                    additive_shares[result_idx] =
+                        RingElement(additive_shares[result_idx].0.wrapping_add(partial));
+                }
+            }
+        }
+    }
+
+    // Multiply mask results by 2 for Some targets, set max distance for None targets
+    for (target_idx, target_opt) in targets.iter().enumerate() {
+        let base_idx = target_idx * ROTATIONS * 2;
+        if target_opt.is_some() {
+            for rot_idx in 0..ROTATIONS {
+                let mask_idx = base_idx + rot_idx * 2 + 1;
+                additive_shares[mask_idx] = RingElement(2) * additive_shares[mask_idx];
+            }
+        } else {
+            let (a, b) = SHARE_OF_MAX_DISTANCE;
+            for rot_idx in 0..ROTATIONS {
+                let code_idx = base_idx + rot_idx * 2;
+                additive_shares[code_idx] = RingElement(a);
+                additive_shares[code_idx + 1] = RingElement(b);
+            }
+        }
+    }
+}
+
+#[inline]
+fn simple_dot_product(a: &[u16], b: &[u16]) -> u16 {
+    debug_assert_eq!(a.len(), b.len());
+    let mut sum = 0u16;
+    for i in 0..a.len() {
+        sum = sum.wrapping_add(a[i].wrapping_mul(b[i]));
+    }
+    sum
 }
 
 pub fn non_existent_distance() -> Vec<RingElement<u16>> {
@@ -1093,18 +1307,17 @@ mod tests {
                     &mut session,
                     &[(
                         DistanceShare {
-                            code_dot: four_shares[0].clone(),
-                            mask_dot: four_shares[1].clone(),
+                            code_dot: four_shares[0],
+                            mask_dot: four_shares[1],
                         },
                         DistanceShare {
-                            code_dot: four_shares[2].clone(),
-                            mask_dot: four_shares[3].clone(),
+                            code_dot: four_shares[2],
+                            mask_dot: four_shares[3],
                         },
                     )],
                 )
                 .await
-                .unwrap()[0]
-                    .clone();
+                .unwrap()[0];
 
                 open_single(&mut session, out_shared).await.unwrap()
             });
@@ -1195,5 +1408,142 @@ mod tests {
 
         assert_eq!(output0.1[0], plain_d1 as u16);
         assert_eq!(output0.1[1], plain_d2);
+    }
+
+    #[rstest]
+    #[case(0, 1)]
+    #[case(1, 5)]
+    #[case(42, 10)]
+    fn test_rotation_aware_pairwise_distance_rowmajor_equivalence(
+        #[case] seed: u64,
+        #[case] num_targets: usize,
+    ) {
+        use crate::protocol::shared_iris::GaloisRingSharedIris;
+
+        let mut rng = AesRng::seed_from_u64(seed);
+
+        // Create enough iris codes: 1 for query + num_targets for targets
+        let iris_db = IrisDB::new_random_rng(1 + num_targets, &mut rng).db;
+
+        // Generate shares for the query
+        let query_shares =
+            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
+
+        // Generate shares for targets
+        let target_shares: Vec<_> = iris_db[1..]
+            .iter()
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .collect();
+
+        // Test for each party's share
+        for party_id in 0..3 {
+            // Prepare query with preprocessing
+            let mut query = query_shares[party_id].clone();
+            query.code.preprocess_iris_code_query_share();
+            query.mask.preprocess_mask_code_query_share();
+            let query_arc = Arc::new(query);
+
+            // Prepare targets (no preprocessing needed for targets)
+            let targets: Vec<ArcIris> = target_shares
+                .iter()
+                .map(|shares| Arc::new(shares[party_id].clone()))
+                .collect();
+
+            // Call the original function
+            let result_original =
+                rotation_aware_pairwise_distance(&query_arc, targets.iter().map(Some));
+
+            // Call the row-major function
+            let result_rowmajor =
+                rotation_aware_pairwise_distance_rowmajor(&query_arc, targets.iter().map(Some));
+
+            // Verify results are identical
+            assert_eq!(
+                result_original.len(),
+                result_rowmajor.len(),
+                "Result lengths should match"
+            );
+            for (i, (orig, rowmaj)) in result_original
+                .iter()
+                .zip(result_rowmajor.iter())
+                .enumerate()
+            {
+                assert_eq!(
+                    orig, rowmaj,
+                    "Mismatch at index {} for party {} with seed {}: original {:?} != rowmajor {:?}",
+                    i, party_id, seed, orig, rowmaj
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_rotation_aware_pairwise_distance_rowmajor_with_none_targets() {
+        use crate::protocol::shared_iris::GaloisRingSharedIris;
+
+        let mut rng = AesRng::seed_from_u64(123);
+
+        // Create iris codes
+        let iris_db = IrisDB::new_random_rng(3, &mut rng).db;
+
+        // Generate shares
+        let query_shares =
+            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
+        let target_shares: Vec<_> = iris_db[1..]
+            .iter()
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .collect();
+
+        // Test for party 0
+        let party_id = 0;
+
+        // Prepare query with preprocessing
+        let mut query = query_shares[party_id].clone();
+        query.code.preprocess_iris_code_query_share();
+        query.mask.preprocess_mask_code_query_share();
+        let query_arc = Arc::new(query);
+
+        // Keep the Arc values alive
+        let target0: ArcIris = Arc::new(target_shares[0][party_id].clone());
+        let target1: ArcIris = Arc::new(target_shares[1][party_id].clone());
+        let targets_with_none: Vec<Option<&ArcIris>> = vec![
+            Some(&target0),
+            None, // This should get SHARE_OF_MAX_DISTANCE
+            Some(&target1),
+        ];
+
+        // Call both functions
+        let result_original =
+            rotation_aware_pairwise_distance(&query_arc, targets_with_none.clone().into_iter());
+        let result_rowmajor =
+            rotation_aware_pairwise_distance_rowmajor(&query_arc, targets_with_none.into_iter());
+
+        // Verify results are identical
+        assert_eq!(result_original.len(), result_rowmajor.len());
+        for (i, (orig, rowmaj)) in result_original
+            .iter()
+            .zip(result_rowmajor.iter())
+            .enumerate()
+        {
+            assert_eq!(orig, rowmaj, "Mismatch at index {}", i);
+        }
+
+        // Verify that None targets produce SHARE_OF_MAX_DISTANCE
+        let (max_code, max_mask) = SHARE_OF_MAX_DISTANCE;
+        // Second target is None, so indices 31*2..31*4 should all be max distance
+        for rot in 0..ROTATIONS {
+            let idx = ROTATIONS * 2 + rot * 2;
+            assert_eq!(
+                result_rowmajor[idx].0, max_code,
+                "Code at rotation {} should be max",
+                rot
+            );
+            assert_eq!(
+                result_rowmajor[idx + 1].0,
+                max_mask,
+                "Mask at rotation {} should be max",
+                rot
+            );
+        }
     }
 }
