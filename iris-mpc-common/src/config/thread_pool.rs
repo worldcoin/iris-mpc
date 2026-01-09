@@ -29,7 +29,7 @@ pub fn get_iris_worker_core_ids(half_idx: usize) -> Vec<CoreId> {
 
     core_ids
         .into_iter()
-        .rev()
+        //        .rev()
         .skip(half * half_idx)
         .take(half)
         .collect()
@@ -50,5 +50,9 @@ fn get_tokio_core_ids() -> Vec<CoreId> {
     core_ids.sort();
     assert!(!core_ids.is_empty());
 
-    core_ids.into_iter().take(get_num_tokio_cores()).collect()
+    core_ids
+        .into_iter()
+        .rev()
+        .take(get_num_tokio_cores())
+        .collect()
 }
