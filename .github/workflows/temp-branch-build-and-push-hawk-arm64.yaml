@@ -3,7 +3,7 @@ name: Branch - Anon stats server build and push docker image
 on:
   push:
     branches:
-      - "sw/test_separate_thread_pools"
+      - "sw/separate_thread_pools"
     paths-ignore:
       - "deploy/**"
 
