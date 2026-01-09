@@ -3,8 +3,7 @@ name: Branch - Anon stats server build and push docker image
 on:
   push:
     branches:
-      - "dev"
-      - "chore/rustc-1.89"
+      - "sw/test_separate_thread_pools"
     paths-ignore:
       - "deploy/**"
 

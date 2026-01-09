@@ -3,7 +3,7 @@
 use clap::Parser;
 use eyre::Result;
 use iris_mpc::server::server_main;
-use iris_mpc_common::config::{Config, Opt};
+use iris_mpc_common::config::{thread_pool, Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
 use std::process::exit;
 
@@ -16,8 +16,11 @@ fn main() -> Result<()> {
 
     // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(config.tokio_threads)
+        .worker_threads(thread_pool::num_tokio_cores())
         .enable_all()
+        .on_thread_start(move || {
+            thread_pool::pin_next_tokio_core_id();
+        })
         .build()
         .unwrap();
 

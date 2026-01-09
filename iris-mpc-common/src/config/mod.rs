@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 pub mod json_wrapper;
+pub mod thread_pool;
 
 pub const ENV_DEV: &str = "dev";
 pub const ENV_PROD: &str = "prod";

@@ -2998,6 +2998,7 @@ dependencies = [
  "chrono",
  "clap",
  "config",
+ "core_affinity",
  "eyre",
  "float_eq",
  "hex",

@@ -10,13 +10,12 @@ use crate::{
     shares::RingElement,
 };
 use ampc_actor_utils::fast_metrics::FastHistogram;
-use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::{config::thread_pool::get_iris_worker_core_ids, vector_id::VectorId};
 use std::{
-    cmp, iter,
+    iter,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -293,7 +292,7 @@ pub fn init_workers(
     iris_store: SharedIrisesRef<ArcIris>,
     numa: bool,
 ) -> IrisPoolHandle {
-    let core_ids = select_core_ids(shard_index);
+    let core_ids = get_iris_worker_core_ids(shard_index);
     info!(
         "Dot product shard {} running on {} cores ({:?})",
         shard_index,
@@ -401,21 +400,4 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
         }
     }
-}
-
-const SHARD_COUNT: usize = 2;
-
-pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let mut core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.sort();
-    assert!(!core_ids.is_empty());
-
-    let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
-    let shard_index = shard_index % shard_count;
-
-    let shard_size = core_ids.len() / shard_count;
-    let start = shard_index * shard_size;
-    let end = cmp::min(start + shard_size, core_ids.len());
-
-    core_ids[start..end].to_vec()
 }

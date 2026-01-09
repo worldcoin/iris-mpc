@@ -60,6 +60,7 @@ serde-big-array.workspace = true
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 num_cpus = "1.17.0"
+core_affinity.workspace = true
 ampc-secret-sharing.workspace = true
 ampc-actor-utils.workspace = true
 ampc-server-utils.workspace = true
