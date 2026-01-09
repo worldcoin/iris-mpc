@@ -104,9 +104,6 @@ env:
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-smpcv2-stage-sns-requests"
 
-  - name: SMPC__SNS_BUFFER_BUCKET_NAME
-    value: "wf-smpcv2-stage-sns-buffer"
-
   - name: SMPC__ENABLE_S3_IMPORTER
     value: "true"
 
@@ -145,12 +142,6 @@ env:
 
   - name: SMPC__N_BUCKETS
     value: "375"
-
-  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-    value: "true"
-
-  - name: SMPC__ENABLE_SENDING_MIRROR_ANONYMIZED_STATS_MESSAGE
-    value: "true"
 
   - name: SMPC__ENABLE_REAUTH
     value: "true"
