@@ -1,4 +1,4 @@
-use crate::execution::hawk_main::{rot::Rotations, SearchRotations};
+use crate::execution::hawk_main::HAWK_BASE_ROTATIONS_MASK;
 
 use super::{BothEyes, BothOrient, HawkSession, Orientation, LEFT, RIGHT};
 
@@ -10,7 +10,8 @@ pub struct SessionGroups {
 impl SessionGroups {
     // For each request, we may use parallel sessions for:
     // both orientations, both eyes, search+intra_batch, rotations.
-    pub const N_SESSIONS_PER_REQUEST: usize = 2 * 2 * 2 * SearchRotations::N_ROTATIONS;
+    pub const N_SESSIONS_PER_REQUEST: usize =
+        2 * 2 * 2 * (HAWK_BASE_ROTATIONS_MASK.count_ones() as usize);
 
     // Group the sessions per orientation, eye, and search+intra_batch.
     pub fn new(sessions: BothEyes<Vec<HawkSession>>) -> Self {

@@ -459,8 +459,9 @@ mod tests {
     use ampc_secret_sharing::shares::DistanceShare;
     use ampc_secret_sharing::Share;
 
-    use crate::execution::hawk_main::rot::Rotations;
-    use crate::execution::hawk_main::{HawkResult, InsertPlanV, SearchRotations, VecRotations};
+    use crate::execution::hawk_main::{
+        HawkResult, InsertPlanV, VecRotations, HAWK_BASE_ROTATIONS_MASK,
+    };
     use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::searcher::UpdateEntryPoint;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
@@ -714,7 +715,10 @@ mod tests {
                     update_ep: UpdateEntryPoint::False,
                 },
             };
-            VecRotations::from(vec![insert_plan; SearchRotations::N_ROTATIONS])
+            VecRotations::from(vec![
+                insert_plan;
+                HAWK_BASE_ROTATIONS_MASK.count_ones() as usize
+            ])
         };
 
         let search_results = [
