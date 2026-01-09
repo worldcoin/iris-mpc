@@ -1,12 +1,14 @@
+use std::{
+    io::Error,
+    path::{Path, PathBuf},
+};
+
+use iris_mpc_common::config::Config as NodeConfig;
+
 use super::reader;
 use crate::{
     constants::PARTY_INDICES,
     types::{NodeConfigSet, NodeExecutionHost, PartyIdx},
-};
-use iris_mpc_common::config::Config as NodeConfig;
-use std::{
-    io::Error,
-    path::{Path, PathBuf},
 };
 
 /// Returns path to an asset within the crate assets sub-directory.
@@ -34,6 +36,12 @@ pub fn get_path_to_root() -> PathBuf {
     Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).into()
 }
 
+/// Returns path to a service client config file.
+pub fn get_path_to_service_client_config(config_idx: usize) -> PathBuf {
+    get_path_to_assets()
+        .join(format!("service-client-config/service-client-config-{config_idx}.toml",).as_str())
+}
+
 /// Returns path to sub-directory.
 pub fn get_path_to_subdir(name: &str) -> PathBuf {
     get_path_to_root().join(name)
@@ -47,7 +55,7 @@ pub fn read_node_config(
 ) -> Result<NodeConfig, Error> {
     let path_to_config = get_path_to_node_config(config_kind, config_idx, party_idx);
 
-    reader::read_node_config(&path_to_config)
+    reader::read_toml_config(&path_to_config)
 }
 
 /// Returns network wide configuration deserialized from a set of toml files.

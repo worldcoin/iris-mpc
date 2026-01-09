@@ -1,10 +1,19 @@
-use iris_mpc_common::config::Config as NodeConfig;
 use std::{fs, io::Error, path::Path};
+
 use toml;
 
-/// Returns node configuration deserialized from a toml file.
-pub fn read_node_config(path_to_config: &Path) -> Result<NodeConfig, Error> {
-    assert!(path_to_config.exists());
+/// Returns a deserialised toml configuration file.
+pub fn read_toml_config<T>(path_to_config: &Path) -> Result<T, Error>
+where
+    T: serde::de::DeserializeOwned,
+{
+    if !path_to_config.exists() {
+        return Err(Error::new(
+            std::io::ErrorKind::NotFound,
+            "Configuration file not found",
+        ));
+    }
 
-    Ok(toml::from_str(&fs::read_to_string(path_to_config)?).unwrap())
+    let content = fs::read_to_string(path_to_config)?;
+    toml::from_str(&content).map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))
 }
