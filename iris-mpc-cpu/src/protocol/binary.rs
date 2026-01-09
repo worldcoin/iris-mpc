@@ -20,11 +20,9 @@ use num_traits::{One, Zero};
 use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use std::{
-    cell::RefCell,
-    ops::SubAssign,
-    sync::atomic::{AtomicU64, AtomicU8, Ordering},
-};
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::{cell::RefCell, ops::SubAssign};
 use tracing::{instrument, trace_span, Instrument};
 
 // Global counters for FSS timing (using atomic types for thread-safe accumulation)
@@ -1942,7 +1940,9 @@ where
     // Party2: a=d2, b=d1
 
     // Get party number
-    let role = session.own_role().index();
+    // let role = session.own_role().index();
+    //Randomizing the roles, since party 2 has more load
+    let role = (session.own_role().index() + session.session_id().0 as usize) % 3;
     // Depending on the role, do different stuff
     match role {
         0 => {
@@ -1985,45 +1985,56 @@ where
             let p = InG::from(1u16 << 15) + n_half;
             let q = InG::from(u16::MAX) + n_half; // modulo is handled by U16Group
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4]; // !!! do math again for this? is this correct size?
-            let mut f_x_0_bits = Vec::with_capacity(batch_size); // store all the eval results
 
             // Deserialize each to find original IcShare and call eval
             let key_words_fss_0: Vec<u32> = RingElement::<u32>::convert_vec(k_fss_0_vec); //need to un-flatten key vector
+
+            // Preprocess: compute offsets and lengths for each key
+            let mut key_offsets = Vec::with_capacity(batch_size);
+            let mut key_lengths = Vec::with_capacity(batch_size);
             let mut offset: usize = 0;
-            for i in 0..batch_size {
-                // Need to "unflatten" to get batch_size number of fss keys
-                let curr_key_byte_len = 1 + (key_words_fss_0[offset] as usize + 3) / 4; // offset index has the byte length, then find total u32s for this key
-
-                // Get current key (ICShare)
-                let k_fss_0_icshare: IcShare =
-                    IcShare::deserialize(&key_words_fss_0[offset..offset + curr_key_byte_len])?;
-                offset += curr_key_byte_len; //update offset to point to next cell that contains size of next key
-
-                // reconstruct the input d+r [recall x.a=d0] for each x[i]
-                let d_plus_r: RingElement<u16> =
-                    d1r1[i] + d2r2_vec[i] + x[i].a + RingElement(n_half_u32);
-                // this should be wrapping addition, implemented by RingElement
-
-                // Now we're ready to call eval
-                let prg =
-                    Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
-                let icf = Icf::new(p, q, prg);
-                //Call eval & convert from from ByteGroup<16> to RingElement<u128>
-                let temp_eval = RingElement::<u128>(u128::from_le_bytes(
-                    icf.eval(
-                        false,
-                        &k_fss_0_icshare,
-                        fss_rs::group::int::U16Group(d_plus_r.0),
-                    )
-                    .0,
-                ));
-
-                // Add the respective r_prime and add to the vector of results and take only the LSB
-                // Make them RingElements so it's easy to send to network
-                f_x_0_bits.push(RingElement(Bit::new(
-                    ((temp_eval ^ r_prime_keys[i]).0 & 1) != 0,
-                )));
+            for _ in 0..batch_size {
+                key_offsets.push(offset);
+                let curr_key_byte_len = 1 + (key_words_fss_0[offset] as usize + 3) / 4;
+                key_lengths.push(curr_key_byte_len);
+                offset += curr_key_byte_len;
             }
+
+            // Parallel eval loop
+            let f_x_0_bits: Vec<RingElement<Bit>> = (0..batch_size)
+                .into_par_iter()
+                .map(|i| {
+                    let offset = key_offsets[i];
+
+                    // Get current key (ICShare)
+                    let k_fss_0_icshare: IcShare =
+                        IcShare::deserialize(&key_words_fss_0[offset..offset + key_lengths[i]])?;
+
+                    // reconstruct the input d+r [recall x.a=d0] for each x[i]
+                    let d_plus_r: RingElement<u16> =
+                        d1r1[i] + d2r2_vec[i] + x[i].a + RingElement(n_half_u32);
+                    // this should be wrapping addition, implemented by RingElement
+
+                    // Now we're ready to call eval
+                    let prg =
+                        Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| {
+                            &keys[i]
+                        }));
+                    let icf = Icf::new(p, q, prg);
+                    let temp_eval = RingElement::<u128>(u128::from_le_bytes(
+                        icf.eval(
+                            false,
+                            &k_fss_0_icshare,
+                            fss_rs::group::int::U16Group(d_plus_r.0),
+                        )
+                        .0,
+                    ));
+
+                    Ok(RingElement(Bit::new(
+                        ((temp_eval ^ r_prime_keys[i]).0 & 1) != 0,
+                    )))
+                })
+                .collect::<Result<Vec<RingElement<Bit>>, Error>>()?;
 
             // Prepare them in a vector to send to dealer and next party
             let f_0_res_network: Vec<NetworkValue> = f_x_0_bits
@@ -2105,46 +2116,56 @@ where
             let p = InG::from(1u16 << 15) + n_half;
             let q = InG::from(u16::MAX) + n_half; // modulo is handled by U16Group
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
-            let mut f_x_1_bits = Vec::with_capacity(batch_size); // store all the eval results
-
-            // Deserialize each to find original IcShare and call eval
             // Deserialize each to find original IcShare and call eval
             let key_words_fss_1: Vec<u32> = RingElement::<u32>::convert_vec(k_fss_1_vec); //need to un-flatten key vector
+
+            // Preprocess: compute offsets for each key
+            let mut key_offsets = Vec::with_capacity(batch_size);
+            let mut key_lengths = Vec::with_capacity(batch_size);
             let mut offset: usize = 0;
-            for i in 0..batch_size {
-                // // Need to "unflatten" to get batch_size number of fss keys
-                let curr_key_byte_len = 1 + (key_words_fss_1[offset] as usize + 3) / 4; // offset index has the byte length, then find total u32s for this key
-
-                // Get current key
-                let k_fss_1_icshare: IcShare =
-                    IcShare::deserialize(&key_words_fss_1[offset..offset + curr_key_byte_len])?;
-                offset += curr_key_byte_len; //update offset to point to next cell that contains size of next key
-
-                // reconstruct the input d+r [recall d0=x.b] for each x[i]
-                let d_plus_r: RingElement<u16> =
-                    d1r1_vec[i] + d2r2_vec[i] + x[i].b + RingElement(n_half_u32);
-                // this should be wrapping addition, implemented by RingElement
-
-                // Now we're ready to call eval
-                let prg =
-                    Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
-                let icf = Icf::new(p, q, prg);
-                //Call eval & convert from from ByteGroup<16> to RingElement<u128>
-                let temp_eval = RingElement::<u128>(u128::from_le_bytes(
-                    icf.eval(
-                        true,
-                        &k_fss_1_icshare,
-                        fss_rs::group::int::U16Group(d_plus_r.0),
-                    )
-                    .0,
-                ));
-
-                // Add the respective r_prime and add to the vector of results and take only the LSB
-                // Make them RingElements so it's easy to send to network
-                f_x_1_bits.push(RingElement(Bit::new(
-                    ((temp_eval ^ r_prime_keys[i]).0 & 1) != 0,
-                )));
+            for _ in 0..batch_size {
+                key_offsets.push(offset);
+                let curr_key_byte_len = 1 + (key_words_fss_1[offset] as usize + 3) / 4;
+                key_lengths.push(curr_key_byte_len);
+                offset += curr_key_byte_len;
             }
+
+            // Parallel eval loop
+            use rayon::prelude::*;
+            let f_x_1_bits: Vec<RingElement<Bit>> = (0..batch_size)
+                .into_par_iter()
+                .map(|i| {
+                    let offset = key_offsets[i];
+
+                    // Get current key
+                    let k_fss_1_icshare: IcShare =
+                        IcShare::deserialize(&key_words_fss_1[offset..offset + key_lengths[i]])?;
+
+                    // reconstruct the input d+r [recall d0=x.b] for each x[i]
+                    let d_plus_r: RingElement<u16> =
+                        d1r1_vec[i] + d2r2_vec[i] + x[i].b + RingElement(n_half_u32);
+                    // this should be wrapping addition, implemented by RingElement
+
+                    // Now we're ready to call eval
+                    let prg =
+                        Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| {
+                            &keys[i]
+                        }));
+                    let icf = Icf::new(p, q, prg);
+                    let temp_eval = RingElement::<u128>(u128::from_le_bytes(
+                        icf.eval(
+                            true,
+                            &k_fss_1_icshare,
+                            fss_rs::group::int::U16Group(d_plus_r.0),
+                        )
+                        .0,
+                    ));
+
+                    Ok(RingElement(Bit::new(
+                        ((temp_eval ^ r_prime_keys[i]).0 & 1) != 0,
+                    )))
+                })
+                .collect::<Result<Vec<RingElement<Bit>>, Error>>()?;
 
             // Prepare them in a vector to send to dealer and next party
             let f_1_res_network: Vec<NetworkValue> = f_x_1_bits
@@ -2212,7 +2233,6 @@ where
             }
 
             // Do the main loop in parallel, collecting per-key serialized results
-            use rayon::prelude::*;
             let serialized_pairs: Vec<(Vec<RingElement<u32>>, Vec<RingElement<u32>>)> = (0
                 ..batch_size)
                 .into_par_iter()
@@ -2250,12 +2270,28 @@ where
                 })
                 .collect::<Result<Vec<(Vec<RingElement<u32>>, Vec<RingElement<u32>>)>, Error>>()?;
 
-            // Flatten the per-key results into final flat vectors serially
-            let mut k_fss_0_vec_flat = Vec::with_capacity(batch_size);
-            let mut k_fss_1_vec_flat = Vec::with_capacity(batch_size);
-            for (v0, v1) in serialized_pairs {
-                k_fss_0_vec_flat.extend(v0);
-                k_fss_1_vec_flat.extend(v1);
+            // Precompute sizes and offsets for flattening
+            let mut total_size_0 = 0usize;
+            let mut total_size_1 = 0usize;
+            let mut offsets_0 = Vec::with_capacity(batch_size);
+            let mut offsets_1 = Vec::with_capacity(batch_size);
+            for (v0, v1) in &serialized_pairs {
+                offsets_0.push(total_size_0);
+                total_size_0 += v0.len();
+                offsets_1.push(total_size_1);
+                total_size_1 += v1.len();
+            }
+
+            // Allocate flat vectors once and copy in place
+            let mut k_fss_0_vec_flat = vec![RingElement(0u32); total_size_0];
+            let mut k_fss_1_vec_flat = vec![RingElement(0u32); total_size_1];
+            for i in 0..batch_size {
+                let offset_0 = offsets_0[i];
+                let offset_1 = offsets_1[i];
+                k_fss_0_vec_flat[offset_0..offset_0 + serialized_pairs[i].0.len()]
+                    .copy_from_slice(&serialized_pairs[i].0);
+                k_fss_1_vec_flat[offset_1..offset_1 + serialized_pairs[i].1.len()]
+                    .copy_from_slice(&serialized_pairs[i].1);
             }
 
             // Send the flattened FSS keys to parties 0 and 1, so they can do Eval
@@ -2603,8 +2639,8 @@ pub(crate) async fn extract_msb_u16_batch_fss(
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
     for batch in x.chunks(batch_size) {
         tracing::debug!("Inside extract_msb_u16_fss, batch size: {}", batch.len());
-        // let batch_out = add_3_get_msb_fss_batch_parallel_u16(session, batch).await?;
-        let batch_out = add_3_get_msb_fss_batch_u16(session, batch).await?;
+        let batch_out = add_3_get_msb_fss_batch_parallel_u16(session, batch).await?;
+        // let batch_out = add_3_get_msb_fss_batch_u16(session, batch).await?;
         vec_of_msb_shares.extend(batch_out);
     }
     Ok(vec_of_msb_shares)
