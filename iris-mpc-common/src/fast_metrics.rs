@@ -1,6 +1,6 @@
 use std::{fmt, time::Instant};
 
-const FLUSH_AFTER_COUNT: u64 = 1000;
+const FLUSH_AFTER_COUNT: u64 = 1000001;
 
 pub struct FastHistogram {
     name: String,

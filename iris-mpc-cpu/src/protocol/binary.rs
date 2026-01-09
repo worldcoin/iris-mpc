@@ -20,21 +20,184 @@ use num_traits::{One, Zero};
 use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use std::{cell::RefCell, ops::SubAssign};
+use std::{
+    cell::RefCell,
+    ops::SubAssign,
+    sync::atomic::{AtomicU64, AtomicU8, Ordering},
+};
 use tracing::{instrument, trace_span, Instrument};
+
+// Global counters for FSS timing (using atomic types for thread-safe accumulation)
+static FSS_PRG_KEYGEN_COUNT: AtomicU64 = AtomicU64::new(0);
+static FSS_PRG_KEYGEN_SUM_MICROS: AtomicU64 = AtomicU64::new(0);
+static FSS_PRG_KEYGEN_MIN_MICROS: AtomicU64 = AtomicU64::new(u64::MAX);
+static FSS_PRG_KEYGEN_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
+
+static FSS_ICF_EVAL_COUNT: AtomicU64 = AtomicU64::new(0);
+static FSS_ICF_EVAL_SUM_MICROS: AtomicU64 = AtomicU64::new(0);
+static FSS_ICF_EVAL_MIN_MICROS: AtomicU64 = AtomicU64::new(u64::MAX);
+static FSS_ICF_EVAL_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
+
+static FSS_ICF_KEYGEN_COUNT: AtomicU64 = AtomicU64::new(0);
+static FSS_ICF_KEYGEN_SUM_MICROS: AtomicU64 = AtomicU64::new(0);
+static FSS_ICF_KEYGEN_MIN_MICROS: AtomicU64 = AtomicU64::new(u64::MAX);
+static FSS_ICF_KEYGEN_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
+
+static FSS_NETWORK_COUNT: AtomicU64 = AtomicU64::new(0);
+static FSS_NETWORK_SUM_MICROS: AtomicU64 = AtomicU64::new(0);
+static FSS_NETWORK_MIN_MICROS: AtomicU64 = AtomicU64::new(u64::MAX);
+static FSS_NETWORK_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
+static FSS_NETWORK_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
+
+/// Record a PRG keygen timing measurement in microseconds.
+#[inline]
+fn record_prg_keygen_micros(micros: u64) {
+    FSS_PRG_KEYGEN_COUNT.fetch_add(1, Ordering::Relaxed);
+    FSS_PRG_KEYGEN_SUM_MICROS.fetch_add(micros, Ordering::Relaxed);
+
+    // Update min
+    let mut current_min = FSS_PRG_KEYGEN_MIN_MICROS.load(Ordering::Relaxed);
+    while micros < current_min {
+        match FSS_PRG_KEYGEN_MIN_MICROS.compare_exchange(
+            current_min,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_min = actual,
+        }
+    }
+
+    // Update max
+    let mut current_max = FSS_PRG_KEYGEN_MAX_MICROS.load(Ordering::Relaxed);
+    while micros > current_max {
+        match FSS_PRG_KEYGEN_MAX_MICROS.compare_exchange(
+            current_max,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_max = actual,
+        }
+    }
+}
+
+/// Record an ICF eval timing measurement in microseconds.
+#[inline]
+fn record_icf_eval_micros(micros: u64) {
+    FSS_ICF_EVAL_COUNT.fetch_add(1, Ordering::Relaxed);
+    FSS_ICF_EVAL_SUM_MICROS.fetch_add(micros, Ordering::Relaxed);
+
+    // Update min
+    let mut current_min = FSS_ICF_EVAL_MIN_MICROS.load(Ordering::Relaxed);
+    while micros < current_min {
+        match FSS_ICF_EVAL_MIN_MICROS.compare_exchange(
+            current_min,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_min = actual,
+        }
+    }
+
+    // Update max
+    let mut current_max = FSS_ICF_EVAL_MAX_MICROS.load(Ordering::Relaxed);
+    while micros > current_max {
+        match FSS_ICF_EVAL_MAX_MICROS.compare_exchange(
+            current_max,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_max = actual,
+        }
+    }
+}
+
+/// Record an ICF keygen timing measurement in microseconds.
+#[inline]
+fn record_icf_keygen_micros(micros: u64) {
+    FSS_ICF_KEYGEN_COUNT.fetch_add(1, Ordering::Relaxed);
+    FSS_ICF_KEYGEN_SUM_MICROS.fetch_add(micros, Ordering::Relaxed);
+
+    // Update min
+    let mut current_min = FSS_ICF_KEYGEN_MIN_MICROS.load(Ordering::Relaxed);
+    while micros < current_min {
+        match FSS_ICF_KEYGEN_MIN_MICROS.compare_exchange(
+            current_min,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_min = actual,
+        }
+    }
+
+    // Update max
+    let mut current_max = FSS_ICF_KEYGEN_MAX_MICROS.load(Ordering::Relaxed);
+    while micros > current_max {
+        match FSS_ICF_KEYGEN_MAX_MICROS.compare_exchange(
+            current_max,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_max = actual,
+        }
+    }
+}
+
+/// Record a network operation timing measurement in microseconds.
+#[inline]
+fn record_network_micros(micros: u64) {
+    FSS_NETWORK_COUNT.fetch_add(1, Ordering::Relaxed);
+    FSS_NETWORK_SUM_MICROS.fetch_add(micros, Ordering::Relaxed);
+
+    // Update min
+    let mut current_min = FSS_NETWORK_MIN_MICROS.load(Ordering::Relaxed);
+    while micros < current_min {
+        match FSS_NETWORK_MIN_MICROS.compare_exchange(
+            current_min,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_min = actual,
+        }
+    }
+
+    // Update max
+    let mut current_max = FSS_NETWORK_MAX_MICROS.load(Ordering::Relaxed);
+    while micros > current_max {
+        match FSS_NETWORK_MAX_MICROS.compare_exchange(
+            current_max,
+            micros,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current_max = actual,
+        }
+    }
+}
+
+/// Record bytes sent over the network.
+#[inline]
+fn record_network_bytes_sent(bytes: u64) {
+    FSS_NETWORK_BYTES_SENT.fetch_add(bytes, Ordering::Relaxed);
+}
 
 thread_local! {
     static ROUNDS_METRICS: RefCell<FastHistogram> = RefCell::new(
         FastHistogram::new("smpc.rounds")
-    );
-    static FSS_PRG_KEYGEN_METRICS: RefCell<FastHistogram> = RefCell::new(
-        FastHistogram::new("fss.prg_keygen_micros")
-    );
-    static FSS_ICF_EVAL_METRICS: RefCell<FastHistogram> = RefCell::new(
-        FastHistogram::new("fss.icf_eval_micros")
-    );
-    static FSS_NETWORK_METRICS: RefCell<FastHistogram> = RefCell::new(
-        FastHistogram::new("fss.network_micros")
     );
 }
 
@@ -1445,8 +1608,8 @@ where
                 let prg_start = std::time::Instant::now();
                 let prg =
                     Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
-                let prg_elapsed = prg_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
-                FSS_PRG_KEYGEN_METRICS.with(|m| m.borrow_mut().record(prg_elapsed));
+                let prg_elapsed_micros = (prg_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+                record_prg_keygen_micros(prg_elapsed_micros);
 
                 let icf = Icf::new(p, q, prg);
                 //Call eval & convert from from ByteGroup<16> to RingElement<u128>
@@ -1456,8 +1619,8 @@ where
                     &k_fss_0_icshare,
                     fss_rs::group::int::U16Group(d_plus_r.0),
                 );
-                let icf_elapsed = icf_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
-                FSS_ICF_EVAL_METRICS.with(|m| m.borrow_mut().record(icf_elapsed));
+                let icf_elapsed_micros = (icf_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+                record_icf_eval_micros(icf_elapsed_micros);
 
                 let temp_eval = RingElement::<u128>(u128::from_le_bytes(eval_result.0));
 
@@ -1477,11 +1640,14 @@ where
 
             let cloned_f_0_res_network = f_0_res_network.clone();
             let net_start = std::time::Instant::now();
+            let bytes_next =
+                (cloned_f_0_res_network.len() * std::mem::size_of::<NetworkValue>()) as u64;
             session // send to party 1
                 .network_session
                 .send_next(NetworkValue::vec_to_network(cloned_f_0_res_network))
                 .await?;
 
+            let bytes_prev = (f_0_res_network.len() * std::mem::size_of::<NetworkValue>()) as u64;
             session // send to the dealer (party 2)
                 .network_session
                 .send_prev(NetworkValue::vec_to_network(f_0_res_network))
@@ -1492,8 +1658,11 @@ where
                 Ok(v) => NetworkValue::vec_from_network(v),
                 Err(e) => return Err(eyre!("Party 0 cannot receive bit shares from party 1: {e}")),
             }?;
-            let net_elapsed = net_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
-            FSS_NETWORK_METRICS.with(|m| m.borrow_mut().record(net_elapsed));
+            let bytes_recv = (f_x_1_bits_net.len() * std::mem::size_of::<NetworkValue>()) as u64;
+            record_network_bytes_sent(bytes_recv);
+            let net_elapsed_micros = (net_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+            record_network_micros(net_elapsed_micros);
+            record_network_bytes_sent(bytes_next + bytes_prev);
 
             // Convert Vec<NetworkValue> to Vec<RingElement<Bit>>
             let f_x_1_bits: Vec<RingElement<Bit>> = f_x_1_bits_net
@@ -1575,8 +1744,8 @@ where
                 let prg_start = std::time::Instant::now();
                 let prg =
                     Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
-                let prg_elapsed = prg_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
-                FSS_PRG_KEYGEN_METRICS.with(|m| m.borrow_mut().record(prg_elapsed));
+                let prg_elapsed_micros = (prg_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+                record_prg_keygen_micros(prg_elapsed_micros);
 
                 let icf = Icf::new(p, q, prg);
                 //Call eval & convert from from ByteGroup<16> to RingElement<u128>
@@ -1586,8 +1755,8 @@ where
                     &k_fss_1_icshare,
                     fss_rs::group::int::U16Group(d_plus_r.0),
                 );
-                let icf_elapsed = icf_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
-                FSS_ICF_EVAL_METRICS.with(|m| m.borrow_mut().record(icf_elapsed));
+                let icf_elapsed_micros = (icf_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+                record_icf_eval_micros(icf_elapsed_micros);
 
                 let temp_eval = RingElement::<u128>(u128::from_le_bytes(eval_result.0));
 
@@ -1607,11 +1776,14 @@ where
 
             let cloned_f_1_res_network = f_1_res_network.clone();
             let net_start = std::time::Instant::now();
+            let bytes_prev =
+                (cloned_f_1_res_network.len() * std::mem::size_of::<NetworkValue>()) as u64;
             session // send to party 0
                 .network_session
                 .send_prev(NetworkValue::vec_to_network(cloned_f_1_res_network))
                 .await?;
 
+            let bytes_next = (f_1_res_network.len() * std::mem::size_of::<NetworkValue>()) as u64;
             session // send to the dealer (party 2)
                 .network_session
                 .send_next(NetworkValue::vec_to_network(f_1_res_network))
@@ -1622,8 +1794,11 @@ where
                 Ok(v) => NetworkValue::vec_from_network(v),
                 Err(e) => return Err(eyre!("Party 0 cannot receive bit shares from party 1: {e}")),
             }?;
-            let net_elapsed = net_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
-            FSS_NETWORK_METRICS.with(|m| m.borrow_mut().record(net_elapsed));
+            let bytes_recv = (f_x_0_bits_net.len() * std::mem::size_of::<NetworkValue>()) as u64;
+            record_network_bytes_sent(bytes_recv);
+            let net_elapsed_micros = (net_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+            record_network_micros(net_elapsed_micros);
+            record_network_bytes_sent(bytes_prev + bytes_next);
 
             // Convert Vec<NetworkValue> to Vec<RingElement<Bit>>
             let f_x_0_bits: Vec<RingElement<Bit>> = f_x_0_bits_net
@@ -1689,11 +1864,13 @@ where
 
             // Send the flattened FSS keys to parties 0 and 1, so they can do Eval
             let net_start = std::time::Instant::now();
+            let bytes_next = (k_fss_0_vec_flat.len() * std::mem::size_of::<u32>()) as u64;
             session
                 .network_session
                 .send_next(NetworkInt::new_network_vec(k_fss_0_vec_flat))
                 .await?; //next is party 0
 
+            let bytes_prev = (k_fss_1_vec_flat.len() * std::mem::size_of::<u32>()) as u64;
             session
                 .network_session
                 .send_prev(NetworkInt::new_network_vec(k_fss_1_vec_flat))
@@ -1704,6 +1881,8 @@ where
                 Ok(v) => NetworkValue::vec_from_network(v),
                 Err(e) => return Err(eyre!("Party 0 cannot receive bit shares from party 1: {e}")),
             }?;
+            let bytes_recv_0 = (f_x_0_bits_net.len() * std::mem::size_of::<NetworkValue>()) as u64;
+            record_network_bytes_sent(bytes_recv_0);
 
             // Convert Vec<NetworkValue> to Vec<RingElement<Bit>>
             let f_x_0_bits: Vec<RingElement<Bit>> = f_x_0_bits_net
@@ -1719,8 +1898,11 @@ where
                 Ok(v) => NetworkValue::vec_from_network(v),
                 Err(e) => return Err(eyre!("Party 0 cannot receive bit shares from party 1: {e}")),
             }?;
-            let net_elapsed = net_start.elapsed().as_secs_f64() * 1_000_000.0; // convert to microseconds
-            FSS_NETWORK_METRICS.with(|m| m.borrow_mut().record(net_elapsed));
+            let bytes_recv_1 = (f_x_1_bits_net.len() * std::mem::size_of::<NetworkValue>()) as u64;
+            record_network_bytes_sent(bytes_recv_1);
+            let net_elapsed_micros = (net_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+            record_network_micros(net_elapsed_micros);
+            record_network_bytes_sent(bytes_next + bytes_prev);
 
             // Convert Vec<NetworkValue> to Vec<RingElement<Bit>>
             let f_x_1_bits: Vec<RingElement<Bit>> = f_x_1_bits_net
@@ -2049,7 +2231,12 @@ where
                     let icf = Icf::new(p, q, prg);
                     let (k_fss_0_pre_ser, k_fss_1_pre_ser): (IcShare, IcShare) = {
                         let mut rng = rand::thread_rng();
-                        icf.gen(f, &mut rng)
+                        let icf_keygen_start = std::time::Instant::now();
+                        let result = icf.gen(f, &mut rng);
+                        let icf_keygen_elapsed_micros =
+                            (icf_keygen_start.elapsed().as_secs_f64() * 1_000_000.0) as u64;
+                        record_icf_keygen_micros(icf_keygen_elapsed_micros);
+                        result
                     };
 
                     // Serialize the ICShare into u32
@@ -2572,62 +2759,96 @@ fn to_bit_from_u128(msb_xored: RingElement<u128>) -> Result<Bit, Error> {
     }
 }
 
+/// Format timing value in appropriate units (µs, ms, or s).
+fn format_time_micros(micros: f64) -> String {
+    if micros >= 1_000_000.0 {
+        format!("{:.2} s", micros / 1_000_000.0)
+    } else if micros >= 1_000.0 {
+        format!("{:.2} ms", micros / 1_000.0)
+    } else {
+        format!("{:.2} µs", micros)
+    }
+}
+
+/// Format bytes in appropriate units (B, MB, or GB).
+fn format_bytes(bytes: u64) -> String {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const KB: f64 = 1024.0;
+
+    let bytes_f = bytes as f64;
+    if bytes_f >= GB {
+        format!("{:.2} GB", bytes_f / GB)
+    } else if bytes_f >= MB {
+        format!("{:.2} MB", bytes_f / MB)
+    } else if bytes_f >= KB {
+        format!("{:.2} KB", bytes_f / KB)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 /// Print a summary of timing statistics for the FSS operations.
-/// This function flushes all pending metrics and prints cumulative statistics for:
+/// Displays average time per operation and operation count for:
 /// - PRG key generation
-/// - ICF evaluation
-/// - Network operations (send/receive)
+/// - ICF evaluation and keygen
+/// - Network operations
 pub fn print_fss_timing_summary() {
-    FSS_PRG_KEYGEN_METRICS.with(|m| {
-        let mut metrics = m.borrow_mut();
-        metrics.flush();
-        let count = metrics.get_count();
-        let sum = metrics.get_sum();
-        let min = metrics.get_min();
-        let max = metrics.get_max();
-        let avg = metrics.get_avg();
+    tracing::info!("=== FSS Timing Summary ===");
 
-        if count > 0 {
-            tracing::info!(
-                "FSS PRG Key Generation: count={}, sum={:.2}µs, min={:.2}µs, max={:.2}µs, avg={:.2}µs",
-                count, sum, min, max, avg
-            );
-        }
-    });
+    // PRG Key Generation
+    let prg_count = FSS_PRG_KEYGEN_COUNT.load(Ordering::Relaxed);
+    if prg_count > 0 {
+        let prg_sum = FSS_PRG_KEYGEN_SUM_MICROS.load(Ordering::Relaxed) as f64;
+        let prg_avg = prg_sum / prg_count as f64;
+        tracing::info!(
+            "  PRG Key Generation: {} ops, avg = {}",
+            prg_count,
+            format_time_micros(prg_avg)
+        );
+    }
 
-    FSS_ICF_EVAL_METRICS.with(|m| {
-        let mut metrics = m.borrow_mut();
-        metrics.flush();
-        let count = metrics.get_count();
-        let sum = metrics.get_sum();
-        let min = metrics.get_min();
-        let max = metrics.get_max();
-        let avg = metrics.get_avg();
+    // ICF Evaluation
+    let icf_count = FSS_ICF_EVAL_COUNT.load(Ordering::Relaxed);
+    if icf_count > 0 {
+        let icf_sum = FSS_ICF_EVAL_SUM_MICROS.load(Ordering::Relaxed) as f64;
+        let icf_avg = icf_sum / icf_count as f64;
+        tracing::info!(
+            "  ICF Evaluation: {} ops, avg = {}",
+            icf_count,
+            format_time_micros(icf_avg)
+        );
+    }
 
-        if count > 0 {
-            tracing::info!(
-                "FSS ICF Evaluation: count={}, sum={:.2}µs, min={:.2}µs, max={:.2}µs, avg={:.2}µs",
-                count, sum, min, max, avg
-            );
-        }
-    });
+    // ICF Keygen
+    let icf_keygen_count = FSS_ICF_KEYGEN_COUNT.load(Ordering::Relaxed);
+    if icf_keygen_count > 0 {
+        let icf_keygen_sum = FSS_ICF_KEYGEN_SUM_MICROS.load(Ordering::Relaxed) as f64;
+        let icf_keygen_avg = icf_keygen_sum / icf_keygen_count as f64;
+        tracing::info!(
+            "  ICF Keygen: {} ops, avg = {}",
+            icf_keygen_count,
+            format_time_micros(icf_keygen_avg)
+        );
+    }
 
-    FSS_NETWORK_METRICS.with(|m| {
-        let mut metrics = m.borrow_mut();
-        metrics.flush();
-        let count = metrics.get_count();
-        let sum = metrics.get_sum();
-        let min = metrics.get_min();
-        let max = metrics.get_max();
-        let avg = metrics.get_avg();
+    // Network Operations
+    let net_count = FSS_NETWORK_COUNT.load(Ordering::Relaxed);
+    if net_count > 0 {
+        let net_sum = FSS_NETWORK_SUM_MICROS.load(Ordering::Relaxed) as f64;
+        let net_avg = net_sum / net_count as f64;
+        tracing::info!(
+            "  Network Operations: {} ops, avg = {}",
+            net_count,
+            format_time_micros(net_avg)
+        );
+    }
 
-        if count > 0 {
-            tracing::info!(
-                "FSS Network Operations: count={}, sum={:.2}µs, min={:.2}µs, max={:.2}µs, avg={:.2}µs",
-                count, sum, min, max, avg
-            );
-        }
-    });
+    // Network Bytes Sent
+    let net_bytes = FSS_NETWORK_BYTES_SENT.load(Ordering::Relaxed);
+    if net_bytes > 0 {
+        tracing::info!("  Network Bytes Sent: {}", format_bytes(net_bytes));
+    }
 }
 
 #[cfg(test)]
