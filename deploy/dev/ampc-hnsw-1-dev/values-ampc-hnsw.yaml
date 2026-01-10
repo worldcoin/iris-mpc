@@ -9,7 +9,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "true"
+    value: "false"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
@@ -40,7 +40,7 @@ env:
     value: "genesis"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_cpu1M"
+    value: "_cpu1M6"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
     value: "_gpu1M"
