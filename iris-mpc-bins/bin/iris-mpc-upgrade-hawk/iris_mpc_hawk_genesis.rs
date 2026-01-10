@@ -40,8 +40,7 @@ async fn main() -> Result<()> {
     // Set config.
     println!("Initialising config");
     dotenvy::dotenv().ok();
-    let mut config: Config = Config::load_config("SMPC")?;
-    config.disable_persistence = true;
+    let config: Config = Config::load_config("SMPC")?;
 
     // Set args.
     println!("Initialising args");

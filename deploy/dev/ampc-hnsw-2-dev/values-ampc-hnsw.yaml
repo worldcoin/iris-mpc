@@ -82,7 +82,7 @@ env:
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "true"
+    value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "512"
