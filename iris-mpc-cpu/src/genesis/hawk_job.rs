@@ -9,7 +9,10 @@ use eyre::Result;
 use futures::future::try_join_all;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
 use std::{fmt, sync::Arc};
-use tokio::{join, sync::oneshot};
+use tokio::{
+    join,
+    sync::{self, oneshot},
+};
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3Query>>;
@@ -23,7 +26,7 @@ pub struct Job {
     pub(super) request: JobRequest,
 
     // Tokio channel through which job result will be signalled.
-    pub(super) return_channel: oneshot::Sender<Result<JobResult>>,
+    pub(super) return_channel: oneshot::Sender<Result<(sync::oneshot::Receiver<()>, JobResult)>>,
 }
 
 /// An indexation job request.
@@ -46,6 +49,8 @@ pub enum JobRequest {
         // Modification entry for processing
         modification: Modification,
     },
+    // acts as a code barrier
+    Sync,
 }
 
 /// Constructor.
@@ -105,7 +110,7 @@ impl JobRequest {
 }
 
 /// An indexation result over a set of irises.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum JobResult {
     BatchIndexation {
         /// Unique sequential job identifier.
@@ -124,6 +129,7 @@ pub enum JobResult {
         first_serial_id: IrisSerialId,
         /// Iris serial id of batch's last element.
         last_serial_id: IrisSerialId,
+        done_tx: sync::oneshot::Sender<()>,
     },
     Modification {
         /// Modification id of associated modifications table entry.
@@ -134,7 +140,9 @@ pub enum JobResult {
 
         /// Connect plans for updating HNSW graph in DB.
         connect_plans: HawkMutation,
+        done_tx: sync::oneshot::Sender<()>,
     },
+    Sync,
 }
 
 /// Constructor.
@@ -144,6 +152,7 @@ impl JobResult {
         vector_ids: Vec<IrisVectorId>,
         connect_plans: HawkMutation,
         vector_ids_to_persist: Vec<IrisVectorId>,
+        done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         let first_serial_id = vector_ids_to_persist.first().unwrap().serial_id();
         let last_serial_id = vector_ids_to_persist.last().unwrap().serial_id();
@@ -155,6 +164,7 @@ impl JobResult {
             vector_ids_to_persist,
             first_serial_id,
             last_serial_id,
+            done_tx,
         }
     }
 
@@ -162,11 +172,13 @@ impl JobResult {
         modification_id: i64,
         connect_plans: HawkMutation,
         vector_id_to_persist: IrisVectorId,
+        done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         Self::Modification {
             modification_id,
             connect_plans,
             vector_id_to_persist,
+            done_tx,
         }
     }
 }
@@ -196,6 +208,7 @@ impl fmt::Display for JobResult {
             } => {
                 write!(f, "modification-id={}", modification_id)
             }
+            JobResult::Sync => write!(f, "sync"),
         }
     }
 }

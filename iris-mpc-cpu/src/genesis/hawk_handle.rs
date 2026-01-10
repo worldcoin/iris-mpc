@@ -14,7 +14,7 @@ use eyre::{eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{self, mpsc, oneshot};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "Hawk-Handle";
@@ -103,8 +103,9 @@ impl Handle {
         actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
         request: JobRequest,
-    ) -> Result<JobResult> {
+    ) -> Result<(sync::oneshot::Receiver<()>, JobResult)> {
         let now = Instant::now();
+        let (done_tx, done_rx) = sync::oneshot::channel();
 
         match request {
             JobRequest::BatchIndexation {
@@ -219,11 +220,15 @@ impl Handle {
                 metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
                 metrics::gauge!("genesis_batch_size").set(vector_ids.len() as f64);
 
-                Ok(JobResult::new_batch_result(
-                    batch_id,
-                    vector_ids,
-                    HawkMutation(mutations),
-                    vector_ids_to_persist,
+                Ok((
+                    done_rx,
+                    JobResult::new_batch_result(
+                        batch_id,
+                        vector_ids,
+                        HawkMutation(mutations),
+                        vector_ids_to_persist,
+                        done_tx,
+                    ),
                 ))
             }
             JobRequest::Modification { modification } => {
@@ -318,11 +323,20 @@ impl Handle {
                 metrics::histogram!("genesis_modification_duration")
                     .record(now.elapsed().as_secs_f64());
 
-                Ok(JobResult::new_modification_result(
-                    modification.id,
-                    HawkMutation(mutations),
-                    left_vector,
+                Ok((
+                    done_rx,
+                    JobResult::new_modification_result(
+                        modification.id,
+                        HawkMutation(mutations),
+                        left_vector,
+                        done_tx,
+                    ),
                 ))
+            }
+            JobRequest::Sync => {
+                let _ = done_tx;
+                actor.sync_peers().await?;
+                Ok((done_rx, JobResult::Sync))
             }
         }
     }
@@ -353,7 +367,7 @@ impl Handle {
     pub async fn submit_request(
         &mut self,
         request: JobRequest,
-    ) -> impl Future<Output = Result<JobResult>> {
+    ) -> impl Future<Output = Result<(sync::oneshot::Receiver<()>, JobResult)>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
@@ -374,5 +388,18 @@ impl Handle {
 
             Ok(result)
         }
+    }
+
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        let job = Job {
+            request: JobRequest::Sync,
+            return_channel: tx,
+        };
+
+        let sent = self.job_queue.send(job).await;
+        sent?;
+        let _ = rx.await??;
+        Ok(())
     }
 }
