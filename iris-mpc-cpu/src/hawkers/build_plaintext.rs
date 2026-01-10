@@ -78,7 +78,7 @@ pub async fn plaintext_parallel_batch_insert(
             .into_iter()
             .collect::<Result<_, _>>()?;
 
-        results.sort_by_key(|(vector_id, _)| (vector_id.serial_id()));
+        results.sort_by_key(|(vector_id, _)| vector_id.serial_id());
 
         let (ids, plans): (Vec<_>, Vec<_>) = results.into_iter().unzip();
         let ids = ids.into_iter().map(Some).collect_vec();
