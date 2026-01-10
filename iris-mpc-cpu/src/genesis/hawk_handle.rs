@@ -333,6 +333,11 @@ impl Handle {
                     ),
                 ))
             }
+            JobRequest::Sync => {
+                let _ = done_tx;
+                let _ = actor.sync_peers().await?;
+                Ok((done_rx, JobResult::Sync))
+            }
         }
     }
 
@@ -383,5 +388,18 @@ impl Handle {
 
             Ok(result)
         }
+    }
+
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        let job = Job {
+            request: JobRequest::Sync,
+            return_channel: tx,
+        };
+
+        let sent = self.job_queue.send(job).await;
+        sent?;
+        let _ = rx.await??;
+        Ok(())
     }
 }

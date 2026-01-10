@@ -49,6 +49,8 @@ pub enum JobRequest {
         // Modification entry for processing
         modification: Modification,
     },
+    // acts as a code barrier
+    Sync,
 }
 
 /// Constructor.
@@ -140,6 +142,7 @@ pub enum JobResult {
         connect_plans: HawkMutation,
         done_tx: sync::oneshot::Sender<()>,
     },
+    Sync,
 }
 
 /// Constructor.
@@ -205,6 +208,7 @@ impl fmt::Display for JobResult {
             } => {
                 write!(f, "modification-id={}", modification_id)
             }
+            JobResult::Sync => write!(f, "sync"),
         }
     }
 }

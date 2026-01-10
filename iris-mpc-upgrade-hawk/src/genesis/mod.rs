@@ -549,6 +549,7 @@ async fn exec_delta(
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
             done_rx.await?;
+            hawk_handle.sync_peers().await?;
         }
 
         Ok(())
@@ -694,6 +695,7 @@ async fn exec_indexation(
                 now.elapsed().as_secs_f64(),
             ));
             done_rx.await?;
+            hawk_handle.sync_peers().await?;
             now = Instant::now();
         }
         Ok(())
@@ -1210,7 +1212,8 @@ async fn get_results_thread(
 
                     let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
-                }
+                },
+                JobResult::Sync => unreachable!(),
             }
         }
 
