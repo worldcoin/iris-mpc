@@ -688,14 +688,13 @@ async fn exec_indexation(
             let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
-            // Signal.
+            done_rx.await?;
+            hawk_handle.sync_peers().await?;
             log_info(format!(
                 "Indexing new batch: {} :: time {:?}s",
                 batch,
                 now.elapsed().as_secs_f64(),
             ));
-            done_rx.await?;
-            hawk_handle.sync_peers().await?;
             now = Instant::now();
         }
         Ok(())
