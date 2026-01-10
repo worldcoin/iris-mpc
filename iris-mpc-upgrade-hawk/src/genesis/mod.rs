@@ -1079,7 +1079,7 @@ async fn get_results_thread(
     shutdown_handler: &Arc<ShutdownHandler>,
     disable_persistence: bool,
 ) -> Result<Sender<JobResult>> {
-    let (tx, mut rx) = mpsc::channel::<JobResult>(0); // bounded channel with no extra buffer space
+    let (tx, mut rx) = mpsc::channel::<JobResult>(1); // tokio does not have a bounded channel
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
     let graph_store_bg = Arc::clone(&graph_store);
