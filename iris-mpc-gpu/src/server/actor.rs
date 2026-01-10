@@ -2305,7 +2305,7 @@ impl ServerActor {
         let chunk_size = db_subset_idx.iter().map(|x| x.len()).collect::<Vec<_>>();
         let dot_chunk_size = chunk_size
             .iter()
-            .map(|&s| (s.max(1).div_ceil(64) * 64))
+            .map(|&s| s.max(1).div_ceil(64) * 64)
             .collect::<Vec<_>>();
 
         record_stream_time!(
@@ -2610,7 +2610,7 @@ impl ServerActor {
             // later.
             let dot_chunk_size = chunk_size
                 .iter()
-                .map(|&s| (s.max(1).div_ceil(64) * 64))
+                .map(|&s| s.max(1).div_ceil(64) * 64)
                 .collect::<Vec<_>>();
 
             // First stream doesn't need to wait
