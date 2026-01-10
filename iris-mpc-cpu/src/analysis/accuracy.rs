@@ -23,6 +23,7 @@ use rand::{rngs::StdRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
+    future::Future,
     ops::Range,
     path::PathBuf,
     sync::Arc,
@@ -75,6 +76,21 @@ pub struct AnalysisResult {
     found: bool,
 }
 
+/// Spawns futures as tasks, awaits them all, and collects the results.
+async fn execute_batch<F>(futures: Vec<F>) -> Result<Vec<AnalysisResult>>
+where
+    F: Future<Output = Result<AnalysisResult>> + Send + 'static,
+{
+    let handles = futures.into_iter().map(tokio::spawn).collect_vec();
+    let join_results = futures::future::join_all(handles).await;
+
+    let mut results = Vec::with_capacity(join_results.len());
+    for join_result in join_results {
+        results.push(join_result??);
+    }
+    Ok(results)
+}
+
 pub async fn run_analysis(
     config: AnalysisConfig,
     store: PlaintextStore,
@@ -109,6 +125,9 @@ pub async fn run_analysis(
     let total_queries =
         config.sample_size * config.mutations.len() * config.rotations.clone().count();
     println!("Preparing {} search queries...", total_queries);
+
+    const CHUNK_SIZE: usize = 200;
+    let mut all_results = Vec::with_capacity(total_queries);
 
     for &target_id in &sampled_ids {
         let target_code = store
@@ -172,25 +191,19 @@ pub async fn run_analysis(
                     __mutation = mutation,
                     __rotation = ri
                 ));
-                futures.push(tokio::spawn(future));
+                futures.push(future);
+
+                if futures.len() >= CHUNK_SIZE {
+                    let batch_results = execute_batch(std::mem::take(&mut futures)).await?;
+                    all_results.extend(batch_results);
+                    println!("Processed {} queries...", all_results.len());
+                }
             }
         }
     }
 
-    println!(
-        "... {} total queries prepared. Executing all searches in parallel...",
-        futures.len()
-    );
-
-    // Wait for all tasks to complete
-    let join_results = futures::future::join_all(futures).await;
-
-    let mut all_results = Vec::with_capacity(total_queries);
-    // Collect results, propagating any errors
-    for join_result in join_results {
-        let analysis_result = join_result??;
-        all_results.push(analysis_result);
-    }
+    let remaining_results = execute_batch(futures).await?;
+    all_results.extend(remaining_results);
 
     println!("... all {} searches complete.", all_results.len());
 
