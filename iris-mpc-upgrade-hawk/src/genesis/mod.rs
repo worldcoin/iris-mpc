@@ -49,6 +49,7 @@ use tokio::{
     time::timeout,
 };
 
+pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
@@ -516,7 +517,8 @@ async fn exec_delta(
 
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        for modification in modifications {
+        let end = modifications.len().saturating_sub(1);
+        for (idx, modification) in modifications.into_iter().enumerate() {
             log_info(format!(
                 "Applying modification: type={} id={}, serial_id={:?}",
                 modification.request_type, modification.id, modification.serial_id
@@ -549,8 +551,13 @@ async fn exec_delta(
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
+            let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
+            if idx % (PERSIST_DELAY - 1) == 0 || idx == end {
+                done_rx.await?;
+                hawk_handle.sync_peers().await?;
+            }
         }
 
         Ok(())
@@ -648,6 +655,7 @@ async fn exec_indexation(
     log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set indexation result.
+    let mut persist_ch = None;
     let res: Result<()> = async {
         log_info(String::from("Entering main indexation loop"));
 
@@ -703,6 +711,7 @@ async fn exec_indexation(
 
             // Send results to processing thread responsible for persisting to database.
             let start = Instant::now();
+            let (done_rx, result) = result;
             tx_results.send(result).await?;
             tracing::debug!(target: "searcher",
                 "time  to send tx_results: {}ms",
@@ -788,7 +797,13 @@ async fn exec_indexation(
 
 
             shutdown_handler.increment_batches_pending_completion();
-            // Signal.
+            if batch.batch_id % (PERSIST_DELAY - 1) == 0 {
+                persist_ch.take();
+                done_rx.await?;
+                hawk_handle.sync_peers().await?;
+            } else {
+                persist_ch.replace(done_rx);
+            }
             log_info(format!(
                 "Indexing new batch: {} :: time {:?}s",
                 batch,
@@ -804,6 +819,10 @@ async fn exec_indexation(
     match res {
         // Success.
         Ok(_) => {
+            if let Some(rx) = persist_ch.take() {
+                rx.await?;
+                hawk_handle.sync_peers().await?;
+            }
             log_info(String::from(
                 "Waiting for last batch results to be processed before \
                  shutting down...",
@@ -1177,7 +1196,7 @@ async fn get_results_thread(
     shutdown_handler: &Arc<ShutdownHandler>,
     disable_persistence: bool,
 ) -> Result<Sender<JobResult>> {
-    let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<JobResult>(PERSIST_DELAY);
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
     let graph_store_bg = Arc::clone(&graph_store);
@@ -1189,6 +1208,7 @@ async fn get_results_thread(
                     connect_plans,
                     last_serial_id,
                     vector_ids_to_persist,
+                    done_tx,
                     ..
                 } => {
                    
@@ -1249,6 +1269,7 @@ async fn get_results_thread(
                         ));
                     }
 
+                    let _ = done_tx.send(());
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
@@ -1256,6 +1277,7 @@ async fn get_results_thread(
                     modification_id,
                     connect_plans,
                     vector_id_to_persist,
+                    done_tx,
                 } => {
                     log_info(format!(
                         "Job Results :: Received: modification-id={modification_id} for serial-id={}",
@@ -1306,8 +1328,10 @@ async fn get_results_thread(
                         ));
                     }
 
+                    let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
-                }
+                },
+                JobResult::Sync => unreachable!(),
             }
         }
 
