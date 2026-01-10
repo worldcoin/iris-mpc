@@ -124,7 +124,7 @@ pub async fn run_analysis(
 
     let total_queries =
         config.sample_size * config.mutations.len() * config.rotations.clone().count();
-    println!("Preparing {} search queries...", total_queries);
+    println!("Processing {} search queries...", total_queries);
 
     const CHUNK_SIZE: usize = 200;
     let mut all_results = Vec::with_capacity(total_queries);
