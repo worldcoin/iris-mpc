@@ -1,7 +1,7 @@
 use serde::Serialize;
 
-use iris_mpc_common::{galois_engine::degree4::GaloisRingIrisCodeShare, IrisSerialId};
-use iris_mpc_cpu::execution::hawk_main::BothEyes;
+use iris_mpc_common::IrisSerialId;
+use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::GaloisRingSharedIris};
 
 use super::{
     client::AwsClient,
@@ -38,18 +38,12 @@ impl AwsClient {
     pub async fn s3_upload_iris_shares(
         &self,
         signup_id: &uuid::Uuid,
-        shares: &BothEyes<[[GaloisRingIrisCodeShare; N_PARTIES]; 2]>,
+        shares: &BothEyes<[GaloisRingSharedIris; N_PARTIES]>,
     ) -> Result<S3ObjectInfo, AwsClientError> {
         // Set AWS-S3 JSON compatible shares.
-        let [[l_code, l_mask], [r_code, r_mask]] = shares;
+        let [l_shares, r_shares] = shares;
         let shares = create_iris_party_shares_for_s3(
-            &create_iris_code_party_shares(
-                signup_id.to_owned(),
-                l_code.to_owned(),
-                l_mask.to_owned(),
-                r_code.to_owned(),
-                r_mask.to_owned(),
-            ),
+            &create_iris_code_party_shares(signup_id, l_shares, r_shares),
             &self.public_keyset(),
         );
 

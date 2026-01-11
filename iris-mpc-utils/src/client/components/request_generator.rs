@@ -5,7 +5,6 @@ use super::super::typeset::{
 };
 
 /// Encapsulates logic for generating batches of SMPC service request messages.
-#[derive(Debug)]
 pub(crate) struct RequestGenerator {
     // Count of generated batches.
     generated_batch_count: usize,
@@ -125,7 +124,6 @@ fn push_new_uniqueness_maybe(
 }
 
 /// Set of variants over request generation inputs.
-#[derive(Debug)]
 pub(crate) enum RequestGeneratorParams {
     /// Parameters permitting single kind batches to be generated.
     Simple {

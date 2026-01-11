@@ -16,7 +16,6 @@ use crate::{
 };
 
 /// A component responsible for dequeuing system responses from network egress queues.
-#[derive(Debug)]
 pub(crate) struct ResponseDequeuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,

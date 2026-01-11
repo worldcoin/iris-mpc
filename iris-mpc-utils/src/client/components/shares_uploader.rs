@@ -12,7 +12,6 @@ use crate::{aws::AwsClient, client::typeset::Request};
 
 /// A component responsible for uploading Iris shares to AWS services
 /// in advance of system request processing.
-#[derive(Debug)]
 pub(crate) struct SharesUploader<R: Rng + CryptoRng + SeedableRng + Send> {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,

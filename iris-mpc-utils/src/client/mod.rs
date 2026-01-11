@@ -7,7 +7,7 @@ use crate::aws::{AwsClient, AwsClientConfig};
 
 use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
-    SharesGeneratorParams, SharesUploader,
+    SharesGeneratorOptions, SharesUploader,
 };
 use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
 
@@ -19,7 +19,6 @@ mod config;
 mod typeset;
 
 /// A utility for enqueuing system requests & correlating with system responses.
-#[derive(Debug)]
 pub struct ServiceClient<R: Rng + CryptoRng + SeedableRng + Send> {
     // Component that enqueues system requests upon system ingress queues.
     request_enqueuer: RequestEnqueuer,
@@ -144,25 +143,26 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
     for SharesGenerator<R>
 {
     fn from(config: &ServiceClientConfiguration) -> Self {
-        Self::new(SharesGeneratorParams::<R>::from(config))
+        Self::new(SharesGeneratorOptions::<R>::from(config))
     }
 }
 
 impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
-    for SharesGeneratorParams<R>
+    for SharesGeneratorOptions<R>
 {
     fn from(config: &ServiceClientConfiguration) -> Self {
         match config.shares_generator() {
             config::SharesGeneratorConfiguration::FromFile {
                 path_to_ndjson_file,
+                rng_seed,
                 ..
             } => {
                 tracing::info!("Parsing config: Shares generator from file");
-                SharesGeneratorParams::new_file(PathBuf::from(path_to_ndjson_file))
+                SharesGeneratorOptions::new_file(PathBuf::from(path_to_ndjson_file), *rng_seed)
             }
             config::SharesGeneratorConfiguration::FromRng { rng_seed } => {
                 tracing::info!("Parsing config: Shares generator from RNG");
-                SharesGeneratorParams::<R>::new_rng(*rng_seed)
+                SharesGeneratorOptions::<R>::new_rng(*rng_seed)
             }
         }
     }

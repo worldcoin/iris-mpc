@@ -12,7 +12,7 @@ use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 
-use crate::{constants::N_PARTIES, fsys, irises::convertor};
+use crate::{constants::N_PARTIES, fsys};
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
 enum IrisSelectionStrategy {
@@ -30,12 +30,11 @@ pub fn read_b64_iris_codes(
     n_to_skip: usize,
     n_to_take: usize,
 ) -> Result<impl Iterator<Item = Base64IrisCode>, Error> {
-    let iterable =
+    Ok(
         fsys::reader::read_json_iter::<Base64IrisCode>(path_to_ndjson, n_to_skip, n_to_take)
             .unwrap()
-            .map(|res| res.unwrap());
-
-    Ok(iterable)
+            .map(|res| res.unwrap()),
+    )
 }
 
 /// Returns chunked iterator over base64 encoded Iris codes deserialized from an ndjson file.
@@ -45,11 +44,9 @@ pub fn read_b64_iris_codes_chunks(
     n_to_take: usize,
     chunk_size: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = Base64IrisCode>>, Error> {
-    let iterable = read_b64_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
+    Ok(read_b64_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
         .unwrap()
-        .chunks(chunk_size);
-
-    Ok(iterable)
+        .chunks(chunk_size))
 }
 
 /// Returns iterator over Iris codes deserialized from an ndjson file.
@@ -58,11 +55,9 @@ pub fn read_iris_codes(
     n_to_skip: usize,
     n_to_take: usize,
 ) -> Result<impl Iterator<Item = IrisCode>, Error> {
-    let iterable = read_b64_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
+    Ok(read_b64_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
         .unwrap()
-        .map(|res| IrisCode::from(&res));
-
-    Ok(iterable)
+        .map(|res| IrisCode::from(&res)))
 }
 
 /// Returns chunked iterator over Iris codes deserialized from an ndjson file.
@@ -72,11 +67,9 @@ pub fn read_iris_codes_chunks(
     n_to_take: usize,
     chunk_size: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = IrisCode>>, Error> {
-    let iterable = read_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
+    Ok(read_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
         .unwrap()
-        .chunks(chunk_size);
-
-    Ok(iterable)
+        .chunks(chunk_size))
 }
 
 /// Returns iterator over Iris shares deserialized from a stream of Iris Code pairs.
@@ -86,11 +79,9 @@ pub fn read_iris_shares<'a, R: Rng + CryptoRng + 'a>(
     n_to_take: usize,
     rng: &'a mut R,
 ) -> Result<impl Iterator<Item = [GaloisRingSharedIris; N_PARTIES]> + 'a, Error> {
-    let iterable = read_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
+    Ok(read_iris_codes(path_to_ndjson, n_to_skip, n_to_take)
         .unwrap()
-        .map(move |iris_code| convertor::to_galois_ring_shares(rng, iris_code));
-
-    Ok(iterable)
+        .map(move |iris_code| GaloisRingSharedIris::generate_shares_locally(rng, iris_code)))
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
@@ -101,11 +92,9 @@ pub fn read_iris_shares_chunks<'a, R: Rng + CryptoRng + 'a>(
     chunk_size: usize,
     rng: &'a mut R,
 ) -> Result<IntoChunks<impl Iterator<Item = [GaloisRingSharedIris; N_PARTIES]> + 'a>, Error> {
-    let iterable = read_iris_shares(path_to_ndjson, n_to_skip, n_to_take, rng)
+    Ok(read_iris_shares(path_to_ndjson, n_to_skip, n_to_take, rng)
         .unwrap()
-        .chunks(chunk_size);
-
-    Ok(iterable)
+        .chunks(chunk_size))
 }
 
 /// Returns node configuration deserialized from a toml file.
@@ -142,55 +131,78 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_b64_iris_codes() {
-        for _ in read_b64_iris_codes(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE).unwrap() {}
+        let iris_codes: Vec<_> = read_b64_iris_codes(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE)
+            .unwrap()
+            .collect();
+        assert_eq!(iris_codes.len(), N_TO_TAKE);
     }
 
     #[tokio::test]
     async fn test_read_b64_iris_codes_chunks() {
-        for chunk in read_b64_iris_codes_chunks(&get_path_to_ndjson(), N_TO_SKIP, 100, 10)
-            .unwrap()
-            .into_iter()
-        {
-            for _ in chunk {}
+        let chunks: Vec<_> =
+            read_b64_iris_codes_chunks(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE, CHUNK_SIZE)
+                .unwrap()
+                .into_iter()
+                .map(|chunk| chunk.collect::<Vec<_>>())
+                .collect();
+
+        assert_eq!(chunks.len(), N_TO_TAKE / CHUNK_SIZE);
+        for chunk in chunks {
+            assert_eq!(chunk.len(), CHUNK_SIZE);
         }
     }
 
     #[tokio::test]
     async fn test_read_iris_codes() {
-        for _ in read_iris_codes(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE).unwrap() {}
+        let iris_codes: Vec<_> = read_iris_codes(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE)
+            .unwrap()
+            .collect();
+        assert_eq!(iris_codes.len(), N_TO_TAKE);
     }
 
     #[tokio::test]
     async fn test_read_iris_codes_chunks() {
-        for chunk in read_iris_codes_chunks(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE, 10)
-            .unwrap()
-            .into_iter()
-        {
-            for _ in chunk {}
+        let chunks: Vec<_> =
+            read_iris_codes_chunks(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE, CHUNK_SIZE)
+                .unwrap()
+                .into_iter()
+                .map(|chunk| chunk.collect::<Vec<_>>())
+                .collect();
+        assert_eq!(chunks.len(), N_TO_TAKE / CHUNK_SIZE);
+
+        for chunk in chunks {
+            assert_eq!(chunk.len(), CHUNK_SIZE);
         }
     }
 
     #[tokio::test]
     async fn test_read_iris_shares() {
-        for _ in
-            read_iris_shares(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE, &mut get_rng()).unwrap()
-        {
-        }
+        let mut rng = get_rng();
+        let shares: Vec<_> =
+            read_iris_shares(&get_path_to_ndjson(), N_TO_SKIP, N_TO_TAKE, &mut rng)
+                .unwrap()
+                .collect();
+        assert_eq!(shares.len(), N_TO_TAKE);
     }
 
     #[tokio::test]
     async fn test_read_iris_shares_chunks() {
-        for chunk in read_iris_shares_chunks(
+        let mut rng = get_rng();
+        let chunks: Vec<_> = read_iris_shares_chunks(
             &get_path_to_ndjson(),
             N_TO_SKIP,
             N_TO_TAKE,
             CHUNK_SIZE,
-            &mut get_rng(),
+            &mut rng,
         )
         .unwrap()
         .into_iter()
-        {
-            for _ in chunk {}
+        .map(|chunk| chunk.collect::<Vec<_>>())
+        .collect();
+        assert_eq!(chunks.len(), N_TO_TAKE / CHUNK_SIZE);
+
+        for chunk in chunks {
+            assert_eq!(chunk.len(), CHUNK_SIZE);
         }
     }
 }

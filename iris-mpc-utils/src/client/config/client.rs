@@ -53,8 +53,11 @@ pub enum SharesGeneratorConfiguration {
         // Path to an NDJSON file.
         path_to_ndjson_file: String,
 
+        // An optional RNG seed.
+        rng_seed: Option<u64>,
+
         // Instruction in respect of Iris code selection.
-        selection_strategy: IrisCodeSelectionStrategy,
+        selection_strategy: Option<IrisCodeSelectionStrategy>,
     },
     /// Shares are generated via a random number generator.
     FromRng {

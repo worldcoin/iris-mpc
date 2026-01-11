@@ -1,64 +1,187 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use itertools::Itertools;
 use rand::{CryptoRng, Rng, SeedableRng};
 
-use iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare;
-use iris_mpc_cpu::execution::hawk_main::BothEyes;
+use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::GaloisRingSharedIris};
 
 use super::super::{
     config::IrisCodeSelectionStrategy,
     typeset::{Initialize, ServiceClientError},
 };
-use crate::{constants::N_PARTIES, irises::generate_iris_code_and_mask_party_shares_for_both_eyes};
+use crate::{
+    constants::N_PARTIES,
+    irises::{generate_iris_shares_locally, reader::read_iris_shares},
+};
 
-/// Encapsulates logic for generating Iris shares.
-#[derive(Debug)]
-pub(crate) struct SharesGenerator<R: Rng + CryptoRng + SeedableRng + Send> {
-    // Parameters determining how shares are generated.
-    params: SharesGeneratorParams<R>,
+// Add this enum to wrap both generator types
+pub(crate) enum SharesGenerator<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
+    FromCpu(SharesGeneratorFromCpu<R>),
+    FromFile(SharesGeneratorFromFile<R>),
+}
+
+// Implement GenerateShares for the enum so it can be used polymorphically
+impl<R> SharesGenerator<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
+    pub(crate) fn new(opts: SharesGeneratorOptions<R>) -> Self
+    where
+        R: Rng + CryptoRng + SeedableRng + Send,
+    {
+        match opts {
+            SharesGeneratorOptions::FromFile {
+                path_to_ndjson_file,
+                rng,
+                selection_strategy,
+            } => Self::FromFile(SharesGeneratorFromFile::new(
+                path_to_ndjson_file,
+                rng,
+                selection_strategy,
+            )),
+            SharesGeneratorOptions::FromRng { rng } => {
+                Self::FromCpu(SharesGeneratorFromCpu::new(rng))
+            }
+        }
+    }
+
+    /// Generates pairs of Iris shares for upstream processing.
+    pub(crate) fn generate(&mut self) -> BothEyes<[GaloisRingSharedIris; N_PARTIES]> {
+        match self {
+            Self::FromCpu(generator) => [generator.generate(), generator.generate()],
+            Self::FromFile(generator) => [generator.generate(), generator.generate()],
+        }
+    }
 }
 
 #[async_trait]
-impl<R: Rng + CryptoRng + SeedableRng + Send> Initialize for SharesGenerator<R> {
+impl<R> Initialize for SharesGenerator<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
     async fn init(&mut self) -> Result<(), ServiceClientError> {
-        match self.params {
-            SharesGeneratorParams::FromFile { .. } => {
-                unimplemented!()
+        match self {
+            Self::FromCpu(_) => {}
+            Self::FromFile(_generator) => {
+                println!("TODO: initialise Iris shares stream reader");
             }
-            _ => Ok(()),
         }
+
+        Ok(())
     }
 }
 
-impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
-    pub(crate) fn new(params: SharesGeneratorParams<R>) -> Self {
-        Self { params }
+/// A shares generator that computes Iris shares on the fly.
+pub(crate) struct SharesGeneratorFromCpu<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
+    // A random number generator acting as an entropy source.
+    rng: R,
+}
+
+impl<R> SharesGeneratorFromCpu<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
+    fn new(rng: R) -> Self {
+        Self { rng }
     }
 
-    pub fn generate(&mut self) -> BothEyes<[[GaloisRingIrisCodeShare; N_PARTIES]; 2]> {
-        match &mut self.params {
-            SharesGeneratorParams::FromFile {
-                path_to_ndjson_file: _,
-                ..
-            } => {
-                unimplemented!()
-            }
-            SharesGeneratorParams::FromRng { rng } => {
-                generate_iris_code_and_mask_party_shares_for_both_eyes(rng)
-            }
+    fn generate(&mut self) -> [GaloisRingSharedIris; N_PARTIES] {
+        // Pass through to sink function.
+        generate_iris_shares_locally(&mut self.rng, None)
+    }
+}
+
+/// A shares generator that reads Iris codes from file and then computes shares on the fly.
+pub(crate) struct SharesGeneratorFromFile<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
+    // Current batch if available Iris shares read from file system.
+    batch: Vec<[GaloisRingSharedIris; N_PARTIES]>,
+
+    // Count of cached batches.
+    batch_count: usize,
+
+    // Size of each cached batch.
+    #[allow(dead_code)]
+    batch_size: usize,
+
+    // Path to an NDJSON file.
+    path_to_ndjson_file: PathBuf,
+
+    // A random number generator acting as an entropy source.
+    rng: R,
+
+    // Strategy to apply in respect of Iris code selection.
+    #[allow(dead_code)]
+    selection_strategy: IrisCodeSelectionStrategy,
+}
+
+impl<R> SharesGeneratorFromFile<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
+    const BATCH_SIZE: usize = 100;
+
+    fn new(
+        path_to_ndjson_file: PathBuf,
+        rng: R,
+        selection_strategy: IrisCodeSelectionStrategy,
+    ) -> Self {
+        Self {
+            batch_count: 0,
+            batch_size: Self::BATCH_SIZE,
+            path_to_ndjson_file,
+            rng,
+            selection_strategy,
+            batch: Vec::with_capacity(Self::BATCH_SIZE),
         }
+    }
+
+    fn generate(&mut self) -> [GaloisRingSharedIris; N_PARTIES] {
+        if self.batch.is_empty() {
+            self.set_next_batch();
+        }
+        if self.batch.is_empty() {
+            panic!("Iris shares generator exhaustion error");
+        }
+
+        self.batch.pop().unwrap()
+    }
+
+    fn set_next_batch(&mut self) {
+        self.batch = read_iris_shares(
+            &self.path_to_ndjson_file,
+            Self::BATCH_SIZE * self.batch_count,
+            Self::BATCH_SIZE,
+            &mut self.rng,
+        )
+        .unwrap()
+        .collect_vec();
+        self.batch_count += 1;
     }
 }
 
 /// Set of variants over share generation inputs.
-#[derive(Debug)]
-pub(crate) enum SharesGeneratorParams<R: Rng + CryptoRng + SeedableRng + Send> {
+pub(crate) enum SharesGeneratorOptions<R>
+where
+    R: Rng + CryptoRng + SeedableRng + Send,
+{
     /// Shares are generated from a pre-built file.
     FromFile {
         // Path to an NDJSON file.
         #[allow(dead_code)]
         path_to_ndjson_file: PathBuf,
+
+        // A random number generator acting as an entropy source.
+        rng: R,
 
         // Strategy to apply in respect of Iris code selection.
         #[allow(dead_code)]
@@ -71,10 +194,15 @@ pub(crate) enum SharesGeneratorParams<R: Rng + CryptoRng + SeedableRng + Send> {
     },
 }
 
-impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGeneratorParams<R> {
-    pub fn new_file(path_to_ndjson_file: PathBuf) -> Self {
+impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGeneratorOptions<R> {
+    pub fn new_file(path_to_ndjson_file: PathBuf, rng_seed: Option<u64>) -> Self {
         Self::FromFile {
             path_to_ndjson_file,
+            rng: if let Some(state) = rng_seed {
+                R::seed_from_u64(state)
+            } else {
+                R::from_entropy()
+            },
             selection_strategy: IrisCodeSelectionStrategy::All,
         }
     }
@@ -94,26 +222,26 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGeneratorParams<R> {
 mod tests {
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
-    use super::{SharesGenerator, SharesGeneratorParams};
+    use super::{SharesGenerator, SharesGeneratorOptions};
     use crate::fsys::local::get_path_to_ndjson;
 
-    impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGeneratorParams<R> {
+    impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGeneratorOptions<R> {
         pub(crate) fn new_1() -> Self {
             Self::new_rng(Some(42))
         }
 
         pub(crate) fn new_2() -> Self {
-            Self::new_file(get_path_to_ndjson())
+            Self::new_file(get_path_to_ndjson(), Some(42))
         }
     }
 
     impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
         pub(crate) fn new_1() -> Self {
-            Self::new(SharesGeneratorParams::new_1())
+            Self::new(SharesGeneratorOptions::new_1())
         }
 
         pub(crate) fn new_2() -> Self {
-            Self::new(SharesGeneratorParams::new_2())
+            Self::new(SharesGeneratorOptions::new_2())
         }
     }
 
