@@ -32,6 +32,8 @@ impl<I: Clone + Default> Default for SharedIrises<I> {
 impl<I: Clone> SharedIrises<I> {
     pub fn new(points_map: HashMap<VectorId, I>, empty_iris: I) -> Self {
         let size = points_map.keys().map(|v| v.serial_id()).unique().count();
+        // All serial ids should be distinct
+        assert!(size == points_map.len());
         let next_id = points_map.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
 
         let mut points = vec![None; next_id as usize];
