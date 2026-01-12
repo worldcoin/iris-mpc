@@ -45,7 +45,7 @@ use tokio::{
     time::timeout,
 };
 
-pub const PERSIST_DELAY: usize = 16;
+pub const PERSIST_DELAY: usize = 32;
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
