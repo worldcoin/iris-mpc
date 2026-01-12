@@ -8,7 +8,10 @@ use iris_mpc_common::helpers::{
     sha256::sha256_as_hex_string,
     smpc_request::{IrisCodeSharesJSON, SharesS3Object},
 };
-use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
+use iris_mpc_cpu::{
+    execution::hawk_main::{BothEyes, LEFT as LEFT_EYE, RIGHT as RIGHT_EYE},
+    protocol::shared_iris::GaloisRingSharedIris,
+};
 
 use crate::{constants::N_PARTIES, misc::encode_b64};
 
@@ -19,7 +22,7 @@ const IRIS_SHARES_VERSION: &str = "1.3";
 /// Converts iris code shares into a representation to be dispatched to an S3 bucket.
 pub fn create_iris_code_shares(
     signup_id: &Uuid,
-    shares: &[[GaloisRingSharedIris; N_PARTIES]; 2],
+    shares: &BothEyes<[GaloisRingSharedIris; N_PARTIES]>,
 ) -> IrisCodePartyShares {
     IrisCodePartyShares::new(
         signup_id.to_string(),
@@ -29,15 +32,15 @@ pub fn create_iris_code_shares(
 
 /// Converts iris code shares into a JSON representation.
 fn create_iris_code_shares_json(
-    shares: &[[GaloisRingSharedIris; N_PARTIES]; 2],
+    shares: &BothEyes<[GaloisRingSharedIris; N_PARTIES]>,
 ) -> [IrisCodeSharesJSON; N_PARTIES] {
     std::array::from_fn(|i| IrisCodeSharesJSON {
         iris_version: IRIS_VERSION.to_string(),
         iris_shares_version: IRIS_SHARES_VERSION.to_string(),
-        left_iris_code_shares: encode_b64(&shares[0][i].code),
-        left_mask_code_shares: encode_b64(&shares[0][i].mask),
-        right_iris_code_shares: encode_b64(&shares[1][i].code),
-        right_mask_code_shares: encode_b64(&shares[1][i].mask),
+        left_iris_code_shares: encode_b64(&shares[LEFT_EYE][i].code),
+        left_mask_code_shares: encode_b64(&shares[LEFT_EYE][i].mask),
+        right_iris_code_shares: encode_b64(&shares[RIGHT_EYE][i].code),
+        right_mask_code_shares: encode_b64(&shares[RIGHT_EYE][i].mask),
     })
 }
 
