@@ -6,5 +6,4 @@ set -e
 
 # exec replaces the shell with the binary
 # $@ allows arguments to be forwarded from kubernetes
-exec /bin/iris-mpc-hawk-genesis $@
-
+exec /bin/iris-mpc-hawk-genesis --max-height=${GENESIS_MAX_HEIGHT} --perform-snapshot=false
