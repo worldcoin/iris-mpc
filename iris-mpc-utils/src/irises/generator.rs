@@ -4,14 +4,12 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
 };
-use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
+use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::GaloisRingSharedIris};
 
 use crate::constants::N_PARTIES;
 
 /// Returns generated iris shares from an iris code using local randomness alongside its mirrored component.
-/// TODO: rationalize this with the source in shared_iris.rs in iris-mpc-cpu
-#[allow(dead_code)]
-pub fn generate_iris_shares_locally<R: Rng + CryptoRng>(
+pub fn generate_iris_shares<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
 ) -> [GaloisRingSharedIris; N_PARTIES] {
@@ -37,10 +35,21 @@ pub fn generate_iris_shares_locally<R: Rng + CryptoRng>(
     ]
 }
 
+/// Convenience function that returns 2 sets of Iris shares.
+pub fn generate_iris_shares_both_eyes<R: Rng + CryptoRng>(
+    rng: &mut R,
+    iris_code_l: Option<IrisCode>,
+    iris_code_r: Option<IrisCode>,
+) -> BothEyes<[GaloisRingSharedIris; N_PARTIES]> {
+    [
+        generate_iris_shares(rng, iris_code_l),
+        generate_iris_shares(rng, iris_code_r),
+    ]
+}
+
 /// Returns generated iris shares from an iris code using local randomness alongside its mirrored component.
 /// TODO: rationalize this with the source in shared_iris.rs in iris-mpc-cpu
-#[allow(dead_code)]
-pub fn generate_iris_shares_locally_mirrored<R: Rng + CryptoRng>(
+pub fn generate_iris_shares_mirrored<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
 ) -> [GaloisRingSharedIris; N_PARTIES] {
@@ -74,8 +83,21 @@ pub fn generate_iris_shares_locally_mirrored<R: Rng + CryptoRng>(
     ]
 }
 
+/// Convenience function that returns 2 sets of mirrored Iris shares.
+#[allow(dead_code)]
+pub fn generate_iris_shares_mirrored_both_eyes<R: Rng + CryptoRng>(
+    rng: &mut R,
+    iris_code_l: Option<IrisCode>,
+    iris_code_r: Option<IrisCode>,
+) -> BothEyes<[GaloisRingSharedIris; N_PARTIES]> {
+    [
+        generate_iris_shares_mirrored(rng, iris_code_l),
+        generate_iris_shares_mirrored(rng, iris_code_r),
+    ]
+}
+
 /// Returns generated iris code/mask shares.
-pub fn generate_iris_code_and_mask_shares<R: Rng + CryptoRng>(
+fn generate_iris_code_and_mask_shares<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
 ) -> [[GaloisRingIrisCodeShare; N_PARTIES]; 2] {
@@ -94,8 +116,8 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
 
     use super::{
-        generate_iris_code_and_mask_shares, generate_iris_shares_locally,
-        generate_iris_shares_locally_mirrored, IrisCode,
+        generate_iris_code_and_mask_shares, generate_iris_shares, generate_iris_shares_both_eyes,
+        generate_iris_shares_mirrored, generate_iris_shares_mirrored_both_eyes, IrisCode,
     };
     use crate::constants::N_PARTIES;
 
@@ -119,32 +141,65 @@ mod tests {
     }
 
     #[test]
-    fn test_can_generate_shared_iris_locally_1() {
+    fn test_can_generate_iris_shares_1() {
         let mut rng = StdRng::seed_from_u64(44);
-        let shares = generate_iris_shares_locally(&mut rng, None);
+        let shares = generate_iris_shares(&mut rng, None);
         assert_eq!(shares.len(), N_PARTIES);
     }
 
     #[test]
-    fn test_can_generate_shared_iris_locally_2() {
+    fn test_can_generate_iris_shares_2() {
         let mut rng = StdRng::seed_from_u64(45);
         let iris_code = IrisCode::default();
-        let shares = generate_iris_shares_locally(&mut rng, Some(iris_code));
+        let shares = generate_iris_shares(&mut rng, Some(iris_code));
         assert_eq!(shares.len(), N_PARTIES);
     }
 
     #[test]
-    fn test_can_generate_shared_iris_locally_mirrored_1() {
+    fn test_can_generate_iris_shares_both_eyes_1() {
+        let mut rng = StdRng::seed_from_u64(44);
+        let shares = generate_iris_shares_both_eyes(&mut rng, None, None);
+        assert_eq!(shares.len(), 2);
+    }
+
+    #[test]
+    fn test_can_generate_iris_shares_both_eyes_2() {
+        let mut rng = StdRng::seed_from_u64(44);
+        let iris_code_l = IrisCode::default();
+        let iris_code_r = IrisCode::default();
+        let shares = generate_iris_shares_both_eyes(&mut rng, Some(iris_code_l), Some(iris_code_r));
+        assert_eq!(shares.len(), 2);
+    }
+
+    #[test]
+    fn test_can_generate_iris_shares_mirrored_1() {
         let mut rng = StdRng::seed_from_u64(46);
-        let shares = generate_iris_shares_locally_mirrored(&mut rng, None);
+        let shares = generate_iris_shares_mirrored(&mut rng, None);
         assert_eq!(shares.len(), N_PARTIES);
     }
 
     #[test]
-    fn test_can_generate_shared_iris_locally_mirrored_2() {
+    fn test_can_generate_iris_shares_mirrored_2() {
         let mut rng = StdRng::seed_from_u64(47);
         let iris_code = IrisCode::default();
-        let shares = generate_iris_shares_locally_mirrored(&mut rng, Some(iris_code));
+        let shares = generate_iris_shares_mirrored(&mut rng, Some(iris_code));
         assert_eq!(shares.len(), N_PARTIES);
+    }
+
+    #[test]
+    fn test_can_generate_iris_shares_mirrored_both_eyes_1() {
+        let mut rng = StdRng::seed_from_u64(46);
+        let shares = generate_iris_shares_mirrored_both_eyes(&mut rng, None, None);
+        assert_eq!(shares.len(), 2);
+    }
+
+    #[test]
+    fn test_can_generate_iris_shares_mirrored_both_eyes_2() {
+        let mut rng = StdRng::seed_from_u64(46);
+        let iris_code_l = IrisCode::default();
+        let iris_code_r = IrisCode::default();
+        let shares =
+            generate_iris_shares_mirrored_both_eyes(&mut rng, Some(iris_code_l), Some(iris_code_r));
+        assert_eq!(shares.len(), 2);
     }
 }

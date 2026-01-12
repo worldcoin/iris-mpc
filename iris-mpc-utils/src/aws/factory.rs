@@ -17,34 +17,32 @@ const IRIS_VERSION: &str = "1.0";
 const IRIS_SHARES_VERSION: &str = "1.3";
 
 /// Converts iris code shares into a representation to be dispatched to an S3 bucket.
-pub fn create_iris_code_party_shares(
+pub fn create_iris_code_shares(
     signup_id: &Uuid,
-    l_shares: &[GaloisRingSharedIris; N_PARTIES],
-    r_shares: &[GaloisRingSharedIris; N_PARTIES],
+    shares: &[[GaloisRingSharedIris; N_PARTIES]; 2],
 ) -> IrisCodePartyShares {
     IrisCodePartyShares::new(
         signup_id.to_string(),
-        create_iris_code_party_shares_json(l_shares, r_shares).to_vec(),
+        create_iris_code_shares_json(shares).to_vec(),
     )
 }
 
 /// Converts iris code shares into a JSON representation.
-pub fn create_iris_code_party_shares_json(
-    l_shares: &[GaloisRingSharedIris; N_PARTIES],
-    r_shares: &[GaloisRingSharedIris; N_PARTIES],
+fn create_iris_code_shares_json(
+    shares: &[[GaloisRingSharedIris; N_PARTIES]; 2],
 ) -> [IrisCodeSharesJSON; N_PARTIES] {
     std::array::from_fn(|i| IrisCodeSharesJSON {
         iris_version: IRIS_VERSION.to_string(),
         iris_shares_version: IRIS_SHARES_VERSION.to_string(),
-        right_iris_code_shares: encode_b64(&r_shares[i].code),
-        right_mask_code_shares: encode_b64(&r_shares[i].mask),
-        left_iris_code_shares: encode_b64(&l_shares[i].code),
-        left_mask_code_shares: encode_b64(&l_shares[i].mask),
+        left_iris_code_shares: encode_b64(&shares[0][i].code),
+        left_mask_code_shares: encode_b64(&shares[0][i].mask),
+        right_iris_code_shares: encode_b64(&shares[1][i].code),
+        right_mask_code_shares: encode_b64(&shares[1][i].mask),
     })
 }
 
 /// Converts iris code shares into a JSON representation.
-pub fn create_iris_party_shares_for_s3(
+pub fn create_iris_code_shares_s3(
     shares: &IrisCodePartyShares,
     encryption_keys: &[PublicKey; N_PARTIES],
 ) -> SharesS3Object {
@@ -72,10 +70,9 @@ pub fn create_iris_party_shares_for_s3(
 #[cfg(test)]
 mod tests {
     use super::{
-        create_iris_code_party_shares, create_iris_code_party_shares_json,
-        create_iris_party_shares_for_s3,
+        create_iris_code_shares, create_iris_code_shares_json, create_iris_code_shares_s3,
     };
-    use crate::{constants::N_PARTIES, irises::generate_iris_shares_locally};
+    use crate::{constants::N_PARTIES, irises::generate_iris_shares_both_eyes};
     use rand::{rngs::StdRng, SeedableRng};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
     use uuid::Uuid;
@@ -85,30 +82,27 @@ mod tests {
     }
 
     #[test]
-    fn test_create_iris_code_party_shares() {
+    fn test_create_iris_code_shares() {
         let mut rng = StdRng::from_entropy();
-        let l_shares = generate_iris_shares_locally(&mut rng, None);
-        let r_shares = generate_iris_shares_locally(&mut rng, None);
+        let shares = generate_iris_shares_both_eyes(&mut rng, None, None);
         let signup_id = Uuid::new_v4();
-        let _ = create_iris_code_party_shares(&signup_id, &l_shares, &r_shares);
+        let _ = create_iris_code_shares(&signup_id, &shares);
     }
 
     #[test]
     fn test_create_iris_code_shares_json() {
         let mut rng = StdRng::from_entropy();
-        let l_shares = generate_iris_shares_locally(&mut rng, None);
-        let r_shares = generate_iris_shares_locally(&mut rng, None);
-        let _ = create_iris_code_party_shares_json(&l_shares, &r_shares);
+        let shares = generate_iris_shares_both_eyes(&mut rng, None, None);
+        let _ = create_iris_code_shares_json(&shares);
     }
 
     #[test]
-    fn test_create_party_shares_for_s3() {
+    fn test_create_iris_code_shares_s3() {
         let mut rng = StdRng::from_entropy();
-        let l_shares = generate_iris_shares_locally(&mut rng, None);
-        let r_shares = generate_iris_shares_locally(&mut rng, None);
-        let signup_id = Uuid::new_v4();
-        let shares = create_iris_code_party_shares(&signup_id, &l_shares, &r_shares);
         let keys = create_public_keys_for_encryption();
-        let _ = create_iris_party_shares_for_s3(&shares, &keys);
+        let shares = generate_iris_shares_both_eyes(&mut rng, None, None);
+        let signup_id = Uuid::new_v4();
+        let shares_1 = create_iris_code_shares(&signup_id, &shares);
+        let _ = create_iris_code_shares_s3(&shares_1, &keys);
     }
 }

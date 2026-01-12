@@ -12,7 +12,7 @@ use super::super::{
 };
 use crate::{
     constants::N_PARTIES,
-    irises::{generate_iris_shares_locally, reader::read_iris_shares},
+    irises::{generate_iris_shares, reader::read_iris_shares},
 };
 
 // Add this enum to wrap both generator types
@@ -94,7 +94,7 @@ where
 
     fn generate(&mut self) -> [GaloisRingSharedIris; N_PARTIES] {
         // Pass through to sink function.
-        generate_iris_shares_locally(&mut self.rng, None)
+        generate_iris_shares(&mut self.rng, None)
     }
 }
 
@@ -177,14 +177,12 @@ where
     /// Shares are generated from a pre-built file.
     FromFile {
         // Path to an NDJSON file.
-        #[allow(dead_code)]
         path_to_ndjson_file: PathBuf,
 
         // A random number generator acting as an entropy source.
         rng: R,
 
         // Strategy to apply in respect of Iris code selection.
-        #[allow(dead_code)]
         selection_strategy: IrisCodeSelectionStrategy,
     },
     /// Shares are generated via a random number generator.

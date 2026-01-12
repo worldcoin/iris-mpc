@@ -6,7 +6,7 @@ use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::Galois
 use super::{
     client::AwsClient,
     errors::AwsClientError,
-    factory::{create_iris_code_party_shares, create_iris_party_shares_for_s3},
+    factory::{create_iris_code_shares, create_iris_code_shares_s3},
     types::S3ObjectInfo,
 };
 use crate::constants::N_PARTIES;
@@ -41,9 +41,8 @@ impl AwsClient {
         shares: &BothEyes<[GaloisRingSharedIris; N_PARTIES]>,
     ) -> Result<S3ObjectInfo, AwsClientError> {
         // Set AWS-S3 JSON compatible shares.
-        let [l_shares, r_shares] = shares;
-        let shares = create_iris_party_shares_for_s3(
-            &create_iris_code_party_shares(signup_id, l_shares, r_shares),
+        let shares = create_iris_code_shares_s3(
+            &create_iris_code_shares(signup_id, shares),
             &self.public_keyset(),
         );
 
