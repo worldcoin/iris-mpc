@@ -2,6 +2,7 @@ use crate::{
     execution::session::{Session, SessionHandles},
     protocol::shared_iris::ArcIris,
 };
+use ampc_actor_utils::fast_metrics::FastHistogram;
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
     sub_pub,
@@ -12,7 +13,6 @@ use ampc_actor_utils::protocol::{
     },
     ops::{conditionally_select_distance, cross_mul, oblivious_cross_compare},
 };
-use ampc_actor_utils::{fast_metrics::FastHistogram, protocol::prf::batch_generate_prf};
 pub use ampc_secret_sharing::shares::{
     bit::Bit,
     ring_impl::{RingElement, VecRingElement},
@@ -103,8 +103,8 @@ async fn select_shared_slices_by_bits(
     // Compute c * (left_value - right_value)
     let v_len = left_values.len();
     let mut res_a = Vec::with_capacity(v_len); // avoid extra allocations from flat_map
-    let my_prf = batch_generate_prf(session.prf.get_my_prf(), v_len);
-    let prev_prf = batch_generate_prf(session.prf.get_prev_prf(), v_len);
+    let my_prf = session.prf.gen_rands_mine(v_len);
+    let prev_prf = session.prf.gen_rands_prev(v_len);
     for (left_chunk, right_chunk, c, my_prf_chunk, prev_prf_chunk) in izip!(
         left_values.chunks(slice_size),
         right_values.chunks(slice_size),
@@ -322,8 +322,8 @@ pub async fn conditionally_swap_distances(
 
     // Batch PRF generation for zero shares
     let n = indices.len();
-    let my_prf = batch_generate_prf(session.prf.get_my_prf(), 3 * n);
-    let prev_prf = batch_generate_prf(session.prf.get_prev_prf(), 3 * n);
+    let my_prf = session.prf.gen_rands_mine(3 * n);
+    let prev_prf = session.prf.gen_rands_prev(3 * n);
     // Pre-allocate buffer for res_a
     let mut res_a = Vec::with_capacity(3 * n);
 
@@ -556,12 +556,8 @@ pub(crate) async fn min_round_robin_batch(
     // Multiply distance shares with selection bits to zero out non-minimum distances.
     let selected_distances = {
         let total = 2 * distances.len();
-        let mut my_prf = batch_generate_prf(session.prf.get_my_prf(), total)
-            .0
-            .into_iter();
-        let mut prev_prf = batch_generate_prf(session.prf.get_prev_prf(), total)
-            .0
-            .into_iter();
+        let mut my_prf = session.prf.gen_rands_mine(total).0.into_iter();
+        let mut prev_prf = session.prf.gen_rands_prev(total).0.into_iter();
         let mut shares_a = VecRingElement::with_capacity(total);
         for i_batch in 0..num_batches {
             for i in 0..batch_size {
