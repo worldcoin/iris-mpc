@@ -79,7 +79,7 @@ use crate::{
     },
     hnsw::{
         graph::graph_store,
-        searcher::{ConnectPlanV, NeighborhoodMode},
+        searcher::{ConnectPlanV, NeighborhoodMode, UpdateEntryPoint},
         GraphMem, HnswSearcher, VectorStore,
     },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -312,7 +312,7 @@ impl DistanceCache {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
@@ -699,7 +699,7 @@ impl HawkActor {
                 let matches = insert_plan.matches.clone();
 
                 for (vector_id, distance) in matches {
-                    let distance_share = distance.clone();
+                    let distance_share = distance;
                     let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
                         .entry(match_id)
@@ -1493,13 +1493,51 @@ impl HawkMutation {
 
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
+        // Group updates by side: side -> (key -> neighbors)
+        // Key: (serial_id, version_id, layer)
+        let mut updates_by_side: HashMap<StoreId, HashMap<(i64, i16, i16), Vec<_>>> =
+            HashMap::new();
+
         for mutation in self.0 {
             for (side, plan_opt) in izip!(STORE_IDS, mutation.plans) {
                 if let Some(plan) = plan_opt {
-                    graph_tx.with_graph(side).insert_apply(plan).await?;
+                    let mut graph = graph_tx.with_graph(side);
+                    // Updating entry points sequentially is fine in practice
+                    match plan.update_ep {
+                        UpdateEntryPoint::False => {}
+                        UpdateEntryPoint::SetUnique { layer } => {
+                            graph.set_entry_point(plan.inserted_vector, layer).await?;
+                        }
+                        UpdateEntryPoint::Append { layer } => {
+                            graph.add_entry_point(plan.inserted_vector, layer).await?;
+                        }
+                    }
+
+                    // Buffer link updates by side
+                    let side_map = updates_by_side.entry(side).or_default();
+                    for ((inserted_vector, lc), neighbors) in plan.updates {
+                        let key = (
+                            inserted_vector.serial_id() as i64,
+                            inserted_vector.version_id(),
+                            lc as i16,
+                        );
+                        // Deduplicate: If multiple updates for the same node exist, the last one wins
+                        side_map.insert(key, neighbors);
+                    }
                 }
             }
         }
+
+        // Execute one batch per side
+        for (side, batch_updates) in updates_by_side {
+            if !batch_updates.is_empty() {
+                graph_tx
+                    .with_graph(side)
+                    .batch_set_links(batch_updates)
+                    .await?;
+            }
+        }
+
         Ok(())
     }
 }
