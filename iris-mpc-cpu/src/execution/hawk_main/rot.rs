@@ -10,7 +10,8 @@ pub const ALL_ROTATIONS_MASK: u32 = (1 << 31) - 1;
 pub const CENTER_ONLY_MASK: u32 = 1 << 15;
 
 #[allow(dead_code)]
-/// Rotations -10, 0, 10. These base rotations cover [-15, 15] when used with MinFhd5/6
+/// Rotations -10, 0, 10. These base rotations cover [-15, 15] when used with
+/// MinFHD5 (11 rotations) or MinFHD6 (13 rotations).
 pub const CENTER_AND_10_MASK: u32 = (1 << 5) + (1 << 15) + (1 << 25);
 
 /// VecRotationSupport is an abstraction for functions that work with or without rotations,

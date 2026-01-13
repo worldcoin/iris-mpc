@@ -857,7 +857,7 @@ impl PrerotatedQueryRowMajor {
     }
 }
 
-pub struct PrerotatedQueryRowMajorView<'a, const ROT: usize> {
+pub struct PrerotatedQueryRowMajorView<'a, const ROTATIONS: usize> {
     storage: &'a mut PrerotatedQueryRowMajor,
 }
 
@@ -866,7 +866,7 @@ impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
     pub const CODE_ROWS: usize = PrerotatedQueryRowMajor::CODE_ROWS;
     pub const MASK_ROWS: usize = PrerotatedQueryRowMajor::MASK_ROWS;
 
-    /// Rotation amounts for each of the 31 rotations.
+    /// Rotation amounts for each rotation.
     const ROTATION_AMOUNTS: [usize; ROTATIONS] = {
         let mut amounts = [0usize; ROTATIONS];
         // Left rotations: rotate left by 60, 56, ..., 4 elements
@@ -924,7 +924,7 @@ impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
         }
     }
 
-    /// Get all 31 rotations of a code row (contiguous in memory - 50KB)
+    /// Get all rotations of a code row (contiguous in memory, at most 50KB)
     #[inline]
     fn code_row_rotations(&self, row_idx: usize) -> &[u16] {
         let start = row_idx * ROTATIONS * Self::ROW_SIZE;
@@ -932,7 +932,7 @@ impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
         &self.storage.code_data[start..end]
     }
 
-    /// Get all 31 rotations of a mask row (contiguous in memory - 50KB)
+    /// Get all rotations of a mask row (contiguous in memory, at most 50KB)
     #[inline]
     fn mask_row_rotations(&self, row_idx: usize) -> &[u16] {
         let start = row_idx * ROTATIONS * Self::ROW_SIZE;

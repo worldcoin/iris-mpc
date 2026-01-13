@@ -425,7 +425,7 @@ impl IrisCode {
 
     /// Return the minimum distance of an iris code against all rotations of another iris code
     /// using the IrisRotation enum. This avoids generating all rotation copies.
-    /// snote that the rotations are applied to Other.
+    /// Note that the rotations are applied to Other.
     pub fn get_min_distance_fraction_rotation_aware<const ROTATIONS: usize>(
         &self,
         other: &Self,
@@ -438,10 +438,7 @@ impl IrisCode {
         let other_mask = Self::transform_iris_code_array(&other.mask);
 
         // go through all rotations of other
-        for rotation in IrisRotation::all()
-            .skip((crate::ROTATIONS - ROTATIONS) / 2)
-            .take(ROTATIONS)
-        {
+        for rotation in IrisRotation::centered::<ROTATIONS>() {
             let distance = Self::get_distance_fraction_with_rotation(
                 &other_code,
                 &other_mask,

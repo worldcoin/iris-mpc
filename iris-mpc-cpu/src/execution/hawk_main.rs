@@ -50,7 +50,7 @@
 //! - **`MinFHDX` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
 //!   FHD distance across rotation amounts `-X, -(X-1).. 0 .. (X - 1), X`.
 //!   
-//! The choice of distant is set by the constant `HAWK_DISTANCE_FN`.
+//! The choice of distance function is set by the constant `HAWK_DISTANCE_FN`.
 //! One must also set the `HAWK_MINFHD_ROTATIONS` constant, which refers to the total rotations considered by MinFHD.
 //! Note that one should set it to `2 * X + 1` to work with `MinFHDX`.
 //! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
