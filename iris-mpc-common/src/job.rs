@@ -5,7 +5,6 @@ use crate::{
     helpers::sync::{Modification, ModificationKey},
     ROTATIONS,
 };
-use ampc_anon_stats::{BucketStatistics, BucketStatistics2D};
 use ampc_server_utils::batch_sync::get_own_batch_sync_entries;
 use ampc_server_utils::{get_batch_sync_entries, BatchSyncEntriesResult};
 use eyre::{eyre, Result};
@@ -103,9 +102,6 @@ pub struct BatchQuery {
 
     // Boolean value for mirror attack detection enabled
     pub full_face_mirror_attacks_detection_enabled: bool,
-
-    // If true, anonymized statistics (1D, 2D, and mirror-orientation) are disabled for this batch.
-    pub disable_anonymized_stats: bool,
 }
 
 impl BatchQuery {
@@ -394,15 +390,6 @@ pub struct ServerJobResult<A = ()> {
     pub deleted_ids: Vec<u32>,
     // For each query, a set of serial ids that were matched *within* the same batch
     pub matched_batch_request_ids: Vec<Vec<String>>,
-    // See struct definition for more details
-    pub anonymized_bucket_statistics_left: BucketStatistics,
-    pub anonymized_bucket_statistics_right: BucketStatistics,
-    // 2D anonymized statistics across both eyes (only for matches on both sides)
-    // Only for Normal orientation
-    pub anonymized_bucket_statistics_2d: BucketStatistics2D,
-    // Mirror orientation bucket statistics
-    pub anonymized_bucket_statistics_left_mirror: BucketStatistics,
-    pub anonymized_bucket_statistics_right_mirror: BucketStatistics,
     // Reauth results, this can be ignored on the first iterations of HNSW
     pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
     pub reauth_target_indices: HashMap<String, u32>,

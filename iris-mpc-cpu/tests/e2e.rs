@@ -189,8 +189,6 @@ async fn e2e_test_async() -> Result<()> {
         hnsw_param_ef_search: HNSW_EF_SEARCH,
         hnsw_prf_key: None,
         disable_persistence: false,
-        match_distances_buffer_size: 64,
-        n_buckets: 10,
         tls: None,
         numa: true,
     };
@@ -212,13 +210,6 @@ async fn e2e_test_async() -> Result<()> {
     let mut handle2 = handle2?;
 
     let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, INTERNAL_RNG_SEED, true);
-
-    // TODO: enable this once supported
-    // test_case_generator.enable_bucket_statistic_checks(
-    //     N_BUCKETS,
-    //     num_devices,
-    //     MATCH_DISTANCES_BUFFER_SIZE,
-    // );
 
     test_case_generator
         .run_n_batches(
