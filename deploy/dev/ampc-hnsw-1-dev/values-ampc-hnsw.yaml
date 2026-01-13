@@ -1,6 +1,6 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1051076"
+    value: "2107152"
 
   - name: RUST_LOG
     value: "info"
@@ -79,7 +79,7 @@ env:
     value: "96"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "16"
+    value: "64"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
