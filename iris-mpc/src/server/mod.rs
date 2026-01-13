@@ -227,7 +227,11 @@ fn process_config(config: &Config) {
         panic!("Missing CPU dB config settings",);
     }
     // Load batch_size config
-    tracing::info!("Set max batch size to {}", config.max_batch_size);
+    tracing::info!(
+        "Set batch size limits: min={}, max={}",
+        config.min_batch_size,
+        config.max_batch_size
+    );
 }
 
 /// Returns initialized PostgreSQL clients for interacting
