@@ -48,6 +48,11 @@ pub enum RequestBatchConfiguration {
 /// Set of variants over inputs to iris shares generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SharesGeneratorConfiguration {
+    /// Shares are generated via a random number generator.
+    FromCompute {
+        // An optional RNG seed.
+        rng_seed: Option<u64>,
+    },
     /// Shares are generated from a pre-built file.
     FromFile {
         // Path to an NDJSON file.
@@ -58,11 +63,6 @@ pub enum SharesGeneratorConfiguration {
 
         // Instruction in respect of Iris code selection.
         selection_strategy: Option<IrisCodeSelectionStrategy>,
-    },
-    /// Shares are generated via a random number generator.
-    FromRng {
-        // An optional RNG seed.
-        rng_seed: Option<u64>,
     },
 }
 

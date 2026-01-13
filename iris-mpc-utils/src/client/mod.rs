@@ -53,9 +53,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
-}
 
-impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
     pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
@@ -146,7 +144,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
     for SharesGenerator<R>
 {
     fn from(config: &ServiceClientConfiguration) -> Self {
-        Self::new(SharesGeneratorOptions::<R>::from(config))
+        Self::from(SharesGeneratorOptions::<R>::from(config))
     }
 }
 
@@ -155,6 +153,10 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
 {
     fn from(config: &ServiceClientConfiguration) -> Self {
         match config.shares_generator() {
+            config::SharesGeneratorConfiguration::FromCompute { rng_seed } => {
+                tracing::info!("Parsing config: Shares generator from RNG");
+                SharesGeneratorOptions::<R>::new_compute(*rng_seed)
+            }
             config::SharesGeneratorConfiguration::FromFile {
                 path_to_ndjson_file,
                 rng_seed,
@@ -166,10 +168,6 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
                     *rng_seed,
                     selection_strategy.as_ref().map(IrisSelection::from),
                 )
-            }
-            config::SharesGeneratorConfiguration::FromRng { rng_seed } => {
-                tracing::info!("Parsing config: Shares generator from RNG");
-                SharesGeneratorOptions::<R>::new_rng(*rng_seed)
             }
         }
     }

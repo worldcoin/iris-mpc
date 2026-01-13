@@ -15,7 +15,7 @@ use crate::{
     constants::N_PARTIES,
 };
 
-/// A component responsible for dequeuing system responses from network egress queues.
+/// Dequeues system responses from network egress queues.
 pub(crate) struct ResponseDequeuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
@@ -101,7 +101,7 @@ impl ResponseDequeuer {
                                 .as_ref()
                                 .and_then(|matched| matched.first().copied())
                         })
-                        .expect("Unmatched uniqueness request.");
+                        .expect(format!("Unmatched uniqueness request: {:?}", result).as_str());
                     *uniqueness_ref = UniquenessReference::IrisSerialId(serial_id);
                 }
             }

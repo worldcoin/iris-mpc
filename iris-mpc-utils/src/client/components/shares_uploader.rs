@@ -32,7 +32,6 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> SharesUploader<R> {
 #[async_trait]
 impl<R: Rng + CryptoRng + SeedableRng + Send> Initialize for SharesUploader<R> {
     async fn init(&mut self) -> Result<(), ServiceClientError> {
-        self.shares_generator.init().await?;
         self.aws_client
             .set_public_keyset()
             .await
@@ -85,7 +84,7 @@ mod tests {
 
     impl SharesUploader<StdRng> {
         pub async fn new_1() -> Self {
-            Self::new(AwsClient::new_1().await, SharesGenerator::new_rng_1())
+            Self::new(AwsClient::new_1().await, SharesGenerator::new_compute_1())
         }
     }
 

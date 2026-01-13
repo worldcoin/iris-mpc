@@ -4,7 +4,7 @@ use super::super::typeset::{
     RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError, UniquenessReference,
 };
 
-/// Encapsulates logic for generating batches of SMPC service request messages.
+/// Generates batches of SMPC service requests.
 pub(crate) struct RequestGenerator {
     // Count of generated batches.
     generated_batch_count: usize,
