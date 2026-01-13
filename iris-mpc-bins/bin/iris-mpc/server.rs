@@ -1837,10 +1837,6 @@ async fn server_main(config: Config) -> Result<()> {
                 )
                 .await?;
             }
-
-            // Anonymized statistics publishing (1D/mirror/2D) is deprecated and handled by the
-            // anon-stats-server. This binary no longer emits those SNS messages.
-
             shutdown_handler_bg.decrement_batches_pending_completion();
         }
 

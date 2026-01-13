@@ -172,9 +172,6 @@ hnsw-smpc-2:
     - name: SMPC__N_BUCKETS
       value: "16"
 
-    - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-      value: "true"
-
     - name: SMPC__ANON_STATS_DATABASE__DB_SCHEMA_NAME
       value: "anon_stats_hnsw_2"
 
