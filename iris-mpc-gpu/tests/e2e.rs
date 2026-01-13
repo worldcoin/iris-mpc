@@ -17,7 +17,6 @@ mod e2e_test {
     const DB_BUFFER: usize = 8 * 1000;
     const NUM_BATCHES: usize = 30;
     const MAX_BATCH_SIZE: usize = 64;
-    const N_BUCKETS: usize = 10;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
     const MATCH_DISTANCES_2D_BUFFER_SIZE: usize = 1 << 6;
@@ -132,7 +131,6 @@ mod e2e_test {
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
                 MATCH_DISTANCES_2D_BUFFER_SIZE,
-                N_BUCKETS,
                 true,
                 false,
                 false,
@@ -168,7 +166,6 @@ mod e2e_test {
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
                 MATCH_DISTANCES_2D_BUFFER_SIZE,
-                N_BUCKETS,
                 true,
                 false,
                 false,
@@ -204,7 +201,6 @@ mod e2e_test {
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
                 MATCH_DISTANCES_2D_BUFFER_SIZE,
-                N_BUCKETS,
                 true,
                 false,
                 false,
@@ -230,8 +226,6 @@ mod e2e_test {
         let mut handle2 = rx2.await??;
 
         let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, internal_seed, false);
-
-        test_case_generator.enable_bucket_statistic_checks(N_BUCKETS);
 
         test_case_generator
             .run_n_batches(

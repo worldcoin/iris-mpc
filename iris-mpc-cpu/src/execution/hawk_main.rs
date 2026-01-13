@@ -94,7 +94,7 @@ use ampc_actor_utils::{
 use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
 use ampc_anon_stats::{
     AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
-    BucketStatistics, BucketStatistics2D,
+    BucketStatistics,
 };
 use clap::Parser;
 use eyre::{eyre, Report, Result};
@@ -1387,8 +1387,7 @@ impl HawkResult {
         let merged_results = self.merged_results();
         let matched_batch_request_ids = self.matched_batch_request_ids();
 
-        let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
-        let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
+        // Anonymized bucket statistics are no longer produced by the online pipeline.
 
         let successful_reauths = decisions
             .iter()
@@ -1433,11 +1432,6 @@ impl HawkResult {
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,
             matched_batch_request_ids,
-            anonymized_bucket_statistics_left,
-            anonymized_bucket_statistics_right,
-            anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
-            anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
-            anonymized_bucket_statistics_2d: BucketStatistics2D::default(),        // TODO.
 
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,
@@ -2042,8 +2036,6 @@ mod tests {
         assert_eq!(batch_size, result.right_iris_requests.code.len());
         assert!(result.deleted_ids.is_empty());
         assert_eq!(batch_size, result.matched_batch_request_ids.len());
-        assert!(result.anonymized_bucket_statistics_left.buckets.is_empty());
-        assert!(result.anonymized_bucket_statistics_right.buckets.is_empty());
         assert_eq!(batch_size, result.successful_reauths.len());
         assert!(result.reauth_target_indices.is_empty());
         assert!(result.reauth_or_rule_used.is_empty());
@@ -2177,24 +2169,6 @@ mod tests {
                 "All parties must agree on the reset update shares"
             );
             all_results[i].reset_update_shares = all_results[0].reset_update_shares.clone();
-        }
-
-        for i in 0..all_results.len() {
-            // Same for specific fields of the bucket statistics.
-            // TODO: specific assertions for the bucket statistics results
-            let first = all_results[0].anonymized_bucket_statistics_left.clone();
-            let other = &mut all_results[i];
-            for other in [
-                &mut other.anonymized_bucket_statistics_left,
-                &mut other.anonymized_bucket_statistics_right,
-                &mut other.anonymized_bucket_statistics_left_mirror,
-                &mut other.anonymized_bucket_statistics_right_mirror,
-            ] {
-                other.party_id = first.party_id;
-                other.start_time_utc_timestamp = first.start_time_utc_timestamp;
-                other.end_time_utc_timestamp = first.end_time_utc_timestamp;
-                other.next_start_time_utc_timestamp = first.next_start_time_utc_timestamp;
-            }
         }
 
         assert!(

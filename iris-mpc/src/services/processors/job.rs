@@ -4,8 +4,8 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{bail, Result, WrapErr};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::smpc_request::{
-    ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::{
     IdentityDeletionResult, ReAuthResult, ResetCheckResult, ResetUpdateAckResult, UniquenessResult,
@@ -34,7 +34,6 @@ pub async fn process_job_result(
     identity_deletion_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_check_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_update_result_attributes: &HashMap<String, MessageAttributeValue>,
-    anonymized_statistics_attributes: &HashMap<String, MessageAttributeValue>,
     shutdown_handler: &ShutdownHandler,
 ) -> Result<()> {
     let ServerJobResult {
@@ -53,8 +52,6 @@ pub async fn process_job_result(
         right_iris_requests,
         deleted_ids,
         matched_batch_request_ids,
-        anonymized_bucket_statistics_left,
-        anonymized_bucket_statistics_right,
         successful_reauths,
         reauth_target_indices,
         reauth_or_rule_used,
@@ -416,35 +413,6 @@ pub async fn process_job_result(
         IDENTITY_DELETION_MESSAGE_TYPE,
     )
     .await?;
-
-    if (config.enable_sending_anonymized_stats_message)
-        && (!anonymized_bucket_statistics_left.buckets.is_empty()
-            || !anonymized_bucket_statistics_right.buckets.is_empty())
-    {
-        tracing::info!("Sending anonymized stats results");
-        let anonymized_statistics_results = [
-            anonymized_bucket_statistics_left,
-            anonymized_bucket_statistics_right,
-        ];
-        // transform to vector of string ands remove None values
-        let anonymized_statistics_results = anonymized_statistics_results
-            .iter()
-            .map(|anonymized_bucket_statistics| {
-                serde_json::to_string(anonymized_bucket_statistics)
-                    .wrap_err("failed to serialize anonymized statistics result")
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        send_results_to_sns(
-            anonymized_statistics_results,
-            &metadata,
-            sns_client,
-            config,
-            anonymized_statistics_attributes,
-            ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-        )
-        .await?;
-    }
 
     tracing::info!("Sending {} reset check results", reset_check_results.len());
     send_results_to_sns(
