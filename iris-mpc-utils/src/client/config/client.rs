@@ -66,6 +66,8 @@ pub enum SharesGeneratorConfiguration {
     },
 }
 
+/// Enumeration over types of strategy to apply when selecting
+/// Iris codes from an NDJSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IrisCodeSelectionStrategy {
     // All Iris codes are selected.

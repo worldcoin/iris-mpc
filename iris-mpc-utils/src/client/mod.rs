@@ -3,16 +3,19 @@ use std::path::PathBuf;
 use async_from::{self, AsyncFrom};
 use rand::{CryptoRng, Rng, SeedableRng};
 
-use crate::aws::{AwsClient, AwsClientConfig};
+use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
 
+use crate::{
+    aws::{AwsClient, AwsClientConfig},
+    client::config::IrisCodeSelectionStrategy,
+};
 use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
     SharesGeneratorOptions, SharesUploader,
 };
-use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
-
 pub use config::{AwsConfiguration, ServiceClientConfiguration};
 pub use typeset::ServiceClientError;
+use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
 
 mod components;
 mod config;
@@ -155,15 +158,29 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
             config::SharesGeneratorConfiguration::FromFile {
                 path_to_ndjson_file,
                 rng_seed,
-                ..
+                selection_strategy,
             } => {
                 tracing::info!("Parsing config: Shares generator from file");
-                SharesGeneratorOptions::new_file(PathBuf::from(path_to_ndjson_file), *rng_seed)
+                SharesGeneratorOptions::new_file(
+                    PathBuf::from(path_to_ndjson_file),
+                    *rng_seed,
+                    selection_strategy.as_ref().map(IrisSelection::from),
+                )
             }
             config::SharesGeneratorConfiguration::FromRng { rng_seed } => {
                 tracing::info!("Parsing config: Shares generator from RNG");
                 SharesGeneratorOptions::<R>::new_rng(*rng_seed)
             }
+        }
+    }
+}
+
+impl From<&IrisCodeSelectionStrategy> for IrisSelection {
+    fn from(value: &IrisCodeSelectionStrategy) -> Self {
+        match value {
+            IrisCodeSelectionStrategy::All => Self::All,
+            IrisCodeSelectionStrategy::Even => Self::Even,
+            IrisCodeSelectionStrategy::Odd => Self::Odd,
         }
     }
 }

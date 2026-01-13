@@ -85,13 +85,13 @@ mod tests {
 
     impl SharesUploader<StdRng> {
         pub async fn new_1() -> Self {
-            Self::new(AwsClient::new_1().await, SharesGenerator::new_1())
+            Self::new(AwsClient::new_1().await, SharesGenerator::new_rng_1())
         }
     }
 
     impl<R: Rng + CryptoRng + SeedableRng + Send> SharesUploader<R> {
         pub async fn new_2() -> Self {
-            Self::new(AwsClient::new_1().await, SharesGenerator::<R>::new_2())
+            Self::new(AwsClient::new_1().await, SharesGenerator::<R>::new_file_1())
         }
     }
 
