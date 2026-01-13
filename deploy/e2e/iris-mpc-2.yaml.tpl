@@ -219,9 +219,6 @@ iris-mpc-2:
     - name: SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE
       value: "64"
 
-    - name: SMPC__N_BUCKETS
-      value: "375"
-
     - name: SMPC__ENABLE_REAUTH
       value: "true"
 

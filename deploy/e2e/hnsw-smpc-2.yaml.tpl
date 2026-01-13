@@ -166,12 +166,6 @@ hnsw-smpc-2:
     - name: SMPC__DISABLE_PERSISTENCE
       value: "false"
 
-    - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-      value: "64"
-
-    - name: SMPC__N_BUCKETS
-      value: "16"
-
     - name: SMPC__ANON_STATS_DATABASE__DB_SCHEMA_NAME
       value: "anon_stats_hnsw_2"
 
