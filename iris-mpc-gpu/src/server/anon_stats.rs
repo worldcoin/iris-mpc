@@ -122,21 +122,6 @@ impl DistanceCache {
             .collect::<Vec<_>>()
     }
 
-    /// Prepares the match distances buckets for the given device manager and number of buckets.
-    /// This only operates on the first device.
-    ///
-    /// # Arguments
-    /// * `device_manager` - The device manager to allocate buffers on.
-    /// * `n_buckets` - The number of buckets to prepare.
-    pub fn prepare_match_distances_buckets(
-        device_manager: &DeviceManager,
-        n_buckets: usize,
-    ) -> ChunkShare<u32> {
-        let a = device_manager.device(0).alloc_zeros(n_buckets).unwrap();
-        let b = device_manager.device(0).alloc_zeros(n_buckets).unwrap();
-        ChunkShare::new(a, b)
-    }
-
     pub fn load_counters(&self, device_manager: &DeviceManager, eye: Eye) -> Vec<usize> {
         let (_, _, counters, _) = self.get_buffers(eye);
         device_manager
