@@ -2424,8 +2424,8 @@ pub(crate) async fn extract_msb_u16_batch_fss(
     let mut vec_of_msb_shares: Vec<Share<Bit>> = Vec::with_capacity(x.len());
     for batch in x.chunks(batch_size) {
         tracing::debug!("Inside extract_msb_u16_fss, batch size: {}", batch.len());
-        let batch_out = add_3_get_msb_fss_batch_parallel_u16(session, batch).await?;
-        // let batch_out = add_3_get_msb_fss_batch_u16(session, batch).await?;
+        // let batch_out = add_3_get_msb_fss_batch_parallel_u16(session, batch).await?;
+        let batch_out = add_3_get_msb_fss_batch_u16(session, batch).await?;
         vec_of_msb_shares.extend(batch_out);
     }
     Ok(vec_of_msb_shares)
