@@ -210,6 +210,9 @@ hnsw-smpc-0:
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
 
+    - name: SMPC__SNS_BUFFER_BUCKET_NAME
+      value: "wf-smpcv2-$ENV-sns-buffer"
+
     - name: SMPC__ENABLE_S3_IMPORTER
       value: "false"
 
