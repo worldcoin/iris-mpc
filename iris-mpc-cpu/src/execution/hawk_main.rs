@@ -42,15 +42,20 @@
 //!
 //! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
 
-//! ### 2. Distance Function: `MinFhd` vs. `Fhd`
+//! ### 2. Distance Function and base rotations
 //!
-//! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance.
-//! - **`MinFhd` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
-//!   distance across a set of predefined rotations.
+//! There are two choices of distance function:
 //!
-//! The distance is determined by the `DISTANCE_FN` constant, which gets passed to the vector store constructor.
-//! DISTANCE_FN itself is initialized from the choice of rotations included in search (SearchRotations type alias).
-//! Center-only implies MinFhd while searching explicitly for rotated irises implies Fhd.
+//! - **`FHD` (Fractional Hamming Distance)**: Computes the standard fractional Hamming distance.
+//! - **`MinFHDX` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
+//!   FHD distance across rotation amounts `-X, -(X-1).. 0 .. (X - 1), X`.
+//!   
+//! The choice of distance function is set by the constant `HAWK_DISTANCE_FN`.
+//! One must also set the `HAWK_MINFHD_ROTATIONS` constant, which refers to the total rotations considered by MinFHD.
+//! Note that one should set it to `2 * X + 1` to work with `MinFHDX`.
+//! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
+//! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
+//! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinFhd5 encodes the set `{-10, 0, 10}`.
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
@@ -65,7 +70,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{CenterOnly, Rotations, VecRotationSupport},
+            rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
@@ -155,17 +160,48 @@ pub mod state_check;
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
-/// The master switch to enable search-per-rotation or search-center-only.
-pub type SearchRotations = CenterOnly;
-/// Rotation support as configured by SearchRotations.
-pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
+/// Distance function used by the HawkActor
+pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
+/// Number of rotations considered by the MinFhd distance.
+/// Not used for non-MinFhd distance, but should be set to `1`.
+pub const HAWK_MINFHD_ROTATIONS: usize = 11;
+/// Bitmask of base rotations, i.e rotations of the query for which
+/// the HawkActor will launch independent HNSW searches.
+pub const HAWK_BASE_ROTATIONS_MASK: u32 = CENTER_AND_10_MASK;
 
-/// The choice of distance function to use in the Aby3Store.
-pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
-    DistanceFn::MinFhd
-} else {
-    DistanceFn::Fhd
+// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MINFHD_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
+const _: () = {
+    match HAWK_DISTANCE_FN {
+        DistanceFn::Fhd => {
+            // For Fhd the base rotations should consist of all 31 rotations.
+            // HAWK_MINFHD_ROTATIONS is not actually used in this case, but it must be set to 1.
+            if HAWK_MINFHD_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
+                panic!();
+            }
+        }
+        _ => match HAWK_MINFHD_ROTATIONS {
+            // Variants correspond to "full" minfhd, minfhd5 and minfhd6.
+            // The former requires center-only as base, while the latter two
+            // require -10, 0, 10 as base rotations for searches.
+            31 => {
+                if HAWK_BASE_ROTATIONS_MASK != CENTER_ONLY_MASK {
+                    panic!();
+                }
+            }
+            11 | 13 => {
+                if HAWK_BASE_ROTATIONS_MASK != CENTER_AND_10_MASK {
+                    panic!();
+                }
+            }
+            _ => {
+                panic!();
+            }
+        },
+    }
 };
+
+/// Rotation support as configured by SearchRotations.
+pub type VecRotations<T> = VecRotationSupport<T, HAWK_BASE_ROTATIONS_MASK>;
 
 /// The choice of HNSW candidate list strategy
 pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
@@ -559,7 +595,7 @@ impl HawkActor {
                     prf,
                 },
                 workers,
-                DISTANCE_FN,
+                HAWK_DISTANCE_FN,
             );
 
             let hawk_session = HawkSession {
@@ -842,9 +878,9 @@ pub struct HawkRequest {
     /// The original `BatchQuery` containing request metadata and raw iris data.
     batch: BatchQuery,
     /// Secret-shared iris queries for normal matching (left vs. left, right vs. right).
-    queries: SearchQueries<SearchRotations>,
+    queries: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
     /// Secret-shared iris queries for mirror-attack detection (left vs. right, right vs. left).
-    queries_mirror: SearchQueries<SearchRotations>,
+    queries_mirror: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
     /// The identifiers for each request in the batch.
     ids: SearchIds,
 }
@@ -901,9 +937,11 @@ impl From<BatchQuery> for HawkRequest {
                     .map(|chunk| {
                         // Collect the rotations for one request.
                         chunk
-                            .skip(SearchRotations::N_SKIP)
-                            .take(SearchRotations::N_ROTATIONS)
-                            .map(|(code, mask, code_proc, mask_proc)| {
+                            .enumerate()
+                            .filter(|(rot_index, _)| {
+                                ((HAWK_BASE_ROTATIONS_MASK >> rot_index) & 1) > 0
+                            })
+                            .map(|(_, (code, mask, code_proc, mask_proc))| {
                                 Aby3Query::from_processed(code, mask, code_proc, mask_proc)
                             })
                             .collect_vec()
@@ -962,9 +1000,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_orient(
-        queries: SearchQueries<SearchRotations>,
+        queries: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
         workers: &BothEyes<IrisPoolHandle>,
-    ) -> SearchQueries<SearchRotations> {
+    ) -> SearchQueries<HAWK_BASE_ROTATIONS_MASK> {
         let (left, right) = join!(
             Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
             Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
@@ -1047,7 +1085,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn queries(&self, orient: Orientation) -> SearchQueries<SearchRotations> {
+    fn queries(&self, orient: Orientation) -> SearchQueries<HAWK_BASE_ROTATIONS_MASK> {
         match orient {
             Orientation::Normal => self.queries.clone(),
             Orientation::Mirror => self.queries_mirror.clone(),
@@ -1555,7 +1593,7 @@ impl HawkHandle {
                 do_match: true,
             };
 
-            let search_results = search::search::<SearchRotations>(
+            let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
                 sessions_search,
                 search_queries,
                 search_ids,
