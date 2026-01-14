@@ -41,6 +41,9 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "smpcv2-server-prod"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "SMPC_rerand"
+
   - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:
