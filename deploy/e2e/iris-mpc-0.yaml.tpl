@@ -1,6 +1,7 @@
 iris-mpc-0:
   fullnameOverride: "iris-mpc-0"
   image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc:$IRIS_MPC_IMAGE_TAG"
+  imagePullPolicy: Always
 
   environment: $ENV
   replicaCount: 1

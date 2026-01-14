@@ -1,6 +1,7 @@
 hnsw-smpc-1:
   fullnameOverride: "hnsw-smpc-1"
   image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
+  imagePullPolicy: Always
 
   environment: $ENV
   replicaCount: 1
@@ -214,9 +215,6 @@ hnsw-smpc-1:
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
 
-    - name: SMPC__SNS_BUFFER_BUCKET_NAME
-      value: "wf-smpcv2-$ENV-sns-buffer"
-
     - name: SMPC__ENABLE_S3_IMPORTER
       value: "false"
 
@@ -259,7 +257,7 @@ hnsw-smpc-1:
       value: "256"
 
     - name: SMPC__SERVICE__METRICS__PREFIX
-      value: "hnsw-0"
+      value: "hnsw-1"
 
     - name: SMPC__IMAGE_NAME
       value: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
