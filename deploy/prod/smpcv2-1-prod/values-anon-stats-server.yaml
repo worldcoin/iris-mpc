@@ -72,6 +72,12 @@ env:
 
   - name: SMPC__N_BUCKETS_2D
     value: "375"
+    
+  - name: SMPC__N_BUCKETS_1D_REAUTH
+    value: "500"
+
+  - name: SMPC__N_BUCKETS_2D_REAUTH
+    value: "500"
 
   - name: SMPC__MIN_1D_JOB_SIZE
     value: "65536"
