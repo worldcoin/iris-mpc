@@ -606,6 +606,12 @@ pub mod degree4 {
         pub fn all() -> IrisRotationIter {
             IrisRotationIter::new()
         }
+
+        /// Returns a centered subset of rotations.
+        /// For example, `centered::<11>()` returns rotations -5 to +5.
+        pub fn centered<const N: usize>() -> impl Iterator<Item = IrisRotation> {
+            Self::all().skip((crate::ROTATIONS - N) / 2).take(N)
+        }
     }
 
     pub struct IrisRotationIter {
