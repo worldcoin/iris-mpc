@@ -205,6 +205,54 @@ impl IrisPoolHandle {
         Ok(results)
     }
 
+    /// Computes rotation-aware dot products for multiple (query, vectors) batches.
+    ///
+    /// Each query's prerotation is reused across all its target vectors, making this
+    /// more efficient than `rotation_aware_dot_product_pairs` when the same query
+    /// is compared against multiple vectors.
+    ///
+    /// Returns results grouped by input batch.
+    pub async fn rotation_aware_dot_product_batches(
+        &mut self,
+        batches: Vec<(ArcIris, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<RingElement<u16>>>> {
+        let start = Instant::now();
+        const CHUNK_SIZE: usize = 128;
+
+        // Track batch_idx for each chunk to enable reassembly
+        let mut chunk_batch_indices: Vec<usize> = Vec::new();
+        let mut responses = Vec::new();
+
+        for (batch_idx, (query, vector_ids)) in batches.iter().enumerate() {
+            for chunk in vector_ids.chunks(CHUNK_SIZE) {
+                let (tx, rx) = oneshot::channel();
+                let task = IrisTask::RotationAwareDotProductBatch {
+                    query: query.clone(),
+                    vector_ids: chunk.to_vec(),
+                    rsp: tx,
+                };
+                self.get_next_worker().send(task)?;
+                chunk_batch_indices.push(batch_idx);
+                responses.push(rx);
+            }
+        }
+
+        let chunk_results = futures::future::try_join_all(responses).await?;
+
+        // Reassemble results by batch
+        let mut results: Vec<Vec<RingElement<u16>>> = batches
+            .iter()
+            .map(|(_, ids)| Vec::with_capacity(2 * HAWK_MINFHD_ROTATIONS * ids.len()))
+            .collect();
+
+        for (batch_idx, chunk_result) in chunk_batch_indices.into_iter().zip(chunk_results) {
+            results[batch_idx].extend(chunk_result);
+        }
+
+        self.metric_latency.record(start.elapsed().as_secs_f64());
+        Ok(results)
+    }
+
     pub async fn bench_batch_dot(
         &mut self,
         per_worker: usize,
