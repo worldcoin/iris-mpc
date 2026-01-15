@@ -101,7 +101,7 @@ impl ResponseDequeuer {
                                 .as_ref()
                                 .and_then(|matched| matched.first().copied())
                         })
-                        .expect(format!("Unmatched uniqueness request: {:?}", result).as_str());
+                        .unwrap_or_else(|| panic!("Unmatched uniqueness request: {:?}", result));
                     *uniqueness_ref = UniquenessReference::IrisSerialId(serial_id);
                 }
             }

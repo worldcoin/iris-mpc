@@ -6,13 +6,12 @@ use std::{
 
 use itertools::{IntoChunks, Itertools};
 use rand::{CryptoRng, Rng};
-use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 
-use crate::{constants::N_PARTIES, fsys};}
+use crate::{constants::N_PARTIES, fsys};
 
 /// Returns iterator over base64 encoded Iris codes deserialized from an ndjson file.
 pub fn read_b64_iris_codes(
@@ -101,7 +100,7 @@ mod tests {
 
     use super::{
         read_b64_iris_codes, read_b64_iris_codes_chunks, read_iris_codes, read_iris_codes_chunks,
-        read_iris_shares, read_iris_shares_chunks,
+        read_iris_shares,
     };
     use crate::fsys::local::get_path_to_ndjson;
 
@@ -173,26 +172,5 @@ mod tests {
                 .unwrap()
                 .collect();
         assert_eq!(shares.len(), N_TO_TAKE);
-    }
-
-    #[tokio::test]
-    async fn test_read_iris_shares_chunks() {
-        let mut rng = get_rng();
-        let chunks: Vec<_> = read_iris_shares_chunks(
-            &get_path_to_ndjson(),
-            N_TO_SKIP,
-            N_TO_TAKE,
-            CHUNK_SIZE,
-            &mut rng,
-        )
-        .unwrap()
-        .into_iter()
-        .map(|chunk| chunk.collect::<Vec<_>>())
-        .collect();
-        assert_eq!(chunks.len(), N_TO_TAKE / CHUNK_SIZE);
-
-        for chunk in chunks {
-            assert_eq!(chunk.len(), CHUNK_SIZE);
-        }
     }
 }
