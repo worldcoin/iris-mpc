@@ -428,6 +428,7 @@ impl HnswSearcher {
                     .map(|ep| (ep.point, ep.layer))
                     .unzip();
                 let ep_vectors = store.only_valid_vectors(ep_vectors).await;
+                metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
                 // TODO when updating entry points, should check for invalid vectors and remove
 
@@ -1359,12 +1360,17 @@ impl HnswSearcher {
         k: usize,
     ) -> Result<N> {
         // insertion layer doesn't matter here because set_ep is ignored
+        let init_start = std::time::Instant::now();
         let (mut W, n_layers, _, _) = self.search_init::<_, N>(store, graph, query, 0).await?;
+        metrics::histogram!("search_init_duration").record(init_start.elapsed().as_secs_f64());
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
+            let layer_start = std::time::Instant::now();
             let ef = self.params.get_ef_search(lc);
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
+                .record(layer_start.elapsed().as_secs_f64());
         }
 
         W.trim(store, k).await?;
@@ -1425,15 +1431,18 @@ impl HnswSearcher {
     ) -> Result<(Vec<N>, UpdateEntryPoint)> {
         // Initialize candidate neighborhood, index of highest search layer,
         // finalized layer of node insertion, and entry point update outcome.
+        let init_start = std::time::Instant::now();
         let (mut W, n_layers, insertion_layer, update_ep) = self
             .search_init::<_, N>(store, graph, query, insertion_layer)
             .await?;
+        metrics::histogram!("search_init_duration").record(init_start.elapsed().as_secs_f64());
 
         // Saved links for insertion layers
         let mut links = Vec::new();
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
+            let layer_start = std::time::Instant::now();
             let ef = if lc > insertion_layer {
                 self.params.get_ef_constr_search(lc)
             } else {
@@ -1441,6 +1450,8 @@ impl HnswSearcher {
             };
 
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
+                .record(layer_start.elapsed().as_secs_f64());
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {

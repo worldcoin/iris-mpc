@@ -574,6 +574,8 @@ impl VectorStore for Aby3Store {
         if vectors.is_empty() {
             return Ok(vec![]);
         }
+        metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
+        metrics::histogram!("distance_batch_size").record(vectors.len() as f64);
         self.distance_fn
             .eval_distance_batch(self, query, vectors)
             .await
@@ -611,6 +613,8 @@ impl VectorStore for Aby3Store {
         if distances.is_empty() {
             return Ok(vec![]);
         }
+        metrics::counter!("comparisons_total").increment(distances.len() as u64);
+        metrics::histogram!("comparison_batch_size").record(distances.len() as f64);
         cross_compare(&mut self.session, distances).await
     }
 
