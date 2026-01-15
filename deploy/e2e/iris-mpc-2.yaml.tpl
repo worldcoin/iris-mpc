@@ -1,6 +1,7 @@
 iris-mpc-2:
   fullnameOverride: "iris-mpc-2"
   image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc:$IRIS_MPC_IMAGE_TAG"
+  imagePullPolicy: Always
 
   environment: $ENV
   replicaCount: 1
@@ -215,6 +216,9 @@ iris-mpc-2:
 
     - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
       value: "64"
+
+    - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+      value: "500"
 
     - name: SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE
       value: "64"

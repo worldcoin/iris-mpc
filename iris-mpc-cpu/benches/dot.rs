@@ -759,7 +759,7 @@ pub fn bench_rotation_aware_pairwise_distance(c: &mut Criterion) {
                                     let query = &queries[query_idx];
                                     let target_refs: Vec<&ArcIris> =
                                         target_indices.iter().map(|&i| &targets[i]).collect();
-                                    black_box(rotation_aware_pairwise_distance(
+                                    black_box(rotation_aware_pairwise_distance::<31, _>(
                                         query,
                                         target_refs.iter().map(|t| Some(*t)),
                                     ))
@@ -795,7 +795,7 @@ pub fn bench_rotation_aware_pairwise_distance(c: &mut Criterion) {
                                     let query = &queries[query_idx];
                                     let target_refs: Vec<&ArcIris> =
                                         target_indices.iter().map(|&i| &targets[i]).collect();
-                                    black_box(rotation_aware_pairwise_distance_rowmajor(
+                                    black_box(rotation_aware_pairwise_distance_rowmajor::<31, _>(
                                         query,
                                         target_refs.iter().map(|t| Some(*t)),
                                     ))

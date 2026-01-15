@@ -280,15 +280,6 @@ extern "C" __global__ void shared_assign(TYPE *des_a, TYPE *des_b, TYPE *src_a,
   }
 }
 
-extern "C" __global__ void shared_assign_u32(U32 *des_a, U32 *des_b, U32 *src_a,
-                                             U32 *src_b, size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
-    des_a[i] = src_a[i];
-    des_b[i] = src_b[i];
-  }
-}
-
 extern "C" __global__ void shared_xor(TYPE *res_a, TYPE *res_b, TYPE *lhs_a,
                                       TYPE *lhs_b, TYPE *rhs_a, TYPE *rhs_b,
                                       size_t n) {
@@ -616,108 +607,5 @@ extern "C" __global__ void collapse_u64_helper(U64 *inout_a, U64 *in_b,
     U64 res_a;
     or_pre_inner<TYPE>(&res_a, inout_a, in_b, helper_a, helper_b, r);
     *inout_a = res_a & mask;
-  }
-}
-
-extern "C" __global__ void collapse_sum_assign(U32 *inout_a, U32 *inout_b,
-                                               size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i == 0) {
-    for (size_t j = 1; j < n; j++) {
-      inout_a[0] += inout_a[j];
-    }
-  } else if (i == 1) {
-    for (size_t j = 1; j < n; j++) {
-      inout_b[0] += inout_b[j];
-    }
-  }
-}
-
-extern "C" __global__ void collapse_sum(U32 *inout_a, U32 *inout_b,
-                                        U32 *input_a, U32 *input_b,
-                                        size_t inout_index, size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i == 0) {
-    for (size_t j = 0; j < n; j++) {
-      inout_a[inout_index] += input_a[j];
-    }
-  } else if (i == 1) {
-    for (size_t j = 0; j < n; j++) {
-      inout_b[inout_index] += input_b[j];
-    }
-  }
-}
-
-extern "C" __global__ void rotate_bitvec(U64 *out_a, U64 *out_b, U64 *in_a,
-                                         U64 *in_b, size_t rotation, size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
-    out_a[i] = (in_a[i] >> rotation) | (in_a[(i + 1) % n] << (64 - rotation));
-    out_b[i] = (in_b[i] >> rotation) | (in_b[(i + 1) % n] << (64 - rotation));
-  }
-}
-
-extern "C" __global__ void mask_bitvec(U64 *inout_a, U64 *inout_b, U64 *mask,
-                                       size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
-    inout_a[i] = inout_a[i] & mask[i];
-    inout_b[i] = inout_b[i] & mask[i];
-  }
-}
-
-// Calculates the pre-networking step for a conditional select operation.
-// Conditional multiplexing:
-// If control bit is 1, select d1, else select d2.
-// res = c * d1 + (1 - c) * d2 = d2 + c * (d1 - d2);
-// We need to do it for both code_dot and mask_dot.
-// we start with the mult of c and d1-d2
-extern "C" __global__ void
-conditional_select_pre(U32 *cond_a, U32 *cond_b, U32 *inout_code_a,
-                       U32 *inout_code_b, U32 *inout_mask_a, U32 *inout_mask_b,
-                       U32 *code_2_a, U32 *code_2_b, U32 *mask_2_a,
-                       U32 *mask_2_b, U32 *rand, size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
-    U32 code_a = inout_code_a[i] - code_2_a[i];
-    U32 code_b = inout_code_b[i] - code_2_b[i];
-    U32 mask_a = inout_mask_a[i] - mask_2_a[i];
-    U32 mask_b = inout_mask_b[i] - mask_2_b[i];
-    inout_code_a[i] = cond_a[i] * code_a + cond_b[i] * code_a +
-                      cond_a[i] * code_b + rand[2 * i] - rand[2 * n + 2 * i];
-    inout_mask_a[i] = cond_a[i] * mask_a + cond_b[i] * mask_a +
-                      cond_a[i] * mask_b + rand[2 * i + 1] -
-                      rand[2 * n + 2 * i + 1];
-  }
-}
-
-// finally compute the result by adding the d2 shares
-extern "C" __global__ void
-conditional_select_post(U32 *inout_code_a, U32 *inout_code_b, U32 *inout_mask_a,
-                        U32 *inout_mask_b, U32 *code_2_a, U32 *code_2_b,
-                        U32 *mask_2_a, U32 *mask_2_b, size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
-    inout_code_a[i] += code_2_a[i];
-    inout_code_b[i] += code_2_b[i];
-    inout_mask_a[i] += mask_2_a[i];
-    inout_mask_b[i] += mask_2_b[i];
-  }
-}
-
-// implements the local part of the cross multiplication of two distance
-// shares, see cross_mul in the CPU code
-extern "C" __global__ void cross_mul_pre(U32 *out_a, U32 *code_a, U32 *code_b,
-                                         U32 *mask_a, U32 *mask_b,
-                                         U32 *code_2_a, U32 *code_2_b,
-                                         U32 *mask_2_a, U32 *mask_2_b,
-                                         U32 *rand, size_t n) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) {
-    U32 code2_mask1 = code_2_a[i] * mask_a[i] + code_2_b[i] * mask_a[i] +
-                      code_2_a[i] * mask_b[i];
-    U32 code1_mask2 = code_a[i] * mask_2_a[i] + code_b[i] * mask_2_a[i] +
-                      code_a[i] * mask_2_b[i];
-    out_a[i] = rand[i] - rand[n + i] + code2_mask1 - code1_mask2;
   }
 }

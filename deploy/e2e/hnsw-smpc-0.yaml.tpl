@@ -1,6 +1,7 @@
 hnsw-smpc-0:
   fullnameOverride: "hnsw-smpc-0"
   image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
+  imagePullPolicy: Always
 
   environment: $ENV
   replicaCount: 1

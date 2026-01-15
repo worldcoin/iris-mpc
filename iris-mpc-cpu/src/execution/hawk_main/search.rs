@@ -1,5 +1,5 @@
 use super::{
-    rot::{Rotations, VecRotationSupport},
+    rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
     BothEyes, HawkInsertPlan, HawkSession, VecRequests, LEFT, RIGHT,
 };
@@ -20,8 +20,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-pub type SearchQueries<ROT> = Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROT>>>>;
-pub type SearchResults<ROT> = BothEyes<VecRequests<VecRotationSupport<HawkInsertPlan, ROT>>>;
+pub type SearchQueries<const ROTMASK: u32> =
+    Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROTMASK>>>>;
+pub type SearchResults<const ROTMASK: u32> =
+    BothEyes<VecRequests<VecRotationSupport<HawkInsertPlan, ROTMASK>>>;
 
 /// Identifiers of requests
 pub type SearchIds = Arc<VecRequests<String>>;
@@ -32,16 +34,13 @@ pub struct SearchParams {
     pub do_match: bool,
 }
 
-pub async fn search<ROT>(
+pub async fn search<const ROTMASK: u32>(
     sessions: &BothEyes<Vec<HawkSession>>,
-    search_queries: &SearchQueries<ROT>,
+    search_queries: &SearchQueries<ROTMASK>,
     search_ids: &SearchIds,
     search_params: SearchParams,
     mode: NeighborhoodMode,
-) -> Result<SearchResults<ROT>>
-where
-    ROT: Rotations,
-{
+) -> Result<SearchResults<ROTMASK>> {
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -85,7 +84,7 @@ where
         }
     };
 
-    let schedule = Schedule::new(n_sessions, n_requests, ROT::N_ROTATIONS);
+    let schedule = Schedule::new(n_sessions, n_requests, ROTMASK.count_ones() as usize);
 
     parallelize(schedule.search_batches().into_iter().map(per_session)).await?;
 
@@ -94,9 +93,9 @@ where
     Ok(results)
 }
 
-async fn per_session<ROT, N: Neighborhood<Aby3Store>>(
+async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store>>(
     session: &HawkSession,
-    search_queries: &SearchQueries<ROT>,
+    search_queries: &SearchQueries<ROTMASK>,
     search_ids: &SearchIds,
     search_params: &SearchParams,
     tx: UnboundedSender<(TaskId, HawkInsertPlan)>,
