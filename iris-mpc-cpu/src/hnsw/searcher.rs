@@ -1040,10 +1040,9 @@ impl HnswSearcher {
         let opened_nodes_metrics =
             metrics::counter!("opened_nodes_count", &[("layer", lc.to_string())]);
 
-        let mut visited_nodes_count = 0;
-
         opened_nodes_metrics.increment(init_opened.len() as u64);
-        visited_nodes_count += init_links.len();
+        visited_nodes_metrics.increment(init_links.len() as u64);
+        let mut visited_so_far = init_links.len();
 
         opened.extend(init_opened);
 
@@ -1109,7 +1108,8 @@ impl HnswSearcher {
             .await?;
 
             opened_nodes_metrics.increment(new_opened.len() as u64);
-            visited_nodes_count += c_links.len();
+            visited_nodes_metrics.increment(c_links.len() as u64);
+            visited_so_far += c_links.len();
 
             debug!(
                 event_type = Operation::OpenNode.id(),
@@ -1153,7 +1153,7 @@ impl HnswSearcher {
             metrics::counter!(
                 "insertion_stats",
                 &[
-                    ("currently_visited", visited_nodes_count.to_string()),
+                    ("currently_visited", visited_so_far.to_string()),
                     ("computed_ins_rate", ins_rate.to_string()),
                     ("n_insertions", n_insertions.to_string()),
                     ("depth", depth.to_string())
@@ -1191,8 +1191,6 @@ impl HnswSearcher {
                     .cloned(),
             );
         }
-
-        visited_nodes_metrics.increment(visited_nodes_count as u64);
 
         let metrics_labels = [("layer", lc.to_string())];
         metrics::histogram!("search_depth", &metrics_labels).record(depth as f64);
