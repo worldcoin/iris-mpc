@@ -11,7 +11,7 @@ use crate::{
 };
 use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
-    SharesGeneratorOptions, SharesUploader,
+    SharesUploader,
 };
 pub use config::{AwsConfiguration, ServiceClientConfiguration};
 pub use typeset::ServiceClientError;
@@ -144,18 +144,10 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
     for SharesGenerator<R>
 {
     fn from(config: &ServiceClientConfiguration) -> Self {
-        Self::from(SharesGeneratorOptions::<R>::from(config))
-    }
-}
-
-impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
-    for SharesGeneratorOptions<R>
-{
-    fn from(config: &ServiceClientConfiguration) -> Self {
         match config.shares_generator() {
             config::SharesGeneratorConfiguration::FromCompute { rng_seed } => {
                 tracing::info!("Parsing config: Shares generator from RNG");
-                SharesGeneratorOptions::<R>::new_compute(*rng_seed)
+                SharesGenerator::<R>::new_compute(*rng_seed)
             }
             config::SharesGeneratorConfiguration::FromFile {
                 path_to_ndjson_file,
@@ -163,7 +155,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
                 selection_strategy,
             } => {
                 tracing::info!("Parsing config: Shares generator from file");
-                SharesGeneratorOptions::new_file(
+                SharesGenerator::new_file(
                     PathBuf::from(path_to_ndjson_file),
                     *rng_seed,
                     selection_strategy.as_ref().map(IrisSelection::from),

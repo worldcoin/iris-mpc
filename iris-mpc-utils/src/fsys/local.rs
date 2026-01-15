@@ -54,7 +54,7 @@ pub fn get_path_to_subdir(name: &str) -> PathBuf {
 pub fn read_ndjson_file<'a, R: Rng + CryptoRng + 'a>(
     rng: &'a mut R,
 ) -> Result<impl Iterator<Item = [GaloisRingSharedIris; N_PARTIES]> + 'a, Error> {
-    irises::reader::read_iris_shares(get_path_to_ndjson().as_path(), 1000, 0, rng)
+    irises::reader::read_iris_shares(get_path_to_ndjson().as_path(), rng)
 }
 
 /// Returns a loaded node config file.
