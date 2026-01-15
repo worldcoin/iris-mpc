@@ -12,17 +12,7 @@ use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 
-use crate::{constants::N_PARTIES, fsys};
-
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
-enum IrisSelectionStrategy {
-    // All Iris codes are selected.
-    All,
-    // Every other Iris code is selected beginning at an even offset.
-    Even,
-    // Every other Iris code is selected beginning at an odd offset.
-    Odd,
-}
+use crate::{constants::N_PARTIES, fsys};}
 
 /// Returns iterator over base64 encoded Iris codes deserialized from an ndjson file.
 pub fn read_b64_iris_codes(
