@@ -1207,6 +1207,7 @@ impl HnswSearcher {
         start: &(V::VectorRef, V::DistanceRef),
         lc: usize,
     ) -> Result<(V::VectorRef, V::DistanceRef)> {
+        let greedy_start = std::time::Instant::now();
         // Current node of graph traversal
         let (mut c_vec, mut c_dist) = start.clone();
 
@@ -1243,6 +1244,8 @@ impl HnswSearcher {
             // If no neighbors are nearer, return current node; otherwise continue
             if n_vec == c_vec {
                 metrics::counter!("greedy_search_depth").increment(counter);
+                metrics::histogram!("greedy_search_duration", "layer" => lc.to_string())
+                    .record(greedy_start.elapsed().as_secs_f64());
                 return Ok((c_vec, c_dist));
             } else {
                 (c_vec, c_dist) = (n_vec, n_dist);
