@@ -62,7 +62,7 @@ impl ResponseDequeuer {
     }
 
     /// Attempts to correlate an SQS response with a previously dispatched request.  If correlated
-    /// then sets the corrleation and updates a child request (if found).
+    /// then sets the correlation and updates a child request (if found).
     fn maybe_correlate_response_and_update_child_request(
         &mut self,
         batch: &mut RequestBatch,

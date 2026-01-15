@@ -185,7 +185,7 @@ where
     }
 
     fn generate(&mut self) -> [GaloisRingSharedIris; N_PARTIES] {
-        // Read next batch from NDJSON if ncessary.
+        // Read next batch from NDJSON if necessary.
         if self.batch.is_empty() {
             self.batch = self.read_next_batch();
             self.batch_count += 1;
