@@ -42,15 +42,20 @@
 //!
 //! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
 
-//! ### 2. Distance Function: `MinFhd` vs. `Fhd`
+//! ### 2. Distance Function and base rotations
 //!
-//! - **`Fhd` (Fractional Hamming Distance)**: Computes the standard Hamming distance.
-//! - **`MinFhd` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
-//!   distance across a set of predefined rotations.
+//! There are two choices of distance function:
 //!
-//! The distance is determined by the `DISTANCE_FN` constant, which gets passed to the vector store constructor.
-//! DISTANCE_FN itself is initialized from the choice of rotations included in search (SearchRotations type alias).
-//! Center-only implies MinFhd while searching explicitly for rotated irises implies Fhd.
+//! - **`FHD` (Fractional Hamming Distance)**: Computes the standard fractional Hamming distance.
+//! - **`MinFHDX` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
+//!   FHD distance across rotation amounts `-X, -(X-1).. 0 .. (X - 1), X`.
+//!   
+//! The choice of distance function is set by the constant `HAWK_DISTANCE_FN`.
+//! One must also set the `HAWK_MINFHD_ROTATIONS` constant, which refers to the total rotations considered by MinFHD.
+//! Note that one should set it to `2 * X + 1` to work with `MinFHDX`.
+//! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
+//! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
+//! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinFhd5 encodes the set `{-10, 0, 10}`.
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
@@ -65,7 +70,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{CenterOnly, Rotations, VecRotationSupport},
+            rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
@@ -88,13 +93,10 @@ use crate::{
         shared_iris::GaloisRingSharedIris,
     },
 };
-use ampc_actor_utils::{
-    network::config::TlsConfig, protocol::anon_stats::compare_min_threshold_buckets,
-};
-use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+use ampc_actor_utils::network::config::TlsConfig;
+use ampc_anon_stats::types::Eye;
 use ampc_anon_stats::{
     AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
-    BucketStatistics, BucketStatistics2D,
 };
 use clap::Parser;
 use eyre::{eyre, Report, Result};
@@ -155,21 +157,51 @@ pub(crate) mod scheduler;
 pub(crate) mod search;
 mod session_groups;
 pub mod state_check;
-use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
-/// The master switch to enable search-per-rotation or search-center-only.
-pub type SearchRotations = CenterOnly;
-/// Rotation support as configured by SearchRotations.
-pub type VecRotations<T> = VecRotationSupport<T, SearchRotations>;
+/// Distance function used by the HawkActor
+pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
+/// Number of rotations considered by the MinFhd distance.
+/// Not used for non-MinFhd distance, but should be set to `1`.
+pub const HAWK_MINFHD_ROTATIONS: usize = 11;
+/// Bitmask of base rotations, i.e rotations of the query for which
+/// the HawkActor will launch independent HNSW searches.
+pub const HAWK_BASE_ROTATIONS_MASK: u32 = CENTER_AND_10_MASK;
 
-/// The choice of distance function to use in the Aby3Store.
-pub const DISTANCE_FN: DistanceFn = if SearchRotations::N_ROTATIONS == CenterOnly::N_ROTATIONS {
-    DistanceFn::MinFhd
-} else {
-    DistanceFn::Fhd
+// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MINFHD_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
+const _: () = {
+    match HAWK_DISTANCE_FN {
+        DistanceFn::Fhd => {
+            // For Fhd the base rotations should consist of all 31 rotations.
+            // HAWK_MINFHD_ROTATIONS is not actually used in this case, but it must be set to 1.
+            if HAWK_MINFHD_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
+                panic!();
+            }
+        }
+        _ => match HAWK_MINFHD_ROTATIONS {
+            // Variants correspond to "full" minfhd, minfhd5 and minfhd6.
+            // The former requires center-only as base, while the latter two
+            // require -10, 0, 10 as base rotations for searches.
+            31 => {
+                if HAWK_BASE_ROTATIONS_MASK != CENTER_ONLY_MASK {
+                    panic!();
+                }
+            }
+            11 | 13 => {
+                if HAWK_BASE_ROTATIONS_MASK != CENTER_AND_10_MASK {
+                    panic!();
+                }
+            }
+            _ => {
+                panic!();
+            }
+        },
+    }
 };
+
+/// Rotation support as configured by SearchRotations.
+pub type VecRotations<T> = VecRotationSupport<T, HAWK_BASE_ROTATIONS_MASK>;
 
 /// The choice of HNSW candidate list strategy
 pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
@@ -210,12 +242,6 @@ pub struct HawkArgs {
 
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
-
-    #[clap(long, default_value_t = 64)]
-    pub match_distances_buffer_size: usize,
-
-    #[clap(long, default_value_t = 10)]
-    pub n_buckets: usize,
 
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
@@ -262,13 +288,8 @@ pub struct HawkActor {
     graph_store: BothEyes<GraphRef>,
     /// Handles to the iris worker pools for NUMA-aware data processing.
     workers_handle: BothEyes<IrisPoolHandle>,
-    /// Aggregates statistics for anonymized reporting on match distance distributions.
-    anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 
-    /// Caches computed distances for anonymized statistics before they are processed and cleared.
-    distances_cache: BothEyes<DistanceCache>,
-
-    /// An optional store for persisting detailed anonymized statistics.
+    /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
 
     // ---- Networking ----
@@ -278,38 +299,6 @@ pub struct HawkActor {
     error_ct: CancellationToken,
     /// The index of this MPC party (0, 1, or 2).
     party_id: usize,
-}
-
-#[derive(Clone, Default)]
-struct DistanceCache {
-    distances_cache: Vec<(i64, Vec<DistanceShare<u32>>)>,
-    total_size: usize,
-}
-
-impl DistanceCache {
-    fn total_size(&self) -> usize {
-        self.total_size
-    }
-
-    fn extend(&mut self, other: impl Iterator<Item = (i64, Vec<DistanceShare<u32>>)>) {
-        let mut count = 0;
-        self.distances_cache
-            .extend(other.inspect(|(_, v)| count += v.len()));
-        self.total_size += count;
-    }
-
-    fn clear(&mut self) {
-        self.distances_cache.clear();
-        self.total_size = 0;
-    }
-
-    fn iter(&self) -> impl Iterator<Item = &(i64, Vec<DistanceShare<u32>>)> {
-        self.distances_cache.iter()
-    }
-
-    fn bundles(&self) -> impl Iterator<Item = &Vec<DistanceShare<u32>>> {
-        self.distances_cache.iter().map(|(_, bundle)| bundle)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -370,7 +359,6 @@ pub type BothEyes<T> = [T; 2];
 pub type BothOrient<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
 pub(crate) type VecRequests<T> = Vec<T>;
-type VecBuckets = Vec<u32>;
 /// VecEdges are lists of things for each neighbor of a vector (graph edges).
 type VecEdges<T> = Vec<T>;
 /// MapEdges are maps from neighbor IDs to something.
@@ -462,23 +450,6 @@ impl HawkActor {
         let workers_handle = [LEFT, RIGHT]
             .map(|side| iris_worker::init_workers(side, iris_store[side].clone(), args.numa));
 
-        let bucket_statistics_left = BucketStatistics::new(
-            args.match_distances_buffer_size,
-            args.n_buckets,
-            args.party_index,
-            Some(Eye::Left),
-            AnonStatsResultSource::Legacy,
-            Some(AnonStatsOperation::Uniqueness),
-        );
-        let bucket_statistics_right = BucketStatistics::new(
-            args.match_distances_buffer_size,
-            args.n_buckets,
-            args.party_index,
-            Some(Eye::Right),
-            AnonStatsResultSource::Legacy,
-            Some(AnonStatsOperation::Uniqueness),
-        );
-
         Ok(HawkActor {
             args: args.clone(),
             searcher,
@@ -486,8 +457,6 @@ impl HawkActor {
             loader_db_size: 0,
             iris_store,
             graph_store,
-            anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
-            distances_cache: [Default::default(), Default::default()],
             anon_stats_store: None,
             networking,
             party_id: args.party_index,
@@ -626,7 +595,7 @@ impl HawkActor {
                     prf,
                 },
                 workers,
-                DISTANCE_FN,
+                HAWK_DISTANCE_FN,
             );
 
             let hawk_session = HawkSession {
@@ -671,27 +640,27 @@ impl HawkActor {
 
     async fn update_anon_stats(
         &mut self,
-        sessions: &BothEyes<Vec<HawkSession>>,
         search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
-            self.cache_distances(side, &search_results[side]);
-            let session = &mut sessions[side][0].aby3_store.write().await.session;
-            self.fill_anonymized_statistics_buckets(session, side)
+            let sided_search_results = &search_results[side];
+
+            tracing::info!(
+                "Keeping distances for eye {side} out of {} search results",
+                sided_search_results.len(),
+            );
+
+            let partial_distances = self.get_partial_distances(sided_search_results);
+            self.persist_cached_distances(side, partial_distances)
                 .await?;
         }
         Ok(())
     }
 
-    fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
-        (1..=n_buckets)
-            .map(|x: usize| {
-                translate_threshold_a(MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64))
-            })
-            .collect_vec()
-    }
-
-    fn cache_distances(&mut self, side: usize, search_results: &[VecRotations<HawkInsertPlan>]) {
+    fn get_partial_distances(
+        &mut self,
+        search_results: &[VecRotations<HawkInsertPlan>],
+    ) -> BTreeMap<i64, Vec<DistanceShare<u32>>> {
         // maps query_id and db_id to a vector of distances.
         let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
@@ -708,63 +677,19 @@ impl HawkActor {
                 }
             }
         }
-
-        tracing::info!(
-            "Keeping distances for eye {side} out of {} search results. Cache size: {}/{}",
-            search_results.len(),
-            self.distances_cache[side].total_size(),
-            self.args.match_distances_buffer_size,
-        );
-        self.distances_cache[side].extend(distances_with_ids.into_iter());
+        distances_with_ids
     }
 
-    async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
-        let start = Instant::now();
-        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
-        let bundles = self.distances_cache[side]
-            .bundles()
-            .cloned()
-            .collect::<Vec<_>>();
-        let bucket_result_shares = compare_min_threshold_buckets(
-            session,
-            translated_thresholds.as_slice(),
-            bundles.as_slice(),
-        )
-        .await?;
-
-        let buckets = open_ring(session, &bucket_result_shares).await?;
-        metrics::histogram!("statistics_buckets_duration").record(start.elapsed().as_secs_f64());
-        Ok(buckets)
-    }
-
-    async fn fill_anonymized_statistics_buckets(
-        &mut self,
-        session: &mut Session,
+    async fn persist_cached_distances(
+        &self,
         side: usize,
+        partial_distances: BTreeMap<i64, Vec<DistanceShare<u32>>>,
     ) -> Result<()> {
-        if self.distances_cache[side].total_size() > self.args.match_distances_buffer_size {
-            tracing::info!(
-                "Gathered enough distances for eye {side}: {}, filling anonymized stats buckets",
-                self.distances_cache[side].total_size()
-            );
-            let buckets = self.compute_buckets(session, side).await?;
-            self.anonymized_bucket_statistics[side].fill_buckets(
-                &buckets,
-                MATCH_THRESHOLD_RATIO,
-                self.anonymized_bucket_statistics[side].next_start_time_utc_timestamp,
-            );
-            self.persist_cached_distances(side).await?;
-            self.distances_cache[side].clear();
-        }
-        Ok(())
-    }
-
-    async fn persist_cached_distances(&self, side: usize) -> Result<()> {
         let Some(store) = &self.anon_stats_store else {
             return Ok(());
         };
 
-        let bundles = self.distances_cache[side]
+        let bundles = partial_distances
             .iter()
             .filter_map(|(match_id, shares)| {
                 if shares.is_empty() {
@@ -953,9 +878,9 @@ pub struct HawkRequest {
     /// The original `BatchQuery` containing request metadata and raw iris data.
     batch: BatchQuery,
     /// Secret-shared iris queries for normal matching (left vs. left, right vs. right).
-    queries: SearchQueries<SearchRotations>,
+    queries: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
     /// Secret-shared iris queries for mirror-attack detection (left vs. right, right vs. left).
-    queries_mirror: SearchQueries<SearchRotations>,
+    queries_mirror: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
     /// The identifiers for each request in the batch.
     ids: SearchIds,
 }
@@ -1012,9 +937,11 @@ impl From<BatchQuery> for HawkRequest {
                     .map(|chunk| {
                         // Collect the rotations for one request.
                         chunk
-                            .skip(SearchRotations::N_SKIP)
-                            .take(SearchRotations::N_ROTATIONS)
-                            .map(|(code, mask, code_proc, mask_proc)| {
+                            .enumerate()
+                            .filter(|(rot_index, _)| {
+                                ((HAWK_BASE_ROTATIONS_MASK >> rot_index) & 1) > 0
+                            })
+                            .map(|(_, (code, mask, code_proc, mask_proc))| {
                                 Aby3Query::from_processed(code, mask, code_proc, mask_proc)
                             })
                             .collect_vec()
@@ -1073,9 +1000,9 @@ impl HawkRequest {
     }
 
     async fn numa_realloc_orient(
-        queries: SearchQueries<SearchRotations>,
+        queries: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
         workers: &BothEyes<IrisPoolHandle>,
-    ) -> SearchQueries<SearchRotations> {
+    ) -> SearchQueries<HAWK_BASE_ROTATIONS_MASK> {
         let (left, right) = join!(
             Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
             Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
@@ -1158,7 +1085,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn queries(&self, orient: Orientation) -> SearchQueries<SearchRotations> {
+    fn queries(&self, orient: Orientation) -> SearchQueries<HAWK_BASE_ROTATIONS_MASK> {
         match orient {
             Orientation::Normal => self.queries.clone(),
             Orientation::Mirror => self.queries_mirror.clone(),
@@ -1222,7 +1149,6 @@ pub struct HawkResult {
     batch: BatchQuery,
     match_results: matching::BatchStep3,
     connect_plans: HawkMutation,
-    anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 }
 
 impl HawkResult {
@@ -1230,13 +1156,11 @@ impl HawkResult {
         batch: BatchQuery,
         match_results: matching::BatchStep3,
         connect_plans: HawkMutation,
-        anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     ) -> Self {
         HawkResult {
             batch,
             match_results,
             connect_plans,
-            anonymized_bucket_statistics,
         }
     }
 
@@ -1387,8 +1311,7 @@ impl HawkResult {
         let merged_results = self.merged_results();
         let matched_batch_request_ids = self.matched_batch_request_ids();
 
-        let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
-        let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
+        // Anonymized bucket statistics are no longer produced by the online pipeline.
 
         let successful_reauths = decisions
             .iter()
@@ -1433,11 +1356,6 @@ impl HawkResult {
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,
             matched_batch_request_ids,
-            anonymized_bucket_statistics_left,
-            anonymized_bucket_statistics_right,
-            anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
-            anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
-            anonymized_bucket_statistics_2d: BucketStatistics2D::default(),        // TODO.
 
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,
@@ -1675,7 +1593,7 @@ impl HawkHandle {
                 do_match: true,
             };
 
-            let search_results = search::search::<SearchRotations>(
+            let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
                 sessions_search,
                 search_queries,
                 search_ids,
@@ -1713,9 +1631,7 @@ impl HawkHandle {
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
-        hawk_actor
-            .update_anon_stats(sessions_mutations, &search_results)
-            .await?;
+        hawk_actor.update_anon_stats(&search_results).await?;
         tracing::info!("Updated anonymized statistics.");
 
         // Reset Updates. Find how to insert the new irises into the graph.
@@ -1733,21 +1649,7 @@ impl HawkHandle {
         )
         .await?;
 
-        let results = HawkResult::new(
-            request.batch,
-            match_result,
-            mutations,
-            hawk_actor.anonymized_bucket_statistics.clone(),
-        );
-
-        // if we sent the bucket statistics, clear them.
-        for side in [LEFT, RIGHT] {
-            if !hawk_actor.anonymized_bucket_statistics[side].is_empty() {
-                hawk_actor.anonymized_bucket_statistics[side]
-                    .buckets
-                    .clear();
-            }
-        }
+        let results = HawkResult::new(request.batch, match_result, mutations);
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
@@ -2042,8 +1944,6 @@ mod tests {
         assert_eq!(batch_size, result.right_iris_requests.code.len());
         assert!(result.deleted_ids.is_empty());
         assert_eq!(batch_size, result.matched_batch_request_ids.len());
-        assert!(result.anonymized_bucket_statistics_left.buckets.is_empty());
-        assert!(result.anonymized_bucket_statistics_right.buckets.is_empty());
         assert_eq!(batch_size, result.successful_reauths.len());
         assert!(result.reauth_target_indices.is_empty());
         assert!(result.reauth_or_rule_used.is_empty());
@@ -2179,24 +2079,6 @@ mod tests {
             all_results[i].reset_update_shares = all_results[0].reset_update_shares.clone();
         }
 
-        for i in 0..all_results.len() {
-            // Same for specific fields of the bucket statistics.
-            // TODO: specific assertions for the bucket statistics results
-            let first = all_results[0].anonymized_bucket_statistics_left.clone();
-            let other = &mut all_results[i];
-            for other in [
-                &mut other.anonymized_bucket_statistics_left,
-                &mut other.anonymized_bucket_statistics_right,
-                &mut other.anonymized_bucket_statistics_left_mirror,
-                &mut other.anonymized_bucket_statistics_right_mirror,
-            ] {
-                other.party_id = first.party_id;
-                other.start_time_utc_timestamp = first.start_time_utc_timestamp;
-                other.end_time_utc_timestamp = first.end_time_utc_timestamp;
-                other.next_start_time_utc_timestamp = first.next_start_time_utc_timestamp;
-            }
-        }
-
         assert!(
             all_results.iter().all_equal(),
             "All parties must agree on the results"
@@ -2313,8 +2195,6 @@ mod tests_db {
             hnsw_param_ef_search: 256,
             hnsw_prf_key: None,
             numa: true,
-            match_distances_buffer_size: 64,
-            n_buckets: 10,
             disable_persistence: false,
             tls: None,
         };

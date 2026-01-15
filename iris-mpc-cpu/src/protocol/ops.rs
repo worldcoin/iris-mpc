@@ -20,7 +20,7 @@ pub use ampc_actor_utils::protocol::ops::{
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
-    ROTATIONS,
+    ROTATIONS as ALL_ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use std::{cmp::Ordering, ops::Not, time::Instant};
@@ -790,7 +790,7 @@ where
 }
 
 /// This is similar to `pairwise_distance`, but performs dot products on all rotations of the query.
-pub fn rotation_aware_pairwise_distance<'a, I>(
+pub fn rotation_aware_pairwise_distance<'a, const ROTATIONS: usize, I>(
     query: &'a ArcIris,
     targets: I,
 ) -> Vec<RingElement<u16>>
@@ -802,7 +802,10 @@ where
     let mut additive_shares = Vec::with_capacity(2 * ROTATIONS * targets.len());
 
     for target in targets {
-        for rotation in IrisRotation::all() {
+        for rotation in IrisRotation::all()
+            .skip((ALL_ROTATIONS - ROTATIONS) / 2)
+            .take(ROTATIONS)
+        {
             let (code_dist, mask_dist) = if let Some(y) = target {
                 count += 1;
                 let (a, b) = (
@@ -842,24 +845,43 @@ impl PrerotatedQueryRowMajor {
     pub const ROW_SIZE: usize = 800;
     pub const CODE_ROWS: usize = 16;
     pub const MASK_ROWS: usize = 8;
-    const CODE_SIZE: usize = Self::CODE_ROWS * ROTATIONS * Self::ROW_SIZE;
-    const MASK_SIZE: usize = Self::MASK_ROWS * ROTATIONS * Self::ROW_SIZE;
+    const CODE_SIZE: usize = Self::CODE_ROWS * ALL_ROTATIONS * Self::ROW_SIZE;
+    const MASK_SIZE: usize = Self::MASK_ROWS * ALL_ROTATIONS * Self::ROW_SIZE;
 
-    /// Rotation amounts for each of the 31 rotations.
+    /// Create a new buffer (allocates memory).
+    fn new_buffer() -> Self {
+        Self {
+            code_data: vec![0u16; Self::CODE_SIZE],
+            mask_data: vec![0u16; Self::MASK_SIZE],
+        }
+    }
+}
+
+pub struct PrerotatedQueryRowMajorView<'a, const ROTATIONS: usize> {
+    storage: &'a mut PrerotatedQueryRowMajor,
+}
+
+impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
+    pub const ROW_SIZE: usize = PrerotatedQueryRowMajor::ROW_SIZE;
+    pub const CODE_ROWS: usize = PrerotatedQueryRowMajor::CODE_ROWS;
+    pub const MASK_ROWS: usize = PrerotatedQueryRowMajor::MASK_ROWS;
+
+    /// Rotation amounts for each rotation.
     const ROTATION_AMOUNTS: [usize; ROTATIONS] = {
         let mut amounts = [0usize; ROTATIONS];
         // Left rotations: rotate left by 60, 56, ..., 4 elements
+        let half = ROTATIONS / 2;
         let mut i = 0;
-        while i < 15 {
-            amounts[i] = (15 - i) * 4;
+        while i < half {
+            amounts[i] = (half - i) * 4;
             i += 1;
         }
         // Center: no rotation
-        amounts[15] = 0;
+        amounts[half] = 0;
         // Right rotations: rotate right by 4, 8, ..., 60 (i.e., left by 796, 792, ..., 740)
         let mut i = 1;
-        while i <= 15 {
-            amounts[15 + i] = 800 - i * 4;
+        while i <= half {
+            amounts[half + i] = 800 - i * 4;
             i += 1;
         }
         amounts
@@ -877,14 +899,6 @@ impl PrerotatedQueryRowMajor {
         dst[second.len()..].copy_from_slice(first);
     }
 
-    /// Create a new buffer (allocates memory).
-    fn new_buffer() -> Self {
-        Self {
-            code_data: vec![0u16; Self::CODE_SIZE],
-            mask_data: vec![0u16; Self::MASK_SIZE],
-        }
-    }
-
     /// Fill the buffer with rotated query data (reuses existing allocation).
     fn fill(&mut self, query: &ArcIris) {
         // Process code rows - write directly into destination (no intermediate allocations)
@@ -893,7 +907,7 @@ impl PrerotatedQueryRowMajor {
                 &query.code.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
             for rot_idx in 0..ROTATIONS {
                 let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
-                let dst = &mut self.code_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                let dst = &mut self.storage.code_data[dst_offset..dst_offset + Self::ROW_SIZE];
                 Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
             }
         }
@@ -904,32 +918,26 @@ impl PrerotatedQueryRowMajor {
                 &query.mask.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
             for rot_idx in 0..ROTATIONS {
                 let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
-                let dst = &mut self.mask_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                let dst = &mut self.storage.mask_data[dst_offset..dst_offset + Self::ROW_SIZE];
                 Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
             }
         }
     }
 
-    pub fn new(query: &ArcIris) -> Self {
-        let mut buf = Self::new_buffer();
-        buf.fill(query);
-        buf
-    }
-
-    /// Get all 31 rotations of a code row (contiguous in memory - 50KB)
+    /// Get all rotations of a code row (contiguous in memory, at most 50KB)
     #[inline]
     fn code_row_rotations(&self, row_idx: usize) -> &[u16] {
         let start = row_idx * ROTATIONS * Self::ROW_SIZE;
         let end = start + ROTATIONS * Self::ROW_SIZE;
-        &self.code_data[start..end]
+        &self.storage.code_data[start..end]
     }
 
-    /// Get all 31 rotations of a mask row (contiguous in memory - 50KB)
+    /// Get all rotations of a mask row (contiguous in memory, at most 50KB)
     #[inline]
     fn mask_row_rotations(&self, row_idx: usize) -> &[u16] {
         let start = row_idx * ROTATIONS * Self::ROW_SIZE;
         let end = start + ROTATIONS * Self::ROW_SIZE;
-        &self.mask_data[start..end]
+        &self.storage.mask_data[start..end]
     }
 }
 
@@ -940,7 +948,7 @@ thread_local! {
 
 /// Row-major rotation-aware distance - processes row-by-row for L1 cache efficiency.
 /// Uses thread-local buffer reuse to minimize allocations at high thread counts.
-pub fn rotation_aware_pairwise_distance_rowmajor<'a, I>(
+pub fn rotation_aware_pairwise_distance_rowmajor<'a, const ROTATIONS: usize, I>(
     query: &'a ArcIris,
     targets: I,
 ) -> Vec<RingElement<u16>>
@@ -953,9 +961,11 @@ where
     // Use thread-local buffer to avoid allocation per call
     PREROTATED_BUFFER.with(|cell| {
         let mut borrowed = cell.borrow_mut();
-        let prerotated = borrowed.get_or_insert_with(PrerotatedQueryRowMajor::new_buffer);
+        let mut prerotated = PrerotatedQueryRowMajorView::<ROTATIONS> {
+            storage: borrowed.get_or_insert_with(PrerotatedQueryRowMajor::new_buffer),
+        };
         prerotated.fill(query);
-        rotation_aware_inner(prerotated, targets, &mut additive_shares);
+        rotation_aware_inner(&prerotated, targets, &mut additive_shares);
     });
 
     additive_shares
@@ -963,8 +973,8 @@ where
 
 /// Inner implementation that works with a borrowed prerotated buffer.
 #[inline(never)]
-fn rotation_aware_inner<'a, I>(
-    prerotated: &PrerotatedQueryRowMajor,
+fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
+    prerotated: &PrerotatedQueryRowMajorView<ROTATIONS>,
     targets: I,
     additive_shares: &mut [RingElement<u16>],
 ) where
@@ -1418,6 +1428,17 @@ mod tests {
         #[case] seed: u64,
         #[case] num_targets: usize,
     ) {
+        test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic::<11>(seed, num_targets);
+        test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic::<13>(seed, num_targets);
+        test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic::<31>(seed, num_targets);
+    }
+
+    fn test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic<
+        const ROTATIONS: usize,
+    >(
+        seed: u64,
+        num_targets: usize,
+    ) {
         use crate::protocol::shared_iris::GaloisRingSharedIris;
 
         let mut rng = AesRng::seed_from_u64(seed);
@@ -1450,12 +1471,16 @@ mod tests {
                 .collect();
 
             // Call the original function
-            let result_original =
-                rotation_aware_pairwise_distance(&query_arc, targets.iter().map(Some));
+            let result_original = rotation_aware_pairwise_distance::<ROTATIONS, _>(
+                &query_arc,
+                targets.iter().map(Some),
+            );
 
             // Call the row-major function
-            let result_rowmajor =
-                rotation_aware_pairwise_distance_rowmajor(&query_arc, targets.iter().map(Some));
+            let result_rowmajor = rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+                &query_arc,
+                targets.iter().map(Some),
+            );
 
             // Verify results are identical
             assert_eq!(
@@ -1477,8 +1502,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_rotation_aware_pairwise_distance_rowmajor_with_none_targets() {
+    fn test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic<
+        const ROTATIONS: usize,
+    >() {
         use crate::protocol::shared_iris::GaloisRingSharedIris;
 
         let mut rng = AesRng::seed_from_u64(123);
@@ -1513,10 +1539,14 @@ mod tests {
         ];
 
         // Call both functions
-        let result_original =
-            rotation_aware_pairwise_distance(&query_arc, targets_with_none.clone().into_iter());
-        let result_rowmajor =
-            rotation_aware_pairwise_distance_rowmajor(&query_arc, targets_with_none.into_iter());
+        let result_original = rotation_aware_pairwise_distance::<ROTATIONS, _>(
+            &query_arc,
+            targets_with_none.clone().into_iter(),
+        );
+        let result_rowmajor = rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+            &query_arc,
+            targets_with_none.into_iter(),
+        );
 
         // Verify results are identical
         assert_eq!(result_original.len(), result_rowmajor.len());
@@ -1545,5 +1575,12 @@ mod tests {
                 rot
             );
         }
+    }
+
+    #[test]
+    fn test_rotation_aware_pairwise_distance_rowmajor_with_none_targets() {
+        test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic::<11>();
+        test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic::<13>();
+        test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic::<31>();
     }
 }
