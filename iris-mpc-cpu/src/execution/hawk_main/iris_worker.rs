@@ -267,13 +267,8 @@ impl IrisPoolHandle {
         task: IrisTask,
         rx: oneshot::Receiver<Vec<RingElement<u16>>>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let start = Instant::now();
-
         self.get_next_worker().send(task)?;
-        let res = rx.await?;
-
-        self.metric_latency.record(start.elapsed().as_secs_f64());
-        Ok(res)
+        Ok(rx.await?)
     }
 
     fn get_next_worker(&self) -> &Sender<IrisTask> {
