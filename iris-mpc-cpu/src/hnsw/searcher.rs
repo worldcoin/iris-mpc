@@ -428,6 +428,7 @@ impl HnswSearcher {
                     .map(|ep| (ep.point, ep.layer))
                     .unzip();
                 let ep_vectors = store.only_valid_vectors(ep_vectors).await;
+                metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
                 // TODO when updating entry points, should check for invalid vectors and remove
 
@@ -1039,10 +1040,9 @@ impl HnswSearcher {
         let opened_nodes_metrics =
             metrics::counter!("opened_nodes_count", &[("layer", lc.to_string())]);
 
-        let mut visited_nodes_count = 0;
-
         opened_nodes_metrics.increment(init_opened.len() as u64);
-        visited_nodes_count += init_links.len();
+        visited_nodes_metrics.increment(init_links.len() as u64);
+        let mut visited_so_far = init_links.len();
 
         opened.extend(init_opened);
 
@@ -1108,7 +1108,8 @@ impl HnswSearcher {
             .await?;
 
             opened_nodes_metrics.increment(new_opened.len() as u64);
-            visited_nodes_count += c_links.len();
+            visited_nodes_metrics.increment(c_links.len() as u64);
+            visited_so_far += c_links.len();
 
             debug!(
                 event_type = Operation::OpenNode.id(),
@@ -1152,7 +1153,7 @@ impl HnswSearcher {
             metrics::counter!(
                 "insertion_stats",
                 &[
-                    ("currently_visited", visited_nodes_count.to_string()),
+                    ("currently_visited", visited_so_far.to_string()),
                     ("computed_ins_rate", ins_rate.to_string()),
                     ("n_insertions", n_insertions.to_string()),
                     ("depth", depth.to_string())
@@ -1191,8 +1192,6 @@ impl HnswSearcher {
             );
         }
 
-        visited_nodes_metrics.increment(visited_nodes_count as u64);
-
         let metrics_labels = [("layer", lc.to_string())];
         metrics::histogram!("search_depth", &metrics_labels).record(depth as f64);
         Ok(())
@@ -1208,6 +1207,7 @@ impl HnswSearcher {
         start: &(V::VectorRef, V::DistanceRef),
         lc: usize,
     ) -> Result<(V::VectorRef, V::DistanceRef)> {
+        let greedy_start = std::time::Instant::now();
         // Current node of graph traversal
         let (mut c_vec, mut c_dist) = start.clone();
 
@@ -1244,6 +1244,8 @@ impl HnswSearcher {
             // If no neighbors are nearer, return current node; otherwise continue
             if n_vec == c_vec {
                 metrics::counter!("greedy_search_depth").increment(counter);
+                metrics::histogram!("greedy_search_duration", "layer" => lc.to_string())
+                    .record(greedy_start.elapsed().as_secs_f64());
                 return Ok((c_vec, c_dist));
             } else {
                 (c_vec, c_dist) = (n_vec, n_dist);
@@ -1359,12 +1361,17 @@ impl HnswSearcher {
         k: usize,
     ) -> Result<N> {
         // insertion layer doesn't matter here because set_ep is ignored
+        let init_start = std::time::Instant::now();
         let (mut W, n_layers, _, _) = self.search_init::<_, N>(store, graph, query, 0).await?;
+        metrics::histogram!("search_init_duration").record(init_start.elapsed().as_secs_f64());
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
+            let layer_start = std::time::Instant::now();
             let ef = self.params.get_ef_search(lc);
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
+                .record(layer_start.elapsed().as_secs_f64());
         }
 
         W.trim(store, k).await?;
@@ -1425,15 +1432,18 @@ impl HnswSearcher {
     ) -> Result<(Vec<N>, UpdateEntryPoint)> {
         // Initialize candidate neighborhood, index of highest search layer,
         // finalized layer of node insertion, and entry point update outcome.
+        let init_start = std::time::Instant::now();
         let (mut W, n_layers, insertion_layer, update_ep) = self
             .search_init::<_, N>(store, graph, query, insertion_layer)
             .await?;
+        metrics::histogram!("search_init_duration").record(init_start.elapsed().as_secs_f64());
 
         // Saved links for insertion layers
         let mut links = Vec::new();
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {
+            let layer_start = std::time::Instant::now();
             let ef = if lc > insertion_layer {
                 self.params.get_ef_constr_search(lc)
             } else {
@@ -1441,6 +1451,8 @@ impl HnswSearcher {
             };
 
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
+                .record(layer_start.elapsed().as_secs_f64());
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {

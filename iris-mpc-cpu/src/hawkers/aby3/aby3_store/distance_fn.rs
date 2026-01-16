@@ -138,14 +138,25 @@ impl DistanceMinimalRotation {
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<u32>>> {
+        let total_start = std::time::Instant::now();
         let ds_and_ts = store
             .workers
             .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        store
+        let oblivious_min_start = std::time::Instant::now();
+        let result = store
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
-            .await
+            .await;
+        let oblivious_min_duration = oblivious_min_start.elapsed();
+        let total_duration = total_start.elapsed();
+        if !total_duration.is_zero() {
+            let oblivious_min_percent =
+                (oblivious_min_duration.as_secs_f64() / total_duration.as_secs_f64()) * 100.0;
+            metrics::histogram!("eval_distance_oblivious_min_percent")
+                .record(oblivious_min_percent);
+        }
+        result
     }
 }
 
