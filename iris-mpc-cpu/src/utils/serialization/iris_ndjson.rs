@@ -49,6 +49,16 @@ pub enum IrisSelection {
     Odd,
 }
 
+impl IrisSelection {
+    pub fn skip_and_step(&self) -> (usize, usize) {
+        match self {
+            Self::All => (0, 1),
+            Self::Even => (0, 2),
+            Self::Odd => (1, 2),
+        }
+    }
+}
+
 pub fn irises_from_ndjson_iter(
     path: &Path,
     limit: Option<usize>,

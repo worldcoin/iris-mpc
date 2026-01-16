@@ -7,25 +7,18 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 
 use super::super::typeset::{
-    Initialize, ProcessRequestBatch, RequestBatch, ResponsePayload, ServiceClientError,
+    Initialize, ProcessRequestBatch, Request, RequestBatch, ResponsePayload, ServiceClientError,
+    UniquenessReference,
 };
 use crate::{
     aws::{types::SqsMessageInfo, AwsClient},
     constants::N_PARTIES,
 };
 
-/// A component responsible for dequeuing system responses from network egress queues.
-#[derive(Debug)]
+/// Dequeues system responses from network egress queues.
 pub(crate) struct ResponseDequeuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,
-}
-
-impl ResponseDequeuer {
-    /// Constructor.
-    pub fn new(aws_client: AwsClient) -> Self {
-        Self { aws_client }
-    }
 }
 
 #[async_trait]
@@ -47,8 +40,11 @@ impl ProcessRequestBatch for ResponseDequeuer {
                 .sqs_receive_messages(Some(N_PARTIES))
                 .await?
             {
-                if batch
-                    .correlate_and_update_child(ResponsePayload::from(&sqs_msg))
+                if self
+                    .maybe_correlate_response_and_update_child_request(
+                        batch,
+                        ResponsePayload::from(&sqs_msg),
+                    )
                     .is_some()
                 {
                     self.aws_client.sqs_purge_message(&sqs_msg).await?;
@@ -57,6 +53,60 @@ impl ProcessRequestBatch for ResponseDequeuer {
         }
 
         Ok(())
+    }
+}
+
+impl ResponseDequeuer {
+    pub fn new(aws_client: AwsClient) -> Self {
+        Self { aws_client }
+    }
+
+    /// Attempts to correlate an SQS response with a previously dispatched request.  If correlated
+    /// then sets the correlation and updates a child request (if found).
+    fn maybe_correlate_response_and_update_child_request(
+        &mut self,
+        batch: &mut RequestBatch,
+        response: ResponsePayload,
+    ) -> Option<()> {
+        if let Some(idx_of_correlated) = batch.get_idx_of_correlated(&response) {
+            if batch.requests_mut()[idx_of_correlated]
+                .set_correlation(&response)
+                .is_some()
+            {
+                if let Some(idx_of_child) = batch.get_idx_of_child(idx_of_correlated) {
+                    self.maybe_update_child_request(
+                        &mut batch.requests_mut()[idx_of_child],
+                        &response,
+                    );
+                }
+            }
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Attempts to update a child request with data returned from it's parent's response.
+    fn maybe_update_child_request(&mut self, request: &mut Request, response: &ResponsePayload) {
+        match request {
+            Request::IdentityDeletion { uniqueness_ref, .. }
+            | Request::Reauthorization { uniqueness_ref, .. }
+            | Request::ResetUpdate { uniqueness_ref, .. } => {
+                if let ResponsePayload::Uniqueness(result) = response {
+                    let serial_id = result
+                        .serial_id
+                        .or_else(|| {
+                            result
+                                .matched_serial_ids
+                                .as_ref()
+                                .and_then(|matched| matched.first().copied())
+                        })
+                        .unwrap_or_else(|| panic!("Unmatched uniqueness request: {:?}", result));
+                    *uniqueness_ref = UniquenessReference::IrisSerialId(serial_id);
+                }
+            }
+            _ => panic!("Unsupported parent data"),
+        }
     }
 }
 

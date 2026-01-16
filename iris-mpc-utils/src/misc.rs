@@ -5,6 +5,7 @@ use std::{
     path::Path,
 };
 
+use base64::prelude::{Engine, BASE64_STANDARD};
 use bincode;
 use eyre::Result;
 use serde::{de::DeserializeOwned, Serialize};
@@ -26,6 +27,20 @@ where
         Some(num) => Box::new(iter.take(num)),
         None => Box::new(iter),
     }
+}
+
+/// Decoder: Base64 -> T.
+pub fn decode_b64<T: DeserializeOwned>(encoded: &str) -> Result<T> {
+    let decoded_bytes = BASE64_STANDARD.decode(encoded)?;
+
+    Ok(bincode::deserialize(&decoded_bytes)?)
+}
+
+/// Encoder: T -> Base64.
+pub fn encode_b64<T: Serialize>(entity: &T) -> String {
+    let encoded_bytes = bincode::serialize(&entity).expect("to serialize");
+
+    BASE64_STANDARD.encode::<Vec<u8>>(encoded_bytes)
 }
 
 /// Reads binary data from a file & deserializes a domain type.

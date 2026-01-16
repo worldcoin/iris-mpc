@@ -82,12 +82,23 @@ unset AWS_SECRET_ACCESS_KEY
 export AWS_PROFILE="worldcoin-smpcv-io-vpc-dev"
 ```
 
-## Step 4: Setup Local Configuration File
+## Step 4: Setup Local Configuration Files
 
-Copy following to `~/.hnsw/config/service-client-dev-staging-0.toml`.
+Copy following to `~/.hnsw/service-client/config/aws/dev-local.toml`.
 
 ```
-[aws]
+environment = "dev"
+public_key_base_url = "http://localhost:4566/wf-dev-public-keys"
+s3_request_bucket_name = "wf-smpcv2-dev-sns-requests"
+sns_request_topic_arn = "arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo"
+sqs_long_poll_wait_time = 10
+sqs_response_queue_url = "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo"
+sqs_wait_time_seconds = 5
+```
+
+Copy following to `~/.hnsw/service-client/config/aws/dev-staging.toml`.
+
+```
 environment = "dev"
 public_key_base_url = "https://pki-smpcv2-dev.worldcoin.org"
 s3_request_bucket_name = "wf-smpcv2-dev-sns-requests-v2"
@@ -95,33 +106,50 @@ sns_request_topic_arn = "arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-de
 sqs_long_poll_wait_time = 10
 sqs_response_queue_url = "https://sqs.eu-central-1.amazonaws.com/238407200320/hnsw-smpc-results.fifo"
 sqs_wait_time_seconds = 5
-
-[request_batch.SimpleBatchKind]
-batch_count = 1
-batch_size = 1
-batch_kind = "uniqueness"
 ```
 
+Copy following to `~/.hnsw/service-client/config/requests/simple-from-compute.toml`.
+
+```
+[request_batch.Simple]
+batch_count = 10
+batch_size = 10
+batch_kind = "uniqueness"
+
+[shares_generator.FromCompute]
+rng_seed = Some(42)
+```
+
+Copy following to `~/.hnsw/service-client/config/requests/simple-from-file.toml`.
+
+```
+[request_batch.Simple]
+batch_count = 10
+batch_size = 10
+batch_kind = "uniqueness"
+
+[shares_generator.FromFile]
+path_to_ndjson = <PATH_TO_AN_NDJSON_FILE>
+rng_seed = 42
+selection_strategy = "All"
+```
 ## Step 5: Setup Local Execution Script
 
 Copy following to `~/.hnsw/exec/exec_service_client.sh` & **edit accordingly**.
 
 ```
 pushd "YOUR-WORKING-DIRECTORY/iris-mpc/iris-mpc-bins"
-
 cargo run --release --bin service-client -- \
-    --path-to-config-file "${HOME}/.hnsw/config/service-client-dev-staging-0.toml"
-    --rng-seed 42
-
+    --path-to-config \
+        "${HOME}/.hnsw/config/requests/simple-from-compute.toml"
+    --path-to-config-aws \
+        "${HOME}/.hnsw/service-client/config/aws/dev-staging.toml"
 popd
 ```
 
 ## Step 6: Execute Client
 
 ```
-# Activate environment variables.
-. ~/.hnsw/envs/dev-staging
-
 # Execute client.
 . ~/.hnsw/exec/exec_service_client.sh
 ```

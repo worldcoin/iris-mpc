@@ -1,4 +1,3 @@
-pub mod config;
 mod data;
 mod errors;
 mod traits;

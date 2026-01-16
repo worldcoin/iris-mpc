@@ -36,25 +36,8 @@ impl RequestBatch {
         }
     }
 
-    /// Performs a correlation and then updates any child requests accordingly.
-    pub(crate) fn correlate_and_update_child(&mut self, response: ResponsePayload) -> Option<()> {
-        if let Some(idx_of_correlated) = self.get_idx_of_correlated(&response) {
-            if self.requests_mut()[idx_of_correlated]
-                .set_correlation(&response)
-                .is_some()
-            {
-                if let Some(idx_of_child) = self.get_idx_of_child(idx_of_correlated) {
-                    self.requests_mut()[idx_of_child].set_data_from_parent_response(&response);
-                }
-            }
-            Some(())
-        } else {
-            None
-        }
-    }
-
     /// Returns maybe ordinal identifier of a correlated request.
-    fn get_idx_of_correlated(&self, response: &ResponsePayload) -> Option<usize> {
+    pub(crate) fn get_idx_of_correlated(&self, response: &ResponsePayload) -> Option<usize> {
         self.requests
             .iter()
             .enumerate()
@@ -63,7 +46,7 @@ impl RequestBatch {
     }
 
     /// Maybe returns ordinal identifier a correlated request's child.
-    fn get_idx_of_child(&self, idx_of_correlated: usize) -> Option<usize> {
+    pub(crate) fn get_idx_of_child(&self, idx_of_correlated: usize) -> Option<usize> {
         let correlated = &self.requests[idx_of_correlated];
         self.requests
             .iter()
