@@ -1158,7 +1158,8 @@ impl HnswSearcher {
                     ("n_insertions", n_insertions.to_string()),
                     ("depth", depth.to_string())
                 ]
-            );
+            )
+            .increment(1);
 
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
             W.insert_batch_and_trim(store, &filtered_links, ef)

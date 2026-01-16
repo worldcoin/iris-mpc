@@ -50,9 +50,10 @@ futures = "0.3.30"
 hex = "0.4.3"
 hkdf = "0.12.4"
 itertools = "0.13"
-metrics = "0.22.1"
-metrics-util = "0.16.0"
-metrics-exporter-statsd = "0.7"
+metrics = "0.24.0"
+metrics-util = "0.20.1"
+metrics-exporter-statsd = "0.9.0"
+metrics-tracing-context = "0.18.0"
 num-traits = "0.2"
 memmap2 = "0.9.5"
 serde = { version = "1.0", features = ["derive"] }
@@ -70,17 +71,17 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 rustls = { version = "0.23.16", features = ["ring"] }
 sha2 = "0.10.8"
 static_assertions = "1.1"
-telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "901ea26e478c81e10d5d4355ac628ab7b15afca7" }
+telemetry-batteries = "0.1.1"
 thiserror = "1"
 tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
 tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
-ampc-anon-stats =  { git = "https://github.com/worldcoin/ampc-common.git", rev = "258fe748eb06c8db618bff29c28af84533b27393" }
-ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "258fe748eb06c8db618bff29c28af84533b27393" }
-ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "258fe748eb06c8db618bff29c28af84533b27393" }
-ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "258fe748eb06c8db618bff29c28af84533b27393" }
+ampc-anon-stats =  { git = "https://github.com/worldcoin/ampc-common.git", rev = "361fea0ac2559f625e42677aa987b23cf89e5ed7" }
+ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "361fea0ac2559f625e42677aa987b23cf89e5ed7" }
+ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "361fea0ac2559f625e42677aa987b23cf89e5ed7" }
+ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "361fea0ac2559f625e42677aa987b23cf89e5ed7" }
 
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.
