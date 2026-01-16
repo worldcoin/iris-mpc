@@ -50,10 +50,10 @@ futures = "0.3.30"
 hex = "0.4.3"
 hkdf = "0.12.4"
 itertools = "0.13"
-metrics = "0.22.4"
-metrics-util = "0.16.0"
-metrics-exporter-statsd = "0.7"
-metrics-tracing-context = "0.15.0"
+metrics = "0.24.0"
+metrics-util = "0.20.1"
+metrics-exporter-statsd = "0.9.0"
+metrics-tracing-context = "0.18.0"
 num-traits = "0.2"
 memmap2 = "0.9.5"
 serde = { version = "1.0", features = ["derive"] }
@@ -71,7 +71,7 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 rustls = { version = "0.23.16", features = ["ring"] }
 sha2 = "0.10.8"
 static_assertions = "1.1"
-telemetry-batteries = { git = "https://github.com/worldcoin/telemetry-batteries.git", rev = "901ea26e478c81e10d5d4355ac628ab7b15afca7" }
+telemetry-batteries = "0.1.1"
 thiserror = "1"
 tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
 tokio-util = "0.7.15"
