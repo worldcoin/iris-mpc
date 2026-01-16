@@ -404,7 +404,7 @@ impl Aby3Store {
             izip!(base_node_queries, neighborhoods.iter())
                 .map(|(q, nbhd)| (q, nbhd.clone()))
                 .collect();
-        let nbhd_distances = self.eval_distance_batches(batches).await?;
+        let nbhd_distances = self.eval_distance_multibatch(batches).await?;
         let id_distances = izip!(
             neighborhoods.iter().flatten().map(|vid| vid.serial_id()),
             nbhd_distances.into_iter().flatten(),
@@ -521,7 +521,7 @@ impl Aby3Store {
     ///
     /// Optimized for MinFhd where prerotation buffer is reused per query.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn eval_distance_batches(
+    pub async fn eval_distance_multibatch(
         &mut self,
         batches: Vec<(Aby3Query, Vec<VectorId>)>,
     ) -> Result<Vec<Vec<Aby3DistanceRef>>> {

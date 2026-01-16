@@ -79,7 +79,7 @@ impl DistanceFn {
                 }
                 Ok(results)
             }
-            MinFhd => DistanceMinimalRotation::eval_distance_batches(store, batches).await,
+            MinFhd => DistanceMinimalRotation::eval_distance_multibatch(store, batches).await,
         }
     }
 }
@@ -174,7 +174,7 @@ impl DistanceMinimalRotation {
     /// Evaluates distances for multiple (query, vectors) batches efficiently.
     ///
     /// Each query's prerotation is reused across all its target vectors.
-    async fn eval_distance_batches(
+    async fn eval_distance_multibatch(
         store: &mut Aby3Store,
         batches: Vec<(Aby3Query, Vec<VectorId>)>,
     ) -> Result<Vec<Vec<DistanceShare<u32>>>> {
@@ -193,7 +193,7 @@ impl DistanceMinimalRotation {
         // Get raw dot products grouped by batch
         let ds_and_ts_batches = store
             .workers
-            .rotation_aware_dot_product_batches(worker_batches)
+            .rotation_aware_dot_product_multibatch(worker_batches)
             .await?;
 
         // Flatten all batches to allow single calls to post-processing functions
