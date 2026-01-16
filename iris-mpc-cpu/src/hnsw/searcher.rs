@@ -1243,7 +1243,8 @@ impl HnswSearcher {
 
             // If no neighbors are nearer, return current node; otherwise continue
             if n_vec == c_vec {
-                metrics::counter!("greedy_search_depth").increment(counter);
+                metrics::histogram!("greedy_search_depth", "layer" => lc.to_string())
+                    .record(counter as f64);
                 metrics::histogram!("greedy_search_duration", "layer" => lc.to_string())
                     .record(greedy_start.elapsed().as_secs_f64());
                 return Ok((c_vec, c_dist));
