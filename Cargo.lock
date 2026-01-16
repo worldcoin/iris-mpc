@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=1c0dec5fa694e546d75f0928a3c3e133ca256c38#1c0dec5fa694e546d75f0928a3c3e133ca256c38"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -91,7 +91,7 @@ dependencies = [
  "eyre",
  "futures",
  "itertools 0.13.0",
- "metrics 0.22.4",
+ "metrics",
  "num-traits",
  "num_enum",
  "rand 0.8.5",
@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=1c0dec5fa694e546d75f0928a3c3e133ca256c38#1c0dec5fa694e546d75f0928a3c3e133ca256c38"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -135,7 +135,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=1c0dec5fa694e546d75f0928a3c3e133ca256c38#1c0dec5fa694e546d75f0928a3c3e133ca256c38"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=1c0dec5fa694e546d75f0928a3c3e133ca256c38#1c0dec5fa694e546d75f0928a3c3e133ca256c38"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -2929,7 +2929,7 @@ dependencies = [
  "iris-mpc-cpu",
  "iris-mpc-store",
  "itertools 0.13.0",
- "metrics 0.24.3",
+ "metrics",
  "pprof",
  "rand 0.8.5",
  "serde",
@@ -2978,7 +2978,7 @@ dependencies = [
  "iris-mpc-upgrade-hawk",
  "iris-mpc-utils",
  "itertools 0.13.0",
- "metrics 0.24.3",
+ "metrics",
  "metrics-exporter-statsd",
  "metrics-tracing-context",
  "metrics-util 0.20.1",
@@ -3029,7 +3029,7 @@ dependencies = [
  "hmac",
  "http 1.1.0",
  "itertools 0.13.0",
- "metrics 0.24.3",
+ "metrics",
  "metrics-exporter-statsd",
  "num_cpus",
  "percent-encoding",
@@ -3085,7 +3085,7 @@ dependencies = [
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
- "metrics 0.24.3",
+ "metrics",
  "num-traits",
  "num_cpus",
  "num_enum",
@@ -3132,7 +3132,7 @@ dependencies = [
  "iris-mpc-cpu",
  "itertools 0.13.0",
  "memmap2",
- "metrics 0.24.3",
+ "metrics",
  "ndarray",
  "num-traits",
  "rand 0.8.5",
@@ -3222,7 +3222,7 @@ dependencies = [
  "iris-mpc-cpu",
  "iris-mpc-store",
  "itertools 0.13.0",
- "metrics 0.24.3",
+ "metrics",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -3525,16 +3525,6 @@ dependencies = [
 
 [[package]]
 name = "metrics"
-version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56d05972e8cbac2671e85aa9d04d9160d193f8bebd1a5c1a2f4542c62e65d1d0"
-dependencies = [
- "ahash",
- "portable-atomic",
-]
-
-[[package]]
-name = "metrics"
 version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d5312e9ba3771cfa961b585728215e3d972c950a3eed9252aa093d6301277e8"
@@ -3556,7 +3546,7 @@ dependencies = [
  "hyper-util",
  "indexmap 2.6.0",
  "ipnet",
- "metrics 0.24.3",
+ "metrics",
  "metrics-util 0.19.1",
  "quanta",
  "thiserror 1.0.65",
@@ -3571,7 +3561,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57971e32cdee88619fb6c673fd89cfd37c12f2dd7c187fb400b7aae0ede0ed9e"
 dependencies = [
  "cadence",
- "metrics 0.24.3",
+ "metrics",
  "thiserror 1.0.65",
 ]
 
@@ -3584,7 +3574,7 @@ dependencies = [
  "indexmap 2.6.0",
  "itoa",
  "lockfree-object-pool",
- "metrics 0.24.3",
+ "metrics",
  "metrics-util 0.20.1",
  "once_cell",
  "tracing",
@@ -3601,7 +3591,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.15.0",
- "metrics 0.24.3",
+ "metrics",
  "quanta",
  "rand 0.9.2",
  "rand_xoshiro",
@@ -3619,7 +3609,7 @@ dependencies = [
  "crossbeam-utils",
  "hashbrown 0.16.1",
  "indexmap 2.6.0",
- "metrics 0.24.3",
+ "metrics",
  "ordered-float",
  "quanta",
  "radix_trie",
@@ -5772,7 +5762,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "http 1.1.0",
- "metrics 0.24.3",
+ "metrics",
  "metrics-exporter-prometheus",
  "metrics-exporter-statsd",
  "opentelemetry",
