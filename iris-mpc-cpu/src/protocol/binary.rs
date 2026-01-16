@@ -1376,11 +1376,11 @@ where
         0 => {
             //Generate all r2 prf key, keep the r0 keys for later
             let batch_size = x.len();
-            // println!("party 0: Batch size is {}", batch_size);
+
             let mut r_prime_keys = Vec::with_capacity(batch_size);
             let mut d2r2_vec = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
-                let (r_prime_temp, _) = session.prf.gen_rands::<RingElement<u16>>().clone(); //_ is r2
+                let (r_prime_temp, _) = session.prf.gen_rands::<RingElement<u16>>(); //.clone(); //_ is r2
                 r_prime_keys.push(RingElement::<u128>(u128::from(r_prime_temp.0))); //convet to this for later
                 d2r2_vec.push(x[i].b + RingElement(0)); // change this to take the second thing gen_rands returns
             }
@@ -1391,6 +1391,22 @@ where
                 .network_session
                 .send_next(u16::new_network_vec(clone_d2r2_vec))
                 .await?;
+
+            // Set up the function for FSS
+            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
+            let n_half_u32 = 1u16 << 15;
+            let n_half = InG::from(n_half_u32);
+            // make the interval so that we return 1 when MSB == 1
+            // this is (our number + n/2 ) % n, modulo is handled by U16Group
+            let p = InG::from(1u16 << 15) + n_half;
+            let q = InG::from(u16::MAX) + n_half; // modulo is handled by U16Group
+            let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
+            let prg =
+                Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
+
+            let icf = Icf::new(p, q, prg); //let keys: [[u8; 16]; 4] = [[0u8; 16]; 4]; // allocate a fixed size array instead of heap allocated vector
+
+            let mut f_x_0_bits = Vec::with_capacity(batch_size); // store all the eval results
 
             // Receive d1+r1 from party 1
             let d1r1 = match session.network_session.receive_next().await {
@@ -1404,20 +1420,10 @@ where
                 Err(e) => Err(eyre!("Party 0 cannot receive my fss key from dealer {e}")),
             }?;
 
-            // Set up the function for FSS
-            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
-            let n_half_u32 = 1u16 << 15;
-            let n_half = InG::from(n_half_u32);
-            // make the interval so that we return 1 when MSB == 1
-            // this is (our number + n/2 ) % n, modulo is handled by U16Group
-            let p = InG::from(1u16 << 15) + n_half;
-            let q = InG::from(u16::MAX) + n_half; // modulo is handled by U16Group
-            let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4]; // !!! do math again for this? is this correct size?
-            let mut f_x_0_bits = Vec::with_capacity(batch_size); // store all the eval results
-
             // Deserialize each to find original IcShare and call eval
             let key_words_fss_0: Vec<u32> = RingElement::<u32>::convert_vec(k_fss_0_vec); //need to un-flatten key vector
             let mut offset: usize = 0;
+
             for i in 0..batch_size {
                 // Need to "unflatten" to get batch_size number of fss keys
                 let curr_key_byte_len = 1 + (key_words_fss_0[offset] as usize + 3) / 4; // offset index has the byte length, then find total u32s for this key
@@ -1432,11 +1438,6 @@ where
                     d1r1[i] + d2r2_vec[i] + x[i].a + RingElement(n_half_u32);
                 // this should be wrapping addition, implemented by RingElement
 
-                // Now we're ready to call eval
-                let prg =
-                    Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
-
-                let icf = Icf::new(p, q, prg);
                 //Call eval & convert from from ByteGroup<16> to RingElement<u128>
                 let eval_result = icf.eval(
                     false,
@@ -1500,7 +1501,7 @@ where
             let mut r_prime_keys = Vec::with_capacity(batch_size);
             let mut d1r1_vec = Vec::with_capacity(batch_size);
             for i in 0..batch_size {
-                let (_, r_prime_temp) = session.prf.gen_rands::<RingElement<u16>>().clone(); //_ is r1
+                let (_, r_prime_temp) = session.prf.gen_rands::<RingElement<u16>>(); //.clone(); //_ is r1
                 r_prime_keys.push(RingElement::<u128>(u128::from(r_prime_temp.0))); //convet to this for later
                 d1r1_vec.push(x[i].a + RingElement(0)); // change this to take the first thing gen_rands returns
             }
@@ -1511,6 +1512,22 @@ where
                 .network_session
                 .send_prev(u16::new_network_vec(cloned_d1r1_vec))
                 .await?;
+
+            // Set up the function for FSS
+            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
+            let n_half_u32 = 1u16 << 15;
+            let n_half = InG::from(n_half_u32);
+            // make the interval so that we return 1 when MSB == 1
+            // this is (our number + n/2 ) % n, modulo is handled by U16Group
+            let p = InG::from(1u16 << 15) + n_half;
+            let q = InG::from(u16::MAX) + n_half; // modulo is handled by U16Group
+            let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
+            // // Now we're ready to call eval
+            let prg =
+                Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
+
+            let icf = Icf::new(p, q, prg);
+            let mut f_x_1_bits = Vec::with_capacity(batch_size); // store all the eval results
 
             // Receive d2+r2 from party 0
             let d2r2_vec = match session.network_session.receive_prev().await {
@@ -1524,21 +1541,10 @@ where
                 Err(e) => Err(eyre!("Party 1 cannot receive my fss key from dealer {e}")),
             }?;
 
-            // Set up the function for FSS
-            // we need this below to handle signed numbers, if input is unsigned no need to add N/2
-            let n_half_u32 = 1u16 << 15;
-            let n_half = InG::from(n_half_u32);
-            // make the interval so that we return 1 when MSB == 1
-            // this is (our number + n/2 ) % n, modulo is handled by U16Group
-            let p = InG::from(1u16 << 15) + n_half;
-            let q = InG::from(u16::MAX) + n_half; // modulo is handled by U16Group
-            let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
-            let mut f_x_1_bits = Vec::with_capacity(batch_size); // store all the eval results
-
-            // Deserialize each to find original IcShare and call eval
             // Deserialize each to find original IcShare and call eval
             let key_words_fss_1: Vec<u32> = RingElement::<u32>::convert_vec(k_fss_1_vec); //need to un-flatten key vector
             let mut offset: usize = 0;
+
             for i in 0..batch_size {
                 // // Need to "unflatten" to get batch_size number of fss keys
                 let curr_key_byte_len = 1 + (key_words_fss_1[offset] as usize + 3) / 4; // offset index has the byte length, then find total u32s for this key
@@ -1553,11 +1559,6 @@ where
                     d1r1_vec[i] + d2r2_vec[i] + x[i].b + RingElement(n_half_u32);
                 // this should be wrapping addition, implemented by RingElement
 
-                // Now we're ready to call eval
-                let prg =
-                    Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
-
-                let icf = Icf::new(p, q, prg);
                 //Call eval & convert from from ByteGroup<16> to RingElement<u128>
                 let eval_result = icf.eval(
                     true,
@@ -1623,43 +1624,44 @@ where
             // we need this to handle signed numbers, if input is unsigned no need to add N/2
             let n_half = InG::from(1u16 << 15);
             let keys: Vec<[u8; 16]> = vec![[0u8; 16]; 4];
-
             // make the interval so that we return 1 when MSB == 1
             // this is (our number + n/2 ) % n, modulo is handled by U16Group
             let p = InG::from(1u16 << 15) + n_half;
             let q = InG::from(u16::MAX) + n_half; // modulo is handled by U32Group
+            let prg =
+                Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
+            let icf = Icf::new(p, q, prg);
 
             let mut k_fss_0_vec_flat = Vec::with_capacity(batch_size); // to store the fss keys
             let mut k_fss_1_vec_flat = Vec::with_capacity(batch_size);
-            for _i in 0..batch_size {
-                // Draw r1 + r2 (aka r_in)
-                let (_r2, _r1) = session.prf.gen_rands::<RingElement<u16>>().clone();
-                let r2 = RingElement(0);
-                let r1 = RingElement(0);
+            {
+                let mut rng = rand::thread_rng();
+                for _i in 0..batch_size {
+                    // Draw r1 + r2 (aka r_in)
+                    let (_r2, _r1) = session.prf.gen_rands::<RingElement<u16>>().clone();
+                    let r2 = RingElement(0);
+                    let r1 = RingElement(0);
 
-                let r1_plus_r2_u32: u16 = (r1 + r2).convert();
-                // Defining the function f using r_in
-                let f = IntvFn {
-                    r_in: InG::from(r1_plus_r2_u32), //rin = r1+r2
-                    r_out: OutG::from(0u128),        // rout=0
-                };
-                // now we can call gen to generate the FSS keys for each party
-                let prg =
-                    Aes128MatyasMeyerOseasPrg::<16, 2, 4>::new(&std::array::from_fn(|i| &keys[i]));
-                let icf = Icf::new(p, q, prg);
-                let (k_fss_0_pre_ser, k_fss_1_pre_ser): (IcShare, IcShare) = {
-                    let mut rng = rand::thread_rng();
-                    icf.gen(f, &mut rng)
-                };
+                    let r1_plus_r2_u32: u16 = (r1 + r2).convert();
+                    // Defining the function f using r_in
+                    let f = IntvFn {
+                        r_in: InG::from(r1_plus_r2_u32), //rin = r1+r2
+                        r_out: OutG::from(0u128),        // rout=0
+                    };
+                    // now we can call gen to generate the FSS keys for each party
+                    let (k_fss_0_pre_ser, k_fss_1_pre_ser): (IcShare, IcShare) = {
+                        // let mut rng = rand::thread_rng();
+                        icf.gen(f, &mut rng)
+                    };
 
-                // Serialize the ICShare into u32 (no need to use u16 here)
-                let temp_key0 = k_fss_0_pre_ser.serialize()?;
-                k_fss_0_vec_flat.extend(RingElement::<u32>::convert_vec_rev(temp_key0.clone()));
+                    // Serialize the ICShare into u32 (no need to use u16 here)
+                    let temp_key0 = k_fss_0_pre_ser.serialize()?;
+                    k_fss_0_vec_flat.extend(RingElement::<u32>::convert_vec_rev(temp_key0));
 
-                let temp_key1 = k_fss_1_pre_ser.serialize()?;
-                k_fss_1_vec_flat.extend(RingElement::<u32>::convert_vec_rev(temp_key1.clone()));
+                    let temp_key1 = k_fss_1_pre_ser.serialize()?;
+                    k_fss_1_vec_flat.extend(RingElement::<u32>::convert_vec_rev(temp_key1));
+                }
             }
-
             // Send the flattened FSS keys to parties 0 and 1, so they can do Eval
             session
                 .network_session
