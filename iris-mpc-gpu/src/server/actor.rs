@@ -179,6 +179,8 @@ pub struct ServerActor {
     match_distances_buffer: DistanceCache,
     // Mirror orientation buffers
     match_distances_buffer_mirror: DistanceCache,
+    // reauth distance buffers
+    reauth_distance_caches: [OneSidedDistanceCache; 2],
     // 2D anon stats buffer
     both_side_match_distances_buffer: Vec<TwoSidedDistanceCache>,
     full_scan_side: Eye,
@@ -535,6 +537,10 @@ impl ServerActor {
         }
         tracing::info!("GPU actor: Initialized");
 
+        let reauth_distance_buffers = [
+            OneSidedDistanceCache::default(),
+            OneSidedDistanceCache::default(),
+        ];
         let both_side_match_distances_buffer =
             vec![TwoSidedDistanceCache::default(); device_manager.device_count()];
 
@@ -580,6 +586,7 @@ impl ServerActor {
             internal_batch_counter: 0,
             match_distances_buffer: bucket_distance_cache,
             match_distances_buffer_mirror: bucket_distance_cache_mirror,
+            reauth_distance_caches: reauth_distance_buffers,
             full_scan_side,
             full_scan_side_switching_enabled,
             both_side_match_distances_buffer,
@@ -838,9 +845,8 @@ impl ServerActor {
                 }
             })
             .enumerate()
-            .filter_map(|(query_idx, reauth_target)| match reauth_target {
-                Some(reauth_target_idx) => Some((query_idx as u32, reauth_target_idx)),
-                None => None,
+            .filter_map(|(query_idx, reauth_target)| {
+                reauth_target.map(|reauth_target_idx| (query_idx as u32, reauth_target_idx))
             })
             .collect_vec();
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
@@ -1679,7 +1685,23 @@ impl ServerActor {
                 &mut both_side_match_distances_buffer,
             );
 
-            self.persist_two_sided_caches(&both_side_match_distances_buffer);
+            // persist 2d distances, skipping reauth, as we handle it below
+            self.persist_two_sided_caches(&both_side_match_distances_buffer, true);
+        }
+        // check if we have reauth bundles to persist, and reset reauth anon stats buffers
+        {
+            let mut left = OneSidedDistanceCache::default();
+            let mut right = OneSidedDistanceCache::default();
+            mem::swap(
+                &mut left,
+                &mut self.reauth_distance_caches[Eye::Left as usize],
+            );
+            mem::swap(
+                &mut right,
+                &mut self.reauth_distance_caches[Eye::Right as usize],
+            );
+            let merged = TwoSidedDistanceCache::merge(left, right);
+            self.persist_two_sided_caches(&[merged], false);
         }
 
         // Instead of sending to return_channel, we'll return this at the end
@@ -2147,7 +2169,8 @@ impl ServerActor {
             }
         };
 
-        self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
+        // persist one sided caches, skipping reauth, as we do them separately
+        self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer, true);
         match orientation {
             Orientation::Normal => {
                 self.reset_anon_stats_distance_cache(eye_db, Orientation::Normal)
@@ -2370,6 +2393,19 @@ impl ServerActor {
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
             let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+            // persist reauth distances if needed
+            if orientation == Orientation::Normal {
+                copy_distance_shares_for_indices(
+                    batch_reauth_targets,
+                    &code_dots,
+                    &mask_dots,
+                    offset,
+                    &phase_2_chunk_sizes,
+                    self.max_batch_size,
+                    &mut self.reauth_distance_caches[eye_db as usize],
+                    request_streams,
+                );
+            }
             {
                 assert_eq!(
                     (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
@@ -2503,7 +2539,15 @@ impl ServerActor {
             }
         };
 
-        self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
+        // persist normal caches, skipping reauth, as we persist them separately
+        self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer, true);
+        // persist reauth caches
+        self.persist_one_sided_caches(
+            eye_db,
+            orientation,
+            &self.reauth_distance_caches[eye_db as usize..=eye_db as usize],
+            false,
+        );
         match orientation {
             Orientation::Normal => {
                 self.reset_anon_stats_distance_cache(eye_db, Orientation::Normal)
@@ -3080,6 +3124,7 @@ impl ServerActor {
         eye: Eye,
         orientation: Orientation,
         caches: &[OneSidedDistanceCache],
+        skip_reauth: bool,
     ) {
         tracing::info!(
             "Persisting one-sided anon stats caches for eye {:?} and orientation {:?}",
@@ -3143,7 +3188,11 @@ impl ServerActor {
                     })
                     .collect::<DistanceBundle1D>();
                 match operation {
-                    AnonStatsOperation::Reauth => reauth_bundles.push((match_id, distance_bundle)),
+                    AnonStatsOperation::Reauth => {
+                        if !skip_reauth {
+                            reauth_bundles.push((match_id, distance_bundle))
+                        }
+                    }
                     _ => uniqueness_bundles.push((match_id, distance_bundle)),
                 }
             }
@@ -3173,7 +3222,7 @@ impl ServerActor {
         }
     }
 
-    fn persist_two_sided_caches(&self, caches: &[TwoSidedDistanceCache]) {
+    fn persist_two_sided_caches(&self, caches: &[TwoSidedDistanceCache], skip_reauth: bool) {
         tracing::info!("Persisting two-sided anon stats caches");
         let writer = match &self.anon_stats_writer {
             Some(writer) => writer,
@@ -3244,7 +3293,9 @@ impl ServerActor {
 
                 match operation {
                     AnonStatsOperation::Reauth => {
-                        reauth_bundles.push((match_id, (left_bundle, right_bundle)))
+                        if !skip_reauth {
+                            reauth_bundles.push((match_id, (left_bundle, right_bundle)))
+                        }
                     }
                     _ => uniqueness_bundles.push((match_id, (left_bundle, right_bundle))),
                 }
@@ -3260,6 +3311,7 @@ impl ServerActor {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn copy_distance_shares_for_indices(
     batch_reauth_targets: &[(u32, u32)],
     code_dots: &[ChunkShareView<u16>],
@@ -3267,7 +3319,7 @@ fn copy_distance_shares_for_indices(
     current_db_offset: usize,
     chunk_sizes: &[usize],
     query_size: usize,
-    distance_cache: &mut [OneSidedDistanceCache],
+    distance_cache: &mut OneSidedDistanceCache,
     streams: &[CudaStream],
 ) {
     if batch_reauth_targets.is_empty() {
@@ -3279,13 +3331,13 @@ fn copy_distance_shares_for_indices(
     for (query_idx, reauth_target) in batch_reauth_targets {
         let device_idx = (*reauth_target as usize) % num_devices;
         let device_db_idx = (*reauth_target as usize) / num_devices;
-        if (current_db_offset..current_db_offset + chunk_sizes[device_idx])
-            .contains(&(device_db_idx as usize))
+        if (current_db_offset..current_db_offset + chunk_sizes[device_idx]).contains(&device_db_idx)
         {
             let chunk_db_idx = device_db_idx - current_db_offset;
-            let target_idx =
+            let chunk_target_idx =
                 ROTATIONS * query_size * chunk_db_idx + ROTATIONS * *query_idx as usize;
-            gpu_targets[device_idx].push(target_idx);
+            let global_idx = (*reauth_target as u64) * query_size as u64 + *query_idx as u64;
+            gpu_targets[device_idx].push((global_idx, chunk_target_idx));
         }
     }
     // nothing to do for this chunk
@@ -3308,7 +3360,7 @@ fn copy_distance_shares_for_indices(
         streams,
         &gpu_targets
     ) {
-        for (idx, chunk_idx) in targets.iter().enumerate() {
+        for (idx, (_, chunk_idx)) in targets.iter().enumerate() {
             // copy codes a share
             // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
             unsafe {
@@ -3316,7 +3368,7 @@ fn copy_distance_shares_for_indices(
                     code_buf.as_mut_ptr() as u64,
                     idx * ROTATIONS * 2,
                     *code_dot.a.device_ptr(),
-                    *chunk_idx as usize,
+                    *chunk_idx,
                     ROTATIONS,
                     stream.stream,
                 );
@@ -3328,7 +3380,7 @@ fn copy_distance_shares_for_indices(
                     code_buf.as_mut_ptr() as u64,
                     idx * ROTATIONS * 2 + ROTATIONS,
                     *code_dot.b.device_ptr(),
-                    *chunk_idx as usize,
+                    *chunk_idx,
                     ROTATIONS,
                     stream.stream,
                 );
@@ -3340,7 +3392,7 @@ fn copy_distance_shares_for_indices(
                     mask_buf.as_mut_ptr() as u64,
                     idx * ROTATIONS * 2,
                     *mask_dot.a.device_ptr(),
-                    *chunk_idx as usize,
+                    *chunk_idx,
                     ROTATIONS,
                     stream.stream,
                 );
@@ -3352,7 +3404,7 @@ fn copy_distance_shares_for_indices(
                     mask_buf.as_mut_ptr() as u64,
                     idx * ROTATIONS * 2 + ROTATIONS,
                     *mask_dot.b.device_ptr(),
-                    *chunk_idx as usize,
+                    *chunk_idx,
                     ROTATIONS,
                     stream.stream,
                 );
@@ -3369,12 +3421,12 @@ fn copy_distance_shares_for_indices(
     }
 
     // Bundle the results and add them to the distance cache
-    for (codes, masks, targets, cache) in izip!(codes_buf, masks_buf, gpu_targets, distance_cache) {
-        for (idx, target) in targets.iter().enumerate() {
+    for (codes, masks, targets) in izip!(codes_buf, masks_buf, gpu_targets) {
+        for (idx, (target, _)) in targets.iter().enumerate() {
             let mut shares = Vec::with_capacity(ROTATIONS);
             for i in 0..ROTATIONS {
                 shares.push(CpuDistanceShare {
-                    idx: (*target as u64) * ROTATIONS as u64 + i as u64,
+                    idx: *target * ROTATIONS as u64 + i as u64,
                     code_a: codes[idx * 2 * ROTATIONS + i],
                     code_b: codes[idx * 2 * ROTATIONS + ROTATIONS + i],
                     mask_a: masks[idx * 2 * ROTATIONS + i],
@@ -3382,7 +3434,7 @@ fn copy_distance_shares_for_indices(
                     operation: AnonStatsOperation::Reauth,
                 })
             }
-            if cache.insert(*target as u64, shares).is_some() {
+            if distance_cache.insert(*target, shares).is_some() {
                 tracing::error!(
                     "we should not have duplicate values in reauth anon stats insertion"
                 );
