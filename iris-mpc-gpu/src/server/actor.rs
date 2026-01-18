@@ -2062,7 +2062,7 @@ impl ServerActor {
                 &code_dots,
                 &mask_dots,
                 db_subset_idx,
-                &phase_2_chunk_sizes,
+                &dot_chunk_size,
                 self.max_batch_size,
                 &mut self.reauth_distance_caches[eye_db as usize],
                 &self.streams[0],
@@ -2413,7 +2413,7 @@ impl ServerActor {
                     &code_dots,
                     &mask_dots,
                     offset,
-                    &phase_2_chunk_sizes,
+                    &dot_chunk_size,
                     self.max_batch_size,
                     &mut self.reauth_distance_caches[eye_db as usize],
                     request_streams,
@@ -3347,8 +3347,13 @@ fn copy_distance_shares_for_indices_full(
         if (current_db_offset..current_db_offset + chunk_sizes[device_idx]).contains(&device_db_idx)
         {
             let chunk_db_idx = device_db_idx - current_db_offset;
-            let chunk_target_idx =
-                ROTATIONS * query_size * chunk_db_idx + ROTATIONS * *query_idx as usize;
+            // code dots and mask dots are in column-major order, with columns = ROTATIONS*query_size and rows = chunk_sizes
+            let chunk_target_idx = (0..ROTATIONS)
+                .map(|rot_i| {
+                    chunk_sizes[device_idx] * (*query_idx as usize * ROTATIONS + rot_i)
+                        + chunk_db_idx
+                })
+                .collect_vec();
             let global_idx = (*reauth_target as u64) * query_size as u64 + *query_idx as u64;
             gpu_targets[device_idx].push((global_idx, chunk_target_idx));
         }
@@ -3389,8 +3394,12 @@ fn copy_distance_shares_for_indices_subset(
                 tracing::error!("subset index outside chunk");
                 continue;
             }
-            let chunk_target_idx =
-                ROTATIONS * query_size * chunk_db_idx + ROTATIONS * *query_idx as usize;
+            let chunk_target_idx = (0..ROTATIONS)
+                .map(|rot_i| {
+                    chunk_sizes[device_idx] * (*query_idx as usize * ROTATIONS + rot_i)
+                        + chunk_db_idx
+                })
+                .collect_vec();
             let global_idx = (*reauth_target as u64) * query_size as u64 + *query_idx as u64;
             gpu_targets[device_idx].push((global_idx, chunk_target_idx));
         }
@@ -3403,7 +3412,7 @@ fn copy_distance_shares_for_indices_subset(
 }
 
 fn copy_distance_shares_for_indices(
-    gpu_targets: &[Vec<(u64, usize)>],
+    gpu_targets: &[Vec<(u64, Vec<usize>)>],
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
     distance_cache: &mut OneSidedDistanceCache,
@@ -3425,54 +3434,56 @@ fn copy_distance_shares_for_indices(
         streams,
         gpu_targets
     ) {
-        for (idx, (_, chunk_idx)) in targets.iter().enumerate() {
-            // copy codes a share
-            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
-            unsafe {
-                helpers::dtoh_at_offset(
-                    code_buf.as_mut_ptr() as u64,
-                    idx * ROTATIONS * 2,
-                    *code_dot.a.device_ptr(),
-                    *chunk_idx,
-                    ROTATIONS,
-                    stream.stream,
-                );
-            }
-            // copy codes b share
-            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
-            unsafe {
-                helpers::dtoh_at_offset(
-                    code_buf.as_mut_ptr() as u64,
-                    idx * ROTATIONS * 2 + ROTATIONS,
-                    *code_dot.b.device_ptr(),
-                    *chunk_idx,
-                    ROTATIONS,
-                    stream.stream,
-                );
-            }
-            // copy mask a share
-            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
-            unsafe {
-                helpers::dtoh_at_offset(
-                    mask_buf.as_mut_ptr() as u64,
-                    idx * ROTATIONS * 2,
-                    *mask_dot.a.device_ptr(),
-                    *chunk_idx,
-                    ROTATIONS,
-                    stream.stream,
-                );
-            }
-            // copy mask b share
-            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
-            unsafe {
-                helpers::dtoh_at_offset(
-                    mask_buf.as_mut_ptr() as u64,
-                    idx * ROTATIONS * 2 + ROTATIONS,
-                    *mask_dot.b.device_ptr(),
-                    *chunk_idx,
-                    ROTATIONS,
-                    stream.stream,
-                );
+        for (idx, (_, chunk_idxs)) in targets.iter().enumerate() {
+            for (rot_idx, chunk_idx) in chunk_idxs.iter().enumerate() {
+                // copy codes a share
+                // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+                unsafe {
+                    helpers::dtoh_at_offset(
+                        code_buf.as_mut_ptr() as u64,
+                        (idx * ROTATIONS * 2 + rot_idx) * size_of::<u16>(),
+                        *code_dot.a.device_ptr(),
+                        *chunk_idx,
+                        size_of::<u16>(),
+                        stream.stream,
+                    );
+                }
+                // copy codes b share
+                // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+                unsafe {
+                    helpers::dtoh_at_offset(
+                        code_buf.as_mut_ptr() as u64,
+                        (idx * ROTATIONS * 2 + ROTATIONS + rot_idx) * size_of::<u16>(),
+                        *code_dot.b.device_ptr(),
+                        *chunk_idx,
+                        size_of::<u16>(),
+                        stream.stream,
+                    );
+                }
+                // copy mask a share
+                // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+                unsafe {
+                    helpers::dtoh_at_offset(
+                        mask_buf.as_mut_ptr() as u64,
+                        (idx * ROTATIONS * 2 + rot_idx) * size_of::<u16>(),
+                        *mask_dot.a.device_ptr(),
+                        *chunk_idx,
+                        size_of::<u16>(),
+                        stream.stream,
+                    );
+                }
+                // copy mask b share
+                // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+                unsafe {
+                    helpers::dtoh_at_offset(
+                        mask_buf.as_mut_ptr() as u64,
+                        (idx * ROTATIONS * 2 + ROTATIONS + rot_idx) * size_of::<u16>(),
+                        *mask_dot.b.device_ptr(),
+                        *chunk_idx,
+                        size_of::<u16>(),
+                        stream.stream,
+                    );
+                }
             }
         }
     }
