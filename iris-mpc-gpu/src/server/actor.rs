@@ -829,7 +829,8 @@ impl ServerActor {
                 };
                 let device_idx = reauth_target % self.device_manager.device_count();
                 let device_reauth_target = reauth_target / self.device_manager.device_count();
-                let target_idx = query_idx as u64 * device_reauth_target as u64;
+                let target_idx = query_idx as u64 * self.current_db_sizes[device_idx] as u64
+                    + device_reauth_target as u64;
                 batch_reauth_targets[device_idx].push(target_idx);
             }
         }
@@ -2139,7 +2140,6 @@ impl ServerActor {
             }
         };
 
-        // persist one sided caches, skipping reauth, as we do them separately
         self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
         match orientation {
             Orientation::Normal => {
