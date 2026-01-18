@@ -2056,6 +2056,19 @@ impl ServerActor {
         let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
         let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
 
+        if orientation == Orientation::Normal {
+            copy_distance_shares_for_indices_subset(
+                batch_reauth_targets,
+                &code_dots,
+                &mask_dots,
+                db_subset_idx,
+                &phase_2_chunk_sizes,
+                self.max_batch_size,
+                &mut self.reauth_distance_caches[eye_db as usize],
+                &self.streams[0],
+            );
+        }
+
         assert_eq!(
             (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
             0,
@@ -2395,7 +2408,7 @@ impl ServerActor {
             let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
             // persist reauth distances if needed
             if orientation == Orientation::Normal {
-                copy_distance_shares_for_indices(
+                copy_distance_shares_for_indices_full(
                     batch_reauth_targets,
                     &code_dots,
                     &mask_dots,
@@ -3312,7 +3325,7 @@ impl ServerActor {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn copy_distance_shares_for_indices(
+fn copy_distance_shares_for_indices_full(
     batch_reauth_targets: &[(u32, u32)],
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
@@ -3344,6 +3357,58 @@ fn copy_distance_shares_for_indices(
     if gpu_targets.iter().all(|x| x.is_empty()) {
         return;
     }
+    copy_distance_shares_for_indices(&gpu_targets, code_dots, mask_dots, distance_cache, streams);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_distance_shares_for_indices_subset(
+    batch_reauth_targets: &[(u32, u32)],
+    code_dots: &[ChunkShareView<u16>],
+    mask_dots: &[ChunkShareView<u16>],
+    db_idx_mapping: &[Vec<u32>],
+    chunk_sizes: &[usize],
+    query_size: usize,
+    distance_cache: &mut OneSidedDistanceCache,
+    streams: &[CudaStream],
+) {
+    if batch_reauth_targets.is_empty() {
+        return;
+    }
+    // map each reauth target to its corresponding GPU
+    let num_devices = streams.len();
+    let mut gpu_targets = vec![vec![]; num_devices];
+    for (query_idx, reauth_target) in batch_reauth_targets {
+        let device_idx = (*reauth_target as usize) % num_devices;
+        let device_db_idx = (*reauth_target as usize) / num_devices;
+        // Search DB idx in subset mapping
+        if let Some(chunk_db_idx) = db_idx_mapping[device_idx]
+            .iter()
+            .position(|&x| x == device_db_idx as u32)
+        {
+            if chunk_db_idx >= chunk_sizes[device_idx] {
+                tracing::error!("subset index outside chunk");
+                continue;
+            }
+            let chunk_target_idx =
+                ROTATIONS * query_size * chunk_db_idx + ROTATIONS * *query_idx as usize;
+            let global_idx = (*reauth_target as u64) * query_size as u64 + *query_idx as u64;
+            gpu_targets[device_idx].push((global_idx, chunk_target_idx));
+        }
+    }
+    // nothing to do for this chunk
+    if gpu_targets.iter().all(|x| x.is_empty()) {
+        return;
+    }
+    copy_distance_shares_for_indices(&gpu_targets, code_dots, mask_dots, distance_cache, streams);
+}
+
+fn copy_distance_shares_for_indices(
+    gpu_targets: &[Vec<(u64, usize)>],
+    code_dots: &[ChunkShareView<u16>],
+    mask_dots: &[ChunkShareView<u16>],
+    distance_cache: &mut OneSidedDistanceCache,
+    streams: &[CudaStream],
+) {
     // prepare target buffers for each GPU
     let mut codes_buf = gpu_targets
         .iter()
@@ -3358,7 +3423,7 @@ fn copy_distance_shares_for_indices(
         &mut codes_buf,
         &mut masks_buf,
         streams,
-        &gpu_targets
+        gpu_targets
     ) {
         for (idx, (_, chunk_idx)) in targets.iter().enumerate() {
             // copy codes a share
