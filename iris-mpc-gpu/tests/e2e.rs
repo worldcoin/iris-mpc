@@ -21,7 +21,7 @@ mod e2e_test {
     const DB_BUFFER: usize = 8 * 1000;
     const NUM_BATCHES: usize = 30;
     const MAX_BATCH_SIZE: usize = 64;
-    const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
+    const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 16;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
     const MAX_DELETIONS_PER_BATCH: usize = 10;
     const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
