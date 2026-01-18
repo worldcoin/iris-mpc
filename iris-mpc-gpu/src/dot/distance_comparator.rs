@@ -264,7 +264,7 @@ impl DistanceComparator {
                             self.query_length,
                             self.max_db_size as u64,
                             &reauth_target_idx_gpu,
-                            reauth_target_idx.len(),
+                            reauth_target_idx[i].len(),
                         ),
                     )
                     .unwrap();
@@ -359,7 +359,7 @@ impl DistanceComparator {
                             self.query_length,
                             self.max_db_size as u64,
                             &reauth_target_idx_gpu,
-                            reauth_target_idx.len(),
+                            reauth_target_idx[i].len(),
                         ),
                     )
                     .unwrap();
