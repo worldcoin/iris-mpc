@@ -293,6 +293,14 @@ impl OneSidedDistanceCache {
     pub fn iter(&self) -> impl Iterator<Item = (&u64, &Vec<CpuDistanceShare>)> {
         self.map.iter()
     }
+
+    pub fn insert(
+        &mut self,
+        idx: u64,
+        shares: Vec<CpuDistanceShare>,
+    ) -> Option<Vec<CpuDistanceShare>> {
+        self.map.insert(idx, shares)
+    }
 }
 
 /// Represents a cache for match distances that matched on both sides.

@@ -15,7 +15,9 @@ use crate::{
         },
     },
     server::{
-        anon_stats::{DistanceCache, OneSidedDistanceCache, TwoSidedDistanceCache},
+        anon_stats::{
+            CpuDistanceShare, DistanceCache, OneSidedDistanceCache, TwoSidedDistanceCache,
+        },
         PreprocessedBatchQuery,
     },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
@@ -27,7 +29,7 @@ use ampc_anon_stats::{
 use cudarc::{
     cublas::CudaBlas,
     driver::{
-        result::{self, event::elapsed, mem_get_info},
+        result::{self, event::elapsed, mem_get_info, stream},
         sys::CUevent,
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
@@ -822,6 +824,25 @@ impl ServerActor {
                 }
             })
             .collect::<Vec<_>>();
+        // For each valid query in the batch, grab the reauth target index if it has one
+        // Vec of (query_idx, reauth_db_target_idx)
+        let batch_reauth_targets = batch
+            .request_types
+            .iter()
+            .zip(batch.request_ids.iter())
+            .map(|(request_type, request_id)| {
+                if request_type.as_str() == REAUTH_MESSAGE_TYPE {
+                    batch.reauth_target_indices.get(request_id).copied()
+                } else {
+                    None
+                }
+            })
+            .enumerate()
+            .filter_map(|(query_idx, reauth_target)| match reauth_target {
+                Some(reauth_target_idx) => Some((query_idx as u32, reauth_target_idx)),
+                None => None,
+            })
+            .collect_vec();
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
         self.internal_batch_counter += 1;
 
@@ -979,6 +1000,7 @@ impl ServerActor {
                 batch_size,
                 orientation,
                 &batch_operations,
+                &batch_reauth_targets,
             );
 
         ///////////////////////////////////////////////////////////////////
@@ -1089,6 +1111,7 @@ impl ServerActor {
                     batch_size,
                     orientation,
                     &batch_operations,
+                    &batch_reauth_targets,
                 )
             } else {
                 tracing::info!("Comparing {} eye queries against DB subset", other_side);
@@ -1101,6 +1124,7 @@ impl ServerActor {
                     &partial_matches_side1,
                     orientation,
                     &batch_operations,
+                    &batch_reauth_targets,
                 )
             };
 
@@ -1886,6 +1910,7 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        batch_reauth_targets: &[(u32, u32)],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
@@ -2143,6 +2168,7 @@ impl ServerActor {
         batch_size: usize,
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        batch_reauth_targets: &[(u32, u32)],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
@@ -3230,6 +3256,137 @@ impl ServerActor {
         }
         if !reauth_bundles.is_empty() {
             writer.insert_2d(origin, AnonStatsOperation::Reauth, reauth_bundles);
+        }
+    }
+}
+
+fn copy_distance_shares_for_indices(
+    batch_reauth_targets: &[(u32, u32)],
+    code_dots: &[ChunkShareView<u16>],
+    mask_dots: &[ChunkShareView<u16>],
+    current_db_offset: usize,
+    chunk_sizes: &[usize],
+    query_size: usize,
+    distance_cache: &mut [OneSidedDistanceCache],
+    streams: &[CudaStream],
+) {
+    if batch_reauth_targets.is_empty() {
+        return;
+    }
+    // map each reauth target to its corresponding GPU
+    let num_devices = streams.len();
+    let mut gpu_targets = vec![vec![]; num_devices];
+    for (query_idx, reauth_target) in batch_reauth_targets {
+        let device_idx = (*reauth_target as usize) % num_devices;
+        let device_db_idx = (*reauth_target as usize) / num_devices;
+        if (current_db_offset..current_db_offset + chunk_sizes[device_idx])
+            .contains(&(device_db_idx as usize))
+        {
+            let chunk_db_idx = device_db_idx - current_db_offset;
+            let target_idx =
+                ROTATIONS * query_size * chunk_db_idx + ROTATIONS * *query_idx as usize;
+            gpu_targets[device_idx].push(target_idx);
+        }
+    }
+    // nothing to do for this chunk
+    if gpu_targets.iter().all(|x| x.is_empty()) {
+        return;
+    }
+    // prepare target buffers for each GPU
+    let mut codes_buf = gpu_targets
+        .iter()
+        .map(|targets| vec![0u16; targets.len() * ROTATIONS * 2])
+        .collect_vec();
+    let mut masks_buf = codes_buf.clone();
+
+    // for each device, schedule copies on stream
+    for (code_dot, mask_dot, code_buf, mask_buf, stream, targets) in izip!(
+        code_dots,
+        mask_dots,
+        &mut codes_buf,
+        &mut masks_buf,
+        streams,
+        &gpu_targets
+    ) {
+        for (idx, chunk_idx) in targets.iter().enumerate() {
+            // copy codes a share
+            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+            unsafe {
+                helpers::dtoh_at_offset(
+                    code_buf.as_mut_ptr() as u64,
+                    idx * ROTATIONS * 2,
+                    *code_dot.a.device_ptr(),
+                    *chunk_idx as usize,
+                    ROTATIONS,
+                    stream.stream,
+                );
+            }
+            // copy codes b share
+            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+            unsafe {
+                helpers::dtoh_at_offset(
+                    code_buf.as_mut_ptr() as u64,
+                    idx * ROTATIONS * 2 + ROTATIONS,
+                    *code_dot.b.device_ptr(),
+                    *chunk_idx as usize,
+                    ROTATIONS,
+                    stream.stream,
+                );
+            }
+            // copy mask a share
+            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+            unsafe {
+                helpers::dtoh_at_offset(
+                    mask_buf.as_mut_ptr() as u64,
+                    idx * ROTATIONS * 2,
+                    *mask_dot.a.device_ptr(),
+                    *chunk_idx as usize,
+                    ROTATIONS,
+                    stream.stream,
+                );
+            }
+            // copy mask b share
+            // SAFETY: We wait on streams below, so the target buffers are still in scope and valid
+            unsafe {
+                helpers::dtoh_at_offset(
+                    mask_buf.as_mut_ptr() as u64,
+                    idx * ROTATIONS * 2 + ROTATIONS,
+                    *mask_dot.b.device_ptr(),
+                    *chunk_idx as usize,
+                    ROTATIONS,
+                    stream.stream,
+                );
+            }
+        }
+    }
+    // wait for all copies to be finished
+    for stream in streams {
+        // SAFETY: these streams have already been created, and the caller holds a
+        // reference to their CudaDevice, which makes sure they aren't dropped.
+        unsafe {
+            stream::synchronize(stream.stream).unwrap();
+        }
+    }
+
+    // Bundle the results and add them to the distance cache
+    for (codes, masks, targets, cache) in izip!(codes_buf, masks_buf, gpu_targets, distance_cache) {
+        for (idx, target) in targets.iter().enumerate() {
+            let mut shares = Vec::with_capacity(ROTATIONS);
+            for i in 0..ROTATIONS {
+                shares.push(CpuDistanceShare {
+                    idx: (*target as u64) * ROTATIONS as u64 + i as u64,
+                    code_a: codes[idx * 2 * ROTATIONS + i],
+                    code_b: codes[idx * 2 * ROTATIONS + ROTATIONS + i],
+                    mask_a: masks[idx * 2 * ROTATIONS + i],
+                    mask_b: masks[idx * 2 * ROTATIONS + ROTATIONS + i],
+                    operation: AnonStatsOperation::Reauth,
+                })
+            }
+            if cache.insert(*target as u64, shares).is_some() {
+                tracing::error!(
+                    "we should not have duplicate values in reauth anon stats insertion"
+                );
+            }
         }
     }
 }
