@@ -1006,27 +1006,31 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        // also add the OR rule indices to the partial matches
-        let or_indices = batch
+        // also add the OR rule indices and reauth indices to the partial matches
+        let or_indices_and_reauth = batch
             .or_rule_indices
             .iter()
             .flatten()
             .copied()
+            .chain(batch.reauth_target_indices.values().copied())
             .unique()
             .collect_vec();
 
-        for or_idx in or_indices {
+        for or_idx in or_indices_and_reauth {
             let device_idx = or_idx % self.device_manager.device_count() as u32;
             let db_idx = or_idx / self.device_manager.device_count() as u32;
             if db_idx as usize >= self.current_db_sizes[device_idx as usize] {
                 tracing::warn!(
-                    "OR rule index {} is out of bounds for device {}",
+                    "OR rule or REAUTH index {} is out of bounds for device {}",
                     or_idx,
                     device_idx
                 );
                 continue;
             }
-            partial_matches_side1[device_idx as usize].push(db_idx);
+            // only add non-duplicates, this is a linear scan, but the number of elements in this loop should be somewhat small
+            if !partial_matches_side1[device_idx as usize].contains(&db_idx) {
+                partial_matches_side1[device_idx as usize].push(db_idx);
+            }
         }
 
         ///////////////////////////////////////////////////////////////////
