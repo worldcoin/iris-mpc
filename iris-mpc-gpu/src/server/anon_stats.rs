@@ -243,10 +243,8 @@ impl DistanceCache {
                     let target_idx = target_idx_from_match_id(idx, max_query_length, max_db_size);
                     // We only keep reauths that match their target idx
                     if !reauth_targets.contains(&target_idx) {
-                        tracing::info!("skipping non-target reauth");
                         continue;
                     }
-                    tracing::info!("target reauth");
                 }
                 map.entry(idx / ROTATIONS as u64)
                     .or_insert_with(|| Vec::with_capacity(4))
