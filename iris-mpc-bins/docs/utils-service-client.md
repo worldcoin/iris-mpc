@@ -80,6 +80,7 @@ unset AWS_ENDPOINT_URL
 unset AWS_REGION
 unset AWS_SECRET_ACCESS_KEY
 export AWS_PROFILE="worldcoin-smpcv-io-vpc-dev"
+??? export AWS_ENDPOINT_URL=http://127.0.0.1:4566
 ```
 
 ## Step 4: Setup Local Configuration Files
@@ -117,7 +118,7 @@ batch_size = 10
 batch_kind = "uniqueness"
 
 [shares_generator.FromCompute]
-rng_seed = Some(42)
+rng_seed = 42
 ```
 
 Copy following to `~/.hnsw/service-client/config/requests/simple-from-file.toml`.
