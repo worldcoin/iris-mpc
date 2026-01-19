@@ -1,4 +1,5 @@
 use crate::{
+    execution::hawk_main::HAWK_MINFHD_ROTATIONS,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
         ops::{
@@ -15,6 +16,7 @@ use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
 use iris_mpc_common::vector_id::VectorId;
+use itertools::{izip, Itertools};
 use std::{
     cmp, iter,
     sync::{
@@ -155,38 +157,28 @@ impl IrisPoolHandle {
         self.submit(task, rx).await
     }
 
-    pub async fn rotation_aware_dot_product_pairs(
-        &mut self,
-        pairs: Vec<(ArcIris, VectorId)>,
-    ) -> Result<Vec<RingElement<u16>>> {
-        let mut responses = Vec::new();
+    /// Maximum size of batches for rotation aware dot product batch tasks.
+    const ROT_AWARE_BATCH_CHUNK_SIZE: usize = 128;
 
-        for (query, id) in pairs {
-            let (tx, rx) = oneshot::channel();
-            let task = IrisTask::RotationAwareDotProductBatch {
-                query,
-                vector_ids: vec![id],
-                rsp: tx,
-            };
-            self.get_next_worker().send(task)?;
-            responses.push(rx);
-        }
-        let results = futures::future::try_join_all(responses).await?;
-        let results = results.into_iter().flatten().collect();
-        Ok(results)
+    /// Number of chunks a batch is split into for rotation aware dot product
+    /// batch evaluation.
+    #[inline(always)]
+    fn n_batch_chunks(batch_len: usize) -> usize {
+        batch_len.div_ceil(Self::ROT_AWARE_BATCH_CHUNK_SIZE)
     }
 
-    pub async fn rotation_aware_dot_product_batch(
+    /// Dispatch a batch of rotation aware dot product evaluations, splitting
+    /// into tasks over chunks of maximum size `ROT_AWARE_BATCH_CHUNK_SIZE`.
+    ///
+    /// Response channels are appended to `responses` for caller to await.
+    #[inline(always)]
+    fn dispatch_rotation_dot_product_batch(
         &mut self,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
-    ) -> Result<Vec<RingElement<u16>>> {
-        let start = Instant::now();
-
-        const CHUNK_SIZE: usize = 128;
-        let mut responses = Vec::with_capacity(vector_ids.len().div_ceil(CHUNK_SIZE));
-
-        for chunk in vector_ids.chunks(CHUNK_SIZE) {
+        responses: &mut Vec<oneshot::Receiver<Vec<RingElement<u16>>>>,
+    ) -> Result<()> {
+        for chunk in vector_ids.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE) {
             let (tx, rx) = oneshot::channel();
             let task = IrisTask::RotationAwareDotProductBatch {
                 query: query.clone(),
@@ -197,10 +189,78 @@ impl IrisPoolHandle {
             responses.push(rx);
         }
 
+        Ok(())
+    }
+
+    pub async fn rotation_aware_dot_product_pairs(
+        &mut self,
+        pairs: Vec<(ArcIris, VectorId)>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let mut responses = Vec::with_capacity(pairs.len());
+        for (query, id) in pairs {
+            self.dispatch_rotation_dot_product_batch(query, vec![id], &mut responses)?;
+        }
+
+        let results = futures::future::try_join_all(responses).await?;
+        let results = results.into_iter().flatten().collect();
+
+        Ok(results)
+    }
+
+    pub async fn rotation_aware_dot_product_batch(
+        &mut self,
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let start = Instant::now();
+
+        let mut responses = Vec::with_capacity(Self::n_batch_chunks(vector_ids.len()));
+        self.dispatch_rotation_dot_product_batch(query, vector_ids, &mut responses)?;
+
         let results = futures::future::try_join_all(responses).await?;
         let results = results.into_iter().flatten().collect();
 
         self.metric_latency.record(start.elapsed().as_secs_f64());
+        Ok(results)
+    }
+
+    /// Computes rotation-aware dot products for multiple (query, vectors) batches.
+    ///
+    /// Each query's prerotation is reused across all its target vectors, making this
+    /// more efficient than `rotation_aware_dot_product_pairs` when the same query
+    /// is compared against multiple vectors.
+    ///
+    /// Returns results grouped by input batch.
+    pub async fn rotation_aware_dot_product_multibatch(
+        &mut self,
+        batches: Vec<(ArcIris, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<RingElement<u16>>>> {
+        // Track batch index for each chunk to enable reassembly
+        let chunk_batch_indices = batches
+            .iter()
+            .enumerate()
+            .flat_map(|(batch_idx, (_, vids))| vec![batch_idx; Self::n_batch_chunks(vids.len())])
+            .collect_vec();
+        let n_chunks = chunk_batch_indices.len();
+
+        // Preallocate vectors for results
+        let mut results = batches
+            .iter()
+            .map(|(_, vids)| Vec::with_capacity(2 * HAWK_MINFHD_ROTATIONS * vids.len()))
+            .collect_vec();
+
+        // Dispatch dot product batches
+        let mut responses = Vec::with_capacity(n_chunks);
+        for (query, vector_ids) in batches {
+            self.dispatch_rotation_dot_product_batch(query, vector_ids, &mut responses)?;
+        }
+
+        // Reassemble results by batch
+        let chunk_results = futures::future::try_join_all(responses).await?;
+        for (batch_idx, chunk_result) in izip!(chunk_batch_indices, chunk_results) {
+            results[batch_idx].extend(chunk_result);
+        }
+
         Ok(results)
     }
 
@@ -211,6 +271,8 @@ impl IrisPoolHandle {
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
         let mut responses = Vec::with_capacity(vector_ids.len() / per_worker);
+        // Does not call `dispatch_rotation_dot_product_batch` because chunking
+        // is controlled dynamically.
         for vector_id_chunk in vector_ids.chunks(per_worker) {
             let (tx, rx) = oneshot::channel();
             let task = IrisTask::RotationAwareDotProductBatch {
@@ -241,7 +303,7 @@ impl IrisPoolHandle {
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let mut responses = Vec::new();
+        let mut responses = Vec::with_capacity(pairs.len());
         for pair in pairs {
             let (tx, rx) = oneshot::channel();
             responses.push(rx);
@@ -386,7 +448,9 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let result = rotation_aware_pairwise_distance_rowmajor(&query, targets);
+                let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MINFHD_ROTATIONS, _>(
+                    &query, targets,
+                );
                 let _ = rsp.send(result);
             }
 
@@ -396,7 +460,10 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::RotationAwarePairwiseDistance { pair, rsp } => {
-                let r = rotation_aware_pairwise_distance(&pair.0, iter::once(Some(&pair.1)));
+                let r = rotation_aware_pairwise_distance::<HAWK_MINFHD_ROTATIONS, _>(
+                    &pair.0,
+                    iter::once(Some(&pair.1)),
+                );
                 let _ = rsp.send(r);
             }
         }

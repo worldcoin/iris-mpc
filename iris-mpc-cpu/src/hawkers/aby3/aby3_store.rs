@@ -413,16 +413,16 @@ impl Aby3Store {
         }
 
         let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await;
-        let query_vec_pairs = izip!(base_node_queries, neighborhoods.iter())
-            .flat_map(|(q, nbhd)| nbhd.iter().map(move |nb| (q.clone(), *nb)))
-            .collect_vec();
-        let distances = self.eval_distance_pairs(&query_vec_pairs).await?;
-        let id_distances = neighborhoods
-            .iter()
-            .flatten()
-            .zip(distances)
-            .map(|(vector_id, distance)| (vector_id.serial_id(), distance))
-            .collect_vec();
+        let batches: Vec<(Aby3Query, Vec<VectorId>)> =
+            izip!(base_node_queries, neighborhoods.iter())
+                .map(|(q, nbhd)| (q, nbhd.clone()))
+                .collect();
+        let nbhd_distances = self.eval_distance_multibatch(batches).await?;
+        let id_distances = izip!(
+            neighborhoods.iter().flatten().map(|vid| vid.serial_id()),
+            nbhd_distances.into_iter().flatten(),
+        )
+        .collect_vec();
         let id_versions: BTreeMap<_, _> = neighborhoods
             .iter()
             .enumerate()
@@ -528,6 +528,20 @@ impl Aby3Store {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(compacted_nbhds)
+    }
+
+    /// Evaluates distances for multiple (query, vectors) batches.
+    ///
+    /// Optimized for MinFhd where prerotation buffer is reused per query.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_distance_multibatch(
+        &mut self,
+        batches: Vec<(Aby3Query, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<Aby3DistanceRef>>> {
+        if batches.is_empty() {
+            return Ok(vec![]);
+        }
+        self.distance_fn.eval_distance_batches(self, batches).await
     }
 }
 

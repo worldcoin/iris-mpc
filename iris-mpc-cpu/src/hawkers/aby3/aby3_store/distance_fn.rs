@@ -1,9 +1,11 @@
+use crate::execution::hawk_main::HAWK_MINFHD_ROTATIONS;
+
 use super::{
     Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
 };
 use clap::ValueEnum;
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, ROTATIONS};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use itertools::Itertools;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
@@ -20,7 +22,7 @@ impl DistanceFn {
     pub fn plaintext_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
         match self {
             Fhd => a.get_distance_fraction(b),
-            MinFhd => a.get_min_distance_fraction_rotation_aware(b),
+            MinFhd => a.get_min_distance_fraction_rotation_aware::<HAWK_MINFHD_ROTATIONS>(b),
         }
     }
 
@@ -55,6 +57,29 @@ impl DistanceFn {
         match self {
             Fhd => DistanceSimple::eval_distance_batch(store, query, vectors).await,
             MinFhd => DistanceMinimalRotation::eval_distance_batch(store, query, vectors).await,
+        }
+    }
+
+    /// Evaluates distances for multiple (query, vectors) batches.
+    ///
+    /// For MinFhd, this enables prerotation buffer reuse within each batch.
+    pub async fn eval_distance_batches(
+        self,
+        store: &mut Aby3Store,
+        batches: Vec<(Aby3Query, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<Aby3DistanceRef>>> {
+        match self {
+            Fhd => {
+                // Fallback: process batch-by-batch using existing method
+                let mut results = Vec::with_capacity(batches.len());
+                for (query, vectors) in batches {
+                    let distances =
+                        DistanceSimple::eval_distance_batch(store, &query, &vectors).await?;
+                    results.push(distances);
+                }
+                Ok(results)
+            }
+            MinFhd => DistanceMinimalRotation::eval_distance_multibatch(store, batches).await,
         }
     }
 }
@@ -145,6 +170,56 @@ impl DistanceMinimalRotation {
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
             .await
     }
+
+    /// Evaluates distances for multiple (query, vectors) batches efficiently.
+    ///
+    /// Each query's prerotation is reused across all its target vectors.
+    async fn eval_distance_multibatch(
+        store: &mut Aby3Store,
+        batches: Vec<(Aby3Query, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<DistanceShare<u32>>>> {
+        if batches.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let batch_sizes: Vec<usize> = batches.iter().map(|(_, vids)| vids.len()).collect();
+
+        // Convert to worker format (use preprocessed iris)
+        let worker_batches: Vec<(ArcIris, Vec<VectorId>)> = batches
+            .into_iter()
+            .map(|(q, vids)| (q.iris_proc, vids))
+            .collect();
+
+        // Get raw dot products grouped by batch
+        let ds_and_ts_batches = store
+            .workers
+            .rotation_aware_dot_product_multibatch(worker_batches)
+            .await?;
+
+        // Flatten all batches to allow single calls to post-processing functions
+        let flattened_ds_and_ts: Vec<_> = ds_and_ts_batches.into_iter().flatten().collect();
+
+        if flattened_ds_and_ts.is_empty() {
+            // All batches were empty
+            return Ok(batch_sizes.iter().map(|_| vec![]).collect());
+        }
+
+        // Process all items in single batched calls
+        let distances = store.gr_to_lifted_distances(flattened_ds_and_ts).await?;
+        let all_mins = store
+            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .await?;
+
+        // Split results back into per-batch vectors
+        let mut results = Vec::with_capacity(batch_sizes.len());
+        let mut offset = 0;
+        for batch_size in batch_sizes {
+            results.push(all_mins[offset..offset + batch_size].to_vec());
+            offset += batch_size;
+        }
+
+        Ok(results)
+    }
 }
 
 /// Convert the results of rotation-parallel evaluations into the format convenient for minimum finding.
@@ -155,12 +230,12 @@ impl DistanceMinimalRotation {
 /// With rotation r and batch item i:
 ///     `input[r + i * ROTATIONS] == output[r][i]`
 fn transpose_from_flat(distances: &[Aby3DistanceRef]) -> Vec<Vec<Aby3DistanceRef>> {
-    (0..ROTATIONS)
+    (0..HAWK_MINFHD_ROTATIONS)
         .map(|i| {
             distances
                 .iter()
                 .skip(i)
-                .step_by(ROTATIONS)
+                .step_by(HAWK_MINFHD_ROTATIONS)
                 .cloned()
                 .collect()
         })

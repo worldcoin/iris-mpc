@@ -1058,8 +1058,6 @@ async fn get_hawk_actor(
         hnsw_param_ef_search: config.hnsw_param_ef_search,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
-        match_distances_buffer_size: config.match_distances_buffer_size,
-        n_buckets: config.n_buckets,
         tls: config.tls.clone(),
         numa: config.hawk_numa,
     };
@@ -1250,7 +1248,7 @@ async fn get_results_thread(
                                 &codes_and_masks,
                             )
                             .await?;
-                        connect_plans.persist2(&mut graph_tx).await?;
+                        connect_plans.persist(&mut graph_tx).await?;
                         log_info(format!(
                             "Job Results :: Persisted graph updates: batch-id={batch_id}"
                         ));
@@ -1260,8 +1258,10 @@ async fn get_results_thread(
                         log_info(format!(
                             "Job Results :: Persisted last indexed id: batch-id={batch_id}"
                         ));
-                        // Update metrics with persistence status
-                        metrics::counter!("genesis_batches_persisted").increment(1);
+
+                        log_info(format!(
+                            "Job Results :: Persisted to dB: batch-id={batch_id}"
+                        ));
                         metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
                     } else {
                         log_info(format!(
@@ -1310,7 +1310,7 @@ async fn get_results_thread(
                                 &iris_data,
                             )
                             .await?;
-                        connect_plans.persist2(&mut graph_tx).await?;
+                        connect_plans.persist(&mut graph_tx).await?;
                         log_info(format!(
                             "Job Results :: Persisted graph updates: modification-id={modification_id}"
                         ));

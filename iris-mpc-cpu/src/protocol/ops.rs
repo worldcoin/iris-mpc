@@ -22,7 +22,7 @@ pub use ampc_secret_sharing::shares::{
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
-    ROTATIONS,
+    ROTATIONS as ALL_ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use std::{cmp::Ordering, ops::Not, time::Instant};
@@ -101,29 +101,27 @@ async fn select_shared_slices_by_bits(
     // If control bit is 1, select left_value, else select right_value.
     // res = c * (left_value - right_value) + right_value
     // Compute c * (left_value - right_value)
-    let v_len = left_values.len();
-    let mut res_a = Vec::with_capacity(v_len); // avoid extra allocations from flat_map
-    let my_prf = session.prf.gen_rands_mine(v_len);
-    let prev_prf = session.prf.gen_rands_prev(v_len);
-    for (left_chunk, right_chunk, c, my_prf_chunk, prev_prf_chunk) in izip!(
+    let res_a: VecRingElement<u32> = izip!(
         left_values.chunks(slice_size),
         right_values.chunks(slice_size),
-        control_bits.iter(),
-        my_prf.0.chunks(slice_size),
-        prev_prf.0.chunks(slice_size),
-    ) {
-        for (left, right, my_prf, prev_prf) in
-            izip!(left_chunk, right_chunk, my_prf_chunk, prev_prf_chunk)
-        {
-            let diff = *left - *right;
-            let zero_share = *my_prf - *prev_prf; // equivalent to gen_zero_share
-            res_a.push(zero_share + c.a * diff.a + c.b * diff.a + c.a * diff.b);
-        }
-    }
+        control_bits.iter()
+    )
+    .flat_map(|(left_chunk, right_chunk, c)| {
+        left_chunk
+            .iter()
+            .zip(right_chunk.iter())
+            .map(|(left, right)| {
+                let diff = *left - *right;
+                session.prf.gen_zero_share() + c.a * diff.a + c.b * diff.a + c.a * diff.b
+            })
+            .collect_vec()
+    })
+    .collect();
 
-    let res_a = VecRingElement(res_a);
     let network = &mut session.network_session;
+
     network.send_ring_vec_next(&res_a).await?;
+
     let res_b = network.receive_ring_vec_prev().await?;
 
     // Pack networking messages into shares and
@@ -153,19 +151,16 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
     }
 
     // Now select distances
-    let (left_ids, left_distances): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
-    let (right_ids, right_distances): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
-    let v_len = left_distances.len();
-    let mut left_dist = Vec::with_capacity(2 * v_len);
-    let mut right_dist = Vec::with_capacity(2 * v_len);
-    for d in &left_distances {
-        left_dist.push(d.code_dot);
-        left_dist.push(d.mask_dot);
-    }
-    for d in &right_distances {
-        right_dist.push(d.code_dot);
-        right_dist.push(d.mask_dot);
-    }
+    let (left_ids, left_dist): (Vec<_>, Vec<_>) = left_distances.into_iter().unzip();
+    let (right_ids, right_dist): (Vec<_>, Vec<_>) = right_distances.into_iter().unzip();
+    let left_dist = left_dist
+        .into_iter()
+        .flat_map(|d| [d.code_dot, d.mask_dot])
+        .collect_vec();
+    let right_dist = right_dist
+        .into_iter()
+        .flat_map(|d| [d.code_dot, d.mask_dot])
+        .collect_vec();
 
     let distances =
         select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 2)
@@ -204,21 +199,16 @@ pub(crate) async fn conditionally_select_distances_with_shared_ids(
         eyre::bail!("Distances must not be empty");
     }
 
-    let n = left_distances.len();
-    let mut left_flat = Vec::with_capacity(3 * n);
-    let mut right_flat = Vec::with_capacity(3 * n);
-    for (id, d) in &left_distances {
-        left_flat.push(*id);
-        left_flat.push(d.code_dot);
-        left_flat.push(d.mask_dot);
-    }
-    for (id, d) in &right_distances {
-        right_flat.push(*id);
-        right_flat.push(d.code_dot);
-        right_flat.push(d.mask_dot);
-    }
+    let left_dist = left_distances
+        .into_iter()
+        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
+        .collect_vec();
+    let right_dist = right_distances
+        .into_iter()
+        .flat_map(|(id, d)| [id, d.code_dot, d.mask_dot])
+        .collect_vec();
     let distances =
-        select_shared_slices_by_bits(session, &left_flat, &right_flat, &control_bits, 3)
+        select_shared_slices_by_bits(session, &left_dist, &right_dist, &control_bits, 3)
             .await?
             .into_iter()
             .tuples()
@@ -258,12 +248,13 @@ pub async fn conditionally_swap_distances_plain_ids(
         .await?
         .inner();
 
-    let mut distances_to_swap = Vec::with_capacity(indices.len());
-    for (idx1, idx2) in indices {
-        if let (Some((_, d1)), Some((_, d2))) = (list.get(*idx1), list.get(*idx2)) {
-            distances_to_swap.push((*d1, *d2));
-        }
-    }
+    let distances_to_swap = indices
+        .iter()
+        .filter_map(|(idx1, idx2)| match (list.get(*idx1), list.get(*idx2)) {
+            (Some((_, d1)), Some((_, d2))) => Some((*d1, *d2)),
+            _ => None,
+        })
+        .collect_vec();
     // Select the first distance in each pair based on the control bits
     let first_distances =
         conditionally_select_distance(session, &distances_to_swap, &swap_bits_u32).await?;
@@ -285,14 +276,14 @@ pub async fn conditionally_swap_distances_plain_ids(
         first_distances,
         second_distances
     ) {
-        let mut not_bit = -*bit;
+        let mut not_bit = -bit;
         not_bit.add_assign_const_role(1, role);
         let id1 = list[*idx1].0;
         let id2 = list[*idx2].0;
         // Only propagate index and skip version id.
         // This computation is local as indices are public.
-        let first_id = *bit * id1 + not_bit * id2;
-        let second_id = *bit * id2 + not_bit * id1;
+        let first_id = bit * id1 + not_bit * id2;
+        let second_id = bit * id2 + not_bit * id1;
         encrypted_list[*idx1] = (first_id, first_d);
         encrypted_list[*idx2] = (second_id, second_d);
     }
@@ -320,12 +311,11 @@ pub async fn conditionally_swap_distances(
         .await?
         .inner();
 
-    // Batch PRF generation for zero shares
-    let n = indices.len();
-    let my_prf = session.prf.gen_rands_mine(3 * n);
-    let prev_prf = session.prf.gen_rands_prev(3 * n);
-    // Pre-allocate buffer for res_a
-    let mut res_a = Vec::with_capacity(3 * n);
+    // A helper closure to compute the difference of two input shares and prepare the a part of the product of this difference and the control bit.
+    let mut mul_share_a = |x: Share<u32>, y: Share<u32>, sb: &Share<u32>| -> RingElement<u32> {
+        let diff = x - y;
+        session.prf.gen_zero_share() + sb.a * diff.a + sb.b * diff.a + sb.a * diff.b
+    };
 
     // Conditional swapping:
     // If control bit c is 1, return (d1, d2); otherwise, (d2, d1), which can be computed as:
@@ -334,36 +324,28 @@ pub async fn conditionally_swap_distances(
     // We need to do it for ids, code_dot and mask_dot.
 
     // Compute c * (d1-d2)
-    for ((idx1, idx2), sb, my_prf_chunk, prev_prf_chunk) in izip!(
-        indices,
-        swap_bits_u32.iter(),
-        my_prf.0.chunks(3),
-        prev_prf.0.chunks(3)
-    ) {
-        let (id1, d1) = &list[*idx1];
-        let (id2, d2) = &list[*idx2];
-        let diff_id = *id1 - *id2;
-        let diff_code = d1.code_dot - d2.code_dot;
-        let diff_mask = d1.mask_dot - d2.mask_dot;
+    let res_a: VecRingElement<u32> = indices
+        .iter()
+        .zip(swap_bits_u32.iter())
+        .flat_map(|((idx1, idx2), sb)| {
+            let (id1, d1) = &list[*idx1];
+            let (id2, d2) = &list[*idx2];
 
-        // A helper loop to compute the difference of two input shares and prepare the a part of the product of this difference and the control bit.
-        for (diff, my_prf, prev_prf) in izip!(
-            [diff_id, diff_code, diff_mask].iter(),
-            my_prf_chunk,
-            prev_prf_chunk
-        ) {
-            let zero_share = *my_prf - *prev_prf;
-            res_a.push(zero_share + sb.a * diff.a + sb.b * diff.a + sb.a * diff.b);
-        }
-    }
-    let res_a = VecRingElement(res_a);
+            let id = mul_share_a(*id1, *id2, sb);
+            let code_dot_a = mul_share_a(d1.code_dot, d2.code_dot, sb);
+            let mask_dot_a = mul_share_a(d1.mask_dot, d2.mask_dot, sb);
+            [id, code_dot_a, mask_dot_a]
+        })
+        .collect();
 
     let network = &mut session.network_session;
+
     network.send_ring_vec_next(&res_a).await?;
+
     let res_b = network.receive_ring_vec_prev().await?;
 
     // Finally compute the swapped tuples.
-    let swapped_distances = izip!(res_a.0, res_b)
+    let swapped_distances = izip!(res_a, res_b)
         // combine a and b part into shares
         .map(|(a, b)| Share::new(a, b))
         // combine the code and mask parts into DistanceShare
@@ -555,20 +537,13 @@ pub(crate) async fn min_round_robin_batch(
     let selection_bits: VecShare<u32> = bit_inject(session, selection_bits).await?;
     // Multiply distance shares with selection bits to zero out non-minimum distances.
     let selected_distances = {
-        let total = 2 * distances.len();
-        let mut my_prf = session.prf.gen_rands_mine(total).0.into_iter();
-        let mut prev_prf = session.prf.gen_rands_prev(total).0.into_iter();
-        let mut shares_a = VecRingElement::with_capacity(total);
+        let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
         for i_batch in 0..num_batches {
             for i in 0..batch_size {
                 let distance = &distances[i * num_batches + i_batch];
                 let b = &selection_bits.shares()[i_batch * batch_size + i];
-                // Safety of unwrap()
-                // the prfs are guaranteed to have length equal to num_batches * batch_size * 2
-                let code_a =
-                    my_prf.next().unwrap() - prev_prf.next().unwrap() + b * &distance.code_dot;
-                let mask_a =
-                    my_prf.next().unwrap() - prev_prf.next().unwrap() + b * &distance.mask_dot;
+                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
+                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
                 shares_a.push(code_a);
                 shares_a.push(mask_a);
             }
@@ -621,6 +596,11 @@ where
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
             count += 1;
             let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
+            // When applying the trick dot on trimmed masks, we have to multiply
+            // the result by 2 because a GaloisRingTrimmedMask is encoded using
+            // half the elements of a full GaloisRingMask, representing that
+            // real/imaginary bits at an index are either both masked or both
+            // unmasked.
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
             // Non-existent vectors get the largest relative distance of 100%.
@@ -628,9 +608,6 @@ where
             (RingElement(a), RingElement(b))
         };
         additive_shares.push(code_dist);
-        // When applying the trick dot on trimmed masks, we have to multiply with 2 the
-        // result The intuition being that a GaloisRingTrimmedMask contains half
-        // the elements that a full GaloisRingMask has.
         additive_shares.push(mask_dist);
     }
 
@@ -645,7 +622,7 @@ where
 }
 
 /// This is similar to `pairwise_distance`, but performs dot products on all rotations of the query.
-pub fn rotation_aware_pairwise_distance<'a, I>(
+pub fn rotation_aware_pairwise_distance<'a, const ROTATIONS: usize, I>(
     query: &'a ArcIris,
     targets: I,
 ) -> Vec<RingElement<u16>>
@@ -657,7 +634,10 @@ where
     let mut additive_shares = Vec::with_capacity(2 * ROTATIONS * targets.len());
 
     for target in targets {
-        for rotation in IrisRotation::all() {
+        for rotation in IrisRotation::all()
+            .skip((ALL_ROTATIONS - ROTATIONS) / 2)
+            .take(ROTATIONS)
+        {
             let (code_dist, mask_dist) = if let Some(y) = target {
                 count += 1;
                 let (a, b) = (
@@ -697,24 +677,43 @@ impl PrerotatedQueryRowMajor {
     pub const ROW_SIZE: usize = 800;
     pub const CODE_ROWS: usize = 16;
     pub const MASK_ROWS: usize = 8;
-    const CODE_SIZE: usize = Self::CODE_ROWS * ROTATIONS * Self::ROW_SIZE;
-    const MASK_SIZE: usize = Self::MASK_ROWS * ROTATIONS * Self::ROW_SIZE;
+    const CODE_SIZE: usize = Self::CODE_ROWS * ALL_ROTATIONS * Self::ROW_SIZE;
+    const MASK_SIZE: usize = Self::MASK_ROWS * ALL_ROTATIONS * Self::ROW_SIZE;
 
-    /// Rotation amounts for each of the 31 rotations.
+    /// Create a new buffer (allocates memory).
+    fn new_buffer() -> Self {
+        Self {
+            code_data: vec![0u16; Self::CODE_SIZE],
+            mask_data: vec![0u16; Self::MASK_SIZE],
+        }
+    }
+}
+
+pub struct PrerotatedQueryRowMajorView<'a, const ROTATIONS: usize> {
+    storage: &'a mut PrerotatedQueryRowMajor,
+}
+
+impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
+    pub const ROW_SIZE: usize = PrerotatedQueryRowMajor::ROW_SIZE;
+    pub const CODE_ROWS: usize = PrerotatedQueryRowMajor::CODE_ROWS;
+    pub const MASK_ROWS: usize = PrerotatedQueryRowMajor::MASK_ROWS;
+
+    /// Rotation amounts for each rotation.
     const ROTATION_AMOUNTS: [usize; ROTATIONS] = {
         let mut amounts = [0usize; ROTATIONS];
         // Left rotations: rotate left by 60, 56, ..., 4 elements
+        let half = ROTATIONS / 2;
         let mut i = 0;
-        while i < 6 {
-            amounts[i] = (6 - i) * 4;
+        while i < half {
+            amounts[i] = (half - i) * 4;
             i += 1;
         }
         // Center: no rotation
-        amounts[6] = 0;
+        amounts[half] = 0;
         // Right rotations: rotate right by 4, 8, ..., 60 (i.e., left by 796, 792, ..., 740)
         let mut i = 1;
-        while i <= 6 {
-            amounts[6 + i] = 800 - i * 4;
+        while i <= half {
+            amounts[half + i] = 800 - i * 4;
             i += 1;
         }
         amounts
@@ -732,14 +731,6 @@ impl PrerotatedQueryRowMajor {
         dst[second.len()..].copy_from_slice(first);
     }
 
-    /// Create a new buffer (allocates memory).
-    fn new_buffer() -> Self {
-        Self {
-            code_data: vec![0u16; Self::CODE_SIZE],
-            mask_data: vec![0u16; Self::MASK_SIZE],
-        }
-    }
-
     /// Fill the buffer with rotated query data (reuses existing allocation).
     fn fill(&mut self, query: &ArcIris) {
         // Process code rows - write directly into destination (no intermediate allocations)
@@ -748,7 +739,7 @@ impl PrerotatedQueryRowMajor {
                 &query.code.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
             for rot_idx in 0..ROTATIONS {
                 let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
-                let dst = &mut self.code_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                let dst = &mut self.storage.code_data[dst_offset..dst_offset + Self::ROW_SIZE];
                 Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
             }
         }
@@ -759,32 +750,26 @@ impl PrerotatedQueryRowMajor {
                 &query.mask.coefs[row_idx * Self::ROW_SIZE..(row_idx + 1) * Self::ROW_SIZE];
             for rot_idx in 0..ROTATIONS {
                 let dst_offset = (row_idx * ROTATIONS + rot_idx) * Self::ROW_SIZE;
-                let dst = &mut self.mask_data[dst_offset..dst_offset + Self::ROW_SIZE];
+                let dst = &mut self.storage.mask_data[dst_offset..dst_offset + Self::ROW_SIZE];
                 Self::rotate_row_into(src_row, dst, Self::ROTATION_AMOUNTS[rot_idx]);
             }
         }
     }
 
-    pub fn new(query: &ArcIris) -> Self {
-        let mut buf = Self::new_buffer();
-        buf.fill(query);
-        buf
-    }
-
-    /// Get all 31 rotations of a code row (contiguous in memory - 50KB)
+    /// Get all rotations of a code row (contiguous in memory, at most 50KB)
     #[inline]
     fn code_row_rotations(&self, row_idx: usize) -> &[u16] {
         let start = row_idx * ROTATIONS * Self::ROW_SIZE;
         let end = start + ROTATIONS * Self::ROW_SIZE;
-        &self.code_data[start..end]
+        &self.storage.code_data[start..end]
     }
 
-    /// Get all 31 rotations of a mask row (contiguous in memory - 50KB)
+    /// Get all rotations of a mask row (contiguous in memory, at most 50KB)
     #[inline]
     fn mask_row_rotations(&self, row_idx: usize) -> &[u16] {
         let start = row_idx * ROTATIONS * Self::ROW_SIZE;
         let end = start + ROTATIONS * Self::ROW_SIZE;
-        &self.mask_data[start..end]
+        &self.storage.mask_data[start..end]
     }
 }
 
@@ -795,7 +780,7 @@ thread_local! {
 
 /// Row-major rotation-aware distance - processes row-by-row for L1 cache efficiency.
 /// Uses thread-local buffer reuse to minimize allocations at high thread counts.
-pub fn rotation_aware_pairwise_distance_rowmajor<'a, I>(
+pub fn rotation_aware_pairwise_distance_rowmajor<'a, const ROTATIONS: usize, I>(
     query: &'a ArcIris,
     targets: I,
 ) -> Vec<RingElement<u16>>
@@ -808,9 +793,11 @@ where
     // Use thread-local buffer to avoid allocation per call
     PREROTATED_BUFFER.with(|cell| {
         let mut borrowed = cell.borrow_mut();
-        let prerotated = borrowed.get_or_insert_with(PrerotatedQueryRowMajor::new_buffer);
+        let mut prerotated = PrerotatedQueryRowMajorView::<ROTATIONS> {
+            storage: borrowed.get_or_insert_with(PrerotatedQueryRowMajor::new_buffer),
+        };
         prerotated.fill(query);
-        rotation_aware_inner(prerotated, targets, &mut additive_shares);
+        rotation_aware_inner(&prerotated, targets, &mut additive_shares);
     });
 
     additive_shares
@@ -818,8 +805,8 @@ where
 
 /// Inner implementation that works with a borrowed prerotated buffer.
 #[inline(never)]
-fn rotation_aware_inner<'a, I>(
-    prerotated: &PrerotatedQueryRowMajor,
+fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
+    prerotated: &PrerotatedQueryRowMajorView<ROTATIONS>,
     targets: I,
     additive_shares: &mut [RingElement<u16>],
 ) where
@@ -1238,6 +1225,17 @@ mod tests {
         #[case] seed: u64,
         #[case] num_targets: usize,
     ) {
+        test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic::<11>(seed, num_targets);
+        test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic::<13>(seed, num_targets);
+        test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic::<31>(seed, num_targets);
+    }
+
+    fn test_rotation_aware_pairwise_distance_rowmajor_equivalence_generic<
+        const ROTATIONS: usize,
+    >(
+        seed: u64,
+        num_targets: usize,
+    ) {
         use crate::protocol::shared_iris::GaloisRingSharedIris;
 
         let mut rng = AesRng::seed_from_u64(seed);
@@ -1270,12 +1268,16 @@ mod tests {
                 .collect();
 
             // Call the original function
-            let result_original =
-                rotation_aware_pairwise_distance(&query_arc, targets.iter().map(Some));
+            let result_original = rotation_aware_pairwise_distance::<ROTATIONS, _>(
+                &query_arc,
+                targets.iter().map(Some),
+            );
 
             // Call the row-major function
-            let result_rowmajor =
-                rotation_aware_pairwise_distance_rowmajor(&query_arc, targets.iter().map(Some));
+            let result_rowmajor = rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+                &query_arc,
+                targets.iter().map(Some),
+            );
 
             // Verify results are identical
             assert_eq!(
@@ -1297,8 +1299,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_rotation_aware_pairwise_distance_rowmajor_with_none_targets() {
+    fn test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic<
+        const ROTATIONS: usize,
+    >() {
         use crate::protocol::shared_iris::GaloisRingSharedIris;
 
         let mut rng = AesRng::seed_from_u64(123);
@@ -1333,10 +1336,14 @@ mod tests {
         ];
 
         // Call both functions
-        let result_original =
-            rotation_aware_pairwise_distance(&query_arc, targets_with_none.clone().into_iter());
-        let result_rowmajor =
-            rotation_aware_pairwise_distance_rowmajor(&query_arc, targets_with_none.into_iter());
+        let result_original = rotation_aware_pairwise_distance::<ROTATIONS, _>(
+            &query_arc,
+            targets_with_none.clone().into_iter(),
+        );
+        let result_rowmajor = rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+            &query_arc,
+            targets_with_none.into_iter(),
+        );
 
         // Verify results are identical
         assert_eq!(result_original.len(), result_rowmajor.len());
@@ -1365,5 +1372,12 @@ mod tests {
                 rot
             );
         }
+    }
+
+    #[test]
+    fn test_rotation_aware_pairwise_distance_rowmajor_with_none_targets() {
+        test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic::<11>();
+        test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic::<13>();
+        test_rotation_aware_pairwise_distance_rowmajor_with_none_targets_generic::<31>();
     }
 }

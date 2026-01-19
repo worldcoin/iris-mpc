@@ -54,7 +54,7 @@ ampc-anon-stats.workspace = true
 ampc-server-utils.workspace = true
 tonic = "0.12.3"
 metrics.workspace = true
-metrics-tracing-context = "0.15.0"
+metrics-tracing-context.workspace = true
 metrics-util.workspace = true
 metrics-exporter-statsd.workspace = true
 tracing.workspace = true
@@ -214,7 +214,7 @@ path = "bin/iris-mpc-upgrade-hawk/iris_mpc_hawk_genesis.rs"
 
 [[bin]]
 name = "service-client"
-path = "bin/iris-mpc-utils/service_client.rs"
+path = "bin/iris-mpc-utils/exec_service_client.rs"
 
 [[bin]]
 name = "write-node-config-toml"

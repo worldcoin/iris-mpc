@@ -1,6 +1,7 @@
 hnsw-smpc-0:
   fullnameOverride: "hnsw-smpc-0"
   image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
+  imagePullPolicy: Always
 
   environment: $ENV
   replicaCount: 1
@@ -161,15 +162,6 @@ hnsw-smpc-0:
 
     - name: SMPC__DISABLE_PERSISTENCE
       value: "false"
-
-    - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-      value: "64"
-
-    - name: SMPC__N_BUCKETS
-      value: "16"
-
-    - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-      value: "true"
 
     - name: SMPC__ANON_STATS_DATABASE__URL
       valueFrom:

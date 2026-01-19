@@ -1,45 +1,29 @@
-use std::{marker::PhantomData, ops::Deref};
-
-use iris_mpc_common::ROTATIONS;
 use itertools::Itertools;
+use std::ops::Deref;
 
-pub trait Rotations: Send + Sync + 'static {
-    /// The number of rotations.
-    const N_ROTATIONS: usize;
-
-    /// The argument of `iter::skip` that selects the requested rotations.
-    const N_SKIP: usize;
-}
-
-#[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct AllRotations {}
+/// All rotations from -15 to 15
+pub const ALL_ROTATIONS_MASK: u32 = (1 << 31) - 1;
 
-impl Rotations for AllRotations {
-    const N_ROTATIONS: usize = ROTATIONS;
+#[allow(dead_code)]
+/// Rotation 0 only
+pub const CENTER_ONLY_MASK: u32 = 1 << 15;
 
-    const N_SKIP: usize = 0;
-}
-
-#[derive(Clone, Debug)]
-pub struct CenterOnly {}
-
-impl Rotations for CenterOnly {
-    const N_ROTATIONS: usize = 1;
-
-    const N_SKIP: usize = ROTATIONS / 2;
-}
+#[allow(dead_code)]
+/// Rotations -10, 0, 10. These base rotations cover [-15, 15] when used with
+/// MinFHD5 (11 rotations) or MinFHD6 (13 rotations).
+pub const CENTER_AND_10_MASK: u32 = (1 << 5) + (1 << 15) + (1 << 25);
 
 /// VecRotationSupport is an abstraction for functions that work with or without rotations,
-/// controlled by the generic ROT = AllRotations or CenterOnly.
-/// Under the hood it is a Vec of length either 1 or ROTATIONS.
+/// controlled by the const generic ROTMASK which is a u32 where the i-th bit is set iff
+/// the i-th rotation is present in this collection.
+/// Under the hood it is a Vec of length `ROTMASK.count_ones()`.
 #[derive(Clone, Debug)]
-pub struct VecRotationSupport<R, ROT> {
+pub struct VecRotationSupport<R, const ROTMASK: u32> {
     rotations: Vec<R>,
-    phantom: PhantomData<ROT>,
 }
 
-impl<R, ROT> Deref for VecRotationSupport<R, ROT> {
+impl<R, const ROTMASK: u32> Deref for VecRotationSupport<R, ROTMASK> {
     type Target = Vec<R>;
 
     fn deref(&self) -> &Self::Target {
@@ -47,30 +31,23 @@ impl<R, ROT> Deref for VecRotationSupport<R, ROT> {
     }
 }
 
-impl<R, ROT: Rotations> From<Vec<R>> for VecRotationSupport<R, ROT> {
+impl<R, const ROTMASK: u32> From<Vec<R>> for VecRotationSupport<R, ROTMASK> {
     fn from(rotations: Vec<R>) -> Self {
-        assert_eq!(rotations.len(), ROT::N_ROTATIONS);
-        Self {
-            rotations,
-            phantom: PhantomData,
-        }
+        assert_eq!(rotations.len(), Self::n_rotations());
+        Self { rotations }
     }
 }
 
-impl<R> VecRotationSupport<R, CenterOnly> {
-    pub fn new_center_only(center: R) -> Self {
-        Self {
-            rotations: vec![center],
-            phantom: PhantomData,
-        }
+impl<R> VecRotationSupport<R, { 1 << 15 }> {
+    pub fn new_center_only(r: R) -> Self {
+        Self { rotations: vec![r] }
     }
 }
 
-impl<R, ROT: Rotations> VecRotationSupport<R, ROT> {
+impl<R, const ROTMASK: u32> VecRotationSupport<R, ROTMASK> {
     pub const fn n_rotations() -> usize {
-        ROT::N_ROTATIONS
+        ROTMASK.count_ones() as usize
     }
-
     /// Get the item attached to the center rotation.
     pub fn center(&self) -> &R {
         &self.rotations[self.rotations.len() / 2]
@@ -92,10 +69,10 @@ impl<R, ROT: Rotations> VecRotationSupport<R, ROT> {
     /// The opposite of flatten.
     /// Split a concatenated Vec into a batch of something with rotations.
     pub fn unflatten(batch: Vec<R>) -> Vec<Self> {
-        let mut rots = Vec::with_capacity(batch.len() / ROT::N_ROTATIONS);
+        let mut rots = Vec::with_capacity(batch.len() / Self::n_rotations());
         let mut it = batch.into_iter();
         loop {
-            let rot = it.by_ref().take(ROT::N_ROTATIONS).collect_vec();
+            let rot = it.by_ref().take(Self::n_rotations()).collect_vec();
             if rot.is_empty() {
                 break;
             }

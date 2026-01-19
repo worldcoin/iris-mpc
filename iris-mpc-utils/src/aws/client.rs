@@ -187,9 +187,9 @@ impl AwsClient {
 
 impl From<&SqsMessage> for SqsMessageInfo {
     fn from(msg: &SqsMessage) -> Self {
-        let raw = msg.body().expect("Empty JSON string");
-        let decoded: serde_json::Value = serde_json::from_str(raw).expect("Invalid JSON string");
-
+        let decoded: serde_json::Value =
+            serde_json::from_str(msg.body().expect("Empty JSON string"))
+                .expect("Invalid JSON string");
         let msg_kind = decoded
             .get("MessageAttributes")
             .and_then(|v| v.get("message_type"))
@@ -223,7 +223,7 @@ mod tests {
             assert!(self.sqs.config().region().is_some());
         }
 
-        async fn new_1() -> Self {
+        pub(crate) async fn new_1() -> Self {
             Self::new(AwsClientConfig::new_1().await)
         }
     }

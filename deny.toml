@@ -2,6 +2,16 @@
 # Cargo deny will check dependencies via `--all-features`
 all-features = true
 
+[bans]
+multiple-versions = "warn"
+
+# Deny multiple versions of metrics - having multiple versions causes metrics
+# to use separate global recorders, silently breaking metrics collection.
+[[bans.deny]]
+name = "metrics"
+deny-multiple-versions = true
+reason = "metrics crate uses a global recorder - multiple versions may break metrics silently"
+
 [advisories]
 version = 2
 ignore = [
@@ -17,7 +27,11 @@ ignore = [
     # Dependency of config-rs, they are not yet migrating of it, once they do we can bump the version and remove this exception
     # https://github.com/rust-cli/config-rs/issues/717
     { id = "RUSTSEC-2025-0120", reason = "No mature alternative available yet" },
-    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is unmaintained. Not a security issue" },
+    # rustls-pemfile is required by reqwest and tonic, we will switch once they do
+    { id = "RUSTSEC-2025-0134", reason = "No mature alternative available yet" },
+    # bincode is no longer maintained, but it's considered finalized by the authors; we can switch to a maintained alternative at some point
+    { id = "RUSTSEC-2025-0141", reason = "stable even if no longer maintained" },
+    { id = "RUSTSEC-2026-0002", reason = "waiting for aws-sdk-s3 to bump this dependency" },
 ]
 
 [sources]
