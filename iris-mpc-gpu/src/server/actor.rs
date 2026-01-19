@@ -829,8 +829,8 @@ impl ServerActor {
                 };
                 let device_idx = reauth_target % self.device_manager.device_count();
                 let device_reauth_target = reauth_target / self.device_manager.device_count();
-                let target_idx = query_idx as u64 * self.current_db_sizes[device_idx] as u64
-                    + device_reauth_target as u64;
+                let target_idx =
+                    query_idx as u64 + (device_reauth_target as u64 * self.max_batch_size as u64);
                 batch_reauth_targets[device_idx].push(target_idx);
             }
         }

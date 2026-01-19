@@ -296,7 +296,7 @@ fn operation_from_match_id(
 
 fn target_idx_from_match_id(match_idx: u64, max_query_length: u64, max_db_size: u64) -> u64 {
     let match_id_without_batch = match_idx % (max_query_length * max_db_size);
-    match_id_without_batch / ROTATIONS as u64
+    match_id_without_batch / (ROTATIONS as u64)
 }
 
 /// Represents a cache for one-sided distances, stored on the CPU.

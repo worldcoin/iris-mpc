@@ -73,7 +73,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             if (!match) {
                 bool skip = true;
                 // check if we want this distance recorded anyways
-                unsigned long long outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx + offset;
+                unsigned long long outputIdx = (dbIdx + offset) * max_query_length + queryIdx;
                 for (int j = 0; j < anon_stats_idx_len; j++) {
                     if (anon_stats_idx[j] == outputIdx) {
                         skip = false;
