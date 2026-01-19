@@ -55,4 +55,4 @@ COPY --from=build-app /src/iris-mpc-upgrade-hawk/target/release/iris-mpc-hawk-ge
 
 USER 65534
 
-ENTRYPOINT ["/bin/run-genesis.sh"]
+ENTRYPOINT ["/bin/iris-mpc-hawk-genesis"]

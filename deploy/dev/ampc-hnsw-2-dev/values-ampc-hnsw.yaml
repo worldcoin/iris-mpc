@@ -1,7 +1,4 @@
 env:
-  - name: GENESIS_MAX_HEIGHT
-    value: "1051076"
-    
   - name: RUST_LOG
     value: "info"
 
