@@ -92,6 +92,9 @@ pub struct Config {
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 
+    #[serde(default = "default_min_batch_size")]
+    pub min_batch_size: usize,
+
     // used for testing to recreate batch sequence
     #[serde(
         default = "default_predefined_batch_sizes",
@@ -305,6 +308,10 @@ fn default_processing_timeout_secs() -> u64 {
 
 fn default_max_batch_size() -> usize {
     64
+}
+
+fn default_min_batch_size() -> usize {
+    1
 }
 
 fn default_predefined_batch_sizes() -> Vec<usize> {
@@ -602,6 +609,7 @@ pub struct CommonConfig {
     init_db_size: usize,
     max_db_size: usize,
     max_batch_size: usize,
+    min_batch_size: usize,
     #[serde(default)]
     predefined_batch_sizes: Vec<usize>,
     fake_db_size: usize,
@@ -673,6 +681,7 @@ impl From<Config> for CommonConfig {
             init_db_size,
             max_db_size,
             max_batch_size,
+            min_batch_size,
             predefined_batch_sizes,
             fake_db_size,
             return_partial_results,
@@ -746,6 +755,7 @@ impl From<Config> for CommonConfig {
             max_db_size,
             predefined_batch_sizes,
             max_batch_size,
+            min_batch_size,
             fake_db_size,
             return_partial_results,
             disable_persistence,
