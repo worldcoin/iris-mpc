@@ -596,6 +596,11 @@ where
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
             count += 1;
             let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
+            // When applying the trick dot on trimmed masks, we have to multiply
+            // the result by 2 because a GaloisRingTrimmedMask is encoded using
+            // half the elements of a full GaloisRingMask, representing that
+            // real/imaginary bits at an index are either both masked or both
+            // unmasked.
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
             // Non-existent vectors get the largest relative distance of 100%.
@@ -603,9 +608,6 @@ where
             (RingElement(a), RingElement(b))
         };
         additive_shares.push(code_dist);
-        // When applying the trick dot on trimmed masks, we have to multiply with 2 the
-        // result The intuition being that a GaloisRingTrimmedMask contains half
-        // the elements that a full GaloisRingMask has.
         additive_shares.push(mask_dist);
     }
 
