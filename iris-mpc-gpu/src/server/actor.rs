@@ -2133,7 +2133,9 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
+                self.distance_comparator.max_db_size as u64,
             ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
@@ -2490,7 +2492,9 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
+                self.distance_comparator.max_db_size as u64,
             ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
