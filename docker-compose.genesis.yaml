@@ -1,6 +1,6 @@
 services:
   dev_db:
-    image: pg-local-build:latest # build from Dockerfile.postgres
+    image: pg-local-build:latest # built from Dockerfile.postgres
     ports:
       - "127.0.0.1:5432:5432"
     user: "postgres"
