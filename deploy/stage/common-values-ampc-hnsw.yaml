@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:0e695007d7336a90c118ae84b64d6fb0cb32f81b-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:c0740d16fd440e2624705b116c3084c644ee5ac3-arm64"
 
 environment: stage
 replicaCount: 1
@@ -23,15 +23,6 @@ ports:
     protocol: TCP
   - containerPort: 4002
     name: tcp-4002
-    protocol: TCP
-  - containerPort: 4100
-    name: tcp-4100
-    protocol: TCP
-  - containerPort: 4101
-    name: tcp-4101
-    protocol: TCP
-  - containerPort: 4102
-    name: tcp-4102
     protocol: TCP
 
 livenessProbe:
