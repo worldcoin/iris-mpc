@@ -46,4 +46,4 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.genesis.hawk
+          file: Dockerfile.genesis.dev.hawk
