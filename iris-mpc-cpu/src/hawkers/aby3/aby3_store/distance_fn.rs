@@ -59,6 +59,29 @@ impl DistanceFn {
             MinFhd => DistanceMinimalRotation::eval_distance_batch(store, query, vectors).await,
         }
     }
+
+    /// Evaluates distances for multiple (query, vectors) batches.
+    ///
+    /// For MinFhd, this enables prerotation buffer reuse within each batch.
+    pub async fn eval_distance_batches(
+        self,
+        store: &mut Aby3Store,
+        batches: Vec<(Aby3Query, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<Aby3DistanceRef>>> {
+        match self {
+            Fhd => {
+                // Fallback: process batch-by-batch using existing method
+                let mut results = Vec::with_capacity(batches.len());
+                for (query, vectors) in batches {
+                    let distances =
+                        DistanceSimple::eval_distance_batch(store, &query, &vectors).await?;
+                    results.push(distances);
+                }
+                Ok(results)
+            }
+            MinFhd => DistanceMinimalRotation::eval_distance_multibatch(store, batches).await,
+        }
+    }
 }
 
 struct DistanceSimple;
@@ -157,6 +180,56 @@ impl DistanceMinimalRotation {
                 .record(oblivious_min_percent);
         }
         result
+    }
+
+    /// Evaluates distances for multiple (query, vectors) batches efficiently.
+    ///
+    /// Each query's prerotation is reused across all its target vectors.
+    async fn eval_distance_multibatch(
+        store: &mut Aby3Store,
+        batches: Vec<(Aby3Query, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<DistanceShare<u32>>>> {
+        if batches.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let batch_sizes: Vec<usize> = batches.iter().map(|(_, vids)| vids.len()).collect();
+
+        // Convert to worker format (use preprocessed iris)
+        let worker_batches: Vec<(ArcIris, Vec<VectorId>)> = batches
+            .into_iter()
+            .map(|(q, vids)| (q.iris_proc, vids))
+            .collect();
+
+        // Get raw dot products grouped by batch
+        let ds_and_ts_batches = store
+            .workers
+            .rotation_aware_dot_product_multibatch(worker_batches)
+            .await?;
+
+        // Flatten all batches to allow single calls to post-processing functions
+        let flattened_ds_and_ts: Vec<_> = ds_and_ts_batches.into_iter().flatten().collect();
+
+        if flattened_ds_and_ts.is_empty() {
+            // All batches were empty
+            return Ok(batch_sizes.iter().map(|_| vec![]).collect());
+        }
+
+        // Process all items in single batched calls
+        let distances = store.gr_to_lifted_distances(flattened_ds_and_ts).await?;
+        let all_mins = store
+            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .await?;
+
+        // Split results back into per-batch vectors
+        let mut results = Vec::with_capacity(batch_sizes.len());
+        let mut offset = 0;
+        for batch_size in batch_sizes {
+            results.push(all_mins[offset..offset + batch_size].to_vec());
+            offset += batch_size;
+        }
+
+        Ok(results)
     }
 }
 
