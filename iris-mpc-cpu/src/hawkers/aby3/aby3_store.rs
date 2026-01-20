@@ -14,11 +14,10 @@ use crate::{
     },
     protocol::{
         ops::{
-            batch_signed_lift_vec, conditionally_select_distances_with_plain_ids,
+            conditionally_select_distances_with_plain_ids,
             conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
             conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, min_of_pair_batch, min_round_robin_batch,
-            oblivious_cross_compare, oblivious_cross_compare_lifted, open_ring,
+            lte_threshold_and_open, min_round_robin_batch, open_ring,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -27,6 +26,10 @@ use crate::{
         share::{DistanceShare, Share},
         RingElement,
     },
+};
+use ampc_actor_utils::protocol::ops::{
+    batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
+    oblivious_cross_compare_lifted,
 };
 use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
@@ -363,30 +366,39 @@ impl Aby3Store {
             }
         }
 
-        let mut res = distances.to_vec();
+        let mut res = distances;
+        let mut pairs = Vec::with_capacity(len * (res.len() / 2));
         while res.len() > MIN_ROUND_ROBIN_SIZE {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
-            let pairs = res
-                .into_iter()
-                .tuples()
-                .flat_map(|(a, b)| izip!(a, b).collect_vec())
-                .collect_vec();
+
+            // Build pairs for min_of_pair_batch
+            pairs.clear();
+            for ab in res.chunks_exact(2) {
+                let (a, b) = (&ab[0], &ab[1]);
+                for (x, y) in izip!(a, b) {
+                    pairs.push((*x, *y));
+                }
+            }
+
             // compute minimums of pairs
             let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
-            res = flattened_res
-                .into_iter()
-                .chunks(len)
-                .into_iter()
-                .map(|chunk| chunk.collect())
-                .collect_vec();
+
+            // Rebuild res as Vec<Vec<_>>
+            res.clear();
+            for chunk in flattened_res.chunks(len) {
+                res.push(chunk.to_vec());
+            }
             // if we saved a last distance, we need to add it back
             if let Some(last_distance) = maybe_last_distance {
-                res.push(last_distance.clone());
+                res.push(last_distance);
             }
         }
-        let flattened_distances = res.iter().flatten().cloned().collect_vec();
-        min_round_robin_batch(&mut self.session, &flattened_distances, res.len()).await
+        // Only flatten res once at the end
+        let res_len = res.len();
+        let mut flattened_distances = Vec::with_capacity(res_len * len);
+        flattened_distances.extend(res.into_iter().flatten());
+        min_round_robin_batch(&mut self.session, &flattened_distances, res_len).await
     }
 
     async fn compact_neighborhood_batch(
@@ -400,16 +412,16 @@ impl Aby3Store {
         }
 
         let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await;
-        let query_vec_pairs = izip!(base_node_queries, neighborhoods.iter())
-            .flat_map(|(q, nbhd)| nbhd.iter().map(move |nb| (q.clone(), *nb)))
-            .collect_vec();
-        let distances = self.eval_distance_pairs(&query_vec_pairs).await?;
-        let id_distances = neighborhoods
-            .iter()
-            .flatten()
-            .zip(distances)
-            .map(|(vector_id, distance)| (vector_id.serial_id(), distance))
-            .collect_vec();
+        let batches: Vec<(Aby3Query, Vec<VectorId>)> =
+            izip!(base_node_queries, neighborhoods.iter())
+                .map(|(q, nbhd)| (q, nbhd.clone()))
+                .collect();
+        let nbhd_distances = self.eval_distance_multibatch(batches).await?;
+        let id_distances = izip!(
+            neighborhoods.iter().flatten().map(|vid| vid.serial_id()),
+            nbhd_distances.into_iter().flatten(),
+        )
+        .collect_vec();
         let id_versions: BTreeMap<_, _> = neighborhoods
             .iter()
             .enumerate()
@@ -515,6 +527,20 @@ impl Aby3Store {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(compacted_nbhds)
+    }
+
+    /// Evaluates distances for multiple (query, vectors) batches.
+    ///
+    /// Optimized for MinFhd where prerotation buffer is reused per query.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_distance_multibatch(
+        &mut self,
+        batches: Vec<(Aby3Query, Vec<VectorId>)>,
+    ) -> Result<Vec<Vec<Aby3DistanceRef>>> {
+        if batches.is_empty() {
+            return Ok(vec![]);
+        }
+        self.distance_fn.eval_distance_batches(self, batches).await
     }
 }
 

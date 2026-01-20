@@ -1,21 +1,23 @@
 use crate::{
     execution::session::{Session, SessionHandles},
     protocol::shared_iris::ArcIris,
-    shares::{
-        bit::Bit,
-        ring_impl::{RingElement, VecRingElement},
-        share::{reconstruct_distance_vector, DistanceShare, Share},
-        vecshare::VecShare,
-    },
 };
 use ampc_actor_utils::fast_metrics::FastHistogram;
-use ampc_actor_utils::protocol::binary::{
-    and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k, open_bin, single_extract_msb,
-};
-// Import non-iris-specific protocol operations from ampc-common
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
     sub_pub,
+};
+use ampc_actor_utils::protocol::{
+    binary::{
+        and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k, open_bin, single_extract_msb,
+    },
+    ops::{conditionally_select_distance, cross_mul, oblivious_cross_compare},
+};
+pub use ampc_secret_sharing::shares::{
+    bit::Bit,
+    ring_impl::{RingElement, VecRingElement},
+    share::{reconstruct_distance_vector, DistanceShare, Share},
+    vecshare::VecShare,
 };
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
@@ -56,15 +58,6 @@ pub async fn greater_than_threshold(
     extract_msb_batch(session, &diffs).await
 }
 
-/// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
-pub fn translate_threshold_a(t: f64) -> u32 {
-    assert!(
-        (0. ..=1.).contains(&t),
-        "Threshold must be in the range [0, 1]"
-    );
-    ((1. - 2. * t) * (B as f64)) as u32
-}
-
 /// The same as compare_threshold, but the input shares are 16-bit and lifted to
 /// 32-bit before threshold comparison.
 ///
@@ -83,60 +76,6 @@ pub async fn lift_and_compare_threshold(
     y -= x;
 
     single_extract_msb(session, y).await
-}
-
-/// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
-/// (VecShare) of 32-bit values.
-pub async fn batch_signed_lift(
-    session: &mut Session,
-    mut pre_lift: VecShare<u16>,
-) -> Result<VecShare<u32>> {
-    // Compute (v + 2^{15}) % 2^{16}, to make values positive.
-    for v in pre_lift.iter_mut() {
-        v.add_assign_const_role(1_u16 << 15, session.own_role());
-    }
-    let mut lifted_values = lift(session, pre_lift).await?;
-    // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
-    // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
-    // get signed shares over 2^{32}
-    for v in lifted_values.iter_mut() {
-        v.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role());
-    }
-    Ok(lifted_values)
-}
-
-/// Wrapper over batch_signed_lift that lifts a vector (Vec) of 16-bit shares to
-/// a vector (Vec) of 32-bit shares.
-pub async fn batch_signed_lift_vec(
-    session: &mut Session,
-    pre_lift: Vec<Share<u16>>,
-) -> Result<Vec<Share<u32>>> {
-    let pre_lift = VecShare::new_vec(pre_lift);
-    Ok(batch_signed_lift(session, pre_lift).await?.inner())
-}
-
-/// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).
-/// The cross product is computed as (d2.code_dist * d1.mask_dist - d1.code_dist * d2.mask_dist) and the result is shared.
-///
-/// Assumes that the input shares are originally 16-bit and lifted to u32.
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub(crate) async fn cross_mul(
-    session: &mut Session,
-    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
-) -> Result<Vec<Share<u32>>> {
-    let res_a: VecRingElement<u32> = distances
-        .iter()
-        .map(|(d1, d2)| {
-            session.prf.gen_zero_share() + &d2.code_dot * &d1.mask_dot - &d1.code_dot * &d2.mask_dot
-        })
-        .collect();
-
-    let network = &mut session.network_session;
-
-    network.send_ring_vec_next(&res_a).await?;
-
-    let res_b = network.receive_ring_vec_prev().await?;
-    Ok(izip!(res_a, res_b).map(|(a, b)| Share::new(a, b)).collect())
 }
 
 /// Conditionally selects equally-sized slices of input shares based on control bits.
@@ -191,65 +130,6 @@ async fn select_shared_slices_by_bits(
         .map(|(a, b)| Share::new(a, b))
         .zip(right_values.iter())
         .map(|(res, right)| res + right)
-        .collect())
-}
-
-/// Conditionally selects the distance shares based on control bits.
-/// If the control bit is 1, it selects the first distance share (d1),
-/// otherwise it selects the second distance share (d2).
-/// Assumes that the input shares are originally 16-bit and lifted to u32.
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn conditionally_select_distance(
-    session: &mut Session,
-    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
-    control_bits: &[Share<u32>],
-) -> Result<Vec<DistanceShare<u32>>> {
-    if distances.len() != control_bits.len() {
-        bail!("Number of distances must match number of control bits");
-    }
-
-    // Conditional multiplexing:
-    // If control bit is 1, select d1, else select d2.
-    // res = c * d1 + (1 - c) * d2 = d2 + c * (d1 - d2);
-    // We need to do it for both code_dot and mask_dot.
-
-    // we start with the mult of c and d1-d2
-    let res_a: VecRingElement<u32> = distances
-        .iter()
-        .zip(control_bits.iter())
-        .flat_map(|((d1, d2), c)| {
-            let code = d1.code_dot - d2.code_dot;
-            let mask = d1.mask_dot - d2.mask_dot;
-            let code_mul_a =
-                session.prf.gen_zero_share() + c.a * code.a + c.b * code.a + c.a * code.b;
-            let mask_mul_a =
-                session.prf.gen_zero_share() + c.a * mask.a + c.b * mask.a + c.a * mask.b;
-            [code_mul_a, mask_mul_a]
-        })
-        .collect();
-
-    let network = &mut session.network_session;
-
-    network.send_ring_vec_next(&res_a).await?;
-
-    let res_b = network.receive_ring_vec_prev().await?;
-
-    // finally compute the result by adding the d2 shares
-    Ok(izip!(res_a, res_b)
-        // combine a and b part into shares
-        .map(|(a, b)| Share::new(a, b))
-        // combine the code and mask parts into DistanceShare
-        .tuples()
-        .map(|(code, mask)| DistanceShare {
-            code_dot: code,
-            mask_dot: mask,
-        })
-        // add the d2 shares
-        .zip(distances.iter())
-        .map(|(res, (_, d2))| DistanceShare {
-            code_dot: res.code_dot + d2.code_dot,
-            mask_dot: res.mask_dot + d2.mask_dot,
-        })
         .collect())
 }
 
@@ -509,6 +389,7 @@ pub async fn conditionally_swap_distances(
     Ok(swapped_list)
 }
 
+// consider putting this in ampc-common next to oblivious_cross_compare()
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 and opens it.
 ///
 /// The less-than operator is implemented in 2 steps:
@@ -528,55 +409,6 @@ pub async fn cross_compare(
     // Open the MSB
     let opened_b = open_bin(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
-}
-
-/// For every pair of distance shares (d1, d2), this computes the secret-shared bit d2 < d1 .
-///
-/// The less-than operator is implemented in 2 steps:
-///
-/// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
-/// 2. The most significant bit of the result is extracted.
-///
-/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub(crate) async fn oblivious_cross_compare(
-    session: &mut Session,
-    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
-) -> Result<Vec<Share<Bit>>> {
-    // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
-    let diff = cross_mul(session, distances).await?;
-    // Compute the MSB of the above
-    extract_msb_batch(session, &diff).await
-}
-
-/// For every pair of distance shares (d1, d2), this computes the secret-shared bit d2 < d1 and lift it to u32 shares.
-///
-/// The less-than operator is implemented in 2 steps:
-///
-/// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
-/// 2. The most significant bit of the result is extracted.
-///
-/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub(crate) async fn oblivious_cross_compare_lifted(
-    session: &mut Session,
-    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
-) -> Result<Vec<Share<u32>>> {
-    // compute the secret-shared bits d1 < d2
-    let bits = oblivious_cross_compare(session, distances).await?;
-    // inject bits to T shares
-    Ok(bit_inject(session, VecShare::new_vec(bits)).await?.inner())
-}
-
-/// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
-///
-/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub(crate) async fn min_of_pair_batch(
-    session: &mut Session,
-    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
-) -> Result<Vec<DistanceShare<u32>>> {
-    // compute the secret-shared bits d1 < d2
-    let bits = oblivious_cross_compare_lifted(session, distances).await?;
-
-    conditionally_select_distance(session, distances, bits.as_slice()).await
 }
 
 /// Given a flattened array of distance shares arranged in batches,
@@ -731,8 +563,6 @@ pub(crate) async fn min_round_robin_batch(
     Ok(res)
 }
 
-use ampc_actor_utils::network::value::NetworkInt;
-use ampc_secret_sharing::IntRing2k;
 use std::cell::RefCell;
 
 thread_local! {
@@ -766,6 +596,11 @@ where
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
             count += 1;
             let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
+            // When applying the trick dot on trimmed masks, we have to multiply
+            // the result by 2 because a GaloisRingTrimmedMask is encoded using
+            // half the elements of a full GaloisRingMask, representing that
+            // real/imaginary bits at an index are either both masked or both
+            // unmasked.
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
             // Non-existent vectors get the largest relative distance of 100%.
@@ -773,9 +608,6 @@ where
             (RingElement(a), RingElement(b))
         };
         additive_shares.push(code_dist);
-        // When applying the trick dot on trimmed masks, we have to multiply with 2 the
-        // result The intuition being that a GaloisRingTrimmedMask contains half
-        // the elements that a full GaloisRingMask has.
         additive_shares.push(mask_dist);
     }
 
@@ -1071,41 +903,6 @@ pub async fn lte_threshold_and_open(
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
 
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-/// Same as [open_ring], but for non-replicated shares. Due to the share being non-replicated,
-/// each party needs to send its entire share to the next and previous party.
-pub async fn open_ring_element_broadcast<T: IntRing2k + NetworkInt>(
-    session: &mut Session,
-    shares: &[RingElement<T>],
-) -> Result<Vec<T>> {
-    let network = &mut session.network_session;
-    let message = if shares.len() == 1 {
-        T::new_network_element(shares[0])
-    } else {
-        T::new_network_vec(shares.to_vec())
-    };
-
-    network.send_next(message.clone()).await?;
-    network.send_prev(message).await?;
-
-    // receiving from previous party
-    let b = network
-        .receive_prev()
-        .await
-        .and_then(|v| T::into_vec(v))
-        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
-    let c = network
-        .receive_next()
-        .await
-        .and_then(|v| T::into_vec(v))
-        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
-
-    // ADD shares with the received shares
-    izip!(shares.iter(), b.iter(), c.iter())
-        .map(|(a, b, c)| Ok((*a + *b + *c).convert()))
-        .collect::<Result<Vec<_>>>()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,7 +913,7 @@ mod tests {
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
-    use ampc_actor_utils::protocol::prf::Prf;
+    use ampc_actor_utils::protocol::{ops::batch_signed_lift_vec, prf::Prf};
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
