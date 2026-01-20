@@ -1,6 +1,6 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1048576"
+    value: "2107152"
 
   - name: RUST_LOG
     value: "info"
@@ -12,7 +12,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "true"
+    value: "false"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
@@ -36,6 +36,18 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
+  - name: SMPC__PARTY_ID
+    value: "1"
+
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_cpu1M6"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "_gpu1M"
+
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-1"
 
@@ -45,11 +57,14 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
-  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_minfhd"
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
 
   - name: SMPC__MAX_DB_SIZE
-    value: "2000000"
+    value: "2107152"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "96"
@@ -70,7 +85,16 @@ env:
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "true"
+    value: "false"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
+    value: "512"
+
+  - name: SMPC__N_BUCKETS
+    value: "16"
+
+  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
+    value: "false"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
@@ -224,4 +248,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-  - sg-0b7cacc680e0f8e3b # smpc1-dev ampc-hnsw pod sg
+    - sg-0b7cacc680e0f8e3b # smpc1-dev ampc-hnsw pod sg
