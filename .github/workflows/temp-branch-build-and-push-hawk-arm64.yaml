@@ -1,4 +1,4 @@
-name: Branch - Anon stats server build and push docker image
+name: Branch - Hawk Build and push Arm64 docker image
 
 on:
   push:
