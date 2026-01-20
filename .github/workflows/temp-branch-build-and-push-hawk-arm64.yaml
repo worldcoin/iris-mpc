@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "chore/rustc-1.89"
+      - "refactor/gpu_reauth_anon_stats"
     paths-ignore:
       - "deploy/**"
 
