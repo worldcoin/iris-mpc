@@ -141,7 +141,9 @@ impl DistanceCache {
         max_internal_buffer_size: usize,
         streams: &[CudaStream],
         operations: &[AnonStatsOperation],
+        reauth_target_idx: &[Vec<u64>],
         max_query_length: u64,
+        max_db_size: u64,
     ) -> Vec<OneSidedDistanceCache> {
         let (codes, masks, counters, indices_gpu) = self.get_buffers(eye);
         let counters = device_manager
@@ -206,7 +208,7 @@ impl DistanceCache {
             })
             .collect_vec();
 
-        for (map, ind, code_a_v, code_b_v, mask_a_v, mask_b_v, old, new) in izip!(
+        for (map, ind, code_a_v, code_b_v, mask_a_v, mask_b_v, old, new, reauth_targets) in izip!(
             &mut maps,
             &indices,
             &codes_a,
@@ -214,7 +216,8 @@ impl DistanceCache {
             &masks_a,
             &masks_b,
             old_counters,
-            counters
+            counters,
+            reauth_target_idx,
         ) {
             if new >= max_internal_buffer_size {
                 tracing::info!(
@@ -236,6 +239,13 @@ impl DistanceCache {
             .take(new - old)
             {
                 let operation = operation_from_match_id(idx, operations, max_query_length);
+                if operation == AnonStatsOperation::Reauth {
+                    let target_idx = target_idx_from_match_id(idx, max_query_length, max_db_size);
+                    // We only keep reauths that match their target idx
+                    if !reauth_targets.contains(&target_idx) {
+                        continue;
+                    }
+                }
                 map.entry(idx / ROTATIONS as u64)
                     .or_insert_with(|| Vec::with_capacity(4))
                     .push(CpuDistanceShare {
@@ -282,6 +292,11 @@ fn operation_from_match_id(
         .unwrap_or(AnonStatsOperation::Uniqueness)
 }
 
+fn target_idx_from_match_id(match_idx: u64, max_query_length: u64, max_db_size: u64) -> u64 {
+    let match_id_without_batch = match_idx % (max_query_length * max_db_size);
+    match_id_without_batch / (ROTATIONS as u64)
+}
+
 /// Represents a cache for one-sided distances, stored on the CPU.
 /// This will be used to do a union with the one-sided distances from the other side, to arrive at the distances for actual matches.
 #[derive(Debug, Default, Clone)]
@@ -292,6 +307,14 @@ pub struct OneSidedDistanceCache {
 impl OneSidedDistanceCache {
     pub fn iter(&self) -> impl Iterator<Item = (&u64, &Vec<CpuDistanceShare>)> {
         self.map.iter()
+    }
+
+    pub fn insert(
+        &mut self,
+        idx: u64,
+        shares: Vec<CpuDistanceShare>,
+    ) -> Option<Vec<CpuDistanceShare>> {
+        self.map.insert(idx, shares)
     }
 }
 
