@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "refactor/gpu_reauth_anon_stats"
+      - "feat/reauth_anon_stats"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"

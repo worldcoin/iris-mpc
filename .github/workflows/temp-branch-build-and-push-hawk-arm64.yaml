@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - "dev"
-      - "refactor/gpu_reauth_anon_stats"
+      - "feat/reauth_anon_stats"
+
     paths-ignore:
       - "deploy/**"
 
