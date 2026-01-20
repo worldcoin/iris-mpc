@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:v0.24.1@sha256:9d119acf7b3336d9244444dab51835611c500347d0c8d514eb72b5b952db4cd0"
+image: "ghcr.io/worldcoin/anon-stats-server:c0740d16fd440e2624705b116c3084c644ee5ac3"
 
 environment: stage
 replicaCount: 1
@@ -23,15 +23,6 @@ ports:
     protocol: TCP
   - containerPort: 4002
     name: tcp-4002
-    protocol: TCP
-  - containerPort: 4100
-    name: tcp-4100
-    protocol: TCP
-  - containerPort: 4101
-    name: tcp-4101
-    protocol: TCP
-  - containerPort: 4102
-    name: tcp-4102
     protocol: TCP
 
 startupProbe:
