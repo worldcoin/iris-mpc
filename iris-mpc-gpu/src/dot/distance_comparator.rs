@@ -205,6 +205,7 @@ impl DistanceComparator {
         batch_size: usize,
         max_bucket_distances: usize,
         streams: &[CudaStream],
+        reauth_target_idx: &[Vec<u64>],
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -220,6 +221,12 @@ impl DistanceComparator {
                 &self.device_manager.devices()[i],
             );
             self.device_manager.device(i).bind_to_thread().unwrap();
+            let reauth_target_idx_gpu = htod_on_stream_sync(
+                &reauth_target_idx[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap();
 
             unsafe {
                 self.open_kernels[i]
@@ -256,6 +263,8 @@ impl DistanceComparator {
                             batch_id,
                             self.query_length,
                             self.max_db_size as u64,
+                            &reauth_target_idx_gpu,
+                            reauth_target_idx[i].len(),
                         ),
                     )
                     .unwrap();
@@ -285,6 +294,7 @@ impl DistanceComparator {
         max_bucket_distances: usize,
         streams: &[CudaStream],
         index_mapping: &[Vec<u32>],
+        reauth_target_idx: &[Vec<u64>],
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -302,6 +312,12 @@ impl DistanceComparator {
             self.device_manager.device(i).bind_to_thread().unwrap();
             let index_mapping = htod_on_stream_sync(
                 &index_mapping[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap();
+            let reauth_target_idx_gpu = htod_on_stream_sync(
+                &reauth_target_idx[i],
                 &self.device_manager.device(i),
                 &streams[i],
             )
@@ -342,6 +358,8 @@ impl DistanceComparator {
                             batch_id,
                             self.query_length,
                             self.max_db_size as u64,
+                            &reauth_target_idx_gpu,
+                            reauth_target_idx[i].len(),
                         ),
                     )
                     .unwrap();
