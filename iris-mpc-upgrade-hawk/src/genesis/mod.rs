@@ -496,6 +496,7 @@ async fn exec_delta(
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
         let end = modifications.len().saturating_sub(1);
+        let mut now = Instant::now();
         for (idx, modification) in modifications.iter().enumerate() {
             log_info(format!(
                 "Applying modification: type={} id={}, serial_id={:?}",
@@ -532,10 +533,19 @@ async fn exec_delta(
             let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
-            if idx % (PERSIST_DELAY - 1) == 0 || idx == end {
-                done_rx.await?;
+            let is_sync_batch = idx % (PERSIST_DELAY - 1) == 0 || idx == end;
+            if is_sync_batch {
+                let wait_start = Instant::now();
+                done_rx.await.map_err(|_| {
+                    eyre!("results thread terminated before acknowledging modification")
+                })?;
+                metrics::histogram!("genesis_persist_wait_duration")
+                    .record(wait_start.elapsed().as_secs_f64());
                 hawk_handle.sync_peers().await?;
             }
+            metrics::histogram!("genesis_modification_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
+                .record(now.elapsed().as_secs_f64());
+            now = Instant::now();
         }
 
         Ok(())
@@ -668,13 +678,21 @@ async fn exec_indexation(
             let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
-            if batch.batch_id % (PERSIST_DELAY - 1) == 0 {
+            let is_sync_batch = batch.batch_id % (PERSIST_DELAY - 1) == 0;
+            if is_sync_batch {
                 persist_ch.take();
-                done_rx.await?;
+                let wait_start = Instant::now();
+                done_rx.await.map_err(|_| {
+                    eyre!("results thread terminated before acknowledging batch")
+                })?;
+                metrics::histogram!("genesis_persist_wait_duration")
+                    .record(wait_start.elapsed().as_secs_f64());
                 hawk_handle.sync_peers().await?;
             } else {
                 persist_ch.replace(done_rx);
             }
+            metrics::histogram!("genesis_batch_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
+                .record(now.elapsed().as_secs_f64());
             log_info(format!(
                 "Indexing new batch: {} :: time {:?}s",
                 batch,
@@ -691,7 +709,12 @@ async fn exec_indexation(
         // Success.
         Ok(_) => {
             if let Some(rx) = persist_ch.take() {
-                rx.await?;
+                let wait_start = Instant::now();
+                rx.await.map_err(|_| {
+                    eyre!("results thread terminated before acknowledging final batch")
+                })?;
+                metrics::histogram!("genesis_persist_wait_duration")
+                    .record(wait_start.elapsed().as_secs_f64());
                 hawk_handle.sync_peers().await?;
             }
             log_info(String::from(
