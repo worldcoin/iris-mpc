@@ -105,7 +105,7 @@ pub struct GenesisConfig {
 }
 
 /// Logical CLI arguments for genesis process.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct GenesisArgs {
     pub max_indexation_id: IrisSerialId,
 

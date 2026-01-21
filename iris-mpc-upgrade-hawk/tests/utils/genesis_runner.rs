@@ -19,12 +19,10 @@ use crate::utils::{
 pub const NUM_GPU_IRISES_INIT: usize = 100;
 pub const MAX_INDEXATION_ID: usize = 100;
 
-pub fn default_genesis_args() -> GenesisArgs {
-    GenesisArgs {
-        max_indexation_id: MAX_INDEXATION_ID as u32,
-        batch_size_config: BatchSizeConfig::Static { size: 1 },
-    }
-}
+pub const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
+    max_indexation_id: MAX_INDEXATION_ID as u32,
+    batch_size_config: BatchSizeConfig::Static { size: 1 },
+};
 
 pub fn get_node_configs() -> [Config; 3] {
     let exec_env = TestRunContextInfo::new(0, 0);

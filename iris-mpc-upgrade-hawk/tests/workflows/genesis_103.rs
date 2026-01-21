@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     join_runners,
     utils::{
-        genesis_runner::{self, default_genesis_args, MAX_INDEXATION_ID},
+        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
         modifications::{
             ModificationInput,
             ModificationType::{Reauth, ResetUpdate, Uniqueness},
@@ -48,10 +48,10 @@ impl TestRun for Test {
         }
         join_runners!(join_set);
 
-        let genesis_args = default_genesis_args();
+        let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let args = genesis_args.clone();
+            let args = genesis_args;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
@@ -77,7 +77,7 @@ impl TestRun for Test {
             plaintext_genesis::init_plaintext_irises_db(&genesis_runner::get_irises());
         state_0.config = plaintext_genesis::init_plaintext_config(&self.configs[0]);
         plaintext_genesis::apply_modifications(&mut state_0.src_db, &[], &MODIFICATIONS)?;
-        state_0.args = default_genesis_args();
+        state_0.args = DEFAULT_GENESIS_ARGS;
 
         let expected = run_plaintext_genesis(state_0)
             .await

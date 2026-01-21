@@ -1,7 +1,7 @@
 use crate::{
     join_runners,
     utils::{
-        genesis_runner::{self, default_genesis_args, MAX_INDEXATION_ID},
+        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
         mpc_node::{DbAssertions, MpcNodes},
         plaintext_genesis::PlaintextGenesis,
         HawkConfigs, TestRun, TestRunContextInfo,
@@ -27,10 +27,10 @@ impl TestRun for Test {
     // run genesis twice - first indexing 50 and then up to 100
     async fn exec(&mut self) -> Result<()> {
         // Execute genesis - first run indexing up to 50
-        let genesis_args = default_genesis_args();
+        let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config.clone();
+            let batch_size_config = genesis_args.batch_size_config;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(batch_size_config, 50, false, false),
@@ -44,7 +44,7 @@ impl TestRun for Test {
         // Execute genesis - second run indexing up to 100
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config.clone();
+            let batch_size_config = genesis_args.batch_size_config;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(batch_size_config, 100, false, false),
@@ -62,7 +62,7 @@ impl TestRun for Test {
         // Run plaintext genesis
         let config = &self.configs[0];
         let plaintext_irises = genesis_runner::get_irises();
-        let expected = PlaintextGenesis::new(default_genesis_args(), config, &plaintext_irises)
+        let expected = PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
             .run()
             .await
             .unwrap();

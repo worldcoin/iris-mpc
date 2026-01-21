@@ -297,7 +297,7 @@ async fn exec_setup(
 
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
-        args.batch_size_config.clone(),
+        args.batch_size_config,
         excluded_serial_ids.clone(),
         last_indexed_id,
         args.max_indexation_id,
