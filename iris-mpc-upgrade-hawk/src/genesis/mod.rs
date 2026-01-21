@@ -18,6 +18,7 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
+pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
     genesis::{
@@ -35,7 +36,6 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
 };
-pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
     sync::Arc,

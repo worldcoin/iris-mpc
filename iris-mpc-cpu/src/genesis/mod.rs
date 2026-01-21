@@ -87,7 +87,9 @@ impl BatchSizeConfig {
             }
 
             let cap = cap.ok_or_else(|| {
-                eyre::eyre!("Missing 'cap' parameter. Expected format: dynamic:cap=<cap>,error_rate=<rate>")
+                eyre::eyre!(
+                    "Missing 'cap' parameter. Expected format: dynamic:cap=<cap>,error_rate=<rate>"
+                )
             })?;
             let error_rate = error_rate.ok_or_else(|| {
                 eyre::eyre!("Missing 'error_rate' parameter. Expected format: dynamic:cap=<cap>,error_rate=<rate>")

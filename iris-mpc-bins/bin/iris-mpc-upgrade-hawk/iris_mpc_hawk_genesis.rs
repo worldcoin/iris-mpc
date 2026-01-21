@@ -77,7 +77,10 @@ fn parse_args() -> Result<ExecutionArgs> {
                 "Error: --max-height argument must be a valid u32. Value: {}",
                 value
             );
-            eyre::eyre!("--max-height argument must be a valid u32. Value: {}", value)
+            eyre::eyre!(
+                "--max-height argument must be a valid u32. Value: {}",
+                value
+            )
         })?,
         None => {
             eprintln!("Error: --max-height argument is required.");

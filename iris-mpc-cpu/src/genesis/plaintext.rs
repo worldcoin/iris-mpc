@@ -144,8 +144,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     let batch_size = match &state.args.batch_size_config {
         BatchSizeConfig::Static { size } => *size,
         BatchSizeConfig::Dynamic { cap, error_rate } => {
-            let dynamic_size =
-                BatchSize::get_dynamic_size(id, *error_rate, state.config.hnsw_M);
+            let dynamic_size = BatchSize::get_dynamic_size(id, *error_rate, state.config.hnsw_M);
             dynamic_size.min(*cap)
         }
     };
