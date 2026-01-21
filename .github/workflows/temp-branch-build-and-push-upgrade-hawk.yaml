@@ -3,7 +3,8 @@ name: Branch - Hawk Upgrade Build and push docker image
 on:
   push:
     branches:
-      - "sw/run_genesis"
+      - "POP-2651/implement-and-test-table-coping-for-genesis-rollback"
+
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
   cancel-in-progress: true
