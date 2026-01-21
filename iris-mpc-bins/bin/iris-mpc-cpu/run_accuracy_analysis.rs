@@ -41,16 +41,23 @@ async fn main() -> Result<()> {
     let graph = load_graph(&config.graph, &mut store, &mut rng).await?;
     println!("Graph initialized.");
 
-    tracing_subscriber::registry()
-        .with(MetricsLayer::new())
-        .init();
+    // Conditionally set up metrics collection
+    let snapshotter: Option<Snapshotter> = if config.analysis.metrics_path.is_some() {
+        tracing_subscriber::registry()
+            .with(MetricsLayer::new())
+            .init();
 
-    let recorder = DebuggingRecorder::new();
-    let snapshotter = recorder.snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
 
-    let recorder =
-        TracingContextLayer::only_allow(["__query_id", "__mutation", "__rotation"]).layer(recorder);
-    metrics::set_global_recorder(recorder).expect("failed to install recorder");
+        let recorder = TracingContextLayer::only_allow(["__query_id", "__mutation", "__rotation"])
+            .layer(recorder);
+        metrics::set_global_recorder(recorder).expect("failed to install recorder");
+
+        Some(snapshotter)
+    } else {
+        None
+    };
 
     println!("Starting analysis...");
     let results = run_analysis(config.analysis.clone(), store, graph, &mut rng).await?;
@@ -62,12 +69,11 @@ async fn main() -> Result<()> {
         config.analysis.output_path.display()
     );
 
-    export_metrics_csv(&snapshotter, Path::new(&config.analysis.metrics_path))?;
-
-    println!(
-        "Metrics written to {}.",
-        config.analysis.metrics_path.display()
-    );
+    // Conditionally export metrics
+    if let (Some(snapshotter), Some(metrics_path)) = (&snapshotter, &config.analysis.metrics_path) {
+        export_metrics_csv(snapshotter, metrics_path)?;
+        println!("Metrics written to {}.", metrics_path.display());
+    }
 
     Ok(())
 }

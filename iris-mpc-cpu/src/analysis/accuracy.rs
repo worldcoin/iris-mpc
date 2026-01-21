@@ -45,8 +45,8 @@ pub struct AnalysisConfig {
     pub output_format: String,
     /// Path for the output CSV file.
     pub output_path: PathBuf,
-    /// Path for the output CSV file.
-    pub metrics_path: PathBuf,
+    /// Optional path for the metrics CSV file. If not specified, metrics collection is disabled.
+    pub metrics_path: Option<PathBuf>,
     /// Range of relative rotations to test (e.g., [-3, -2, -1, 0, 1, 2, 3]).
     pub rotations: Range<isize>,
     /// List of mutation amounts
