@@ -295,6 +295,9 @@ struct Buffers {
     x: Option<Vec<CudaSlice<u16>>>,
     y: Option<Vec<CudaSlice<u16>>>,
     z: Option<Vec<CudaSlice<u16>>>,
+    rand_01: Option<Vec<CudaSlice<u32>>>,
+    rand_02: Option<Vec<CudaSlice<u32>>>,
+    rand_12: Option<Vec<CudaSlice<u32>>>,
     chunk_size: usize,
 }
 
@@ -315,6 +318,10 @@ impl Buffers {
         let x = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let y = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let z = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+
+        let rand_01 = Some(Self::allocate_single_buffer(chunk_size * 64, devices));
+        let rand_02 = Some(Self::allocate_single_buffer(chunk_size * 64, devices));
+        let rand_12 = Some(Self::allocate_single_buffer(chunk_size * 64, devices));
         Buffers {
             lifted_shares,
             lifted_shares_buckets1,
@@ -328,6 +335,9 @@ impl Buffers {
             x,
             y,
             z,
+            rand_01,
+            rand_02,
+            rand_12,
             chunk_size,
         }
     }
@@ -1293,37 +1303,19 @@ impl Circuits {
     ) {
         let y_ = Buffers::take_single_buffer(&mut self.buffers.y);
         let z_ = Buffers::take_single_buffer(&mut self.buffers.z);
+        let mut rand_01_ = Buffers::take_single_buffer(&mut self.buffers.rand_01);
+        let mut rand_02_ = Buffers::take_single_buffer(&mut self.buffers.rand_02);
 
         let y = Buffers::get_single_buffer_chunk(&y_, self.chunk_size * 128);
         let mut z = Buffers::get_single_buffer_chunk(&z_, self.chunk_size * 128);
 
-        let mut rands_01: Vec<CudaSlice<u32>> = Vec::with_capacity(y.len());
-        let mut rands_02: Vec<CudaSlice<u32>> = Vec::with_capacity(y.len());
-        for idx in 0..y.len() {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_01_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_02_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-
-            self.fill_my_rng_into_u16(&mut rand_01_alloc, idx, streams);
-            self.fill_their_rng_into_u16(&mut rand_02_alloc, idx, streams);
-
-            rands_01.push(rand_01_alloc);
-            rands_02.push(rand_02_alloc);
-        }
-
-        let mut send = Vec::with_capacity(inp.len());
+        let mut send = Vec::with_capacity(self.chunk_size * 64);
 
         for (idx, (inp, y, rand_01, rand_02)) in
-            izip!(inp, &y, rands_01.iter(), rands_02.iter()).enumerate()
+            izip!(inp, &y, rand_01_.iter_mut(), rand_02_.iter_mut()).enumerate()
         {
-            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
-            let r_01: CudaView<u16> = unsafe { rand_01.transmute(rand_01.len() * 2).unwrap() };
-            let r_02: CudaView<u16> = unsafe { rand_02.transmute(rand_02.len() * 2).unwrap() };
+            let r_01 = self.fill_my_rng_into_u16(rand_01, idx, streams);
+            let r_02 = self.fill_their_rng_into_u16(rand_02, idx, streams);
 
             let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1366,8 +1358,8 @@ impl Circuits {
         for (idx, (inp, res, rand_01, rand_02, y, z)) in izip!(
             inp,
             outp.iter_mut(),
-            rands_01.iter(),
-            rands_02.iter(),
+            rand_01_.iter(),
+            rand_02_.iter(),
             y.iter(),
             z.iter_mut()
         )
@@ -1410,6 +1402,8 @@ impl Circuits {
 
         Buffers::return_single_buffer(&mut self.buffers.y, y_);
         Buffers::return_single_buffer(&mut self.buffers.z, z_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_01, rand_01_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_02, rand_02_);
     }
 
     fn bit_inject_party_1(
@@ -1420,34 +1414,19 @@ impl Circuits {
     ) {
         let x_ = Buffers::take_single_buffer(&mut self.buffers.x);
         let y_ = Buffers::take_single_buffer(&mut self.buffers.y);
+        let mut rand_01_ = Buffers::take_single_buffer(&mut self.buffers.rand_01);
+        let mut rand_12_ = Buffers::take_single_buffer(&mut self.buffers.rand_12);
 
         let x = Buffers::get_single_buffer_chunk(&x_, self.chunk_size * 128);
         let mut y = Buffers::get_single_buffer_chunk(&y_, self.chunk_size * 128);
 
-        let mut rands_01: Vec<CudaSlice<u32>> = Vec::with_capacity(y.len());
-        let mut rands_12: Vec<CudaSlice<u32>> = Vec::with_capacity(y.len());
-        for idx in 0..y.len() {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_01_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_12_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
+        let mut send = Vec::with_capacity(self.chunk_size * 64);
 
-            self.fill_their_rng_into_u16(&mut rand_01_alloc, idx, streams);
-            self.fill_my_rng_into_u16(&mut rand_12_alloc, idx, streams);
-
-            rands_01.push(rand_01_alloc);
-            rands_12.push(rand_12_alloc);
-        }
-
-        let mut send = Vec::with_capacity(inp.len());
-
-        for (idx, (inp, x, rand_01)) in izip!(inp, x.iter(), rands_01.iter()).enumerate() {
-            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
-            let r_01: CudaView<u16> = unsafe { rand_01.transmute(rand_01.len() * 2).unwrap() };
+        for (idx, (inp, x, rand_01, rand_12)) in
+            izip!(inp, x.iter(), rand_01_.iter_mut(), rand_12_.iter_mut()).enumerate()
+        {
+            let r_01 = self.fill_their_rng_into_u16(rand_01, idx, streams);
+            let _ = self.fill_my_rng_into_u16(rand_12, idx, streams);
 
             let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1489,8 +1468,8 @@ impl Circuits {
 
         for (idx, (res, rand_01, rand_12, x, y)) in izip!(
             outp.iter_mut(),
-            rands_01.iter(),
-            rands_12.iter(),
+            rand_01_.iter(),
+            rand_12_.iter(),
             x.iter(),
             y.iter_mut()
         )
@@ -1524,6 +1503,8 @@ impl Circuits {
 
         Buffers::return_single_buffer(&mut self.buffers.x, x_);
         Buffers::return_single_buffer(&mut self.buffers.y, y_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_01, rand_01_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_12, rand_12_);
     }
 
     fn bit_inject_party_2(
@@ -1534,14 +1515,13 @@ impl Circuits {
     ) {
         let x_ = Buffers::take_single_buffer(&mut self.buffers.x);
         let z_ = Buffers::take_single_buffer(&mut self.buffers.z);
+        let mut rand_02_ = Buffers::take_single_buffer(&mut self.buffers.rand_02);
+        let mut rand_12_ = Buffers::take_single_buffer(&mut self.buffers.rand_12);
 
         let mut x = Buffers::get_single_buffer_chunk(&x_, self.chunk_size * 128);
         let z = Buffers::get_single_buffer_chunk(&z_, self.chunk_size * 128);
 
-        let mut send = Vec::with_capacity(inp.len());
-
-        let mut rands_02: Vec<CudaSlice<u32>> = Vec::with_capacity(x.len());
-        let mut rands_12: Vec<CudaSlice<u32>> = Vec::with_capacity(x.len());
+        let mut send = Vec::with_capacity(self.chunk_size * 64);
 
         result::group_start().unwrap();
         for (idx, x) in x.iter_mut().enumerate() {
@@ -1551,31 +1531,20 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        for idx in 0..x.len() {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_02_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_12_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-
-            self.fill_my_rng_into_u16(&mut rand_02_alloc, idx, streams);
-            self.fill_their_rng_into_u16(&mut rand_12_alloc, idx, streams);
-
-            rands_02.push(rand_02_alloc);
-            rands_12.push(rand_12_alloc);
-        }
-
-        for (idx, (inp, rand_12, x, z)) in
-            izip!(inp, rands_12.iter(), x.iter_mut(), z.iter()).enumerate()
+        for (idx, (inp, rand_12, rand_02, x, z)) in izip!(
+            inp,
+            rand_12_.iter_mut(),
+            rand_02_.iter_mut(),
+            x.iter_mut(),
+            z.iter()
+        )
+        .enumerate()
         {
+            let r_12 = self.fill_their_rng_into_u16(rand_12, idx, streams);
+            let _ = self.fill_my_rng_into_u16(rand_02, idx, streams);
+
             // ChaCha decrypt
             self.chacha2_decrypt_u16(x, idx, streams);
-
-            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
-            let r_12: CudaView<u16> = unsafe { rand_12.transmute(rand_12.len() * 2).unwrap() };
 
             let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1610,8 +1579,8 @@ impl Circuits {
         for (idx, (inp, res, rand_02, rand_12, x, z)) in izip!(
             inp,
             outp.iter_mut(),
-            rands_02.iter(),
-            rands_12.iter(),
+            rand_02_.iter(),
+            rand_12_.iter(),
             x.iter_mut(),
             z.iter()
         )
@@ -1651,6 +1620,8 @@ impl Circuits {
 
         Buffers::return_single_buffer(&mut self.buffers.x, x_);
         Buffers::return_single_buffer(&mut self.buffers.z, z_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_02, rand_02_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_12, rand_12_);
     }
 
     pub fn bit_inject(

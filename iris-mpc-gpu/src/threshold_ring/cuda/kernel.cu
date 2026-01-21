@@ -537,12 +537,8 @@ extern "C" __global__ void packed_bit_inject_party_0_a(U16 *y, U64 *in_b,
   if (i < 64 * n) {
     size_t wordindex = i / 64;
     size_t bitindex = i % 64;
-    bool my_bit_b = ((in_b[wordindex] >> bitindex) & 1) == 1;
-    if (my_bit_b) {
-      y[i] = rand_01[i] - rand_02[i];
-    } else {
-      y[i] = -rand_02[i];
-    }
+    U16 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    y[i] = my_bit_b * rand_01[i] - rand_02[i];
   }
 }
 
@@ -609,9 +605,8 @@ extern "C" __global__ void packed_bit_inject_party_2_a(U16 *z, const U64 *in_a,
   if (i < 64 * n) {
     size_t wordindex = i / 64;
     size_t bitindex = i % 64;
-    bool my_bit_a = ((in_a[wordindex] >> bitindex) & 1) == 1;
-    z[i] = -rand_12[i];
-    z[i] += my_bit_a ? x[i] : 0;
+    U16 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
+    z[i] = my_bit_a * x[i] - rand_12[i];
   }
 }
 
@@ -629,7 +624,7 @@ packed_bit_inject_party_2_b(U16 *out_a, U16 *out_b, const U64 *in_a,
   if (i < 64 * n) {
     size_t wordindex = i / 64;
     size_t bitindex = i % 64;
-    bool my_bit_a = (in_a[wordindex] >> bitindex) & 1;
+    U16 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
     out_a[i] = -((rand_02[i] + z[i]) << 1) + my_bit_a;
     out_b[i] = x[i] - (rand_12[i] << 1);
   }
