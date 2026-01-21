@@ -124,6 +124,9 @@ mod bitinject_test {
                 .unwrap();
         }
         cudarc::nccl::result::group_end().unwrap();
+
+        party.synchronize_streams(streams);
+
         for (idx, res) in x.iter_mut().enumerate() {
             c.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap())
         }
@@ -177,7 +180,7 @@ mod bitinject_test {
             party.synchronize_streams(&streams);
 
             let now = Instant::now();
-            party.bit_inject_ot(&code_gpu, &mut res, &streams);
+            party.bit_inject(&code_gpu, &mut res, &streams);
             tracing::info!("id = {}, compute time: {:?}", id, now.elapsed());
 
             let now = Instant::now();
