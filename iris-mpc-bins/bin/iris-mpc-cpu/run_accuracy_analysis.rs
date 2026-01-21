@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
         config.analysis.output_path.display()
     );
 
-    export_metrics_csv(&snapshotter, Path::new("metrics.csv"))?;
+    export_metrics_csv(&snapshotter, Path::new(&config.analysis.metrics_path))?;
 
     println!(
         "Metrics written to {}.",
