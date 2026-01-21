@@ -1,7 +1,7 @@
 use crate::{
     join_runners,
     utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+        genesis_runner::{self, default_genesis_args, MAX_INDEXATION_ID},
         mpc_node::{DbAssertions, MpcNodes},
         plaintext_genesis::PlaintextGenesis,
         HawkConfigs, TestRun, TestRunContextInfo,
@@ -26,14 +26,15 @@ impl Test {
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<()> {
         // Execute genesis
+        let genesis_args = default_genesis_args();
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
+            let args = genesis_args.clone();
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        DEFAULT_GENESIS_ARGS.batch_size,
-                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
-                        DEFAULT_GENESIS_ARGS.max_indexation_id,
+                        args.batch_size_config,
+                        args.max_indexation_id,
                         false,
                         false,
                     ),
@@ -51,7 +52,7 @@ impl TestRun for Test {
         // Run plaintext genesis
         let config = &self.configs[0];
         let plaintext_irises = genesis_runner::get_irises();
-        let expected = PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
+        let expected = PlaintextGenesis::new(default_genesis_args(), config, &plaintext_irises)
             .run()
             .await
             .unwrap();

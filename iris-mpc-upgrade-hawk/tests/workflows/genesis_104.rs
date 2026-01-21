@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     join_runners,
     utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+        genesis_runner::{self, default_genesis_args, MAX_INDEXATION_ID},
         modifications::{
             self, ModificationInput,
             ModificationType::{Reauth, ResetUpdate},
@@ -43,14 +43,15 @@ impl TestRun for Test {
     // then insert modifications
     // then run genesis again
     async fn exec(&mut self) -> Result<()> {
-        // Execute genesis
+        // Execute genesis - first run indexing up to 50
+        let genesis_args = default_genesis_args();
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
+            let batch_size_config = genesis_args.batch_size_config.clone();
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        DEFAULT_GENESIS_ARGS.batch_size,
-                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        batch_size_config,
                         50,
                         false,
                         false,
@@ -68,14 +69,14 @@ impl TestRun for Test {
         }
         join_runners!(join_set);
 
+        // Execute genesis - second run indexing up to 100
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
+            let batch_size_config = genesis_args.batch_size_config.clone();
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
+                        batch_size_config,
                         100,
                         false,
                         false,
@@ -96,7 +97,7 @@ impl TestRun for Test {
         state_0.src_db.irises =
             plaintext_genesis::init_plaintext_irises_db(&genesis_runner::get_irises());
         state_0.config = plaintext_genesis::init_plaintext_config(&self.configs[0]);
-        state_0.args = DEFAULT_GENESIS_ARGS;
+        state_0.args = default_genesis_args();
         state_0.args.max_indexation_id = 50;
 
         let mut state_1 = run_plaintext_genesis(state_0)
