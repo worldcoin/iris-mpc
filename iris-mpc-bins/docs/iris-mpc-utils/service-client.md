@@ -38,7 +38,7 @@ The tool is designed to be used in the following environments:
 source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/activate
 ```
 
-HINT: you may wish to add activation to your local `~/.bashrc` file.
+*HINT*: you may wish to add activation to your local `~/.bashrc` file.
 
 ## Step 3: View Help
 
@@ -56,7 +56,7 @@ Initialises local resources for each environment.  One time execution.
 hnsw-service-client-init
 ```
 
-NOTE: you will be instructed to review/edit the following files:
+*NOTE*: you will be instructed to review/edit the following files:
 
 ```
 YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/envs/dev-dkr/aws-credentials
@@ -71,7 +71,7 @@ Starts service client session against a supported environment.  One time executi
 hnsw-service-client-set-env env="dev-dkr"
 ```
 
-NOTE: Repeat if you switch between supported environments within a terminal session.
+*NOTE*: Repeat if you switch between supported environments within a terminal session.
 
 ## Step 6: Execute
 
