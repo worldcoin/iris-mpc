@@ -2,17 +2,13 @@
 
 function _help() {
     echo "
+    COMMAND
+    ----------------------------------------------------------------
+    hnsw-service-client-init
+
     DESCRIPTION
     ----------------------------------------------------------------
-    Copies HNSW service client AWS config files to local file system.
-
-    ARGS
-    ----------------------------------------------------------------
-    env         Environment: lcl-dkr | dev-stg. Optional.
-
-    DEFAULTS
-    ----------------------------------------------------------------
-    env         lcl-dkr
+    Initialises HNSW service client for subsequent usage.
     "
 }
 
@@ -38,7 +34,6 @@ function _get_path_to_here()
 # ENTRY POINT
 # ----------------------------------------------------------------
 
-unset _ENV
 unset _HELP
 
 for ARGUMENT in "$@"
@@ -46,7 +41,6 @@ do
     KEY=$(echo "$ARGUMENT" | cut -f1 -d=)
     VALUE=$(echo "$ARGUMENT" | cut -f2 -d=)
     case "$KEY" in
-        env) _ENV=${VALUE} ;;
         help) _HELP="show" ;;
         *)
     esac
@@ -55,5 +49,5 @@ done
 if [ "${_HELP:-""}" = "show" ]; then
     _help
 else
-    _main "${_ENV:-"lcl-dkr"}"
+    _main
 fi

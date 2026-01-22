@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+# ###############################################################
+# PATH
+# ###############################################################
+
+# Set path -> here.
+export _SC_HERE="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# ###############################################################
+# COMMANDS
+# ###############################################################
+
+alias hnsw-service-client-exec='source $_SC_HERE/exec.sh'
+alias hnsw-service-client-init-aws-config='source $_SC_HERE/init_aws_config.sh'
+alias hnsw-service-client-set-aws-config='source $_SC_HERE/set_aws_config.sh'

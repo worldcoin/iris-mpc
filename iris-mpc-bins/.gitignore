@@ -1,2 +1,2 @@
 /data
-/resources/service-client/dev-stg/aws-credentials
+/scripts/iris-mpc-utils/service-client/envs/dev-stg/aws-credentials
