@@ -142,51 +142,33 @@ pub trait BatchIterator {
 pub enum BatchSize {
     /// Static batch size.
     Static(usize),
-    /// Dynamic batch size with size error coefficient & hnsw-m param.
+    /// Dynamic batch size with size error coefficient, hnsw-m param, and cap.
     #[allow(non_snake_case)]
     Dynamic {
         error_correction: usize,
         hnsw_M: usize,
+        cap: usize,
     },
 }
 
 /// Constructor.
 impl BatchSize {
     #[allow(non_snake_case)]
-    pub fn new_dynamic(error_correction: usize, hnsw_M: usize) -> Self {
-        // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
+    pub fn new_dynamic(error_correction: usize, hnsw_M: usize, cap: usize) -> Self {
         log_info(format!(
-            "Creating dynamic batch size: error-correction={}, hnsw-M={}",
-            error_correction, hnsw_M
+            "Creating dynamic batch size: error-correction={}, hnsw-M={}, cap={}",
+            error_correction, hnsw_M, cap
         ));
         BatchSize::Dynamic {
             error_correction,
             hnsw_M,
+            cap,
         }
     }
 
     pub fn new_static(size: usize) -> Self {
-        // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
         log_info(format!("Creating static batch size: size={}", size));
         BatchSize::Static(size)
-    }
-
-    #[allow(non_snake_case)]
-    pub fn new_static_from_dynamic_formula(
-        last_indexed_id: IrisSerialId,
-        error_correction: usize,
-        hnsw_M: usize,
-    ) -> Self {
-        // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
-        log_info(format!(
-            "Creating static batch size from dynamic formula: last-indexed-id={}, error-correction={}, hnsw-M={}",
-            last_indexed_id, error_correction, hnsw_M
-        ));
-        Self::new_static(Self::get_dynamic_size(
-            last_indexed_id,
-            error_correction,
-            hnsw_M,
-        ))
     }
 }
 
@@ -199,11 +181,12 @@ impl fmt::Display for BatchSize {
             BatchSize::Dynamic {
                 error_correction,
                 hnsw_M,
+                cap,
             } => {
                 write!(
                     f,
-                    "Dynamic(error-correction={}, hnsw-M={})",
-                    error_correction, hnsw_M
+                    "Dynamic(error-correction={}, hnsw-M={}, cap={})",
+                    error_correction, hnsw_M, cap
                 )
             }
         }
@@ -384,11 +367,13 @@ impl BatchSize {
             BatchSize::Dynamic {
                 error_correction: r,
                 hnsw_M: M,
+                cap,
             } => {
-                let batch_size = Self::get_dynamic_size(last_indexed_id, *r, *M);
+                let dynamic_size = Self::get_dynamic_size(last_indexed_id, *r, *M);
+                let batch_size = dynamic_size.min(*cap);
                 log_info(format!(
-                    "Calculated batch size: last-indexed-id={} :: size={} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
-                    last_indexed_id, batch_size, last_indexed_id, M, r
+                    "Calculated batch size: last-indexed-id={} :: size={} (formula: min(N/(Mr-1)+1, cap), where N={}, M={}, r={}, cap={}, uncapped={})",
+                    last_indexed_id, batch_size, last_indexed_id, M, r, cap, dynamic_size
                 ));
 
                 batch_size
@@ -439,6 +424,7 @@ mod tests {
     const SIZE_OF_IRIS_DB: usize = 100;
     const STATIC_BATCH_SIZE_1: usize = 1;
     const STATIC_BATCH_SIZE_10: usize = 10;
+    const DYNAMIC_BATCH_CAP: usize = 1000;
 
     impl BatchSize {
         fn new_1() -> Self {
@@ -448,7 +434,7 @@ mod tests {
             Self::new_static(STATIC_BATCH_SIZE_1)
         }
         fn new_3() -> Self {
-            Self::new_dynamic(BATCH_SIZE_ERROR_RATE, HNSW_PARAM_M)
+            Self::new_dynamic(BATCH_SIZE_ERROR_RATE, HNSW_PARAM_M, DYNAMIC_BATCH_CAP)
         }
     }
 
