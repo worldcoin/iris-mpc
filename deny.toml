@@ -2,6 +2,16 @@
 # Cargo deny will check dependencies via `--all-features`
 all-features = true
 
+[bans]
+multiple-versions = "warn"
+
+# Deny multiple versions of metrics - having multiple versions causes metrics
+# to use separate global recorders, silently breaking metrics collection.
+[[bans.deny]]
+name = "metrics"
+deny-multiple-versions = true
+reason = "metrics crate uses a global recorder - multiple versions may break metrics silently"
+
 [advisories]
 version = 2
 ignore = [

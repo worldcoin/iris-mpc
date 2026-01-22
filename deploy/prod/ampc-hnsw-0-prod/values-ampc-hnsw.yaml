@@ -11,9 +11,6 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-0"
 
-  - name: SMPC__PARTY_ID
-    value: "0"
-
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
@@ -21,19 +18,22 @@ env:
         name: application
 
   - name: SMPC__MAX_DB_SIZE
-    value: "2000000"
+    value: "20000000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "32"
 
+  - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
+    value: "30"
+
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"
+    value: "1240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "8"
+    value: "48"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
@@ -41,23 +41,14 @@ env:
   - name: SMPC__DISABLE_PERSISTENCE
     value: "false"
 
-  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "512"
-
-  - name: SMPC__N_BUCKETS
-    value: "16"
-
-  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-    value: "false"
-
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
 
   - name: SMPC__HAWK_SERVER_RESETS_ENABLED
-    value: "false"
+    value: "true"
 
   - name: SMPC__HAWK_SERVER_DELETIONS_ENABLED
-    value: "false"
+    value: "true"
 
   - name: SMPC__LUC_ENABLED
     value: "true"
@@ -74,11 +65,14 @@ env:
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
 
-  - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
-    value: '3000'
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
+    value: "0"
 
-  - name: SMPC__NODE_HOSTNAMES
+  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
     value: '["0.0.0.0","pod.1.prod.hnsw.worldcoin.org","pod.2.prod.hnsw.worldcoin.org"]'
+
+  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
+    value: $(IMAGE_NAME)
 
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-mpc-prod-smpcv2-sns-requests"
@@ -136,14 +130,21 @@ env:
   - name: SMPC__SERVICE__METRICS__PREFIX
     value: "hnsw-0"
 
-  - name: SMPC__IMAGE_NAME
-    value: $(IMAGE_NAME)
-
   - name: SMPC__ENABLE_MODIFICATIONS_SYNC
     value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
+
+
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
+
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERTS
+    value: '["/usr/local/share/ca-certificates/ca_party_prod_0.crt", "/usr/local/share/ca-certificates/ca_party_prod_1.crt", "/usr/local/share/ca-certificates/ca_party_prod_2.crt"]'
 
 initContainer:
   enabled: true
