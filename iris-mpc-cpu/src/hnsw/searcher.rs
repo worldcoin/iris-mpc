@@ -1035,13 +1035,8 @@ impl HnswSearcher {
         .instrument(eval_dist_span.clone())
         .await?;
 
-        let visited_nodes_metrics =
-            metrics::counter!("visited_nodes_count", &[("layer", lc.to_string())]);
-        let opened_nodes_metrics =
-            metrics::counter!("opened_nodes_count", &[("layer", lc.to_string())]);
-
-        opened_nodes_metrics.increment(init_opened.len() as u64);
-        visited_nodes_metrics.increment(init_links.len() as u64);
+        // Track totals for metrics (emitted as histograms at end)
+        let mut opened_so_far = init_opened.len();
         let mut visited_so_far = init_links.len();
 
         opened.extend(init_opened);
@@ -1107,8 +1102,7 @@ impl HnswSearcher {
             .instrument(eval_dist_span.clone())
             .await?;
 
-            opened_nodes_metrics.increment(new_opened.len() as u64);
-            visited_nodes_metrics.increment(c_links.len() as u64);
+            opened_so_far += new_opened.len();
             visited_so_far += c_links.len();
 
             debug!(
@@ -1195,6 +1189,8 @@ impl HnswSearcher {
 
         let metrics_labels = [("layer", lc.to_string())];
         metrics::histogram!("search_depth", &metrics_labels).record(depth as f64);
+        metrics::histogram!("opened_nodes_count", &metrics_labels).record(opened_so_far as f64);
+        metrics::histogram!("visited_nodes_count", &metrics_labels).record(visited_so_far as f64);
         Ok(())
     }
 
@@ -1453,7 +1449,7 @@ impl HnswSearcher {
             };
 
             Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
-            metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
+            metrics::histogram!("search_to_insert_layer_duration", "layer" => lc.to_string())
                 .record(layer_start.elapsed().as_secs_f64());
 
             // Save links in output only for layers in which query is inserted

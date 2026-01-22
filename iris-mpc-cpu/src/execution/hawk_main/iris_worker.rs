@@ -100,8 +100,10 @@ pub struct IrisPoolHandle {
     workers: Arc<[Sender<IrisTask>]>,
     /// A counter used for round-robin task distribution.
     next_counter: Arc<AtomicU64>,
-    /// A metric to record the latency of task execution.
-    metric_latency: FastHistogram,
+    /// Latency metric for dot_product_batch (used with Fhd distance).
+    metric_dot_product_batch_latency: FastHistogram,
+    /// Latency metric for rotation_aware_dot_product_batch (used with MinFhd distance).
+    metric_rotation_aware_dot_product_latency: FastHistogram,
 }
 
 impl IrisPoolHandle {
@@ -148,13 +150,17 @@ impl IrisPoolHandle {
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
+        let start = Instant::now();
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::DotProductBatch {
             query,
             vector_ids,
             rsp: tx,
         };
-        self.submit(task, rx).await
+        let result = self.submit(task, rx).await;
+        self.metric_dot_product_batch_latency
+            .record(start.elapsed().as_secs_f64());
+        result
     }
 
     /// Maximum size of batches for rotation aware dot product batch tasks.
@@ -220,7 +226,8 @@ impl IrisPoolHandle {
         let results = futures::future::try_join_all(responses).await?;
         let results = results.into_iter().flatten().collect();
 
-        self.metric_latency.record(start.elapsed().as_secs_f64());
+        self.metric_rotation_aware_dot_product_latency
+            .record(start.elapsed().as_secs_f64());
         Ok(results)
     }
 
@@ -372,7 +379,12 @@ pub fn init_workers(
     IrisPoolHandle {
         workers: channels.into(),
         next_counter: Arc::new(AtomicU64::new(0)),
-        metric_latency: FastHistogram::new("iris_worker.latency"),
+        metric_dot_product_batch_latency: FastHistogram::new(
+            "iris_worker.dot_product_batch_latency",
+        ),
+        metric_rotation_aware_dot_product_latency: FastHistogram::new(
+            "iris_worker.rotation_aware_dot_product_latency",
+        ),
     }
 }
 
