@@ -63,7 +63,7 @@ YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/envs/dev-stg/aws-
 Start a service client session against a supported environment.  To be executed once per terminal session.
 
 ```
-hnsw-service-client-start env="dev-dkr"
+hnsw-service-client-set-env env="dev-dkr"
 ```
 
 NOTE: To be executed once *per terminal session*.  Repeat if you switch between supported environments within a session.

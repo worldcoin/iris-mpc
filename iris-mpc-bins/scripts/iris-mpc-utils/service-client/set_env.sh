@@ -4,33 +4,29 @@ function _help() {
     echo "
     COMMAND
     ----------------------------------------------------------------
-    hnsw-service-client-init-session
+    hnsw-service-client-set-env
 
     DESCRIPTION
     ----------------------------------------------------------------
-    Initialises HNSW service client for immediate usage.
+    Sets HNSW service client environment for immediate usage.
 
     ARGS
     ----------------------------------------------------------------
-    env         Environment: lcl-dkr | dev-stg.
+    env         Environment: dev-dkr | dev-stg.
 
     DEFAULTS
     ----------------------------------------------------------------
-    env         lcl-dkr
+    env         dev-dkr
     "
 }
 
 function _main()
 {
-    local path_to_resources=$(_get_path_to_env_folder ${1})
+    local env=${1}
 
-    cp "${path_to_resources}/aws-config" "${HOME}/.aws/config"
-    cp "${path_to_resources}/aws-credentials" "${HOME}/.aws/credentials"
-}
-
-function _get_path_to_env_folder()
-{
-    echo "$(_get_path_to_here)/env-${1}"
+    # Copy aws config/credential files to ~/.aws folder.
+    cp "$(_get_path_to_env_asset ${env} "aws-config")" "${HOME}/.aws/config"
+    cp "$(_get_path_to_env_asset ${env} "aws-credentials")" "${HOME}/.aws/credentials"
 }
 
 function _get_path_to_here()
@@ -41,6 +37,8 @@ function _get_path_to_here()
 # ----------------------------------------------------------------
 # ENTRY POINT
 # ----------------------------------------------------------------
+
+source "$(_get_path_to_here)/utils.sh"
 
 unset _ENV
 unset _HELP
@@ -59,5 +57,5 @@ done
 if [ "${_HELP:-""}" = "show" ]; then
     _help
 else
-    _main "${_ENV:-"lcl-dkr"}"
+    _main "${_ENV:-"dev-dkr"}"
 fi

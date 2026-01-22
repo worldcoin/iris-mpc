@@ -14,15 +14,45 @@ function _help() {
 
 function _main()
 {
-    local path_to_resources=$(_get_path_to_env_folder ${1})
+    _init_fsys
+    _init_exec_configs
+    _init_envs
 
-    cp "${path_to_resources}/aws-config" "${HOME}/.aws/config"
-    cp "${path_to_resources}/aws-credentials" "${HOME}/.aws/credentials"
+    echo "------------------------------------------------------------------------------------------"
+    echo "HNSW service client has been initialised.  Please edit the following aws-credentials files as necessary:"
+    echo "$(_get_path_to_env "dev-dkr")/aws-credentials"
+    echo "$(_get_path_to_env "dev-stg")/aws-credentials"
+    echo "------------------------------------------------------------------------------------------"
 }
 
-function _get_path_to_env_folder()
+function _init_exec_configs()
 {
-    echo "$(_get_path_to_here)/env-${1}"
+    cp "$(_get_path_to_resources)/exec-config-example-1.toml" "$(_get_path_to_exec_configs)/example-1.toml"
+    cp "$(_get_path_to_resources)/exec-config-example-2.toml" "$(_get_path_to_exec_configs)/example-2.toml"
+}
+
+function _init_envs()
+{
+    local envs=("dev-dkr" "dev-stg")
+    for env in "${envs[@]}"; do
+        mkdir "$(_get_path_to_env ${env})"
+        local resources=("aws-config" "aws-config.toml" "aws-credentials" "aws_evars.sh")
+        for resource in "${resources[@]}"; do
+            cp "$(_get_path_to_resource_of_env ${env} "${resource}")" \
+               "$(_get_path_to_env ${env})/${resource}"
+        done
+    done
+}
+
+function _init_fsys()
+{
+    local paths=($(_get_path_to_exec_configs) $(_get_path_to_envs))
+    for path in "${paths[@]}"; do
+        if [ -d ${path} ]; then
+            rm -rf "${path}"
+        fi
+        mkdir -p "${path}"
+    done
 }
 
 function _get_path_to_here()
@@ -33,6 +63,8 @@ function _get_path_to_here()
 # ----------------------------------------------------------------
 # ENTRY POINT
 # ----------------------------------------------------------------
+
+source "$(_get_path_to_here)/utils.sh"
 
 unset _HELP
 

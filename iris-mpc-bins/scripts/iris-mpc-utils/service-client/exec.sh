@@ -12,49 +12,27 @@ function _help() {
 
     ARGS
     ----------------------------------------------------------------
-    env         Environment: lcl-dkr | dev-stg.
+    env         Environment: dev-dkr | dev-stg.
     config      Path to a service client config toml file.
 
     DEFAULTS
     ----------------------------------------------------------------
-    env         lcl-dkr
-    config      $(_get_path_to_template "exec-config-example.toml")
+    env         dev-dkr
+    config      $(_get_path_to_exec_configs)/example-1.toml
     "
 }
 
 function _main()
 {
-    local env=${1}
-    local cfg=${2}
+    local path_to_aws_config=$(_get_path_to_env_asset ${1} "aws-config.toml")
+    local path_to_exec_config=${2:-$(_get_path_to_exec_configs)/example-1.toml}
 
     pushd "$(_get_path_to_iris_mpc_bins)" || exit
     cargo run \
         --release --bin service-client -- \
-        --path-to-config "${cfg:-$(_get_path_to_template "exec-config-example.toml")}" \
-        --path-to-config-aws "$(_get_path_to_aws_config "${env}")"
+        --path-to-config "${path_to_exec_config}" \
+        --path-to-config-aws "${path_to_aws_config}"
     popd || exit
-}
-
-function _get_path_to_aws_config()
-{
-    local env=${1}
-
-    echo "$(_get_path_to_env ${1})/config-aws.toml"
-}
-
-function _get_path_to_env()
-{
-    echo "$(_get_path_to_here)/envs/${1}"
-}
-
-function _get_path_to_here()
-{
-    echo $( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
-}
-
-function _get_path_to_template()
-{
-    echo "$(_get_path_to_here)/templates/${1}"
 }
 
 function _get_path_to_iris_mpc_bins()
@@ -62,33 +40,27 @@ function _get_path_to_iris_mpc_bins()
     echo "$(_get_path_to_ancestor "$(_get_path_to_here)" "1")"
 }
 
-function _get_path_to_ancestor()
+function _get_path_to_here()
 {
-    local path=${1}
-    local steps=${2}
-
-    for idx in $(seq 0 ${steps})
-    do
-        path=$( cd "$( dirname "${path}" )" && pwd )
-    done
-
-    echo ${path}
+    echo $( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 }
 
 # ----------------------------------------------------------------
 # ENTRY POINT
 # ----------------------------------------------------------------
 
+source "$(_get_path_to_here)/utils.sh"
+
 unset _ENV
 unset _HELP
-unset _PATH_TO_CONFIG
+unset _PATH_TO_EXEC_CONFIG
 
 for ARGUMENT in "$@"
 do
     KEY=$(echo "$ARGUMENT" | cut -f1 -d=)
     VALUE=$(echo "$ARGUMENT" | cut -f2 -d=)
     case "$KEY" in
-        config) _PATH_TO_CONFIG=${VALUE} ;;
+        config) _PATH_TO_EXEC_CONFIG=${VALUE} ;;
         env) _ENV=${VALUE} ;;
         help) _HELP="show" ;;
         *)
@@ -99,6 +71,6 @@ if [ "${_HELP:-""}" = "show" ]; then
     _help
 else
     _main \
-        "${_ENV:-"lcl-dkr"}" \
-        "${_PATH_TO_CONFIG}"
+        "${_ENV:-"dev-dkr"}" \
+        "${_PATH_TO_EXEC_CONFIG}"
 fi
