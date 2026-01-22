@@ -179,8 +179,7 @@ impl DistanceMinimalRotation {
             let total_secs = total_duration.as_secs_f64();
             let gr_to_lifted_percent = (gr_to_lifted_duration.as_secs_f64() / total_secs) * 100.0;
             let oblivious_min_percent = (oblivious_min_duration.as_secs_f64() / total_secs) * 100.0;
-            metrics::histogram!("eval_distance_gr_to_lifted_percent")
-                .record(gr_to_lifted_percent);
+            metrics::histogram!("eval_distance_gr_to_lifted_percent").record(gr_to_lifted_percent);
             metrics::histogram!("eval_distance_oblivious_min_percent")
                 .record(oblivious_min_percent);
         }
