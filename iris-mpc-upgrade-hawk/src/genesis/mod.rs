@@ -653,7 +653,6 @@ async fn exec_indexation(
 
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
-
             last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
@@ -1101,6 +1100,7 @@ async fn get_results_thread(
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
                     // get iris shares to persist
+                    let start = Instant::now();
                     let left_store = &imem_iris_stores_bg[LEFT];
                     let right_store = &imem_iris_stores_bg[RIGHT];
 
@@ -1150,7 +1150,8 @@ async fn get_results_thread(
                     log_info(format!(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
                     ));
-                    metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
+                    metrics::gauge!("genesis_batch_indexation_complete").set(last_serial_id);
+                    metrics::histogram!("genesis_batch_persist_duration").record(start.elapsed().as_secs_f64());
                     let _ = done_tx.send(());
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
