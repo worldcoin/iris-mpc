@@ -26,14 +26,15 @@ impl Test {
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<()> {
         // Execute genesis
+        let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
+            let args = genesis_args;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        DEFAULT_GENESIS_ARGS.batch_size,
-                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
-                        DEFAULT_GENESIS_ARGS.max_indexation_id,
+                        args.batch_size_config,
+                        args.max_indexation_id,
                         false,
                         false,
                     ),

@@ -18,6 +18,7 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
+pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
     genesis::{
@@ -29,8 +30,8 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
-        IndexationError, JobRequest, JobResult,
+        utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
+        JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
@@ -45,19 +46,17 @@ use tokio::{
     time::timeout,
 };
 
+pub const PERSIST_DELAY: usize = 32;
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ExecutionArgs {
-    // Serial idenitifer of maximum indexed Iris.
+    // Serial identifier of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
-    // Initial batch size for indexing.
-    batch_size: usize,
-
-    // Error rate to be applied when calculating dynamic batch sizes.
-    batch_size_error_rate: usize,
+    // Batch size configuration (static or dynamic with cap).
+    batch_size_config: BatchSizeConfig,
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_snapshot: bool,
@@ -69,15 +68,13 @@ pub struct ExecutionArgs {
 /// Constructor.
 impl ExecutionArgs {
     pub fn new(
-        batch_size: usize,
-        batch_size_error_rate: usize,
+        batch_size_config: BatchSizeConfig,
         max_indexation_id: IrisSerialId,
         perform_snapshot: bool,
         use_backup_as_source: bool,
     ) -> Self {
         Self {
-            batch_size,
-            batch_size_error_rate,
+            batch_size_config,
             max_indexation_id,
             perform_snapshot,
             use_backup_as_source,
@@ -122,7 +119,7 @@ impl ExecutionContextInfo {
         max_modification_persist_id: i64,
     ) -> Self {
         Self {
-            args: *args,
+            args: args.clone(),
             config: config.clone(),
             excluded_serial_ids,
             last_indexed_id,
@@ -160,10 +157,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     log_info(String::from("Setup complete."));
     log_info(format!(
-        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
+        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}\n  Use backup as source: {}",
         args.max_indexation_id,
-        args.batch_size,
-        args.batch_size_error_rate,
+        args.batch_size_config,
         args.perform_snapshot,
         args.use_backup_as_source,
     ));
@@ -301,8 +297,7 @@ async fn exec_setup(
 
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
-        args.batch_size,
-        args.batch_size_error_rate,
+        args.batch_size_config,
         excluded_serial_ids.clone(),
         last_indexed_id,
         args.max_indexation_id,
@@ -494,7 +489,9 @@ async fn exec_delta(
 
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        for modification in modifications {
+        let end = modifications.len().saturating_sub(1);
+        let mut now = Instant::now();
+        for (idx, modification) in modifications.iter().enumerate() {
             log_info(format!(
                 "Applying modification: type={} id={}, serial_id={:?}",
                 modification.request_type, modification.id, modification.serial_id
@@ -527,8 +524,22 @@ async fn exec_delta(
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
+            let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
+            let is_sync_batch = idx % (PERSIST_DELAY - 1) == 0 || idx == end;
+            if is_sync_batch {
+                let wait_start = Instant::now();
+                done_rx.await.map_err(|_| {
+                    eyre!("results thread terminated before acknowledging modification")
+                })?;
+                metrics::histogram!("genesis_persist_wait_duration")
+                    .record(wait_start.elapsed().as_secs_f64());
+                hawk_handle.sync_peers().await?;
+            }
+            metrics::histogram!("genesis_modification_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
+                .record(now.elapsed().as_secs_f64());
+            now = Instant::now();
         }
 
         Ok(())
@@ -596,11 +607,11 @@ async fn exec_indexation(
         ctx.last_indexed_id, ctx.args.max_indexation_id
     ));
 
-    // Set batch size.
-    let batch_size = match ctx.args.batch_size {
-        0 => BatchSize::new_dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
-        _ => BatchSize::new_static(ctx.args.batch_size),
-    };
+    // Set batch size from config.
+    let batch_size = ctx
+        .args
+        .batch_size_config
+        .compute_batch_size(ctx.config.hnsw_param_M);
 
     if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
         log_warn(format!(
@@ -619,6 +630,7 @@ async fn exec_indexation(
     log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set indexation result.
+    let mut persist_ch = None;
     let res: Result<()> = async {
         log_info(String::from("Entering main indexation loop"));
 
@@ -657,9 +669,24 @@ async fn exec_indexation(
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
+            let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
-            // Signal.
+            let is_sync_batch = batch.batch_id % (PERSIST_DELAY - 1) == 0;
+            if is_sync_batch {
+                persist_ch.take();
+                let wait_start = Instant::now();
+                done_rx.await.map_err(|_| {
+                    eyre!("results thread terminated before acknowledging batch")
+                })?;
+                metrics::histogram!("genesis_persist_wait_duration")
+                    .record(wait_start.elapsed().as_secs_f64());
+                hawk_handle.sync_peers().await?;
+            } else {
+                persist_ch.replace(done_rx);
+            }
+            metrics::histogram!("genesis_batch_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
+                .record(now.elapsed().as_secs_f64());
             log_info(format!(
                 "Indexing new batch: {} :: time {:?}s",
                 batch,
@@ -675,6 +702,15 @@ async fn exec_indexation(
     match res {
         // Success.
         Ok(_) => {
+            if let Some(rx) = persist_ch.take() {
+                let wait_start = Instant::now();
+                rx.await.map_err(|_| {
+                    eyre!("results thread terminated before acknowledging final batch")
+                })?;
+                metrics::histogram!("genesis_persist_wait_duration")
+                    .record(wait_start.elapsed().as_secs_f64());
+                hawk_handle.sync_peers().await?;
+            }
             log_info(String::from(
                 "Waiting for last batch results to be processed before \
                  shutting down...",
@@ -720,7 +756,10 @@ async fn exec_snapshot(
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
-        ctx.last_indexed_id, ctx.args.max_indexation_id, ctx.args.batch_size, unix_timestamp
+        ctx.last_indexed_id,
+        ctx.args.max_indexation_id,
+        ctx.args.batch_size_config.to_aws_identifier(),
+        unix_timestamp
     );
 
     // Set cluster ID.
@@ -1045,7 +1084,7 @@ async fn get_results_thread(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<Sender<JobResult>> {
-    let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<JobResult>(PERSIST_DELAY);
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
     let graph_store_bg = Arc::clone(&graph_store);
@@ -1057,6 +1096,7 @@ async fn get_results_thread(
                     connect_plans,
                     last_serial_id,
                     vector_ids_to_persist,
+                    done_tx,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
@@ -1111,6 +1151,7 @@ async fn get_results_thread(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
                     ));
                     metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
+                    let _ = done_tx.send(());
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
@@ -1118,6 +1159,7 @@ async fn get_results_thread(
                     modification_id,
                     connect_plans,
                     vector_id_to_persist,
+                    done_tx,
                 } => {
                     log_info(format!(
                         "Job Results :: Received: modification-id={modification_id} for serial-id={}",
@@ -1165,8 +1207,10 @@ async fn get_results_thread(
                         "Job Results :: Persisted to dB: modification_id={modification_id}"
                     ));
 
+                    let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
-                }
+                },
+                JobResult::Sync => unreachable!(),
             }
         }
 

@@ -15,7 +15,7 @@ use ampc_server_utils::{
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
 use aws_smithy_types::retry::RetryConfig;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap_builder::Parser;
 use eyre::{bail, eyre, Context, Result};
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
@@ -99,6 +99,7 @@ struct AnonStatsProcessor {
     s3_client: S3Client,
     publish: PublishTargets,
     sync_failures: HashMap<(AnonStatsOrigin, AnonStatsOperation), usize>,
+    last_report_times: HashMap<(AnonStatsOrigin, AnonStatsOperation), DateTime<Utc>>,
 }
 
 impl AnonStatsProcessor {
@@ -122,6 +123,7 @@ impl AnonStatsProcessor {
             s3_client,
             publish,
             sync_failures: HashMap::new(),
+            last_report_times: HashMap::new(),
         }
     }
 
@@ -251,20 +253,30 @@ impl AnonStatsProcessor {
                     return Ok(());
                 }
 
+                let last_report_time = self.last_report_times.get(&(origin, operation)).copied();
                 let start = Instant::now();
-                let stats = process_1d_anon_stats_job(
+                let mut stats = process_1d_anon_stats_job(
                     session,
                     job,
                     &origin,
                     self.config.as_ref(),
                     Some(operation),
+                    last_report_time,
                 )
                 .await?;
 
                 self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
                     .await;
 
+                let report_time = Utc::now();
+                let window_start = last_report_time.unwrap_or(report_time);
+                stats.start_time_utc_timestamp = window_start;
+                stats.end_time_utc_timestamp = Some(report_time);
+                stats.next_start_time_utc_timestamp = Some(report_time);
+
                 self.publish_1d_stats(&stats).await?;
+                self.last_report_times
+                    .insert((origin, operation), report_time);
                 self.store.mark_anon_stats_processed_1d(&ids).await?;
                 self.sync_failures.remove(&(origin, operation));
                 Ok(())
@@ -295,20 +307,30 @@ impl AnonStatsProcessor {
                     return Ok(());
                 }
 
+                let last_report_time = self.last_report_times.get(&(origin, operation)).copied();
                 let start = Instant::now();
-                let stats = process_1d_lifted_anon_stats_job(
+                let mut stats = process_1d_lifted_anon_stats_job(
                     session,
                     job,
                     &origin,
                     self.config.as_ref(),
                     Some(operation),
+                    last_report_time,
                 )
                 .await?;
 
                 self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
                     .await;
 
+                let report_time = Utc::now();
+                let window_start = last_report_time.unwrap_or(report_time);
+                stats.start_time_utc_timestamp = window_start;
+                stats.end_time_utc_timestamp = Some(report_time);
+                stats.next_start_time_utc_timestamp = Some(report_time);
+
                 self.publish_1d_stats(&stats).await?;
+                self.last_report_times
+                    .insert((origin, operation), report_time);
                 self.store.mark_anon_stats_processed_1d_lifted(&ids).await?;
                 self.sync_failures.remove(&(origin, operation));
                 Ok(())
@@ -391,14 +413,29 @@ impl AnonStatsProcessor {
             return Ok(());
         }
 
+        let last_report_time = self.last_report_times.get(&(origin, operation)).copied();
         let start = Instant::now();
-        let stats =
-            process_2d_anon_stats_job(session, job, self.config.as_ref(), Some(operation)).await?;
+        let mut stats = process_2d_anon_stats_job(
+            session,
+            job,
+            self.config.as_ref(),
+            Some(operation),
+            last_report_time,
+        )
+        .await?;
 
         self.log_job_metrics("2d", origin, kind, job_size, start.elapsed())
             .await;
 
+        let report_time = Utc::now();
+        let window_start = last_report_time.unwrap_or(report_time);
+        stats.start_time_utc_timestamp = window_start;
+        stats.end_time_utc_timestamp = Some(report_time);
+        stats.next_start_time_utc_timestamp = Some(report_time);
+
         self.publish_2d_stats(&stats).await?;
+        self.last_report_times
+            .insert((origin, operation), report_time);
         self.store.mark_anon_stats_processed_2d(&ids).await?;
         self.sync_failures.remove(&(origin, operation));
         Ok(())
