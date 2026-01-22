@@ -540,7 +540,9 @@ impl Aby3Store {
         if batches.is_empty() {
             return Ok(vec![]);
         }
-        self.distance_fn.eval_distance_batches(self, batches).await
+        self.distance_fn
+            .eval_distance_multibatch(self, batches)
+            .await
     }
 }
 
