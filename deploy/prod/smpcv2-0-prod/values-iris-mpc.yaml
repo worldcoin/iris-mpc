@@ -120,13 +120,13 @@ env:
     value: "https://pki-smpc.worldcoin.org"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "false"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-0-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "even_odd_with_version_id_output_16k"
+    value: "even_odd_with_version_id_output_16k_rerandomized"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
