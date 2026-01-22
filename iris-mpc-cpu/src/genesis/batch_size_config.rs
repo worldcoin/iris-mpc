@@ -1,3 +1,4 @@
+use super::batch_generator::BatchSize;
 use eyre::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -88,6 +89,35 @@ impl BatchSizeConfig {
              - dynamic:cap=<cap>,error_rate=<rate> (e.g., dynamic:cap=500,error_rate=128)",
             s
         )
+    }
+
+    /// Converts this configuration into a [`BatchSize`] policy.
+    ///
+    /// For dynamic batch sizing, the `hnsw_M` parameter (HNSW graph connectivity)
+    /// is required to compute batch sizes at runtime.
+    #[allow(non_snake_case)]
+    pub fn compute_batch_size(&self, hnsw_M: usize) -> BatchSize {
+        match self {
+            BatchSizeConfig::Static { size } => BatchSize::new_static(*size),
+            BatchSizeConfig::Dynamic { cap, error_rate } => {
+                BatchSize::new_dynamic(*error_rate, hnsw_M, *cap)
+            }
+        }
+    }
+
+    /// Returns an AWS-compliant identifier string (letters, numbers, hyphens only).
+    ///
+    /// Used for AWS RDS snapshot identifiers which require 1-63 characters
+    /// consisting only of letters, numbers, or hyphens.
+    ///
+    /// Format:
+    /// - Static: the batch size value (e.g., "100")
+    /// - Dynamic: "0" (following convention that 0 represents dynamic batch sizing)
+    pub fn to_aws_identifier(&self) -> String {
+        match self {
+            BatchSizeConfig::Static { size } => size.to_string(),
+            BatchSizeConfig::Dynamic { .. } => "0".to_string(),
+        }
     }
 }
 
@@ -185,5 +215,20 @@ mod tests {
             let reparsed = BatchSizeConfig::parse(&output).unwrap();
             assert_eq!(config, reparsed);
         }
+    }
+
+    #[test]
+    fn test_to_aws_identifier_static() {
+        let config = BatchSizeConfig::Static { size: 100 };
+        assert_eq!(config.to_aws_identifier(), "100");
+    }
+
+    #[test]
+    fn test_to_aws_identifier_dynamic() {
+        let config = BatchSizeConfig::Dynamic {
+            cap: 500,
+            error_rate: 128,
+        };
+        assert_eq!(config.to_aws_identifier(), "0");
     }
 }

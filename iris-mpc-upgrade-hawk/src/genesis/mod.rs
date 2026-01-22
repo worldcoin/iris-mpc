@@ -30,7 +30,7 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
+        utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle,
         IndexationError, JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
@@ -608,12 +608,10 @@ async fn exec_indexation(
     ));
 
     // Set batch size from config.
-    let batch_size = match &ctx.args.batch_size_config {
-        BatchSizeConfig::Static { size } => BatchSize::new_static(*size),
-        BatchSizeConfig::Dynamic { cap, error_rate } => {
-            BatchSize::new_dynamic(*error_rate, ctx.config.hnsw_param_M, *cap)
-        }
-    };
+    let batch_size = ctx
+        .args
+        .batch_size_config
+        .compute_batch_size(ctx.config.hnsw_param_M);
 
     if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
         log_warn(format!(
@@ -758,7 +756,10 @@ async fn exec_snapshot(
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
-        ctx.last_indexed_id, ctx.args.max_indexation_id, ctx.args.batch_size_config, unix_timestamp
+        ctx.last_indexed_id,
+        ctx.args.max_indexation_id,
+        ctx.args.batch_size_config.to_aws_identifier(),
+        unix_timestamp
     );
 
     // Set cluster ID.

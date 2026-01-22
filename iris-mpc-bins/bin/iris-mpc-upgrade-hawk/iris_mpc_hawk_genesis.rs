@@ -88,31 +88,11 @@ fn parse_args() -> Result<ExecutionArgs> {
     })?;
 
     // Arg: batch size configuration.
-    if args.batch_size.is_none() {
-        eprintln!("Error: --batch-size argument is required.");
-        eprintln!();
-        eprintln!("Expected format:");
-        eprintln!("  --batch-size 'static:<size>'");
-        eprintln!("  --batch-size 'dynamic:cap=<cap>,error_rate=<rate>'");
-        eprintln!();
-        eprintln!("Examples:");
-        eprintln!("  --batch-size 'static:100'");
-        eprintln!("  --batch-size 'dynamic:cap=500,error_rate=128'");
-        bail!("--batch-size argument is required.");
-    }
-    let batch_size_arg = args.batch_size.as_ref().unwrap();
-    let batch_size_config = BatchSizeConfig::parse(batch_size_arg).map_err(|e| {
-        eprintln!("Error parsing --batch-size: {}", e);
-        eprintln!();
-        eprintln!("Expected format:");
-        eprintln!("  --batch-size 'static:<size>'");
-        eprintln!("  --batch-size 'dynamic:cap=<cap>,error_rate=<rate>'");
-        eprintln!();
-        eprintln!("Examples:");
-        eprintln!("  --batch-size 'static:100'");
-        eprintln!("  --batch-size 'dynamic:cap=500,error_rate=128'");
-        e
-    })?;
+    let batch_size_arg = args
+        .batch_size
+        .as_ref()
+        .ok_or_else(|| eyre::eyre!("--batch-size argument is required."))?;
+    let batch_size_config = BatchSizeConfig::parse(batch_size_arg)?;
 
     // Arg: perform snapshot.
     let perform_snapshot = if args.perform_snapshot.is_some() {
