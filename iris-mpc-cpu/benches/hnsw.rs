@@ -1,4 +1,5 @@
 use aes_prng::AesRng;
+use ampc_actor_utils::protocol::ops::batch_signed_lift_vec;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
@@ -12,10 +13,7 @@ use iris_mpc_cpu::{
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
     protocol::{
-        ops::{
-            batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,
-            galois_ring_to_rep3,
-        },
+        ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
         shared_iris::GaloisRingSharedIris,
     },
     shares::share::DistanceShare,

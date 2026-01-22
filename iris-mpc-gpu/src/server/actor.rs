@@ -162,7 +162,6 @@ pub struct ServerActor {
     max_db_size: usize,
     match_distances_buffer_size: usize,
     match_distances_buffer_size_extra_percent: usize,
-    match_distances_2d_buffer_size: usize,
     return_partial_results: bool,
     disable_persistence: bool,
     enable_debug_timing: bool,
@@ -245,7 +244,6 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
-        match_distances_2d_buffer_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
@@ -264,7 +262,6 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
@@ -283,7 +280,6 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
-        match_distances_2d_buffer_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
@@ -304,7 +300,6 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
@@ -325,7 +320,6 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
-        match_distances_2d_buffer_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
@@ -344,7 +338,6 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
@@ -366,7 +359,6 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
-        match_distances_2d_buffer_size: usize,
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
@@ -567,7 +559,6 @@ impl ServerActor {
             max_db_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
@@ -822,6 +813,27 @@ impl ServerActor {
                 }
             })
             .collect::<Vec<_>>();
+        // For each valid query in the batch, grab the reauth target index if it has one
+        // Vec of (query_idx, reauth_db_target_idx)
+        let mut batch_reauth_targets = vec![vec![]; self.device_manager.device_count()];
+        for (query_idx, (request_type, request_id)) in batch
+            .request_types
+            .iter()
+            .zip(batch.request_ids.iter())
+            .enumerate()
+        {
+            if request_type.as_str() == REAUTH_MESSAGE_TYPE {
+                let reauth_target = match batch.reauth_target_indices.get(request_id).copied() {
+                    Some(idx) => idx as usize,
+                    None => continue,
+                };
+                let device_idx = reauth_target % self.device_manager.device_count();
+                let device_reauth_target = reauth_target / self.device_manager.device_count();
+                let target_idx =
+                    query_idx as u64 + (device_reauth_target as u64 * self.max_batch_size as u64);
+                batch_reauth_targets[device_idx].push(target_idx);
+            }
+        }
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
         self.internal_batch_counter += 1;
 
@@ -979,6 +991,7 @@ impl ServerActor {
                 batch_size,
                 orientation,
                 &batch_operations,
+                &batch_reauth_targets,
             );
 
         ///////////////////////////////////////////////////////////////////
@@ -994,27 +1007,31 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        // also add the OR rule indices to the partial matches
-        let or_indices = batch
+        // also add the OR rule indices and reauth indices to the partial matches
+        let or_indices_and_reauth = batch
             .or_rule_indices
             .iter()
             .flatten()
             .copied()
+            .chain(batch.reauth_target_indices.values().copied())
             .unique()
             .collect_vec();
 
-        for or_idx in or_indices {
+        for or_idx in or_indices_and_reauth {
             let device_idx = or_idx % self.device_manager.device_count() as u32;
             let db_idx = or_idx / self.device_manager.device_count() as u32;
             if db_idx as usize >= self.current_db_sizes[device_idx as usize] {
                 tracing::warn!(
-                    "OR rule index {} is out of bounds for device {}",
+                    "OR rule or REAUTH index {} is out of bounds for device {}",
                     or_idx,
                     device_idx
                 );
                 continue;
             }
-            partial_matches_side1[device_idx as usize].push(db_idx);
+            // only add non-duplicates, this is a linear scan, but the number of elements in this loop should be somewhat small
+            if !partial_matches_side1[device_idx as usize].contains(&db_idx) {
+                partial_matches_side1[device_idx as usize].push(db_idx);
+            }
         }
 
         ///////////////////////////////////////////////////////////////////
@@ -1089,6 +1106,7 @@ impl ServerActor {
                     batch_size,
                     orientation,
                     &batch_operations,
+                    &batch_reauth_targets,
                 )
             } else {
                 tracing::info!("Comparing {} eye queries against DB subset", other_side);
@@ -1101,6 +1119,7 @@ impl ServerActor {
                     &partial_matches_side1,
                     orientation,
                     &batch_operations,
+                    &batch_reauth_targets,
                 )
             };
 
@@ -1642,11 +1661,8 @@ impl ServerActor {
             .iter()
             .map(|x| x.len())
             .sum::<usize>();
-        tracing::info!(
-            "Match distance 2D count: {match_distance_2d_count}/{}",
-            self.match_distances_2d_buffer_size
-        );
-        if match_distance_2d_count >= self.match_distances_2d_buffer_size {
+        tracing::info!("Match distance 2D count: {match_distance_2d_count}");
+        if match_distance_2d_count > 0 {
             tracing::info!("Persisting 2D anon stats bundles for both sides");
             let mut both_side_match_distances_buffer =
                 vec![TwoSidedDistanceCache::default(); self.device_manager.device_count()];
@@ -1886,6 +1902,7 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
@@ -2079,6 +2096,7 @@ impl ServerActor {
                         / 100,
                     &self.streams[0],
                     db_subset_idx,
+                    batch_reauth_targets,
                 );
                 self.phase2.return_result_buffer(res);
             }
@@ -2115,7 +2133,9 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
+                self.distance_comparator.max_db_size as u64,
             ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
@@ -2143,6 +2163,7 @@ impl ServerActor {
         batch_size: usize,
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
@@ -2407,6 +2428,7 @@ impl ServerActor {
                                 * (100 + self.match_distances_buffer_size_extra_percent)
                                 / 100,
                             request_streams,
+                            batch_reauth_targets,
                         );
                         self.phase2.return_result_buffer(res);
                     }
@@ -2470,13 +2492,16 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
+                self.distance_comparator.max_db_size as u64,
             ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
             }
         };
 
+        // persist normal caches, skipping reauth, as we persist them separately
         self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
         match orientation {
             Orientation::Normal => {
@@ -2733,6 +2758,7 @@ fn open(
     batch_size: usize,
     max_bucket_distances: usize,
     streams: &[CudaStream],
+    reauth_target_idx: &[Vec<u64>],
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
@@ -2778,6 +2804,7 @@ fn open(
         batch_size,
         max_bucket_distances,
         streams,
+        reauth_target_idx,
     );
 }
 
@@ -2803,6 +2830,7 @@ fn open_subset_results(
     max_bucket_distances: usize,
     streams: &[CudaStream],
     index_mapping: &[Vec<u32>],
+    reauth_target_idx: &[Vec<u64>],
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
@@ -2848,6 +2876,7 @@ fn open_subset_results(
         max_bucket_distances,
         streams,
         index_mapping,
+        reauth_target_idx,
     );
 }
 

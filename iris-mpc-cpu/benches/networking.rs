@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use aes_prng::AesRng;
+use ampc_actor_utils::protocol::ops::batch_signed_lift_vec;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use iris_mpc_cpu::{
     execution::{local::LocalRuntime, session::Session},
-    protocol::ops::{batch_signed_lift_vec, cross_compare},
+    protocol::ops::cross_compare,
     shares::{share::DistanceShare, Share},
 };
 use rand::SeedableRng;

@@ -1,6 +1,9 @@
 #[cfg(feature = "gpu_dependent")]
 mod e2e_test {
+    use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
+    use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
     use ampc_anon_stats::types::Eye;
+    use ampc_anon_stats::AnonStatsStore;
     use cudarc::nccl::Id;
     use eyre::Result;
     use iris_mpc_common::{
@@ -10,6 +13,7 @@ mod e2e_test {
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
     use rand::random;
     use std::{env, sync::Arc};
+    use tokio::runtime::Handle;
     use tokio::sync::oneshot;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -17,9 +21,8 @@ mod e2e_test {
     const DB_BUFFER: usize = 8 * 1000;
     const NUM_BATCHES: usize = 30;
     const MAX_BATCH_SIZE: usize = 64;
-    const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
+    const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 16;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
-    const MATCH_DISTANCES_2D_BUFFER_SIZE: usize = 1 << 6;
     const MAX_DELETIONS_PER_BATCH: usize = 10;
     const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
 
@@ -110,6 +113,27 @@ mod e2e_test {
             db_seed,
             internal_seed
         );
+        async fn build_anon_stats_db_from_env(
+            env_name: &str,
+        ) -> Result<Option<(AnonStatsStore, Handle)>> {
+            let anon_stats_schema_name = "anon_stats_mpc";
+            match env::var(env_name) {
+                Ok(url) => {
+                    let anon_client = AnonStatsPgClient::new(
+                        &url,
+                        anon_stats_schema_name,
+                        AnonStatsAccessMode::ReadWrite,
+                    )
+                    .await?;
+                    let anon_store = AnonStatsStore::new(&anon_client).await?;
+                    Ok(Some((anon_store, Handle::current())))
+                }
+                Err(_) => Ok(None),
+            }
+        }
+        let anon_stats_db0 = build_anon_stats_db_from_env("ANON_STATS_DB_URL_0").await?;
+        let anon_stats_db1 = build_anon_stats_db_from_env("ANON_STATS_DB_URL_1").await?;
+        let anon_stats_db2 = build_anon_stats_db_from_env("ANON_STATS_DB_URL_2").await?;
 
         let test_db = generate_full_test_db(DB_SIZE, db_seed, false);
         let party_db0 = test_db.party_db(0);
@@ -130,13 +154,12 @@ mod e2e_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
-                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 true,
                 false,
                 false,
                 Eye::Left,
                 true,
-                None,
+                anon_stats_db0,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0, &mut actor);
@@ -165,13 +188,12 @@ mod e2e_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
-                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 true,
                 false,
                 false,
                 Eye::Left,
                 true,
-                None,
+                anon_stats_db1,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1, &mut actor);
@@ -200,13 +222,12 @@ mod e2e_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
-                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 true,
                 false,
                 false,
                 Eye::Left,
                 true,
-                None,
+                anon_stats_db2,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2, &mut actor);
