@@ -26,9 +26,9 @@ function _get_path_to_envs()
     echo "$(_get_path_to_here)/envs"
 }
 
-function _get_path_to_exec_configs()
+function _get_path_to_exec_options()
 {
-    echo "$(_get_path_to_here)/exec-configs"
+    echo "$(_get_path_to_here)/exec-options"
 }
 
 function _get_path_to_here()

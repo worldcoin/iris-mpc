@@ -32,7 +32,7 @@ The tool is designed to be used in the following environments:
         - Save: `Access Key`
         - Save: `Secret access key`
 
-## Step 2: Activate Service Client CLI
+## Step 2: Activate Service Client
 
 ```
 source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/activate
@@ -40,7 +40,7 @@ source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/activate
 
 HINT: you may wish to add activation to your local `~/.bashrc` file.
 
-## Step 3: View Service Client CLI Help
+## Step 3: View Service Client Help
 
 ```
 hnsw-service-client-init help
@@ -73,15 +73,15 @@ hnsw-service-client-set-env env="dev-dkr"
 
 NOTE: Repeat if you switch between supported environments within a terminal session.
 
-## Step 6: Execute Client
+## Step 6: Execute Service Client
 
 ```
 hnsw-service-client-exec env="dev-dkr" config=PATH-TO-A-SERVICE-CLIENT-CONFIG-FILE
 ```
 
-## Example service client execution option files.
+## Example Service Client Execution Options.
 
-It is good practice to create a local folder, e.g. `~/.hnsw/service-client/exec-config`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
+It is good practice to create a local folder, e.g. `~/.hnsw/service-client/exec-options`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
 
 ### Example 1.
 

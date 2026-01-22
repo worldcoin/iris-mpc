@@ -27,8 +27,8 @@ function _main()
 
 function _init_exec_configs()
 {
-    cp "$(_get_path_to_resources)/exec-config-example-1.toml" "$(_get_path_to_exec_configs)/example-1.toml"
-    cp "$(_get_path_to_resources)/exec-config-example-2.toml" "$(_get_path_to_exec_configs)/example-2.toml"
+    cp "$(_get_path_to_resources)/exec-options-1.toml" "$(_get_path_to_exec_options)/example-1.toml"
+    cp "$(_get_path_to_resources)/exec-options-2.toml" "$(_get_path_to_exec_options)/example-2.toml"
 }
 
 function _init_envs()
@@ -46,7 +46,7 @@ function _init_envs()
 
 function _init_fsys()
 {
-    local paths=($(_get_path_to_exec_configs) $(_get_path_to_envs))
+    local paths=($(_get_path_to_exec_options) $(_get_path_to_envs))
     for path in "${paths[@]}"; do
         if [ -d ${path} ]; then
             rm -rf "${path}"

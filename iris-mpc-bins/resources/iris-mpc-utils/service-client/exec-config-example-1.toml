@@ -1,7 +1,0 @@
-[request_batch.Simple]
-batch_count = 10
-batch_size = 10
-batch_kind = "uniqueness"
-
-[shares_generator.FromCompute]
-rng_seed = 42
