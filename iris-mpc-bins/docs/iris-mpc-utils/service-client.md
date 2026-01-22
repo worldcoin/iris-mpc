@@ -10,7 +10,7 @@ The tool is designed to be used in the following environments:
 
 - *dev-stg*: Remote AWS staged development environment
 
-## Step 1: Setup Datadog & AWS accounts
+## Prelude: Setup Datadog & AWS accounts
 
 ### DatadogHQ Account
 
@@ -32,7 +32,7 @@ The tool is designed to be used in the following environments:
         - Save: `Access Key`
         - Save: `Secret access key`
 
-## Step 2: Activate
+## Step 1: Activate
 
 ```
 source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/activate
@@ -40,7 +40,7 @@ source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/activate
 
 *HINT*: you may wish to add activation to your local `~/.bashrc` file.
 
-## Step 3: View Help
+## Step 2: View Help
 
 ```
 hnsw-service-client-init help
@@ -48,7 +48,7 @@ hnsw-service-client-set-env help
 hnsw-service-client-exec help
 ```
 
-## Step 4: Initialise
+## Step 3: Initialise
 
 Initialises local resources for each environment.  One time execution.
 
@@ -63,7 +63,7 @@ YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/en
 YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/envs/dev-stg/aws-credentials
 ```
 
-## Step 5: Start Session
+## Step 4: Start Session
 
 Starts service client session against a supported environment.  One time execution per terminal session.
 
@@ -73,7 +73,7 @@ hnsw-service-client-set-env env="dev-dkr"
 
 *NOTE*: Repeat if you switch between supported environments within a terminal session.
 
-## Step 6: Execute
+## Step 5: Execute
 
 ```
 hnsw-service-client-exec env="dev-dkr" config=PATH-TO-A-SERVICE-CLIENT-CONFIG-FILE
