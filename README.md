@@ -170,6 +170,11 @@ The script must run with `--init-servers` flag at least once. It will create som
 ./scripts/run-server.sh 2 # in a separate shell
 ```
 
+#### Option 1a: Use a pre-populated database for hawk or genesis
+The files `docker-compose.genesis.yaml` and `docker-compose.hawk.yaml` use a persistent volume. The user still has to populate the database before use. This is accomplished with the `init-test-dbs` executable.
+
+For genesis, `Dockerfile.postgres` is provided, which includes a start-up script to clear the CPU databases on each run. No such functionality is provided for hawk - the database and graph are not reset between runs.
+
 #### Option 2: Run everything with docker
 
 Just run
