@@ -43,18 +43,14 @@ impl TestRun for Test {
     // then insert modifications
     // then run genesis again
     async fn exec(&mut self) -> Result<()> {
-        // Execute genesis
+        // Execute genesis - first run indexing up to 50
+        let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
+            let batch_size_config = genesis_args.batch_size_config;
             join_set.spawn(async move {
                 exec_genesis(
-                    ExecutionArgs::new(
-                        DEFAULT_GENESIS_ARGS.batch_size,
-                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
-                        50,
-                        false,
-                        false,
-                    ),
+                    ExecutionArgs::new(batch_size_config, 50, false, false),
                     config,
                 )
                 .await
@@ -68,18 +64,13 @@ impl TestRun for Test {
         }
         join_runners!(join_set);
 
+        // Execute genesis - second run indexing up to 100
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
+            let batch_size_config = genesis_args.batch_size_config;
             join_set.spawn(async move {
                 exec_genesis(
-                    ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
-                        100,
-                        false,
-                        false,
-                    ),
+                    ExecutionArgs::new(batch_size_config, 100, false, false),
                     config,
                 )
                 .await

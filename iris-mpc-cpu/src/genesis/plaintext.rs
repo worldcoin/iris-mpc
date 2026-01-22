@@ -30,7 +30,7 @@ use crate::{
         insert::{self, InsertPlanV},
         BothEyes, STORE_IDS,
     },
-    genesis::BatchSize,
+    genesis::{BatchSize, BatchSizeConfig},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
@@ -105,13 +105,20 @@ pub struct GenesisConfig {
 }
 
 /// Logical CLI arguments for genesis process.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct GenesisArgs {
     pub max_indexation_id: IrisSerialId,
 
-    pub batch_size: usize,
+    pub batch_size_config: BatchSizeConfig,
+}
 
-    pub batch_size_error_rate: usize,
+impl Default for GenesisArgs {
+    fn default() -> Self {
+        Self {
+            max_indexation_id: 0,
+            batch_size_config: BatchSizeConfig::Static { size: 1 },
+        }
+    }
 }
 
 /// Execute the genesis indexer over a plaintext state representation, and
@@ -133,9 +140,13 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     let mut id = last_indexed_iris_id;
     let target_id = state.args.max_indexation_id;
 
-    let batch_size = match state.args.batch_size {
-        0 => BatchSize::get_dynamic_size(id, state.args.batch_size_error_rate, state.config.hnsw_M),
-        batch_size => batch_size,
+    // Calculate batch size based on config.
+    let batch_size = match &state.args.batch_size_config {
+        BatchSizeConfig::Static { size } => *size,
+        BatchSizeConfig::Dynamic { cap, error_rate } => {
+            let dynamic_size = BatchSize::get_dynamic_size(id, *error_rate, state.config.hnsw_M);
+            dynamic_size.min(*cap)
+        }
     };
 
     // Initialize existing vector stores
@@ -409,8 +420,10 @@ mod tests {
             },
             args: GenesisArgs {
                 max_indexation_id: 100,
-                batch_size: 0,
-                batch_size_error_rate: 128,
+                batch_size_config: BatchSizeConfig::Dynamic {
+                    cap: 1000,
+                    error_rate: 128,
+                },
             },
             s3_deletions: Vec::new(),
         }
@@ -502,7 +515,7 @@ mod tests {
     async fn test_plaintext_genesis_batched() -> Result<()> {
         let mut init_state = gen_base_state(200);
         init_state.s3_deletions = vec![25, 40, 50, 60, 90];
-        init_state.args.batch_size = 10;
+        init_state.args.batch_size_config = BatchSizeConfig::Static { size: 10 };
 
         let new_state = run_plaintext_genesis(init_state).await?;
 
