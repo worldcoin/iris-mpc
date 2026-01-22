@@ -63,7 +63,7 @@ impl DistanceFn {
     /// Evaluates distances for multiple (query, vectors) batches.
     ///
     /// For MinFhd, this enables prerotation buffer reuse within each batch.
-    pub async fn eval_distance_batches(
+    pub async fn eval_distance_multibatch(
         self,
         store: &mut Aby3Store,
         batches: Vec<(Aby3Query, Vec<VectorId>)>,
