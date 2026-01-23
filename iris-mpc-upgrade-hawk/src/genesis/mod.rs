@@ -630,7 +630,7 @@ async fn exec_indexation(
     log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set indexation result.
-    let mut persist_ch = None;
+    let mut persist_ch: Option<tokio::sync::oneshot::Receiver<()>> = None;
     let res: Result<()> = async {
         log_info(String::from("Entering main indexation loop"));
 
@@ -671,19 +671,26 @@ async fn exec_indexation(
             let (done_rx, result) = result;
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
-            let is_sync_batch = batch.batch_id % (PERSIST_DELAY - 1) == 0;
+
+            // Periodically synchronize batch persistence between nodes.
+            let is_sync_batch = (batch.batch_id % PERSIST_DELAY) == PERSIST_DELAY - 1;
             if is_sync_batch {
-                persist_ch.take();
-                let wait_start = Instant::now();
-                done_rx.await.map_err(|_| {
-                    eyre!("results thread terminated before acknowledging batch")
-                })?;
-                metrics::histogram!("genesis_persist_wait_duration")
-                    .record(wait_start.elapsed().as_secs_f64());
-                hawk_handle.sync_peers().await?;
-            } else {
-                persist_ch.replace(done_rx);
+                if let Some(prev_done_rx) = persist_ch.take() {
+                    let wait_start = Instant::now();
+                    // Wait for previous batch's persistence to signal completion.
+                    prev_done_rx.await.map_err(|_| {
+                        eyre!("results thread terminated before acknowledging batch")
+                    })?;
+                    metrics::histogram!("genesis_persist_wait_duration")
+                        .record(wait_start.elapsed().as_secs_f64());
+                    // Wait for other nodes to finish equivalent persistence.
+                    hawk_handle.sync_peers().await?;
+                }
             }
+
+            // Store current results thread "done" signal channel for future synchronization.
+            persist_ch.replace(done_rx);
+
             metrics::histogram!("genesis_batch_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
                 .record(now.elapsed().as_secs_f64());
             log_info(format!(
