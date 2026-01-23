@@ -36,7 +36,7 @@ fi
 export RUST_MIN_STACK=104857600
 
 if [ "$BINARY" == "genesis" ]; then
-    /bin/iris-mpc-hawk-genesis --max-height 100 --perform-snapshot=false
+    /bin/iris-mpc-hawk-genesis --max-height "${GENESIS_MAX_HEIGHT:-100}" --batch-size "${GENESIS_BATCH_SIZE:-dynamic:cap=96,error_rate=128}" --perform-snapshot=false
 else
     /bin/iris-mpc-hawk
 fi
