@@ -59,8 +59,8 @@ hnsw-service-client-init
 *NOTE*: you will be instructed to review/edit the following files:
 
 ```
-YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/envs/dev-dkr/aws-credentials
-YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/envs/dev-stg/aws-credentials
+YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/aws-opts/dev-dkr/aws-credentials
+YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/aws-opts/dev-stg/aws-credentials
 ```
 
 ## Step 4: Start Session
@@ -71,13 +71,20 @@ Starts service client session against a supported environment.  One time executi
 hnsw-service-client-set-env env="dev-dkr"
 ```
 
+Defaults: 
+- env = "dev-dkr"
+
 *NOTE*: Repeat if you switch between supported environments within a terminal session.
 
 ## Step 5: Execute
 
 ```
-hnsw-service-client-exec env="dev-dkr" config=PATH-TO-A-SERVICE-CLIENT-CONFIG-FILE
+hnsw-service-client-exec env="dev-dkr" opts=PATH-TO-A-SERVICE-CLIENT-EXEC-OPTIONS-FILE
 ```
+
+Defaults: 
+- env = "dev-dkr"
+- opts = YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/exec-opts/example-1.toml
 
 ## Example Service Client Execution Options.
 
