@@ -1,4 +1,5 @@
 use crate::services::aws::s3::create_s3_client;
+use crate::services::aws::sns::create_sns_client;
 use crate::services::aws::sqs::create_sqs_client;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -30,7 +31,7 @@ impl AwsClients {
 
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
 
-        let sns_client = SNSClient::new(&shared_config);
+        let sns_client = create_sns_client(&shared_config);
         let sqs_client = create_sqs_client(&shared_config, config.sqs_long_poll_wait_time);
         let s3_client = create_s3_client(&shared_config, force_path_style);
         let secrets_manager_client = SecretsManagerClient::new(&shared_config);
