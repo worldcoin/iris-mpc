@@ -27,6 +27,9 @@ function _main()
     # Copy aws config/credential files to ~/.aws folder.
     cp "$(_get_path_to_env_asset ${env} "aws-config")" "${HOME}/.aws/config"
     cp "$(_get_path_to_env_asset ${env} "aws-credentials")" "${HOME}/.aws/credentials"
+
+    # Activate env vars.
+    source "$(_get_path_to_env_asset ${env} "aws_evars.sh")"
 }
 
 function _get_path_to_here()
