@@ -24,12 +24,10 @@ function _main()
 {
     local env=${1}
 
-    if [ "${env}" = "dev-dkr" ]; then
-        _set_env "${env}"
-    elif [ "${env}" = "dev-stg" ]; then
+    if [ "${env}" = "dev-dkr" ] || [ "${env}" = "dev-stg" ]; then
         _set_env "${env}"
     else
-        log_error "Invalid env label: ${env}"
+        _log_error "Invalid env label: ${env}"
     fi
 }
 

@@ -1,3 +1,8 @@
+function _get_now()
+{
+    echo $(date +%Y-%m-%dT%H:%M:%S.%6N)
+}
+
 function _get_path_to_ancestor()
 {
     local path=${1}
@@ -49,4 +54,11 @@ function _get_path_to_resource_of_env()
 function _get_path_to_root()
 {
     echo "$(_get_path_to_ancestor "$(_get_path_to_here)" "2")"
+}
+
+function _log_error ()
+{
+    local MSG=${1}
+
+    echo -e "$(_get_now) [ERROR] [$$] HNSW-SERVICE-CLIENT :: $MSG"
 }
