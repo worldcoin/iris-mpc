@@ -416,7 +416,10 @@ impl Aby3Store {
             izip!(base_node_queries, neighborhoods.iter())
                 .map(|(q, nbhd)| (q, nbhd.clone()))
                 .collect();
+        let distance_start = std::time::Instant::now();
         let nbhd_distances = self.eval_distance_multibatch(batches).await?;
+        metrics::histogram!("compaction_distance_duration")
+            .record(distance_start.elapsed().as_secs_f64());
         let id_distances = izip!(
             neighborhoods.iter().flatten().map(|vid| vid.serial_id()),
             nbhd_distances.into_iter().flatten(),
@@ -448,8 +451,11 @@ impl Aby3Store {
         }
 
         // Oblivious application of batched selection networks
+        let sorting_start = std::time::Instant::now();
         let res_id_distances =
             apply_oblivious_swap_network(self, &id_distances, &batched_network).await?;
+        metrics::histogram!("compaction_sorting_duration")
+            .record(sorting_start.elapsed().as_secs_f64());
 
         // Truncate results and unpack into individual vectors
         let mut unshuffled_truncated_shares = Vec::with_capacity(neighborhoods.len());
@@ -471,6 +477,7 @@ impl Aby3Store {
         }
 
         // Batch shuffle
+        let shuffle_start = std::time::Instant::now();
         let mut shuffled_shares_by_idx: BTreeMap<usize, Vec<_>> = BTreeMap::new();
         for (_len, v) in shares_by_length.into_iter() {
             let (idxs, nbhds): (Vec<_>, Vec<_>) = v.into_iter().unzip();
@@ -483,6 +490,8 @@ impl Aby3Store {
                 shuffled_shares_by_idx.insert(idx, shuffled_nbhd);
             }
         }
+        metrics::histogram!("compaction_shuffle_duration")
+            .record(shuffle_start.elapsed().as_secs_f64());
 
         // Open secret shared neighborhood vector ids
         let secret_nbhds = shuffled_shares_by_idx
@@ -602,6 +611,8 @@ impl VectorStore for Aby3Store {
         if vectors.is_empty() {
             return Ok(vec![]);
         }
+        metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
+        metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
         self.distance_fn
             .eval_distance_batch(self, query, vectors)
             .await
@@ -639,6 +650,8 @@ impl VectorStore for Aby3Store {
         if distances.is_empty() {
             return Ok(vec![]);
         }
+        metrics::counter!("comparisons_total").increment(distances.len() as u64);
+        metrics::histogram!("comparisons_batch_size").record(distances.len() as f64);
         cross_compare(&mut self.session, distances).await
     }
 
