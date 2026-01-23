@@ -11,22 +11,22 @@ function _get_path_to_ancestor()
     echo ${path}
 }
 
-function _get_path_to_env()
+function _get_path_to_aws_opts()
 {
-    echo "$(_get_path_to_envs)/${1}"
+    echo "$(_get_path_to_here)/aws-options"
 }
 
-function _get_path_to_env_asset()
+function _get_path_to_aws_opts_env()
 {
-    echo "$(_get_path_to_env ${1})/${2}"
+    echo "$(_get_path_to_aws_opts)/${1}"
 }
 
-function _get_path_to_envs()
+function _get_path_to_aws_opts_env_asset()
 {
-    echo "$(_get_path_to_here)/envs"
+    echo "$(_get_path_to_aws_opts_env ${1})/${2}"
 }
 
-function _get_path_to_exec_options()
+function _get_path_to_exec_opts()
 {
     echo "$(_get_path_to_here)/exec-options"
 }
@@ -49,9 +49,4 @@ function _get_path_to_resource_of_env()
 function _get_path_to_root()
 {
     echo "$(_get_path_to_ancestor "$(_get_path_to_here)" "2")"
-}
-
-function _get_path_to_template()
-{
-    echo "$(_get_path_to_here)/templates/${1}"
 }

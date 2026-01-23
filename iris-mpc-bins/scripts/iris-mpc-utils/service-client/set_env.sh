@@ -24,12 +24,25 @@ function _main()
 {
     local env=${1}
 
+    if [ "${env}" = "dev-dkr" ]; then
+        _set_env "${env}"
+    elif [ "${env}" = "dev-stg" ]; then
+        _set_env "${env}"
+    else
+        log_error "Invalid env label: ${env}"
+    fi
+}
+
+function _set_env()
+{
+    local env=${1}
+
     # Copy aws config/credential files to ~/.aws folder.
-    cp "$(_get_path_to_env_asset ${env} "aws-config")" "${HOME}/.aws/config"
-    cp "$(_get_path_to_env_asset ${env} "aws-credentials")" "${HOME}/.aws/credentials"
+    cp "$(_get_path_to_aws_opts_env_asset ${env} "aws-config")" "${HOME}/.aws/config"
+    cp "$(_get_path_to_aws_opts_env_asset ${env} "aws-credentials")" "${HOME}/.aws/credentials"
 
     # Activate env vars.
-    source "$(_get_path_to_env_asset ${env} "aws_evars.sh")"
+    source "$(_get_path_to_aws_opts_env_asset ${env} "aws_evars.sh")"
 }
 
 function _get_path_to_here()
