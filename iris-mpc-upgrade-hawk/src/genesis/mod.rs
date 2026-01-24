@@ -42,7 +42,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::mpsc::{self, Sender},
+    sync::{
+        mpsc::{self, Sender},
+        oneshot,
+    },
     time::timeout,
 };
 
@@ -630,7 +633,7 @@ async fn exec_indexation(
     log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set indexation result.
-    let mut persist_ch: Option<tokio::sync::oneshot::Receiver<()>> = None;
+    let mut persist_ch: Option<oneshot::Receiver<()>> = None;
     let res: Result<()> = async {
         log_info(String::from("Entering main indexation loop"));
 
