@@ -59,13 +59,13 @@ impl fmt::Display for CliOptions {
             "
 ------------------------------------------------------------------------
 Iris-MPC Service Client Options:
-    aws options
+    path_to_config
         {}
-    exec options
+    path_to_config_aws
         {}
 ------------------------------------------------------------------------
                 ",
-            self.path_to_config_aws, self.path_to_config,
+            self.path_to_config, self.path_to_config_aws,
         )
     }
 }

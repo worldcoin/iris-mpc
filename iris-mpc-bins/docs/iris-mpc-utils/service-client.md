@@ -8,9 +8,9 @@ The tool is designed to be used in the following environments:
 
 - *dev-dkr*: Local dockerised development environment
 
-- *dev-stg*: Remote AWS staged development environment
+- *dev-stg*: Remove AWS staged development environment
 
-## Prelude: Setup Datadog & AWS accounts
+## Step 1: Setup Datadog & AWS accounts
 
 ### DatadogHQ Account
 
@@ -32,21 +32,17 @@ The tool is designed to be used in the following environments:
         - Save: `Access Key`
         - Save: `Secret access key`
 
-## Step 1: Activate
+## Step 2: Activate
+
+Activates service client CLI commands.  
 
 ```
 source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/activate
 ```
 
-*HINT*: you may wish to add activation to your local `~/.bashrc` file.
+NOTE: To be executed once *per terminal session*.
 
-## Step 2: View Help
-
-```
-hnsw-service-client-init help
-hnsw-service-client-set-env help
-hnsw-service-client-exec help
-```
+HINT: you may wish to add activation to your local `~/.bashrc` file.
 
 ## Step 3: Initialise
 
@@ -56,44 +52,38 @@ Initialises local resources for each environment.  One time execution.
 hnsw-service-client-init
 ```
 
-*NOTE*: you will be instructed to review/edit the following files:
+NOTE: for `dev-stg` environment you will be instructed to edit the following file:
 
 ```
-YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/aws-opts/dev-dkr/aws-credentials
-YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/aws-opts/dev-stg/aws-credentials
+YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/envs/dev-stg/aws-credentials
 ```
 
-## Step 4: Start Session
+## Step 4: Start session
 
-Starts service client session against a supported environment.  One time execution per terminal session.
+Start a service client session against a supported environment.  To be executed once per terminal session.
 
 ```
 hnsw-service-client-set-env env="dev-dkr"
 ```
 
-Defaults: 
-- env = "dev-dkr"
+NOTE: To be executed once *per terminal session*.  Repeat if you switch between supported environments within a session.
 
-*NOTE*: Repeat if you switch between supported environments within a terminal session.
-
-## Step 5: Execute
+## Step 5: Execute Client
 
 ```
-hnsw-service-client-exec env="dev-dkr" opts=PATH-TO-A-SERVICE-CLIENT-EXEC-OPTIONS-FILE
+hnsw-service-client-exec env="dev-dkr" config=PATH-TO-A-SERVICE-CLIENT-CONFIG-FILE
 ```
 
-Defaults: 
-- env = "dev-dkr"
-- opts = YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/exec-opts/example-1.toml
+## Example service client execution option files.
 
-## Example Service Client Execution Options.
-
-It is good practice to create a local folder, e.g. `~/.hnsw/service-client/exec-options`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
+It is good practice to create a local folder, e.g. `~/.hnsw/service-client/exec-config`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
 
 ### Example 1.
 
 - Simple uniqueness requests
 - Iris shares generated on the fly
+
+Copy following to `~/.hnsw/service-client/exec-config/example-1.toml`
 
 ```
 [request_batch.Simple]
@@ -110,6 +100,8 @@ rng_seed = 42
 - Simple uniqueness requests
 - Iris shares generated from an Iris codes NDJSON file
 
+Copy following to `~/.hnsw/service-client/exec-config/example-2.toml`
+
 ```
 [request_batch.Simple]
 batch_count = 10
@@ -121,6 +113,8 @@ path_to_ndjson_file = "YOUR-WORKING-DIR/iris-mpc/iris-mpc-utils/assets/iris-code
 rng_seed = 42
 selection_strategy = "All"
 ```
+
+Copy following to `~/.hnsw/service-client/exec-config/example-3.toml`
 
 ### Example 3.
 

@@ -1,8 +1,3 @@
-function _get_now()
-{
-    echo $(date +%Y-%m-%dT%H:%M:%S.%6N)
-}
-
 function _get_path_to_ancestor()
 {
     local path=${1}
@@ -16,24 +11,24 @@ function _get_path_to_ancestor()
     echo ${path}
 }
 
-function _get_path_to_aws_opts()
+function _get_path_to_env()
 {
-    echo "$(_get_path_to_here)/aws-options"
+    echo "$(_get_path_to_envs)/${1}"
 }
 
-function _get_path_to_aws_opts_env()
+function _get_path_to_env_asset()
 {
-    echo "$(_get_path_to_aws_opts)/${1}"
+    echo "$(_get_path_to_env ${1})/${2}"
 }
 
-function _get_path_to_aws_opts_env_asset()
+function _get_path_to_envs()
 {
-    echo "$(_get_path_to_aws_opts_env ${1})/${2}"
+    echo "$(_get_path_to_here)/envs"
 }
 
-function _get_path_to_exec_opts()
+function _get_path_to_exec_configs()
 {
-    echo "$(_get_path_to_here)/exec-options"
+    echo "$(_get_path_to_here)/exec-configs"
 }
 
 function _get_path_to_here()
@@ -56,9 +51,7 @@ function _get_path_to_root()
     echo "$(_get_path_to_ancestor "$(_get_path_to_here)" "2")"
 }
 
-function _log_error ()
+function _get_path_to_template()
 {
-    local MSG=${1}
-
-    echo -e "$(_get_now) [ERROR] [$$] HNSW-SERVICE-CLIENT :: $MSG"
+    echo "$(_get_path_to_here)/templates/${1}"
 }
