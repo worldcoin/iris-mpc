@@ -18,6 +18,7 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
+pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
     genesis::{
@@ -29,8 +30,8 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
-        IndexationError, JobRequest, JobResult,
+        utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
+        JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
@@ -49,16 +50,13 @@ pub const PERSIST_DELAY: usize = 32;
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ExecutionArgs {
-    // Serial idenitifer of maximum indexed Iris.
+    // Serial identifier of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
-    // Initial batch size for indexing.
-    batch_size: usize,
-
-    // Error rate to be applied when calculating dynamic batch sizes.
-    batch_size_error_rate: usize,
+    // Batch size configuration (static or dynamic with cap).
+    batch_size_config: BatchSizeConfig,
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_snapshot: bool,
@@ -70,15 +68,13 @@ pub struct ExecutionArgs {
 /// Constructor.
 impl ExecutionArgs {
     pub fn new(
-        batch_size: usize,
-        batch_size_error_rate: usize,
+        batch_size_config: BatchSizeConfig,
         max_indexation_id: IrisSerialId,
         perform_snapshot: bool,
         use_backup_as_source: bool,
     ) -> Self {
         Self {
-            batch_size,
-            batch_size_error_rate,
+            batch_size_config,
             max_indexation_id,
             perform_snapshot,
             use_backup_as_source,
@@ -123,7 +119,7 @@ impl ExecutionContextInfo {
         max_modification_persist_id: i64,
     ) -> Self {
         Self {
-            args: *args,
+            args: args.clone(),
             config: config.clone(),
             excluded_serial_ids,
             last_indexed_id,
@@ -161,10 +157,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     log_info(String::from("Setup complete."));
     log_info(format!(
-        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
+        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}\n  Use backup as source: {}",
         args.max_indexation_id,
-        args.batch_size,
-        args.batch_size_error_rate,
+        args.batch_size_config,
         args.perform_snapshot,
         args.use_backup_as_source,
     ));
@@ -302,8 +297,7 @@ async fn exec_setup(
 
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
-        args.batch_size,
-        args.batch_size_error_rate,
+        args.batch_size_config,
         excluded_serial_ids.clone(),
         last_indexed_id,
         args.max_indexation_id,
@@ -613,11 +607,11 @@ async fn exec_indexation(
         ctx.last_indexed_id, ctx.args.max_indexation_id
     ));
 
-    // Set batch size.
-    let batch_size = match ctx.args.batch_size {
-        0 => BatchSize::new_dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
-        _ => BatchSize::new_static(ctx.args.batch_size),
-    };
+    // Set batch size from config.
+    let batch_size = ctx
+        .args
+        .batch_size_config
+        .compute_batch_size(ctx.config.hnsw_param_M);
 
     if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
         log_warn(format!(
@@ -659,7 +653,6 @@ async fn exec_indexation(
 
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
-
             last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
@@ -762,7 +755,10 @@ async fn exec_snapshot(
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
-        ctx.last_indexed_id, ctx.args.max_indexation_id, ctx.args.batch_size, unix_timestamp
+        ctx.last_indexed_id,
+        ctx.args.max_indexation_id,
+        ctx.args.batch_size_config.to_aws_identifier(),
+        unix_timestamp
     );
 
     // Set cluster ID.
@@ -1104,6 +1100,7 @@ async fn get_results_thread(
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
                     // get iris shares to persist
+                    let start = Instant::now();
                     let left_store = &imem_iris_stores_bg[LEFT];
                     let right_store = &imem_iris_stores_bg[RIGHT];
 
@@ -1153,7 +1150,8 @@ async fn get_results_thread(
                     log_info(format!(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
                     ));
-                    metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
+                    metrics::gauge!("genesis_batch_indexation_complete").set(last_serial_id);
+                    metrics::histogram!("genesis_batch_persist_duration").record(start.elapsed().as_secs_f64());
                     let _ = done_tx.send(());
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();

@@ -41,6 +41,9 @@ env:
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "smpcv2-server-prod"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "SMPC_rerand"
+
   - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:
@@ -123,7 +126,7 @@ env:
     value: "iris-mpc-db-exporter-store-node-0-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "even_odd_with_version_id_output_16k"
+    value: "even_odd_with_version_id_output_16k_rerandomized"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
