@@ -166,12 +166,14 @@ impl Handle {
                                         }
                                     },
                                 );
-
+                                let start = Instant::now();
                                 let plans = parallelize(search_jobs)
                                     .await?
                                     .into_iter()
                                     .map(Some)
                                     .collect_vec();
+                                metrics::histogram!("genesis_all_searches_duration")
+                                    .record(start.elapsed().as_secs_f64());
 
                                 let batch_ids = queries_batch
                                     .iter()
@@ -180,6 +182,7 @@ impl Handle {
 
                                 // Insert into in-memory store, and return insertion plans for use by DB
                                 {
+                                    let start = Instant::now();
                                     let mut store = insert_session.aby3_store.write().await;
                                     let mut graph = insert_session.graph_store.write().await;
 
@@ -191,6 +194,8 @@ impl Handle {
                                         &batch_ids,
                                     )
                                     .await?;
+                                    metrics::histogram!("genesis_insert_duration")
+                                        .record(start.elapsed().as_secs_f64());
                                     connect_plans.extend(plans);
                                 }
                             }
