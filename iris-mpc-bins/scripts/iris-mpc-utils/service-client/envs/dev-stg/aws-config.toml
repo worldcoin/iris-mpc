@@ -1,7 +1,0 @@
-environment = "dev"
-public_key_base_url = "https://pki-smpcv2-dev.worldcoin.org"
-s3_request_bucket_name = "wf-smpcv2-dev-sns-requests-v2"
-sns_request_topic_arn = "arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo"
-sqs_long_poll_wait_time = 10
-sqs_response_queue_url = "https://sqs.eu-central-1.amazonaws.com/238407200320/hnsw-smpc-results.fifo"
-sqs_wait_time_seconds = 5

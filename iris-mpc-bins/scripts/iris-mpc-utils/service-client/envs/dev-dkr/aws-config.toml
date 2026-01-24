@@ -1,7 +1,0 @@
-environment = "dev"
-public_key_base_url = "http://localhost:4566/wf-dev-public-keys"
-s3_request_bucket_name = "wf-smpcv2-dev-sns-requests"
-sns_request_topic_arn = "arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo"
-sqs_long_poll_wait_time = 10
-sqs_response_queue_url = "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo"
-sqs_wait_time_seconds = 5
