@@ -1,4 +1,4 @@
-[worldcoin-dev-stg]
+[profile worldcoin-dev-stg]
 region = eu-central-1
 output = table
 
