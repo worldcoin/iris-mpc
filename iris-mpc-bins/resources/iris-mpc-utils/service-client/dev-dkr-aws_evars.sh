@@ -2,5 +2,5 @@ unset AWS_ACCESS_KEY_ID
 unset AWS_ENDPOINT_URL
 unset AWS_REGION
 unset AWS_SECRET_ACCESS_KEY
-export AWS_PROFILE="local-worldcoin"
-export AWS_ENDPOINT_URL="http://127.0.0.1:4566"
+export AWS_PROFILE="worldcoin-dev-dkr"
+export AWS_ENDPOINT_URL="http://localhost:4566"
