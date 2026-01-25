@@ -392,6 +392,11 @@ pub async fn conditionally_swap_distances(
 // consider putting this in ampc-common next to oblivious_cross_compare()
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 and opens it.
 ///
+/// Rounds a batch size to the nearest multiple of 100.
+fn round_batch_size(size: usize) -> usize {
+    ((size + 50) / 100) * 100
+}
+
 /// The less-than operator is implemented in 2 steps:
 ///
 /// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
@@ -402,12 +407,40 @@ pub async fn cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<bool>> {
+    let total_start = Instant::now();
+    let batch_size = distances.len();
+    let rounded_batch_size = round_batch_size(batch_size);
+    let batch_size_label = rounded_batch_size.to_string();
+
+    // Track batch size occurrence
+    metrics::counter!("less_than_batch_count", "batch_size" => batch_size_label.clone())
+        .increment(1);
+
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
+    let cross_mul_start = Instant::now();
     let diff = cross_mul(session, distances).await?;
+    metrics::histogram!("less_than_cross_mul_duration_ms", "batch_size" => batch_size_label.clone())
+        .record(cross_mul_start.elapsed().as_secs_f64() * 1000.0);
+
     // Compute the MSB of the above
+    let extract_msb_start = Instant::now();
     let bits = extract_msb_batch(session, &diff).await?;
+    metrics::histogram!(
+        "less_than_extract_msb_duration_ms",
+        "batch_size" => batch_size_label.clone()
+    )
+    .record(extract_msb_start.elapsed().as_secs_f64() * 1000.0);
+
     // Open the MSB
+    let open_bin_start = Instant::now();
     let opened_b = open_bin(session, &bits).await?;
+    metrics::histogram!("less_than_open_bin_duration_ms", "batch_size" => batch_size_label.clone())
+        .record(open_bin_start.elapsed().as_secs_f64() * 1000.0);
+
+    // Record total duration
+    metrics::histogram!("less_than_batch_total_duration_ms", "batch_size" => batch_size_label)
+        .record(total_start.elapsed().as_secs_f64() * 1000.0);
+
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 

@@ -33,6 +33,11 @@ use tracing::{debug, instrument, trace_span, Instrument};
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
 
+/// Rounds a search depth to the nearest multiple of 50.
+fn round_search_depth(depth: usize) -> usize {
+    ((depth + 25) / 50) * 50
+}
+
 /// Proportion by which `M_max` is multiplied to determine the compaction limit
 /// size `M_limit` by default.
 const DEFAULT_M_LIMIT_MULTIPLIER: f64 = 1.1;
@@ -1082,6 +1087,8 @@ impl HnswSearcher {
         // query than the nodes in W
         while !cur_unopened.is_empty() {
             depth += 1;
+            let rounded_depth = round_search_depth(depth);
+            let depth_label = rounded_depth.to_string();
 
             // Estimate the number of neighbors to visit which will result in approximately
             // the desired number of new elements to be inserted into the candidate neighborhood.
@@ -1090,6 +1097,7 @@ impl HnswSearcher {
             // Open several candidate nodes, visit unvisited neighbors, and compute distances
             // between the query and neighbors as a batch. Opens nodes until at least
             // `target_batch_size` neighbors are visited or all nodes are opened.
+            let open_nodes_start = std::time::Instant::now();
             let (new_opened, c_links) = HnswSearcher::open_nodes_batch(
                 store,
                 graph,
@@ -1101,6 +1109,18 @@ impl HnswSearcher {
             )
             .instrument(eval_dist_span.clone())
             .await?;
+            metrics::histogram!(
+                "layer_search_open_nodes_duration_ms",
+                "layer" => lc.to_string(),
+                "search_depth" => depth_label.clone()
+            )
+            .record(open_nodes_start.elapsed().as_secs_f64() * 1000.0);
+            metrics::histogram!(
+                "layer_search_open_nodes_batch_size",
+                "layer" => lc.to_string(),
+                "search_depth" => depth_label.clone()
+            )
+            .record(c_links.len() as f64);
 
             opened_so_far += new_opened.len();
             visited_so_far += c_links.len();
@@ -1114,6 +1134,7 @@ impl HnswSearcher {
             opened.extend(new_opened);
 
             // Compare elements against current farthest element of W
+            let comparison_start = std::time::Instant::now();
             let fq = W
                 .get_furthest()
                 .ok_or(eyre!("No furthest element found"))?
@@ -1128,6 +1149,12 @@ impl HnswSearcher {
                 .less_than_batch(&batch)
                 .instrument(less_than_span.clone())
                 .await?;
+            metrics::histogram!(
+                "layer_search_comparison_duration_ms",
+                "layer" => lc.to_string(),
+                "search_depth" => depth_label.clone()
+            )
+            .record(comparison_start.elapsed().as_secs_f64() * 1000.0);
 
             // Filter out elements which are not strictly closer than the current worst candidate
             let filtered_links: Vec<_> = results
@@ -1156,9 +1183,22 @@ impl HnswSearcher {
             .increment(1);
 
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
+            metrics::histogram!(
+                "layer_search_insert_count",
+                "layer" => lc.to_string(),
+                "search_depth" => depth_label.clone()
+            )
+            .record(n_insertions as f64);
+            let insert_and_trim_start = std::time::Instant::now();
             W.insert_batch_and_trim(store, &filtered_links, ef)
                 .instrument(insert_span.clone())
                 .await?;
+            metrics::histogram!(
+                "layer_search_insert_and_trim_duration_ms",
+                "layer" => lc.to_string(),
+                "search_depth" => depth_label
+            )
+            .record(insert_and_trim_start.elapsed().as_secs_f64() * 1000.0);
 
             // If measured insertion rate is too low, update the estimated insertion rate.
             //
