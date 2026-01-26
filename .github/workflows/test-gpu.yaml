@@ -45,18 +45,6 @@ jobs:
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: df -h
 
-      - name: Update gcc to version 11
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --reinstall ca-certificates
-          sudo apt-get install -y build-essential manpages-dev software-properties-common
-          sudo add-apt-repository ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          sudo apt-get install -y gcc-11 g++-11
-          sudo ln -sf /usr/bin/gcc-11 /usr/bin/gcc
-          gcc --version
-
       - name: Install OpenSSL && pkg-config && protobuf-compiler
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler
@@ -67,17 +55,21 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt install -y wget
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-ubuntu2404.pin
           sudo mv cuda-ubuntu2404.pin /etc/apt/preferences.d/cuda-repository-pin-600
+          
           wget https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda-repo-ubuntu2404-12-8-local_12.8.0-570.86.10-1_amd64.deb
           sudo dpkg -i cuda-repo-ubuntu2404-12-8-local_12.8.0-570.86.10-1_amd64.deb
           sudo cp /var/cuda-repo-ubuntu2404-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/
-          sudo apt-get update
-          sudo apt-get -y install cuda-toolkit-12-8
+          
+          sudo tee /etc/apt/preferences.d/nccl-pin <<'EOF'
+          Package: libnccl2 libnccl-dev
+          Pin: origin developer.download.nvidia.com
+          Pin-Priority: 1001
+          EOF
           
           sudo apt-get update
-          sudo apt-get -y install cuda-toolkit-12-8 cuda-command-line-tools-12-8 libnccl2 libnccl-dev
+          sudo apt-get install -y cuda-toolkit-12-8 libnccl2 libnccl-dev
 
       - name: Find libs
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
