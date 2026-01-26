@@ -113,7 +113,7 @@ impl From<&ServiceClientOptions> for RequestGenerator {
 impl From<&ServiceClientOptions> for RequestGeneratorParams {
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.request_batch() {
-            options::RequestBatchConfiguration::Simple {
+            options::RequestBatchOptions::Simple {
                 batch_count,
                 batch_size,
                 batch_kind,
@@ -127,7 +127,7 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                     known_iris_serial_id: *known_iris_serial_id,
                 }
             }
-            options::RequestBatchConfiguration::KnownSet(request_batch_set) => {
+            options::RequestBatchOptions::KnownSet(request_batch_set) => {
                 tracing::info!("Parsing config: Request batch set from known set");
                 Self::KnownSet(request_batch_set.clone())
             }
@@ -138,11 +138,11 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
 impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for SharesGenerator<R> {
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.shares_generator() {
-            options::SharesGeneratorConfiguration::FromCompute { rng_seed } => {
+            options::SharesGeneratorOptions::FromCompute { rng_seed } => {
                 tracing::info!("Parsing config: Shares generator from RNG");
                 SharesGenerator::<R>::new_compute(*rng_seed)
             }
-            options::SharesGeneratorConfiguration::FromFile {
+            options::SharesGeneratorOptions::FromFile {
                 path_to_ndjson_file,
                 rng_seed,
                 selection_strategy,
