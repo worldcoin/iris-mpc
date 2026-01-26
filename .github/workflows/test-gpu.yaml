@@ -68,10 +68,19 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt install -y wget
-          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt update
-          sudo apt install -y cuda-toolkit-12-2 cuda-command-line-tools-12-2 libnccl2 libnccl-dev
+#          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
+#          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+#          sudo apt update
+#          sudo apt install -y cuda-toolkit-12-2 cuda-command-line-tools-12-2 libnccl2 libnccl-dev
+
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-ubuntu2404.pin
+          sudo mv cuda-ubuntu2404.pin /etc/apt/preferences.d/cuda-repository-pin-600
+          wget https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda-repo-ubuntu2404-12-8-local_12.8.0-570.86.10-1_arm64.deb
+          sudo dpkg -i cuda-repo-ubuntu2404-12-8-local_12.8.0-570.86.10-1_arm64.deb
+          sudo cp /var/cuda-repo-ubuntu2404-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/
+          
+          sudo apt-get update
+          sudo apt-get -y install cuda-toolkit-12-8 cuda-command-line-tools-12-8 libnccl2 libnccl-dev
 
       - name: Find libs
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
