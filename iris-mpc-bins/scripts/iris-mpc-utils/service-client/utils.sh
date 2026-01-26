@@ -18,7 +18,7 @@ function _get_path_to_ancestor()
 
 function _get_path_to_aws_opts()
 {
-    echo "$(_get_path_to_base)/aws-options"
+    echo "$(_get_path_to_base)/aws-opts"
 }
 
 function _get_path_to_aws_opts_env()
@@ -38,7 +38,7 @@ function _get_path_to_base()
 
 function _get_path_to_exec_opts()
 {
-    echo "$(_get_path_to_base)/exec-options"
+    echo "$(_get_path_to_base)/exec-opts"
 }
 
 function _get_path_to_here()

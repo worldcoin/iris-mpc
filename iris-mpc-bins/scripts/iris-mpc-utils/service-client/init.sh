@@ -40,8 +40,9 @@ function _init_aws_opts()
 
 function _init_exec_opts()
 {
-    cp "$(_get_path_to_resources)/exec-options-1.toml" "$(_get_path_to_exec_opts)/example-1.toml"
-    cp "$(_get_path_to_resources)/exec-options-2.toml" "$(_get_path_to_exec_opts)/example-2.toml"
+    mkdir -p "$(_get_path_to_exec_opts)/examples"
+    cp "$(_get_path_to_resources)/exec-options-1.toml" "$(_get_path_to_exec_opts)/examples/example-1.toml"
+    cp "$(_get_path_to_resources)/exec-options-2.toml" "$(_get_path_to_exec_opts)/examples/example-2.toml"
 }
 
 function _init_fsys()

@@ -18,14 +18,14 @@ function _help() {
     DEFAULTS
     ----------------------------------------------------------------
     env         dev-dkr
-    opts        $(_get_path_to_exec_opts)/example-1.toml
+    opts        $(_get_path_to_exec_opts)/examples/example-1.toml
     "
 }
 
 function _main()
 {
     local path_to_aws_opts=$(_get_path_to_aws_opts_env_asset ${1} "aws-config.toml")
-    local path_to_exec_opts=${2:-$(_get_path_to_exec_opts)/example-1.toml}
+    local path_to_exec_opts=${2:-$(_get_path_to_exec_opts)/examples/example-1.toml}
 
     pushd "$(_get_path_to_iris_mpc_bins)" || exit
     cargo run \
