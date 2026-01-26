@@ -5,20 +5,18 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
 
-use crate::{
-    aws::{AwsClient, AwsClientConfig},
-    client::config::IrisCodeSelectionStrategy,
-};
+use crate::aws::{AwsClient, AwsClientConfig};
 use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
     SharesUploader,
 };
-pub use config::{AwsConfiguration, ServiceClientConfiguration};
+use options::IrisCodeSelectionStrategy;
+pub use options::{AwsOptions, ServiceClientOptions};
 pub use typeset::ServiceClientError;
 use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
 
 mod components;
-mod config;
+mod options;
 mod typeset;
 
 /// A utility for enqueuing system requests & correlating with system responses.
@@ -37,19 +35,16 @@ pub struct ServiceClient<R: Rng + CryptoRng + SeedableRng + Send> {
 }
 
 impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
-    pub async fn new(
-        client_config: ServiceClientConfiguration,
-        aws_config: AwsConfiguration,
-    ) -> Self {
-        let aws_client = AwsClient::async_from(aws_config).await;
+    pub async fn new(opts: ServiceClientOptions, aws_opts: AwsOptions) -> Self {
+        let aws_client = AwsClient::async_from(aws_opts).await;
 
         Self {
             shares_uploader: SharesUploader::new(
                 aws_client.clone(),
-                SharesGenerator::<R>::from(&client_config),
+                SharesGenerator::<R>::from(&opts),
             ),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::from(&client_config),
+            request_generator: RequestGenerator::from(&opts),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         }
     }
@@ -87,15 +82,15 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<AwsConfiguration> for AwsClient {
-    async fn async_from(config: AwsConfiguration) -> Self {
+impl AsyncFrom<AwsOptions> for AwsClient {
+    async fn async_from(config: AwsOptions) -> Self {
         AwsClient::new(AwsClientConfig::async_from(config).await)
     }
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<AwsConfiguration> for AwsClientConfig {
-    async fn async_from(config: AwsConfiguration) -> Self {
+impl AsyncFrom<AwsOptions> for AwsClientConfig {
+    async fn async_from(config: AwsOptions) -> Self {
         AwsClientConfig::new(
             config.environment().to_owned(),
             config.public_key_base_url().to_owned(),
@@ -109,16 +104,16 @@ impl AsyncFrom<AwsConfiguration> for AwsClientConfig {
     }
 }
 
-impl From<&ServiceClientConfiguration> for RequestGenerator {
-    fn from(config: &ServiceClientConfiguration) -> Self {
+impl From<&ServiceClientOptions> for RequestGenerator {
+    fn from(config: &ServiceClientOptions) -> Self {
         Self::new(RequestGeneratorParams::from(config))
     }
 }
 
-impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
-    fn from(config: &ServiceClientConfiguration) -> Self {
-        match config.request_batch() {
-            config::RequestBatchConfiguration::Simple {
+impl From<&ServiceClientOptions> for RequestGeneratorParams {
+    fn from(opts: &ServiceClientOptions) -> Self {
+        match opts.request_batch() {
+            options::RequestBatchConfiguration::Simple {
                 batch_count,
                 batch_size,
                 batch_kind,
@@ -132,7 +127,7 @@ impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
                     known_iris_serial_id: *known_iris_serial_id,
                 }
             }
-            config::RequestBatchConfiguration::KnownSet(request_batch_set) => {
+            options::RequestBatchConfiguration::KnownSet(request_batch_set) => {
                 tracing::info!("Parsing config: Request batch set from known set");
                 Self::KnownSet(request_batch_set.clone())
             }
@@ -140,16 +135,14 @@ impl From<&ServiceClientConfiguration> for RequestGeneratorParams {
     }
 }
 
-impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientConfiguration>
-    for SharesGenerator<R>
-{
-    fn from(config: &ServiceClientConfiguration) -> Self {
-        match config.shares_generator() {
-            config::SharesGeneratorConfiguration::FromCompute { rng_seed } => {
+impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for SharesGenerator<R> {
+    fn from(opts: &ServiceClientOptions) -> Self {
+        match opts.shares_generator() {
+            options::SharesGeneratorConfiguration::FromCompute { rng_seed } => {
                 tracing::info!("Parsing config: Shares generator from RNG");
                 SharesGenerator::<R>::new_compute(*rng_seed)
             }
-            config::SharesGeneratorConfiguration::FromFile {
+            options::SharesGeneratorConfiguration::FromFile {
                 path_to_ndjson_file,
                 rng_seed,
                 selection_strategy,

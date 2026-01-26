@@ -6,7 +6,7 @@ use super::super::typeset::RequestBatch;
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceClientConfiguration {
+pub struct ServiceClientOptions {
     // Associated request batch generation configuration.
     request_batch: RequestBatchConfiguration,
 
@@ -14,7 +14,7 @@ pub struct ServiceClientConfiguration {
     shares_generator: SharesGeneratorConfiguration,
 }
 
-impl ServiceClientConfiguration {
+impl ServiceClientOptions {
     pub fn request_batch(&self) -> &RequestBatchConfiguration {
         &self.request_batch
     }

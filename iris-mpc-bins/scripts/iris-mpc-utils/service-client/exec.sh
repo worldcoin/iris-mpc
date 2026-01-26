@@ -30,8 +30,8 @@ function _main()
     pushd "$(_get_path_to_iris_mpc_bins)" || exit
     cargo run \
         --release --bin service-client -- \
-        --path-to-config "${path_to_exec_opts}" \
-        --path-to-config-aws "${path_to_aws_opts}"
+        --path-to-opts "${path_to_exec_opts}" \
+        --path-to-opts-aws "${path_to_aws_opts}"
     popd || exit
 }
 
