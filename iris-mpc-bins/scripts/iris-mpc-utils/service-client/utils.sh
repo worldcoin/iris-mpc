@@ -18,7 +18,7 @@ function _get_path_to_ancestor()
 
 function _get_path_to_aws_opts()
 {
-    echo "$(_get_path_to_here)/aws-options"
+    echo "$(_get_path_to_base)/aws-options"
 }
 
 function _get_path_to_aws_opts_env()
@@ -31,9 +31,14 @@ function _get_path_to_aws_opts_env_asset()
     echo "$(_get_path_to_aws_opts_env ${1})/${2}"
 }
 
+function _get_path_to_base()
+{
+    echo ${HOME}/.hnsw/service-client
+}
+
 function _get_path_to_exec_opts()
 {
-    echo "$(_get_path_to_here)/exec-options"
+    echo "$(_get_path_to_base)/exec-options"
 }
 
 function _get_path_to_here()

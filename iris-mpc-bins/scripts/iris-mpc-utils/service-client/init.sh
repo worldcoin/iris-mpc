@@ -15,8 +15,8 @@ function _help() {
 function _main()
 {
     _init_fsys
-    _init_exec_configs
-    _init_envs
+    _init_exec_opts
+    _init_aws_opts
 
     echo "------------------------------------------------------------------------------------------"
     echo "HNSW service client has been initialised.  Please edit the following aws-credentials files as necessary:"
@@ -25,13 +25,7 @@ function _main()
     echo "------------------------------------------------------------------------------------------"
 }
 
-function _init_exec_configs()
-{
-    cp "$(_get_path_to_resources)/exec-options-1.toml" "$(_get_path_to_exec_opts)/example-1.toml"
-    cp "$(_get_path_to_resources)/exec-options-2.toml" "$(_get_path_to_exec_opts)/example-2.toml"
-}
-
-function _init_envs()
+function _init_aws_opts()
 {
     local envs=("dev-dkr" "dev-stg")
     for env in "${envs[@]}"; do
@@ -42,6 +36,12 @@ function _init_envs()
                "$(_get_path_to_aws_opts_env ${env})/${resource}"
         done
     done
+}
+
+function _init_exec_opts()
+{
+    cp "$(_get_path_to_resources)/exec-options-1.toml" "$(_get_path_to_exec_opts)/example-1.toml"
+    cp "$(_get_path_to_resources)/exec-options-2.toml" "$(_get_path_to_exec_opts)/example-2.toml"
 }
 
 function _init_fsys()
