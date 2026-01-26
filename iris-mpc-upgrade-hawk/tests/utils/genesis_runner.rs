@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::Result;
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
+use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs, BatchSizeConfig};
 use itertools::izip;
 use rand::{thread_rng, Rng};
 use tokio::task::JoinSet;
@@ -17,13 +17,12 @@ use crate::utils::{
 };
 
 pub const NUM_GPU_IRISES_INIT: usize = 100;
+pub const MAX_INDEXATION_ID: usize = 100;
 
 pub const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
-    max_indexation_id: 100,
-    batch_size: 1,
-    batch_size_error_rate: 250,
+    max_indexation_id: MAX_INDEXATION_ID as u32,
+    batch_size_config: BatchSizeConfig::Static { size: 1 },
 };
-pub const MAX_INDEXATION_ID: usize = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
 
 pub fn get_node_configs() -> [Config; 3] {
     let exec_env = TestRunContextInfo::new(0, 0);

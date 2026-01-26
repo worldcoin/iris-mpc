@@ -1,15 +1,13 @@
+use super::BatchSizeConfig;
 use eyre::{ensure, Result};
 use iris_mpc_common::{config::CommonConfig, helpers::sync::Modification, IrisSerialId};
 use serde::{Deserialize, Serialize};
 
-/// Encpasulates common Genesis specific configuration information.  This is a network level type.
+/// Encapsulates common Genesis specific configuration information. This is a network level type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    // Size of indexation batch.
-    pub batch_size: usize,
-
-    // For Dynamic batch size, this is the error rate for the size calculation.
-    pub batch_size_error_rate: usize,
+    // Batch size configuration (static or dynamic with cap).
+    pub batch_size_config: BatchSizeConfig,
 
     // Set of identifiers of Iris's to be excluded from indexation.
     pub excluded_serial_ids: Vec<IrisSerialId>,
@@ -37,8 +35,7 @@ pub struct Config {
 impl Config {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        batch_size: usize,
-        batch_size_error_rate: usize,
+        batch_size_config: BatchSizeConfig,
         excluded_serial_ids: Vec<IrisSerialId>,
         last_indexed_id: IrisSerialId,
         max_indexation_id: IrisSerialId,
@@ -48,8 +45,7 @@ impl Config {
         use_backup_as_source: bool,
     ) -> Self {
         Self {
-            batch_size,
-            batch_size_error_rate,
+            batch_size_config,
             excluded_serial_ids,
             last_indexed_id,
             max_indexation_id,
@@ -151,8 +147,7 @@ mod tests {
                 graph_mutation: None,
             };
             Self::new(
-                64,
-                128,
+                BatchSizeConfig::Static { size: 64 },
                 vec![3, 5],
                 50,
                 100,
@@ -174,8 +169,7 @@ mod tests {
                 graph_mutation: None,
             };
             Self::new(
-                64,
-                128,
+                BatchSizeConfig::Static { size: 64 },
                 vec![3, 5, 6],
                 150,
                 200,
@@ -198,8 +192,7 @@ mod tests {
                 graph_mutation: None,
             };
             Self::new(
-                64,
-                128,
+                BatchSizeConfig::Static { size: 64 },
                 vec![3, 5, 6],
                 150,
                 200,
