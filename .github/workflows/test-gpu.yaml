@@ -69,7 +69,7 @@ jobs:
           EOF
           
           sudo apt-get update
-          sudo apt-get install -y cuda-toolkit-12-8 libnccl2 libnccl-dev
+          sudo apt-get install -y cuda-toolkit-12-8 libnccl2=2.26.* libnccl-dev=2.26.*
 
       - name: Find libs
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
