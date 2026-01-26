@@ -5,7 +5,6 @@ on:
     branches:
       - "dev"
       - "feat/reauth_anon_stats"
-      - "elenagryaznova-pop-3444-increase-sns-retry-config-for-iris-mpc-from-3-default-to-5"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
