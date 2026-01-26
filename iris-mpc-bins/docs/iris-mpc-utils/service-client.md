@@ -59,8 +59,8 @@ hnsw-service-client-init
 *NOTE*: you will be instructed to review/edit the following files:
 
 ```
-YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/aws-opts/dev-dkr/aws-credentials
-YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/aws-opts/dev-stg/aws-credentials
+${HOME}/.hnsw/service-client/aws-opts/dev-dkr/aws-credentials
+${HOME}/.hnsw/service-client/aws-opts/dev-stg/aws-credentials
 ```
 
 ## Step 4: Start Session
@@ -84,11 +84,11 @@ hnsw-service-client-exec env="dev-dkr" opts=PATH-TO-A-SERVICE-CLIENT-EXEC-OPTION
 
 Defaults: 
 - env = "dev-dkr"
-- opts = YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/exec-opts/example-1.toml
+- opts = ${HOME}/.hnsw/service-client/exec-opts/example-1.toml
 
 ## Example Service Client Execution Options.
 
-It is good practice to create a local folder, e.g. `~/.hnsw/service-client/exec-options`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
+It is good practice to create a local folder, e.g. `~/.hnsw/service-client/my-exec-opts`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
 
 ### Example 1.
 
