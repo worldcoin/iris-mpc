@@ -49,7 +49,7 @@
 //! - **`FHD` (Fractional Hamming Distance)**: Computes the standard fractional Hamming distance.
 //! - **`MinFHDX` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
 //!   FHD distance across rotation amounts `-X, -(X-1).. 0 .. (X - 1), X`.
-//!   
+//!
 //! The choice of distance function is set by the constant `HAWK_DISTANCE_FN`.
 //! One must also set the `HAWK_MINFHD_ROTATIONS` constant, which refers to the total rotations considered by MinFHD.
 //! Note that one should set it to `2 * X + 1` to work with `MinFHDX`.
@@ -510,11 +510,7 @@ impl HawkActor {
                 let my_prf_key = thread_rng().gen();
                 setup_shared_seed(network_session, my_prf_key)
                     .await
-                    .unwrap_or_else(|err| {
-                        tracing::warn!("Unable to initialize shared HNSW PRF key: {err}");
-                        tracing::warn!("Using default PRF key value [0u8; 16]");
-                        [0u8; 16]
-                    })
+                    .map_err(|err| eyre!("Unable to initialize shared HNSW PRF key: {err}"))?
             };
             let prf_key = Arc::new(prf_key_);
 
