@@ -172,7 +172,7 @@ impl Handle {
                                     .into_iter()
                                     .map(Some)
                                     .collect_vec();
-                                metrics::histogram!("genesis_all_searches_duration")
+                                metrics::histogram!("genesis_all_searches_duration", "eye" => format!("{side:?}").to_lowercase())
                                     .record(start.elapsed().as_secs_f64());
 
                                 let batch_ids = queries_batch
@@ -194,7 +194,7 @@ impl Handle {
                                         &batch_ids,
                                     )
                                     .await?;
-                                    metrics::histogram!("genesis_insert_duration")
+                                    metrics::histogram!("genesis_insert_duration", "eye" => format!("{side:?}").to_lowercase())
                                         .record(start.elapsed().as_secs_f64());
                                     connect_plans.extend(plans);
                                 }

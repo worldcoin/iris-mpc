@@ -7,6 +7,12 @@ use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use itertools::Itertools;
+use std::time::Instant;
+
+/// Rounds a batch size to the nearest multiple of 100.
+fn round_batch_size(size: usize) -> usize {
+    ((size + 50) / 100) * 100
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
@@ -112,11 +118,49 @@ impl DistanceSimple {
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<u32>>> {
+        let total_start = Instant::now();
+        let batch_size = vectors.len();
+        let rounded_batch_size = round_batch_size(batch_size);
+        let batch_size_label = rounded_batch_size.to_string();
+
+        // Track batch size occurrence
+        metrics::counter!(
+            "eval_distance_batch_count",
+            "batch_size" => batch_size_label.clone(),
+            "distance_fn" => "fhd"
+        )
+        .increment(1);
+
+        let dot_product_start = Instant::now();
         let ds_and_ts = store
             .workers
             .dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
-        store.gr_to_lifted_distances(ds_and_ts).await
+        metrics::histogram!(
+            "eval_distance_dot_product_duration_ms",
+            "batch_size" => batch_size_label.clone(),
+            "distance_fn" => "fhd"
+        )
+        .record(dot_product_start.elapsed().as_secs_f64() * 1000.0);
+
+        let gr_to_lifted_start = Instant::now();
+        let result = store.gr_to_lifted_distances(ds_and_ts).await;
+        metrics::histogram!(
+            "eval_distance_gr_to_lifted_duration_ms",
+            "batch_size" => batch_size_label.clone(),
+            "distance_fn" => "fhd"
+        )
+        .record(gr_to_lifted_start.elapsed().as_secs_f64() * 1000.0);
+
+        // Record total duration
+        metrics::histogram!(
+            "eval_distance_batch_total_duration_ms",
+            "batch_size" => batch_size_label,
+            "distance_fn" => "fhd"
+        )
+        .record(total_start.elapsed().as_secs_f64() * 1000.0);
+
+        result
     }
 }
 
@@ -161,28 +205,59 @@ impl DistanceMinimalRotation {
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<u32>>> {
-        let total_start = std::time::Instant::now();
+        let total_start = Instant::now();
+        let batch_size = vectors.len();
+        let rounded_batch_size = round_batch_size(batch_size);
+        let batch_size_label = rounded_batch_size.to_string();
+
+        // Track batch size occurrence
+        metrics::counter!(
+            "eval_distance_batch_count",
+            "batch_size" => batch_size_label.clone(),
+            "distance_fn" => "min_fhd"
+        )
+        .increment(1);
+
+        let dot_product_start = Instant::now();
         let ds_and_ts = store
             .workers
             .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
-        let gr_to_lifted_start = std::time::Instant::now();
+        metrics::histogram!(
+            "eval_distance_dot_product_duration_ms",
+            "batch_size" => batch_size_label.clone(),
+            "distance_fn" => "min_fhd"
+        )
+        .record(dot_product_start.elapsed().as_secs_f64() * 1000.0);
+
+        let gr_to_lifted_start = Instant::now();
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        let gr_to_lifted_duration = gr_to_lifted_start.elapsed();
-        let oblivious_min_start = std::time::Instant::now();
+        metrics::histogram!(
+            "eval_distance_gr_to_lifted_duration_ms",
+            "batch_size" => batch_size_label.clone(),
+            "distance_fn" => "min_fhd"
+        )
+        .record(gr_to_lifted_start.elapsed().as_secs_f64() * 1000.0);
+
+        let oblivious_min_start = Instant::now();
         let result = store
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
             .await;
-        let oblivious_min_duration = oblivious_min_start.elapsed();
-        let total_duration = total_start.elapsed();
-        if !total_duration.is_zero() {
-            let total_secs = total_duration.as_secs_f64();
-            let gr_to_lifted_percent = (gr_to_lifted_duration.as_secs_f64() / total_secs) * 100.0;
-            let oblivious_min_percent = (oblivious_min_duration.as_secs_f64() / total_secs) * 100.0;
-            metrics::histogram!("eval_distance_gr_to_lifted_percent").record(gr_to_lifted_percent);
-            metrics::histogram!("eval_distance_oblivious_min_percent")
-                .record(oblivious_min_percent);
-        }
+        metrics::histogram!(
+            "eval_distance_oblivious_min_duration_ms",
+            "batch_size" => batch_size_label.clone(),
+            "distance_fn" => "min_fhd"
+        )
+        .record(oblivious_min_start.elapsed().as_secs_f64() * 1000.0);
+
+        // Record total duration
+        metrics::histogram!(
+            "eval_distance_batch_total_duration_ms",
+            "batch_size" => batch_size_label,
+            "distance_fn" => "min_fhd"
+        )
+        .record(total_start.elapsed().as_secs_f64() * 1000.0);
+
         result
     }
 
