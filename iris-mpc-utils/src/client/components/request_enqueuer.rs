@@ -10,8 +10,7 @@ use crate::aws::{types::SnsMessageInfo, AwsClient};
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
-/// A component responsible for enqueuing system requests upon network ingress queues.
-#[derive(Debug)]
+/// Enqueues system requests upon network ingress queues.
 pub(crate) struct RequestEnqueuer {
     /// A client for interacting with system AWS services.
     aws_client: AwsClient,

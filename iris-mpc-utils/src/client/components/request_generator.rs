@@ -1,12 +1,10 @@
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::super::typeset::{
-    config::{RequestBatchConfiguration, ServiceClientConfiguration},
     RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError, UniquenessReference,
 };
 
-/// Encapsulates logic for generating batches of SMPC service request messages.
-#[derive(Debug)]
+/// Generates batches of SMPC service requests.
 pub(crate) struct RequestGenerator {
     // Count of generated batches.
     generated_batch_count: usize,
@@ -18,15 +16,15 @@ pub(crate) struct RequestGenerator {
 impl RequestGenerator {
     fn batch_count(&self) -> usize {
         match &self.params {
-            RequestGeneratorParams::BatchKind { batch_count, .. } => *batch_count,
+            RequestGeneratorParams::Simple { batch_count, .. } => *batch_count,
             RequestGeneratorParams::KnownSet(batch_set) => batch_set.len(),
         }
     }
 
-    pub(crate) fn new(config: ServiceClientConfiguration) -> Self {
+    pub(crate) fn new(params: RequestGeneratorParams) -> Self {
         Self {
             generated_batch_count: 0,
-            params: RequestGeneratorParams::from(config),
+            params,
         }
     }
 
@@ -37,7 +35,7 @@ impl RequestGenerator {
         }
 
         let batch = match &self.params {
-            RequestGeneratorParams::BatchKind {
+            RequestGeneratorParams::Simple {
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
@@ -60,8 +58,7 @@ impl RequestGenerator {
                 batch
             }
             RequestGeneratorParams::KnownSet(batch_set) => {
-                let batch_idx = self.next_batch_idx();
-                batch_set.get(batch_idx).unwrap().clone()
+                batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
             }
         };
 
@@ -127,10 +124,9 @@ fn push_new_uniqueness_maybe(
 }
 
 /// Set of variants over request generation inputs.
-#[derive(Debug)]
-enum RequestGeneratorParams {
+pub(crate) enum RequestGeneratorParams {
     /// Parameters permitting single kind batches to be generated.
-    BatchKind {
+    Simple {
         /// Number of request batches to generate.
         batch_count: usize,
 
@@ -147,27 +143,6 @@ enum RequestGeneratorParams {
     KnownSet(Vec<RequestBatch>),
 }
 
-impl From<ServiceClientConfiguration> for RequestGeneratorParams {
-    fn from(config: ServiceClientConfiguration) -> Self {
-        match config.request_batch() {
-            RequestBatchConfiguration::SimpleBatchKind {
-                batch_count,
-                batch_size,
-                batch_kind,
-                known_iris_serial_id,
-            } => Self::BatchKind {
-                batch_count: *batch_count,
-                batch_size: RequestBatchSize::Static(*batch_size),
-                batch_kind: RequestBatchKind::from(batch_kind),
-                known_iris_serial_id: *known_iris_serial_id,
-            },
-            RequestBatchConfiguration::KnownSet(request_batch_set) => {
-                Self::KnownSet(request_batch_set.clone())
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
@@ -179,7 +154,7 @@ mod tests {
 
     impl RequestGeneratorParams {
         pub fn new_1() -> Self {
-            Self::BatchKind {
+            Self::Simple {
                 batch_count: 1,
                 batch_size: RequestBatchSize::Static(1),
                 batch_kind: RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),

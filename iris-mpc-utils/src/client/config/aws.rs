@@ -1,29 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use iris_mpc_common::IrisSerialId;
-
-use super::RequestBatch;
-
-/// Service client configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceClientConfiguration {
-    // Associated AWS services configuration.
-    aws: AwsConfiguration,
-
-    // Associated request batch generation configuration.
-    request_batch: RequestBatchConfiguration,
-}
-
-impl ServiceClientConfiguration {
-    pub fn aws(&self) -> &AwsConfiguration {
-        &self.aws
-    }
-
-    pub fn request_batch(&self) -> &RequestBatchConfiguration {
-        &self.request_batch
-    }
-}
-
 /// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AwsConfiguration {
@@ -77,25 +53,4 @@ impl AwsConfiguration {
     pub fn sqs_wait_time_seconds(&self) -> &usize {
         &self.sqs_wait_time_seconds
     }
-}
-
-/// Set of variants over inputs to request batch generation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RequestBatchConfiguration {
-    // Batches of single request type
-    SimpleBatchKind {
-        /// Number of request batches to generate.
-        batch_count: usize,
-
-        /// Determines type of requests to be included in each batch.
-        batch_kind: String,
-
-        /// Size of each batch.
-        batch_size: usize,
-
-        // A known serial identifier that allows response correlation to be bypassed.
-        known_iris_serial_id: Option<IrisSerialId>,
-    },
-    /// A pre-built known set of request batches.
-    KnownSet(Vec<RequestBatch>),
 }
