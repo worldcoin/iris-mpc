@@ -1,3 +1,8 @@
+function _get_aws_opts_env()
+{
+    echo "$(cat $(_get_path_to_aws_opts)/env)"
+}
+
 function _get_now()
 {
     echo $(date +%Y-%m-%dT%H:%M:%S.%6N)

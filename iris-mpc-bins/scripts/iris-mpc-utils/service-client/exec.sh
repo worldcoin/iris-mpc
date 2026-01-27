@@ -24,7 +24,8 @@ function _help() {
 
 function _main()
 {
-    local path_to_aws_opts=$(_get_path_to_aws_opts_env_asset ${1} "aws-config.toml")
+    local aws_opts_env=$(_get_aws_opts_env)
+    local path_to_aws_opts=$(_get_path_to_aws_opts_env_asset ${aws_opts_env} "aws-config.toml")
     local path_to_exec_opts=${2:-$(_get_path_to_exec_opts)/examples/example-1.toml}
 
     pushd "$(_get_path_to_iris_mpc_bins)" || exit
@@ -51,17 +52,12 @@ function _get_path_to_here()
 
 source "$(_get_path_to_here)/utils.sh"
 
-unset _ENV
 unset _HELP
-unset _PATH_TO_EXEC_OPTS
 
 for ARGUMENT in "$@"
 do
     KEY=$(echo "$ARGUMENT" | cut -f1 -d=)
-    VALUE=$(echo "$ARGUMENT" | cut -f2 -d=)
     case "$KEY" in
-        opts) _PATH_TO_EXEC_OPTS=${VALUE} ;;
-        env) _ENV=${VALUE} ;;
         help) _HELP="show" ;;
         *)
     esac
@@ -70,7 +66,5 @@ done
 if [ "${_HELP:-""}" = "show" ]; then
     _help
 else
-    _main \
-        "${_ENV:-"dev-dkr"}" \
-        "${_PATH_TO_EXEC_OPTS}"
+    _main "${1}"
 fi

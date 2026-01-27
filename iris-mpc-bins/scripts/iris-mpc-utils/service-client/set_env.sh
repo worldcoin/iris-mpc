@@ -27,7 +27,7 @@ function _main()
     if [ "${env}" = "dev-dkr" ] || [ "${env}" = "dev-stg" ]; then
         _set_env "${env}"
     else
-        _log_error "Invalid env label: ${env}"
+        _log_error "Invalid env: ${env}"
     fi
 }
 
@@ -41,6 +41,9 @@ function _set_env()
 
     # Activate env vars.
     source "$(_get_path_to_aws_opts_env_asset ${env} "aws_evars.sh")"
+
+    # Set memo.
+    printf "${env}" > $(_get_path_to_aws_opts)/env
 }
 
 function _get_path_to_here()
@@ -54,7 +57,6 @@ function _get_path_to_here()
 
 source "$(_get_path_to_here)/utils.sh"
 
-unset _ENV
 unset _HELP
 
 for ARGUMENT in "$@"
@@ -62,7 +64,6 @@ do
     KEY=$(echo "$ARGUMENT" | cut -f1 -d=)
     VALUE=$(echo "$ARGUMENT" | cut -f2 -d=)
     case "$KEY" in
-        env) _ENV=${VALUE} ;;
         help) _HELP="show" ;;
         *)
     esac
@@ -71,5 +72,5 @@ done
 if [ "${_HELP:-""}" = "show" ]; then
     _help
 else
-    _main "${_ENV:-"dev-dkr"}"
+    _main "${1:-"dev-dkr"}"
 fi

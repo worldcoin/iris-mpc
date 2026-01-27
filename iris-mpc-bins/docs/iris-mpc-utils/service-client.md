@@ -68,23 +68,25 @@ ${HOME}/.hnsw/service-client/aws-opts/dev-stg/aws-credentials
 Starts service client session against a supported environment.  One time execution per terminal session.
 
 ```
-hnsw-service-client-set-env env="dev-dkr"
+hnsw-service-client-set-env dev-dkr
 ```
 
+Options: 
+- env = dev-dkr | dev-stg
+
 Defaults: 
-- env = "dev-dkr"
+- env = dev-dkr
 
 *NOTE*: Repeat if you switch between supported environments within a terminal session.
 
 ## Step 5: Execute
 
 ```
-hnsw-service-client-exec env="dev-dkr" opts=PATH-TO-A-SERVICE-CLIENT-EXEC-OPTIONS-FILE
+hnsw-service-client-exec PATH-TO-A-SERVICE-CLIENT-EXEC-OPTIONS-FILE
 ```
 
 Defaults: 
-- env = "dev-dkr"
-- opts = ${HOME}/.hnsw/service-client/exec-opts/example-1.toml
+- filepath = ${HOME}/.hnsw/service-client/exec-opts/examples/example-1.toml
 
 ## Example Service Client Execution Options.
 
