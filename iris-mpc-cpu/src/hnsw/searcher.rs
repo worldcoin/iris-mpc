@@ -1060,7 +1060,7 @@ impl HnswSearcher {
         // representation.
         //
         // TODO optimize insertion rate estimate update size
-        const INS_RATE_UPDATE: (usize, usize) = (5, 6);
+        const INS_RATE_UPDATE: (usize, usize) = (5, 7);
 
         // The insertion rate after the next update
         let mut next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
