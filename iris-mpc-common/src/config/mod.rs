@@ -285,6 +285,9 @@ pub struct Config {
 
     #[serde(default = "default_tokio_threads")]
     pub tokio_threads: usize,
+
+    #[serde(default = "default_sns_retry_max_attempts")]
+    pub sns_retry_max_attempts: u32,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -454,6 +457,10 @@ fn default_pprof_per_batch_enabled() -> bool {
 
 fn default_tokio_threads() -> usize {
     num_cpus::get()
+}
+
+fn default_sns_retry_max_attempts() -> u32 {
+    5
 }
 
 impl Config {
@@ -733,6 +740,7 @@ impl From<Config> for CommonConfig {
             pprof_profile_only: _,
             enable_pprof_per_batch: _,
             tokio_threads: _,
+            sns_retry_max_attempts: _,
         } = value;
 
         Self {
