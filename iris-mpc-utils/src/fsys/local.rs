@@ -3,12 +3,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use rand::{CryptoRng, Rng};
+
 use iris_mpc_common::config::Config as NodeConfig;
+use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 
 use super::reader;
 use crate::{
-    constants::PARTY_INDICES,
-    types::{NodeConfigSet, NodeExecutionHost, PartyIdx},
+    constants::{N_PARTIES, PARTY_INDICES},
+    irises,
+    types::{NetConfig, NodeExecutionHost, PartyIdx},
 };
 
 /// Returns path to an asset within the crate assets sub-directory.
@@ -31,15 +35,14 @@ pub fn get_path_to_node_config(
     )
 }
 
+/// Returns path to an NDJSON file.
+pub fn get_path_to_ndjson() -> PathBuf {
+    get_path_to_assets().join("iris-codes-plaintext/20250710-1k.ndjson")
+}
+
 /// Returns path to root directory.
 pub fn get_path_to_root() -> PathBuf {
     Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).into()
-}
-
-/// Returns path to a service client config file.
-pub fn get_path_to_service_client_config(config_idx: usize) -> PathBuf {
-    get_path_to_assets()
-        .join(format!("service-client-config/service-client-config-{config_idx}.toml",).as_str())
 }
 
 /// Returns path to sub-directory.
@@ -47,44 +50,66 @@ pub fn get_path_to_subdir(name: &str) -> PathBuf {
     get_path_to_root().join(name)
 }
 
+/// Returns an iterator over a local NDJSON file.
+pub fn read_ndjson_file<'a, R: Rng + CryptoRng + 'a>(
+    rng: &'a mut R,
+) -> Result<impl Iterator<Item = [GaloisRingSharedIris; N_PARTIES]> + 'a, Error> {
+    irises::reader::read_iris_shares(get_path_to_ndjson().as_path(), 1000, 0, rng)
+}
+
 /// Returns a loaded node config file.
 pub fn read_node_config(
+    party_idx: &PartyIdx,
     config_kind: &str,
     config_idx: usize,
-    party_idx: &PartyIdx,
 ) -> Result<NodeConfig, Error> {
     let path_to_config = get_path_to_node_config(config_kind, config_idx, party_idx);
 
-    reader::read_toml_config(&path_to_config)
+    reader::read_toml(&path_to_config)
 }
 
 /// Returns network wide configuration deserialized from a set of toml files.
-pub fn read_node_config_set(config_kind: &str, config_idx: usize) -> Result<NodeConfigSet, Error> {
+pub fn read_node_config_set(config_kind: &str, config_idx: usize) -> Result<NetConfig, Error> {
     Ok(PARTY_INDICES
         .iter()
-        .map(|party_idx| read_node_config(config_kind, config_idx, party_idx).unwrap())
+        .map(|party_idx| read_node_config(party_idx, config_kind, config_idx).unwrap())
         .collect::<Vec<_>>()
         .try_into()
         .unwrap())
 }
 
-impl NodeExecutionHost {
-    /// Returns name of execution host specific assets subdirectory.
-    pub(super) fn assets_subdirectory() -> &'static str {
-        match NodeExecutionHost::default() {
-            NodeExecutionHost::BareMetal => "baremetal",
-            NodeExecutionHost::Docker => "docker",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use rand::{rngs::StdRng, SeedableRng};
+
     use super::{
-        get_path_to_assets, get_path_to_node_config, get_path_to_root, get_path_to_subdir,
-        read_node_config, read_node_config_set,
+        get_path_to_assets, get_path_to_ndjson, get_path_to_node_config, get_path_to_root,
+        get_path_to_subdir, read_ndjson_file, read_node_config, read_node_config_set,
     };
-    use crate::constants::{NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, N_PARTIES, PARTY_INDICES};
+    use crate::constants::{NODE_CONFIG_KIND, PARTY_INDICES};
+
+    fn get_rng() -> StdRng {
+        StdRng::seed_from_u64(42)
+    }
+
+    #[test]
+    fn test_get_path_to_assets() {
+        assert!(get_path_to_assets().exists());
+    }
+
+    #[test]
+    fn test_path_to_ndjson() {
+        assert!(get_path_to_ndjson().exists());
+    }
+
+    #[test]
+    fn test_get_path_to_node_config() {
+        PARTY_INDICES.iter().for_each(move |party_idx| {
+            NODE_CONFIG_KIND.iter().for_each(|kind| {
+                assert!(get_path_to_node_config(kind, 0, party_idx).exists());
+            });
+        });
+    }
 
     #[test]
     fn test_get_path_to_root() {
@@ -97,34 +122,25 @@ mod tests {
     }
 
     #[test]
-    fn test_get_path_to_assets() {
-        assert!(get_path_to_assets().exists());
-    }
-
-    #[test]
-    fn test_path_to_node_config() {
-        PARTY_INDICES.iter().for_each(move |party_idx| {
-            NODE_CONFIG_KIND.iter().for_each(|kind| {
-                assert!(get_path_to_node_config(kind, 0, party_idx).exists());
-            });
-        });
+    fn test_read_ndjson_file() {
+        let mut rng = get_rng();
+        let iterable = read_ndjson_file(&mut rng).unwrap();
+        for _ in iterable {}
     }
 
     #[test]
     fn test_read_node_config() {
         PARTY_INDICES.iter().for_each(move |party_idx| {
             NODE_CONFIG_KIND.iter().for_each(|kind| {
-                read_node_config(kind, 0, party_idx).unwrap();
+                let _ = read_node_config(party_idx, kind, 0).unwrap();
             });
         });
     }
 
     #[test]
-    fn test_read_net_config() {
-        let net_config = read_node_config_set(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
-        assert!(net_config.len() == N_PARTIES);
-        for (party_idx, node_config) in net_config.iter().enumerate() {
-            assert!(node_config.party_id == party_idx);
-        }
+    fn test_read_node_config_set() {
+        NODE_CONFIG_KIND.iter().for_each(|kind| {
+            let _ = read_node_config_set(kind, 0).unwrap();
+        });
     }
 }

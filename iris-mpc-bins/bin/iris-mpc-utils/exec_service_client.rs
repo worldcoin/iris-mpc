@@ -3,11 +3,14 @@ use std::{fmt, path::PathBuf};
 use async_from::{self, AsyncFrom};
 use clap::Parser;
 use eyre::Result;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_utils::{
-    client::{ServiceClient, ServiceClientConfiguration},
-    fsys::reader::read_toml_config,
+    client::{
+        AwsConfiguration, ServiceClient as Client,
+        ServiceClientConfiguration as ClientConfiguration,
+    },
+    fsys::reader::read_toml,
 };
 
 #[tokio::main]
@@ -17,7 +20,7 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    let mut client = ServiceClient::<StdRng>::async_from(options.clone()).await;
+    let mut client = Client::<StdRng>::async_from(options.clone()).await;
     if let Err(e) = client.init().await {
         tracing::error!("Initialisation failure: {}", e);
         return Err(e.into());
@@ -32,21 +35,20 @@ pub async fn main() -> Result<()> {
 struct CliOptions {
     /// Path to service client configuration file.
     #[clap(long)]
-    path_to_config_file: String,
+    path_to_config: String,
 
-    /// A random number generator seed for upstream entropy.
+    /// Path to AWS configuration file.
     #[clap(long)]
-    rng_seed: Option<u64>,
+    path_to_config_aws: String,
 }
 
 impl CliOptions {
-    #[allow(dead_code)]
-    fn rng_seed(&self) -> StdRng {
-        if self.rng_seed.is_some() {
-            StdRng::seed_from_u64(self.rng_seed.unwrap())
-        } else {
-            StdRng::from_entropy()
-        }
+    fn path_to_config(&self) -> PathBuf {
+        PathBuf::from(self.path_to_config.clone())
+    }
+
+    fn path_to_config_aws(&self) -> PathBuf {
+        PathBuf::from(self.path_to_config_aws.clone())
     }
 }
 
@@ -57,33 +59,38 @@ impl fmt::Display for CliOptions {
             "
 ------------------------------------------------------------------------
 Iris-MPC Service Client Options:
-    path_to_config_file
+    path_to_config
         {}
-    rng_seed
-        {:?}
+    path_to_config_aws
+        {}
 ------------------------------------------------------------------------
                 ",
-            self.path_to_config_file, self.rng_seed,
+            self.path_to_config, self.path_to_config_aws,
         )
     }
 }
 
 #[async_from::async_trait]
-impl AsyncFrom<CliOptions> for ServiceClient<StdRng> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for Client<R> {
     async fn async_from(options: CliOptions) -> Self {
-        ServiceClient::<StdRng>::new(
-            ServiceClientConfiguration::from(&options),
-            options.rng_seed(),
+        Client::<R>::new(
+            ClientConfiguration::from(&options),
+            AwsConfiguration::from(&options),
         )
         .await
     }
 }
 
-impl From<&CliOptions> for ServiceClientConfiguration {
+impl From<&CliOptions> for ClientConfiguration {
     fn from(options: &CliOptions) -> Self {
-        read_toml_config::<ServiceClientConfiguration>(
-            PathBuf::from(&options.path_to_config_file).as_path(),
-        )
-        .expect("Failed to read service client configuration file")
+        read_toml::<ClientConfiguration>(options.path_to_config().as_path())
+            .expect("Failed to read service client configuration file")
+    }
+}
+
+impl From<&CliOptions> for AwsConfiguration {
+    fn from(options: &CliOptions) -> Self {
+        read_toml::<AwsConfiguration>(options.path_to_config_aws().as_path())
+            .expect("Failed to read service client AWS configuration file")
     }
 }
