@@ -44,7 +44,7 @@ use tokio::time::{interval, MissedTickBehavior};
 use tracing::{debug, event, info, warn};
 use uuid::Uuid;
 
-const GPU_1D_ORIGINS: [AnonStatsOrigin; 2] = [
+const GPU_1D_ORIGINS: [AnonStatsOrigin; 4] = [
     AnonStatsOrigin {
         side: Some(Eye::Left),
         orientation: AnonStatsOrientation::Normal,
@@ -53,6 +53,16 @@ const GPU_1D_ORIGINS: [AnonStatsOrigin; 2] = [
     AnonStatsOrigin {
         side: Some(Eye::Right),
         orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::GPU,
+    },
+    AnonStatsOrigin {
+        side: Some(Eye::Left),
+        orientation: AnonStatsOrientation::Mirror,
+        context: AnonStatsContext::GPU,
+    },
+    AnonStatsOrigin {
+        side: Some(Eye::Right),
+        orientation: AnonStatsOrientation::Mirror,
         context: AnonStatsContext::GPU,
     },
 ];
