@@ -187,6 +187,7 @@ async fn e2e_test_async() -> Result<()> {
         hnsw_param_ef_constr: HNSW_EF_CONSTR,
         hnsw_param_M: HNSW_M,
         hnsw_param_ef_search: HNSW_EF_SEARCH,
+        hnsw_layer_density: None,
         hnsw_prf_key: None,
         disable_persistence: false,
         tls: None,
