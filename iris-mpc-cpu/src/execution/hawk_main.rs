@@ -93,6 +93,7 @@ use crate::{
         shared_iris::GaloisRingSharedIris,
     },
 };
+use ampc_actor_utils::fast_metrics::GlobalMetricsCollector;
 use ampc_actor_utils::network::config::TlsConfig;
 use ampc_anon_stats::types::Eye;
 use ampc_anon_stats::{
@@ -1542,6 +1543,9 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
+        // Reset global metrics collector at job start
+        GlobalMetricsCollector::instance().reset();
+
         let request = request
             .numa_realloc(hawk_actor.workers_handle.clone())
             .await;
@@ -1652,6 +1656,10 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
+
+        // Log aggregated metrics for this job
+        tracing::info!("{}", GlobalMetricsCollector::instance().format_summary());
+
         tracing::info!("Finished processing a Hawk job…");
         Ok(results)
     }
