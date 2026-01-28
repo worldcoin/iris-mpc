@@ -675,7 +675,6 @@ async fn exec_indexation(
             // Send results to processing thread responsible for persisting to database.
             let (done_rx, result) = result;
             tx_results.send(result).await?;
-            shutdown_handler.increment_batches_pending_completion();
 
             // Periodically synchronize batch persistence between nodes.
             let is_sync_batch = (batch.batch_id % PERSIST_DELAY) == PERSIST_DELAY - 1;
@@ -722,11 +721,6 @@ async fn exec_indexation(
                     .record(wait_start.elapsed().as_secs_f64());
                 hawk_handle.sync_peers(false).await?;
             }
-            log_info(String::from(
-                "Waiting for last batch results to be processed before \
-                 shutting down...",
-            ));
-            shutdown_handler.wait_for_pending_batches_completion().await;
             log_info(String::from(
                 "All batches have been processed, \
                  shutting down...",
@@ -1102,6 +1096,8 @@ async fn get_results_thread(
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some(result) = rx.recv().await {
             match result {
+                // BatchIndexation does not use shutdown_handler to track batches pending completion because it explicitly
+                // synchronizes peers instead
                 JobResult::BatchIndexation {
                     batch_id,
                     connect_plans,
@@ -1165,8 +1161,6 @@ async fn get_results_thread(
                     metrics::gauge!("genesis_batch_indexation_complete").set(last_serial_id);
                     metrics::histogram!("genesis_batch_persist_duration").record(start.elapsed().as_secs_f64());
                     let _ = done_tx.send(());
-                    // Notify background task responsible for tracking pending batches.
-                    shutdown_handler_bg.decrement_batches_pending_completion();
                 }
                 JobResult::Modification {
                     modification_id,
