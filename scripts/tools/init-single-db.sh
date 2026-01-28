@@ -1,9 +1,9 @@
 #!/bin/sh
 
+# 1M irises that match the graph.dat
 curl "https://drive.usercontent.google.com/download?id=1je1stRXfVrHy2LRVcfg-SrRiz_yw33S4&export=download&confirm=t" -o /tmp/irises.ndjson
 
-# actually 10k
-curl "https://drive.usercontent.google.com/download?id=1rhFOU81cJUuastLBHHCSUNf2c1x7J_tC&export=download&confirm=t" -o /tmp/irises-1k.ndjson
+curl "https://drive.usercontent.google.com/download?id=1whFu0GIezDA2_YD9eMr9cY60oU0BF_Ao&export=download&confirm=t" -o /tmp/irises2M.ndjson
 
 curl "https://drive.usercontent.google.com/download?id=1vjswOMB7Yn-f7TDOqfzQr1_ZS-ubSg4E&export=download&confirm=t" -o /tmp/graph.dat
 
@@ -26,12 +26,12 @@ echo "cpu1M init done"
 echo "gpu1M init done"
 /bin/init-single-db \
     --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
-    --source "/tmp/irises-1k.ndjson" \
+    --source "/tmp/irises2M.ndjson" \
     --db-url "$SMPC__CPU_DATABASE__URL" \
     --db-schema "genesis_gpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID" \
-    --target-db-size 1058576 \
+    --target-db-size 2097152 \
     --skip 0
-echo "10K irises added to gpu"
+echo "1M irises added to gpu"
 /bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph.dat restore-db
 echo "restore graph done"
 
