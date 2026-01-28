@@ -10,7 +10,7 @@ use crate::{
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
-use eyre::{eyre, OptionExt, Result};
+use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
@@ -338,10 +338,10 @@ impl Handle {
                     ),
                 ))
             }
-            JobRequest::Sync => {
+            JobRequest::Sync(shutdown) => {
                 let _ = done_tx;
-                actor.sync_peers().await?;
-                Ok((done_rx, JobResult::Sync))
+                let r = HawkSession::sync_peers(shutdown, sessions).await?;
+                Ok((done_rx, JobResult::Sync(r)))
             }
         }
     }
@@ -395,16 +395,12 @@ impl Handle {
         }
     }
 
-    pub async fn sync_peers(&mut self) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let job = Job {
-            request: JobRequest::Sync,
-            return_channel: tx,
-        };
-
-        let sent = self.job_queue.send(job).await;
-        sent?;
-        let _ = rx.await??;
-        Ok(())
+    pub async fn sync_peers(&mut self, shutdown: bool) -> Result<bool> {
+        let r = self.submit_request(JobRequest::Sync(shutdown)).await;
+        let (_, r) = r.await?; // no timeout
+        match r {
+            JobResult::Sync(r) => Ok(r),
+            _ => bail!("invalid job result"),
+        }
     }
 }
