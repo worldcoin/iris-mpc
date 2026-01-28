@@ -538,7 +538,7 @@ async fn exec_delta(
                 })?;
                 metrics::histogram!("genesis_persist_wait_duration")
                     .record(wait_start.elapsed().as_secs_f64());
-                hawk_handle.sync_peers().await?;
+                hawk_handle.sync_peers(false).await?;
             }
             metrics::histogram!("genesis_modification_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
                 .record(now.elapsed().as_secs_f64());
@@ -649,7 +649,9 @@ async fn exec_indexation(
             .await?
         {
             // Coordinator: escape on shutdown.
-            if shutdown_handler.is_shutting_down() {
+            let shutdown = shutdown_handler.is_shutting_down();
+            let mismatch = hawk_handle.sync_peers(shutdown).await?;
+            if shutdown || mismatch {
                 log_warn(String::from("Shutting down has been triggered"));
                 break;
             }
@@ -687,7 +689,7 @@ async fn exec_indexation(
                     metrics::histogram!("genesis_persist_wait_duration")
                         .record(wait_start.elapsed().as_secs_f64());
                     // Wait for other nodes to finish equivalent persistence.
-                    hawk_handle.sync_peers().await?;
+                    hawk_handle.sync_peers(false).await?;
                 }
             }
 
@@ -718,7 +720,7 @@ async fn exec_indexation(
                 })?;
                 metrics::histogram!("genesis_persist_wait_duration")
                     .record(wait_start.elapsed().as_secs_f64());
-                hawk_handle.sync_peers().await?;
+                hawk_handle.sync_peers(false).await?;
             }
             log_info(String::from(
                 "Waiting for last batch results to be processed before \
@@ -1221,7 +1223,7 @@ async fn get_results_thread(
                     let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 },
-                JobResult::Sync => unreachable!(),
+                JobResult::Sync(_) => unreachable!(),
             }
         }
 
