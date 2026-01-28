@@ -36,7 +36,7 @@ impl RequestBatch {
         }
     }
 
-    /// Returns maybe ordinal identifier of a correlated request.
+    /// Maybe returns ordinal identifier of a correlated request.
     pub(crate) fn get_idx_of_correlated(&self, response: &ResponsePayload) -> Option<usize> {
         self.requests
             .iter()

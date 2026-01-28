@@ -26,7 +26,7 @@ function _main()
 {
     local aws_opts_env=$(_get_aws_opts_env)
     local path_to_aws_opts=$(_get_path_to_aws_opts_env_asset ${aws_opts_env} "aws-config.toml")
-    local path_to_exec_opts=${2:-$(_get_path_to_exec_opts)/examples/example-1.toml}
+    local path_to_exec_opts=${1:-$(_get_path_to_exec_opts)/examples/example-1.toml}
 
     pushd "$(_get_path_to_iris_mpc_bins)" || exit
     cargo run \

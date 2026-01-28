@@ -131,6 +131,9 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                 tracing::info!("Parsing config: Request batch set from known set");
                 Self::KnownSet(request_batch_set.clone())
             }
+            options::RequestBatchOptions::Series { .. } => {
+                unimplemented!()
+            }
         }
     }
 }

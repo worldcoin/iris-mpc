@@ -1,38 +1,42 @@
+use serde::{Deserialize, Serialize};
+
 /// Options over an associated Iris share pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrisDescriptor {
-    // Ordinal identifer typically pointing to
+    // Ordinal identifer typically pointing to a row within an NDJSON file.
     index: usize,
 
-    // Optionally apply noise, rotations, mirroring, etc.
-    // Type left as TODO
+    // TODO: Optionally apply noise, rotations, mirroring, etc.
     mutation: Option<()>,
 }
 
 /// Options over an individual request within a batch.
-pub struct Request {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestOptions {
     // Optional label for cross referencing within batch series.
-    nickname: Option<String>,
+    label: Option<String>,
 
     // Inner request payload options.
-    payload: RequestPayload,
+    payload: RequestPayloadOptions,
 }
 
-/// Options over a batch of requests.
-pub struct RequestBatch(Vec<Request>);
+// /// Options over a batch of requests.
+// pub struct RequestBatchOptions(Vec<RequestOptions>);
 
-/// Options over a series of request batches.
-pub struct RequestBatchSeries {
-    // Contextual reference to remote system state prior to execution of this batch series.
-    // E.G. a hex encoded hash value or a label.
-    prestate: Option<()>,
+// /// Options over a series of request batches.
+// pub struct RequestBatchSeriesOptions {
+//     // Contextual reference to remote system state prior to execution of this batch series.
+//     // E.G. a hex encoded hash value or a label.
+//     prestate: Option<()>,
 
-    // Set of batches to be dispatched to target system.
-    batches: Vec<Vec<RequestBatch>>,
-}
+//     // Set of batches to be dispatched to target system.
+//     batches: Vec<RequestBatchOptions>,
+// }
 
 /// Options over an associated request descriptor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RequestDescriptor {
-    // Nickname within batch/file scope.
+    // Label to identify request within batch/file scope.
     Label(String),
 
     // Iris serial identifer as assigned by remote system.
@@ -40,7 +44,8 @@ pub enum RequestDescriptor {
 }
 
 /// Options over a request's payload.
-pub enum RequestPayload {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RequestPayloadOptions {
     // Options over a uniqueness request payload.
     Uniqueness {
         iris_pair: (IrisDescriptor, IrisDescriptor),

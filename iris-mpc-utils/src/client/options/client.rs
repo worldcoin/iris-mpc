@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::IrisSerialId;
 
-use super::super::typeset::RequestBatch;
+use super::{super::typeset::RequestBatch, RequestOptions};
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +43,15 @@ pub enum RequestBatchOptions {
     },
     /// A pre-built known set of request batches.
     KnownSet(Vec<RequestBatch>),
+    // A series of interleaved request batches.
+    Series {
+        // Contextual reference to remote system state prior to execution of this batch series.
+        // E.G. a hex encoded hash value or a label.
+        prestate: Option<String>,
+
+        // A batches of request batches to be dispatched to target system.
+        batches: Vec<Vec<RequestOptions>>,
+    },
 }
 
 /// Set of variants over inputs to iris shares generation.
