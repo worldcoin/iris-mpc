@@ -403,7 +403,7 @@ impl Handle {
 
     pub async fn sync_peers(&mut self, shutdown: bool) -> Result<bool> {
         let r = self.submit_request(JobRequest::Sync(shutdown)).await;
-        let (_, r) = timeout(Duration::from_secs(1), r).await??;
+        let (_, r) = timeout(Duration::from_secs(2), r).await??;
         match r {
             JobResult::Sync(r) => Ok(r),
             _ => bail!("invalid job result"),
