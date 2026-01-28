@@ -1,0 +1,7 @@
+[request_batch.Simple]
+batch_count = 10
+batch_size = 10
+batch_kind = "reauth"
+
+[shares_generator.FromCompute]
+rng_seed = 42

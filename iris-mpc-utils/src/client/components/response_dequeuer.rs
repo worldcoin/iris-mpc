@@ -25,7 +25,7 @@ pub(crate) struct ResponseDequeuer {
 impl Initialize for ResponseDequeuer {
     async fn init(&mut self) -> Result<(), ServiceClientError> {
         self.aws_client
-            .sqs_purge_queue()
+            .sqs_purge_response_queue()
             .await
             .map_err(ServiceClientError::AwsServiceError)
     }
@@ -47,7 +47,9 @@ impl ProcessRequestBatch for ResponseDequeuer {
                     )
                     .is_some()
                 {
-                    self.aws_client.sqs_purge_message(&sqs_msg).await?;
+                    self.aws_client
+                        .sqs_purge_response_queue_message(&sqs_msg)
+                        .await?;
                 }
             }
         }

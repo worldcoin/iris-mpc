@@ -26,8 +26,6 @@ where
 /// Returns an iterable dataset from a json file.
 pub fn read_json_iter<T>(
     path_to_file: &Path,
-    n_to_skip: usize,
-    n_to_take: usize,
 ) -> Result<impl Iterator<Item = Result<T, serde_json::Error>>, Error>
 where
     T: serde::de::DeserializeOwned,
@@ -41,10 +39,7 @@ where
 
     let handle = File::open(path_to_file)?;
     let reader = BufReader::new(handle);
-    let iterable = serde_json::Deserializer::from_reader(reader)
-        .into_iter::<T>()
-        .skip(n_to_skip)
-        .take(n_to_take);
+    let stream = serde_json::Deserializer::from_reader(reader).into_iter::<T>();
 
-    Ok(iterable)
+    Ok(stream)
 }

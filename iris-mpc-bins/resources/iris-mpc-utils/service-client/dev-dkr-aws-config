@@ -1,0 +1,20 @@
+[profile worldcoin-dev-dkr]
+region = us-east-1
+output = table
+
+[profile worldcoin-dev-dkr-smpcv-io-0-dev]
+source_profile=worldcoin-dev-dkr
+role_arn=arn:aws:iam::004304088310:role/ampc-hnsw-developer-role
+
+[profile worldcoin-dev-dkr-smpcv-io-1-dev]
+source_profile=worldcoin-dev-dkr
+role_arn=arn:aws:iam::284038850594:role/ampc-hnsw-developer-role
+
+[profile worldcoin-dev-dkr-smpcv-io-2-dev]
+source_profile=worldcoin-dev-dkr
+role_arn=arn:aws:iam::882222437714:role/ampc-hnsw-developer-role
+
+[profile worldcoin-dev-dkr-smpcv-io-vpc-dev]
+source_profile=worldcoin-dev-dkr
+role_arn=arn:aws:iam::238407200320:role/ampc-hnsw-developer-role
+output = None
