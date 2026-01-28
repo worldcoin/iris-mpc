@@ -45,6 +45,11 @@ pub fn get_path_to_root() -> PathBuf {
     Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).into()
 }
 
+/// Returns path to a service client execution options file.
+pub fn get_path_to_service_client_exec_opts(opts_idx: usize) -> PathBuf {
+    get_path_to_assets().join(format!("service-client/exec-opts-{opts_idx}.toml",).as_str())
+}
+
 /// Returns path to sub-directory.
 pub fn get_path_to_subdir(name: &str) -> PathBuf {
     get_path_to_root().join(name)
@@ -84,7 +89,8 @@ mod tests {
 
     use super::{
         get_path_to_assets, get_path_to_ndjson, get_path_to_node_config, get_path_to_root,
-        get_path_to_subdir, read_ndjson_file, read_node_config, read_node_config_set,
+        get_path_to_service_client_exec_opts, get_path_to_subdir, read_ndjson_file,
+        read_node_config, read_node_config_set,
     };
     use crate::constants::{NODE_CONFIG_KIND, PARTY_INDICES};
 
@@ -114,6 +120,13 @@ mod tests {
     #[test]
     fn test_get_path_to_root() {
         assert!(get_path_to_root().exists());
+    }
+
+    #[test]
+    fn test_get_path_to_service_client_exec_opts() {
+        (1..=3).for_each(move |opts_idx| {
+            assert!(get_path_to_service_client_exec_opts(opts_idx).exists());
+        });
     }
 
     #[test]

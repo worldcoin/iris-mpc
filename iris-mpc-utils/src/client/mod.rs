@@ -127,11 +127,8 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                     known_iris_serial_id: *known_iris_serial_id,
                 }
             }
-            options::RequestBatchOptions::KnownSet(request_batch_set) => {
-                tracing::info!("Parsing config: Request batch set from known set");
-                Self::KnownSet(request_batch_set.clone())
-            }
             options::RequestBatchOptions::Series { .. } => {
+                // TODO: map options to Self::KnownSet.
                 unimplemented!()
             }
         }

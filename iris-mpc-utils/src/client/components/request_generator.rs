@@ -125,6 +125,8 @@ fn push_new_uniqueness_maybe(
 
 /// Set of variants over request generation inputs.
 pub(crate) enum RequestGeneratorParams {
+    /// A pre-built known set of request batches.
+    KnownSet(Vec<RequestBatch>),
     /// Parameters permitting single kind batches to be generated.
     Simple {
         /// Number of request batches to generate.
@@ -139,8 +141,6 @@ pub(crate) enum RequestGeneratorParams {
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
     },
-    /// A pre-built known set of request batches.
-    KnownSet(Vec<RequestBatch>),
 }
 
 #[cfg(test)]
