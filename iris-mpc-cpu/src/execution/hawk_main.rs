@@ -84,7 +84,7 @@ use crate::{
     },
     hnsw::{
         graph::graph_store,
-        searcher::{ConnectPlanV, NeighborhoodMode, UpdateEntryPoint},
+        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint},
         GraphMem, HnswSearcher, VectorStore,
     },
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -236,6 +236,9 @@ pub struct HawkArgs {
 
     #[clap(long, default_value_t = 256)]
     pub hnsw_param_ef_search: usize,
+
+    #[clap(long)]
+    pub hnsw_layer_density: Option<usize>,
 
     #[clap(long)]
     pub hnsw_prf_key: Option<u64>,
@@ -428,12 +431,23 @@ impl HawkActor {
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        let searcher = Arc::new(HnswSearcher::new_linear_scan(
-            args.hnsw_param_ef_constr,
-            args.hnsw_param_ef_search,
-            args.hnsw_param_M,
-            LINEAR_SCAN_MAX_GRAPH_LAYER,
-        ));
+        let searcher = {
+            let mut searcher_ = HnswSearcher::new_linear_scan(
+                args.hnsw_param_ef_constr,
+                args.hnsw_param_ef_search,
+                args.hnsw_param_M,
+                LINEAR_SCAN_MAX_GRAPH_LAYER,
+            );
+
+            if let Some(layer_density) = args.hnsw_layer_density {
+                searcher_.layer_distribution =
+                    LayerDistribution::new_geometric_from_M(layer_density);
+            } else {
+                // default geometric distribution uses layer_density value of `M`
+            }
+
+            Arc::new(searcher_)
+        };
 
         let network_args = NetworkHandleArgs {
             party_index: args.party_index,
@@ -2189,6 +2203,7 @@ mod tests_db {
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
+            hnsw_layer_density: None,
             hnsw_prf_key: None,
             numa: true,
             disable_persistence: false,
