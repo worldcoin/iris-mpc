@@ -13,8 +13,14 @@ use crate::{
 use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
-use std::{future::Future, time::Instant};
-use tokio::sync::{self, mpsc, oneshot};
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
+use tokio::{
+    sync::{self, mpsc, oneshot},
+    time::timeout,
+};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "Hawk-Handle";
@@ -397,7 +403,7 @@ impl Handle {
 
     pub async fn sync_peers(&mut self, shutdown: bool) -> Result<bool> {
         let r = self.submit_request(JobRequest::Sync(shutdown)).await;
-        let (_, r) = r.await?; // no timeout
+        let (_, r) = timeout(Duration::from_secs(1), r).await??;
         match r {
             JobResult::Sync(r) => Ok(r),
             _ => bail!("invalid job result"),

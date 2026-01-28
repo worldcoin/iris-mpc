@@ -57,7 +57,7 @@ impl HawkSession {
         let prev_share = decode(net.receive_prev().await)?;
         let next_share = decode(net.receive_next().await)?;
 
-        Ok(prev_share == shutdown && next_share == shutdown)
+        Ok(prev_share != shutdown || next_share != shutdown)
     }
 
     pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSession>>>) -> Result<()> {
