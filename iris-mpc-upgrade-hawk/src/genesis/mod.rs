@@ -49,7 +49,7 @@ use tokio::{
     time::timeout,
 };
 
-pub const PERSIST_DELAY: usize = 32;
+pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
@@ -1218,7 +1218,7 @@ async fn get_results_thread(
                     let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 },
-                JobResult::Sync(_) => unreachable!(),
+                JobResult::Sync { .. } => unreachable!(),
             }
         }
 

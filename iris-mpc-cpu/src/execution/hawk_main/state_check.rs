@@ -38,7 +38,7 @@ impl SetHash {
 }
 
 impl HawkSession {
-    // returns true if there is a mismatch
+    /// Returns true if there is a mismatch in shutdown states between nodes.
     pub async fn sync_peers(shutdown: bool, sessions: &BothEyes<Vec<HawkSession>>) -> Result<bool> {
         let session = &sessions[0][0];
         let mut store = session.aby3_store.write().await;

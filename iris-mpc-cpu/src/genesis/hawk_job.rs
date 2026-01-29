@@ -46,11 +46,14 @@ pub enum JobRequest {
         queries: Aby3BatchQueryRef,
     },
     Modification {
-        // Modification entry for processing
+        /// Modification entry for processing.
         modification: Modification,
     },
-    // acts as a code barrier
-    Sync(bool),
+    /// Acts as a code barrier for inter-node synchronization.
+    Sync {
+        /// Whether this node has been signaled to shut down.
+        shutdown: bool,
+    },
 }
 
 /// Constructor.
@@ -142,7 +145,11 @@ pub enum JobResult {
         connect_plans: HawkMutation,
         done_tx: sync::oneshot::Sender<()>,
     },
-    Sync(bool),
+    Sync {
+        /// Whether the shutdown states of different nodes' Sync jobs
+        /// were mismatched.
+        mismatched: bool,
+    },
 }
 
 /// Constructor.
@@ -208,7 +215,9 @@ impl fmt::Display for JobResult {
             } => {
                 write!(f, "modification-id={}", modification_id)
             }
-            JobResult::Sync(x) => write!(f, "sync={x}"),
+            JobResult::Sync { mismatched } => {
+                write!(f, "mismatched={}", mismatched)
+            }
         }
     }
 }
