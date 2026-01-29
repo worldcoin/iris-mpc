@@ -1,6 +1,6 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "2000000"
+    value: "2097152"
 
   - name: GENESIS_BATCH_SIZE
     value: "static:96"
@@ -46,7 +46,7 @@ env:
     value: "genesis"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_cpu1M6"
+    value: "_cpu1M"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
     value: "_gpu1M"
@@ -67,7 +67,7 @@ env:
         name: application
 
   - name: SMPC__MAX_DB_SIZE
-    value: "2107152"
+    value: "2097152"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "96"
