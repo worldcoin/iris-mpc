@@ -212,6 +212,9 @@ pub struct Config {
     pub hnsw_param_ef_search: usize,
 
     #[serde(default)]
+    pub hnsw_layer_density: Option<usize>,
+
+    #[serde(default)]
     pub hawk_prf_key: Option<u64>,
 
     #[serde(default = "default_hawk_numa")]
@@ -630,6 +633,7 @@ pub struct CommonConfig {
     hnsw_param_ef_constr: usize,
     hnsw_param_M: usize,
     hnsw_param_ef_search: usize,
+    hnsw_layer_density: Option<usize>,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
     max_modifications_lookback: usize,
@@ -711,6 +715,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
+            hnsw_layer_density,
             hawk_prf_key,
             hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
@@ -773,6 +778,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
+            hnsw_layer_density,
             hawk_prf_key,
             max_deletions_per_batch,
             max_modifications_lookback,
