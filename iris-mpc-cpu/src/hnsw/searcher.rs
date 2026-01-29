@@ -33,9 +33,20 @@ use tracing::{debug, instrument, trace_span, Instrument};
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
 
-/// Proportion by which `M_max` is multiplied to determine the compaction limit
-/// size `M_limit` by default.
-const DEFAULT_M_LIMIT_MULTIPLIER: f64 = 1.1;
+/// Scaling parameter to determine the frequency of neighborhood compaction
+/// operations for large graph neighborhoods.  When a neighborhood reaches
+/// size greater than M_limit in some layer, the neighborhood is trimmed
+/// to size M_max in that layer.  In layer 0, the standard values for these
+/// parameters are
+///
+/// - `M_max_0 = 2 * M * (1 - COMPACTION_SCALE)`
+/// - `M_limit_0 = 2 * M * (1 + COMPACTION_SCALE)`
+///
+/// For positive layers, the standard values for these parameters are
+///
+/// - `M_max = M`
+/// - `M_limit = M * (1 + COMPACTION_SCALE)`
+const COMPACTION_SCALE: f64 = 0.1;
 
 /// Struct specifying general parameters for HNSW search.
 ///
@@ -68,21 +79,29 @@ pub struct HnswParams {
 
 #[allow(non_snake_case)]
 impl HnswParams {
-    /// Construct a `Params` object corresponding to parameter configuration providing the
-    /// functionality described in the original HNSW paper of Malkov and Yashunin:
+    /// Construct a `Params` object corresponding to parameter configuration providing roughly
+    /// the functionality described in the original HNSW paper of Malkov and Yashunin, modified
+    /// to account for batched compaction of neighborhoods of size near the target maximum:
     /// - `ef_construction` exploration factor used for insertion layers
     /// - `ef_search` exploration factor used for layer 0 in search
     /// - higher layers in both insertion and search use exploration factor 1,
     ///   representing simple greedy search
-    /// - vertex degrees bounded by `M_max = M` in positive layer graphs
-    /// - vertex degrees bounded by `M_max0 = 2*M` in layer 0 graph
-    /// - `m_L = 1 / ln(M)` so that layer density decreases by a factor of `M` at
-    ///   each successive hierarchical layer
+    /// - vertex degrees bounded by `M_limit = M * (1+STD_M_LIMIT_SCALE)` in positive
+    ///   layer graphs, compacted to size `M_max = M`
+    /// - vertex degrees bounded by `M_limit_0 = 2 * M * (1+STD_M_LIMIT_SCALE)` in layer 0
+    ///   graph, compacted to size `M_max_0 = 2 * M * (1-STD_M_LIMIT_SCALE)`
     pub fn new(ef_construction: usize, ef_search: usize, M: usize) -> Self {
+        // Insertion neighborhood sizes
         let M_arr = [M; N_PARAM_LAYERS];
+
+        // Neighborhood compaction sizes
         let mut M_max_arr = [M; N_PARAM_LAYERS];
-        M_max_arr[0] = 2 * M;
-        let M_limit_arr = M_max_arr.map(|m| (m as f64 * DEFAULT_M_LIMIT_MULTIPLIER) as usize);
+        M_max_arr[0] = (((2 * M) as f64) * (1.0 - COMPACTION_SCALE)).round() as usize;
+        let mut M_limit_arr =
+            [(M as f64 * (1.0 + COMPACTION_SCALE)).round() as usize; N_PARAM_LAYERS];
+        M_limit_arr[0] = (((2 * M) as f64) * (1.0 + COMPACTION_SCALE)).round() as usize;
+
+        // Search candidate neighborhood sizes
         let ef_constr_search_arr = [1usize; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef_construction; N_PARAM_LAYERS];
         let mut ef_search_arr = [1usize; N_PARAM_LAYERS];
@@ -101,10 +120,17 @@ impl HnswParams {
     /// Parameter configuration using fixed exploration factor for all layer
     /// search operations, both for insertion and for search.
     pub fn new_uniform(ef: usize, M: usize) -> Self {
+        // Insertion neighborhood sizes
         let M_arr = [M; N_PARAM_LAYERS];
+
+        // Neighborhood compaction sizes
         let mut M_max_arr = [M; N_PARAM_LAYERS];
-        M_max_arr[0] = 2 * M;
-        let M_limit_arr = M_max_arr.map(|m| (m as f64 * DEFAULT_M_LIMIT_MULTIPLIER) as usize);
+        M_max_arr[0] = (((2 * M) as f64) * (1.0 - COMPACTION_SCALE)).round() as usize;
+        let mut M_limit_arr =
+            [(M as f64 * (1.0 + COMPACTION_SCALE)).round() as usize; N_PARAM_LAYERS];
+        M_limit_arr[0] = (((2 * M) as f64) * (1.0 + COMPACTION_SCALE)).round() as usize;
+
+        // Search candidate neighborhood sizes
         let ef_constr_search_arr = [ef; N_PARAM_LAYERS];
         let ef_constr_insert_arr = [ef; N_PARAM_LAYERS];
         let ef_search_arr = [ef; N_PARAM_LAYERS];
