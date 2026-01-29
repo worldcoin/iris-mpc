@@ -344,10 +344,10 @@ impl Handle {
                     ),
                 ))
             }
-            JobRequest::Sync(shutdown) => {
+            JobRequest::Sync { shutdown } => {
                 let _ = done_tx;
-                let r = HawkSession::sync_peers(shutdown, sessions).await?;
-                Ok((done_rx, JobResult::Sync(r)))
+                let mismatched = HawkSession::sync_peers(shutdown, sessions).await?;
+                Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
     }
@@ -401,11 +401,16 @@ impl Handle {
         }
     }
 
+    /// Synchronizes MPC nodes, checking for mismatch in the values of nodes'
+    /// shutdown states.
+    ///
+    /// Used to periodically synchronize db persistence threads of MPC nodes in
+    /// genesis protocol.
     pub async fn sync_peers(&mut self, shutdown: bool) -> Result<bool> {
-        let r = self.submit_request(JobRequest::Sync(shutdown)).await;
+        let r = self.submit_request(JobRequest::Sync { shutdown }).await;
         let (_, r) = timeout(Duration::from_secs(2), r).await??;
         match r {
-            JobResult::Sync(r) => Ok(r),
+            JobResult::Sync { mismatched } => Ok(mismatched),
             _ => bail!("invalid job result"),
         }
     }
