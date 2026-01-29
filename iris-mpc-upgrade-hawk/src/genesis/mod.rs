@@ -63,9 +63,6 @@ pub struct ExecutionArgs {
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_snapshot: bool,
-
-    // Use backup as source
-    use_backup_as_source: bool,
 }
 
 /// Constructor.
@@ -74,13 +71,11 @@ impl ExecutionArgs {
         batch_size_config: BatchSizeConfig,
         max_indexation_id: IrisSerialId,
         perform_snapshot: bool,
-        use_backup_as_source: bool,
     ) -> Self {
         Self {
             batch_size_config,
             max_indexation_id,
             perform_snapshot,
-            use_backup_as_source,
         }
     }
 }
@@ -160,15 +155,13 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     log_info(String::from("Setup complete."));
     log_info(format!(
-        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}\n  Use backup as source: {}",
+        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}",
         args.max_indexation_id,
         args.batch_size_config,
         args.perform_snapshot,
-        args.use_backup_as_source,
     ));
 
     // Phase 1: apply delta.
-
     hawk_handle = exec_delta(
         &config,
         &ctx,
@@ -193,13 +186,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     .await?;
     log_info(String::from("Indexation complete."));
 
-    // Phase 3: database backup.
-    log_info(String::from("Database backup begins"));
-    exec_database_backup(graph_store.clone()).await?;
-
-    // Phase 4: snapshot.
+    // Phase 3: snapshot.
     if !args.perform_snapshot {
-        log_info(String::from("Snapshot skipped ... as requested."));
+        log_info(String::from("Snapshot skipped."));
     } else {
         exec_snapshot(&ctx, &aws_rds_client).await?;
         log_info(String::from("Snapshot complete."));
@@ -307,7 +296,6 @@ async fn exec_setup(
         max_modification_id,
         max_modification_id_to_persist,
         modifications.clone(),
-        args.use_backup_as_source,
     );
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
@@ -351,17 +339,6 @@ async fn exec_setup(
     if shutdown_handler.is_shutting_down() {
         log_warn(String::from("Shutting down has been triggered"));
         bail!("Shutdown")
-    }
-
-    // If use_backup_as_source is set, restore graph tables from backup
-    if args.use_backup_as_source && last_indexed_id != 0 {
-        exec_use_backup_as_source(
-            last_indexed_id,
-            &graph_store_arc,
-            &hnsw_iris_store,
-            &iris_store,
-        )
-        .await?;
     }
 
     // Bail if stores are inconsistent.
@@ -819,11 +796,13 @@ async fn exec_snapshot(
     Ok(())
 }
 
-/// Executes database backup by copying schema and table data.
+/// Executes database backup by graph table data to independent tables
+/// within the existing schema.
 ///
 /// # Arguments
 ///
 /// * `graph_store` - Arc-wrapped HNSW graph store instance.
+#[allow(dead_code)]
 async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<(), IndexationError> {
     log_info(String::from("Graph table data snapshot begins"));
     let now = Instant::now();
@@ -857,6 +836,7 @@ async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<()
 /// * `graph_store_arc` - Arc-wrapped HNSW graph store instance.
 /// * `hnsw_iris_store` - The HNSW iris store to restore.
 /// * `iris_store` - The main iris store to copy data from.
+#[allow(dead_code)]
 pub async fn exec_use_backup_as_source(
     last_indexed_id: u32,
     graph_store_arc: &Arc<GraphPg<Aby3Store>>,

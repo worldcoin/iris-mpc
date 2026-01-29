@@ -22,7 +22,7 @@ struct Args {
     #[clap(long("perform-snapshot"))]
     perform_snapshot: Option<String>,
 
-    // User backup as source.
+    // CLI argument deprecated -- must specify "false" if provided.
     #[clap(long("use-backup-as-source"))]
     use_backup_as_source: Option<String>,
 }
@@ -108,11 +108,27 @@ fn parse_args() -> Result<ExecutionArgs> {
             )
         })?
     } else {
-        true
+        false
     };
 
-    // Arg: use_backup_as_source (parse as string, convert to bool for ExecutionArgs).
-    let use_backup_as_source = if args.use_backup_as_source.is_some() {
+    // Arg: use_backup_as_source deprecated (if specified, must parse to boolean false).
+    if let Some(arg_str) = args.use_backup_as_source.as_ref() {
+        match arg_str.parse::<bool>() {
+            Ok(true) | Err(_) => {
+                eprintln!(
+                        "Error: --use-backup-as-source argument deprecated, and must have value false if provided. Value: {}",
+                        arg_str
+                    );
+                bail!(
+                    "--use-backup-as-source must be false if provided. Value: {}",
+                    arg_str
+                );
+            }
+            Ok(false) => {
+                eprintln!("Warning: --use-backup-as-source argument is deprecated, and must have value false if provided. Value: {}",
+                arg_str);
+            }
+        }
         let use_backup_as_source_args = args.use_backup_as_source.as_ref().unwrap();
         use_backup_as_source_args.parse().map_err(|_| {
             eprintln!(
@@ -133,6 +149,5 @@ fn parse_args() -> Result<ExecutionArgs> {
         batch_size_config,
         max_indexation_id,
         perform_snapshot,
-        use_backup_as_source,
     ))
 }
