@@ -125,24 +125,9 @@ fn parse_args() -> Result<ExecutionArgs> {
                 );
             }
             Ok(false) => {
-                eprintln!("Warning: --use-backup-as-source argument is deprecated, and must have value false if provided. Value: {}",
-                arg_str);
+                eprintln!("Warning: --use-backup-as-source argument is deprecated.");
             }
-        }
-        let use_backup_as_source_args = args.use_backup_as_source.as_ref().unwrap();
-        use_backup_as_source_args.parse().map_err(|_| {
-            eprintln!(
-                "Error: --use-backup-as-source argument must be a valid boolean. Value: {}",
-                use_backup_as_source_args
-            );
-            eyre::eyre!(
-                "--use-backup-as-source argument must be a valid boolean. Value: {}",
-                use_backup_as_source_args
-            )
-        })?
-    } else {
-        eprintln!("--use-backup-as-source argument not provided, defaulting to false.");
-        false
+        };
     };
 
     Ok(ExecutionArgs::new(
