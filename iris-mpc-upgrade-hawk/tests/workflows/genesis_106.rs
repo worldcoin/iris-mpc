@@ -70,11 +70,7 @@ impl TestRun for Test {
         for config in self.configs.iter().cloned() {
             let batch_size_config = genesis_args.batch_size_config;
             join_set.spawn(async move {
-                exec_genesis(
-                    ExecutionArgs::new(batch_size_config, 50, false, false),
-                    config,
-                )
-                .await
+                exec_genesis(ExecutionArgs::new(batch_size_config, 50, false), config).await
             });
         }
         join_runners!(join_set);
@@ -93,11 +89,7 @@ impl TestRun for Test {
         for config in self.configs.iter().cloned() {
             let batch_size_config = genesis_args.batch_size_config;
             join_set.spawn(async move {
-                exec_genesis(
-                    ExecutionArgs::new(batch_size_config, 100, false, false),
-                    config,
-                )
-                .await
+                exec_genesis(ExecutionArgs::new(batch_size_config, 100, false), config).await
             });
         }
         join_runners!(join_set);
