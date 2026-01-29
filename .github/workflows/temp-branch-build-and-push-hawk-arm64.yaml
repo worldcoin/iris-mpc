@@ -3,9 +3,8 @@ name: Branch - Hawk Build and push Arm64 docker image
 on:
   push:
     branches:
-      - "dev"
-      - "feat/reauth_anon_stats"
-
+      - "sw/build-genesis2"
+      
     paths-ignore:
       - "deploy/**"
 
