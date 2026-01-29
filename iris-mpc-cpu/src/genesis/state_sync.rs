@@ -26,9 +26,6 @@ pub struct Config {
 
     // The modifications that will be performed during the delta phase
     pub modifications: Vec<Modification>,
-
-    // The backup of the graph tables will be used as source
-    pub use_backup_as_source: bool,
 }
 
 /// Constructor.
@@ -42,7 +39,6 @@ impl Config {
         max_modification_id: i64,
         max_modification_persisted_id: i64,
         modifications: Vec<Modification>,
-        use_backup_as_source: bool,
     ) -> Self {
         Self {
             batch_size_config,
@@ -52,7 +48,6 @@ impl Config {
             max_modification_id,
             max_modification_persisted_id,
             modifications,
-            use_backup_as_source,
         }
     }
 }
@@ -154,7 +149,6 @@ mod tests {
                 100,
                 10,
                 vec![mod_1, mod_2],
-                false,
             )
         }
         fn new_2() -> Self {
@@ -176,7 +170,6 @@ mod tests {
                 200,
                 200,
                 vec![mod_1],
-                true,
             )
         }
 
@@ -199,7 +192,6 @@ mod tests {
                 200,
                 200,
                 vec![mod_1],
-                true,
             )
         }
     }
