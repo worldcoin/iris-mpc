@@ -1905,13 +1905,12 @@ impl ServerActor {
         batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
-            Orientation::Normal => Some(
-                self.match_distances_buffer
-                    .load_counters(&self.device_manager, eye_db),
-            ),
-            Orientation::Mirror => {
-                None // Do not work on mirror
-            }
+            Orientation::Normal => self
+                .match_distances_buffer
+                .load_counters(&self.device_manager, eye_db),
+            Orientation::Mirror => self
+                .match_distances_buffer_mirror
+                .load_counters(&self.device_manager, eye_db),
         };
 
         // ---- START BATCH DEDUP ----
@@ -2123,11 +2122,11 @@ impl ServerActor {
             0,
             &self.streams[0],
         );
-        let new_partial_match_buffer = match old_distance_cache_counters {
-            Some(counters) => self.match_distances_buffer.load_additions_since(
+        let new_partial_match_buffer = match orientation {
+            Orientation::Normal => self.match_distances_buffer.load_additions_since(
                 &self.device_manager,
                 eye_db,
-                counters,
+                old_distance_cache_counters,
                 self.match_distances_buffer_size
                     * (100 + self.match_distances_buffer_size_extra_percent)
                     / 100,
@@ -2137,9 +2136,19 @@ impl ServerActor {
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
             ),
-            None => {
-                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
-            }
+            Orientation::Mirror => self.match_distances_buffer_mirror.load_additions_since(
+                &self.device_manager,
+                eye_db,
+                old_distance_cache_counters,
+                self.match_distances_buffer_size
+                    * (100 + self.match_distances_buffer_size_extra_percent)
+                    / 100,
+                &self.streams[0],
+                operations,
+                batch_reauth_targets,
+                self.distance_comparator.query_length as u64,
+                self.distance_comparator.max_db_size as u64,
+            ),
         };
 
         self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
@@ -2166,13 +2175,12 @@ impl ServerActor {
         batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
-            Orientation::Normal => Some(
-                self.match_distances_buffer
-                    .load_counters(&self.device_manager, eye_db),
-            ),
-            Orientation::Mirror => {
-                None // Do not work on mirror
-            }
+            Orientation::Normal => self
+                .match_distances_buffer
+                .load_counters(&self.device_manager, eye_db),
+            Orientation::Mirror => self
+                .match_distances_buffer_mirror
+                .load_counters(&self.device_manager, eye_db),
         };
 
         // ---- START BATCH DEDUP ----
@@ -2396,7 +2404,10 @@ impl ServerActor {
                     match_distances_buffers_masks,
                     match_distances_counters,
                     match_distances_indices,
-                ) = self.match_distances_buffer.get_buffers(eye_db);
+                ) = match orientation {
+                    Orientation::Normal => self.match_distances_buffer.get_buffers(eye_db),
+                    Orientation::Mirror => self.match_distances_buffer_mirror.get_buffers(eye_db),
+                };
 
                 record_stream_time!(
                     &self.device_manager,
@@ -2482,11 +2493,11 @@ impl ServerActor {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
 
-        let new_partial_match_buffer = match old_distance_cache_counters {
-            Some(counters) => self.match_distances_buffer.load_additions_since(
+        let new_partial_match_buffer = match orientation {
+            Orientation::Normal => self.match_distances_buffer.load_additions_since(
                 &self.device_manager,
                 eye_db,
-                counters,
+                old_distance_cache_counters,
                 self.match_distances_buffer_size
                     * (100 + self.match_distances_buffer_size_extra_percent)
                     / 100,
@@ -2496,12 +2507,22 @@ impl ServerActor {
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
             ),
-            None => {
-                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
-            }
+            Orientation::Mirror => self.match_distances_buffer_mirror.load_additions_since(
+                &self.device_manager,
+                eye_db,
+                old_distance_cache_counters,
+                self.match_distances_buffer_size
+                    * (100 + self.match_distances_buffer_size_extra_percent)
+                    / 100,
+                &self.streams[0],
+                operations,
+                batch_reauth_targets,
+                self.distance_comparator.query_length as u64,
+                self.distance_comparator.max_db_size as u64,
+            ),
         };
 
-        // persist normal caches, skipping reauth, as we persist them separately
+        // persist one-sided caches, skipping reauth, as we persist them separately
         self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
         match orientation {
             Orientation::Normal => {
@@ -3089,9 +3110,6 @@ impl ServerActor {
             eye,
             orientation
         );
-        if orientation != Orientation::Normal {
-            return;
-        }
         let writer = match &self.anon_stats_writer {
             Some(writer) => writer,
             None => {
@@ -3100,9 +3118,13 @@ impl ServerActor {
             }
         };
 
+        let anon_orientation = match orientation {
+            Orientation::Normal => AnonStatsOrientation::Normal,
+            Orientation::Mirror => AnonStatsOrientation::Mirror,
+        };
         let origin = AnonStatsOrigin {
             side: Some(eye),
-            orientation: AnonStatsOrientation::Normal,
+            orientation: anon_orientation,
             context: AnonStatsContext::GPU,
         };
 
