@@ -1,0 +1,17 @@
+{
+  "request_batch": {
+    "Simple": {
+      "batch_count": 10,
+      "batch_kind": "uniqueness",
+      "batch_size": 10,
+      "known_iris_serial_id": null
+    }
+  },
+  "shares_generator": {
+    "FromFile": {
+      "path_to_ndjson_file": "/Users/asladeofgreen/.itech/wcoin/repos/iris-mpc/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson",
+      "rng_seed": 42,
+      "selection_strategy": "All"
+    }
+  }
+}

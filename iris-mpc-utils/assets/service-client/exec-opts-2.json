@@ -1,0 +1,15 @@
+{
+  "request_batch": {
+    "Simple": {
+      "batch_count": 10,
+      "batch_kind": "reauth",
+      "batch_size": 10,
+      "known_iris_serial_id": 1
+    }
+  },
+  "shares_generator": {
+    "FromCompute": {
+      "rng_seed": 42
+    }
+  }
+}

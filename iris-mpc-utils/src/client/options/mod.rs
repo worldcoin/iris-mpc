@@ -12,6 +12,9 @@ pub(crate) use shares::{IrisCodeSelectionStrategy, SharesGeneratorOptions};
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceClientOptions {
+    // A representation of remote system state prior to execution. E.G. a hex encoded hash value.
+    prestate: Option<String>,
+
     // Associated request batch generation configuration.
     request_batch: RequestBatchOptions,
 

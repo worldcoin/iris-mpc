@@ -2,6 +2,7 @@
 batch_count = 10
 batch_size = 10
 batch_kind = "reauth"
+known_iris_serial_id = 1
 
 [shares_generator.FromCompute]
 rng_seed = 42

@@ -9,11 +9,7 @@ use super::descriptors::{IrisPairDescriptor, RequestDescriptor};
 pub enum RequestBatchOptions {
     // Options for instanitating a set of interleaved request batches.
     Series {
-        // Contextual reference to remote system state prior to execution of this batch series.
-        // E.G. a hex encoded hash value or a label.
-        prestate: Option<String>,
-
-        // Batches of request batch options.
+        // Batches of batches of request options.
         batches: Vec<Vec<RequestOptions>>,
     },
     // Options for generating a set of simple request batches.
@@ -30,6 +26,26 @@ pub enum RequestBatchOptions {
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
     },
+}
+
+impl RequestBatchOptions {
+    pub fn new_series(batches: Vec<Vec<RequestOptions>>) -> Self {
+        Self::Series { batches }
+    }
+
+    pub fn new_simple(
+        batch_kind: &str,
+        batch_count: usize,
+        batch_size: usize,
+        known_iris_serial_id: Option<IrisSerialId>,
+    ) -> Self {
+        Self::Simple {
+            batch_count,
+            batch_kind: batch_kind.to_string(),
+            batch_size,
+            known_iris_serial_id,
+        }
+    }
 }
 
 /// Options over an individual request within a batch.
@@ -84,14 +100,33 @@ pub enum RequestPayloadOptions {
 
 #[cfg(test)]
 mod tests {
+    use serde_json;
+    use toml;
+
+    use iris_mpc_common::helpers::smpc_request;
+
     use super::super::descriptors::{
         tests::{
             REQUEST_DESCRIPTOR_0, REQUEST_DESCRIPTOR_1, REQUEST_DESCRIPTOR_2, REQUEST_DESCRIPTOR_3,
-            REQUEST_DESCRIPTOR_4_0, REQUEST_DESCRIPTOR_4_1, REQUEST_DESCRIPTOR_4_2,
+            REQUEST_DESCRIPTOR_4_00, REQUEST_DESCRIPTOR_4_01, REQUEST_DESCRIPTOR_4_02,
+            REQUEST_DESCRIPTOR_4_10, REQUEST_DESCRIPTOR_4_11, REQUEST_DESCRIPTOR_4_12,
         },
         IrisPairDescriptor, RequestDescriptor,
     };
-    use super::{RequestOptions, RequestPayloadOptions};
+    use super::{RequestBatchOptions, RequestOptions, RequestPayloadOptions};
+
+    impl RequestBatchOptions {
+        fn new_simple_1() -> Self {
+            Self::new_simple(smpc_request::UNIQUENESS_MESSAGE_TYPE, 10, 10, None)
+        }
+
+        fn new_series_1() -> Self {
+            Self::new_series(vec![
+                RequestOptions::new_batch_0(),
+                RequestOptions::new_batch_1(),
+            ])
+        }
+    }
 
     impl RequestOptions {
         /// Identity deletion.
@@ -99,7 +134,7 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_0),
                 RequestPayloadOptions::IdentityDeletion {
-                    parent: RequestDescriptor::new_4_0(),
+                    parent: RequestDescriptor::new_4_10(),
                 },
             )
         }
@@ -109,8 +144,8 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_1),
                 RequestPayloadOptions::Reauthorisation {
-                    iris_pair: IrisPairDescriptor::new_0(11),
-                    parent: RequestDescriptor::new_4_1(),
+                    iris_pair: IrisPairDescriptor::new_0(20),
+                    parent: RequestDescriptor::new_4_11(),
                 },
             )
         }
@@ -120,7 +155,7 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_2),
                 RequestPayloadOptions::ResetCheck {
-                    iris_pair: IrisPairDescriptor::new_0(13),
+                    iris_pair: IrisPairDescriptor::new_0(22),
                 },
             )
         }
@@ -130,48 +165,56 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_3),
                 RequestPayloadOptions::ResetUpdate {
-                    iris_pair: IrisPairDescriptor::new_0(15),
-                    parent: RequestDescriptor::new_4_2(),
+                    iris_pair: IrisPairDescriptor::new_0(24),
+                    parent: RequestDescriptor::new_4_12(),
                 },
             )
         }
 
-        /// Uniqueness 1.
-        fn new_4_0() -> Self {
+        /// Uniqueness 00.
+        fn new_4(descriptor_label: &str, iris_pair_offset: usize) -> Self {
             Self::new(
-                Some(REQUEST_DESCRIPTOR_4_0),
+                Some(descriptor_label),
                 RequestPayloadOptions::Uniqueness {
-                    iris_pair: IrisPairDescriptor::new_0(1),
+                    iris_pair: IrisPairDescriptor::new_0(iris_pair_offset),
                     insertion_layers: None,
                 },
             )
         }
 
-        /// Uniqueness 2.
-        fn new_4_1() -> Self {
-            Self::new(
-                Some(REQUEST_DESCRIPTOR_4_1),
-                RequestPayloadOptions::Uniqueness {
-                    iris_pair: IrisPairDescriptor::new_0(3),
-                    insertion_layers: None,
-                },
-            )
+        /// Uniqueness 00.
+        fn new_4_00() -> Self {
+            Self::new_4(REQUEST_DESCRIPTOR_4_00, 0)
         }
 
-        /// Uniqueness 3.
-        fn new_4_2() -> Self {
-            Self::new(
-                Some(REQUEST_DESCRIPTOR_4_2),
-                RequestPayloadOptions::Uniqueness {
-                    iris_pair: IrisPairDescriptor::new_0(5),
-                    insertion_layers: None,
-                },
-            )
+        /// Uniqueness 01.
+        fn new_4_01() -> Self {
+            Self::new_4(REQUEST_DESCRIPTOR_4_01, 2)
+        }
+
+        /// Uniqueness 02.
+        fn new_4_02() -> Self {
+            Self::new_4(REQUEST_DESCRIPTOR_4_02, 4)
+        }
+
+        /// Uniqueness 10.
+        fn new_4_10() -> Self {
+            Self::new_4(REQUEST_DESCRIPTOR_4_10, 10)
+        }
+
+        /// Uniqueness 11.
+        fn new_4_11() -> Self {
+            Self::new_4(REQUEST_DESCRIPTOR_4_11, 12)
+        }
+
+        /// Uniqueness 12.
+        fn new_4_12() -> Self {
+            Self::new_4(REQUEST_DESCRIPTOR_4_12, 14)
         }
 
         fn new_batch_0() -> Vec<Self> {
             // Uniqueness only.
-            vec![Self::new_4_0(), Self::new_4_1(), Self::new_4_2()]
+            vec![Self::new_4_00(), Self::new_4_01(), Self::new_4_02()]
         }
 
         fn new_batch_1() -> Vec<Self> {
@@ -180,32 +223,64 @@ mod tests {
                 Self::new_1(),
                 Self::new_2(),
                 Self::new_3(),
-                Self::new_4_0(),
-                Self::new_4_1(),
-                Self::new_4_2(),
+                Self::new_4_10(),
+                Self::new_4_11(),
+                Self::new_4_12(),
             ]
         }
     }
 
     #[test]
-    fn test_new_request_opts() {
-        for opts_factory in [
+    fn test_new_request_options() {
+        for entity_factory in [
             RequestOptions::new_0,
             RequestOptions::new_1,
             RequestOptions::new_2,
             RequestOptions::new_3,
-            RequestOptions::new_4_0,
-            RequestOptions::new_4_1,
-            RequestOptions::new_4_2,
+            RequestOptions::new_4_00,
+            RequestOptions::new_4_01,
+            RequestOptions::new_4_02,
         ] {
-            let _ = opts_factory();
+            let _ = entity_factory();
         }
     }
 
     #[test]
-    fn test_new_request_opts_batch() {
-        for opts_batch_factory in [RequestOptions::new_batch_0, RequestOptions::new_batch_1] {
-            let _ = opts_batch_factory();
+    fn test_new_request_options_batch() {
+        for entity_factory in [RequestOptions::new_batch_0, RequestOptions::new_batch_1] {
+            let _ = entity_factory();
+        }
+    }
+
+    #[test]
+    fn test_new_request_batch_options_1() {
+        for entity_factory in [
+            RequestBatchOptions::new_series_1,
+            RequestBatchOptions::new_simple_1,
+        ] {
+            let _ = entity_factory();
+        }
+    }
+
+    #[test]
+    fn test_serialise_request_batch_options_to_json() {
+        for entity_factory in [
+            RequestBatchOptions::new_series_1,
+            RequestBatchOptions::new_simple_1,
+        ] {
+            let entity = entity_factory();
+            let _ = serde_json::to_string(&entity).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_serialise_request_batch_options_to_toml() {
+        for entity_factory in [
+            RequestBatchOptions::new_series_1,
+            RequestBatchOptions::new_simple_1,
+        ] {
+            let entity = entity_factory();
+            let _ = toml::to_string(&entity).unwrap();
         }
     }
 }

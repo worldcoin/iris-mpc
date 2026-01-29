@@ -1,13 +1,7 @@
-[request_batch.Series]
-prestate = "44682ea86b704fb3c65cd16f84a76b621e04bbdb3746280f25cf062220e471b4"
-batches = [
-    [
-        {
-            label = "request-1"
-        }
-    ],
-    [],
-]
+[request_batch.Simple]
+batch_count = 10
+batch_size = 10
+batch_kind = "uniqueness"
 
 [shares_generator.FromFile]
 path_to_ndjson_file = "/Users/asladeofgreen/.itech/wcoin/repos/iris-mpc/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson"
