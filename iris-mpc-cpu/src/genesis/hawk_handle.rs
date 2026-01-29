@@ -10,11 +10,17 @@ use crate::{
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
-use eyre::{eyre, OptionExt, Result};
+use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
-use std::{future::Future, time::Instant};
-use tokio::sync::{self, mpsc, oneshot};
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
+use tokio::{
+    sync::{self, mpsc, oneshot},
+    time::timeout,
+};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "Hawk-Handle";
@@ -338,10 +344,10 @@ impl Handle {
                     ),
                 ))
             }
-            JobRequest::Sync => {
+            JobRequest::Sync { shutdown } => {
                 let _ = done_tx;
-                actor.sync_peers().await?;
-                Ok((done_rx, JobResult::Sync))
+                let mismatched = HawkSession::sync_peers(shutdown, sessions).await?;
+                Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
     }
@@ -395,16 +401,17 @@ impl Handle {
         }
     }
 
-    pub async fn sync_peers(&mut self) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let job = Job {
-            request: JobRequest::Sync,
-            return_channel: tx,
-        };
-
-        let sent = self.job_queue.send(job).await;
-        sent?;
-        let _ = rx.await??;
-        Ok(())
+    /// Synchronizes MPC nodes, checking for mismatch in the values of nodes'
+    /// shutdown states.
+    ///
+    /// Used to periodically synchronize db persistence threads of MPC nodes in
+    /// genesis protocol.
+    pub async fn sync_peers(&mut self, shutdown: bool) -> Result<bool> {
+        let r = self.submit_request(JobRequest::Sync { shutdown }).await;
+        let (_, r) = timeout(Duration::from_secs(2), r).await??;
+        match r {
+            JobResult::Sync { mismatched } => Ok(mismatched),
+            _ => bail!("invalid job result"),
+        }
     }
 }

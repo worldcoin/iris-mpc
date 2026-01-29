@@ -1,3 +1,4 @@
+use ampc_secret_sharing::{shares::bit::Bit, RingElement};
 use eyre::{bail, eyre, Result};
 use futures::join;
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,28 @@ impl SetHash {
 }
 
 impl HawkSession {
+    /// Returns true if there is a mismatch in shutdown states between nodes.
+    pub async fn sync_peers(shutdown: bool, sessions: &BothEyes<Vec<HawkSession>>) -> Result<bool> {
+        let session = &sessions[0][0];
+        let mut store = session.aby3_store.write().await;
+        let msg = NetworkValue::RingElementBit(RingElement(Bit::new(shutdown)));
+        let net = &mut store.session.network_session;
+        net.send_prev(msg.clone()).await?;
+        net.send_next(msg).await?;
+
+        let decode = |msg| match msg {
+            Ok(NetworkValue::RingElementBit(elem)) => Ok(elem.0.convert()),
+            other => {
+                tracing::error!("Unexpected message format: {:?}", other);
+                Err(eyre!("Could not deserialize sync result"))
+            }
+        };
+        let prev_share = decode(net.receive_prev().await)?;
+        let next_share = decode(net.receive_next().await)?;
+
+        Ok(prev_share != shutdown || next_share != shutdown)
+    }
+
     pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSession>>>) -> Result<()> {
         // make a function because the borrow checker can't track the lifetimes properly if this was a closure
         async fn squeeze_rng(session: &HawkSession) -> Result<()> {
