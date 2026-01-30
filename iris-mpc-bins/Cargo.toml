@@ -30,6 +30,7 @@ base64.workspace = true
 cudarc.workspace = true
 chrono.workspace = true
 clap.workspace = true
+core_affinity.workspace = true
 csv = "*"
 data-encoding.workspace = true
 dotenvy.workspace = true
