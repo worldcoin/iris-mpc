@@ -424,6 +424,9 @@ impl Buffers {
         assert!(self.x.is_some());
         assert!(self.y.is_some());
         assert!(self.z.is_some());
+        assert!(self.rand_01.is_some());
+        assert!(self.rand_12.is_some());
+        assert!(self.rand_02.is_some());
     }
 }
 
@@ -1309,7 +1312,7 @@ impl Circuits {
         let y = Buffers::get_single_buffer_chunk(&y_, self.chunk_size * 128);
         let mut z = Buffers::get_single_buffer_chunk(&z_, self.chunk_size * 128);
 
-        let mut send = Vec::with_capacity(self.chunk_size * 64);
+        let mut send = Vec::with_capacity(inp.len());
 
         for (idx, (inp, y, rand_01, rand_02)) in
             izip!(inp, &y, rand_01_.iter_mut(), rand_02_.iter_mut()).enumerate()
@@ -1420,7 +1423,7 @@ impl Circuits {
         let x = Buffers::get_single_buffer_chunk(&x_, self.chunk_size * 128);
         let mut y = Buffers::get_single_buffer_chunk(&y_, self.chunk_size * 128);
 
-        let mut send = Vec::with_capacity(self.chunk_size * 64);
+        let mut send = Vec::with_capacity(inp.len());
 
         for (idx, (inp, x, rand_01, rand_12)) in
             izip!(inp, x.iter(), rand_01_.iter_mut(), rand_12_.iter_mut()).enumerate()
@@ -1521,7 +1524,7 @@ impl Circuits {
         let mut x = Buffers::get_single_buffer_chunk(&x_, self.chunk_size * 128);
         let z = Buffers::get_single_buffer_chunk(&z_, self.chunk_size * 128);
 
-        let mut send = Vec::with_capacity(self.chunk_size * 64);
+        let mut send = Vec::with_capacity(inp.len());
 
         result::group_start().unwrap();
         for (idx, x) in x.iter_mut().enumerate() {
