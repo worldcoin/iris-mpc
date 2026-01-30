@@ -125,8 +125,6 @@ mod bitinject_test {
         }
         cudarc::nccl::result::group_end().unwrap();
 
-        party.synchronize_streams(streams);
-
         for (idx, res) in x.iter_mut().enumerate() {
             c.push(dtoh_on_stream_sync(&res.a, &devices[idx], &streams[idx]).unwrap())
         }
