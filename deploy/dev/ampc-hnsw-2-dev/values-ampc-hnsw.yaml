@@ -15,7 +15,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "true"
+    value: "false"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
@@ -49,13 +49,13 @@ env:
         name: application
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_minfhd"
+    value: "_minfhd2"
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "96"
+    value: "32"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -64,12 +64,9 @@ env:
     value: "1800"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "96"
+    value: "32"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "64"
-
-  - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
