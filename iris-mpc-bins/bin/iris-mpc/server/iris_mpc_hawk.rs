@@ -1,5 +1,8 @@
 #![allow(clippy::needless_range_loop)]
 
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use clap::Parser;
 use eyre::Result;
 use iris_mpc::server::server_main;

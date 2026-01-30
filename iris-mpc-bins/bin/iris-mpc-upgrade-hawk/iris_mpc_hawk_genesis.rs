@@ -1,3 +1,6 @@
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId};

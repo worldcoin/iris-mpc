@@ -78,6 +78,7 @@ iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
 iris-mpc-utils = { path = "../iris-mpc-utils" }
 blake3 = "1.8.2"
+tikv-jemallocator = { workspace = true }
 aws-smithy-types = "1.2.9"
 clap_builder = "4.5.51"
 
