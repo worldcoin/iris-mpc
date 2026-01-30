@@ -3,8 +3,7 @@ name: Branch - Hawk Build and push Arm64 docker image
 on:
   push:
     branches:
-      - "dev"
-      - "feat/reauth_anon_stats"
+      - "sw/single_socket_test"
 
     paths-ignore:
       - "deploy/**"
