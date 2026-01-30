@@ -27,6 +27,7 @@ aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
 clap.workspace = true
+core_affinity.workspace = true
 rand.workspace = true
 bytemuck.workspace = true
 eyre.workspace = true
