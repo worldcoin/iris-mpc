@@ -15,7 +15,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "true"
+    value: "false"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
