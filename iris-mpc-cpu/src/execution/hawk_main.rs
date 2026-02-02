@@ -1666,7 +1666,11 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-        tracing::info!("Finished processing a Hawk job…");
+        tracing::info!(
+            "Finished processing a Hawk job. duration: {}, batch_size: {}",
+            now.elapsed().as_secs_f64(),
+            query_count
+        );
         Ok(results)
     }
 
