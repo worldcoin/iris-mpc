@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/reauth_anon_stats"
+      - "feat/improve-bit-inject"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
