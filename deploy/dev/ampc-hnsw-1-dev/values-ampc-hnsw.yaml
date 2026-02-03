@@ -70,7 +70,7 @@ env:
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "true"
+    value: "false"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
