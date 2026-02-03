@@ -32,12 +32,7 @@ impl TestRun for Test {
             let args = genesis_args;
             join_set.spawn(async move {
                 exec_genesis(
-                    ExecutionArgs::new(
-                        args.batch_size_config,
-                        args.max_indexation_id,
-                        false,
-                        false,
-                    ),
+                    ExecutionArgs::new(args.batch_size_config, args.max_indexation_id, false),
                     config,
                 )
                 .await

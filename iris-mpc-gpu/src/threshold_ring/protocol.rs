@@ -138,9 +138,12 @@ struct Kernels {
     pub(crate) finalize_lift: CudaFunction,
     pub(crate) transpose_32x64: CudaFunction,
     pub(crate) transpose_16x64: CudaFunction,
-    pub(crate) ot_sender: CudaFunction,
-    pub(crate) ot_receiver: CudaFunction,
-    pub(crate) ot_helper: CudaFunction,
+    pub(crate) packed_bit_inject_party_0_a: CudaFunction,
+    pub(crate) packed_bit_inject_party_0_b: CudaFunction,
+    pub(crate) packed_bit_inject_party_1_a: CudaFunction,
+    pub(crate) packed_bit_inject_party_1_b: CudaFunction,
+    pub(crate) packed_bit_inject_party_2_a: CudaFunction,
+    pub(crate) packed_bit_inject_party_2_b: CudaFunction,
     pub(crate) split_arithmetic_xor: CudaFunction,
     pub(crate) arithmetic_xor_assign: CudaFunction,
     pub(crate) assign_u64: CudaFunction,
@@ -172,9 +175,12 @@ impl Kernels {
                 "shared_lifted_sub",
                 "shared_u32_transpose_pack_u64",
                 "shared_u16_transpose_pack_u64",
-                "packed_ot_sender",
-                "packed_ot_receiver",
-                "packed_ot_helper",
+                "packed_bit_inject_party_0_a",
+                "packed_bit_inject_party_0_b",
+                "packed_bit_inject_party_1_a",
+                "packed_bit_inject_party_1_b",
+                "packed_bit_inject_party_2_a",
+                "packed_bit_inject_party_2_b",
                 "split_for_arithmetic_xor",
                 "shared_arithmetic_xor_pre_assign_u32",
                 "shared_assign",
@@ -207,9 +213,24 @@ impl Kernels {
         let transpose_16x64 = dev
             .get_func(Self::MOD_NAME, "shared_u16_transpose_pack_u64")
             .unwrap();
-        let ot_sender = dev.get_func(Self::MOD_NAME, "packed_ot_sender").unwrap();
-        let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
-        let ot_helper = dev.get_func(Self::MOD_NAME, "packed_ot_helper").unwrap();
+        let packed_bit_inject_party_0_a = dev
+            .get_func(Self::MOD_NAME, "packed_bit_inject_party_0_a")
+            .unwrap();
+        let packed_bit_inject_party_0_b = dev
+            .get_func(Self::MOD_NAME, "packed_bit_inject_party_0_b")
+            .unwrap();
+        let packed_bit_inject_party_1_a = dev
+            .get_func(Self::MOD_NAME, "packed_bit_inject_party_1_a")
+            .unwrap();
+        let packed_bit_inject_party_1_b = dev
+            .get_func(Self::MOD_NAME, "packed_bit_inject_party_1_b")
+            .unwrap();
+        let packed_bit_inject_party_2_a = dev
+            .get_func(Self::MOD_NAME, "packed_bit_inject_party_2_a")
+            .unwrap();
+        let packed_bit_inject_party_2_b = dev
+            .get_func(Self::MOD_NAME, "packed_bit_inject_party_2_b")
+            .unwrap();
         let split_arithmetic_xor = dev
             .get_func(Self::MOD_NAME, "split_for_arithmetic_xor")
             .unwrap();
@@ -243,9 +264,12 @@ impl Kernels {
             finalize_lift,
             transpose_32x64,
             transpose_16x64,
-            ot_sender,
-            ot_receiver,
-            ot_helper,
+            packed_bit_inject_party_0_a,
+            packed_bit_inject_party_0_b,
+            packed_bit_inject_party_1_a,
+            packed_bit_inject_party_1_b,
+            packed_bit_inject_party_2_a,
+            packed_bit_inject_party_2_b,
             split_arithmetic_xor,
             arithmetic_xor_assign,
             assign_u64,
@@ -268,9 +292,12 @@ struct Buffers {
     lifted_shares_split3: Option<Vec<ChunkShare<u64>>>,
     binary_adder_s: Option<Vec<ChunkShare<u64>>>,
     binary_adder_c: Option<Vec<ChunkShare<u64>>>,
-    ot_m0: Option<Vec<CudaSlice<u16>>>,
-    ot_m1: Option<Vec<CudaSlice<u16>>>,
-    ot_wc: Option<Vec<CudaSlice<u16>>>,
+    x: Option<Vec<CudaSlice<u16>>>,
+    y: Option<Vec<CudaSlice<u16>>>,
+    z: Option<Vec<CudaSlice<u16>>>,
+    rand_01: Option<Vec<CudaSlice<u32>>>,
+    rand_02: Option<Vec<CudaSlice<u32>>>,
+    rand_12: Option<Vec<CudaSlice<u32>>>,
     chunk_size: usize,
 }
 
@@ -288,10 +315,13 @@ impl Buffers {
 
         let lifting_corrections = Some(Self::allocate_buffer(chunk_size * 128, devices));
 
-        let ot_m0 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
-        let ot_m1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
-        let ot_wc = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let x = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let y = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
+        let z = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
+        let rand_01 = Some(Self::allocate_single_buffer(chunk_size * 64, devices));
+        let rand_02 = Some(Self::allocate_single_buffer(chunk_size * 64, devices));
+        let rand_12 = Some(Self::allocate_single_buffer(chunk_size * 64, devices));
         Buffers {
             lifted_shares,
             lifted_shares_buckets1,
@@ -302,9 +332,12 @@ impl Buffers {
             lifted_shares_split3,
             binary_adder_s,
             binary_adder_c,
-            ot_m0,
-            ot_m1,
-            ot_wc,
+            x,
+            y,
+            z,
+            rand_01,
+            rand_02,
+            rand_12,
             chunk_size,
         }
     }
@@ -388,9 +421,12 @@ impl Buffers {
         assert!(self.binary_adder_s.is_some());
         assert!(self.binary_adder_c.is_some());
         assert!(self.lifting_corrections.is_some());
-        assert!(self.ot_m0.is_some());
-        assert!(self.ot_m1.is_some());
-        assert!(self.ot_wc.is_some());
+        assert!(self.x.is_some());
+        assert!(self.y.is_some());
+        assert!(self.z.is_some());
+        assert!(self.rand_01.is_some());
+        assert!(self.rand_12.is_some());
+        assert!(self.rand_02.is_some());
     }
 }
 
@@ -756,35 +792,6 @@ impl Circuits {
         let mut keystream_u16 = self.fill_my_rng_into_u16(&mut keystream, idx, streams);
         self.single_xor_assign_u16(&mut keystream_u16, input, idx, data_len, streams);
         keystream
-    }
-
-    // Encrypt using chacha in their_rng
-    fn chacha2_encrypt_u16(
-        &mut self,
-        input: &CudaView<u16>,
-        idx: usize,
-        streams: &[CudaStream],
-    ) -> CudaSlice<u32> {
-        let data_len = input.len();
-        assert_eq!(data_len & 1, 0);
-        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let mut keystream_u16 = self.fill_their_rng_into_u16(&mut keystream, idx, streams);
-        self.single_xor_assign_u16(&mut keystream_u16, input, idx, data_len, streams);
-        keystream
-    }
-
-    // Decrypt using chacha in my_rng
-    fn chacha1_decrypt_u16(
-        &mut self,
-        input: &mut CudaView<u16>,
-        idx: usize,
-        streams: &[CudaStream],
-    ) {
-        let data_len = input.len();
-        assert_eq!(data_len & 1, 0);
-        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(data_len >> 1).unwrap() };
-        let keystream_u16 = self.fill_my_rng_into_u16(&mut keystream, idx, streams);
-        self.single_xor_assign_u16(input, &keystream_u16, idx, data_len, streams);
     }
 
     // Decrypt using chacha in their_rng
@@ -1291,147 +1298,27 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split3, x2_);
     }
 
-    fn bit_inject_ot_sender(
+    fn bit_inject_party_0(
         &mut self,
         inp: &[ChunkShareView<u64>],
         outp: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
-        let m0_ = Buffers::take_single_buffer(&mut self.buffers.ot_m0);
-        let m1_ = Buffers::take_single_buffer(&mut self.buffers.ot_m1);
-        let m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 128);
-        let m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
+        let y_ = Buffers::take_single_buffer(&mut self.buffers.y);
+        let z_ = Buffers::take_single_buffer(&mut self.buffers.z);
+        let mut rand_01_ = Buffers::take_single_buffer(&mut self.buffers.rand_01);
+        let mut rand_02_ = Buffers::take_single_buffer(&mut self.buffers.rand_02);
 
-        for (idx, (inp, res, m0, m1)) in izip!(inp, outp, &m0, &m1).enumerate() {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_ca_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_cb_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_cb = self.fill_their_rng_into_u16(&mut rand_cb_alloc, idx, streams);
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_wa1_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_wa1 = self.fill_my_rng_into_u16(&mut rand_wa1_alloc, idx, streams);
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_wa2_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_wa2 = self.fill_my_rng_into_u16(&mut rand_wa2_alloc, idx, streams);
-
-            let cfg = launch_config_from_elements_and_threads(
-                self.chunk_size as u32 * 64 * 2,
-                DEFAULT_LAUNCH_CONFIG_THREADS,
-                &self.devs[idx],
-            );
-
-            unsafe {
-                self.kernels[idx]
-                    .ot_sender
-                    .clone()
-                    .launch_on_stream(
-                        &streams[idx],
-                        cfg,
-                        (
-                            &res.a,
-                            &res.b,
-                            &inp.a,
-                            &inp.b,
-                            m0,
-                            m1,
-                            &rand_ca,
-                            &rand_cb,
-                            &rand_wa1,
-                            &rand_wa2,
-                            2 * self.chunk_size,
-                        ),
-                    )
-                    .unwrap();
-            }
-        }
-
-        // OTP encrypt
-        let m0 = m0
-            .into_iter()
-            .enumerate()
-            .map(|(idx, m0)| self.chacha2_encrypt_u16(&m0, idx, streams))
-            .collect_vec();
-        let m1 = m1
-            .into_iter()
-            .enumerate()
-            .map(|(idx, m1)| self.chacha2_encrypt_u16(&m1, idx, streams))
-            .collect_vec();
-
-        result::group_start().unwrap();
-        for (idx, (m0, m1)) in izip!(&m0, &m1).enumerate() {
-            self.comms[idx]
-                .send(m0, self.prev_id, &streams[idx])
-                .unwrap();
-            self.comms[idx]
-                .send(m1, self.prev_id, &streams[idx])
-                .unwrap();
-        }
-        result::group_end().unwrap();
-
-        Buffers::return_single_buffer(&mut self.buffers.ot_m0, m0_);
-        Buffers::return_single_buffer(&mut self.buffers.ot_m1, m1_);
-    }
-
-    fn bit_inject_ot_receiver(
-        &mut self,
-        inp: &[ChunkShareView<u64>],
-        outp: &mut [ChunkShareView<u16>],
-        streams: &[CudaStream],
-    ) {
-        let m0_ = Buffers::take_single_buffer(&mut self.buffers.ot_m0);
-        let m1_ = Buffers::take_single_buffer(&mut self.buffers.ot_m1);
-        let wc_ = Buffers::take_single_buffer(&mut self.buffers.ot_wc);
-        let mut m0 = Buffers::get_single_buffer_chunk(&m0_, self.chunk_size * 128);
-        let mut m1 = Buffers::get_single_buffer_chunk(&m1_, self.chunk_size * 128);
-        let mut wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
+        let y = Buffers::get_single_buffer_chunk(&y_, self.chunk_size * 128);
+        let mut z = Buffers::get_single_buffer_chunk(&z_, self.chunk_size * 128);
 
         let mut send = Vec::with_capacity(inp.len());
 
-        result::group_start().unwrap();
-        for (idx, (m0, m1, wc)) in izip!(&mut m0, &mut m1, &mut wc).enumerate() {
-            self.comms[idx]
-                .receive_view_u16(m0, self.next_id, &streams[idx])
-                .unwrap();
-            self.comms[idx]
-                .receive_view_u16(wc, self.prev_id, &streams[idx])
-                .unwrap();
-            self.comms[idx]
-                .receive_view_u16(m1, self.next_id, &streams[idx])
-                .unwrap();
-        }
-        result::group_end().unwrap();
-
-        for (idx, (inp, res, m0, m1, wc)) in izip!(
-            inp,
-            outp.iter_mut(),
-            m0.iter_mut(),
-            m1.iter_mut(),
-            wc.iter_mut()
-        )
-        .enumerate()
+        for (idx, (inp, y, rand_01, rand_02)) in
+            izip!(inp, &y, rand_01_.iter_mut(), rand_02_.iter_mut()).enumerate()
         {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_ca_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_ca = self.fill_my_rng_into_u16(&mut rand_ca_alloc, idx, streams);
-
-            // ChaCha decrypt
-            {
-                self.chacha1_decrypt_u16(m0, idx, streams);
-                self.chacha2_decrypt_u16(wc, idx, streams);
-                self.chacha1_decrypt_u16(m1, idx, streams);
-            }
+            let r_01 = self.fill_my_rng_into_u16(rand_01, idx, streams);
+            let r_02 = self.fill_their_rng_into_u16(rand_02, idx, streams);
 
             let cfg = launch_config_from_elements_and_threads(
                 self.chunk_size as u32 * 64 * 2,
@@ -1441,98 +1328,18 @@ impl Circuits {
 
             unsafe {
                 self.kernels[idx]
-                    .ot_receiver
+                    .packed_bit_inject_party_0_a
                     .clone()
                     .launch_on_stream(
                         &streams[idx],
                         cfg,
-                        (
-                            &res.a,
-                            &res.b,
-                            &inp.b,
-                            &*m0,
-                            &*m1,
-                            &rand_ca,
-                            &*wc,
-                            2 * self.chunk_size,
-                        ),
-                    )
-                    .unwrap();
-            }
-            // OTP encrypt
-            send.push(self.chacha2_encrypt_u16(&res.b, idx, streams));
-        }
-
-        // Reshare to Helper
-        result::group_start().unwrap();
-        for (idx, send) in send.iter().enumerate() {
-            self.comms[idx]
-                .send(send, self.prev_id, &streams[idx])
-                .unwrap();
-        }
-        result::group_end().unwrap();
-
-        Buffers::return_single_buffer(&mut self.buffers.ot_m0, m0_);
-        Buffers::return_single_buffer(&mut self.buffers.ot_m1, m1_);
-        Buffers::return_single_buffer(&mut self.buffers.ot_wc, wc_);
-    }
-
-    fn bit_inject_ot_helper(
-        &mut self,
-        inp: &[ChunkShareView<u64>],
-        outp: &mut [ChunkShareView<u16>],
-        streams: &[CudaStream],
-    ) {
-        let wc_ = Buffers::take_single_buffer(&mut self.buffers.ot_wc);
-        let wc = Buffers::get_single_buffer_chunk(&wc_, self.chunk_size * 128);
-
-        let mut send = Vec::with_capacity(inp.len());
-
-        for (idx, (inp, res, wc)) in izip!(inp, outp.iter_mut(), &wc).enumerate() {
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_cb_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_cb = self.fill_their_rng_into_u16(&mut rand_cb_alloc, idx, streams);
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_wb1_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_wb1 = self.fill_their_rng_into_u16(&mut rand_wb1_alloc, idx, streams);
-            // SAFETY: Only unsafe because memory is not initialized. But, we fill
-            // afterwards.
-            let mut rand_wb2_alloc =
-                unsafe { self.devs[idx].alloc::<u32>(self.chunk_size * 64).unwrap() };
-            let rand_wb2 = self.fill_their_rng_into_u16(&mut rand_wb2_alloc, idx, streams);
-
-            let cfg = launch_config_from_elements_and_threads(
-                self.chunk_size as u32 * 64 * 2,
-                DEFAULT_LAUNCH_CONFIG_THREADS,
-                &self.devs[idx],
-            );
-
-            unsafe {
-                self.kernels[idx]
-                    .ot_helper
-                    .clone()
-                    .launch_on_stream(
-                        &streams[idx],
-                        cfg,
-                        (
-                            &res.b,
-                            &inp.a,
-                            &rand_cb,
-                            &rand_wb1,
-                            &rand_wb2,
-                            wc,
-                            2 * self.chunk_size,
-                        ),
+                        (y, &inp.b, &r_01, &r_02, 2 * self.chunk_size),
                     )
                     .unwrap();
             }
 
             // OTP encrypt
-            send.push(self.chacha1_encrypt_u16(wc, idx, streams));
+            send.push(self.chacha1_encrypt_u16(y, idx, streams));
         }
 
         result::group_start().unwrap();
@@ -1542,33 +1349,294 @@ impl Circuits {
                 .unwrap();
         }
         result::group_end().unwrap();
+
         result::group_start().unwrap();
-        for (idx, res) in outp.iter_mut().enumerate() {
+        for (idx, z) in z.iter_mut().enumerate() {
             self.comms[idx]
-                .receive_view_u16(&mut res.a, self.next_id, &streams[idx])
+                .receive_view_u16(z, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
-        // OTP decrypt
+
+        for (idx, (inp, res, rand_01, rand_02, y, z)) in izip!(
+            inp,
+            outp.iter_mut(),
+            rand_01_.iter(),
+            rand_02_.iter(),
+            y.iter(),
+            z.iter_mut()
+        )
+        .enumerate()
         {
-            for (idx, res) in outp.iter_mut().enumerate() {
-                self.chacha1_decrypt_u16(&mut res.a, idx, streams);
+            // ChaCha decrypt
+            self.chacha2_decrypt_u16(z, idx, streams);
+
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
+            let r_01: CudaView<u16> = unsafe { rand_01.transmute(rand_01.len() * 2).unwrap() };
+            let r_02: CudaView<u16> = unsafe { rand_02.transmute(rand_02.len() * 2).unwrap() };
+
+            unsafe {
+                self.kernels[idx]
+                    .packed_bit_inject_party_0_b
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &res.a,
+                            &res.b,
+                            &inp.b,
+                            &r_01,
+                            &r_02,
+                            y,
+                            &*z,
+                            2 * self.chunk_size,
+                        ),
+                    )
+                    .unwrap();
             }
         }
 
-        Buffers::return_single_buffer(&mut self.buffers.ot_wc, wc_);
+        Buffers::return_single_buffer(&mut self.buffers.y, y_);
+        Buffers::return_single_buffer(&mut self.buffers.z, z_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_01, rand_01_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_02, rand_02_);
     }
 
-    pub fn bit_inject_ot(
+    fn bit_inject_party_1(
+        &mut self,
+        inp: &[ChunkShareView<u64>],
+        outp: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
+        let x_ = Buffers::take_single_buffer(&mut self.buffers.x);
+        let y_ = Buffers::take_single_buffer(&mut self.buffers.y);
+        let mut rand_01_ = Buffers::take_single_buffer(&mut self.buffers.rand_01);
+        let mut rand_12_ = Buffers::take_single_buffer(&mut self.buffers.rand_12);
+
+        let x = Buffers::get_single_buffer_chunk(&x_, self.chunk_size * 128);
+        let mut y = Buffers::get_single_buffer_chunk(&y_, self.chunk_size * 128);
+
+        let mut send = Vec::with_capacity(inp.len());
+
+        for (idx, (inp, x, rand_01, rand_12)) in
+            izip!(inp, x.iter(), rand_01_.iter_mut(), rand_12_.iter_mut()).enumerate()
+        {
+            let r_01 = self.fill_their_rng_into_u16(rand_01, idx, streams);
+            let _ = self.fill_my_rng_into_u16(rand_12, idx, streams);
+
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .packed_bit_inject_party_1_a
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (x, &inp.a, &inp.b, &r_01, 2 * self.chunk_size),
+                    )
+                    .unwrap();
+            }
+
+            // OTP encrypt
+            send.push(self.chacha1_encrypt_u16(x, idx, streams));
+        }
+
+        result::group_start().unwrap();
+        for (idx, y) in y.iter_mut().enumerate() {
+            self.comms[idx]
+                .receive_view_u16(y, self.prev_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+
+        result::group_start().unwrap();
+        for (idx, x) in send.iter().enumerate() {
+            self.comms[idx]
+                .send(x, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+
+        for (idx, (res, rand_01, rand_12, x, y)) in izip!(
+            outp.iter_mut(),
+            rand_01_.iter(),
+            rand_12_.iter(),
+            x.iter(),
+            y.iter_mut()
+        )
+        .enumerate()
+        {
+            // ChaCha decrypt
+            self.chacha2_decrypt_u16(y, idx, streams);
+
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
+            let r_01: CudaView<u16> = unsafe { rand_01.transmute(rand_01.len() * 2).unwrap() };
+            let r_12: CudaView<u16> = unsafe { rand_12.transmute(rand_12.len() * 2).unwrap() };
+
+            unsafe {
+                self.kernels[idx]
+                    .packed_bit_inject_party_1_b
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (&res.a, &res.b, &r_01, &r_12, x, &*y, 2 * self.chunk_size),
+                    )
+                    .unwrap();
+            }
+        }
+
+        Buffers::return_single_buffer(&mut self.buffers.x, x_);
+        Buffers::return_single_buffer(&mut self.buffers.y, y_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_01, rand_01_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_12, rand_12_);
+    }
+
+    fn bit_inject_party_2(
+        &mut self,
+        inp: &[ChunkShareView<u64>],
+        outp: &mut [ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
+        let x_ = Buffers::take_single_buffer(&mut self.buffers.x);
+        let z_ = Buffers::take_single_buffer(&mut self.buffers.z);
+        let mut rand_02_ = Buffers::take_single_buffer(&mut self.buffers.rand_02);
+        let mut rand_12_ = Buffers::take_single_buffer(&mut self.buffers.rand_12);
+
+        let mut x = Buffers::get_single_buffer_chunk(&x_, self.chunk_size * 128);
+        let z = Buffers::get_single_buffer_chunk(&z_, self.chunk_size * 128);
+
+        let mut send = Vec::with_capacity(inp.len());
+
+        result::group_start().unwrap();
+        for (idx, x) in x.iter_mut().enumerate() {
+            self.comms[idx]
+                .receive_view_u16(x, self.prev_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+
+        for (idx, (inp, rand_12, rand_02, x, z)) in izip!(
+            inp,
+            rand_12_.iter_mut(),
+            rand_02_.iter_mut(),
+            x.iter_mut(),
+            z.iter()
+        )
+        .enumerate()
+        {
+            let r_12 = self.fill_their_rng_into_u16(rand_12, idx, streams);
+            let _ = self.fill_my_rng_into_u16(rand_02, idx, streams);
+
+            // ChaCha decrypt
+            self.chacha2_decrypt_u16(x, idx, streams);
+
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .packed_bit_inject_party_2_a
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (z, &inp.a, &r_12, &*x, 2 * self.chunk_size),
+                    )
+                    .unwrap();
+            }
+
+            // OTP encrypt
+            send.push(self.chacha1_encrypt_u16(z, idx, streams));
+        }
+
+        result::group_start().unwrap();
+        for (idx, send) in send.iter().enumerate() {
+            self.comms[idx]
+                .send(send, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+
+        for (idx, (inp, res, rand_02, rand_12, x, z)) in izip!(
+            inp,
+            outp.iter_mut(),
+            rand_02_.iter(),
+            rand_12_.iter(),
+            x.iter_mut(),
+            z.iter()
+        )
+        .enumerate()
+        {
+            // the transmute is safe because we know that one u32 is 2 u16s, and the buffer is aligned properly for the transmute
+            let r_02: CudaView<u16> = unsafe { rand_02.transmute(rand_02.len() * 2).unwrap() };
+            let r_12: CudaView<u16> = unsafe { rand_12.transmute(rand_12.len() * 2).unwrap() };
+
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64 * 2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .packed_bit_inject_party_2_b
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &res.a,
+                            &res.b,
+                            &inp.a,
+                            &r_02,
+                            &r_12,
+                            &*x,
+                            z,
+                            2 * self.chunk_size,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+
+        Buffers::return_single_buffer(&mut self.buffers.x, x_);
+        Buffers::return_single_buffer(&mut self.buffers.z, z_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_02, rand_02_);
+        Buffers::return_single_buffer(&mut self.buffers.rand_12, rand_12_);
+    }
+
+    pub fn bit_inject(
         &mut self,
         inp: &[ChunkShareView<u64>],
         outp: &mut [ChunkShareView<u16>],
         streams: &[CudaStream],
     ) {
         match self.peer_id {
-            0 => self.bit_inject_ot_helper(inp, outp, streams),
-            1 => self.bit_inject_ot_receiver(inp, outp, streams),
-            2 => self.bit_inject_ot_sender(inp, outp, streams),
+            0 => self.bit_inject_party_0(inp, outp, streams),
+            1 => self.bit_inject_party_1(inp, outp, streams),
+            2 => self.bit_inject_party_2(inp, outp, streams),
             _ => unreachable!(),
         }
     }
@@ -1996,7 +2064,7 @@ impl Circuits {
         self.transpose_pack_u16_with_len(shares, &mut x1, K, streams);
         self.lift_split(shares, xa, &mut x1, &mut x2, &mut x3, streams);
         self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
-        self.bit_inject_ot(&c, injected, streams);
+        self.bit_inject(&c, injected, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, buffer1);
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, buffer2);
