@@ -12,12 +12,10 @@ function _help() {
 
     ARGS
     ----------------------------------------------------------------
-    env         Environment: dev-dkr | dev-stg.
     opts        Path to a service client execution options toml file.
 
     DEFAULTS
     ----------------------------------------------------------------
-    env         dev-dkr
     opts        $(_get_path_to_exec_opts)/examples/example-1.toml
     "
 }
