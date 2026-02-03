@@ -13,7 +13,10 @@ use components::{
 use options::IrisCodeSelectionStrategy;
 pub use options::{AwsOptions, ServiceClientOptions};
 pub use typeset::ServiceClientError;
-use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
+use typeset::{
+    Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
+    RequestPayloadOptions,
+};
 
 mod components;
 mod options;
@@ -127,8 +130,37 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                     known_iris_serial_id: *known_iris_serial_id,
                 }
             }
-            options::RequestBatchOptions::Series { .. } => {
-                // TODO: map options to Self::KnownSet.
+            options::RequestBatchOptions::Series {
+                batches: opts_batches,
+            } => {
+                for opts_batch in opts_batches {
+                    for opts_request in opts_batch {
+                        match opts_request.payload() {
+                            options::RequestPayloadOptions::IdentityDeletion { parent } => {
+                                println!("TODO");
+                            }
+                            options::RequestPayloadOptions::Reauthorisation {
+                                iris_pair,
+                                parent,
+                            } => {
+                                println!("TODO");
+                            }
+                            options::RequestPayloadOptions::ResetCheck { iris_pair } => {
+                                println!("TODO");
+                            }
+                            options::RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
+                                println!("TODO");
+                            }
+                            options::RequestPayloadOptions::Uniqueness {
+                                iris_pair,
+                                insertion_layers,
+                            } => {
+                                println!("TODO");
+                            }
+                        }
+                    }
+                }
+
                 unimplemented!()
             }
         }

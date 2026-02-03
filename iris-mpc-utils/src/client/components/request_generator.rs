@@ -1,7 +1,8 @@
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::super::typeset::{
-    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError, UniquenessReference,
+    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError,
+    UniquenessRequestDescriptor,
 };
 
 /// Generates batches of SMPC service requests.
@@ -17,7 +18,7 @@ impl RequestGenerator {
     fn batch_count(&self) -> usize {
         match &self.params {
             RequestGeneratorParams::Simple { batch_count, .. } => *batch_count,
-            RequestGeneratorParams::KnownSet(batch_set) => batch_set.len(),
+            RequestGeneratorParams::Series(batch_set) => batch_set.len(),
         }
     }
 
@@ -57,7 +58,7 @@ impl RequestGenerator {
                 }
                 batch
             }
-            RequestGeneratorParams::KnownSet(batch_set) => {
+            RequestGeneratorParams::Series(batch_set) => {
                 batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
             }
         };
@@ -73,7 +74,7 @@ impl RequestGenerator {
 }
 
 /// Pushes a new request onto the batch.
-fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReference>) {
+fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessRequestDescriptor>) {
     assert!(
         matches!(
             kind,
@@ -110,14 +111,14 @@ fn push_new_uniqueness_maybe(
     batch: &mut RequestBatch,
     kind: &str,
     serial_id: Option<IrisSerialId>,
-) -> Option<UniquenessReference> {
+) -> Option<UniquenessRequestDescriptor> {
     match kind {
         smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => None,
         smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
         | smpc_request::REAUTH_MESSAGE_TYPE
         | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
-            Some(serial_id) => UniquenessReference::IrisSerialId(serial_id),
-            None => UniquenessReference::SignupId(batch.push_new_uniqueness()),
+            Some(serial_id) => UniquenessRequestDescriptor::IrisSerialId(serial_id),
+            None => UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness()),
         }),
         _ => panic!("Invalid request kind"),
     }
@@ -126,7 +127,7 @@ fn push_new_uniqueness_maybe(
 /// Set of variants over request generation inputs.
 pub(crate) enum RequestGeneratorParams {
     /// A pre-built known set of request batches.
-    KnownSet(Vec<RequestBatch>),
+    Series(Vec<RequestBatch>),
     /// Parameters permitting single kind batches to be generated.
     Simple {
         /// Number of request batches to generate.
@@ -163,7 +164,7 @@ mod tests {
         }
 
         fn new_2() -> Self {
-            Self::KnownSet(vec![
+            Self::Series(vec![
                 RequestBatch::default(),
                 RequestBatch::default(),
                 RequestBatch::default(),

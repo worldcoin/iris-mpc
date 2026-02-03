@@ -6,7 +6,7 @@ mod requests;
 mod shares;
 
 pub use aws::AwsOptions;
-pub(crate) use requests::RequestBatchOptions;
+pub(crate) use requests::{RequestBatchOptions, RequestPayloadOptions};
 pub(crate) use shares::{IrisCodeSelectionStrategy, SharesGeneratorOptions};
 
 /// Service client configuration.

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::helpers::smpc_request;
 
-use super::{Request, RequestInfo, RequestStatus, ResponsePayload, UniquenessReference};
+use super::{Request, RequestInfo, RequestStatus, ResponsePayload, UniquenessRequestDescriptor};
 
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +71,10 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new IdentityDeletion request.
-    pub(crate) fn push_new_identity_deletion(&mut self, uniqueness_ref: UniquenessReference) {
+    pub(crate) fn push_new_identity_deletion(
+        &mut self,
+        uniqueness_ref: UniquenessRequestDescriptor,
+    ) {
         self.push_request(Request::IdentityDeletion {
             info: RequestInfo::new(self),
             uniqueness_ref,
@@ -79,7 +82,7 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new Reauthorization request.
-    pub(crate) fn push_new_reauthorization(&mut self, uniqueness_ref: UniquenessReference) {
+    pub(crate) fn push_new_reauthorization(&mut self, uniqueness_ref: UniquenessRequestDescriptor) {
         self.push_request(Request::Reauthorization {
             info: RequestInfo::new(self),
             reauth_id: uuid::Uuid::new_v4(),
@@ -96,7 +99,7 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new ResetUpdate request.
-    pub(crate) fn push_new_reset_update(&mut self, uniqueness_ref: UniquenessReference) {
+    pub(crate) fn push_new_reset_update(&mut self, uniqueness_ref: UniquenessRequestDescriptor) {
         self.push_request(Request::ResetUpdate {
             info: RequestInfo::new(self),
             reset_id: uuid::Uuid::new_v4(),
@@ -185,7 +188,7 @@ impl fmt::Display for RequestBatchSize {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::UniquenessReference, RequestBatch};
+    use super::{super::UniquenessRequestDescriptor, RequestBatch};
 
     impl RequestBatch {
         /// New batch of 10 uniqueness requests.
@@ -203,10 +206,10 @@ mod tests {
             let mut batch = Self::default();
             for _ in 0..10 {
                 let signup_id = batch.push_new_uniqueness();
-                batch.push_new_reauthorization(UniquenessReference::SignupId(signup_id));
+                batch.push_new_reauthorization(UniquenessRequestDescriptor::SignupId(signup_id));
                 batch.push_new_reset_check();
-                batch.push_new_reset_update(UniquenessReference::SignupId(signup_id));
-                batch.push_new_identity_deletion(UniquenessReference::SignupId(signup_id));
+                batch.push_new_reset_update(UniquenessRequestDescriptor::SignupId(signup_id));
+                batch.push_new_identity_deletion(UniquenessRequestDescriptor::SignupId(signup_id));
             }
 
             batch
@@ -217,10 +220,13 @@ mod tests {
             let mut batch = Self::default();
             for _ in 0..10 {
                 let serial_id = 1;
-                batch.push_new_reauthorization(UniquenessReference::IrisSerialId(serial_id));
+                batch
+                    .push_new_reauthorization(UniquenessRequestDescriptor::IrisSerialId(serial_id));
                 batch.push_new_reset_check();
-                batch.push_new_reset_update(UniquenessReference::IrisSerialId(serial_id));
-                batch.push_new_identity_deletion(UniquenessReference::IrisSerialId(serial_id));
+                batch.push_new_reset_update(UniquenessRequestDescriptor::IrisSerialId(serial_id));
+                batch.push_new_identity_deletion(UniquenessRequestDescriptor::IrisSerialId(
+                    serial_id,
+                ));
             }
 
             batch

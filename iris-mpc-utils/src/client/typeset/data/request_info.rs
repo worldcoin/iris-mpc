@@ -17,6 +17,9 @@ pub struct RequestInfo {
     /// Correlated system responses returned by MPC nodes.
     correlation_set: [Option<ResponsePayload>; N_PARTIES],
 
+    /// User assigned request label.
+    label: Option<String>,
+
     /// Set of processing states.
     state_history: Vec<RequestStatus>,
 }
@@ -30,6 +33,7 @@ impl RequestInfo {
             batch_idx: batch.batch_idx(),
             batch_item_idx: batch.next_item_idx(),
             correlation_set: [const { None }; N_PARTIES],
+            label: None,
             state_history,
         }
     }

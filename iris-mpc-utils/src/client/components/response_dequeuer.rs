@@ -8,7 +8,7 @@ use iris_mpc_common::helpers::smpc_request::{
 
 use super::super::typeset::{
     Initialize, ProcessRequestBatch, Request, RequestBatch, ResponsePayload, ServiceClientError,
-    UniquenessReference,
+    UniquenessRequestDescriptor,
 };
 use crate::{
     aws::{types::SqsMessageInfo, AwsClient},
@@ -104,7 +104,7 @@ impl ResponseDequeuer {
                                 .and_then(|matched| matched.first().copied())
                         })
                         .unwrap_or_else(|| panic!("Unmatched uniqueness request: {:?}", result));
-                    *uniqueness_ref = UniquenessReference::IrisSerialId(serial_id);
+                    *uniqueness_ref = UniquenessRequestDescriptor::IrisSerialId(serial_id);
                 }
             }
             _ => panic!("Unsupported parent data"),

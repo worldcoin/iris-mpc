@@ -4,7 +4,7 @@ use iris_mpc_common::helpers::smpc_request;
 
 use super::super::typeset::{
     ProcessRequestBatch, Request, RequestBatch, RequestPayload, RequestStatus, ServiceClientError,
-    UniquenessReference,
+    UniquenessRequestDescriptor,
 };
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
@@ -61,7 +61,7 @@ impl From<&Request> for RequestPayload {
             Request::IdentityDeletion { uniqueness_ref, .. } => {
                 Self::IdentityDeletion(smpc_request::IdentityDeletionRequest {
                     serial_id: match uniqueness_ref {
-                        UniquenessReference::IrisSerialId(serial_id) => *serial_id,
+                        UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
                         _ => panic!("Invalid uniqueness reference"),
                     },
                 })
@@ -75,7 +75,7 @@ impl From<&Request> for RequestPayload {
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
                 serial_id: match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(serial_id) => *serial_id,
+                    UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
                     _ => panic!("Invalid uniqueness reference"),
                 },
                 use_or_rule: false,
@@ -95,7 +95,7 @@ impl From<&Request> for RequestPayload {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
                 serial_id: match uniqueness_ref {
-                    UniquenessReference::IrisSerialId(serial_id) => *serial_id,
+                    UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
                     _ => panic!("Invalid uniqueness reference"),
                 },
             }),

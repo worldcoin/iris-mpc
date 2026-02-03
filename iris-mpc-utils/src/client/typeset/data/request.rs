@@ -10,7 +10,7 @@ use super::{RequestInfo, RequestStatus, ResponsePayload};
 /// Enumeration over uniqueness request references. Applies to: IdentityDeletion ^ Reauthorization ^ ResetUpdate.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UniquenessReference {
+pub enum UniquenessRequestDescriptor {
     // A serial identifier assigned from either a processed uniqueness result or a user input override.
     IrisSerialId(IrisSerialId),
     // Unique signup id of system request being processed.
@@ -23,16 +23,16 @@ pub enum Request {
     IdentityDeletion {
         // Standard request information.
         info: RequestInfo,
-        // Weak reference to associated uniqueness.
-        uniqueness_ref: UniquenessReference,
+        // Weak reference to associated uniqueness request.
+        uniqueness_ref: UniquenessRequestDescriptor,
     },
     Reauthorization {
         // Standard request information.
         info: RequestInfo,
         // Operation identifier.
         reauth_id: uuid::Uuid,
-        // Weak reference to associated uniqueness.
-        uniqueness_ref: UniquenessReference,
+        // Weak reference to associated uniqueness request.
+        uniqueness_ref: UniquenessRequestDescriptor,
     },
     ResetCheck {
         // Standard request information.
@@ -45,8 +45,8 @@ pub enum Request {
         info: RequestInfo,
         // Operation identifier.
         reset_id: uuid::Uuid,
-        // Weak reference to associated uniqueness.
-        uniqueness_ref: UniquenessReference,
+        // Weak reference to associated uniqueness request.
+        uniqueness_ref: UniquenessRequestDescriptor,
     },
     Uniqueness {
         // Standard request information.
@@ -86,7 +86,7 @@ impl Request {
             | Self::ResetUpdate { uniqueness_ref, .. } => {
                 matches!(
                     (uniqueness_ref, parent),
-                    (UniquenessReference::SignupId(uniqueness_signup_id), Self::Uniqueness { signup_id, .. })
+                    (UniquenessRequestDescriptor::SignupId(uniqueness_signup_id), Self::Uniqueness { signup_id, .. })
                     if signup_id == uniqueness_signup_id
                 )
             }
@@ -102,7 +102,7 @@ impl Request {
                 ResponsePayload::IdentityDeletion(result),
             ) => matches!(
                 uniqueness_ref,
-                UniquenessReference::IrisSerialId(serial_id) if *serial_id == result.serial_id
+                UniquenessRequestDescriptor::IrisSerialId(serial_id) if *serial_id == result.serial_id
             ),
             (Self::Reauthorization { reauth_id, .. }, ResponsePayload::Reauthorization(result)) => {
                 reauth_id.to_string() == result.reauth_id
@@ -130,13 +130,13 @@ impl Request {
         matches!(self.info().status(), RequestStatus::SharesUploaded)
             && match self {
                 Self::IdentityDeletion { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                    matches!(uniqueness_ref, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
                 Self::Reauthorization { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                    matches!(uniqueness_ref, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
                 Self::ResetUpdate { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                    matches!(uniqueness_ref, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
                 _ => true,
             }
