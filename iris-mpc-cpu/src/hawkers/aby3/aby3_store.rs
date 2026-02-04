@@ -362,7 +362,7 @@ impl Aby3Store {
     ///
     /// # Key details
     /// - `node + (step >> 1) < ROTATIONS`: bounds check uses ROTATIONS (const), not `rotations`
-    /// - `rotations = (rotations + 1) / 2`: ceiling division handles odd counts
+    /// - `rotations.div_ceil(2)`: ceiling division handles odd counts
     /// - Results accumulate at indices 0, step/2, step, 3*step/2, ... within each batch
     /// - Final values extracted and passed to `min_round_robin_batch` for remaining reduction
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
@@ -408,7 +408,7 @@ impl Aby3Store {
                     j += 1;
                 }
             }
-            rotations = (rotations + 1) / 2;
+            rotations = rotations.div_ceil(2);
             step *= 2;
         }
 
@@ -1224,11 +1224,12 @@ mod tests {
         // Batch 0: [(1,1), (2,1), (3,1), (4,1), (6,1), (5,1)]
         // Batch 1: [(7,1), (8,1), (9,1), (12,1), (10,1), (11,1)]
         // Batch 2: [(13,1), (14,1), (18,1), (15,1), (16,1), (17,1)]
-        let mut flat_list: Vec<(u32, u32)> =
-            (1..=(ROTATIONS * num_batches) as u32).map(|i| (i, 1)).collect_vec();
+        let mut flat_list: Vec<(u32, u32)> = (1..=(ROTATIONS * num_batches) as u32)
+            .map(|i| (i, 1))
+            .collect_vec();
         // Swap to place minimum not at index 0 within each batch
-        flat_list.swap(5, 4);   // batch 0: min at index 4
-        flat_list.swap(11, 9);  // batch 1: min at index 9
+        flat_list.swap(5, 4); // batch 0: min at index 4
+        flat_list.swap(11, 9); // batch 1: min at index 9
         flat_list.swap(17, 14); // batch 2: min at index 14
 
         let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;

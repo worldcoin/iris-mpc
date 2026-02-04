@@ -2221,12 +2221,9 @@ mod tests_db {
             let expected_ep = vectors[side];
             assert_eq!(ep, Some((expected_ep, 0)), "Entry point is set");
 
-            let links = graph.read().await.get_links(&vectors[2], 0).await;
-            assert_eq!(
-                links,
-                vec![expected_ep],
-                "vec_2 connects to the entry point"
-            );
+            let graph_guard = graph.read().await;
+            let links = graph_guard.get_links(&vectors[2], 0).await;
+            assert_eq!(links, &[expected_ep], "vec_2 connects to the entry point");
         }
 
         graph_store.cleanup().await.unwrap();
