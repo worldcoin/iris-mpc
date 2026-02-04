@@ -51,6 +51,9 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "_gpu1M"
+    
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
     value: "_cpu1M"
 
