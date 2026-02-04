@@ -371,12 +371,13 @@ impl Aby3Store {
         let mut step = 2;
 
         while rotations > MIN_ROUND_ROBIN_SIZE {
+            pairs.clear();
             for i in 0..num_batches {
                 let mut node = 0;
-                while node + (step >> 1) < (i + 1) * ROTATIONS {
+                while node + (step >> 1) < ROTATIONS {
                     pairs.push((
                         distances[i * ROTATIONS + node],
-                        distances[i * ROTATIONS + node + step],
+                        distances[i * ROTATIONS + node + (step >> 1)],
                     ));
                     node += step;
                 }
@@ -387,26 +388,26 @@ impl Aby3Store {
             let mut j = 0;
             for i in 0..num_batches {
                 let mut node = 0;
-                while node + (step >> 1) < (i + 1) * ROTATIONS {
-                    distances[i * ROTATIONS + node + (step >> 1)] = res[j];
+                while node + (step >> 1) < ROTATIONS {
+                    distances[i * ROTATIONS + node] = res[j];
                     node += step;
                     j += 1;
                 }
             }
-            rotations /= 2;
+            rotations = (rotations + 1) / 2;
             step *= 2;
         }
 
-        let mut final_distances = Vec::with_capacity(num_batches * MIN_ROUND_ROBIN_SIZE);
+        let mut final_distances = Vec::with_capacity(num_batches * rotations);
         for i in 0..num_batches {
             let mut start = 0;
-            while start < distances.len() {
+            while start < ROTATIONS {
                 final_distances.push(distances[i * ROTATIONS + start]);
                 start += step >> 1;
             }
         }
 
-        min_round_robin_batch(&mut self.session, &final_distances, ROTATIONS).await
+        min_round_robin_batch(&mut self.session, &final_distances, rotations).await
     }
 
     async fn compact_neighborhood_batch(
@@ -1203,54 +1204,39 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     async fn test_oblivious_min_batch() -> Result<()> {
-        let list_len = 6_u32;
-        let num_lists = 3;
-        // create 3 lists of length 6
-        // [[(1,1), (2,1), (3,1), (4,1), (6,1), (5,1)],
-        // [(7,1), (8,1), (9,1), (12,1), (10,1), (11,1)],
-        // [(13,1), (14,1), (18,1), (15,1), (16,1), (17,1)]]
-        let mut flat_list = (1..=(list_len * num_lists)).map(|i| (i, 1)).collect_vec();
-        flat_list.swap(5, 4);
-        flat_list.swap(11, 9);
-        flat_list.swap(17, 14);
-        // [(1,1), (7,1), (13,1)],
-        // [(2,1), (8,1), (14,1)],
-        // [(3,1), (9,1), (18,1)],
-        // [(4,1), (12,1), (15,1)],
-        // [(6,1), (10,1), (16,1)],
-        // [(5,1), (11,1), (17,1)]
-        let mut plain_list = Vec::with_capacity(list_len as usize);
-        for i in 0..list_len {
-            let mut slice = Vec::with_capacity(num_lists as usize);
-            for j in 0..num_lists {
-                slice.push(flat_list[(i + list_len * j) as usize]);
-            }
-            plain_list.push(slice);
-        }
+        const ROTATIONS: usize = 6;
+        let num_batches = 3;
+        // Create 3 batches of 6 rotations each (batch-major layout)
+        // Batch 0: [(1,1), (2,1), (3,1), (4,1), (6,1), (5,1)]
+        // Batch 1: [(7,1), (8,1), (9,1), (12,1), (10,1), (11,1)]
+        // Batch 2: [(13,1), (14,1), (18,1), (15,1), (16,1), (17,1)]
+        let mut flat_list: Vec<(u32, u32)> =
+            (1..=(ROTATIONS * num_batches) as u32).map(|i| (i, 1)).collect_vec();
+        // Swap to place minimum not at index 0 within each batch
+        flat_list.swap(5, 4);   // batch 0: min at index 4
+        flat_list.swap(11, 9);  // batch 1: min at index 9
+        flat_list.swap(17, 14); // batch 2: min at index 14
 
         let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         let mut jobs = JoinSet::new();
         for store in local_stores.iter_mut() {
             let store = store.clone();
-            let plain_list = plain_list.clone();
+            let flat_list = flat_list.clone();
             jobs.spawn(async move {
                 let mut store_lock = store.lock().await;
                 let role = store_lock.session.own_role();
-                let list = plain_list
+                let distances = flat_list
                     .iter()
-                    .map(|sub_list| {
-                        sub_list
-                            .iter()
-                            .map(|(code_dist, mask_dist)| {
-                                DistanceShare::new(
-                                    Share::from_const(*code_dist, role),
-                                    Share::from_const(*mask_dist, role),
-                                )
-                            })
-                            .collect_vec()
+                    .map(|(code_dist, mask_dist)| {
+                        DistanceShare::new(
+                            Share::from_const(*code_dist, role),
+                            Share::from_const(*mask_dist, role),
+                        )
                     })
                     .collect_vec();
-                store_lock.oblivious_min_distance_batch(list).await
+                store_lock
+                    .oblivious_min_distance_batch::<ROTATIONS>(distances)
+                    .await
             });
         }
         let res = jobs
@@ -1258,10 +1244,12 @@ mod tests {
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
+
+        // Expected: minimum of each batch (chunks of ROTATIONS)
         let expected = flat_list
-            .chunks_exact(list_len as usize)
-            .map(|sublist| {
-                sublist
+            .chunks_exact(ROTATIONS)
+            .map(|batch| {
+                batch
                     .iter()
                     .min_by(|a, b| (b.0 * a.1).cmp(&(a.0 * b.1)))
                     .unwrap()
