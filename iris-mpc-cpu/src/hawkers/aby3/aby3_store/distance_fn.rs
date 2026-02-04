@@ -133,7 +133,7 @@ impl DistanceMinimalRotation {
             .await?;
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
         store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .oblivious_min_distance_batch::<HAWK_MINFHD_ROTATIONS>(distances)
             .await
     }
 
@@ -152,7 +152,7 @@ impl DistanceMinimalRotation {
             .await?;
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
         store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .oblivious_min_distance_batch::<HAWK_MINFHD_ROTATIONS>(distances)
             .await
     }
 
@@ -171,7 +171,7 @@ impl DistanceMinimalRotation {
         let gr_to_lifted_duration = gr_to_lifted_start.elapsed();
         let oblivious_min_start = std::time::Instant::now();
         let result = store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .oblivious_min_distance_batch::<HAWK_MINFHD_ROTATIONS>(distances)
             .await;
         let oblivious_min_duration = oblivious_min_start.elapsed();
         let total_duration = total_start.elapsed();
@@ -222,7 +222,7 @@ impl DistanceMinimalRotation {
         // Process all items in single batched calls
         let distances = store.gr_to_lifted_distances(flattened_ds_and_ts).await?;
         let all_mins = store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .oblivious_min_distance_batch::<HAWK_MINFHD_ROTATIONS>(distances)
             .await?;
 
         // Split results back into per-batch vectors
@@ -235,24 +235,4 @@ impl DistanceMinimalRotation {
 
         Ok(results)
     }
-}
-
-/// Convert the results of rotation-parallel evaluations into the format convenient for minimum finding.
-///
-/// The input `distances` is a flat array where the rotations of each item of the batch are concatenated.
-/// The output is a 2D matrix with dimensions: (rotations, batch).
-///
-/// With rotation r and batch item i:
-///     `input[r + i * ROTATIONS] == output[r][i]`
-fn transpose_from_flat(distances: &[Aby3DistanceRef]) -> Vec<Vec<Aby3DistanceRef>> {
-    (0..HAWK_MINFHD_ROTATIONS)
-        .map(|i| {
-            distances
-                .iter()
-                .skip(i)
-                .step_by(HAWK_MINFHD_ROTATIONS)
-                .cloned()
-                .collect()
-        })
-        .collect()
 }

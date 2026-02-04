@@ -352,53 +352,61 @@ impl Aby3Store {
     /// The input `distances` is a 2D matrix with dimensions: (rotations, batch).
     /// `distances[r][i]` corresponds to the rth rotation of the ith item of the batch.
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
-    async fn oblivious_min_distance_batch(
+    async fn oblivious_min_distance_batch<const ROTATIONS: usize>(
         &mut self,
-        distances: Vec<Vec<Aby3DistanceRef>>,
+        mut distances: Vec<Aby3DistanceRef>,
     ) -> Result<Vec<Aby3DistanceRef>> {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
-        let len = distances[0].len();
-        for (i, d) in distances.iter().enumerate() {
-            if d.len() != len {
-                eyre::bail!("All distance lists must have the same length. List at index {} has length {}, while the first list has length {}", i, d.len(), len);
-            }
+
+        let num_batches = distances.len() / ROTATIONS;
+
+        if distances.len() % ROTATIONS != 0 {
+            eyre::bail!("Badly formatted vec");
         }
 
-        let mut res = distances;
-        let mut pairs = Vec::with_capacity(len * (res.len() / 2));
-        while res.len() > MIN_ROUND_ROBIN_SIZE {
-            // if the length is odd, we save the last distance to add it back later
-            let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
+        let mut rotations = ROTATIONS;
+        let mut pairs = Vec::with_capacity(num_batches * (rotations / 2));
+        let mut step = 2;
 
-            // Build pairs for min_of_pair_batch
-            pairs.clear();
-            for ab in res.chunks_exact(2) {
-                let (a, b) = (&ab[0], &ab[1]);
-                for (x, y) in izip!(a, b) {
-                    pairs.push((*x, *y));
+        while rotations > MIN_ROUND_ROBIN_SIZE {
+            for i in 0..num_batches {
+                let mut node = 0;
+                while node + (step >> 1) < (i + 1) * ROTATIONS {
+                    pairs.push((
+                        distances[i * ROTATIONS + node],
+                        distances[i * ROTATIONS + node + step],
+                    ));
+                    node += step;
                 }
             }
 
-            // compute minimums of pairs
-            let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
+            let res = min_of_pair_batch(&mut self.session, &pairs).await?;
 
-            // Rebuild res as Vec<Vec<_>>
-            res.clear();
-            for chunk in flattened_res.chunks(len) {
-                res.push(chunk.to_vec());
+            let mut j = 0;
+            for i in 0..num_batches {
+                let mut node = 0;
+                while node + (step >> 1) < (i + 1) * ROTATIONS {
+                    distances[i * ROTATIONS + node + (step >> 1)] = res[j];
+                    node += step;
+                    j += 1;
+                }
             }
-            // if we saved a last distance, we need to add it back
-            if let Some(last_distance) = maybe_last_distance {
-                res.push(last_distance);
+            rotations /= 2;
+            step *= 2;
+        }
+
+        let mut final_distances = Vec::with_capacity(num_batches * MIN_ROUND_ROBIN_SIZE);
+        for i in 0..num_batches {
+            let mut start = 0;
+            while start < distances.len() {
+                final_distances.push(distances[i * ROTATIONS + start]);
+                start += step >> 1;
             }
         }
-        // Only flatten res once at the end
-        let res_len = res.len();
-        let mut flattened_distances = Vec::with_capacity(res_len * len);
-        flattened_distances.extend(res.into_iter().flatten());
-        min_round_robin_batch(&mut self.session, &flattened_distances, res_len).await
+
+        min_round_robin_batch(&mut self.session, &final_distances, ROTATIONS).await
     }
 
     async fn compact_neighborhood_batch(
