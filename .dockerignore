@@ -2,3 +2,6 @@ target
 # Added by SEC-1406 patch
 .git
 .gitignore
+
+*.ndjson
+iris-mpc-bins/data
