@@ -348,9 +348,23 @@ impl Aby3Store {
         Ok(res)
     }
 
-    /// Obliviously computes the minimum distance for each batch of given distances of the same size.
-    /// The input `distances` is a 2D matrix with dimensions: (rotations, batch).
-    /// `distances[r][i]` corresponds to the rth rotation of the ith item of the batch.
+    /// Computes the minimum distance across rotations for each batch element.
+    ///
+    /// # Input layout (batch-major)
+    /// `distances` is flat: `[b0r0, b0r1, ..., b0r{R-1}, b1r0, ..., b1r{R-1}, ...]`
+    /// where `bXrY` = batch X, rotation Y. Length must be `num_batches * ROTATIONS`.
+    ///
+    /// # Algorithm
+    /// Binary tree reduction in-place. Each round pairs elements at distance `step/2`:
+    /// - Round 1 (step=2): compare indices 0-1, 2-3, 4-5, ... → store min at 0, 2, 4, ...
+    /// - Round 2 (step=4): compare indices 0-2, 4-6, 8-10, ... → store min at 0, 4, 8, ...
+    /// - Continue until `rotations <= MIN_ROUND_ROBIN_SIZE`
+    ///
+    /// # Key details
+    /// - `node + (step >> 1) < ROTATIONS`: bounds check uses ROTATIONS (const), not `rotations`
+    /// - `rotations = (rotations + 1) / 2`: ceiling division handles odd counts
+    /// - Results accumulate at indices 0, step/2, step, 3*step/2, ... within each batch
+    /// - Final values extracted and passed to `min_round_robin_batch` for remaining reduction
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     async fn oblivious_min_distance_batch<const ROTATIONS: usize>(
         &mut self,
