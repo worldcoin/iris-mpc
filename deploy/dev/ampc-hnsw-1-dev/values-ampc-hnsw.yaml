@@ -5,6 +5,9 @@ env:
   - name: GENESIS_BATCH_SIZE
     value: "dynamic:cap=96,error_rate=128"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
   - name: RUST_LOG
     value: "info"
 
