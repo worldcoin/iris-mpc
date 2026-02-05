@@ -471,7 +471,7 @@ async fn receive_batch(
                                 REAUTH_MESSAGE_TYPE,
                                 batch_metadata,
                                 or_rule_indices,
-                                false, // skip_persistence is only used for uniqueness requests
+                                reauth_request.skip_persistence.unwrap_or(false),
                             );
 
                             let semaphore = Arc::clone(&semaphore);

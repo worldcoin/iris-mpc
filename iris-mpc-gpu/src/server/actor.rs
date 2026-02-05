@@ -991,6 +991,7 @@ impl ServerActor {
                 batch_size,
                 orientation,
                 &batch_operations,
+                &batch.skip_persistence,
                 &batch_reauth_targets,
             );
 
@@ -1106,6 +1107,7 @@ impl ServerActor {
                     batch_size,
                     orientation,
                     &batch_operations,
+                    &batch.skip_persistence,
                     &batch_reauth_targets,
                 )
             } else {
@@ -1119,6 +1121,7 @@ impl ServerActor {
                     &partial_matches_side1,
                     orientation,
                     &batch_operations,
+                    &batch.skip_persistence,
                     &batch_reauth_targets,
                 )
             };
@@ -1902,6 +1905,7 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        skip_persistence: &[bool],
         batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
@@ -2132,6 +2136,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
@@ -2145,6 +2150,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
@@ -2172,6 +2178,7 @@ impl ServerActor {
         batch_size: usize,
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        skip_persistence: &[bool],
         batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
@@ -2503,6 +2510,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
@@ -2516,6 +2524,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
