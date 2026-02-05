@@ -31,6 +31,7 @@ export SMPC__ANON_STATS_DATABASE__URL="postgres://postgres:postgres@localhost:54
 export SMPC__PARTY_ID="${NODE_ID}"
 export SMPC__AWS__ENDPOINT="http://127.0.0.1:4566"
 export SMPC__REQUESTS_QUEUE_URL="http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/smpcv2-${NODE_ID}-dev.fifo"
+export SMPC__RESULTS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo"
 export SMPC__SERVER_COORDINATION__NODE_HOSTNAMES='["0.0.0.0","0.0.0.0","0.0.0.0"]'
 export SMPC__SERVER_COORDINATION__PARTY_ID="${NODE_ID}"
 export SMPC__SERVICE_PORTS='["4000","4001","4002"]'

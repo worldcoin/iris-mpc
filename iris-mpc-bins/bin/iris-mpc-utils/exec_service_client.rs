@@ -6,10 +6,7 @@ use eyre::Result;
 use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_utils::{
-    client::{
-        AwsConfiguration, ServiceClient as Client,
-        ServiceClientConfiguration as ClientConfiguration,
-    },
+    client::{AwsOptions, ServiceClient as Client, ServiceClientOptions as ClientConfiguration},
     fsys::reader::read_toml,
 };
 
@@ -33,22 +30,22 @@ pub async fn main() -> Result<()> {
 
 #[derive(Debug, Parser, Clone)]
 struct CliOptions {
-    /// Path to service client configuration file.
+    /// Path to service client options.
     #[clap(long)]
-    path_to_config: String,
+    path_to_opts: String,
 
-    /// Path to AWS configuration file.
+    /// Path to AWS options.
     #[clap(long)]
-    path_to_config_aws: String,
+    path_to_opts_aws: String,
 }
 
 impl CliOptions {
-    fn path_to_config(&self) -> PathBuf {
-        PathBuf::from(self.path_to_config.clone())
+    fn path_to_opts(&self) -> PathBuf {
+        PathBuf::from(self.path_to_opts.clone())
     }
 
-    fn path_to_config_aws(&self) -> PathBuf {
-        PathBuf::from(self.path_to_config_aws.clone())
+    fn path_to_opts_aws(&self) -> PathBuf {
+        PathBuf::from(self.path_to_opts_aws.clone())
     }
 }
 
@@ -59,13 +56,13 @@ impl fmt::Display for CliOptions {
             "
 ------------------------------------------------------------------------
 Iris-MPC Service Client Options:
-    path_to_config
+    aws options
         {}
-    path_to_config_aws
+    exec options
         {}
 ------------------------------------------------------------------------
                 ",
-            self.path_to_config, self.path_to_config_aws,
+            self.path_to_opts_aws, self.path_to_opts,
         )
     }
 }
@@ -75,7 +72,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for Client<R
     async fn async_from(options: CliOptions) -> Self {
         Client::<R>::new(
             ClientConfiguration::from(&options),
-            AwsConfiguration::from(&options),
+            AwsOptions::from(&options),
         )
         .await
     }
@@ -83,14 +80,14 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for Client<R
 
 impl From<&CliOptions> for ClientConfiguration {
     fn from(options: &CliOptions) -> Self {
-        read_toml::<ClientConfiguration>(options.path_to_config().as_path())
+        read_toml::<ClientConfiguration>(options.path_to_opts().as_path())
             .expect("Failed to read service client configuration file")
     }
 }
 
-impl From<&CliOptions> for AwsConfiguration {
+impl From<&CliOptions> for AwsOptions {
     fn from(options: &CliOptions) -> Self {
-        read_toml::<AwsConfiguration>(options.path_to_config_aws().as_path())
+        read_toml::<AwsOptions>(options.path_to_opts_aws().as_path())
             .expect("Failed to read service client AWS configuration file")
     }
 }
