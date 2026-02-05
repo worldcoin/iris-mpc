@@ -1,9 +1,9 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "2097152"
+    value: "1049576"
 
   - name: GENESIS_BATCH_SIZE
-    value: "dynamic:cap=96,error_rate=128"
+    value: "static:96"
 
   - name: SMPC__SCHEMA_NAME
     value: "genesis"
@@ -67,7 +67,7 @@ env:
     value: "20000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "64"
+    value: "96"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -76,7 +76,7 @@ env:
     value: "1800"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "64"
+    value: "96"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "32"
