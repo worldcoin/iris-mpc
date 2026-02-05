@@ -525,72 +525,108 @@ extern "C" __global__ void shared_prelifted_sub_ab(U32 *mask_a, U32 *mask_b,
   }
 }
 
-extern "C" __global__ void packed_ot_sender(U16 *out_a, U16 *out_b, U64 *in_a,
-                                            U64 *in_b, U16 *m0, U16 *m1,
-                                            U16 *rand_ca, U16 *rand_cb,
-                                            U16 *rand_wa1, U16 *rand_wa2,
-                                            size_t n) {
+extern "C" __global__ void packed_bit_inject_party_0_a(U16 *y, U64 *in_b,
+                                                       const U16 *rand_01,
+                                                       const U16 *rand_02,
+                                                       size_t n) {
+  // in is bits packed in 64 bit integers
+  // Thus, in has size n, y, rand_01, rand_02
+  // have size 64 * n
+
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
+    U16 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    y[i] = my_bit_b * rand_01[i] - rand_02[i];
+  }
+}
+
+extern "C" __global__ void
+packed_bit_inject_party_0_b(U16 *out_a, U16 *out_b, const U64 *in_b,
+                            const U16 *rand_01, const U16 *rand_02,
+                            const U16 *y, const U16 *z, size_t n) {
   // in is bits packed in 64 bit integers
   // out is each bit injected into 16-bit
   // Thus, in has size n, out has size 64 * n
-  // m0, m1, rand_ca, rand_cb, rand_wa1, rand_wa2 are same size as out
+  // rand_01, rand_02, y, z have the same size
+  // as out
+
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
+    U16 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
+    out_a[i] = rand_01[i] - (y[i] << 1);
+    out_b[i] = -((rand_02[i] + z[i]) << 1) + my_bit_b;
+  }
+}
+
+extern "C" __global__ void packed_bit_inject_party_1_a(U16 *x, const U64 *in_a,
+                                                       const U64 *in_b,
+                                                       const U16 *rand_01,
+                                                       size_t n) {
+  // in is bits packed in 64 bit integers
+  // Thus, in has size n, x and rand_01 have
+  // size 64 * n
+
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    size_t wordindex = i / 64;
+    size_t bitindex = i % 64;
+    U16 my_bit_a = ((in_a[wordindex] >> bitindex) & 1);
+    U16 my_bit_b = ((in_b[wordindex] >> bitindex) & 1);
+    U16 xor_ab = my_bit_a ^ my_bit_b;
+    x[i] = xor_ab - rand_01[i];
+  }
+}
+
+extern "C" __global__ void packed_bit_inject_party_1_b(U16 *out_a, U16 *out_b,
+                                                       const U16 *rand_01,
+                                                       const U16 *rand_12,
+                                                       const U16 *x,
+                                                       const U16 *y, size_t n) {
+  // out, rand_01, rand_02, x, y have size 64 * n
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < 64 * n) {
+    out_a[i] = x[i] - (rand_12[i] << 1);
+    out_b[i] = rand_01[i] - (y[i] << 1);
+  }
+}
+
+extern "C" __global__ void packed_bit_inject_party_2_a(U16 *z, const U64 *in_a,
+                                                       const U16 *rand_12,
+                                                       const U16 *x, size_t n) {
+  // in is bits packed in 64 bit integers
+  // Thus, in has size n, z, rand_12 and x have
+  // size 64 * n
 
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 64 * n) {
     size_t wordindex = i / 64;
     size_t bitindex = i % 64;
     U16 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
-    U16 my_bit_b = (in_b[wordindex] >> bitindex) & 1;
-    out_a[i] = rand_ca[i];
-    out_b[i] = rand_cb[i];
-    U16 c = rand_ca[i] + rand_cb[i];
-    U16 xor_ab = my_bit_a ^ my_bit_b;
-    m0[i] = (xor_ab - c) ^ rand_wa1[i];
-    m1[i] = ((xor_ab ^ 1) - c) ^ rand_wa2[i];
+    z[i] = my_bit_a * x[i] - rand_12[i];
   }
 }
 
-extern "C" __global__ void packed_ot_receiver(U16 *out_a, U16 *out_b, U64 *in_b,
-                                              U16 *m0, U16 *m1, U16 *rand_ca,
-                                              U16 *rand_wc, size_t n) {
-  // in is bits packed in 64 bit integers
-  // out is each bit injected into 16-bit
-  // Thus, in has size n, out has size 64 * n
-  // m0, m1, rand_ca, rand_wc are same size as out
-
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < 64 * n) {
-    size_t wordindex = i / 64;
-    size_t bitindex = i % 64;
-    bool my_bit_b = ((in_b[wordindex] >> bitindex) & 1) == 1;
-    out_a[i] = rand_ca[i];
-    if (my_bit_b) {
-      out_b[i] = rand_wc[i] ^ m1[i];
-    } else {
-      out_b[i] = rand_wc[i] ^ m0[i];
-    }
-  }
-}
-
-extern "C" __global__ void packed_ot_helper(U16 *out_b, U64 *in_a, U16 *rand_cb,
-                                            U16 *rand_wb1, U16 *rand_wb2,
-                                            U16 *wc, size_t n) {
+extern "C" __global__ void
+packed_bit_inject_party_2_b(U16 *out_a, U16 *out_b, const U64 *in_a,
+                            const U16 *rand_02, const U16 *rand_12,
+                            const U16 *x, const U16 *z, size_t n) {
   // in is bits packed in 64 bit integers
   // out is each bit injected into U16-bit
   // Thus, in has size n, out has size 64 * n
-  // rand_wb1, rand_wb2, wc are same size as out
+  // rand_02, rand_12, x, z have the same
+  // size as out
 
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 64 * n) {
     size_t wordindex = i / 64;
     size_t bitindex = i % 64;
-    bool my_bit_a = ((in_a[wordindex] >> bitindex) & 1) == 1;
-    out_b[i] = rand_cb[i];
-    if (my_bit_a) {
-      wc[i] = rand_wb2[i];
-    } else {
-      wc[i] = rand_wb1[i];
-    }
+    U16 my_bit_a = (in_a[wordindex] >> bitindex) & 1;
+    out_a[i] = -((rand_02[i] + z[i]) << 1) + my_bit_a;
+    out_b[i] = x[i] - (rand_12[i] << 1);
   }
 }
 

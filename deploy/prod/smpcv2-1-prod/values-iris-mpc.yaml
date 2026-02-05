@@ -17,18 +17,6 @@ env:
   - name: FI_PROVIDER
     value: "efa"
 
-  - name: NCCL_DEBUG
-    value: "INFO"
-
-  - name: NCCL_DEBUG_SUBSYS
-    value: "INIT,NET"
-
-  - name: FI_LOG_LEVEL
-    value: "INFO"
-
-  - name: FI_EFA_USE_DEVICE_RDMA
-    value: "1"
-
   - name: NCCL_IB_TIMEOUT
     value: "30"
 
@@ -148,15 +136,6 @@ env:
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
-
-  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-    value: "true"
-
-  - name: SMPC__ENABLE_SENDING_MIRROR_ANONYMIZED_STATS_MESSAGE
-    value: "true"
-
-  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_2D_MESSAGE
-    value: "true"
 
   - name: SMPC__ENABLE_RESET
     value: "true"

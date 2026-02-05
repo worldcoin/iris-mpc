@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#0585613cbdda06d754680a698ae467ea88f68375"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#0585613cbdda06d754680a698ae467ea88f68375"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -135,7 +135,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#0585613cbdda06d754680a698ae467ea88f68375"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=361fea0ac2559f625e42677aa987b23cf89e5ed7#361fea0ac2559f625e42677aa987b23cf89e5ed7"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#0585613cbdda06d754680a698ae467ea88f68375"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -1237,7 +1237,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1319,9 +1319,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "bytes-utils"
@@ -4341,7 +4341,7 @@ checksum = "0c1318b19085f08681016926435853bbf7858f9c082d0999b80550ff5d9abe15"
 dependencies = [
  "bytes",
  "heck",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -4374,7 +4374,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9552f850d5f0964a4e4d0bf306459ac29323ddfbae05e35a7c0d35cb0803cc5"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn",
