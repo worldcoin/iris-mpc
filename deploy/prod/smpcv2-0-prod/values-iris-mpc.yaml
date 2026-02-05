@@ -137,15 +137,6 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
 
-  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-    value: "true"
-
-  - name: SMPC__ENABLE_SENDING_MIRROR_ANONYMIZED_STATS_MESSAGE
-    value: "true"
-
-  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_2D_MESSAGE
-    value: "true"
-
   - name: SMPC__ENABLE_RESET
     value: "true"
 
