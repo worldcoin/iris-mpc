@@ -1500,7 +1500,12 @@ impl ServerActor {
                 if !*success {
                     continue;
                 }
-                if batch.skip_persistence.get(reauth_pos).copied().unwrap_or(false) {
+                if batch
+                    .skip_persistence
+                    .get(reauth_pos)
+                    .copied()
+                    .unwrap_or(false)
+                {
                     tracing::info!(
                         "Skipping in-memory reauth update for request {} due to skip_persistence",
                         batch.request_ids[reauth_pos]

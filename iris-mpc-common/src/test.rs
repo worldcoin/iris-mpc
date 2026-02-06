@@ -1087,7 +1087,8 @@ impl TestCaseGenerator {
                         .clone();
                     self.reauth_skip_persistence_templates.remove(&db_idx);
                     self.disallowed_queries.retain(|&idx| idx != db_idx);
-                    self.db_indices_used_in_current_batch.insert(db_idx as usize);
+                    self.db_indices_used_in_current_batch
+                        .insert(db_idx as usize);
                     self.expected_results.insert(
                         request_id.to_string(),
                         ExpectedResult::builder().with_db_index(db_idx).build(),
@@ -1152,10 +1153,7 @@ impl TestCaseGenerator {
 
     /// Returns two templates that both match the original DB entry, but not each other.
     /// This is used to detect unintended reauth updates when skip_persistence is set.
-    fn prepare_disjoint_matching_codes(
-        &mut self,
-        db_index: usize,
-    ) -> (E2ETemplate, E2ETemplate) {
+    fn prepare_disjoint_matching_codes(&mut self, db_index: usize) -> (E2ETemplate, E2ETemplate) {
         let original_left = self.initial_db_state.plain_dbs[LEFT].db[db_index].clone();
         let original_right = self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone();
 
