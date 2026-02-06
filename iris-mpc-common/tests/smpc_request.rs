@@ -7,7 +7,7 @@ mod tests {
         sha256::sha256_as_hex_string,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share, IrisCodeSharesJSON,
-            UniquenessRequest,
+            ReAuthRequest, UniquenessRequest,
         },
     };
     use serde_json::json;

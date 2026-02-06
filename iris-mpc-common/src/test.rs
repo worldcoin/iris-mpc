@@ -165,6 +165,9 @@ pub enum TestCase {
     /// Send a reauth request matching target serial id's iris code only
     /// (successful reauth)
     ReauthMatchingTarget,
+    /// Send a reauth request matching target serial id's iris code only
+    /// (successful reauth) but skip persistence.
+    ReauthMatchingTargetWithSkipPeristence,
     /// Send a reauth request not matching target serial id's iris code
     /// (failed reauth)
     ReauthNonMatchingTarget,
@@ -184,6 +187,9 @@ pub enum TestCase {
     EnrollmentAfterResetCheckNonMatch,
     /// Send an enrollment request using the iris codes used during ResetUpdate and expect a match result
     MatchAfterResetUpdate,
+    /// Send an enrollment request using the iris codes used during
+    /// ReauthMatchingTargetWithSkipPeristence and expect a match result.
+    MatchAfterReauthSkipPeristence,
     /// Send an iris code crafted for full face mirror attack detection:
     /// - Normal flow won't match anything in the database
     /// - But when the code is mirrored, it will match(mirrored version will be pre-inserted in the test db)
@@ -206,12 +212,14 @@ impl TestCase {
             TestCase::WithOrRuleSet,
             TestCase::ReauthNonMatchingTarget,
             TestCase::ReauthMatchingTarget,
+            TestCase::ReauthMatchingTargetWithSkipPeristence,
             TestCase::ReauthOrRuleNonMatchingTarget,
             TestCase::ReauthOrRuleMatchingTarget,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
             TestCase::EnrollmentAfterResetCheckNonMatch,
             TestCase::MatchAfterResetUpdate,
+            TestCase::MatchAfterReauthSkipPeristence,
             TestCase::FullFaceMirrorAttack,
         ]
     }
@@ -333,6 +341,8 @@ pub struct TestCaseGenerator {
     /// responses used for reset checks, where a new iris code was
     /// checked against the database
     non_match_reset_check_templates: HashMap<String, E2ETemplate>,
+    /// templates used after reauth skip persistence, where memory should be unchanged
+    reauth_skip_persistence_templates: HashMap<u32, E2ETemplate>,
     /// templates used for reset updates where memory is overridden with these
     reset_update_templates: HashMap<u32, E2ETemplate>,
     /// A buffer of indices that have been deleted, to choose a index from
@@ -377,6 +387,7 @@ impl TestCaseGenerator {
             reauth_target_indices: HashMap::new(),
             inserted_responses: HashMap::new(),
             non_match_reset_check_templates: HashMap::new(),
+            reauth_skip_persistence_templates: HashMap::new(),
             reset_update_templates: HashMap::new(),
             deleted_indices_buffer: Vec::new(),
             deleted_indices: HashSet::new(),
@@ -610,6 +621,7 @@ impl TestCaseGenerator {
             TestCase::WithOrRuleSet,
             TestCase::ReauthNonMatchingTarget,
             TestCase::ReauthMatchingTarget,
+            TestCase::ReauthMatchingTargetWithSkipPeristence,
             TestCase::ReauthOrRuleNonMatchingTarget,
             TestCase::ReauthOrRuleMatchingTarget,
             TestCase::MatchSkipPersistence,
@@ -630,6 +642,9 @@ impl TestCaseGenerator {
         }
         if !self.reset_update_templates.is_empty() {
             options.push(TestCase::MatchAfterResetUpdate);
+        }
+        if !self.reauth_skip_persistence_templates.is_empty() {
+            options.push(TestCase::MatchAfterReauthSkipPeristence);
         }
 
         options.retain(|x| self.enabled_test_cases.contains(x));
@@ -874,6 +889,30 @@ impl TestCaseGenerator {
                         right: template_right,
                     }
                 }
+                TestCase::ReauthMatchingTargetWithSkipPeristence => {
+                    tracing::info!(
+                        "Sending reauth request with AND rule matching the target index with skip persistence"
+                    );
+                    message_type = REAUTH_MESSAGE_TYPE.to_string();
+                    skip_persistence = true;
+                    let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
+                    self.db_indices_used_in_current_batch.insert(db_index);
+                    self.disallowed_queries.push(db_index as u32);
+                    self.reauth_target_indices
+                        .insert(request_id.to_string(), db_index as u32);
+                    let (reauth_template, probe_template) =
+                        self.prepare_disjoint_matching_codes(db_index);
+                    self.reauth_skip_persistence_templates
+                        .insert(db_index as u32, probe_template);
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult::builder()
+                            .with_reauth_successful(true)
+                            .build(),
+                    );
+                    self.skip_invalidate = true;
+                    reauth_template
+                }
                 TestCase::ReauthNonMatchingTarget => {
                     tracing::info!(
                         "Sending reauth request with AND rule non-matching the target index"
@@ -1032,6 +1071,30 @@ impl TestCaseGenerator {
                     self.skip_invalidate = true;
                     e2e_template
                 }
+                TestCase::MatchAfterReauthSkipPeristence => {
+                    tracing::info!(
+                        "Sending enrollment request using iris codes used during reauth skip persistence"
+                    );
+                    let db_idx = *self
+                        .reauth_skip_persistence_templates
+                        .keys()
+                        .choose(&mut self.rng)
+                        .unwrap();
+                    let e2e_template = self
+                        .reauth_skip_persistence_templates
+                        .get(&db_idx)
+                        .unwrap()
+                        .clone();
+                    self.reauth_skip_persistence_templates.remove(&db_idx);
+                    self.disallowed_queries.retain(|&idx| idx != db_idx);
+                    self.db_indices_used_in_current_batch.insert(db_idx as usize);
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult::builder().with_db_index(db_idx).build(),
+                    );
+                    self.skip_invalidate = true;
+                    e2e_template
+                }
             }
         };
         (
@@ -1085,6 +1148,51 @@ impl TestCaseGenerator {
             left: code_left,
             right: code_right,
         }
+    }
+
+    /// Returns two templates that both match the original DB entry, but not each other.
+    /// This is used to detect unintended reauth updates when skip_persistence is set.
+    fn prepare_disjoint_matching_codes(
+        &mut self,
+        db_index: usize,
+    ) -> (E2ETemplate, E2ETemplate) {
+        let original_left = self.initial_db_state.plain_dbs[LEFT].db[db_index].clone();
+        let original_right = self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone();
+
+        assert_eq!(original_left.mask, IrisCodeArray::ONES);
+        assert_eq!(original_right.mask, IrisCodeArray::ONES);
+
+        let mut reauth_left = original_left.clone();
+        let mut reauth_right = original_right.clone();
+        let mut probe_left = original_left;
+        let mut probe_right = original_right;
+
+        let flip_count = (THRESHOLD_ABSOLUTE / 2) + 1;
+        assert!(
+            flip_count * 2 < IRIS_CODE_LENGTH,
+            "Not enough bits to generate disjoint flip sets"
+        );
+
+        for i in 0..flip_count {
+            reauth_left.code.flip_bit(i);
+            reauth_right.code.flip_bit(i);
+        }
+
+        for i in flip_count..(flip_count * 2) {
+            probe_left.code.flip_bit(i);
+            probe_right.code.flip_bit(i);
+        }
+
+        (
+            E2ETemplate {
+                left: reauth_left,
+                right: reauth_right,
+            },
+            E2ETemplate {
+                left: probe_left,
+                right: probe_right,
+            },
+        )
     }
 
     // check a received result against the expected results

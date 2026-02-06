@@ -1500,6 +1500,13 @@ impl ServerActor {
                 if !*success {
                     continue;
                 }
+                if batch.skip_persistence.get(reauth_pos).copied().unwrap_or(false) {
+                    tracing::info!(
+                        "Skipping in-memory reauth update for request {} due to skip_persistence",
+                        batch.request_ids[reauth_pos]
+                    );
+                    continue;
+                }
                 let reauth_id = batch.request_ids[reauth_pos].clone();
                 let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
                 let device_index = reauth_index % self.device_manager.device_count() as u32;
@@ -1685,6 +1692,7 @@ impl ServerActor {
             metadata: batch.metadata,
             matches,
             matches_with_skip_persistence,
+            skip_persistence: batch.skip_persistence,
             match_ids: match_ids_filtered,
             full_face_mirror_match_ids,
             partial_match_ids_left,

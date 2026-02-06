@@ -1345,6 +1345,7 @@ impl HawkResult {
             metadata: batch.metadata,
             matches_with_skip_persistence,
             matches,
+            skip_persistence: batch.skip_persistence,
 
             match_ids,
 
@@ -1688,7 +1689,13 @@ impl HawkHandle {
             .iter()
             .map(|req_index| match req_index {
                 RequestIndex::UniqueReauthResetCheck(i) => match decisions[*i] {
-                    ReauthUpdate(update_id) => Some(update_id),
+                    ReauthUpdate(update_id) => {
+                        if request.batch.skip_persistence.get(*i).copied().unwrap_or(false) {
+                            None
+                        } else {
+                            Some(update_id)
+                        }
+                    }
                     _ => None,
                 },
                 RequestIndex::ResetUpdate(i) => Some(resets.vector_ids[*i]),
@@ -1734,9 +1741,14 @@ impl HawkHandle {
             let insert_plans = requests_order
                 .iter()
                 .map(|req_index| match req_index {
-                    RequestIndex::UniqueReauthResetCheck(i) => decisions[*i]
+                RequestIndex::UniqueReauthResetCheck(i) => match decisions[*i] {
+                    ReauthUpdate(_) if request.batch.skip_persistence.get(*i).copied().unwrap_or(false) => {
+                        None
+                    }
+                    _ => decisions[*i]
                         .is_mutation()
                         .then(|| search_results[*i].center().clone()),
+                },
                     RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
                     // Deletions were handled earlier in handle_job
                     RequestIndex::Deletion(_) => None,
