@@ -105,7 +105,7 @@ pub fn get_cpus_for_node(node: usize) -> Vec<usize> {
 // uses libc to avoid the need to install numa specific tools on the target
 #[cfg(target_os = "linux")]
 pub fn restrict_to_node_zero() {
-    use libc::{cpu_set_t, sched_setaffinity, CPU_SET, MPOL_BIND};
+    use libc::{cpu_set_t, sched_setaffinity, CPU_SET};
     use nix::libc::{self};
     use std::io::Error;
     use std::mem;
@@ -121,26 +121,7 @@ pub fn restrict_to_node_zero() {
             eprintln!("Warning: Failed to set CPU affinity: {}", err);
         }
 
-        // This prevents RAM allocations from "bleeding" into Node 1
-        // Bit 0 = Node 0
-        let nodemask: libc::c_ulong = 1 << 0;
-        // maxnode is the number of valid bits in the mask (must be >= highest node + 1)
-        let maxnode: libc::c_ulong = 2;
-        // SYS_set_mempolicy automatically resolves to 238 on x86_64 and 203 on ARM64
-        let res = libc::syscall(
-            libc::SYS_set_mempolicy,
-            MPOL_BIND,
-            &nodemask as *const libc::c_ulong,
-            maxnode,
-        );
-
-        if res != 0 {
-            let err = Error::last_os_error();
-            eprintln!(
-                "Warning: set_mempolicy syscall failed: {}. Check permissions/capabilities.",
-                err
-            );
-        }
+        set_mempolicy_for_node(0);
     }
 }
 
@@ -154,6 +135,39 @@ pub fn restrict_to_node_zero() {
 /// For a single-node system, this returns the total number of cores.
 pub fn get_node_zero_cores() -> usize {
     NODE_ZERO_CPUS.len()
+}
+
+/// Sets the memory policy for the current thread to bind allocations to the specified NUMA node.
+/// On non-Linux systems, this is a no-op.
+#[cfg(target_os = "linux")]
+pub fn set_mempolicy_for_node(node: usize) {
+    use libc::MPOL_BIND;
+    use nix::libc;
+    use std::io::Error;
+
+    unsafe {
+        // Set bit for the target node
+        let nodemask: libc::c_ulong = 1 << node;
+        // maxnode must be > highest node number
+        let maxnode: libc::c_ulong = 2;
+
+        let res = libc::syscall(
+            libc::SYS_set_mempolicy,
+            MPOL_BIND,
+            &nodemask as *const libc::c_ulong,
+            maxnode,
+        );
+
+        if res != 0 {
+            let err = Error::last_os_error();
+            eprintln!("Warning: set_mempolicy for node {} failed: {}", node, err);
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn set_mempolicy_for_node(_node: usize) {
+    // No-op on non-Linux systems
 }
 
 #[cfg(test)]

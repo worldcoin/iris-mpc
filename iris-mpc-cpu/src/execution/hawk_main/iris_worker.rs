@@ -15,7 +15,7 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::{get_cpus_for_node, vector_id::VectorId, SHARD_COUNT};
+use iris_mpc_common::{get_cpus_for_node, set_mempolicy_for_node, vector_id::VectorId, SHARD_COUNT};
 use itertools::{izip, Itertools};
 use std::{
     iter,
@@ -371,7 +371,10 @@ pub fn init_workers(
         channels.push(tx);
         let iris_store = iris_store.clone();
         std::thread::spawn(move || {
+            // Pin thread to specific core
             let _ = core_affinity::set_for_current(core_id);
+            // Bind memory allocations to this shard's NUMA node
+            set_mempolicy_for_node(shard_index);
             worker_thread(rx, iris_store, numa);
         });
     }
