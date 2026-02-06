@@ -1,15 +1,15 @@
 #![allow(clippy::needless_range_loop)]
 
 use clap::Parser;
-use core_affinity::CoreId;
 use eyre::Result;
 use iris_mpc::server::server_main;
 use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
-use iris_mpc_common::{get_num_tokio_threads, next_worker_index};
+use iris_mpc_common::{get_node_zero_cores, restrict_to_node_zero};
 use std::process::exit;
 
 fn main() -> Result<()> {
+    restrict_to_node_zero();
     dotenvy::dotenv().ok();
 
     println!("Init config");
@@ -17,12 +17,10 @@ fn main() -> Result<()> {
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
     // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.
-    let num_tokio_threads = get_num_tokio_threads();
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_tokio_threads)
+        .worker_threads(get_node_zero_cores())
         .on_thread_start(move || {
-            let id = next_worker_index(num_tokio_threads);
-            let _ = core_affinity::set_for_current(CoreId { id });
+            restrict_to_node_zero();
         })
         .enable_all()
         .build()

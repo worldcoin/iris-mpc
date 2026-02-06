@@ -1,8 +1,7 @@
 use clap::Parser;
-use core_affinity::CoreId;
 use eyre::{bail, Result};
 use iris_mpc_common::{
-    config::Config, get_num_tokio_threads, next_worker_index, tracing::initialize_tracing,
+    config::Config, get_node_zero_cores, restrict_to_node_zero, tracing::initialize_tracing,
     IrisSerialId,
 };
 use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig};
@@ -34,6 +33,7 @@ struct Args {
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
 /// creates a db snapshot within AWS RDS cluster.
 fn main() -> Result<()> {
+    restrict_to_node_zero();
     // Set config.
     println!("Initialising config");
     dotenvy::dotenv().ok();
@@ -44,12 +44,11 @@ fn main() -> Result<()> {
     let args = parse_args()?;
 
     // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.
-    let num_tokio_threads = get_num_tokio_threads();
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_tokio_threads)
+        .worker_threads(get_node_zero_cores())
         .on_thread_start(move || {
-            let id = next_worker_index(num_tokio_threads);
-            let _ = core_affinity::set_for_current(CoreId { id });
+            // This ensures every spawned worker thread stays on Node 0
+            restrict_to_node_zero();
         })
         .enable_all()
         .build()

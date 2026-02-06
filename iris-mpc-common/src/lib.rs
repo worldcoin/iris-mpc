@@ -28,32 +28,78 @@ pub type IrisCodeDb = (Vec<u16>, Vec<u16>);
 /// Borrowed version of iris database; .0 = iris code, .1 = mask
 pub type IrisCodeDbSlice<'a> = (&'a [u16], &'a [u16]);
 
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-
 pub use ampc_secret_sharing::galois;
 pub use ampc_secret_sharing::id;
 pub use vector_id::SerialId as IrisSerialId;
 pub use vector_id::VectorId as IrisVectorId;
 pub use vector_id::VersionId as IrisVersionId;
 
-pub const SHARD_COUNT: usize = 2;
+use std::fs;
+use std::sync::LazyLock;
 
-/// Static counter that increments each time `next_worker_index` is called,
-/// cycling through 0..num_workers. Used for round-robin worker selection.
-static WORKER_CALL_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Caches the number of NUMA nodes detected on the system.
+/// Defaults to 1 if not on Linux or if detection fails.
+pub static SHARD_COUNT: LazyLock<usize> = LazyLock::new(|| {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(entries) = fs::read_dir("/sys/devices/system/node") {
+            let count = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with("node"))
+                .count();
 
-/// Returns the next worker index, cycling from 0 to num_workers-1.
-/// Each call increments the counter and returns the previous value mod num_workers.
-pub fn next_worker_index(num_workers: usize) -> usize {
-    if num_workers == 0 {
-        return 0;
+            // Handle edge case where dir exists but is empty
+            return if count > 0 { count } else { 1 };
+        }
     }
-    WORKER_CALL_COUNTER.fetch_add(1, Ordering::Relaxed) % num_workers
+    1
+});
+
+// uses libc to avoid the need to install numa specific tools on the target
+#[cfg(target_os = "linux")]
+pub fn restrict_to_node_zero() {
+    use libc::{cpu_set_t, sched_setaffinity, CPU_SET, MPOL_BIND};
+    use nix::libc::{self, c_int, c_ulong};
+    use std::mem;
+
+    // Define raw syscall wrapper if not provided by libc
+    // mode: e.g., MPOL_BIND, MPOL_INTERLEAVE
+    // nodemask: pointer to a bitmask of nodes
+    // maxnode: number of nodes in the mask
+    extern "C" {
+        fn set_mempolicy(mode: c_int, nodemask: *const c_ulong, maxnode: c_ulong) -> c_int;
+    }
+
+    unsafe {
+        let mut cpuset: cpu_set_t = mem::zeroed();
+        for core in 0..get_node_zero_cores() {
+            CPU_SET(core, &mut cpuset);
+        }
+
+        if sched_setaffinity(0, mem::size_of::<cpu_set_t>(), &cpuset) != 0 {
+            eprintln!("Warning: Failed to set CPU affinity");
+        }
+
+        // This prevents RAM allocations from "bleeding" into Node 1
+        let nodemask: libc::c_ulong = 1 << 0; // Bit 0 = Node 0
+        let maxnode: libc::c_ulong = *SHARD_COUNT as _; // Total nodes in the mask
+
+        let res = set_mempolicy(MPOL_BIND, &nodemask, maxnode);
+
+        if res != 0 {
+            eprintln!("Warning: set_mempolicy syscall failed. Check permissions/capabilities.");
+        }
+    }
+}
+
+// On Mac or other OSs, this function becomes a "No-Op" (does nothing)
+#[cfg(not(target_os = "linux"))]
+pub fn restrict_to_node_zero() {
+    // macOS uses Unified Memory; NUMA pinning isn't applicable/available via libc
 }
 
 /// assumes the NIC and the first half of the CPU cores are on NUMA node 0, and restricts tokio to that node. for a single node system, there should be no effect.
-pub fn get_num_tokio_threads() -> usize {
+pub fn get_node_zero_cores() -> usize {
     let core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.len() / SHARD_COUNT
+    core_ids.len() / *SHARD_COUNT
 }
