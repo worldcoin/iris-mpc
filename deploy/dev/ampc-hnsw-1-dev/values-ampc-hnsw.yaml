@@ -1,6 +1,6 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1051576"
+    value: "1052576"
 
   - name: GENESIS_BATCH_SIZE
     value: "static:96"
