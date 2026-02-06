@@ -78,6 +78,7 @@ impl From<&Request> for RequestPayload {
                     UniquenessReference::IrisSerialId(serial_id) => *serial_id,
                     _ => panic!("Invalid uniqueness reference"),
                 },
+                skip_persistence: None,
                 use_or_rule: false,
             }),
             Request::ResetCheck { reset_id, .. } => {

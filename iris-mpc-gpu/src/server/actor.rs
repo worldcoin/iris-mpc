@@ -991,6 +991,7 @@ impl ServerActor {
                 batch_size,
                 orientation,
                 &batch_operations,
+                &batch.skip_persistence,
                 &batch_reauth_targets,
             );
 
@@ -1106,6 +1107,7 @@ impl ServerActor {
                     batch_size,
                     orientation,
                     &batch_operations,
+                    &batch.skip_persistence,
                     &batch_reauth_targets,
                 )
             } else {
@@ -1119,6 +1121,7 @@ impl ServerActor {
                     &partial_matches_side1,
                     orientation,
                     &batch_operations,
+                    &batch.skip_persistence,
                     &batch_reauth_targets,
                 )
             };
@@ -1497,6 +1500,18 @@ impl ServerActor {
                 if !*success {
                     continue;
                 }
+                if batch
+                    .skip_persistence
+                    .get(reauth_pos)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    tracing::info!(
+                        "Skipping in-memory reauth update for request {} due to skip_persistence",
+                        batch.request_ids[reauth_pos]
+                    );
+                    continue;
+                }
                 let reauth_id = batch.request_ids[reauth_pos].clone();
                 let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
                 let device_index = reauth_index % self.device_manager.device_count() as u32;
@@ -1682,6 +1697,7 @@ impl ServerActor {
             metadata: batch.metadata,
             matches,
             matches_with_skip_persistence,
+            skip_persistence: batch.skip_persistence,
             match_ids: match_ids_filtered,
             full_face_mirror_match_ids,
             partial_match_ids_left,
@@ -1902,6 +1918,7 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        skip_persistence: &[bool],
         batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
@@ -2132,6 +2149,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
@@ -2145,6 +2163,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
@@ -2172,6 +2191,7 @@ impl ServerActor {
         batch_size: usize,
         orientation: Orientation,
         operations: &[AnonStatsOperation],
+        skip_persistence: &[bool],
         batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
@@ -2503,6 +2523,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,
@@ -2516,6 +2537,7 @@ impl ServerActor {
                     / 100,
                 &self.streams[0],
                 operations,
+                skip_persistence,
                 batch_reauth_targets,
                 self.distance_comparator.query_length as u64,
                 self.distance_comparator.max_db_size as u64,

@@ -605,7 +605,7 @@ impl<'a> BatchProcessor<'a> {
             REAUTH_MESSAGE_TYPE,
             batch_metadata,
             or_rule_indices,
-            false, // skip_persistence is only used for uniqueness requests
+            reauth_request.skip_persistence.unwrap_or(false),
         );
 
         self.add_iris_shares_task(reauth_request.s3_key)?;
