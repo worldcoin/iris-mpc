@@ -12,4 +12,7 @@ pub enum ServiceClientError {
 
     #[error("Initialisation error: {0}")]
     InitialisationError(String),
+
+    #[error("Response error: {0}")]
+    ResponseError(String),
 }

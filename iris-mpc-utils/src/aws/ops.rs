@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use iris_mpc_common::IrisSerialId;
-use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::GaloisRingSharedIris};
+use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use super::{
     client::AwsClient,
@@ -9,7 +9,7 @@ use super::{
     factory::{create_iris_code_shares, create_iris_code_shares_s3},
     types::S3ObjectInfo,
 };
-use crate::constants::N_PARTIES;
+use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisUpload};
 
 impl AwsClient {
     /// Uploads Iris serial identifiers marked for deletion.
@@ -38,7 +38,7 @@ impl AwsClient {
     pub async fn s3_upload_iris_shares(
         &self,
         signup_id: &uuid::Uuid,
-        shares: &BothEyes<[GaloisRingSharedIris; N_PARTIES]>,
+        shares: &BothEyes<[GaloisRingSharedIrisUpload; N_PARTIES]>,
     ) -> Result<S3ObjectInfo, AwsClientError> {
         // Set AWS-S3 JSON compatible shares.
         let shares = create_iris_code_shares_s3(

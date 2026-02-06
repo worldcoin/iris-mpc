@@ -8,6 +8,15 @@ use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::Galois
 
 use crate::constants::N_PARTIES;
 
+/// Iris shares for upload to the MPC server.
+/// This struct stores the full-size mask share (GaloisRingIrisCodeShare) instead of
+/// the trimmed version, because the server expects full-size mask shares when decoding.
+#[derive(Debug, Clone)]
+pub struct GaloisRingSharedIrisUpload {
+    pub code: GaloisRingIrisCodeShare,
+    pub mask: GaloisRingIrisCodeShare,
+}
+
 /// Returns generated iris shares from an iris code using local randomness alongside its mirrored component.
 pub fn generate_iris_shares<R: Rng + CryptoRng>(
     rng: &mut R,
@@ -108,6 +117,47 @@ fn generate_iris_code_and_mask_shares<R: Rng + CryptoRng>(
         GaloisRingIrisCodeShare::encode_iris_code(&iris_code.code, &iris_code.mask, rng),
         // Mask.
         GaloisRingIrisCodeShare::encode_mask_code(&iris_code.mask, rng),
+    ]
+}
+
+/// Returns generated iris shares for upload (with full-size mask shares).
+/// Use this when generating shares to be sent to the MPC server.
+pub fn generate_iris_shares_for_upload<R: Rng + CryptoRng>(
+    rng: &mut R,
+    iris_code: Option<IrisCode>,
+) -> [GaloisRingSharedIrisUpload; N_PARTIES] {
+    let iris_code = iris_code.unwrap_or_else(|| IrisCode::random_rng(rng));
+    let [code_shares, mask_shares] = generate_iris_code_and_mask_shares(rng, Some(iris_code));
+
+    [
+        // Party 1.
+        GaloisRingSharedIrisUpload {
+            code: code_shares[0].to_owned(),
+            mask: mask_shares[0].to_owned(),
+        },
+        // Party 2.
+        GaloisRingSharedIrisUpload {
+            code: code_shares[1].to_owned(),
+            mask: mask_shares[1].to_owned(),
+        },
+        // Party 3.
+        GaloisRingSharedIrisUpload {
+            code: code_shares[2].to_owned(),
+            mask: mask_shares[2].to_owned(),
+        },
+    ]
+}
+
+/// Convenience function that returns 2 sets of Iris shares for upload.
+/// Use this when generating shares to be sent to the MPC server.
+pub fn generate_iris_shares_for_upload_both_eyes<R: Rng + CryptoRng>(
+    rng: &mut R,
+    iris_code_l: Option<IrisCode>,
+    iris_code_r: Option<IrisCode>,
+) -> BothEyes<[GaloisRingSharedIrisUpload; N_PARTIES]> {
+    [
+        generate_iris_shares_for_upload(rng, iris_code_l),
+        generate_iris_shares_for_upload(rng, iris_code_r),
     ]
 }
 
