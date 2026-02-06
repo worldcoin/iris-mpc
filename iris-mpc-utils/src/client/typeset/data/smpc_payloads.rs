@@ -40,16 +40,19 @@ impl ResponsePayload {
     pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
         let (has_error, error_reason) = match self {
             Self::IdentityDeletion(result) => (!result.success, None),
-            Self::Reauthorization(result) => {
-                (result.error.unwrap_or(false), result.error_reason.as_deref())
-            }
-            Self::ResetCheck(result) => {
-                (result.error.unwrap_or(false), result.error_reason.as_deref())
-            }
+            Self::Reauthorization(result) => (
+                result.error.unwrap_or(false),
+                result.error_reason.as_deref(),
+            ),
+            Self::ResetCheck(result) => (
+                result.error.unwrap_or(false),
+                result.error_reason.as_deref(),
+            ),
             Self::ResetUpdate(_) => (false, None),
-            Self::Uniqueness(result) => {
-                (result.error.unwrap_or(false), result.error_reason.as_deref())
-            }
+            Self::Uniqueness(result) => (
+                result.error.unwrap_or(false),
+                result.error_reason.as_deref(),
+            ),
         };
 
         if has_error {

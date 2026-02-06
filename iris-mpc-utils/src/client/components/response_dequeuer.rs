@@ -44,7 +44,7 @@ impl ProcessRequestBatch for ResponseDequeuer {
                     .maybe_correlate_response_and_update_child_request(
                         batch,
                         ResponsePayload::from(&sqs_msg),
-                    )
+                    )?
                     .is_some()
                 {
                     self.aws_client
@@ -69,8 +69,8 @@ impl ResponseDequeuer {
         &mut self,
         batch: &mut RequestBatch,
         response: ResponsePayload,
-    ) -> Option<()> {
-        response.validate().unwrap();
+    ) -> Result<Option<()>, ServiceClientError> {
+        response.validate()?;
 
         if let Some(idx_of_correlated) = batch.get_idx_of_correlated(&response) {
             if batch.requests_mut()[idx_of_correlated]
@@ -84,9 +84,9 @@ impl ResponseDequeuer {
                     );
                 }
             }
-            Some(())
+            Ok(Some(()))
         } else {
-            None
+            Ok(None)
         }
     }
 
