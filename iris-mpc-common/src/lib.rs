@@ -106,13 +106,9 @@ pub fn get_cpus_for_node(node: usize) -> Vec<usize> {
 #[cfg(target_os = "linux")]
 pub fn restrict_to_node_zero() {
     use libc::{cpu_set_t, sched_setaffinity, CPU_SET, MPOL_BIND};
-    use nix::libc::{self, c_int, c_ulong};
+    use nix::libc::{self};
     use std::io::Error;
     use std::mem;
-
-    extern "C" {
-        fn set_mempolicy(mode: c_int, nodemask: *const c_ulong, maxnode: c_ulong) -> c_int;
-    }
 
     unsafe {
         let mut cpuset: cpu_set_t = mem::zeroed();
@@ -126,11 +122,17 @@ pub fn restrict_to_node_zero() {
         }
 
         // This prevents RAM allocations from "bleeding" into Node 1
-        let nodemask: libc::c_ulong = 1 << 0; // Bit 0 = Node 0
-                                              // maxnode is the number of valid bits in the mask (must be >= highest node + 1)
+        // Bit 0 = Node 0
+        let nodemask: libc::c_ulong = 1 << 0;
+        // maxnode is the number of valid bits in the mask (must be >= highest node + 1)
         let maxnode: libc::c_ulong = 2;
-
-        let res = set_mempolicy(MPOL_BIND, &nodemask, maxnode);
+        // SYS_set_mempolicy automatically resolves to 238 on x86_64 and 203 on ARM64
+        let res = libc::syscall(
+            libc::SYS_set_mempolicy,
+            MPOL_BIND,
+            &nodemask as *const libc::c_ulong,
+            maxnode,
+        );
 
         if res != 0 {
             let err = Error::last_os_error();
