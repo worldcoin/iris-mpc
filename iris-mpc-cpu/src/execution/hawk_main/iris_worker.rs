@@ -15,7 +15,7 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::{vector_id::VectorId, SHARD_COUNT};
 use itertools::{izip, Itertools};
 use std::{
     cmp, iter,
@@ -477,13 +477,9 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
     }
 }
 
-const SHARD_COUNT: usize = 2;
-
-// modified to put everything on node 0
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     let mut core_ids = core_affinity::get_core_ids().unwrap();
     core_ids.sort();
-    core_ids.truncate(core_ids.len() / 2);
     assert!(!core_ids.is_empty());
 
     let shard_count = cmp::min(SHARD_COUNT, core_ids.len());

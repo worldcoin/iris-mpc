@@ -37,6 +37,8 @@ pub use vector_id::SerialId as IrisSerialId;
 pub use vector_id::VectorId as IrisVectorId;
 pub use vector_id::VersionId as IrisVersionId;
 
+pub const SHARD_COUNT: usize = 2;
+
 /// Static counter that increments each time `next_worker_index` is called,
 /// cycling through 0..num_workers. Used for round-robin worker selection.
 static WORKER_CALL_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -50,7 +52,8 @@ pub fn next_worker_index(num_workers: usize) -> usize {
     WORKER_CALL_COUNTER.fetch_add(1, Ordering::Relaxed) % num_workers
 }
 
+/// assumes the NIC and the first half of the CPU cores are on NUMA node 0, and restricts tokio to that node. for a single node system, there should be no effect.
 pub fn get_num_tokio_threads() -> usize {
     let core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.len() / 2
+    core_ids.len() / SHARD_COUNT
 }
