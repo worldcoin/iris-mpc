@@ -55,51 +55,101 @@ pub static SHARD_COUNT: LazyLock<usize> = LazyLock::new(|| {
     1
 });
 
+/// Caches the CPU IDs for NUMA node 0.
+pub static NODE_ZERO_CPUS: LazyLock<Vec<usize>> = LazyLock::new(|| get_cpus_for_node(0));
+
+/// Parses a Linux cpulist format string (e.g., "0-15,32-47") into a vector of CPU IDs.
+fn parse_cpulist(cpulist: &str) -> Vec<usize> {
+    let mut cpus = Vec::new();
+    for part in cpulist.trim().split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((start, end)) = part.split_once('-') {
+            if let (Ok(s), Ok(e)) = (start.parse::<usize>(), end.parse::<usize>()) {
+                cpus.extend(s..=e);
+            }
+        } else if let Ok(cpu) = part.parse::<usize>() {
+            cpus.push(cpu);
+        }
+    }
+    cpus
+}
+
+/// Returns the CPU IDs belonging to the specified NUMA node.
+/// On non-Linux or if detection fails, returns all available CPU IDs for node 0,
+/// or an empty vec for other nodes.
+pub fn get_cpus_for_node(node: usize) -> Vec<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        let path = format!("/sys/devices/system/node/node{}/cpulist", node);
+        if let Ok(contents) = fs::read_to_string(&path) {
+            return parse_cpulist(&contents);
+        }
+    }
+
+    // Fallback for non-Linux or if sysfs read fails:
+    // Node 0 gets all CPUs, other nodes get none
+    if node == 0 {
+        core_affinity::get_core_ids()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
 // uses libc to avoid the need to install numa specific tools on the target
 #[cfg(target_os = "linux")]
 pub fn restrict_to_node_zero() {
     use libc::{cpu_set_t, sched_setaffinity, CPU_SET, MPOL_BIND};
     use nix::libc::{self, c_int, c_ulong};
+    use std::io::Error;
     use std::mem;
 
-    // Define raw syscall wrapper if not provided by libc
-    // mode: e.g., MPOL_BIND, MPOL_INTERLEAVE
-    // nodemask: pointer to a bitmask of nodes
-    // maxnode: number of nodes in the mask
     extern "C" {
         fn set_mempolicy(mode: c_int, nodemask: *const c_ulong, maxnode: c_ulong) -> c_int;
     }
 
     unsafe {
         let mut cpuset: cpu_set_t = mem::zeroed();
-        for core in 0..get_node_zero_cores() {
-            CPU_SET(core, &mut cpuset);
+        for &cpu in NODE_ZERO_CPUS.iter() {
+            CPU_SET(cpu, &mut cpuset);
         }
 
         if sched_setaffinity(0, mem::size_of::<cpu_set_t>(), &cpuset) != 0 {
-            eprintln!("Warning: Failed to set CPU affinity");
+            let err = Error::last_os_error();
+            eprintln!("Warning: Failed to set CPU affinity: {}", err);
         }
 
         // This prevents RAM allocations from "bleeding" into Node 1
         let nodemask: libc::c_ulong = 1 << 0; // Bit 0 = Node 0
-        let maxnode: libc::c_ulong = *SHARD_COUNT as _; // Total nodes in the mask
+                                              // maxnode is the number of valid bits in the mask (must be >= highest node + 1)
+        let maxnode: libc::c_ulong = 2;
 
         let res = set_mempolicy(MPOL_BIND, &nodemask, maxnode);
 
         if res != 0 {
-            eprintln!("Warning: set_mempolicy syscall failed. Check permissions/capabilities.");
+            let err = Error::last_os_error();
+            eprintln!(
+                "Warning: set_mempolicy syscall failed: {}. Check permissions/capabilities.",
+                err
+            );
         }
     }
 }
 
-// On Mac or other OSs, this function becomes a "No-Op" (does nothing)
+// On Mac or other OSs, this function becomes a no-op
 #[cfg(not(target_os = "linux"))]
 pub fn restrict_to_node_zero() {
     // macOS uses Unified Memory; NUMA pinning isn't applicable/available via libc
 }
 
-/// assumes the NIC and the first half of the CPU cores are on NUMA node 0, and restricts tokio to that node. for a single node system, there should be no effect.
+/// Returns the number of CPU cores on NUMA node 0.
+/// For a single-node system, this returns the total number of cores.
 pub fn get_node_zero_cores() -> usize {
-    let core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.len() / *SHARD_COUNT
+    NODE_ZERO_CPUS.len()
 }
