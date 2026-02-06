@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::helpers::{smpc_request, smpc_response};
 
+use super::super::errors::ServiceClientError;
+
 /// Enumeration over request messages enqueued upon system ingress queue.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -31,6 +33,33 @@ impl ResponsePayload {
             Self::ResetCheck(result) => result.node_id,
             Self::ResetUpdate(result) => result.node_id,
             Self::Uniqueness(result) => result.node_id,
+        }
+    }
+
+    /// Validates the response, returning an error if the response indicates failure.
+    pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+        let (has_error, error_reason) = match self {
+            Self::IdentityDeletion(result) => (!result.success, None),
+            Self::Reauthorization(result) => {
+                (result.error.unwrap_or(false), result.error_reason.as_deref())
+            }
+            Self::ResetCheck(result) => {
+                (result.error.unwrap_or(false), result.error_reason.as_deref())
+            }
+            Self::ResetUpdate(_) => (false, None),
+            Self::Uniqueness(result) => {
+                (result.error.unwrap_or(false), result.error_reason.as_deref())
+            }
+        };
+
+        if has_error {
+            let reason = error_reason.unwrap_or("unknown error");
+            Err(ServiceClientError::ResponseError(format!(
+                "{}: {:?}",
+                reason, self
+            )))
+        } else {
+            Ok(())
         }
     }
 }

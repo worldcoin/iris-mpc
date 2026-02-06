@@ -70,6 +70,8 @@ impl ResponseDequeuer {
         batch: &mut RequestBatch,
         response: ResponsePayload,
     ) -> Option<()> {
+        response.validate().unwrap();
+
         if let Some(idx_of_correlated) = batch.get_idx_of_correlated(&response) {
             if batch.requests_mut()[idx_of_correlated]
                 .set_correlation(&response)
