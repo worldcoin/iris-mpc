@@ -153,3 +153,46 @@ pub fn restrict_to_node_zero() {
 pub fn get_node_zero_cores() -> usize {
     NODE_ZERO_CPUS.len()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cpulist_simple_range() {
+        let cpus = parse_cpulist("0-95");
+        assert_eq!(cpus.len(), 96);
+        assert_eq!(cpus, (0..=95).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_cpulist_multiple_ranges() {
+        let cpus = parse_cpulist("0-15,32-47");
+        let expected: Vec<usize> = (0..=15).chain(32..=47).collect();
+        assert_eq!(cpus, expected);
+    }
+
+    #[test]
+    fn test_parse_cpulist_single_values() {
+        let cpus = parse_cpulist("0,5,10");
+        assert_eq!(cpus, vec![0, 5, 10]);
+    }
+
+    #[test]
+    fn test_parse_cpulist_mixed() {
+        let cpus = parse_cpulist("0-3,8,12-14");
+        assert_eq!(cpus, vec![0, 1, 2, 3, 8, 12, 13, 14]);
+    }
+
+    #[test]
+    fn test_parse_cpulist_with_whitespace() {
+        let cpus = parse_cpulist("  0-3 \n");
+        assert_eq!(cpus, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn test_parse_cpulist_empty() {
+        let cpus = parse_cpulist("");
+        assert!(cpus.is_empty());
+    }
+}
