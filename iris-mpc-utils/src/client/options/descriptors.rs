@@ -33,6 +33,18 @@ impl IrisPairDescriptor {
     pub fn new_from_indexes(left: usize, right: usize) -> Self {
         Self::new(IrisDescriptor::new(left), IrisDescriptor::new(right))
     }
+
+    pub fn left(&self) -> &IrisDescriptor {
+        &self.0 .0
+    }
+
+    pub fn right(&self) -> &IrisDescriptor {
+        &self.0 .1
+    }
+
+    pub fn indexes(&self) -> (usize, usize) {
+        (self.left().index, self.right().index)
+    }
 }
 
 /// A descriptor over a system Request.

@@ -46,6 +46,17 @@ impl RequestBatchOptions {
             known_iris_serial_id,
         }
     }
+
+    pub fn iris_indexes(&self) -> Vec<usize> {
+        match self {
+            Self::Series { batches } => {
+                unimplemented!()
+            }
+            Self::Simple { .. } => {
+                vec![]
+            }
+        }
+    }
 }
 
 /// Options over an individual request within a batch.
@@ -76,6 +87,10 @@ impl RequestOptions {
     pub fn payload(&self) -> &RequestPayloadOptions {
         &self.payload
     }
+
+    pub fn iris_indexes(&self) -> Option<(usize, usize)> {
+        self.payload().iris_indexes()
+    }
 }
 
 /// Options over a request's payload.
@@ -104,6 +119,17 @@ pub enum RequestPayloadOptions {
         iris_pair: IrisPairDescriptor,
         insertion_layers: Option<(usize, usize)>,
     },
+}
+
+impl RequestPayloadOptions {
+    pub fn iris_indexes(&self) -> Option<(usize, usize)> {
+        match &self {
+            Self::IdentityDeletion { .. } | Self::ResetCheck { .. } => None,
+            Self::Reauthorisation { iris_pair, .. }
+            | Self::ResetUpdate { iris_pair, .. }
+            | Self::Uniqueness { iris_pair, .. } => Some(iris_pair.indexes()),
+        }
+    }
 }
 
 #[cfg(test)]
