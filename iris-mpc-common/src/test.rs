@@ -167,7 +167,7 @@ pub enum TestCase {
     ReauthMatchingTarget,
     /// Send a reauth request matching target serial id's iris code only
     /// (successful reauth) but skip persistence.
-    ReauthMatchingTargetWithSkipPeristence,
+    ReauthMatchingTargetWithSkipPersistence,
     /// Send a reauth request not matching target serial id's iris code
     /// (failed reauth)
     ReauthNonMatchingTarget,
@@ -189,7 +189,7 @@ pub enum TestCase {
     MatchAfterResetUpdate,
     /// Send an enrollment request using the iris codes used during
     /// ReauthMatchingTargetWithSkipPeristence and expect a match result.
-    MatchAfterReauthSkipPeristence,
+    MatchAfterReauthSkipPersistence,
     /// Send an iris code crafted for full face mirror attack detection:
     /// - Normal flow won't match anything in the database
     /// - But when the code is mirrored, it will match(mirrored version will be pre-inserted in the test db)
@@ -212,14 +212,14 @@ impl TestCase {
             TestCase::WithOrRuleSet,
             TestCase::ReauthNonMatchingTarget,
             TestCase::ReauthMatchingTarget,
-            TestCase::ReauthMatchingTargetWithSkipPeristence,
+            TestCase::ReauthMatchingTargetWithSkipPersistence,
             TestCase::ReauthOrRuleNonMatchingTarget,
             TestCase::ReauthOrRuleMatchingTarget,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
             TestCase::EnrollmentAfterResetCheckNonMatch,
             TestCase::MatchAfterResetUpdate,
-            TestCase::MatchAfterReauthSkipPeristence,
+            TestCase::MatchAfterReauthSkipPersistence,
             TestCase::FullFaceMirrorAttack,
         ]
     }
@@ -621,7 +621,7 @@ impl TestCaseGenerator {
             TestCase::WithOrRuleSet,
             TestCase::ReauthNonMatchingTarget,
             TestCase::ReauthMatchingTarget,
-            TestCase::ReauthMatchingTargetWithSkipPeristence,
+            TestCase::ReauthMatchingTargetWithSkipPersistence,
             TestCase::ReauthOrRuleNonMatchingTarget,
             TestCase::ReauthOrRuleMatchingTarget,
             TestCase::MatchSkipPersistence,
@@ -644,7 +644,7 @@ impl TestCaseGenerator {
             options.push(TestCase::MatchAfterResetUpdate);
         }
         if !self.reauth_skip_persistence_templates.is_empty() {
-            options.push(TestCase::MatchAfterReauthSkipPeristence);
+            options.push(TestCase::MatchAfterReauthSkipPersistence);
         }
 
         options.retain(|x| self.enabled_test_cases.contains(x));
@@ -889,7 +889,7 @@ impl TestCaseGenerator {
                         right: template_right,
                     }
                 }
-                TestCase::ReauthMatchingTargetWithSkipPeristence => {
+                TestCase::ReauthMatchingTargetWithSkipPersistence => {
                     tracing::info!(
                         "Sending reauth request with AND rule matching the target index with skip persistence"
                     );
@@ -1071,7 +1071,7 @@ impl TestCaseGenerator {
                     self.skip_invalidate = true;
                     e2e_template
                 }
-                TestCase::MatchAfterReauthSkipPeristence => {
+                TestCase::MatchAfterReauthSkipPersistence => {
                     tracing::info!(
                         "Sending enrollment request using iris codes used during reauth skip persistence"
                     );
