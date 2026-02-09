@@ -35,7 +35,7 @@ The tool is designed to be used in the following environments:
 ## Step 1: Activate
 
 ```
-source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/service-client/activate
+source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/activate
 ```
 
 *HINT*: you may wish to add activation to your local `~/.bashrc` file.
