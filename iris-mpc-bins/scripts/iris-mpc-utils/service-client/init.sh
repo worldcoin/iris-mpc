@@ -43,9 +43,8 @@ function _init_exec_opts()
     mkdir -p "$(_get_path_to_exec_opts)/examples"
     for idx in $(seq 1 5)
     do
-        echo $idx
-        cp "$(_get_path_to_resources)/exec-options-${idx}.toml" \
-           "$(_get_path_to_exec_opts)/examples/example-${idx}.toml"
+        cp "$(_get_path_to_resources)/exec-options-simple-${idx}.toml" \
+           "$(_get_path_to_exec_opts)/examples/example-simple-${idx}.toml"
     done
 }
 
