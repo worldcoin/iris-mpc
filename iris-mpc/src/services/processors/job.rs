@@ -43,6 +43,7 @@ pub async fn process_job_result(
         metadata,
         matches,
         matches_with_skip_persistence,
+        skip_persistence,
         match_ids,
         partial_match_ids_left,
         partial_match_ids_right,
@@ -306,6 +307,13 @@ pub async fn process_job_result(
         // persist reauth results into db
         for (i, success) in successful_reauths.iter().enumerate() {
             if !success {
+                continue;
+            }
+            if skip_persistence.get(i).copied().unwrap_or(false) {
+                tracing::info!(
+                    "Skipping reauth persistence for request {} due to skip_persistence",
+                    request_ids[i]
+                );
                 continue;
             }
             let reauth_id = request_ids[i].clone();

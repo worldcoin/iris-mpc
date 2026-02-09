@@ -141,6 +141,7 @@ impl DistanceCache {
         max_internal_buffer_size: usize,
         streams: &[CudaStream],
         operations: &[AnonStatsOperation],
+        skip_persistence: &[bool],
         reauth_target_idx: &[Vec<u64>],
         max_query_length: u64,
         max_db_size: u64,
@@ -208,6 +209,8 @@ impl DistanceCache {
             })
             .collect_vec();
 
+        let mut skipped_reauth_stats = 0usize;
+        let mut skipped_uniqueness_stats = 0usize;
         for (map, ind, code_a_v, code_b_v, mask_a_v, mask_b_v, old, new, reauth_targets) in izip!(
             &mut maps,
             &indices,
@@ -239,6 +242,17 @@ impl DistanceCache {
             .take(new - old)
             {
                 let operation = operation_from_match_id(idx, operations, max_query_length);
+                if max_query_length > 0 {
+                    let query_idx = (idx % max_query_length) as usize;
+                    let request_idx = query_idx / ROTATIONS;
+                    if skip_persistence.get(request_idx).copied().unwrap_or(false) {
+                        match operation {
+                            AnonStatsOperation::Reauth => skipped_reauth_stats += 1,
+                            _ => skipped_uniqueness_stats += 1,
+                        }
+                        continue;
+                    }
+                }
                 if operation == AnonStatsOperation::Reauth {
                     let target_idx = target_idx_from_match_id(idx, max_query_length, max_db_size);
                     // We only keep reauths that match their target idx
@@ -259,6 +273,20 @@ impl DistanceCache {
             }
         }
 
+        if skipped_reauth_stats > 0 {
+            tracing::info!(
+                eye = ?eye,
+                skipped_reauth_stats,
+                "Skipped reauth anon stats entries due to skip_persistence"
+            );
+        }
+        if skipped_uniqueness_stats > 0 {
+            tracing::info!(
+                eye = ?eye,
+                skipped_uniqueness_stats,
+                "Skipped uniqueness anon stats entries due to skip_persistence"
+            );
+        }
         maps.into_iter()
             .map(|map| OneSidedDistanceCache { map })
             .collect::<Vec<_>>()
