@@ -153,7 +153,7 @@ impl Request {
 
     /// Updates request status.
     pub(crate) fn set_status(&mut self, new_state: RequestStatus) {
-        tracing::info!("{} :: State -> {}", &self, new_state);
+        tracing::info!("{} :: {}", &self, new_state);
         self.info_mut().set_status(new_state);
     }
 }

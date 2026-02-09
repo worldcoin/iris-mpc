@@ -1,7 +1,7 @@
 [request_batch.Simple]
 batch_count = 2
 batch_size = 10
-batch_kind = "uniqueness"
+batch_kind = "identity_deletion"
 
 [shares_generator.FromCompute]
 rng_seed = 42

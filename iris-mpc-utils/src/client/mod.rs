@@ -13,10 +13,7 @@ use components::{
 use options::IrisCodeSelectionStrategy;
 pub use options::{AwsOptions, ServiceClientOptions};
 pub use typeset::ServiceClientError;
-use typeset::{
-    Initialize, ProcessRequestBatch, Request, RequestBatch, RequestBatchKind, RequestBatchSize,
-    RequestPayloadOptions,
-};
+use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
 
 mod components;
 mod options;
@@ -122,7 +119,7 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                 batch_kind,
                 known_iris_serial_id,
             } => {
-                tracing::info!("Parsing config: Request batch set from simple kind");
+                tracing::info!("Parsing options::RequestBatchOptions::Simple");
                 Self::Simple {
                     batch_count: *batch_count,
                     batch_size: RequestBatchSize::Static(*batch_size),
@@ -133,6 +130,7 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
             options::RequestBatchOptions::Series {
                 batches: opts_batches,
             } => {
+                tracing::info!("Parsing options::RequestBatchOptions::Series");
                 for opts_batch in opts_batches {
                     for opts_request in opts_batch {
                         match opts_request.payload() {
@@ -171,7 +169,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for Sh
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.shares_generator() {
             options::SharesGeneratorOptions::FromCompute { rng_seed } => {
-                tracing::info!("Parsing config: Shares generator from RNG");
+                tracing::info!("Parsing options::SharesGeneratorOptions::FromCompute");
                 SharesGenerator::<R>::new_compute(*rng_seed)
             }
             options::SharesGeneratorOptions::FromFile {
@@ -179,7 +177,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for Sh
                 rng_seed,
                 selection_strategy,
             } => {
-                tracing::info!("Parsing config: Shares generator from file");
+                tracing::info!("Parsing options::SharesGeneratorOptions::FromFile");
                 SharesGenerator::new_file(
                     PathBuf::from(path_to_ndjson_file),
                     *rng_seed,

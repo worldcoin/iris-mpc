@@ -1,5 +1,5 @@
 [request_batch.Simple]
-batch_count = 10
+batch_count = 2
 batch_size = 10
 batch_kind = "reauth"
 

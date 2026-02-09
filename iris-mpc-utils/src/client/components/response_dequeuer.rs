@@ -70,8 +70,11 @@ impl ResponseDequeuer {
         batch: &mut RequestBatch,
         response: ResponsePayload,
     ) -> Result<Option<()>, ServiceClientError> {
+        // Validate response ... allow errors to propogate upwards.
         response.validate()?;
 
+        // If a correlation then update state accordingly. When fully correlated then
+        // dispatch child request(s) if appropriate.
         if let Some(idx_of_correlated) = batch.get_idx_of_correlated(&response) {
             if batch.requests_mut()[idx_of_correlated]
                 .set_correlation(&response)
