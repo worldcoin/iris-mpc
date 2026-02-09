@@ -97,7 +97,8 @@ pub async fn compare_threshold_masked_many(
 }
 
 // Implements the proposed normalized threhsold comparison protocol
-pub async fn compare_threshold_normalized_masked_many(
+// The incoming distance share must be of the form (code_dot, mask_dot/2), which is possible since the mask part would usually be multiplied with 2 beforehand.
+pub async fn compare_threshold_normalized_many(
     session: &mut Session,
     distances: &[DistanceShare<u16>],
 ) -> Result<Vec<Share<Bit>>> {
@@ -113,25 +114,23 @@ pub async fn compare_threshold_normalized_masked_many(
         code.add_assign_const_role(1 << 15, session.own_role());
         to_lift.push(code);
     }
-    let mut lifted = lift_40(session, VecShare::new_vec(to_lift)).await?;
+    let mut lifted = lift(session, VecShare::new_vec(to_lift)).await?;
     let (mut masks, mut codes) = lifted.split_at_mut(distances.len());
     // Postprocess the signed lift
     for code in codes.iter_mut() {
-        // Now we got shares of d1' over 2^64 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
+        // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
         // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
-        // get signed shares over 2^{64}
-        code.add_assign_const_role(-(1i64 << 15) as u64, session.own_role());
+        // get signed shares over 2^{32}
+        code.add_assign_const_role(-(1i64 << 15) as u32, session.own_role());
     }
 
     // The multiplications results
-    let pow40 = 1u64 << 40;
-    let mask40 = pow40 - 1;
     let mut muls = VecRingElement::with_capacity(distances.len() * 2);
     for (c, m) in codes.iter().zip(masks.iter()) {
-        let ml_dot = c * m + session.prf.gen_zero_share(); // ml * hd
-        let ml_square = m * m + session.prf.gen_zero_share(); // ml * ml
-        muls.push(ml_dot & mask40);
-        muls.push(ml_square & mask40);
+        let ml_dot = c * &(m * 2) + session.prf.gen_zero_share(); // ml * hd
+        let ml_square = m * &(m * 2) + session.prf.gen_zero_share(); // ml * ml
+        muls.push(ml_dot);
+        muls.push(ml_square);
     }
     let network = &mut session.network_session;
     network.send_ring_vec_next(&muls).await?;
@@ -145,19 +144,14 @@ pub async fn compare_threshold_normalized_masked_many(
     {
         let mc = Share::new(ma[0], mb[0]);
         let mm = Share::new(ma[1], mb[1]);
-
-        mask.add_assign_const_role(pow40 + pow40, session.own_role()); // For the subtraction mod 2^40
-        *mask *= 159744;
-        *mask += mm * 5;
-        *mask -= mc * 50;
-        *mask -= code * 368640;
-        mask.a &= RingElement(mask40);
-        mask.b &= RingElement(mask40);
+        let q = mm + *mask;
+        let res = q + (*mask * 2) * 15974 - mc * 5 - *code * 36864;
+        *mask = res;
     }
     lifted.truncate(distances.len());
 
     // Extract MSB
-    let packed_bits = extract_msb_mod_2k::<_, 35>(session, lifted).await?;
+    let packed_bits = extract_msb(session, lifted).await?;
     extract_bits(packed_bits, distances.len())
 }
 
@@ -1396,6 +1390,7 @@ mod tests {
         let share3 = Share::new(c, b);
         (share1, share2, share3)
     }
+    #[derive(Debug)]
     struct LocalShares1D<T: IntRing2k> {
         p0: Vec<Share<T>>,
         p1: Vec<Share<T>>,
@@ -1729,7 +1724,56 @@ mod tests {
         for _ in 0..num {
             let code_dot: u16 =
                 rng.gen_range(-(IRIS_CODE_LENGTH as i16)..=IRIS_CODE_LENGTH as i16) as u16;
-            let mask_dot: u16 = rng.gen_range(0..=IRIS_CODE_LENGTH as u16);
+            let mut mask_dot: u16 = rng.gen_range(0..=(IRIS_CODE_LENGTH / 2) as u16);
+            mask_dot = mask_dot.wrapping_mul(2); // ensure mask_dot is even, so that we represent the incoming vectors exactly
+            db[0].push(code_dot);
+            db[1].push(mask_dot);
+
+            let a = rng.gen();
+            let b = rng.gen();
+            let c = RingElement(code_dot) - a - b;
+            let code1 = Share::new(a, c);
+            let code2 = Share::new(b, a);
+            let code3 = Share::new(c, b);
+
+            let a = rng.gen();
+            let b = rng.gen();
+            let c = RingElement(mask_dot) - a - b;
+            let mask1 = Share::new(a, c);
+            let mask2 = Share::new(b, a);
+            let mask3 = Share::new(c, b);
+
+            result[0].push(DistanceShare {
+                code_dot: code1,
+                mask_dot: mask1,
+            });
+            result[1].push(DistanceShare {
+                code_dot: code2,
+                mask_dot: mask2,
+            });
+            result[2].push(DistanceShare {
+                code_dot: code3,
+                mask_dot: mask3,
+            });
+        }
+        (db, result)
+    }
+
+    fn gen_db_and_halved_distance_share<R: Rng>(
+        num: usize,
+        rng: &mut R,
+    ) -> ([Vec<u16>; 2], [Vec<DistanceShare<u16>>; 3]) {
+        let mut result = [
+            Vec::with_capacity(num),
+            Vec::with_capacity(num),
+            Vec::with_capacity(num),
+        ];
+        let mut db = [Vec::with_capacity(num), Vec::with_capacity(num)];
+
+        for _ in 0..num {
+            let code_dot: u16 =
+                rng.gen_range(-(IRIS_CODE_LENGTH as i16)..=IRIS_CODE_LENGTH as i16) as u16;
+            let mask_dot: u16 = rng.gen_range(0..=(IRIS_CODE_LENGTH / 2) as u16);
 
             db[0].push(code_dot);
             db[1].push(mask_dot);
@@ -1819,29 +1863,23 @@ mod tests {
 
         const DB_SIZE: usize = 100;
         let ([codes, masks], distance_shares_per_party) =
-            gen_db_and_distance_share(DB_SIZE, &mut rng);
+            gen_db_and_halved_distance_share(DB_SIZE, &mut rng);
 
         // plain results
-        let pow40 = 1i64 << 40;
-        let mask40 = pow40 - 1;
         let mut result_plain = Vec::with_capacity(DB_SIZE);
         for (code, mask) in codes.into_iter().zip(masks) {
             let code = code as i16 as i64;
-            let mask = mask as i64;
-            let res = (159744 * mask + 5 * mask * mask + pow40 - 50 * mask * code + pow40
-                - 368640 * code)
-                & mask40;
-            let bit40 = (res >> 39) & 1 == 1;
-            let bit35 = (res >> 34) & 1 == 1;
-            assert_eq!(bit40, bit35);
-            result_plain.push(Bit::new(bit40));
+            let mask = (2 * mask) as i64;
+            let res = 159745 * mask + 5 * mask * mask - 50 * mask * code - 368640 * code;
+            let bit = res < 0;
+            result_plain.push(Bit::new(bit));
         }
 
         let mut jobs = JoinSet::new();
         for (session, shares) in sessions.into_iter().zip(distance_shares_per_party) {
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
-                let result = compare_threshold_normalized_masked_many(&mut player_session, &shares)
+                let result = compare_threshold_normalized_many(&mut player_session, &shares)
                     .await
                     .unwrap();
                 let opened = open_bin(&mut player_session, &result).await.unwrap();
