@@ -8,12 +8,13 @@ use iris_mpc_cpu::{execution::hawk_main::BothEyes, protocol::shared_iris::Galois
 
 use crate::constants::N_PARTIES;
 
-/// Iris shares for upload to the MPC server.
-/// This struct stores the full-size mask share (GaloisRingIrisCodeShare) instead of
-/// the trimmed version, because the server expects full-size mask shares when decoding.
+/// Iris shares for upload to SMPC system ingress queue.
 #[derive(Debug, Clone)]
-pub struct GaloisRingSharedIrisUpload {
+pub struct GaloisRingSharedIrisForUpload {
+    // Iris code
     pub code: GaloisRingIrisCodeShare,
+    // Full-size mask share (GaloisRingIrisCodeShare) instead of trimmed version
+    // as server expects full-size mask shares when decoding
     pub mask: GaloisRingIrisCodeShare,
 }
 
@@ -125,23 +126,23 @@ fn generate_iris_code_and_mask_shares<R: Rng + CryptoRng>(
 pub fn generate_iris_shares_for_upload<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code: Option<IrisCode>,
-) -> [GaloisRingSharedIrisUpload; N_PARTIES] {
+) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
     let iris_code = iris_code.unwrap_or_else(|| IrisCode::random_rng(rng));
     let [code_shares, mask_shares] = generate_iris_code_and_mask_shares(rng, Some(iris_code));
 
     [
         // Party 1.
-        GaloisRingSharedIrisUpload {
+        GaloisRingSharedIrisForUpload {
             code: code_shares[0].to_owned(),
             mask: mask_shares[0].to_owned(),
         },
         // Party 2.
-        GaloisRingSharedIrisUpload {
+        GaloisRingSharedIrisForUpload {
             code: code_shares[1].to_owned(),
             mask: mask_shares[1].to_owned(),
         },
         // Party 3.
-        GaloisRingSharedIrisUpload {
+        GaloisRingSharedIrisForUpload {
             code: code_shares[2].to_owned(),
             mask: mask_shares[2].to_owned(),
         },
@@ -154,7 +155,7 @@ pub fn generate_iris_shares_for_upload_both_eyes<R: Rng + CryptoRng>(
     rng: &mut R,
     iris_code_l: Option<IrisCode>,
     iris_code_r: Option<IrisCode>,
-) -> BothEyes<[GaloisRingSharedIrisUpload; N_PARTIES]> {
+) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
     [
         generate_iris_shares_for_upload(rng, iris_code_l),
         generate_iris_shares_for_upload(rng, iris_code_r),

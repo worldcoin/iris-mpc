@@ -7,7 +7,7 @@ use crate::{
     constants::N_PARTIES,
     irises::{
         generate_iris_shares_for_upload, reader::read_iris_shares_for_upload,
-        GaloisRingSharedIrisUpload,
+        GaloisRingSharedIrisForUpload,
     },
 };
 use iris_mpc_cpu::{
@@ -25,7 +25,7 @@ where
     },
     FromFile {
         // Current batch of Iris shares read from file system.
-        batch: Vec<[GaloisRingSharedIrisUpload; N_PARTIES]>,
+        batch: Vec<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
 
         // Count of cached batches.
         batch_count: usize,
@@ -80,11 +80,11 @@ where
     }
 
     /// Generates pairs of Iris shares for upstream processing.
-    pub(crate) fn generate(&mut self) -> BothEyes<[GaloisRingSharedIrisUpload; N_PARTIES]> {
+    pub(crate) fn generate(&mut self) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
         [self.generate_single(), self.generate_single()]
     }
 
-    fn generate_single(&mut self) -> [GaloisRingSharedIrisUpload; N_PARTIES] {
+    fn generate_single(&mut self) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
         match self {
             Self::FromCompute { rng } => generate_iris_shares_for_upload(rng, None),
             Self::FromFile {

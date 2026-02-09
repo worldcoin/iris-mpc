@@ -10,7 +10,7 @@ use iris_mpc_common::helpers::{
 };
 use iris_mpc_cpu::execution::hawk_main::{BothEyes, LEFT as LEFT_EYE, RIGHT as RIGHT_EYE};
 
-use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisUpload, misc::encode_b64};
+use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisForUpload, misc::encode_b64};
 
 /// TODO: review use of these constants.
 const IRIS_VERSION: &str = "1.0";
@@ -19,7 +19,7 @@ const IRIS_SHARES_VERSION: &str = "1.3";
 /// Converts iris code shares into a representation to be dispatched to an S3 bucket.
 pub fn create_iris_code_shares(
     signup_id: &Uuid,
-    shares: &BothEyes<[GaloisRingSharedIrisUpload; N_PARTIES]>,
+    shares: &BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
 ) -> IrisCodePartyShares {
     IrisCodePartyShares::new(
         signup_id.to_string(),
@@ -29,7 +29,7 @@ pub fn create_iris_code_shares(
 
 /// Converts iris code shares into a JSON representation.
 fn create_iris_code_shares_json(
-    shares: &BothEyes<[GaloisRingSharedIrisUpload; N_PARTIES]>,
+    shares: &BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
 ) -> [IrisCodeSharesJSON; N_PARTIES] {
     std::array::from_fn(|i| IrisCodeSharesJSON {
         iris_version: IRIS_VERSION.to_string(),

@@ -10,7 +10,7 @@ use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
 
-use super::{generate_iris_shares_for_upload, GaloisRingSharedIrisUpload};
+use super::{generate_iris_shares_for_upload, GaloisRingSharedIrisForUpload};
 use crate::{constants::N_PARTIES, fsys};
 
 /// Returns iterator over Iris codes deserialized from an ndjson file.
@@ -38,7 +38,7 @@ pub fn read_iris_shares<'a, R: Rng + CryptoRng + 'a>(
 pub fn read_iris_shares_for_upload<'a, R: Rng + CryptoRng + 'a>(
     path_to_ndjson: &Path,
     rng: &'a mut R,
-) -> Result<impl Iterator<Item = [GaloisRingSharedIrisUpload; N_PARTIES]> + 'a, Error> {
+) -> Result<impl Iterator<Item = [GaloisRingSharedIrisForUpload; N_PARTIES]> + 'a, Error> {
     Ok(read_iris_codes(path_to_ndjson)
         .unwrap()
         .map(move |iris_code| generate_iris_shares_for_upload(rng, Some(iris_code))))

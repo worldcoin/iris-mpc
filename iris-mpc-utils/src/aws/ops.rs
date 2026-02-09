@@ -9,7 +9,7 @@ use super::{
     factory::{create_iris_code_shares, create_iris_code_shares_s3},
     types::S3ObjectInfo,
 };
-use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisUpload};
+use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisForUpload};
 
 impl AwsClient {
     /// Uploads Iris serial identifiers marked for deletion.
@@ -35,10 +35,11 @@ impl AwsClient {
             .map_err(|e| AwsClientError::IrisDeletionsUploadError(e.to_string()))
     }
 
+    // Uploads JSON encoded Iris shares to AWS S3 bucket.
     pub async fn s3_upload_iris_shares(
         &self,
         signup_id: &uuid::Uuid,
-        shares: &BothEyes<[GaloisRingSharedIrisUpload; N_PARTIES]>,
+        shares: &BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
     ) -> Result<S3ObjectInfo, AwsClientError> {
         // Set AWS-S3 JSON compatible shares.
         let shares = create_iris_code_shares_s3(
