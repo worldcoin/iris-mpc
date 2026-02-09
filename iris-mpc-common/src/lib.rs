@@ -121,7 +121,7 @@ pub fn restrict_to_node_zero() {
             eprintln!("Warning: Failed to set CPU affinity: {}", err);
         }
 
-        set_mempolicy_for_node(0);
+        // set_mempolicy_for_node(0);
     }
 }
 
@@ -139,6 +139,7 @@ pub fn get_node_zero_cores() -> usize {
 
 /// Sets the memory policy for the current thread to bind allocations to the specified NUMA node.
 /// On non-Linux systems, this is a no-op.
+#[allow(dead_code)]
 #[cfg(target_os = "linux")]
 pub fn set_mempolicy_for_node(node: usize) {
     use libc::MPOL_BIND;
@@ -165,6 +166,7 @@ pub fn set_mempolicy_for_node(node: usize) {
     }
 }
 
+#[allow(dead_code)]
 #[cfg(not(target_os = "linux"))]
 pub fn set_mempolicy_for_node(_node: usize) {
     // No-op on non-Linux systems

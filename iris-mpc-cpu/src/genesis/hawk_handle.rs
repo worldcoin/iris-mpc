@@ -126,14 +126,14 @@ impl Handle {
                     vector_ids.len(),
                 ));
 
-                let queries = JobRequest::numa_realloc(
-                    queries,
-                    [
-                        actor.workers_handle(StoreId::Left),
-                        actor.workers_handle(StoreId::Right),
-                    ],
-                )
-                .await;
+                //let queries = JobRequest::numa_realloc(
+                //    queries,
+                //    [
+                //        actor.workers_handle(StoreId::Left),
+                //        actor.workers_handle(StoreId::Right),
+                //    ],
+                //)
+                //.await;
 
                 // Use all sessions per iris side to search for insertion indices per
                 // batch, number configured by `args.request_parallelism`.
