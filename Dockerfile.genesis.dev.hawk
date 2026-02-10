@@ -1,16 +1,12 @@
 FROM public.ecr.aws/ubuntu/ubuntu:22.04 AS build-image
 
 WORKDIR /src
-RUN rm -rf /var/lib/apt/lists/* && apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
     libssl-dev \
-    texinfo \
-    libcap2-bin \
     pkg-config \
     git \
-    devscripts \
-    debhelper \
     ca-certificates \
     protobuf-compiler \
     wget
