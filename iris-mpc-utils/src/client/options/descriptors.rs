@@ -57,7 +57,7 @@ impl IrisPairDescriptorOptions {
 
 /// A descriptor over a system Request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UniquenessRequestDescriptor {
+pub enum UniquenessRequestDescriptorOptions {
     // Label to identify request within batch/file scope.
     Label(String),
 
@@ -65,7 +65,7 @@ pub enum UniquenessRequestDescriptor {
     SerialId(IrisSerialId),
 }
 
-impl UniquenessRequestDescriptor {
+impl UniquenessRequestDescriptorOptions {
     pub fn new_label(label: &str) -> Self {
         Self::Label(label.to_string())
     }
@@ -77,7 +77,9 @@ impl UniquenessRequestDescriptor {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{IrisDescriptorOptions, IrisPairDescriptorOptions, UniquenessRequestDescriptor};
+    use super::{
+        IrisDescriptorOptions, IrisPairDescriptorOptions, UniquenessRequestDescriptorOptions,
+    };
 
     pub(crate) const REQUEST_DESCRIPTOR_0: &str = "IdentityDeletion-0";
     pub(crate) const REQUEST_DESCRIPTOR_1: &str = "ResetCheck-0";
@@ -99,7 +101,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl UniquenessRequestDescriptor {
+    impl UniquenessRequestDescriptorOptions {
         pub(crate) fn new_4_00() -> Self {
             Self::new_label(REQUEST_DESCRIPTOR_4_00)
         }

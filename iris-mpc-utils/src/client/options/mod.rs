@@ -5,8 +5,11 @@ mod descriptors;
 mod requests;
 mod shares;
 
+use super::typeset::ServiceClientError;
 pub use aws::AwsOptions;
-pub(crate) use descriptors::{IrisDescriptorOptions, IrisPairDescriptorOptions};
+pub(crate) use descriptors::{
+    IrisDescriptorOptions, IrisPairDescriptorOptions, UniquenessRequestDescriptorOptions,
+};
 pub(crate) use requests::{RequestBatchOptions, RequestPayloadOptions};
 pub(crate) use shares::{IrisCodeSelectionStrategyOptions, SharesGeneratorOptions};
 
@@ -30,6 +33,18 @@ impl ServiceClientOptions {
 
     pub fn shares_generator(&self) -> &SharesGeneratorOptions {
         &self.shares_generator
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+        match self.request_batch() {
+            RequestBatchOptions::Series { .. } => match self.shares_generator() {
+                SharesGeneratorOptions::FromCompute { .. } => {
+                    Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Series can only be used with SharesGeneratorOptions::FromFile".to_string()))
+                }
+                _ => Ok(()),
+            },
+            _ => Ok(()),
+        }
     }
 }
 

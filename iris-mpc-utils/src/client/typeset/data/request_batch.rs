@@ -99,9 +99,10 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new ResetCheck request.
-    pub(crate) fn push_new_reset_check(&mut self) {
+    pub(crate) fn push_new_reset_check(&mut self, iris_pair_ref: Option<IrisPairDescriptor>) {
         self.push_request(Request::ResetCheck {
             info: RequestInfo::new(self),
+            iris_pair_ref,
             reset_id: uuid::Uuid::new_v4(),
         });
     }
@@ -225,7 +226,7 @@ mod tests {
                 let uniqueness_ref =
                     UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None));
                 batch.push_new_reauthorization(uniqueness_ref.clone(), None);
-                batch.push_new_reset_check();
+                batch.push_new_reset_check(None);
                 batch.push_new_reset_update(uniqueness_ref.clone(), None);
                 batch.push_new_identity_deletion(uniqueness_ref.clone());
             }
@@ -242,7 +243,7 @@ mod tests {
                     UniquenessRequestDescriptor::IrisSerialId(serial_id),
                     None,
                 );
-                batch.push_new_reset_check();
+                batch.push_new_reset_check(None);
                 batch.push_new_reset_update(
                     UniquenessRequestDescriptor::IrisSerialId(serial_id),
                     None,

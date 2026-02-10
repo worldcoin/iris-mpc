@@ -54,6 +54,14 @@ impl IrisPairDescriptor {
 pub enum UniquenessRequestDescriptor {
     // A serial identifier assigned from either a processed uniqueness result or a user input override.
     IrisSerialId(IrisSerialId),
+    // Label to identify request within batch/file scope.
+    Label(String),
     // Unique signup id of system request being processed.
     SignupId(uuid::Uuid),
+}
+
+impl UniquenessRequestDescriptor {
+    pub(crate) fn new_label(label: String) -> Self {
+        Self::Label(label)
+    }
 }

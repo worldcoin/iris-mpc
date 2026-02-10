@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::IrisSerialId;
 
-use super::descriptors::{IrisPairDescriptorOptions, UniquenessRequestDescriptor};
+use super::descriptors::{IrisPairDescriptorOptions, UniquenessRequestDescriptorOptions};
 
 /// Set of variants over inputs to request batch creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,14 +47,13 @@ impl RequestBatchOptions {
         }
     }
 
+    /// Returns ordered set of Iris indexes to be read from NDJSON file.
     pub fn iris_indexes(&self) -> Vec<usize> {
         match self {
-            Self::Series { batches } => {
+            Self::Series { batches: _ } => {
                 unimplemented!()
             }
-            Self::Simple { .. } => {
-                vec![]
-            }
+            _ => vec![],
         }
     }
 }
@@ -98,12 +97,12 @@ impl RequestOptions {
 pub enum RequestPayloadOptions {
     // Options over a deletion request payload.
     IdentityDeletion {
-        parent: UniquenessRequestDescriptor,
+        parent: UniquenessRequestDescriptorOptions,
     },
     // Options over a reauthorisation request payload.
     Reauthorisation {
         iris_pair: IrisPairDescriptorOptions,
-        parent: UniquenessRequestDescriptor,
+        parent: UniquenessRequestDescriptorOptions,
     },
     // Options over a reset check request payload.
     ResetCheck {
@@ -112,7 +111,7 @@ pub enum RequestPayloadOptions {
     // Options over a reset update request payload.
     ResetUpdate {
         iris_pair: IrisPairDescriptorOptions,
-        parent: UniquenessRequestDescriptor,
+        parent: UniquenessRequestDescriptorOptions,
     },
     // Options over a uniqueness request payload.
     Uniqueness {
@@ -145,7 +144,7 @@ mod tests {
             REQUEST_DESCRIPTOR_4_00, REQUEST_DESCRIPTOR_4_01, REQUEST_DESCRIPTOR_4_02,
             REQUEST_DESCRIPTOR_4_10, REQUEST_DESCRIPTOR_4_11, REQUEST_DESCRIPTOR_4_12,
         },
-        IrisPairDescriptorOptions, UniquenessRequestDescriptor,
+        IrisPairDescriptorOptions, UniquenessRequestDescriptorOptions,
     };
     use super::{RequestBatchOptions, RequestOptions, RequestPayloadOptions};
 
@@ -168,7 +167,7 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_0),
                 RequestPayloadOptions::IdentityDeletion {
-                    parent: UniquenessRequestDescriptor::new_4_10(),
+                    parent: UniquenessRequestDescriptorOptions::new_4_10(),
                 },
             )
         }
@@ -179,7 +178,7 @@ mod tests {
                 Some(REQUEST_DESCRIPTOR_1),
                 RequestPayloadOptions::Reauthorisation {
                     iris_pair: IrisPairDescriptorOptions::new_0(20),
-                    parent: UniquenessRequestDescriptor::new_4_11(),
+                    parent: UniquenessRequestDescriptorOptions::new_4_11(),
                 },
             )
         }
@@ -200,7 +199,7 @@ mod tests {
                 Some(REQUEST_DESCRIPTOR_3),
                 RequestPayloadOptions::ResetUpdate {
                     iris_pair: IrisPairDescriptorOptions::new_0(24),
-                    parent: UniquenessRequestDescriptor::new_4_12(),
+                    parent: UniquenessRequestDescriptorOptions::new_4_12(),
                 },
             )
         }

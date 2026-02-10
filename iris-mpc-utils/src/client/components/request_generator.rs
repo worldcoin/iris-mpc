@@ -94,7 +94,7 @@ fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReque
             batch.push_new_reauthorization(parent.unwrap(), None);
         }
         smpc_request::RESET_CHECK_MESSAGE_TYPE => {
-            batch.push_new_reset_check();
+            batch.push_new_reset_check(None);
         }
         smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
             batch.push_new_reset_update(parent.unwrap(), None);

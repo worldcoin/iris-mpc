@@ -29,6 +29,8 @@ pub enum Request {
     ResetCheck {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair_ref: Option<IrisPairDescriptor>,
         // Operation identifier.
         reset_id: uuid::Uuid,
     },

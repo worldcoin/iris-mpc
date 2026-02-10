@@ -15,7 +15,7 @@ pub use options::{AwsOptions, ServiceClientOptions};
 pub use typeset::ServiceClientError;
 use typeset::{
     Initialize, IrisDescriptor, IrisPairDescriptor, ProcessRequestBatch, RequestBatch,
-    RequestBatchKind, RequestBatchSize,
+    RequestBatchKind, RequestBatchSize, UniquenessRequestDescriptor,
 };
 
 mod components;
@@ -38,10 +38,15 @@ pub struct ServiceClient<R: Rng + CryptoRng + SeedableRng + Send> {
 }
 
 impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
-    pub async fn new(opts: ServiceClientOptions, aws_opts: AwsOptions) -> Self {
-        let aws_client = AwsClient::async_from(aws_opts).await;
+    pub async fn new(
+        opts: ServiceClientOptions,
+        opts_aws: AwsOptions,
+    ) -> Result<Self, ServiceClientError> {
+        opts.validate()?;
 
-        Self {
+        let aws_client = AwsClient::async_from(opts_aws).await;
+
+        Ok(Self {
             shares_uploader: SharesUploader::new(
                 aws_client.clone(),
                 SharesGenerator::<R>::from(&opts),
@@ -49,7 +54,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
             request_generator: RequestGenerator::from(&opts),
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
-        }
+        })
     }
 
     pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
@@ -135,42 +140,57 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
             } => {
                 tracing::info!("Parsing options::RequestBatchOptions::Series");
 
-                let mut batches: Vec<RequestBatch> = vec![];
+                let batches: Vec<RequestBatch> = opts_batches
+                    .iter()
+                    .enumerate()
+                    .map(|(batch_idx, opts_batch)| {
+                        let mut batch = RequestBatch::new(batch_idx, vec![]);
 
-                for (batch_idx, opts_batch) in opts_batches.iter().enumerate() {
-                    let mut batch = RequestBatch::new(batch_idx, vec![]);
-                    batches.push(batch);
-
-                    for opts_request in opts_batch {
-                        match opts_request.payload() {
-                            options::RequestPayloadOptions::IdentityDeletion { parent } => {
-                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::IdentityDeletion");
-                            }
-                            options::RequestPayloadOptions::Reauthorisation {
-                                iris_pair,
-                                parent,
-                            } => {
-                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::Reauthorisation");
-                            }
-                            options::RequestPayloadOptions::ResetCheck { iris_pair } => {
-                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::ResetCheck");
-                            }
-                            options::RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
-                                // batch.push_new_reset_update(Some(IrisPairDescriptor::from(
-                                //     iris_pair,
-                                // )));
-                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::ResetUpdate");
-                            }
-                            options::RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
-                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::ResetUpdate");
-                                // batch
-                                //     .push_new_uniqueness(Some(IrisPairDescriptor::from(iris_pair)));
+                        for opts_request in opts_batch {
+                            match opts_request.payload() {
+                                options::RequestPayloadOptions::IdentityDeletion { parent } => {
+                                    batch.push_new_identity_deletion(
+                                        UniquenessRequestDescriptor::from(parent),
+                                    );
+                                }
+                                options::RequestPayloadOptions::Reauthorisation {
+                                    iris_pair,
+                                    parent,
+                                } => {
+                                    batch.push_new_reauthorization(
+                                        UniquenessRequestDescriptor::from(parent),
+                                        Some(IrisPairDescriptor::from(iris_pair)),
+                                    );
+                                }
+                                options::RequestPayloadOptions::ResetCheck { iris_pair } => {
+                                    batch.push_new_reset_check(Some(IrisPairDescriptor::from(
+                                        iris_pair,
+                                    )));
+                                }
+                                options::RequestPayloadOptions::ResetUpdate {
+                                    iris_pair,
+                                    parent,
+                                } => {
+                                    batch.push_new_reset_update(
+                                        UniquenessRequestDescriptor::from(parent),
+                                        Some(IrisPairDescriptor::from(iris_pair)),
+                                    );
+                                }
+                                options::RequestPayloadOptions::Uniqueness {
+                                    iris_pair, ..
+                                } => {
+                                    batch.push_new_uniqueness(Some(IrisPairDescriptor::from(
+                                        iris_pair,
+                                    )));
+                                }
                             }
                         }
-                    }
-                }
 
-                unimplemented!()
+                        batch
+                    })
+                    .collect();
+
+                Self::Series(batches)
             }
         }
     }
@@ -194,6 +214,19 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for Sh
                     *rng_seed,
                     selection_strategy.as_ref().map(IrisSelection::from),
                 )
+            }
+        }
+    }
+}
+
+impl From<&options::UniquenessRequestDescriptorOptions> for UniquenessRequestDescriptor {
+    fn from(opts: &options::UniquenessRequestDescriptorOptions) -> Self {
+        match opts {
+            options::UniquenessRequestDescriptorOptions::SerialId(serial_id) => {
+                Self::IrisSerialId(*serial_id)
+            }
+            options::UniquenessRequestDescriptorOptions::Label(label) => {
+                Self::new_label(label.clone())
             }
         }
     }
