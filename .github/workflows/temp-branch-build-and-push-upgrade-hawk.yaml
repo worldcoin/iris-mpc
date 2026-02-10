@@ -51,6 +51,7 @@ jobs:
           platforms: linux/arm64
           build-args: |
             ARCHITECTURE=aarch64
+          no-cache-filters: build-image
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.genesis.dev.hawk
