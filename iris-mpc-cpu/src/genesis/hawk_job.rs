@@ -10,12 +10,18 @@ use futures::future::try_join_all;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
 use std::{
     fmt,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicU8, Arc},
 };
+
 use tokio::{
     join,
     sync::{self, oneshot},
 };
+
+// constants for managing the persistence synchronization logic
+pub const SYNC_RUNNING: u8 = 0;
+pub const SYNC_DONE: u8 = 1;
+pub const SYNC_ERROR: u8 = 2;
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3Query>>;
@@ -56,7 +62,7 @@ pub enum JobRequest {
     Sync {
         /// Whether this node has been signaled to shut down.
         shutdown: bool,
-        sync_done: Arc<AtomicBool>,
+        sync_status: Arc<AtomicU8>,
     },
 }
 

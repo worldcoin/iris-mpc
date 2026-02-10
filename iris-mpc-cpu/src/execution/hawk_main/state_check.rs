@@ -6,13 +6,15 @@ use siphasher::sip::SipHasher13;
 use std::{
     hash::{Hash, Hasher},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use crate::{
     execution::hawk_main::{BothOrient, LEFT, RIGHT},
+    genesis::{SYNC_DONE, SYNC_ERROR},
     network::value::{NetworkValue, StateChecksum},
 };
 
@@ -47,7 +49,7 @@ impl HawkSession {
     /// Returns true if there is a mismatch in shutdown states between nodes.
     pub async fn sync_peers(
         shutdown: bool,
-        sync_done: Arc<AtomicBool>,
+        sync_status: Arc<AtomicU8>,
         sessions: &BothEyes<Vec<HawkSession>>,
     ) -> Result<bool> {
         let session = &sessions[0][0];
@@ -60,26 +62,46 @@ impl HawkSession {
             }
         };
 
-        // Exchange messages until persistence completes.
+        // Phase 1: Consensus loop — exchange "ready to exit" flags until all
+        // parties are ready. A party is ready when persistence completes (DONE)
+        // or the results thread crashes (ERROR).
         loop {
-            let my_done = sync_done.load(Ordering::Relaxed);
-            let msg = NetworkValue::RingElementBit(RingElement(Bit::new(my_done)));
+            let my_status = sync_status.load(Ordering::Relaxed);
+            let ready = my_status >= SYNC_DONE;
+            let msg = NetworkValue::RingElementBit(RingElement(Bit::new(ready)));
 
             let mut store = session.aby3_store.write().await;
             let net = &mut store.session.network_session;
             net.send_prev(msg.clone()).await?;
             net.send_next(msg).await?;
-            let prev_done: bool = decode_bool(net.receive_prev().await)?;
-            let next_done: bool = decode_bool(net.receive_next().await)?;
+            let prev_ready: bool = decode_bool(net.receive_prev().await)?;
+            let next_ready: bool = decode_bool(net.receive_next().await)?;
             drop(store);
 
-            if my_done && prev_done && next_done {
+            if ready && prev_ready && next_ready {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        // Exchange shutdown flags.
+        // Phase 2: Error exchange — if any party's results thread died, all
+        // parties bail with an error.
+        let my_error = sync_status.load(Ordering::Relaxed) == SYNC_ERROR;
+        {
+            let msg = NetworkValue::RingElementBit(RingElement(Bit::new(my_error)));
+            let mut store = session.aby3_store.write().await;
+            let net = &mut store.session.network_session;
+            net.send_prev(msg.clone()).await?;
+            net.send_next(msg).await?;
+            let prev_error: bool = decode_bool(net.receive_prev().await)?;
+            let next_error: bool = decode_bool(net.receive_next().await)?;
+
+            if my_error || prev_error || next_error {
+                bail!("results thread terminated before persistence completed");
+            }
+        }
+
+        // Phase 3: Shutdown exchange — detect mismatched shutdown state.
         let msg = NetworkValue::RingElementBit(RingElement(Bit::new(shutdown)));
         let mut store = session.aby3_store.write().await;
         let net = &mut store.session.network_session;

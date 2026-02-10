@@ -1,5 +1,5 @@
 use super::{
-    hawk_job::{Job, JobRequest, JobResult},
+    hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING},
     utils,
 };
 use crate::{
@@ -16,7 +16,7 @@ use itertools::{izip, Itertools};
 use std::{
     future::Future,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
         Arc,
     },
     time::Instant,
@@ -347,10 +347,11 @@ impl Handle {
             }
             JobRequest::Sync {
                 shutdown,
-                sync_done,
+                sync_status,
             } => {
                 let _ = done_tx;
-                let mismatched = HawkSession::sync_peers(shutdown, sync_done, sessions).await?;
+                let mismatched =
+                    HawkSession::sync_peers(shutdown, sync_status, sessions).await?;
                 Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
@@ -415,21 +416,23 @@ impl Handle {
         shutdown: bool,
         sync_done: Option<oneshot::Receiver<()>>,
     ) -> Result<bool> {
-        let done = Arc::new(AtomicBool::new(false));
+        let status = Arc::new(AtomicU8::new(SYNC_RUNNING));
         if let Some(ch) = sync_done {
-            let done = done.clone();
+            let status = status.clone();
             tokio::spawn(async move {
-                let _ = ch.await;
-                done.store(true, Ordering::Relaxed);
+                match ch.await {
+                    Ok(()) => status.store(SYNC_DONE, Ordering::Relaxed),
+                    Err(_) => status.store(SYNC_ERROR, Ordering::Relaxed),
+                }
             });
         } else {
-            done.store(true, Ordering::Relaxed);
+            status.store(SYNC_DONE, Ordering::Relaxed);
         }
 
         let r = self
             .submit_request(JobRequest::Sync {
                 shutdown,
-                sync_done: done,
+                sync_status: status,
             })
             .await;
         let (_, r) = r.await?;
