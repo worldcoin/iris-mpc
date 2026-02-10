@@ -613,9 +613,12 @@ impl VectorStore for Aby3Store {
         }
         metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
         metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
-        self.distance_fn
+        let start = std::time::Instant::now();
+        let result = self.distance_fn
             .eval_distance_batch(self, query, vectors)
-            .await
+            .await;
+        metrics::histogram!("eval_distance_batch_duration").record(start.elapsed().as_secs_f64());
+        result
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
@@ -652,7 +655,10 @@ impl VectorStore for Aby3Store {
         }
         metrics::counter!("comparisons_total").increment(distances.len() as u64);
         metrics::histogram!("comparisons_batch_size").record(distances.len() as f64);
-        cross_compare(&mut self.session, distances).await
+        let start = std::time::Instant::now();
+        let result = cross_compare(&mut self.session, distances).await;
+        metrics::histogram!("less_than_batch_duration").record(start.elapsed().as_secs_f64());
+        result
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]

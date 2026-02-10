@@ -1116,6 +1116,7 @@ impl HnswSearcher {
             // Open several candidate nodes, visit unvisited neighbors, and compute distances
             // between the query and neighbors as a batch. Opens nodes until at least
             // `target_batch_size` neighbors are visited or all nodes are opened.
+            let open_start = std::time::Instant::now();
             let (new_opened, c_links) = HnswSearcher::open_nodes_batch(
                 store,
                 graph,
@@ -1127,6 +1128,8 @@ impl HnswSearcher {
             )
             .instrument(eval_dist_span.clone())
             .await?;
+            metrics::histogram!("layer_search_open_nodes_batch_duration")
+                .record(open_start.elapsed().as_secs_f64());
 
             opened_so_far += new_opened.len();
             visited_so_far += c_links.len();
@@ -1150,10 +1153,13 @@ impl HnswSearcher {
                 .map(|(_c, cq)| (cq.clone(), fq.clone()))
                 .collect();
             let batch_size = batch.len();
+            let less_than_start = std::time::Instant::now();
             let results = store
                 .less_than_batch(&batch)
                 .instrument(less_than_span.clone())
                 .await?;
+            metrics::histogram!("layer_search_less_than_batch_duration")
+                .record(less_than_start.elapsed().as_secs_f64());
 
             // Filter out elements which are not strictly closer than the current worst candidate
             let filtered_links: Vec<_> = results
@@ -1169,9 +1175,12 @@ impl HnswSearcher {
             );
 
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
+            let insert_start = std::time::Instant::now();
             W.insert_batch_and_trim(store, &filtered_links, ef)
                 .instrument(insert_span.clone())
                 .await?;
+            metrics::histogram!("layer_search_insert_batch_and_trim_duration")
+                .record(insert_start.elapsed().as_secs_f64());
 
             // If measured insertion rate is too low, update the estimated insertion rate.
             //
