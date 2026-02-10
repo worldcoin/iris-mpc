@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/reauth_anon_stats"
+      - "mihai/profiling-setup"
 
     paths-ignore:
       - "deploy/**"
