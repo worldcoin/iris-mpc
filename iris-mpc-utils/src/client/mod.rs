@@ -3,14 +3,9 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use super::aws::AwsClient;
 use components::{
-    RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
-    SharesUploader,
+    RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesGenerator, SharesUploader,
 };
-use options::{RequestBatchOptions, RequestPayloadOptions};
-use typeset::{
-    Initialize, IrisPairDescriptor, ProcessRequestBatch, RequestBatch, RequestBatchKind,
-    RequestBatchSize, UniquenessRequestDescriptor,
-};
+use typeset::{Initialize, ProcessRequestBatch};
 
 pub use options::{AwsOptions, ServiceClientOptions};
 pub use typeset::ServiceClientError;
@@ -83,74 +78,5 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
         }
 
         Ok(())
-    }
-}
-
-impl From<&ServiceClientOptions> for RequestGeneratorParams {
-    fn from(opts: &ServiceClientOptions) -> Self {
-        match opts.request_batch() {
-            RequestBatchOptions::Simple {
-                batch_count,
-                batch_size,
-                batch_kind,
-                known_iris_serial_id,
-            } => {
-                tracing::info!("Parsing RequestBatchOptions::Simple");
-                Self::Simple {
-                    batch_count: *batch_count,
-                    batch_size: RequestBatchSize::Static(*batch_size),
-                    batch_kind: RequestBatchKind::from(batch_kind),
-                    known_iris_serial_id: *known_iris_serial_id,
-                }
-            }
-            RequestBatchOptions::Series {
-                batches: opts_batches,
-            } => {
-                tracing::info!("Parsing RequestBatchOptions::Series");
-
-                let batches: Vec<RequestBatch> = opts_batches
-                    .iter()
-                    .enumerate()
-                    .map(|(batch_idx, opts_batch)| {
-                        let mut batch = RequestBatch::new(batch_idx, vec![]);
-                        for opts_request in opts_batch {
-                            match opts_request.payload() {
-                                RequestPayloadOptions::IdentityDeletion { parent } => {
-                                    batch.push_new_identity_deletion(
-                                        UniquenessRequestDescriptor::from(parent),
-                                    );
-                                }
-                                RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
-                                    batch.push_new_reauthorization(
-                                        UniquenessRequestDescriptor::from(parent),
-                                        Some(IrisPairDescriptor::from(iris_pair)),
-                                    );
-                                }
-                                RequestPayloadOptions::ResetCheck { iris_pair } => {
-                                    batch.push_new_reset_check(Some(IrisPairDescriptor::from(
-                                        iris_pair,
-                                    )));
-                                }
-                                RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
-                                    batch.push_new_reset_update(
-                                        UniquenessRequestDescriptor::from(parent),
-                                        Some(IrisPairDescriptor::from(iris_pair)),
-                                    );
-                                }
-                                RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
-                                    batch.push_new_uniqueness(Some(IrisPairDescriptor::from(
-                                        iris_pair,
-                                    )));
-                                }
-                            }
-                        }
-
-                        batch
-                    })
-                    .collect();
-
-                Self::Series(batches)
-            }
-        }
     }
 }
