@@ -350,8 +350,7 @@ impl Handle {
                 sync_status,
             } => {
                 let _ = done_tx;
-                let mismatched =
-                    HawkSession::sync_peers(shutdown, sync_status, sessions).await?;
+                let mismatched = HawkSession::sync_peers(shutdown, sync_status, sessions).await?;
                 Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
