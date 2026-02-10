@@ -17,7 +17,7 @@ pub struct RequestInfo {
     /// Correlated system responses returned by MPC nodes.
     correlation_set: [Option<ResponsePayload>; N_PARTIES],
 
-    /// User assigned request label.
+    /// User assigned label ... used to associate child/parent requests.
     label: Option<String>,
 
     /// Set of processing states.
@@ -25,7 +25,7 @@ pub struct RequestInfo {
 }
 
 impl RequestInfo {
-    pub(super) fn new(batch: &RequestBatch) -> Self {
+    pub(super) fn new(batch: &RequestBatch, label: Option<String>) -> Self {
         let mut state_history = Vec::with_capacity(RequestStatus::VARIANT_COUNT);
         state_history.push(RequestStatus::default());
 
@@ -33,7 +33,7 @@ impl RequestInfo {
             batch_idx: batch.batch_idx(),
             batch_item_idx: batch.next_item_idx(),
             correlation_set: [const { None }; N_PARTIES],
-            label: None,
+            label,
             state_history,
         }
     }

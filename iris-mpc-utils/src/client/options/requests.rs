@@ -71,10 +71,7 @@ pub struct RequestOptions {
 impl RequestOptions {
     pub fn new(label: Option<&str>, payload: RequestPayloadOptions) -> Self {
         Self {
-            label: match label {
-                Option::Some(inner) => Some(inner.to_string()),
-                Option::None => None,
-            },
+            label: label.map(|s| s.to_string()),
             payload,
         }
     }

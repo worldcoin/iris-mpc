@@ -59,9 +59,3 @@ pub enum UniquenessRequestDescriptor {
     // Unique signup id of system request being processed.
     SignupId(uuid::Uuid),
 }
-
-impl UniquenessRequestDescriptor {
-    pub(crate) fn new_label(label: String) -> Self {
-        Self::Label(label)
-    }
-}

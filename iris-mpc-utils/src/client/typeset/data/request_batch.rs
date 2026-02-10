@@ -76,10 +76,11 @@ impl RequestBatch {
     /// Extends requests collection with a new IdentityDeletion request.
     pub(crate) fn push_new_identity_deletion(
         &mut self,
+        label: Option<String>,
         uniqueness_ref: UniquenessRequestDescriptor,
     ) {
         self.push_request(Request::IdentityDeletion {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label),
             uniqueness_ref,
         });
     }
@@ -87,11 +88,12 @@ impl RequestBatch {
     /// Extends requests collection with a new Reauthorization request.
     pub(crate) fn push_new_reauthorization(
         &mut self,
+        label: Option<String>,
         uniqueness_ref: UniquenessRequestDescriptor,
         iris_pair_ref: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::Reauthorization {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label),
             reauth_id: uuid::Uuid::new_v4(),
             iris_pair_ref,
             uniqueness_ref,
@@ -99,9 +101,13 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new ResetCheck request.
-    pub(crate) fn push_new_reset_check(&mut self, iris_pair_ref: Option<IrisPairDescriptor>) {
+    pub(crate) fn push_new_reset_check(
+        &mut self,
+        label: Option<String>,
+        iris_pair_ref: Option<IrisPairDescriptor>,
+    ) {
         self.push_request(Request::ResetCheck {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label),
             iris_pair_ref,
             reset_id: uuid::Uuid::new_v4(),
         });
@@ -110,11 +116,12 @@ impl RequestBatch {
     /// Extends requests collection with a new ResetUpdate request.
     pub(crate) fn push_new_reset_update(
         &mut self,
+        label: Option<String>,
         uniqueness_ref: UniquenessRequestDescriptor,
         iris_pair_ref: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::ResetUpdate {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label),
             reset_id: uuid::Uuid::new_v4(),
             iris_pair_ref,
             uniqueness_ref,
@@ -124,11 +131,12 @@ impl RequestBatch {
     /// Extends requests collection with a new Uniqueness request.
     pub(crate) fn push_new_uniqueness(
         &mut self,
+        label: Option<String>,
         iris_pair_ref: Option<IrisPairDescriptor>,
     ) -> uuid::Uuid {
         let signup_id = uuid::Uuid::new_v4();
         self.push_request(Request::Uniqueness {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label),
             iris_pair_ref,
             signup_id,
         });
@@ -213,7 +221,7 @@ mod tests {
         pub fn new_1() -> Self {
             let mut batch = Self::default();
             for _ in 0..10 {
-                batch.push_new_uniqueness(None);
+                batch.push_new_uniqueness(None, None);
             }
 
             batch
@@ -224,11 +232,11 @@ mod tests {
             let mut batch = Self::default();
             for _ in 0..10 {
                 let uniqueness_ref =
-                    UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None));
-                batch.push_new_reauthorization(uniqueness_ref.clone(), None);
-                batch.push_new_reset_check(None);
-                batch.push_new_reset_update(uniqueness_ref.clone(), None);
-                batch.push_new_identity_deletion(uniqueness_ref.clone());
+                    UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None));
+                batch.push_new_reauthorization(None, uniqueness_ref.clone(), None);
+                batch.push_new_reset_check(None, None);
+                batch.push_new_reset_update(None, uniqueness_ref.clone(), None);
+                batch.push_new_identity_deletion(None, uniqueness_ref.clone());
             }
 
             batch
@@ -240,17 +248,20 @@ mod tests {
             for _ in 0..10 {
                 let serial_id = 1;
                 batch.push_new_reauthorization(
+                    None,
                     UniquenessRequestDescriptor::IrisSerialId(serial_id),
                     None,
                 );
-                batch.push_new_reset_check(None);
+                batch.push_new_reset_check(None, None);
                 batch.push_new_reset_update(
+                    None,
                     UniquenessRequestDescriptor::IrisSerialId(serial_id),
                     None,
                 );
-                batch.push_new_identity_deletion(UniquenessRequestDescriptor::IrisSerialId(
-                    serial_id,
-                ));
+                batch.push_new_identity_deletion(
+                    None,
+                    UniquenessRequestDescriptor::IrisSerialId(serial_id),
+                );
             }
 
             batch

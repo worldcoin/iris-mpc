@@ -106,30 +106,35 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                             match opts_request.payload() {
                                 RequestPayloadOptions::IdentityDeletion { parent } => {
                                     batch.push_new_identity_deletion(
+                                        opts_request.label().clone(),
                                         UniquenessRequestDescriptor::from(parent),
                                     );
                                 }
                                 RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
                                     batch.push_new_reauthorization(
+                                        opts_request.label().clone(),
                                         UniquenessRequestDescriptor::from(parent),
                                         Some(IrisPairDescriptor::from(iris_pair)),
                                     );
                                 }
                                 RequestPayloadOptions::ResetCheck { iris_pair } => {
-                                    batch.push_new_reset_check(Some(IrisPairDescriptor::from(
-                                        iris_pair,
-                                    )));
+                                    batch.push_new_reset_check(
+                                        opts_request.label().clone(),
+                                        Some(IrisPairDescriptor::from(iris_pair)),
+                                    );
                                 }
                                 RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                                     batch.push_new_reset_update(
+                                        opts_request.label().clone(),
                                         UniquenessRequestDescriptor::from(parent),
                                         Some(IrisPairDescriptor::from(iris_pair)),
                                     );
                                 }
                                 RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
-                                    batch.push_new_uniqueness(Some(IrisPairDescriptor::from(
-                                        iris_pair,
-                                    )));
+                                    batch.push_new_uniqueness(
+                                        opts_request.label().clone(),
+                                        Some(IrisPairDescriptor::from(iris_pair)),
+                                    );
                                 }
                             }
                         }

@@ -1,0 +1,39 @@
+prestate = "44682ea86b704fb3c65cd16f84a76b621e04bbdb3746280f25cf062220e471b4"
+
+[shares_generator.FromFile]
+path_to_ndjson_file = "${IRIS_MPC_HOME}/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson"
+rng_seed = 42
+selection_strategy = "All"
+
+[request_batch.Series]
+batches = [
+    [
+    { label = "40-Uniqueness", payload = { Uniqueness = { iris_pair = [
+    { index = 1 },
+    { index = 2 },
+] } } },
+    { label = "41-Uniqueness", payload = { Uniqueness = { iris_pair = [
+    { index = 3 },
+    { index = 4 },
+] } } },
+    { label = "42-Uniqueness", payload = { Uniqueness = { iris_pair = [
+    { index = 5 },
+    { index = 6 },
+] } } },
+],
+    [
+    { label = "00-IdentityDeletion", payload = { IdentityDeletion = { parent = { Label = "40-Uniqueness" } } } },
+    { label = "10-ResetCheck", payload = { Reauthorisation = { iris_pair = [
+    { index = 11 },
+    { index = 12 },
+], parent = { Label = "41-Uniqueness" } } } },
+    { label = "20-ResetUpdate", payload = { ResetCheck = { iris_pair = [
+    { index = 13 },
+    { index = 14 },
+] } } },
+    { label = "30-Reauthorisation", payload = { ResetUpdate = { iris_pair = [
+    { index = 15 },
+    { index = 16 },
+], parent = { Label = "42-Uniqueness" } } } },
+],
+]

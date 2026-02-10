@@ -88,19 +88,19 @@ fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReque
 
     match kind {
         smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-            batch.push_new_identity_deletion(parent.unwrap());
+            batch.push_new_identity_deletion(None, parent.unwrap());
         }
         smpc_request::REAUTH_MESSAGE_TYPE => {
-            batch.push_new_reauthorization(parent.unwrap(), None);
+            batch.push_new_reauthorization(None, parent.unwrap(), None);
         }
         smpc_request::RESET_CHECK_MESSAGE_TYPE => {
-            batch.push_new_reset_check(None);
+            batch.push_new_reset_check(None, None);
         }
         smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
-            batch.push_new_reset_update(parent.unwrap(), None);
+            batch.push_new_reset_update(None, parent.unwrap(), None);
         }
         smpc_request::UNIQUENESS_MESSAGE_TYPE => {
-            batch.push_new_uniqueness(None);
+            batch.push_new_uniqueness(None, None);
         }
         _ => unreachable!(),
     }
@@ -118,7 +118,7 @@ fn push_new_uniqueness_maybe(
         | smpc_request::REAUTH_MESSAGE_TYPE
         | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
             Some(serial_id) => UniquenessRequestDescriptor::IrisSerialId(serial_id),
-            None => UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None)),
+            None => UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None)),
         }),
         _ => panic!("Invalid request kind"),
     }
