@@ -1071,25 +1071,8 @@ impl HnswSearcher {
             .instrument(insert_span.clone())
             .await?;
 
-        // Target number of elements to insert into candidate neighborhood as a batch.
-        //
-        // TODO optimize batch size selection
-        let insertion_batch_size = ef / 2;
-
-        // Numerator and denominator of estimated current insertion rate
-        const INS_RATE_NUM: usize = 64;
-        let mut ins_rate_denom = INS_RATE_NUM;
-        const MAX_INS_RATE_DENOM: usize = INS_RATE_NUM * 1000;
-
-        // When the estimated insertion rate is determined to be too low, the value is
-        // updated by a fixed factor, rounding up to respect the fixed-precision
-        // representation.
-        //
-        // TODO optimize insertion rate estimate update size
-        const INS_RATE_UPDATE: (usize, usize) = (5, 7);
-
-        // The insertion rate after the next update
-        let mut next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
+        // Fixed limit on neighbors visited per open_nodes_batch call
+        const FIXED_OPEN_LIMIT: usize = 4000;
 
         // Sequential depth of traversal process (number of batch openings) for metrics
         let mut depth = 0;
@@ -1109,13 +1092,9 @@ impl HnswSearcher {
         while !cur_unopened.is_empty() {
             depth += 1;
 
-            // Estimate the number of neighbors to visit which will result in approximately
-            // the desired number of new elements to be inserted into the candidate neighborhood.
-            let target_batch_size = insertion_batch_size * ins_rate_denom / INS_RATE_NUM;
-
             // Open several candidate nodes, visit unvisited neighbors, and compute distances
             // between the query and neighbors as a batch. Opens nodes until at least
-            // `target_batch_size` neighbors are visited or all nodes are opened.
+            // FIXED_OPEN_LIMIT neighbors are visited or all nodes are opened.
             let open_start = std::time::Instant::now();
             let (new_opened, c_links) = HnswSearcher::open_nodes_batch(
                 store,
@@ -1124,7 +1103,7 @@ impl HnswSearcher {
                 lc,
                 q,
                 &mut visited,
-                Some(target_batch_size),
+                Some(FIXED_OPEN_LIMIT),
             )
             .instrument(eval_dist_span.clone())
             .await?;
@@ -1181,23 +1160,6 @@ impl HnswSearcher {
                 .await?;
             metrics::histogram!("layer_search_insert_batch_and_trim_duration")
                 .record(insert_start.elapsed().as_secs_f64());
-
-            // If measured insertion rate is too low, update the estimated insertion rate.
-            //
-            // Update rule: if measured insertion rate is smaller than the harmonic mean of
-            // the current estimated insertion rate and the next update to this rate, then
-            // apply the update.
-            if (ins_rate_denom + next_ins_rate_denom) * n_insertions < 2 * INS_RATE_NUM * batch_size
-                && next_ins_rate_denom < MAX_INS_RATE_DENOM
-            {
-                debug!(
-                    prev = ins_rate_denom,
-                    new = next_ins_rate_denom,
-                    "Update insertion rate estimate denominator"
-                );
-                ins_rate_denom = next_ins_rate_denom;
-                next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
-            }
 
             // Refresh the list of currently unopened nodes in the candidate neighborhood `W`
             cur_unopened = Vec::from_iter(
