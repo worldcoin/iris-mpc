@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 mod aws;
 mod descriptors;
+pub(crate) mod mapper;
 mod requests;
 mod shares;
 

@@ -10,12 +10,12 @@ use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
     SharesUploader,
 };
-use options::IrisCodeSelectionStrategyOptions;
 pub use options::{AwsOptions, ServiceClientOptions};
+use options::{RequestBatchOptions, RequestPayloadOptions, SharesGeneratorOptions};
 pub use typeset::ServiceClientError;
 use typeset::{
-    Initialize, IrisDescriptor, IrisPairDescriptor, ProcessRequestBatch, RequestBatch,
-    RequestBatchKind, RequestBatchSize, UniquenessRequestDescriptor,
+    Initialize, IrisPairDescriptor, ProcessRequestBatch, RequestBatch, RequestBatchKind,
+    RequestBatchSize, UniquenessRequestDescriptor,
 };
 
 mod components;
@@ -96,22 +96,6 @@ impl AsyncFrom<AwsOptions> for AwsClient {
     }
 }
 
-#[async_from::async_trait]
-impl AsyncFrom<AwsOptions> for AwsClientConfig {
-    async fn async_from(config: AwsOptions) -> Self {
-        AwsClientConfig::new(
-            config.environment().to_owned(),
-            config.public_key_base_url().to_owned(),
-            config.s3_request_bucket_name().to_owned(),
-            config.sns_request_topic_arn().to_owned(),
-            config.sqs_long_poll_wait_time().to_owned(),
-            config.sqs_response_queue_url().to_owned(),
-            config.sqs_wait_time_seconds().to_owned(),
-        )
-        .await
-    }
-}
-
 impl From<&ServiceClientOptions> for RequestGenerator {
     fn from(config: &ServiceClientOptions) -> Self {
         Self::new(RequestGeneratorParams::from(config))
@@ -121,13 +105,13 @@ impl From<&ServiceClientOptions> for RequestGenerator {
 impl From<&ServiceClientOptions> for RequestGeneratorParams {
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.request_batch() {
-            options::RequestBatchOptions::Simple {
+            RequestBatchOptions::Simple {
                 batch_count,
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
             } => {
-                tracing::info!("Parsing options::RequestBatchOptions::Simple");
+                tracing::info!("Parsing RequestBatchOptions::Simple");
                 Self::Simple {
                     batch_count: *batch_count,
                     batch_size: RequestBatchSize::Static(*batch_size),
@@ -135,50 +119,41 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                     known_iris_serial_id: *known_iris_serial_id,
                 }
             }
-            options::RequestBatchOptions::Series {
+            RequestBatchOptions::Series {
                 batches: opts_batches,
             } => {
-                tracing::info!("Parsing options::RequestBatchOptions::Series");
+                tracing::info!("Parsing RequestBatchOptions::Series");
 
                 let batches: Vec<RequestBatch> = opts_batches
                     .iter()
                     .enumerate()
                     .map(|(batch_idx, opts_batch)| {
                         let mut batch = RequestBatch::new(batch_idx, vec![]);
-
                         for opts_request in opts_batch {
                             match opts_request.payload() {
-                                options::RequestPayloadOptions::IdentityDeletion { parent } => {
+                                RequestPayloadOptions::IdentityDeletion { parent } => {
                                     batch.push_new_identity_deletion(
                                         UniquenessRequestDescriptor::from(parent),
                                     );
                                 }
-                                options::RequestPayloadOptions::Reauthorisation {
-                                    iris_pair,
-                                    parent,
-                                } => {
+                                RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
                                     batch.push_new_reauthorization(
                                         UniquenessRequestDescriptor::from(parent),
                                         Some(IrisPairDescriptor::from(iris_pair)),
                                     );
                                 }
-                                options::RequestPayloadOptions::ResetCheck { iris_pair } => {
+                                RequestPayloadOptions::ResetCheck { iris_pair } => {
                                     batch.push_new_reset_check(Some(IrisPairDescriptor::from(
                                         iris_pair,
                                     )));
                                 }
-                                options::RequestPayloadOptions::ResetUpdate {
-                                    iris_pair,
-                                    parent,
-                                } => {
+                                RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                                     batch.push_new_reset_update(
                                         UniquenessRequestDescriptor::from(parent),
                                         Some(IrisPairDescriptor::from(iris_pair)),
                                     );
                                 }
-                                options::RequestPayloadOptions::Uniqueness {
-                                    iris_pair, ..
-                                } => {
+                                RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
                                     batch.push_new_uniqueness(Some(IrisPairDescriptor::from(
                                         iris_pair,
                                     )));
@@ -199,60 +174,22 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
 impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for SharesGenerator<R> {
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.shares_generator() {
-            options::SharesGeneratorOptions::FromCompute { rng_seed } => {
-                tracing::info!("Parsing options::SharesGeneratorOptions::FromCompute");
+            SharesGeneratorOptions::FromCompute { rng_seed } => {
+                tracing::info!("Parsing SharesGeneratorOptions::FromCompute");
                 SharesGenerator::<R>::new_compute(*rng_seed)
             }
-            options::SharesGeneratorOptions::FromFile {
+            SharesGeneratorOptions::FromFile {
                 path_to_ndjson_file,
                 rng_seed,
                 selection_strategy,
             } => {
-                tracing::info!("Parsing options::SharesGeneratorOptions::FromFile");
+                tracing::info!("Parsing SharesGeneratorOptions::FromFile");
                 SharesGenerator::new_file(
                     PathBuf::from(path_to_ndjson_file),
                     *rng_seed,
                     selection_strategy.as_ref().map(IrisSelection::from),
                 )
             }
-        }
-    }
-}
-
-impl From<&options::UniquenessRequestDescriptorOptions> for UniquenessRequestDescriptor {
-    fn from(opts: &options::UniquenessRequestDescriptorOptions) -> Self {
-        match opts {
-            options::UniquenessRequestDescriptorOptions::SerialId(serial_id) => {
-                Self::IrisSerialId(*serial_id)
-            }
-            options::UniquenessRequestDescriptorOptions::Label(label) => {
-                Self::new_label(label.clone())
-            }
-        }
-    }
-}
-
-impl From<&options::IrisPairDescriptorOptions> for IrisPairDescriptor {
-    fn from(opts: &options::IrisPairDescriptorOptions) -> Self {
-        Self::new(
-            IrisDescriptor::from(opts.left()),
-            IrisDescriptor::from(opts.right()),
-        )
-    }
-}
-
-impl From<&options::IrisDescriptorOptions> for IrisDescriptor {
-    fn from(opts: &options::IrisDescriptorOptions) -> Self {
-        IrisDescriptor::new(opts.index(), opts.mutation())
-    }
-}
-
-impl From<&IrisCodeSelectionStrategyOptions> for IrisSelection {
-    fn from(opts: &IrisCodeSelectionStrategyOptions) -> Self {
-        match opts {
-            IrisCodeSelectionStrategyOptions::All => Self::All,
-            IrisCodeSelectionStrategyOptions::Even => Self::Even,
-            IrisCodeSelectionStrategyOptions::Odd => Self::Odd,
         }
     }
 }
