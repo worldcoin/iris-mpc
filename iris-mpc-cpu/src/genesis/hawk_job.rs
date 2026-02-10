@@ -8,7 +8,10 @@ use crate::{
 use eyre::Result;
 use futures::future::try_join_all;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{atomic::AtomicBool, Arc},
+};
 use tokio::{
     join,
     sync::{self, oneshot},
@@ -53,7 +56,7 @@ pub enum JobRequest {
     Sync {
         /// Whether this node has been signaled to shut down.
         shutdown: bool,
-        sync_done: oneshot::Receiver<()>,
+        sync_done: Arc<AtomicBool>,
     },
 }
 

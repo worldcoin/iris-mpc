@@ -3,7 +3,13 @@ use eyre::{bail, eyre, Result};
 use futures::join;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use crate::{
     execution::hawk_main::{BothOrient, LEFT, RIGHT},
@@ -41,7 +47,7 @@ impl HawkSession {
     /// Returns true if there is a mismatch in shutdown states between nodes.
     pub async fn sync_peers(
         shutdown: bool,
-        mut sync_done: oneshot::Receiver<()>,
+        sync_done: Arc<AtomicBool>,
         sessions: &BothEyes<Vec<HawkSession>>,
     ) -> Result<bool> {
         let session = &sessions[0][0];
@@ -56,7 +62,7 @@ impl HawkSession {
 
         // Exchange messages until persistence completes.
         loop {
-            let my_done = sync_done.try_recv().is_ok();
+            let my_done = sync_done.load(Ordering::Relaxed);
             let msg = NetworkValue::RingElementBit(RingElement(Bit::new(my_done)));
 
             let mut store = session.aby3_store.write().await;

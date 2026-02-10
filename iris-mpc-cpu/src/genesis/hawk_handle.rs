@@ -15,12 +15,13 @@ use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{
     future::Future,
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
 };
-use tokio::{
-    sync::{self, mpsc, oneshot},
-    time::timeout,
-};
+use tokio::sync::{self, mpsc, oneshot};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "Hawk-Handle";
@@ -409,9 +410,29 @@ impl Handle {
     ///
     /// Used to periodically synchronize db persistence threads of MPC nodes in
     /// genesis protocol.
-    pub async fn sync_peers(&mut self, shutdown: bool) -> Result<bool> {
-        let r = self.submit_request(JobRequest::Sync { shutdown }).await;
-        let (_, r) = timeout(Duration::from_secs(2), r).await??;
+    pub async fn sync_peers(
+        &mut self,
+        shutdown: bool,
+        sync_done: Option<oneshot::Receiver<()>>,
+    ) -> Result<bool> {
+        let done = Arc::new(AtomicBool::new(false));
+        if let Some(ch) = sync_done {
+            let done = done.clone();
+            tokio::spawn(async move {
+                let _ = ch.await;
+                done.store(true, Ordering::Relaxed);
+            });
+        } else {
+            done.store(true, Ordering::Relaxed);
+        }
+
+        let r = self
+            .submit_request(JobRequest::Sync {
+                shutdown,
+                sync_done: done,
+            })
+            .await;
+        let (_, r) = r.await?;
         match r {
             JobResult::Sync { mismatched } => Ok(mismatched),
             _ => bail!("invalid job result"),
