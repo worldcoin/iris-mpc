@@ -14,23 +14,23 @@ pub enum Request {
         // Standard request information.
         info: RequestInfo,
         // Weak reference to associated uniqueness request.
-        uniqueness_ref: UniquenessRequestDescriptor,
+        parent: UniquenessRequestDescriptor,
     },
     Reauthorization {
         // Standard request information.
         info: RequestInfo,
         // Associated Iris pair descriptor ... used to build deterministic graphs.
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        iris_pair: Option<IrisPairDescriptor>,
+        // Weak reference to associated uniqueness request.
+        parent: UniquenessRequestDescriptor,
         // Operation identifier.
         reauth_id: uuid::Uuid,
-        // Weak reference to associated uniqueness request.
-        uniqueness_ref: UniquenessRequestDescriptor,
     },
     ResetCheck {
         // Standard request information.
         info: RequestInfo,
         // Associated Iris pair descriptor ... used to build deterministic graphs.
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        iris_pair: Option<IrisPairDescriptor>,
         // Operation identifier.
         reset_id: uuid::Uuid,
     },
@@ -38,17 +38,17 @@ pub enum Request {
         // Standard request information.
         info: RequestInfo,
         // Associated Iris pair descriptor ... used to build deterministic graphs.
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        iris_pair: Option<IrisPairDescriptor>,
+        // Weak reference to associated uniqueness request.
+        parent: UniquenessRequestDescriptor,
         // Operation identifier.
         reset_id: uuid::Uuid,
-        // Weak reference to associated uniqueness request.
-        uniqueness_ref: UniquenessRequestDescriptor,
     },
     Uniqueness {
         // Standard request information.
         info: RequestInfo,
         // Associated Iris pair descriptor ... used to build deterministic graphs.
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        iris_pair: Option<IrisPairDescriptor>,
         // Iris sign-up identifier.
         signup_id: uuid::Uuid,
     },
@@ -79,11 +79,17 @@ impl Request {
     pub(super) fn is_child(&self, parent: &Self) -> bool {
         // A child of a uniqueness request can be derived by comparing signup identifiers.
         match self {
-            Self::IdentityDeletion { uniqueness_ref, .. }
-            | Self::Reauthorization { uniqueness_ref, .. }
-            | Self::ResetUpdate { uniqueness_ref, .. } => {
+            Self::IdentityDeletion {
+                parent: parent_ref, ..
+            }
+            | Self::Reauthorization {
+                parent: parent_ref, ..
+            }
+            | Self::ResetUpdate {
+                parent: parent_ref, ..
+            } => {
                 matches!(
-                    (uniqueness_ref, parent),
+                    (parent_ref, parent),
                     (UniquenessRequestDescriptor::SignupId(uniqueness_signup_id), Self::Uniqueness { signup_id, .. })
                     if signup_id == uniqueness_signup_id
                 )
@@ -95,13 +101,12 @@ impl Request {
     /// Returns true if a system response is deemed to be correlated with this system request.
     pub(super) fn is_correlation(&self, response: &ResponsePayload) -> bool {
         match (self, response) {
-            (
-                Self::IdentityDeletion { uniqueness_ref, .. },
-                ResponsePayload::IdentityDeletion(result),
-            ) => matches!(
-                uniqueness_ref,
-                UniquenessRequestDescriptor::IrisSerialId(serial_id) if *serial_id == result.serial_id
-            ),
+            (Self::IdentityDeletion { parent, .. }, ResponsePayload::IdentityDeletion(result)) => {
+                matches!(
+                    parent,
+                    UniquenessRequestDescriptor::IrisSerialId(serial_id) if *serial_id == result.serial_id
+                )
+            }
             (Self::Reauthorization { reauth_id, .. }, ResponsePayload::Reauthorization(result)) => {
                 reauth_id.to_string() == result.reauth_id
             }
@@ -127,14 +132,14 @@ impl Request {
     pub(crate) fn is_enqueueable(&self) -> bool {
         matches!(self.info().status(), RequestStatus::SharesUploaded)
             && match self {
-                Self::IdentityDeletion { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessRequestDescriptor::IrisSerialId(_))
+                Self::IdentityDeletion { parent, .. } => {
+                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
-                Self::Reauthorization { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessRequestDescriptor::IrisSerialId(_))
+                Self::Reauthorization { parent, .. } => {
+                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
-                Self::ResetUpdate { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessRequestDescriptor::IrisSerialId(_))
+                Self::ResetUpdate { parent, .. } => {
+                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
                 _ => true,
             }

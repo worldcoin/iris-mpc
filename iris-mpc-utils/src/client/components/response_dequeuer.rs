@@ -96,9 +96,9 @@ impl ResponseDequeuer {
     /// Attempts to update a child request with data returned from it's parent's response.
     fn maybe_update_child_request(&mut self, request: &mut Request, response: &ResponsePayload) {
         match request {
-            Request::IdentityDeletion { uniqueness_ref, .. }
-            | Request::Reauthorization { uniqueness_ref, .. }
-            | Request::ResetUpdate { uniqueness_ref, .. } => {
+            Request::IdentityDeletion { parent, .. }
+            | Request::Reauthorization { parent, .. }
+            | Request::ResetUpdate { parent, .. } => {
                 if let ResponsePayload::Uniqueness(result) = response {
                     let serial_id = result
                         .serial_id
@@ -109,7 +109,7 @@ impl ResponseDequeuer {
                                 .and_then(|matched| matched.first().copied())
                         })
                         .unwrap_or_else(|| panic!("Unmatched uniqueness request: {:?}", result));
-                    *uniqueness_ref = UniquenessRequestDescriptor::IrisSerialId(serial_id);
+                    *parent = UniquenessRequestDescriptor::IrisSerialId(serial_id);
                 }
             }
             _ => panic!("Unsupported parent data"),

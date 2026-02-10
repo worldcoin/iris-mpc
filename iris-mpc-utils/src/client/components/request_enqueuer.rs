@@ -58,23 +58,21 @@ impl ProcessRequestBatch for RequestEnqueuer {
 impl From<&Request> for RequestPayload {
     fn from(request: &Request) -> Self {
         match request {
-            Request::IdentityDeletion { uniqueness_ref, .. } => {
+            Request::IdentityDeletion { parent, .. } => {
                 Self::IdentityDeletion(smpc_request::IdentityDeletionRequest {
-                    serial_id: match uniqueness_ref {
+                    serial_id: match parent {
                         UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
                         _ => panic!("Invalid uniqueness reference"),
                     },
                 })
             }
             Request::Reauthorization {
-                reauth_id,
-                uniqueness_ref,
-                ..
+                reauth_id, parent, ..
             } => Self::Reauthorization(smpc_request::ReAuthRequest {
                 batch_size: Some(1),
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
-                serial_id: match uniqueness_ref {
+                serial_id: match parent {
                     UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
                     _ => panic!("Invalid uniqueness reference"),
                 },
@@ -89,13 +87,11 @@ impl From<&Request> for RequestPayload {
                 })
             }
             Request::ResetUpdate {
-                reset_id,
-                uniqueness_ref,
-                ..
+                reset_id, parent, ..
             } => Self::ResetUpdate(smpc_request::ResetUpdateRequest {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
-                serial_id: match uniqueness_ref {
+                serial_id: match parent {
                     UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
                     _ => panic!("Invalid uniqueness reference"),
                 },

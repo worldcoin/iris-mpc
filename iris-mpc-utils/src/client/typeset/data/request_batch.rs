@@ -77,11 +77,11 @@ impl RequestBatch {
     pub(crate) fn push_new_identity_deletion(
         &mut self,
         label: Option<String>,
-        uniqueness_ref: UniquenessRequestDescriptor,
+        parent_ref: UniquenessRequestDescriptor,
     ) {
         self.push_request(Request::IdentityDeletion {
             info: RequestInfo::new(self, label),
-            uniqueness_ref,
+            parent: parent_ref,
         });
     }
 
@@ -89,14 +89,14 @@ impl RequestBatch {
     pub(crate) fn push_new_reauthorization(
         &mut self,
         label: Option<String>,
-        uniqueness_ref: UniquenessRequestDescriptor,
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        parent_ref: UniquenessRequestDescriptor,
+        iris_pair: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::Reauthorization {
             info: RequestInfo::new(self, label),
             reauth_id: uuid::Uuid::new_v4(),
-            iris_pair_ref,
-            uniqueness_ref,
+            iris_pair,
+            parent: parent_ref,
         });
     }
 
@@ -104,11 +104,11 @@ impl RequestBatch {
     pub(crate) fn push_new_reset_check(
         &mut self,
         label: Option<String>,
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        iris_pair: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::ResetCheck {
             info: RequestInfo::new(self, label),
-            iris_pair_ref,
+            iris_pair,
             reset_id: uuid::Uuid::new_v4(),
         });
     }
@@ -117,14 +117,14 @@ impl RequestBatch {
     pub(crate) fn push_new_reset_update(
         &mut self,
         label: Option<String>,
-        uniqueness_ref: UniquenessRequestDescriptor,
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        parent_ref: UniquenessRequestDescriptor,
+        iris_pair: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::ResetUpdate {
             info: RequestInfo::new(self, label),
             reset_id: uuid::Uuid::new_v4(),
-            iris_pair_ref,
-            uniqueness_ref,
+            iris_pair,
+            parent: parent_ref,
         });
     }
 
@@ -132,12 +132,12 @@ impl RequestBatch {
     pub(crate) fn push_new_uniqueness(
         &mut self,
         label: Option<String>,
-        iris_pair_ref: Option<IrisPairDescriptor>,
+        iris_pair: Option<IrisPairDescriptor>,
     ) -> uuid::Uuid {
         let signup_id = uuid::Uuid::new_v4();
         self.push_request(Request::Uniqueness {
             info: RequestInfo::new(self, label),
-            iris_pair_ref,
+            iris_pair,
             signup_id,
         });
         signup_id
