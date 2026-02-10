@@ -8,7 +8,7 @@ use super::descriptors::{IrisPairDescriptorOptions, UniquenessRequestDescriptorO
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RequestBatchOptions {
     // Options for instanitating a set of interleaved request batches.
-    Series {
+    Complex {
         // Batches of batches of request options.
         batches: Vec<Vec<RequestOptions>>,
     },
@@ -29,8 +29,8 @@ pub enum RequestBatchOptions {
 }
 
 impl RequestBatchOptions {
-    pub fn new_series(batches: Vec<Vec<RequestOptions>>) -> Self {
-        Self::Series { batches }
+    pub fn new_complex(batches: Vec<Vec<RequestOptions>>) -> Self {
+        Self::Complex { batches }
     }
 
     pub fn new_simple(
@@ -50,7 +50,7 @@ impl RequestBatchOptions {
     /// Returns ordered set of Iris indexes to be read from NDJSON file.
     pub fn iris_indexes(&self) -> Vec<usize> {
         match self {
-            Self::Series { batches: _ } => {
+            Self::Complex { batches: _ } => {
                 unimplemented!()
             }
             _ => vec![],
@@ -151,7 +151,7 @@ mod tests {
         }
 
         fn new_series_1() -> Self {
-            Self::new_series(vec![
+            Self::new_complex(vec![
                 RequestOptions::new_batch_0(),
                 RequestOptions::new_batch_1(),
             ])

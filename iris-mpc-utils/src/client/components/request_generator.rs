@@ -18,7 +18,7 @@ impl RequestGenerator {
     fn batch_count(&self) -> usize {
         match &self.params {
             RequestGeneratorParams::Simple { batch_count, .. } => *batch_count,
-            RequestGeneratorParams::Series(batch_set) => batch_set.len(),
+            RequestGeneratorParams::Complex(batch_set) => batch_set.len(),
         }
     }
 
@@ -36,6 +36,9 @@ impl RequestGenerator {
         }
 
         let batch = match &self.params {
+            RequestGeneratorParams::Complex(batch_set) => {
+                batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
+            }
             RequestGeneratorParams::Simple {
                 batch_size,
                 batch_kind,
@@ -57,9 +60,6 @@ impl RequestGenerator {
                     }
                 }
                 batch
-            }
-            RequestGeneratorParams::Series(batch_set) => {
-                batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
             }
         };
 
@@ -127,7 +127,7 @@ fn push_new_uniqueness_maybe(
 /// Set of variants over request generation inputs.
 pub(crate) enum RequestGeneratorParams {
     /// A pre-built known set of request batches.
-    Series(Vec<RequestBatch>),
+    Complex(Vec<RequestBatch>),
     /// Parameters permitting single kind batches to be generated.
     Simple {
         /// Number of request batches to generate.
@@ -154,21 +154,21 @@ mod tests {
     };
 
     impl RequestGeneratorParams {
-        pub fn new_1() -> Self {
+        fn new_1() -> Self {
+            Self::Complex(vec![
+                RequestBatch::default(),
+                RequestBatch::default(),
+                RequestBatch::default(),
+            ])
+        }
+
+        pub fn new_2() -> Self {
             Self::Simple {
                 batch_count: 1,
                 batch_size: RequestBatchSize::Static(1),
                 batch_kind: RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
                 known_iris_serial_id: None,
             }
-        }
-
-        fn new_2() -> Self {
-            Self::Series(vec![
-                RequestBatch::default(),
-                RequestBatch::default(),
-                RequestBatch::default(),
-            ])
         }
     }
 

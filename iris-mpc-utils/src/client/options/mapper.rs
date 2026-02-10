@@ -78,21 +78,7 @@ impl From<&ServiceClientOptions> for RequestGenerator {
 impl From<&ServiceClientOptions> for RequestGeneratorParams {
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.request_batch() {
-            RequestBatchOptions::Simple {
-                batch_count,
-                batch_size,
-                batch_kind,
-                known_iris_serial_id,
-            } => {
-                tracing::info!("Parsing RequestBatchOptions::Simple");
-                Self::Simple {
-                    batch_count: *batch_count,
-                    batch_size: RequestBatchSize::Static(*batch_size),
-                    batch_kind: RequestBatchKind::from(batch_kind),
-                    known_iris_serial_id: *known_iris_serial_id,
-                }
-            }
-            RequestBatchOptions::Series {
+            RequestBatchOptions::Complex {
                 batches: opts_batches,
             } => {
                 tracing::info!("Parsing RequestBatchOptions::Series");
@@ -143,7 +129,21 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                     })
                     .collect();
 
-                Self::Series(batches)
+                Self::Complex(batches)
+            }
+            RequestBatchOptions::Simple {
+                batch_count,
+                batch_size,
+                batch_kind,
+                known_iris_serial_id,
+            } => {
+                tracing::info!("Parsing RequestBatchOptions::Simple");
+                Self::Simple {
+                    batch_count: *batch_count,
+                    batch_size: RequestBatchSize::Static(*batch_size),
+                    batch_kind: RequestBatchKind::from(batch_kind),
+                    known_iris_serial_id: *known_iris_serial_id,
+                }
             }
         }
     }

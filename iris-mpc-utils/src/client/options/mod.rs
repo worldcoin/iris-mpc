@@ -38,7 +38,7 @@ impl ServiceClientOptions {
 
     pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
         match self.request_batch() {
-            RequestBatchOptions::Series { .. } => match self.shares_generator() {
+            RequestBatchOptions::Complex { .. } => match self.shares_generator() {
                 SharesGeneratorOptions::FromCompute { .. } => {
                     Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Series can only be used with SharesGeneratorOptions::FromFile".to_string()))
                 }

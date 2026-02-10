@@ -5,7 +5,7 @@ path_to_ndjson_file = "${IRIS_MPC_HOME}/iris-mpc-utils/assets/iris-codes-plainte
 rng_seed = 42
 selection_strategy = "All"
 
-[request_batch.Series]
+[request_batch.Complex]
 batches = [
     [
     { label = "40-Uniqueness", payload = { Uniqueness = { iris_pair = [

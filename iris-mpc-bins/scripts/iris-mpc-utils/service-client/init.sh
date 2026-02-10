@@ -32,7 +32,7 @@ function _init_aws_opts()
         mkdir "$(_get_path_to_aws_opts_env ${env})"
         local resources=("aws-config" "aws-config.toml" "aws-credentials" "aws_evars.sh")
         for resource in "${resources[@]}"; do
-            cp "$(_get_path_to_resource_of_env ${env} "${resource}")" \
+            cp "$(_get_path_to_aws_resource ${env} "${resource}")" \
                "$(_get_path_to_aws_opts_env ${env})/${resource}"
         done
     done
@@ -45,6 +45,11 @@ function _init_exec_opts()
     do
         cp "$(_get_path_to_resources)/exec-options/simple-${idx}.toml" \
            "$(_get_path_to_exec_opts)/examples/simple-${idx}.toml"
+    done
+    for idx in $(seq 1 1)
+    do
+        cp "$(_get_path_to_resources)/exec-options/complex-${idx}.toml" \
+           "$(_get_path_to_exec_opts)/examples/complex-${idx}.toml"
     done
 }
 

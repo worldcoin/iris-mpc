@@ -56,9 +56,12 @@ function _get_path_to_resources()
     echo "$(_get_path_to_root)/resources/iris-mpc-utils/service-client"
 }
 
-function _get_path_to_resource_of_env()
+function _get_path_to_aws_resource()
 {
-    echo "$(_get_path_to_resources)/${1}-${2}"
+    local env=${1}
+    local resource=${2}
+
+    echo "$(_get_path_to_resources)/aws-options/${env}-${resource}"
 }
 
 function _get_path_to_root()
