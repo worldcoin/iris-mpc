@@ -1,7 +1,8 @@
 FROM public.ecr.aws/ubuntu/ubuntu:22.04 AS build-image
 
 WORKDIR /src
-RUN apt-get update && apt-get install -y \
+RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports|https://ports.ubuntu.com/ubuntu-ports|g' /etc/apt/sources.list \
+    && apt-get update && apt-get install -y \
     curl \
     build-essential \
     libssl-dev \
@@ -13,7 +14,8 @@ RUN apt-get update && apt-get install -y \
     debhelper \
     ca-certificates \
     protobuf-compiler \
-    wget
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -38,7 +40,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG ARCHITECTURE
 ENV ARCHITECTURE=$ARCHITECTURE
 
-RUN apt-get update && apt-get install -y ca-certificates curl unzip
+RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports|https://ports.ubuntu.com/ubuntu-ports|g' /etc/apt/sources.list \
+    && apt-get update && apt-get install -y ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "awscliv2.zip" && \
   unzip awscliv2.zip && \
