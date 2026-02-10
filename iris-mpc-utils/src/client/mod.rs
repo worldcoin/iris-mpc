@@ -1,22 +1,19 @@
-use std::path::PathBuf;
-
 use async_from::{self, AsyncFrom};
 use rand::{CryptoRng, Rng, SeedableRng};
 
-use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
-
-use crate::aws::{AwsClient, AwsClientConfig};
+use super::aws::AwsClient;
 use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
     SharesUploader,
 };
-pub use options::{AwsOptions, ServiceClientOptions};
-use options::{RequestBatchOptions, RequestPayloadOptions, SharesGeneratorOptions};
-pub use typeset::ServiceClientError;
+use options::{RequestBatchOptions, RequestPayloadOptions};
 use typeset::{
     Initialize, IrisPairDescriptor, ProcessRequestBatch, RequestBatch, RequestBatchKind,
     RequestBatchSize, UniquenessRequestDescriptor,
 };
+
+pub use options::{AwsOptions, ServiceClientOptions};
+pub use typeset::ServiceClientError;
 
 mod components;
 mod options;
@@ -89,19 +86,6 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
     }
 }
 
-#[async_from::async_trait]
-impl AsyncFrom<AwsOptions> for AwsClient {
-    async fn async_from(config: AwsOptions) -> Self {
-        AwsClient::new(AwsClientConfig::async_from(config).await)
-    }
-}
-
-impl From<&ServiceClientOptions> for RequestGenerator {
-    fn from(config: &ServiceClientOptions) -> Self {
-        Self::new(RequestGeneratorParams::from(config))
-    }
-}
-
 impl From<&ServiceClientOptions> for RequestGeneratorParams {
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.request_batch() {
@@ -166,29 +150,6 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                     .collect();
 
                 Self::Series(batches)
-            }
-        }
-    }
-}
-
-impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for SharesGenerator<R> {
-    fn from(opts: &ServiceClientOptions) -> Self {
-        match opts.shares_generator() {
-            SharesGeneratorOptions::FromCompute { rng_seed } => {
-                tracing::info!("Parsing SharesGeneratorOptions::FromCompute");
-                SharesGenerator::<R>::new_compute(*rng_seed)
-            }
-            SharesGeneratorOptions::FromFile {
-                path_to_ndjson_file,
-                rng_seed,
-                selection_strategy,
-            } => {
-                tracing::info!("Parsing SharesGeneratorOptions::FromFile");
-                SharesGenerator::new_file(
-                    PathBuf::from(path_to_ndjson_file),
-                    *rng_seed,
-                    selection_strategy.as_ref().map(IrisSelection::from),
-                )
             }
         }
     }
