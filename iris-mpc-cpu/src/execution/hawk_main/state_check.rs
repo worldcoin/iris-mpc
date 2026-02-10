@@ -1,4 +1,4 @@
-use ampc_secret_sharing::{shares::bit::Bit, RingElement};
+use ampc_secret_sharing::RingElement;
 use eyre::{bail, eyre, Result};
 use futures::join;
 use serde::{Deserialize, Serialize};
@@ -48,69 +48,59 @@ impl SetHash {
 impl HawkSession {
     /// Returns true if there is a mismatch in shutdown states between nodes.
     pub async fn sync_peers(
-        shutdown: bool,
+        shutdown_flag: bool,
         sync_status: Arc<AtomicU8>,
         sessions: &BothEyes<Vec<HawkSession>>,
     ) -> Result<bool> {
         let session = &sessions[0][0];
 
-        let decode_bool = |msg| match msg {
-            Ok(NetworkValue::RingElementBit(elem)) => Ok(elem.0.convert()),
+        let decode_u16 = |msg| match msg {
+            Ok(NetworkValue::RingElement16(elem)) => Ok(elem.0),
             other => {
                 tracing::error!("Unexpected message format: {:?}", other);
                 Err(eyre!("Could not deserialize sync result"))
             }
         };
 
-        // Phase 1: Consensus loop — exchange "ready to exit" flags until all
+        // Consensus loop — exchange "ready to exit" flags until all
         // parties are ready. A party is ready when persistence completes (DONE)
         // or the results thread crashes (ERROR).
+        // this step is combined with an exchange of the shutdown flag
+        let shutdown: u16 = if shutdown_flag { 1 } else { 0 } << 8;
+        let mut prev;
+        let mut next;
         loop {
             let my_status = sync_status.load(Ordering::Relaxed);
-            let ready = my_status >= SYNC_DONE;
-            let msg = NetworkValue::RingElementBit(RingElement(Bit::new(ready)));
+            let msg = NetworkValue::RingElement16(RingElement(my_status as u16 | shutdown));
 
             let mut store = session.aby3_store.write().await;
             let net = &mut store.session.network_session;
             net.send_prev(msg.clone()).await?;
             net.send_next(msg).await?;
-            let prev_ready: bool = decode_bool(net.receive_prev().await)?;
-            let next_ready: bool = decode_bool(net.receive_next().await)?;
+            prev = decode_u16(net.receive_prev().await)?;
+            next = decode_u16(net.receive_next().await)?;
             drop(store);
 
-            if ready && prev_ready && next_ready {
+            let ready = my_status >= SYNC_DONE;
+            if ready && (prev & 0xFF) as u8 >= SYNC_DONE && (next & 0xFF) as u8 >= SYNC_DONE {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        // Phase 2: Error exchange — if any party's results thread died, all
+        // Error exchange — if any party's results thread died, all
         // parties bail with an error.
         let my_error = sync_status.load(Ordering::Relaxed) == SYNC_ERROR;
-        {
-            let msg = NetworkValue::RingElementBit(RingElement(Bit::new(my_error)));
-            let mut store = session.aby3_store.write().await;
-            let net = &mut store.session.network_session;
-            net.send_prev(msg.clone()).await?;
-            net.send_next(msg).await?;
-            let prev_error: bool = decode_bool(net.receive_prev().await)?;
-            let next_error: bool = decode_bool(net.receive_next().await)?;
-
-            if my_error || prev_error || next_error {
-                bail!("results thread terminated before persistence completed");
-            }
+        let prev_error = (prev & 0xFF) as u8 == SYNC_ERROR;
+        let next_error = (next & 0xFF) as u8 == SYNC_ERROR;
+        if my_error || prev_error || next_error {
+            bail!("results thread terminated before persistence completed");
         }
 
-        // Phase 3: Shutdown exchange — detect mismatched shutdown state.
-        let msg = NetworkValue::RingElementBit(RingElement(Bit::new(shutdown)));
-        let mut store = session.aby3_store.write().await;
-        let net = &mut store.session.network_session;
-        net.send_prev(msg.clone()).await?;
-        net.send_next(msg).await?;
-        let prev_shutdown: bool = decode_bool(net.receive_prev().await)?;
-        let next_shutdown: bool = decode_bool(net.receive_next().await)?;
-
-        Ok(prev_shutdown != shutdown || next_shutdown != shutdown)
+        // Compare shutdown flags
+        let prev_shutdown = (prev >> 8) as u8 == 1;
+        let next_shutdown = (next >> 8) as u8 == 1;
+        Ok(prev_shutdown != shutdown_flag || next_shutdown != shutdown_flag)
     }
 
     pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSession>>>) -> Result<()> {
