@@ -2962,6 +2962,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "core_affinity",
  "csv",
  "cudarc",
  "data-encoding",

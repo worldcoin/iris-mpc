@@ -479,9 +479,11 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
 
 const SHARD_COUNT: usize = 2;
 
+// Pin all shards to node 0 (lower half of cores)
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     let mut core_ids = core_affinity::get_core_ids().unwrap();
     core_ids.sort();
+    core_ids.truncate(core_ids.len() / 2);
     assert!(!core_ids.is_empty());
 
     let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
