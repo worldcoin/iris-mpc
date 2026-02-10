@@ -41,27 +41,48 @@ impl HawkSession {
     /// Returns true if there is a mismatch in shutdown states between nodes.
     pub async fn sync_peers(
         shutdown: bool,
-        sync_done: oneshot::Receiver<()>,
+        mut sync_done: oneshot::Receiver<()>,
         sessions: &BothEyes<Vec<HawkSession>>,
     ) -> Result<bool> {
         let session = &sessions[0][0];
-        let mut store = session.aby3_store.write().await;
-        let msg = NetworkValue::RingElementBit(RingElement(Bit::new(shutdown)));
-        let net = &mut store.session.network_session;
-        net.send_prev(msg.clone()).await?;
-        net.send_next(msg).await?;
 
-        let decode = |msg| match msg {
+        let decode_bool = |msg| match msg {
             Ok(NetworkValue::RingElementBit(elem)) => Ok(elem.0.convert()),
             other => {
                 tracing::error!("Unexpected message format: {:?}", other);
                 Err(eyre!("Could not deserialize sync result"))
             }
         };
-        let prev_share = decode(net.receive_prev().await)?;
-        let next_share = decode(net.receive_next().await)?;
 
-        Ok(prev_share != shutdown || next_share != shutdown)
+        // Exchange messages until persistence completes.
+        loop {
+            let my_done = sync_done.try_recv().is_ok();
+            let msg = NetworkValue::RingElementBit(RingElement(Bit::new(my_done)));
+
+            let mut store = session.aby3_store.write().await;
+            let net = &mut store.session.network_session;
+            net.send_prev(msg.clone()).await?;
+            net.send_next(msg).await?;
+            let prev_done: bool = decode_bool(net.receive_prev().await)?;
+            let next_done: bool = decode_bool(net.receive_next().await)?;
+            drop(store);
+
+            if my_done && prev_done && next_done {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        // Exchange shutdown flags.
+        let msg = NetworkValue::RingElementBit(RingElement(Bit::new(shutdown)));
+        let mut store = session.aby3_store.write().await;
+        let net = &mut store.session.network_session;
+        net.send_prev(msg.clone()).await?;
+        net.send_next(msg).await?;
+        let prev_shutdown: bool = decode_bool(net.receive_prev().await)?;
+        let next_shutdown: bool = decode_bool(net.receive_next().await)?;
+
+        Ok(prev_shutdown != shutdown || next_shutdown != shutdown)
     }
 
     pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSession>>>) -> Result<()> {
