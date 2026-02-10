@@ -1,7 +1,7 @@
 FROM public.ecr.aws/ubuntu/ubuntu:22.04 AS build-image
 
 WORKDIR /src
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --fix-missing \
     curl \
     build-essential \
     libssl-dev \
