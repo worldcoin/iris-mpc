@@ -4,7 +4,7 @@ use iris_mpc_common::IrisSerialId;
 
 /// A descriptor over an Iris code cached within a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IrisDescriptor {
+pub struct IrisDescriptorOptions {
     // Ordinal identifer typically pointing to a row within an NDJSON file.
     index: usize,
 
@@ -12,33 +12,41 @@ pub struct IrisDescriptor {
     mutation: Option<()>,
 }
 
-impl IrisDescriptor {
-    pub fn new(index: usize) -> Self {
-        Self {
-            index,
-            mutation: None,
-        }
+impl IrisDescriptorOptions {
+    pub fn new(index: usize, mutation: Option<()>) -> Self {
+        Self { index, mutation }
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn mutation(&self) -> Option<()> {
+        self.mutation
     }
 }
 
 /// A descriptor over a pair of Iris codes cached within a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IrisPairDescriptor((IrisDescriptor, IrisDescriptor));
+pub struct IrisPairDescriptorOptions((IrisDescriptorOptions, IrisDescriptorOptions));
 
-impl IrisPairDescriptor {
-    pub fn new(left: IrisDescriptor, right: IrisDescriptor) -> Self {
+impl IrisPairDescriptorOptions {
+    pub fn new(left: IrisDescriptorOptions, right: IrisDescriptorOptions) -> Self {
         Self((left, right))
     }
 
     pub fn new_from_indexes(left: usize, right: usize) -> Self {
-        Self::new(IrisDescriptor::new(left), IrisDescriptor::new(right))
+        Self::new(
+            IrisDescriptorOptions::new(left, None),
+            IrisDescriptorOptions::new(right, None),
+        )
     }
 
-    pub fn left(&self) -> &IrisDescriptor {
+    pub fn left(&self) -> &IrisDescriptorOptions {
         &self.0 .0
     }
 
-    pub fn right(&self) -> &IrisDescriptor {
+    pub fn right(&self) -> &IrisDescriptorOptions {
         &self.0 .1
     }
 
@@ -69,7 +77,7 @@ impl UniquenessRequestDescriptor {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{IrisDescriptor, IrisPairDescriptor, UniquenessRequestDescriptor};
+    use super::{IrisDescriptorOptions, IrisPairDescriptorOptions, UniquenessRequestDescriptor};
 
     pub(crate) const REQUEST_DESCRIPTOR_0: &str = "IdentityDeletion-0";
     pub(crate) const REQUEST_DESCRIPTOR_1: &str = "ResetCheck-0";
@@ -82,11 +90,11 @@ pub(crate) mod tests {
     pub(crate) const REQUEST_DESCRIPTOR_4_11: &str = "Uniqueness-11";
     pub(crate) const REQUEST_DESCRIPTOR_4_12: &str = "Uniqueness-12";
 
-    impl IrisPairDescriptor {
+    impl IrisPairDescriptorOptions {
         pub(crate) fn new_0(offset: usize) -> Self {
             Self::new(
-                IrisDescriptor::new(offset + 1),
-                IrisDescriptor::new(offset + 2),
+                IrisDescriptorOptions::new(offset + 1, None),
+                IrisDescriptorOptions::new(offset + 2, None),
             )
         }
     }

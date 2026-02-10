@@ -6,8 +6,9 @@ mod requests;
 mod shares;
 
 pub use aws::AwsOptions;
+pub(crate) use descriptors::{IrisDescriptorOptions, IrisPairDescriptorOptions};
 pub(crate) use requests::{RequestBatchOptions, RequestPayloadOptions};
-pub(crate) use shares::{IrisCodeSelectionStrategy, SharesGeneratorOptions};
+pub(crate) use shares::{IrisCodeSelectionStrategyOptions, SharesGeneratorOptions};
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

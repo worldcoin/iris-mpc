@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::IrisSerialId;
 
-use super::descriptors::{IrisPairDescriptor, UniquenessRequestDescriptor};
+use super::descriptors::{IrisPairDescriptorOptions, UniquenessRequestDescriptor};
 
 /// Set of variants over inputs to request batch creation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,21 +102,21 @@ pub enum RequestPayloadOptions {
     },
     // Options over a reauthorisation request payload.
     Reauthorisation {
-        iris_pair: IrisPairDescriptor,
+        iris_pair: IrisPairDescriptorOptions,
         parent: UniquenessRequestDescriptor,
     },
     // Options over a reset check request payload.
     ResetCheck {
-        iris_pair: IrisPairDescriptor,
+        iris_pair: IrisPairDescriptorOptions,
     },
     // Options over a reset update request payload.
     ResetUpdate {
-        iris_pair: IrisPairDescriptor,
+        iris_pair: IrisPairDescriptorOptions,
         parent: UniquenessRequestDescriptor,
     },
     // Options over a uniqueness request payload.
     Uniqueness {
-        iris_pair: IrisPairDescriptor,
+        iris_pair: IrisPairDescriptorOptions,
         insertion_layers: Option<(usize, usize)>,
     },
 }
@@ -145,7 +145,7 @@ mod tests {
             REQUEST_DESCRIPTOR_4_00, REQUEST_DESCRIPTOR_4_01, REQUEST_DESCRIPTOR_4_02,
             REQUEST_DESCRIPTOR_4_10, REQUEST_DESCRIPTOR_4_11, REQUEST_DESCRIPTOR_4_12,
         },
-        IrisPairDescriptor, UniquenessRequestDescriptor,
+        IrisPairDescriptorOptions, UniquenessRequestDescriptor,
     };
     use super::{RequestBatchOptions, RequestOptions, RequestPayloadOptions};
 
@@ -178,7 +178,7 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_1),
                 RequestPayloadOptions::Reauthorisation {
-                    iris_pair: IrisPairDescriptor::new_0(20),
+                    iris_pair: IrisPairDescriptorOptions::new_0(20),
                     parent: UniquenessRequestDescriptor::new_4_11(),
                 },
             )
@@ -189,7 +189,7 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_2),
                 RequestPayloadOptions::ResetCheck {
-                    iris_pair: IrisPairDescriptor::new_0(22),
+                    iris_pair: IrisPairDescriptorOptions::new_0(22),
                 },
             )
         }
@@ -199,7 +199,7 @@ mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_3),
                 RequestPayloadOptions::ResetUpdate {
-                    iris_pair: IrisPairDescriptor::new_0(24),
+                    iris_pair: IrisPairDescriptorOptions::new_0(24),
                     parent: UniquenessRequestDescriptor::new_4_12(),
                 },
             )
@@ -210,7 +210,7 @@ mod tests {
             Self::new(
                 Some(descriptor_label),
                 RequestPayloadOptions::Uniqueness {
-                    iris_pair: IrisPairDescriptor::new_0(iris_pair_offset),
+                    iris_pair: IrisPairDescriptorOptions::new_0(iris_pair_offset),
                     insertion_layers: None,
                 },
             )

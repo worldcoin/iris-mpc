@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::helpers::smpc_request;
 
-use super::{Request, RequestInfo, RequestStatus, ResponsePayload, UniquenessRequestDescriptor};
+use super::{
+    IrisPairDescriptor, Request, RequestInfo, RequestStatus, ResponsePayload,
+    UniquenessRequestDescriptor,
+};
 
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,11 +85,16 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new Reauthorization request.
-    pub(crate) fn push_new_reauthorization(&mut self, uniqueness_ref: UniquenessRequestDescriptor) {
+    pub(crate) fn push_new_reauthorization(
+        &mut self,
+        uniqueness_ref: UniquenessRequestDescriptor,
+        iris_pair_ref: Option<IrisPairDescriptor>,
+    ) {
         self.push_request(Request::Reauthorization {
             info: RequestInfo::new(self),
             reauth_id: uuid::Uuid::new_v4(),
-            uniqueness_ref: uniqueness_ref.clone(),
+            iris_pair_ref,
+            uniqueness_ref,
         });
     }
 
@@ -99,19 +107,28 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new ResetUpdate request.
-    pub(crate) fn push_new_reset_update(&mut self, uniqueness_ref: UniquenessRequestDescriptor) {
+    pub(crate) fn push_new_reset_update(
+        &mut self,
+        uniqueness_ref: UniquenessRequestDescriptor,
+        iris_pair_ref: Option<IrisPairDescriptor>,
+    ) {
         self.push_request(Request::ResetUpdate {
             info: RequestInfo::new(self),
             reset_id: uuid::Uuid::new_v4(),
+            iris_pair_ref,
             uniqueness_ref,
         });
     }
 
     /// Extends requests collection with a new Uniqueness request.
-    pub(crate) fn push_new_uniqueness(&mut self) -> uuid::Uuid {
+    pub(crate) fn push_new_uniqueness(
+        &mut self,
+        iris_pair_ref: Option<IrisPairDescriptor>,
+    ) -> uuid::Uuid {
         let signup_id = uuid::Uuid::new_v4();
         self.push_request(Request::Uniqueness {
             info: RequestInfo::new(self),
+            iris_pair_ref,
             signup_id,
         });
         signup_id
@@ -195,7 +212,7 @@ mod tests {
         pub fn new_1() -> Self {
             let mut batch = Self::default();
             for _ in 0..10 {
-                batch.push_new_uniqueness();
+                batch.push_new_uniqueness(None);
             }
 
             batch
@@ -205,11 +222,12 @@ mod tests {
         pub fn new_2() -> Self {
             let mut batch = Self::default();
             for _ in 0..10 {
-                let signup_id = batch.push_new_uniqueness();
-                batch.push_new_reauthorization(UniquenessRequestDescriptor::SignupId(signup_id));
+                let uniqueness_ref =
+                    UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None));
+                batch.push_new_reauthorization(uniqueness_ref.clone(), None);
                 batch.push_new_reset_check();
-                batch.push_new_reset_update(UniquenessRequestDescriptor::SignupId(signup_id));
-                batch.push_new_identity_deletion(UniquenessRequestDescriptor::SignupId(signup_id));
+                batch.push_new_reset_update(uniqueness_ref.clone(), None);
+                batch.push_new_identity_deletion(uniqueness_ref.clone());
             }
 
             batch
@@ -220,10 +238,15 @@ mod tests {
             let mut batch = Self::default();
             for _ in 0..10 {
                 let serial_id = 1;
-                batch
-                    .push_new_reauthorization(UniquenessRequestDescriptor::IrisSerialId(serial_id));
+                batch.push_new_reauthorization(
+                    UniquenessRequestDescriptor::IrisSerialId(serial_id),
+                    None,
+                );
                 batch.push_new_reset_check();
-                batch.push_new_reset_update(UniquenessRequestDescriptor::IrisSerialId(serial_id));
+                batch.push_new_reset_update(
+                    UniquenessRequestDescriptor::IrisSerialId(serial_id),
+                    None,
+                );
                 batch.push_new_identity_deletion(UniquenessRequestDescriptor::IrisSerialId(
                     serial_id,
                 ));

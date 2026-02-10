@@ -3,19 +3,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid;
 
-use iris_mpc_common::IrisSerialId;
-
-use super::{RequestInfo, RequestStatus, ResponsePayload};
-
-/// Enumeration over uniqueness request references. Applies to: IdentityDeletion ^ Reauthorization ^ ResetUpdate.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UniquenessRequestDescriptor {
-    // A serial identifier assigned from either a processed uniqueness result or a user input override.
-    IrisSerialId(IrisSerialId),
-    // Unique signup id of system request being processed.
-    SignupId(uuid::Uuid),
-}
+use super::{
+    IrisPairDescriptor, RequestInfo, RequestStatus, ResponsePayload, UniquenessRequestDescriptor,
+};
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +19,8 @@ pub enum Request {
     Reauthorization {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair_ref: Option<IrisPairDescriptor>,
         // Operation identifier.
         reauth_id: uuid::Uuid,
         // Weak reference to associated uniqueness request.
@@ -43,6 +35,8 @@ pub enum Request {
     ResetUpdate {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair_ref: Option<IrisPairDescriptor>,
         // Operation identifier.
         reset_id: uuid::Uuid,
         // Weak reference to associated uniqueness request.
@@ -51,6 +45,8 @@ pub enum Request {
     Uniqueness {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair_ref: Option<IrisPairDescriptor>,
         // Iris sign-up identifier.
         signup_id: uuid::Uuid,
     },

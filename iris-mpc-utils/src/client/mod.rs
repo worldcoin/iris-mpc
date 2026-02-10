@@ -10,10 +10,13 @@ use components::{
     RequestEnqueuer, RequestGenerator, RequestGeneratorParams, ResponseDequeuer, SharesGenerator,
     SharesUploader,
 };
-use options::IrisCodeSelectionStrategy;
+use options::IrisCodeSelectionStrategyOptions;
 pub use options::{AwsOptions, ServiceClientOptions};
 pub use typeset::ServiceClientError;
-use typeset::{Initialize, ProcessRequestBatch, RequestBatchKind, RequestBatchSize};
+use typeset::{
+    Initialize, IrisDescriptor, IrisPairDescriptor, ProcessRequestBatch, RequestBatch,
+    RequestBatchKind, RequestBatchSize,
+};
 
 mod components;
 mod options;
@@ -131,29 +134,37 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                 batches: opts_batches,
             } => {
                 tracing::info!("Parsing options::RequestBatchOptions::Series");
-                for opts_batch in opts_batches {
+
+                let mut batches: Vec<RequestBatch> = vec![];
+
+                for (batch_idx, opts_batch) in opts_batches.iter().enumerate() {
+                    let mut batch = RequestBatch::new(batch_idx, vec![]);
+                    batches.push(batch);
+
                     for opts_request in opts_batch {
                         match opts_request.payload() {
                             options::RequestPayloadOptions::IdentityDeletion { parent } => {
-                                println!("TODO");
+                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::IdentityDeletion");
                             }
                             options::RequestPayloadOptions::Reauthorisation {
                                 iris_pair,
                                 parent,
                             } => {
-                                println!("TODO");
+                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::Reauthorisation");
                             }
                             options::RequestPayloadOptions::ResetCheck { iris_pair } => {
-                                println!("TODO");
+                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::ResetCheck");
                             }
                             options::RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
-                                println!("TODO");
+                                // batch.push_new_reset_update(Some(IrisPairDescriptor::from(
+                                //     iris_pair,
+                                // )));
+                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::ResetUpdate");
                             }
-                            options::RequestPayloadOptions::Uniqueness {
-                                iris_pair,
-                                insertion_layers,
-                            } => {
-                                println!("TODO");
+                            options::RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
+                                println!("parse RequestBatchOptions::Series :: RequestPayloadOptions::ResetUpdate");
+                                // batch
+                                //     .push_new_uniqueness(Some(IrisPairDescriptor::from(iris_pair)));
                             }
                         }
                     }
@@ -188,12 +199,27 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for Sh
     }
 }
 
-impl From<&IrisCodeSelectionStrategy> for IrisSelection {
-    fn from(value: &IrisCodeSelectionStrategy) -> Self {
-        match value {
-            IrisCodeSelectionStrategy::All => Self::All,
-            IrisCodeSelectionStrategy::Even => Self::Even,
-            IrisCodeSelectionStrategy::Odd => Self::Odd,
+impl From<&options::IrisPairDescriptorOptions> for IrisPairDescriptor {
+    fn from(opts: &options::IrisPairDescriptorOptions) -> Self {
+        Self::new(
+            IrisDescriptor::from(opts.left()),
+            IrisDescriptor::from(opts.right()),
+        )
+    }
+}
+
+impl From<&options::IrisDescriptorOptions> for IrisDescriptor {
+    fn from(opts: &options::IrisDescriptorOptions) -> Self {
+        IrisDescriptor::new(opts.index(), opts.mutation())
+    }
+}
+
+impl From<&IrisCodeSelectionStrategyOptions> for IrisSelection {
+    fn from(opts: &IrisCodeSelectionStrategyOptions) -> Self {
+        match opts {
+            IrisCodeSelectionStrategyOptions::All => Self::All,
+            IrisCodeSelectionStrategyOptions::Even => Self::Even,
+            IrisCodeSelectionStrategyOptions::Odd => Self::Odd,
         }
     }
 }

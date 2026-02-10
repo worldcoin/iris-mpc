@@ -17,14 +17,14 @@ pub enum SharesGeneratorOptions {
         rng_seed: Option<u64>,
 
         // Instruction in respect of Iris code selection.
-        selection_strategy: Option<IrisCodeSelectionStrategy>,
+        selection_strategy: Option<IrisCodeSelectionStrategyOptions>,
     },
 }
 
 /// Enumeration over types of strategy to apply when selecting
 /// Iris codes from an NDJSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum IrisCodeSelectionStrategy {
+pub enum IrisCodeSelectionStrategyOptions {
     // All Iris codes are selected.
     All,
     // Every other Iris code is selected beginning at an even offset.
