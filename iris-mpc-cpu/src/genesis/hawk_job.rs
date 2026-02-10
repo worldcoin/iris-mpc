@@ -53,6 +53,7 @@ pub enum JobRequest {
     Sync {
         /// Whether this node has been signaled to shut down.
         shutdown: bool,
+        sync_done: oneshot::Receiver<()>,
     },
 }
 

@@ -39,7 +39,11 @@ impl SetHash {
 
 impl HawkSession {
     /// Returns true if there is a mismatch in shutdown states between nodes.
-    pub async fn sync_peers(shutdown: bool, sessions: &BothEyes<Vec<HawkSession>>) -> Result<bool> {
+    pub async fn sync_peers(
+        shutdown: bool,
+        sync_done: oneshot::Receiver<()>,
+        sessions: &BothEyes<Vec<HawkSession>>,
+    ) -> Result<bool> {
         let session = &sessions[0][0];
         let mut store = session.aby3_store.write().await;
         let msg = NetworkValue::RingElementBit(RingElement(Bit::new(shutdown)));

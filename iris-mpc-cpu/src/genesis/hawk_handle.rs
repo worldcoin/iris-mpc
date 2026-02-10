@@ -344,9 +344,12 @@ impl Handle {
                     ),
                 ))
             }
-            JobRequest::Sync { shutdown } => {
+            JobRequest::Sync {
+                shutdown,
+                sync_done,
+            } => {
                 let _ = done_tx;
-                let mismatched = HawkSession::sync_peers(shutdown, sessions).await?;
+                let mismatched = HawkSession::sync_peers(shutdown, sync_done, sessions).await?;
                 Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
