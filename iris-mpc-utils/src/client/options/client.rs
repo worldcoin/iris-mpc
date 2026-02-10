@@ -6,27 +6,27 @@ use super::super::typeset::RequestBatch;
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceClientConfiguration {
+pub struct ServiceClientOptions {
     // Associated request batch generation configuration.
-    request_batch: RequestBatchConfiguration,
+    request_batch: RequestBatchOptions,
 
     // Associated Iris shares generator configuration.
-    shares_generator: SharesGeneratorConfiguration,
+    shares_generator: SharesGeneratorOptions,
 }
 
-impl ServiceClientConfiguration {
-    pub fn request_batch(&self) -> &RequestBatchConfiguration {
+impl ServiceClientOptions {
+    pub fn request_batch(&self) -> &RequestBatchOptions {
         &self.request_batch
     }
 
-    pub fn shares_generator(&self) -> &SharesGeneratorConfiguration {
+    pub fn shares_generator(&self) -> &SharesGeneratorOptions {
         &self.shares_generator
     }
 }
 
 /// Set of variants over inputs to request batch generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RequestBatchConfiguration {
+pub enum RequestBatchOptions {
     // Batches of single request type
     Simple {
         /// Number of request batches to generate.
@@ -47,7 +47,7 @@ pub enum RequestBatchConfiguration {
 
 /// Set of variants over inputs to iris shares generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SharesGeneratorConfiguration {
+pub enum SharesGeneratorOptions {
     /// Shares are generated via a random number generator.
     FromCompute {
         // An optional RNG seed.

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AwsConfiguration {
+pub struct AwsOptions {
     /// Execution environment.
     environment: String,
 
@@ -25,7 +25,7 @@ pub struct AwsConfiguration {
     sqs_wait_time_seconds: usize,
 }
 
-impl AwsConfiguration {
+impl AwsOptions {
     pub fn environment(&self) -> &String {
         &self.environment
     }

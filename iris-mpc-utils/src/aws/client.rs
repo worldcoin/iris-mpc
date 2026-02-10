@@ -122,8 +122,26 @@ impl AwsClient {
             })
     }
 
-    /// Purges a response message from an SQS queue.
-    pub async fn sqs_purge_message(&self, sqs_msg: &SqsMessageInfo) -> Result<(), AwsClientError> {
+    /// Purges SQS response queue.
+    pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
+        tracing::debug!("AWS-SQS: purging system response queue");
+        self.sqs
+            .purge_queue()
+            .queue_url(self.config().sqs_response_queue_url())
+            .send()
+            .await
+            .map(|_| {})
+            .map_err(|e| {
+                tracing::error!("AWS-SQS: response queue purge error: {}", e);
+                AwsClientError::SqsPurgeQueueError(e.to_string())
+            })
+    }
+
+    /// Purges SQS response queue message.
+    pub async fn sqs_purge_response_queue_message(
+        &self,
+        sqs_msg: &SqsMessageInfo,
+    ) -> Result<(), AwsClientError> {
         self.sqs
             .delete_message()
             .queue_url(self.config().sqs_response_queue_url())
@@ -136,21 +154,6 @@ impl AwsClient {
             .map_err(|e| {
                 tracing::error!("AWS-SQS: purged message -> error: {}", e);
                 AwsClientError::SqsDeleteMessageError(e.to_string())
-            })
-    }
-
-    /// Purges an SQS queue.
-    pub async fn sqs_purge_queue(&self) -> Result<(), AwsClientError> {
-        tracing::debug!("AWS-SQS: purging response queue");
-        self.sqs
-            .purge_queue()
-            .queue_url(self.config().sqs_response_queue_url())
-            .send()
-            .await
-            .map(|_| {})
-            .map_err(|e| {
-                tracing::error!("AWS-SQS: response queue purge error: {}", e);
-                AwsClientError::SqsPurgeQueueError(e.to_string())
             })
     }
 

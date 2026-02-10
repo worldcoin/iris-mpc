@@ -25,7 +25,7 @@ pub(crate) struct ResponseDequeuer {
 impl Initialize for ResponseDequeuer {
     async fn init(&mut self) -> Result<(), ServiceClientError> {
         self.aws_client
-            .sqs_purge_queue()
+            .sqs_purge_response_queue()
             .await
             .map_err(ServiceClientError::AwsServiceError)
     }
@@ -44,10 +44,12 @@ impl ProcessRequestBatch for ResponseDequeuer {
                     .maybe_correlate_response_and_update_child_request(
                         batch,
                         ResponsePayload::from(&sqs_msg),
-                    )
+                    )?
                     .is_some()
                 {
-                    self.aws_client.sqs_purge_message(&sqs_msg).await?;
+                    self.aws_client
+                        .sqs_purge_response_queue_message(&sqs_msg)
+                        .await?;
                 }
             }
         }
@@ -67,7 +69,9 @@ impl ResponseDequeuer {
         &mut self,
         batch: &mut RequestBatch,
         response: ResponsePayload,
-    ) -> Option<()> {
+    ) -> Result<Option<()>, ServiceClientError> {
+        response.validate()?;
+
         if let Some(idx_of_correlated) = batch.get_idx_of_correlated(&response) {
             if batch.requests_mut()[idx_of_correlated]
                 .set_correlation(&response)
@@ -80,9 +84,9 @@ impl ResponseDequeuer {
                     );
                 }
             }
-            Some(())
+            Ok(Some(()))
         } else {
-            None
+            Ok(None)
         }
     }
 

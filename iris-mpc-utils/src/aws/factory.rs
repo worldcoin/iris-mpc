@@ -8,12 +8,9 @@ use iris_mpc_common::helpers::{
     sha256::sha256_as_hex_string,
     smpc_request::{IrisCodeSharesJSON, SharesS3Object},
 };
-use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, LEFT as LEFT_EYE, RIGHT as RIGHT_EYE},
-    protocol::shared_iris::GaloisRingSharedIris,
-};
+use iris_mpc_cpu::execution::hawk_main::{BothEyes, LEFT as LEFT_EYE, RIGHT as RIGHT_EYE};
 
-use crate::{constants::N_PARTIES, misc::encode_b64};
+use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisForUpload, misc::encode_b64};
 
 /// TODO: review use of these constants.
 const IRIS_VERSION: &str = "1.0";
@@ -22,7 +19,7 @@ const IRIS_SHARES_VERSION: &str = "1.3";
 /// Converts iris code shares into a representation to be dispatched to an S3 bucket.
 pub fn create_iris_code_shares(
     signup_id: &Uuid,
-    shares: &BothEyes<[GaloisRingSharedIris; N_PARTIES]>,
+    shares: &BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
 ) -> IrisCodePartyShares {
     IrisCodePartyShares::new(
         signup_id.to_string(),
@@ -32,7 +29,7 @@ pub fn create_iris_code_shares(
 
 /// Converts iris code shares into a JSON representation.
 fn create_iris_code_shares_json(
-    shares: &BothEyes<[GaloisRingSharedIris; N_PARTIES]>,
+    shares: &BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
 ) -> [IrisCodeSharesJSON; N_PARTIES] {
     std::array::from_fn(|i| IrisCodeSharesJSON {
         iris_version: IRIS_VERSION.to_string(),
@@ -75,7 +72,7 @@ mod tests {
     use super::{
         create_iris_code_shares, create_iris_code_shares_json, create_iris_code_shares_s3,
     };
-    use crate::{constants::N_PARTIES, irises::generate_iris_shares_both_eyes};
+    use crate::{constants::N_PARTIES, irises::generate_iris_shares_for_upload_both_eyes};
     use rand::{rngs::StdRng, SeedableRng};
     use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
     use uuid::Uuid;
@@ -87,7 +84,7 @@ mod tests {
     #[test]
     fn test_create_iris_code_shares() {
         let mut rng = StdRng::from_entropy();
-        let shares = generate_iris_shares_both_eyes(&mut rng, None, None);
+        let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
         let signup_id = Uuid::new_v4();
         let _ = create_iris_code_shares(&signup_id, &shares);
     }
@@ -95,7 +92,7 @@ mod tests {
     #[test]
     fn test_create_iris_code_shares_json() {
         let mut rng = StdRng::from_entropy();
-        let shares = generate_iris_shares_both_eyes(&mut rng, None, None);
+        let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
         let _ = create_iris_code_shares_json(&shares);
     }
 
@@ -103,7 +100,7 @@ mod tests {
     fn test_create_iris_code_shares_s3() {
         let mut rng = StdRng::from_entropy();
         let keys = create_public_keys_for_encryption();
-        let shares = generate_iris_shares_both_eyes(&mut rng, None, None);
+        let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
         let signup_id = Uuid::new_v4();
         let shares_1 = create_iris_code_shares(&signup_id, &shares);
         let _ = create_iris_code_shares_s3(&shares_1, &keys);
