@@ -35,6 +35,14 @@ echo "1M irises added to gpu"
 /bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph.dat restore-db
 echo "restore graph done"
 
+psql "$SMPC__CPU_DATABASE__URL" -c "
+INSERT INTO persistent_state (domain, \"key\", \"value\")
+VALUES ('genesis', 'last_indexed_iris_id', '1048576')
+ON CONFLICT (domain, \"key\")
+DO UPDATE SET \"value\" = EXCLUDED.\"value\";
+"
+echo "persistent_state updated"
+
 shutdown_handler() {
     echo "Shutdown requested"
     exit 0
