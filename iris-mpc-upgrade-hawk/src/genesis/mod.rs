@@ -693,6 +693,10 @@ async fn exec_indexation(
                  shutting down...",
             ));
 
+            // Final barrier: ensure all nodes are done before dropping the Handle
+            // (which closes TCP connections).
+            hawk_handle.sync_peers(false, None).await?;
+
             Ok(())
         }
         // Error.
