@@ -3,7 +3,7 @@ env:
     value: "1057136"
 
   - name: GENESIS_BATCH_SIZE
-    value: "static:1"
+    value: "static:96"
 
   - name: SMPC__SCHEMA_NAME
     value: "genesis"
