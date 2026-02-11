@@ -49,7 +49,7 @@ pub static SHARD_COUNT: LazyLock<usize> = LazyLock::new(|| {
                 .count();
 
             // Handle edge case where dir exists but is empty
-            return if count > 0 { count } else { 1 };
+            // return if count > 0 { count } else { 1 };
         }
     }
     1
