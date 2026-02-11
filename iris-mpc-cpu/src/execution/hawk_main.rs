@@ -1556,9 +1556,9 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let request = request
-            .numa_realloc(hawk_actor.workers_handle.clone())
-            .await;
+        //let request = request
+        //    .numa_realloc(hawk_actor.workers_handle.clone())
+        //    .await;
 
         // All deletions in a batch are applied at the beginning of batch processing
         // This is consistent with the GPU code's handling of deletions

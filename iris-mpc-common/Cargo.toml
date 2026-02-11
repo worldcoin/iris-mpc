@@ -58,6 +58,7 @@ zeroize = "1.8.1"
 wiremock = "0.6.1"
 bincode.workspace = true
 serde-big-array.workspace = true
+nix.workspace = true
 metrics.workspace = true
 metrics-exporter-statsd.workspace = true
 num_cpus = "1.17.0"

@@ -15,10 +15,12 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::{
+    get_cpus_for_node, set_mempolicy_for_node, vector_id::VectorId, SHARD_COUNT,
+};
 use itertools::{izip, Itertools};
 use std::{
-    cmp, iter,
+    iter,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -371,7 +373,10 @@ pub fn init_workers(
         channels.push(tx);
         let iris_store = iris_store.clone();
         std::thread::spawn(move || {
+            // Pin thread to specific core
             let _ = core_affinity::set_for_current(core_id);
+            // Bind memory allocations to this shard's NUMA node
+            //set_mempolicy_for_node(shard_index);
             worker_thread(rx, iris_store, numa);
         });
     }
@@ -477,21 +482,23 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
     }
 }
 
-const SHARD_COUNT: usize = 2;
-
-// modified to put everything on node 0
+/// Returns the CoreIds for the given shard (NUMA node) index.
+/// Reads actual CPU-to-node mappings from sysfs on Linux.
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let mut core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.sort();
-    core_ids.truncate(core_ids.len() / 2);
-    assert!(!core_ids.is_empty());
-
-    let shard_count = cmp::min(SHARD_COUNT, 1);
+    let shard_count = *SHARD_COUNT;
     let shard_index = shard_index % shard_count;
 
-    let shard_size = (core_ids.len() / shard_count) - 16; // for tokio
-    let start = shard_index * shard_size;
-    let end = cmp::min(start + shard_size, core_ids.len());
+    // Get CPUs for this NUMA node from sysfs
+    let cpu_ids = get_cpus_for_node(shard_index);
 
-    core_ids[start..end].to_vec()
+    // Convert to CoreIds
+    let core_ids: Vec<CoreId> = cpu_ids.into_iter().map(|id| CoreId { id }).collect();
+
+    assert!(
+        !core_ids.is_empty(),
+        "No CPUs found for node {}",
+        shard_index
+    );
+
+    core_ids
 }

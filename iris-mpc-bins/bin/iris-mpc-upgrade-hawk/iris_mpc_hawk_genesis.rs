@@ -1,6 +1,9 @@
 use clap::Parser;
 use eyre::{bail, Result};
-use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId};
+use iris_mpc_common::{
+    config::Config, get_node_zero_cores, restrict_to_node_zero, tracing::initialize_tracing,
+    IrisSerialId,
+};
 use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
@@ -29,8 +32,8 @@ struct Args {
 
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
 /// creates a db snapshot within AWS RDS cluster.
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    restrict_to_node_zero();
     // Set config.
     println!("Initialising config");
     dotenvy::dotenv().ok();
@@ -40,28 +43,40 @@ async fn main() -> Result<()> {
     println!("Initialising args");
     let args = parse_args()?;
 
-    // Set tracing.
-    println!("Initialising tracing");
-    let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("Failed to initialize tracing: {:?}", e);
-            return Err(e);
-        }
-    };
+    // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(get_node_zero_cores())
+        .on_thread_start(move || {
+            // This ensures every spawned worker thread stays on Node 0
+            restrict_to_node_zero();
+        })
+        .enable_all()
+        .build()
+        .unwrap();
 
-    // Invoke main.
-    match exec(args, config).await {
-        Ok(_) => {
-            log_info("Server", "Exited normally".to_string());
-        }
-        Err(err) => {
-            log_error("Server", format!("Server exited with error: {:?}", err));
-            return Err(err);
-        }
-    }
+    runtime.block_on(async {
+        // Set tracing.
+        println!("Initialising tracing");
+        let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
+            Ok(handle) => handle,
+            Err(e) => {
+                eprintln!("Failed to initialize tracing: {:?}", e);
+                return Err(e);
+            }
+        };
 
-    Ok(())
+        // Invoke main.
+        match exec(args, config).await {
+            Ok(_) => {
+                log_info("Server", "Exited normally".to_string());
+            }
+            Err(err) => {
+                log_error("Server", format!("Server exited with error: {:?}", err));
+                return Err(err);
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Parses command line arguments.
