@@ -489,10 +489,17 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     let shard_index = shard_index % shard_count;
 
     // Get CPUs for this NUMA node from sysfs
-    let cpu_ids = get_cpus_for_node(shard_index);
+    let cpu_ids = get_cpus_for_node(0); //shard_index);
 
     // Convert to CoreIds
-    let core_ids: Vec<CoreId> = cpu_ids.into_iter().map(|id| CoreId { id }).collect();
+    let mut core_ids: Vec<CoreId> = cpu_ids.into_iter().map(|id| CoreId { id }).collect();
+    core_ids.sort();
+    let shard_size = core_ids.len() / shard_count;
+    let core_ids = core_ids
+        .into_iter()
+        .skip(shard_index * shard_size)
+        .take(shard_size)
+        .collect();
 
     assert!(
         !core_ids.is_empty(),
