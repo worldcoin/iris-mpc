@@ -49,14 +49,17 @@ pub static SHARD_COUNT: LazyLock<usize> = LazyLock::new(|| {
                 .count();
 
             // Handle edge case where dir exists but is empty
-            // return if count > 0 { count } else { 1 };
+            return if count > 0 { count } else { 1 };
         }
     }
     1
 });
 
 /// Caches the CPU IDs for NUMA node 0.
-pub static NODE_ZERO_CPUS: LazyLock<Vec<usize>> = LazyLock::new(|| get_cpus_for_node(0));
+pub static NODE_ZERO_CPUS: LazyLock<Vec<usize>> = LazyLock::new(|| {
+    (0..16).into_iter().collect()
+    //get_cpus_for_node(0)
+});
 
 /// Parses a Linux cpulist format string (e.g., "0-15,32-47") into a vector of CPU IDs.
 fn parse_cpulist(cpulist: &str) -> Vec<usize> {
@@ -81,6 +84,10 @@ fn parse_cpulist(cpulist: &str) -> Vec<usize> {
 /// On non-Linux or if detection fails, returns all available CPU IDs for node 0,
 /// or an empty vec for other nodes.
 pub fn get_cpus_for_node(node: usize) -> Vec<usize> {
+    return match node {
+        0 => (16..54).into_iter().collect(),
+        _ => (54..92).into_iter().collect(),
+    };
     #[cfg(target_os = "linux")]
     {
         let path = format!("/sys/devices/system/node/node{}/cpulist", node);
@@ -134,7 +141,7 @@ pub fn restrict_to_node_zero() {
 /// Returns the number of CPU cores on NUMA node 0.
 /// For a single-node system, this returns the total number of cores.
 pub fn get_node_zero_cores() -> usize {
-    NODE_ZERO_CPUS.len()
+    16 // NODE_ZERO_CPUS.len()
 }
 
 /// Sets the memory policy for the current thread to bind allocations to the specified NUMA node.
