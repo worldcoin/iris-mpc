@@ -3,7 +3,6 @@ name: Branch - Hawk Upgrade Build and push docker image
 on:
   push:
     branches:
-      - "sw/fix_genesis_sync"
       - "POP-2651/implement-and-test-table-coping-for-genesis-rollback"
 
 concurrency:
@@ -51,7 +50,6 @@ jobs:
           platforms: linux/arm64
           build-args: |
             ARCHITECTURE=aarch64
-          no-cache-filters: build-image
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.genesis.dev.hawk
