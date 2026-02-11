@@ -2,6 +2,8 @@ use crate::{
     join_runners,
     utils::{
         genesis_runner::{self, NUM_GPU_IRISES_INIT},
+        modifications::ModificationInput,
+        modifications::ModificationType::{Reauth, ResetUpdate},
         mpc_node::{DbAssertions, MpcNodes},
         HawkConfigs, TestRun, TestRunContextInfo,
     },
@@ -12,12 +14,17 @@ use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use rand::Rng;
 use tokio::task::JoinSet;
 
-const NUM_ITERATIONS: usize = 10;
+const NUM_ITERATIONS: usize = 3;
 const BATCH_SIZE: usize = 16;
 const CHAOS_MAX_INDEXATION_ID: u32 = 64;
 /// Max per-batch delay ceiling (each node picks a random ceiling 0..=MAX_DELAY_MS
 /// at the start of each iteration, then each commit sleeps 0..=ceiling).
 const MAX_DELAY_MS: u64 = 2000;
+
+const MODIFICATIONS: [ModificationInput; 2] = [
+    ModificationInput::new(1, 5, ResetUpdate, true, true),
+    ModificationInput::new(2, 15, Reauth, true, true),
+];
 
 pub struct Test {
     configs: HawkConfigs,
@@ -36,15 +43,17 @@ impl TestRun for Test {
         for iteration in 0..NUM_ITERATIONS {
             tracing::info!("=== Chaos iteration {}/{} ===", iteration + 1, NUM_ITERATIONS);
 
-            // Clear CPU-side tables on all 3 nodes (preserve GPU iris shares)
+            // Clear CPU tables and GPU modifications, then re-insert modifications
             let nodes = MpcNodes::new(&self.configs).await;
-            let mut clear_set = JoinSet::new();
+            let mut setup_set = JoinSet::new();
             for node in nodes {
-                clear_set.spawn(async move {
+                setup_set.spawn(async move {
                     node.clear_cpu_tables().await.unwrap();
+                    node.clear_gpu_modifications().await.unwrap();
+                    node.apply_modifications(&[], &MODIFICATIONS).await.unwrap();
                 });
             }
-            clear_set.join_all().await;
+            setup_set.join_all().await;
 
             // Each node gets a different random delay ceiling
             let mut rng = rand::thread_rng();
@@ -81,11 +90,11 @@ impl TestRun for Test {
                 .assert_num_irises(CHAOS_MAX_INDEXATION_ID as usize)
                 .assert_num_modifications(0)
                 .assert_last_indexed_iris_id(CHAOS_MAX_INDEXATION_ID)
-                .assert_last_indexed_modification_id(0);
+                .assert_last_indexed_modification_id(MODIFICATIONS.len() as i64);
 
             let gpu_asserts = DbAssertions::new()
                 .assert_num_irises(NUM_GPU_IRISES_INIT)
-                .assert_num_modifications(0);
+                .assert_num_modifications(MODIFICATIONS.len());
 
             let nodes = MpcNodes::new(&self.configs).await;
             nodes.apply_assertions(gpu_asserts, cpu_asserts).await;

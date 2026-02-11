@@ -49,6 +49,17 @@ impl DbStores {
             .unwrap_or(0))
     }
 
+    pub async fn get_last_indexed_modification_id(&self) -> Result<i64> {
+        Ok(self
+            .graph
+            .get_persistent_state(
+                constants::STATE_DOMAIN,
+                constants::STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
+            )
+            .await?
+            .unwrap_or(0))
+    }
+
     pub async fn new(url: &str, schema_name: &str, access_mode: AccessMode) -> Self {
         let client = PostgresClient::new(url, schema_name, access_mode)
             .await
@@ -133,6 +144,18 @@ impl MpcNode {
             gpu_stores,
             cpu_stores,
         }
+    }
+
+    /// Clear the GPU modifications table only. Used between chaos test
+    /// iterations so modifications can be re-inserted fresh.
+    pub async fn clear_gpu_modifications(&self) -> Result<()> {
+        let mut tx = self.gpu_stores.iris.tx().await?;
+        self.gpu_stores
+            .iris
+            .clear_modifications_table(&mut tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// clear all tables and insert irises into the GPU database
