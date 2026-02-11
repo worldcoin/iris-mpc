@@ -1,9 +1,9 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1057136"
+    value: "1059136"
 
   - name: GENESIS_BATCH_SIZE
-    value: "static:96"
+    value: "static:32"
 
   - name: SMPC__SCHEMA_NAME
     value: "genesis"
