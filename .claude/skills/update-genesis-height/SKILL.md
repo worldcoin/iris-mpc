@@ -6,7 +6,7 @@ argument-hint: [increment]
 
 Increase the `GENESIS_MAX_HEIGHT` environment variable value in all three dev HNSW deploy config files.
 
-If an argument is provided (`$ARGUMENTS`), use it as the increment. Otherwise, default to an increment of **1000**.
+If an argument is provided (`$ARGUMENTS`), use it as the increment. Otherwise, default to an increment of **2000**.
 
 ## Steps
 
