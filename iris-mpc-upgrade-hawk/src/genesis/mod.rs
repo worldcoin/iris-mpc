@@ -156,6 +156,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     log_info(String::from("Setup complete."));
 
     // Chaos testing: schedule a delayed shutdown trigger
+    #[cfg(feature = "chaos-testing")]
     if let Some(delay_ms) = config.chaos_shutdown_after_ms {
         let sh = Arc::clone(&shutdown_handler);
         tokio::spawn(async move {
@@ -1083,6 +1084,8 @@ async fn get_results_thread(
     shutdown_handler: &Arc<ShutdownHandler>,
     chaos_max_delay_ms: Option<u64>,
 ) -> Result<Sender<JobResult>> {
+    #[cfg(not(feature = "chaos-testing"))]
+    let _ = chaos_max_delay_ms;
     let (tx, mut rx) = mpsc::channel::<JobResult>(PERSIST_DELAY);
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
@@ -1144,6 +1147,7 @@ async fn get_results_thread(
                     ));
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                    #[cfg(feature = "chaos-testing")]
                     if let Some(max_ms) = chaos_max_delay_ms {
                         use rand::Rng;
                         let delay = rand::thread_rng().gen_range(0..=max_ms);
@@ -1204,6 +1208,7 @@ async fn get_results_thread(
 
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
+                    #[cfg(feature = "chaos-testing")]
                     if let Some(max_ms) = chaos_max_delay_ms {
                         use rand::Rng;
                         let delay = rand::thread_rng().gen_range(0..=max_ms);

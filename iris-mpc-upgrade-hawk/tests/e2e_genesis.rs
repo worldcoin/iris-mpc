@@ -127,6 +127,7 @@ fn test_hnsw_genesis_106() -> Result<()> {
 ///   to verify sync_peers consensus handles async persistence correctly.
 ///   asserts:
 ///     all 3 nodes agree on state after each iteration;
+#[cfg(feature = "chaos-testing")]
 #[test]
 #[serial]
 #[ignore = "requires external setup"]
@@ -141,6 +142,7 @@ fn test_hnsw_genesis_200() -> Result<()> {
 ///   to verify sync_peers consensus ensures all nodes stop at the same point.
 ///   asserts:
 ///     all 3 nodes have identical last_indexed_iris_id after each iteration;
+#[cfg(feature = "chaos-testing")]
 #[test]
 #[serial]
 #[ignore = "requires external setup"]

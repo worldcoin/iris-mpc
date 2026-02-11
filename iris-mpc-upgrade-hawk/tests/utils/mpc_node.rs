@@ -38,6 +38,7 @@ pub struct DbStores {
 }
 
 impl DbStores {
+    #[cfg(feature = "chaos-testing")]
     pub async fn get_last_indexed_iris_id(&self) -> Result<u32> {
         Ok(self
             .graph
@@ -49,6 +50,7 @@ impl DbStores {
             .unwrap_or(0))
     }
 
+    #[cfg(feature = "chaos-testing")]
     pub async fn get_last_indexed_modification_id(&self) -> Result<i64> {
         Ok(self
             .graph
@@ -148,6 +150,7 @@ impl MpcNode {
 
     /// Clear the GPU modifications table only. Used between chaos test
     /// iterations so modifications can be re-inserted fresh.
+    #[cfg(feature = "chaos-testing")]
     pub async fn clear_gpu_modifications(&self) -> Result<()> {
         let mut tx = self.gpu_stores.iris.tx().await?;
         self.gpu_stores
@@ -249,6 +252,7 @@ impl MpcNode {
     /// Clear only CPU-side tables (graphs, persistent state, cpu iris store)
     /// while preserving GPU iris shares. Allows re-running genesis without
     /// re-inserting iris data each iteration.
+    #[cfg(feature = "chaos-testing")]
     pub async fn clear_cpu_tables(&self) -> Result<()> {
         let stores = &self.cpu_stores;
 

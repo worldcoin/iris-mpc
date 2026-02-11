@@ -5,7 +5,9 @@ pub mod genesis_103;
 pub mod genesis_104;
 pub mod genesis_105;
 pub mod genesis_106;
+#[cfg(feature = "chaos-testing")]
 pub mod genesis_200;
+#[cfg(feature = "chaos-testing")]
 pub mod genesis_201;
 
 #[macro_export]
