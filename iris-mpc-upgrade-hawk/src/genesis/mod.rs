@@ -694,7 +694,7 @@ async fn exec_indexation(
             ));
 
             // Final barrier: ensure all nodes are done before dropping the Handle
-            // (which closes TCP connections).
+            // Prevents the unit tests from failing the health_check after the Sync job.
             hawk_handle.sync_peers(false, None).await?;
 
             Ok(())
