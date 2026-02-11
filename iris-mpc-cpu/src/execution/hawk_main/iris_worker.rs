@@ -495,7 +495,7 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     let mut core_ids: Vec<CoreId> = cpu_ids.into_iter().map(|id| CoreId { id }).collect();
     core_ids.sort();
     let shard_size = core_ids.len() / shard_count;
-    let core_ids = core_ids
+    let core_ids: Vec<_> = core_ids
         .into_iter()
         .skip(shard_index * shard_size)
         .take(shard_size)
