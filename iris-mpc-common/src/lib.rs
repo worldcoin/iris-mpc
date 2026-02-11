@@ -51,6 +51,7 @@ pub fn next_worker_index(num_workers: usize) -> usize {
 }
 
 pub fn get_num_tokio_threads() -> usize {
-    let core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.len() / 2
+    16
+    // let core_ids = core_affinity::get_core_ids().unwrap();
+    // core_ids.len() / 2
 }

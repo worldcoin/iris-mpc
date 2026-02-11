@@ -489,7 +489,7 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     let shard_count = cmp::min(SHARD_COUNT, 1);
     let shard_index = shard_index % shard_count;
 
-    let shard_size = core_ids.len() / shard_count;
+    let shard_size = (core_ids.len() / shard_count) - 16; // for tokio
     let start = shard_index * shard_size;
     let end = cmp::min(start + shard_size, core_ids.len());
 
