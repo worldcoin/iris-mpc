@@ -121,3 +121,17 @@ fn test_hnsw_genesis_106() -> Result<()> {
     run_test!(106, 1)?;
     Ok(())
 }
+
+/// HNSW-Genesis-200: Chaos test
+///   Runs genesis repeatedly with random persistence delays per node
+///   to verify sync_peers consensus handles async persistence correctly.
+///   asserts:
+///     all 3 nodes agree on state after each iteration;
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_hnsw_genesis_200() -> Result<()> {
+    use workflows::genesis_200::Test;
+    run_test!(200, 1)?;
+    Ok(())
+}

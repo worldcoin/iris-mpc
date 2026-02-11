@@ -109,6 +109,9 @@ pub struct Config {
     pub disable_persistence: bool,
 
     #[serde(default)]
+    pub chaos_max_persistence_delay_ms: Option<u64>,
+
+    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(
@@ -746,6 +749,7 @@ impl From<Config> for CommonConfig {
             enable_pprof_per_batch: _,
             tokio_threads: _,
             sns_retry_max_attempts: _,
+            chaos_max_persistence_delay_ms: _, // chaos testing only
         } = value;
 
         Self {

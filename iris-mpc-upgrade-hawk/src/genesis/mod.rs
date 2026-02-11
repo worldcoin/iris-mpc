@@ -401,6 +401,7 @@ async fn exec_setup(
         graph_store_arc.clone(),
         &mut task_monitor_bg,
         &shutdown_handler,
+        config.chaos_max_persistence_delay_ms,
     )
     .await?;
     task_monitor_bg.check_tasks();
@@ -1069,6 +1070,7 @@ async fn get_results_thread(
     graph_store: Arc<GraphPg<Aby3Store>>,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
+    chaos_max_delay_ms: Option<u64>,
 ) -> Result<Sender<JobResult>> {
     let (tx, mut rx) = mpsc::channel::<JobResult>(PERSIST_DELAY);
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
@@ -1131,6 +1133,11 @@ async fn get_results_thread(
                     ));
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                    if let Some(max_ms) = chaos_max_delay_ms {
+                        use rand::Rng;
+                        let delay = rand::thread_rng().gen_range(0..=max_ms);
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
                     db_tx.commit().await?;
                     log_info(format!(
                         "Job Results :: Persisted last indexed id: batch-id={batch_id}"
@@ -1186,6 +1193,11 @@ async fn get_results_thread(
 
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
+                    if let Some(max_ms) = chaos_max_delay_ms {
+                        use rand::Rng;
+                        let delay = rand::thread_rng().gen_range(0..=max_ms);
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
                     db_tx.commit().await?;
                     log_info(format!(
                         "Job Results :: Persisted last indexed modification id: modification_id={modification_id}"

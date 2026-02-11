@@ -212,6 +212,43 @@ impl MpcNode {
         Ok(())
     }
 
+    /// Clear only CPU-side tables (graphs, persistent state, cpu iris store)
+    /// while preserving GPU iris shares. Allows re-running genesis without
+    /// re-inserting iris data each iteration.
+    pub async fn clear_cpu_tables(&self) -> Result<()> {
+        let stores = &self.cpu_stores;
+
+        // delete irises
+        stores.iris.rollback(0).await?;
+
+        let mut graph_tx = stores.graph.tx().await?;
+
+        // clear graphs
+        graph_tx
+            .with_graph(StoreId::Left)
+            .clear_tables()
+            .await
+            .expect("Could not clear left graph");
+        graph_tx
+            .with_graph(StoreId::Right)
+            .clear_tables()
+            .await
+            .expect("Could not clear right graph");
+
+        let mut tx = graph_tx.tx;
+
+        // clear modifications tables
+        stores.iris.clear_modifications_table(&mut tx).await?;
+
+        // clear persistent state
+        unset_last_indexed_iris_id(&mut tx).await?;
+        unset_last_indexed_modification_id(&mut tx).await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
     /// Adds arbitrary irises to the database. The iris ID will be the new
     /// number of entries after the insertion
     async fn insert_into_gpu_iris_store(&self, shares: &[GaloisRingSharedIrisPair]) -> Result<()> {

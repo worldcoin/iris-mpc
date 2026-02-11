@@ -5,6 +5,7 @@ pub mod genesis_103;
 pub mod genesis_104;
 pub mod genesis_105;
 pub mod genesis_106;
+pub mod genesis_200;
 
 #[macro_export]
 macro_rules! join_runners {
