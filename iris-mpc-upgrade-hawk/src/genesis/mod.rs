@@ -510,12 +510,9 @@ async fn exec_delta(
             let is_sync_batch = idx % (PERSIST_DELAY - 1) == 0 || idx == end;
             if is_sync_batch {
                 let wait_start = Instant::now();
-                done_rx.await.map_err(|_| {
-                    eyre!("results thread terminated before acknowledging modification")
-                })?;
+                hawk_handle.sync_peers(false, Some(done_rx)).await?;
                 metrics::histogram!("genesis_persist_wait_duration")
                     .record(wait_start.elapsed().as_secs_f64());
-                hawk_handle.sync_peers(false).await?;
             }
             metrics::histogram!("genesis_modification_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
                 .record(now.elapsed().as_secs_f64());
@@ -627,7 +624,7 @@ async fn exec_indexation(
         {
             // Coordinator: escape on shutdown.
             let shutdown = shutdown_handler.is_shutting_down();
-            let mismatch = hawk_handle.sync_peers(shutdown).await?;
+            let mismatch = hawk_handle.sync_peers(shutdown, None).await?;
             if shutdown || mismatch {
                 log_warn(String::from("Shutting down has been triggered"));
                 break;
@@ -658,14 +655,10 @@ async fn exec_indexation(
             if is_sync_batch {
                 if let Some(prev_done_rx) = persist_ch.take() {
                     let wait_start = Instant::now();
-                    // Wait for previous batch's persistence to signal completion.
-                    prev_done_rx.await.map_err(|_| {
-                        eyre!("results thread terminated before acknowledging batch")
-                    })?;
+                    // Wait for other nodes to finish equivalent persistence.
+                    hawk_handle.sync_peers(false, Some(prev_done_rx)).await?;
                     metrics::histogram!("genesis_persist_wait_duration")
                         .record(wait_start.elapsed().as_secs_f64());
-                    // Wait for other nodes to finish equivalent persistence.
-                    hawk_handle.sync_peers(false).await?;
                 }
             }
 
@@ -691,12 +684,9 @@ async fn exec_indexation(
         Ok(_) => {
             if let Some(rx) = persist_ch.take() {
                 let wait_start = Instant::now();
-                rx.await.map_err(|_| {
-                    eyre!("results thread terminated before acknowledging final batch")
-                })?;
+                hawk_handle.sync_peers(false, Some(rx)).await?;
                 metrics::histogram!("genesis_persist_wait_duration")
                     .record(wait_start.elapsed().as_secs_f64());
-                hawk_handle.sync_peers(false).await?;
             }
             log_info(String::from(
                 "All batches have been processed, \
