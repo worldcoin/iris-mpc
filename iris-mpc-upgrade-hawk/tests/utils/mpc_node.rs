@@ -38,6 +38,17 @@ pub struct DbStores {
 }
 
 impl DbStores {
+    pub async fn get_last_indexed_iris_id(&self) -> Result<u32> {
+        Ok(self
+            .graph
+            .get_persistent_state(
+                constants::STATE_DOMAIN,
+                constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
+            )
+            .await?
+            .unwrap_or(0))
+    }
+
     pub async fn new(url: &str, schema_name: &str, access_mode: AccessMode) -> Self {
         let client = PostgresClient::new(url, schema_name, access_mode)
             .await

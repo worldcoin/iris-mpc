@@ -135,3 +135,17 @@ fn test_hnsw_genesis_200() -> Result<()> {
     run_test!(200, 1)?;
     Ok(())
 }
+
+/// HNSW-Genesis-201: Shutdown chaos test
+///   Sends shutdown signals to nodes at different times mid-genesis
+///   to verify sync_peers consensus ensures all nodes stop at the same point.
+///   asserts:
+///     all 3 nodes have identical last_indexed_iris_id after each iteration;
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_hnsw_genesis_201() -> Result<()> {
+    use workflows::genesis_201::Test;
+    run_test!(201, 1)?;
+    Ok(())
+}

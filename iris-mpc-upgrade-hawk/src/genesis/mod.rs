@@ -154,6 +154,17 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     ) = exec_setup(&args, &config).await?;
 
     log_info(String::from("Setup complete."));
+
+    // Chaos testing: schedule a delayed shutdown trigger
+    if let Some(delay_ms) = config.chaos_shutdown_after_ms {
+        let sh = Arc::clone(&shutdown_handler);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            tracing::info!("Chaos: triggering shutdown after {}ms", delay_ms);
+            sh.trigger_manual_shutdown();
+        });
+    }
+
     log_info(format!(
         "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}",
         args.max_indexation_id,

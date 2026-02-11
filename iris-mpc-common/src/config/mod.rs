@@ -112,6 +112,9 @@ pub struct Config {
     pub chaos_max_persistence_delay_ms: Option<u64>,
 
     #[serde(default)]
+    pub chaos_shutdown_after_ms: Option<u64>,
+
+    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(
@@ -750,6 +753,7 @@ impl From<Config> for CommonConfig {
             tokio_threads: _,
             sns_retry_max_attempts: _,
             chaos_max_persistence_delay_ms: _, // chaos testing only
+            chaos_shutdown_after_ms: _,        // chaos testing only
         } = value;
 
         Self {
