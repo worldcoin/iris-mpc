@@ -1,5 +1,6 @@
 use std::fmt;
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::helpers::smpc_request;
@@ -63,6 +64,16 @@ impl RequestBatch {
         self.requests.iter().any(|r| r.is_enqueued())
     }
 
+    /// Returns ordered set of unique Iris indexes used across the batch.
+    pub(crate) fn iris_pair_indexes(&self) -> Vec<usize> {
+        self.requests
+            .iter()
+            .flat_map(|r| r.iris_pair_indexes())
+            .unique()
+            .sorted()
+            .collect()
+    }
+
     /// Returns true if there are any requests deemed enqueueable.
     pub(crate) fn is_enqueueable(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueueable())
@@ -76,27 +87,27 @@ impl RequestBatch {
     /// Extends requests collection with a new IdentityDeletion request.
     pub(crate) fn push_new_identity_deletion(
         &mut self,
+        parent: UniquenessRequestDescriptor,
         label: Option<String>,
-        parent_ref: UniquenessRequestDescriptor,
     ) {
         self.push_request(Request::IdentityDeletion {
             info: RequestInfo::new(self, label),
-            parent: parent_ref,
+            parent,
         });
     }
 
     /// Extends requests collection with a new Reauthorization request.
     pub(crate) fn push_new_reauthorization(
         &mut self,
+        parent: UniquenessRequestDescriptor,
         label: Option<String>,
-        parent_ref: UniquenessRequestDescriptor,
         iris_pair: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::Reauthorization {
             info: RequestInfo::new(self, label),
-            reauth_id: uuid::Uuid::new_v4(),
             iris_pair,
-            parent: parent_ref,
+            parent,
+            reauth_id: uuid::Uuid::new_v4(),
         });
     }
 
@@ -116,15 +127,15 @@ impl RequestBatch {
     /// Extends requests collection with a new ResetUpdate request.
     pub(crate) fn push_new_reset_update(
         &mut self,
+        parent: UniquenessRequestDescriptor,
         label: Option<String>,
-        parent_ref: UniquenessRequestDescriptor,
         iris_pair: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::ResetUpdate {
             info: RequestInfo::new(self, label),
-            reset_id: uuid::Uuid::new_v4(),
             iris_pair,
-            parent: parent_ref,
+            parent,
+            reset_id: uuid::Uuid::new_v4(),
         });
     }
 
@@ -231,12 +242,12 @@ mod tests {
         pub fn new_2() -> Self {
             let mut batch = Self::default();
             for _ in 0..10 {
-                let uniqueness_ref =
+                let parent_ref =
                     UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None));
-                batch.push_new_reauthorization(None, uniqueness_ref.clone(), None);
+                batch.push_new_reauthorization(parent_ref.clone(), None, None);
                 batch.push_new_reset_check(None, None);
-                batch.push_new_reset_update(None, uniqueness_ref.clone(), None);
-                batch.push_new_identity_deletion(None, uniqueness_ref.clone());
+                batch.push_new_reset_update(parent_ref.clone(), None, None);
+                batch.push_new_identity_deletion(parent_ref.clone(), None);
             }
 
             batch
@@ -247,21 +258,11 @@ mod tests {
             let mut batch = Self::default();
             for _ in 0..10 {
                 let serial_id = 1;
-                batch.push_new_reauthorization(
-                    None,
-                    UniquenessRequestDescriptor::IrisSerialId(serial_id),
-                    None,
-                );
+                let parent_ref = UniquenessRequestDescriptor::IrisSerialId(serial_id);
+                batch.push_new_reauthorization(parent_ref.clone(), None, None);
                 batch.push_new_reset_check(None, None);
-                batch.push_new_reset_update(
-                    None,
-                    UniquenessRequestDescriptor::IrisSerialId(serial_id),
-                    None,
-                );
-                batch.push_new_identity_deletion(
-                    None,
-                    UniquenessRequestDescriptor::IrisSerialId(serial_id),
-                );
+                batch.push_new_reset_update(parent_ref.clone(), None, None);
+                batch.push_new_identity_deletion(parent_ref.clone(), None);
             }
 
             batch
@@ -280,6 +281,7 @@ mod tests {
         let batch = RequestBatch::new_1();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 10);
+        assert!(batch.iris_pair_indexes().len() == 0);
         for request in batch.requests {
             assert!(request.is_uniqueness());
         }
@@ -290,6 +292,7 @@ mod tests {
         let batch = RequestBatch::new_2();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 50);
+        assert!(batch.iris_pair_indexes().len() == 0);
     }
 
     #[tokio::test]
@@ -297,5 +300,6 @@ mod tests {
         let batch = RequestBatch::new_3();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 40);
+        assert!(batch.iris_pair_indexes().len() == 0);
     }
 }

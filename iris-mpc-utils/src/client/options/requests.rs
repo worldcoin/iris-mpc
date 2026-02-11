@@ -47,12 +47,15 @@ impl RequestBatchOptions {
         }
     }
 
-    /// Returns ordered set of Iris indexes to be read from NDJSON file.
-    pub fn iris_indexes(&self) -> Vec<usize> {
+    /// Returns set of Iris code indexes to be read from NDJSON file.
+    pub(crate) fn iris_code_indexes(&self) -> Vec<usize> {
         match self {
-            Self::Complex { batches: _ } => {
-                unimplemented!()
-            }
+            Self::Complex { batches } => batches
+                .iter()
+                .flat_map(|batch| batch.iter())
+                .filter_map(|item| item.iris_pair())
+                .flat_map(|iris_pair| [iris_pair.left().index(), iris_pair.right().index()])
+                .collect(),
             _ => vec![],
         }
     }
@@ -61,7 +64,7 @@ impl RequestBatchOptions {
 /// Options over an individual request within a batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestOptions {
-    // Optional label for cross referencing within batch series.
+    // Optional label for cross referencing within batch.
     label: Option<String>,
 
     // Inner request payload options.
@@ -84,8 +87,8 @@ impl RequestOptions {
         &self.payload
     }
 
-    pub fn iris_indexes(&self) -> Option<(usize, usize)> {
-        self.payload().iris_indexes()
+    pub fn iris_pair(&self) -> Option<&IrisPairDescriptorOptions> {
+        self.payload().iris_pair()
     }
 }
 
@@ -118,12 +121,12 @@ pub enum RequestPayloadOptions {
 }
 
 impl RequestPayloadOptions {
-    pub fn iris_indexes(&self) -> Option<(usize, usize)> {
+    pub fn iris_pair(&self) -> Option<&IrisPairDescriptorOptions> {
         match &self {
             Self::IdentityDeletion { .. } | Self::ResetCheck { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
-            | Self::Uniqueness { iris_pair, .. } => Some(iris_pair.indexes()),
+            | Self::Uniqueness { iris_pair, .. } => Some(iris_pair),
         }
     }
 }
@@ -146,15 +149,15 @@ mod tests {
     use super::{RequestBatchOptions, RequestOptions, RequestPayloadOptions};
 
     impl RequestBatchOptions {
-        fn new_simple_1() -> Self {
-            Self::new_simple(smpc_request::UNIQUENESS_MESSAGE_TYPE, 10, 10, None)
-        }
-
-        fn new_series_1() -> Self {
+        fn new_complex_1() -> Self {
             Self::new_complex(vec![
                 RequestOptions::new_batch_0(),
                 RequestOptions::new_batch_1(),
             ])
+        }
+
+        fn new_simple_1() -> Self {
+            Self::new_simple(smpc_request::UNIQUENESS_MESSAGE_TYPE, 10, 10, None)
         }
     }
 
@@ -285,7 +288,7 @@ mod tests {
     #[test]
     fn test_new_request_batch_options_1() {
         for entity_factory in [
-            RequestBatchOptions::new_series_1,
+            RequestBatchOptions::new_complex_1,
             RequestBatchOptions::new_simple_1,
         ] {
             let _ = entity_factory();
@@ -295,7 +298,7 @@ mod tests {
     #[test]
     fn test_serialise_request_batch_options_to_json() {
         for entity_factory in [
-            RequestBatchOptions::new_series_1,
+            RequestBatchOptions::new_complex_1,
             RequestBatchOptions::new_simple_1,
         ] {
             let entity = entity_factory();
@@ -306,7 +309,7 @@ mod tests {
     #[test]
     fn test_serialise_request_batch_options_to_toml() {
         for entity_factory in [
-            RequestBatchOptions::new_series_1,
+            RequestBatchOptions::new_complex_1,
             RequestBatchOptions::new_simple_1,
         ] {
             let entity = entity_factory();

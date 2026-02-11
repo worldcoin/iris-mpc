@@ -19,6 +19,17 @@ pub enum SharesGeneratorOptions {
         // Instruction in respect of Iris code selection.
         selection_strategy: Option<IrisCodeSelectionStrategyOptions>,
     },
+    // /// Shares are generated from a slice of Iris shares generated from a pre-built file.
+    // FromFileSlice {
+    //     // Path to an NDJSON file.
+    //     path_to_ndjson_file: String,
+
+    //     // An optional RNG seed.
+    //     rng_seed: Option<u64>,
+
+    //     // Instruction in respect of Iris code selection.
+    //     iris_selectors: Vec<usize>,
+    // },
 }
 
 /// Enumeration over types of strategy to apply when selecting

@@ -11,21 +11,21 @@ pub(crate) struct RequestGenerator {
     generated_batch_count: usize,
 
     // Parameters determining how batches are generated.
-    params: RequestGeneratorParams,
+    config: RequestGeneratorConfig,
 }
 
 impl RequestGenerator {
     fn batch_count(&self) -> usize {
-        match &self.params {
-            RequestGeneratorParams::Simple { batch_count, .. } => *batch_count,
-            RequestGeneratorParams::Complex(batch_set) => batch_set.len(),
+        match &self.config {
+            RequestGeneratorConfig::Simple { batch_count, .. } => *batch_count,
+            RequestGeneratorConfig::Complex(batch_set) => batch_set.len(),
         }
     }
 
-    pub(crate) fn new(params: RequestGeneratorParams) -> Self {
+    pub(crate) fn new(config: RequestGeneratorConfig) -> Self {
         Self {
             generated_batch_count: 0,
-            params,
+            config,
         }
     }
 
@@ -35,11 +35,11 @@ impl RequestGenerator {
             return Ok(None);
         }
 
-        let batch = match &self.params {
-            RequestGeneratorParams::Complex(batch_set) => {
+        let batch = match &self.config {
+            RequestGeneratorConfig::Complex(batch_set) => {
                 batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
             }
-            RequestGeneratorParams::Simple {
+            RequestGeneratorConfig::Simple {
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
@@ -88,16 +88,16 @@ fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReque
 
     match kind {
         smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-            batch.push_new_identity_deletion(None, parent.unwrap());
+            batch.push_new_identity_deletion(parent.unwrap(), None);
         }
         smpc_request::REAUTH_MESSAGE_TYPE => {
-            batch.push_new_reauthorization(None, parent.unwrap(), None);
+            batch.push_new_reauthorization(parent.unwrap(), None, None);
         }
         smpc_request::RESET_CHECK_MESSAGE_TYPE => {
             batch.push_new_reset_check(None, None);
         }
         smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
-            batch.push_new_reset_update(None, parent.unwrap(), None);
+            batch.push_new_reset_update(parent.unwrap(), None, None);
         }
         smpc_request::UNIQUENESS_MESSAGE_TYPE => {
             batch.push_new_uniqueness(None, None);
@@ -125,7 +125,7 @@ fn push_new_uniqueness_maybe(
 }
 
 /// Set of variants over request generation inputs.
-pub(crate) enum RequestGeneratorParams {
+pub(crate) enum RequestGeneratorConfig {
     /// A pre-built known set of request batches.
     Complex(Vec<RequestBatch>),
     /// Parameters permitting single kind batches to be generated.
@@ -150,10 +150,10 @@ mod tests {
 
     use super::{
         super::super::typeset::{RequestBatch, RequestBatchKind, RequestBatchSize},
-        RequestGeneratorParams,
+        RequestGeneratorConfig,
     };
 
-    impl RequestGeneratorParams {
+    impl RequestGeneratorConfig {
         fn new_1() -> Self {
             Self::Complex(vec![
                 RequestBatch::default(),
@@ -174,11 +174,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_1() {
-        let _ = RequestGeneratorParams::new_1();
+        let _ = RequestGeneratorConfig::new_1();
     }
 
     #[tokio::test]
     async fn test_new_2() {
-        let _ = RequestGeneratorParams::new_2();
+        let _ = RequestGeneratorConfig::new_2();
     }
 }

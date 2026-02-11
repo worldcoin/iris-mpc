@@ -40,7 +40,7 @@ impl ServiceClientOptions {
         match self.request_batch() {
             RequestBatchOptions::Complex { .. } => match self.shares_generator() {
                 SharesGeneratorOptions::FromCompute { .. } => {
-                    Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Series can only be used with SharesGeneratorOptions::FromFile".to_string()))
+                    Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()))
                 }
                 _ => Ok(()),
             },

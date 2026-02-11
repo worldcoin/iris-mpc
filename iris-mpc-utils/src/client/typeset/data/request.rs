@@ -75,6 +75,19 @@ impl Request {
         }
     }
 
+    pub(super) fn iris_pair_indexes(&self) -> Vec<usize> {
+        match self {
+            Self::IdentityDeletion { .. } => vec![],
+            Self::Reauthorization { iris_pair, .. }
+            | Self::ResetCheck { iris_pair, .. }
+            | Self::ResetUpdate { iris_pair, .. }
+            | Self::Uniqueness { iris_pair, .. } => match iris_pair {
+                Some(iris_pair) => vec![iris_pair.left().index(), iris_pair.right().index()],
+                None => vec![],
+            },
+        }
+    }
+
     /// Returns true if deemed a child of previous system request.
     pub(super) fn is_child(&self, parent: &Self) -> bool {
         // A child of a uniqueness request can be derived by comparing signup identifiers.

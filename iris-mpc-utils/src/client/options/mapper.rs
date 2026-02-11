@@ -8,7 +8,7 @@ use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
 use crate::{
     aws::{AwsClient, AwsClientConfig},
     client::{
-        components::{RequestGenerator, RequestGeneratorParams, SharesGenerator},
+        components::{RequestGenerator, RequestGeneratorConfig, SharesGenerator},
         options::{
             AwsOptions, IrisCodeSelectionStrategyOptions, IrisDescriptorOptions,
             IrisPairDescriptorOptions, RequestBatchOptions, RequestPayloadOptions,
@@ -71,17 +71,17 @@ impl From<&IrisCodeSelectionStrategyOptions> for IrisSelection {
 
 impl From<&ServiceClientOptions> for RequestGenerator {
     fn from(config: &ServiceClientOptions) -> Self {
-        Self::new(RequestGeneratorParams::from(config))
+        Self::new(RequestGeneratorConfig::from(config))
     }
 }
 
-impl From<&ServiceClientOptions> for RequestGeneratorParams {
+impl From<&ServiceClientOptions> for RequestGeneratorConfig {
     fn from(opts: &ServiceClientOptions) -> Self {
         match opts.request_batch() {
             RequestBatchOptions::Complex {
                 batches: opts_batches,
             } => {
-                tracing::info!("Parsing RequestBatchOptions::Series");
+                tracing::info!("Parsing RequestBatchOptions::Complex");
 
                 let batches: Vec<RequestBatch> = opts_batches
                     .iter()
@@ -92,14 +92,14 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                             match opts_request.payload() {
                                 RequestPayloadOptions::IdentityDeletion { parent } => {
                                     batch.push_new_identity_deletion(
-                                        opts_request.label().clone(),
                                         UniquenessRequestDescriptor::from(parent),
+                                        opts_request.label().clone(),
                                     );
                                 }
                                 RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
                                     batch.push_new_reauthorization(
-                                        opts_request.label().clone(),
                                         UniquenessRequestDescriptor::from(parent),
+                                        opts_request.label().clone(),
                                         Some(IrisPairDescriptor::from(iris_pair)),
                                     );
                                 }
@@ -111,8 +111,8 @@ impl From<&ServiceClientOptions> for RequestGeneratorParams {
                                 }
                                 RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                                     batch.push_new_reset_update(
-                                        opts_request.label().clone(),
                                         UniquenessRequestDescriptor::from(parent),
+                                        opts_request.label().clone(),
                                         Some(IrisPairDescriptor::from(iris_pair)),
                                     );
                                 }

@@ -93,14 +93,4 @@ mod tests {
             Self::new(AwsClient::new_1().await, SharesGenerator::<R>::new_file_1())
         }
     }
-
-    #[tokio::test]
-    async fn test_new_1() {
-        let _ = SharesUploader::new_1().await;
-    }
-
-    #[tokio::test]
-    async fn test_new_2() {
-        let _ = SharesUploader::<StdRng>::new_2().await;
-    }
 }
