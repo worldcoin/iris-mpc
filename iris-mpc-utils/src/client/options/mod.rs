@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 mod aws;
@@ -37,15 +39,31 @@ impl ServiceClientOptions {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+        // Error if complex request batch is being used alongside compute shares generation.
         match self.request_batch() {
             RequestBatchOptions::Complex { .. } => match self.shares_generator() {
                 SharesGeneratorOptions::FromCompute { .. } => {
-                    Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()))
+                    return Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()))
                 }
-                _ => Ok(()),
+                _ => {},
             },
-            _ => Ok(()),
+            _ => {},
         }
+
+        // Error if there are Iris descriptor duplicates.
+        if let RequestBatchOptions::Complex { .. } = self.request_batch() {
+            let indexes = self.request_batch().iris_code_indexes();
+            if !indexes.is_empty() {
+                let set: HashSet<usize> = indexes.iter().copied().collect();
+                if set.len() != indexes.len() {
+                    return Err(ServiceClientError::InvalidOptions(
+                        "RequestBatchOptions Iris descriptor set contains duplicates".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

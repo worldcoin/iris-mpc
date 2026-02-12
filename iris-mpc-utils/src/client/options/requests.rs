@@ -59,6 +59,10 @@ impl RequestBatchOptions {
             _ => vec![],
         }
     }
+
+    pub(crate) fn validate(&self) {
+        unimplemented!()
+    }
 }
 
 /// Options over an individual request within a batch.
