@@ -1,8 +1,4 @@
-<<<<<<< Updated upstream
-image: "ghcr.io/worldcoin/iris-mpc-genesis:f214e734cb67c744efb943a17e927fd0630ea74f-arm64"
-=======
-image: "ghcr.io/worldcoin/iris-mpc-genesis:bb235ce97c983f588efffb6fb60d0ae9852338c6-arm64"
->>>>>>> Stashed changes
+image: "ghcr.io/worldcoin/iris-mpc-cpu:bb235ce97c983f588efffb6fb60d0ae9852338c6-arm64"
 
 environment: dev
 replicaCount: 1
