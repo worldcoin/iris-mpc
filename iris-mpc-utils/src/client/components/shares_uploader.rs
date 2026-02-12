@@ -103,12 +103,14 @@ mod tests {
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
     impl SharesUploader<StdRng> {
+        #[allow(dead_code)]
         pub async fn new_1() -> Self {
             Self::new(AwsClient::new_1().await, SharesGenerator::new_compute_1())
         }
     }
 
     impl<R: Rng + CryptoRng + SeedableRng + Send> SharesUploader<R> {
+        #[allow(dead_code)]
         pub async fn new_2() -> Self {
             Self::new(AwsClient::new_1().await, SharesGenerator::<R>::new_file_1())
         }

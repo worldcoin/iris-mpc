@@ -46,6 +46,7 @@ impl RequestInfo {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn label(&self) -> String {
         self.label.clone().unwrap_or_default()
     }

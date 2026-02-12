@@ -11,12 +11,12 @@ impl ServiceClientOptions {
         // Validate complex request options.
         if let RequestBatchOptions::Complex { .. } = self.request_batch() {
             // Error if used alongside compute shares generation.
-            match self.shares_generator() {
-                    SharesGeneratorOptions::FromCompute { .. } => {
-                        return Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()))
-                    }
-                    _ => {},
-                };
+            if matches!(
+                self.shares_generator(),
+                SharesGeneratorOptions::FromCompute { .. }
+            ) {
+                return Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()));
+            }
 
             // Error if there are duplicate Iris descriptors.
             let indexes = self.request_batch().iris_code_indexes();

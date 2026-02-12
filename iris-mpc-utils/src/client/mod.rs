@@ -3,8 +3,7 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use super::aws::AwsClient;
 use components::{
-    RequestEnqueuer, RequestGenerator, RequestGeneratorConfig, ResponseDequeuer, SharesGenerator,
-    SharesUploader,
+    RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesGenerator, SharesUploader,
 };
 use typeset::{Initialize, ProcessRequestBatch};
 

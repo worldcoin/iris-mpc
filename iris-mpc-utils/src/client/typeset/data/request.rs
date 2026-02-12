@@ -75,6 +75,7 @@ impl Request {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn iris_pair_indexes(&self) -> Vec<usize> {
         match self {
             Self::IdentityDeletion { .. } => vec![],

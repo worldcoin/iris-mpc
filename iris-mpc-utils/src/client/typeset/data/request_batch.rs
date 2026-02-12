@@ -65,6 +65,7 @@ impl RequestBatch {
     }
 
     /// Returns ordered set of unique Iris indexes used across the batch.
+    #[allow(dead_code)]
     pub(crate) fn iris_pair_indexes(&self) -> Vec<usize> {
         self.requests
             .iter()
@@ -229,11 +230,6 @@ impl RequestBatchSet {
     pub(crate) fn len(&self) -> usize {
         self.batches.len()
     }
-
-    // Assigns inter request dependencies as per user definition.
-    pub(crate) fn set_dependencies(&mut self) {
-        unimplemented!()
-    }
 }
 
 /// Encapsulates inputs used to compute size of a request batch.
@@ -309,7 +305,7 @@ mod tests {
         let batch = RequestBatch::new_1();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 10);
-        assert!(batch.iris_pair_indexes().len() == 0);
+        assert!(batch.iris_pair_indexes().is_empty());
         for request in batch.requests {
             assert!(request.is_uniqueness());
         }
@@ -320,7 +316,7 @@ mod tests {
         let batch = RequestBatch::new_2();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 50);
-        assert!(batch.iris_pair_indexes().len() == 0);
+        assert!(batch.iris_pair_indexes().is_empty());
     }
 
     #[tokio::test]
@@ -328,6 +324,6 @@ mod tests {
         let batch = RequestBatch::new_3();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 40);
-        assert!(batch.iris_pair_indexes().len() == 0);
+        assert!(batch.iris_pair_indexes().is_empty());
     }
 }

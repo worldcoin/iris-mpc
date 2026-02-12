@@ -191,6 +191,7 @@ impl RequestBatchOptions {
     }
 
     /// Returns set of declared request labels.
+    #[allow(dead_code)]
     pub(crate) fn labels_by_batch_idx(&self) -> std::collections::HashMap<String, usize> {
         match self {
             Self::Complex { batches } => batches
@@ -383,14 +384,17 @@ pub(crate) mod tests {
     }
 
     impl UniquenessRequestDescriptorOptions {
+        #[allow(dead_code)]
         pub(crate) fn new_4_00() -> Self {
             Self::new_label(REQUEST_DESCRIPTOR_4_00)
         }
 
+        #[allow(dead_code)]
         pub(crate) fn new_4_01() -> Self {
             Self::new_label(REQUEST_DESCRIPTOR_4_01)
         }
 
+        #[allow(dead_code)]
         pub(crate) fn new_4_02() -> Self {
             Self::new_label(REQUEST_DESCRIPTOR_4_02)
         }
