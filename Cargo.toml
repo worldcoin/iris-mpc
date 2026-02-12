@@ -73,7 +73,7 @@ sha2 = "0.10.8"
 static_assertions = "1.1"
 telemetry-batteries = "0.1.1"
 thiserror = "1"
-tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
+tokio = { version = "=1.49", features = ["full", "rt-multi-thread"] }
 tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
