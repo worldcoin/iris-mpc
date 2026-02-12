@@ -5,15 +5,18 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
 
+use super::{
+    super::ServiceClientOptions,
+    types::{
+        AwsOptions, IrisCodeSelectionStrategyOptions, IrisDescriptorOptions,
+        IrisPairDescriptorOptions, RequestBatchOptions, RequestOptions, RequestPayloadOptions,
+        SharesGeneratorOptions, UniquenessRequestDescriptorOptions,
+    },
+};
 use crate::{
     aws::{AwsClient, AwsClientConfig},
     client::{
         components::{RequestGenerator, RequestGeneratorConfig, SharesGenerator},
-        options::{
-            AwsOptions, IrisCodeSelectionStrategyOptions, IrisDescriptorOptions,
-            IrisPairDescriptorOptions, RequestBatchOptions, RequestOptions, RequestPayloadOptions,
-            ServiceClientOptions, SharesGeneratorOptions, UniquenessRequestDescriptorOptions,
-        },
         typeset::{
             IrisDescriptor, IrisPairDescriptor, RequestBatch, RequestBatchKind, RequestBatchSet,
             RequestBatchSize, UniquenessRequestDescriptor,

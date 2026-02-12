@@ -151,17 +151,19 @@ mod tests {
     use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
     use super::{
-        super::super::typeset::{RequestBatch, RequestBatchKind, RequestBatchSize},
+        super::super::typeset::{
+            RequestBatch, RequestBatchKind, RequestBatchSet, RequestBatchSize,
+        },
         RequestGeneratorConfig,
     };
 
     impl RequestGeneratorConfig {
         fn new_1() -> Self {
-            Self::Complex(vec![
+            Self::Complex(RequestBatchSet::new(vec![
                 RequestBatch::default(),
                 RequestBatch::default(),
                 RequestBatch::default(),
-            ])
+            ]))
         }
 
         pub fn new_2() -> Self {

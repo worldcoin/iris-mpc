@@ -1,20 +1,11 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 
-mod aws;
-mod descriptors;
 pub(crate) mod mapper;
-mod requests;
-mod shares;
+mod types;
+mod validator;
 
-use super::typeset::ServiceClientError;
-pub use aws::AwsOptions;
-pub(crate) use descriptors::{
-    IrisDescriptorOptions, IrisPairDescriptorOptions, UniquenessRequestDescriptorOptions,
-};
-pub(crate) use requests::{RequestBatchOptions, RequestOptions, RequestPayloadOptions};
-pub(crate) use shares::{IrisCodeSelectionStrategyOptions, SharesGeneratorOptions};
+pub use types::AwsOptions;
+pub(crate) use types::{RequestBatchOptions, SharesGeneratorOptions};
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,40 +27,6 @@ impl ServiceClientOptions {
 
     pub fn shares_generator(&self) -> &SharesGeneratorOptions {
         &self.shares_generator
-    }
-
-    pub(crate) fn validate_and_parse(&self) -> Result<(), ServiceClientError> {
-        self.validate()?;
-
-        Ok(())
-    }
-
-    fn validate(&self) -> Result<(), ServiceClientError> {
-        // Error if complex request batch is being used alongside compute shares generation.
-        match self.request_batch() {
-            RequestBatchOptions::Complex { .. } => match self.shares_generator() {
-                SharesGeneratorOptions::FromCompute { .. } => {
-                    return Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()))
-                }
-                _ => {},
-            },
-            _ => {},
-        }
-
-        // Error if there are Iris descriptor duplicates.
-        if let RequestBatchOptions::Complex { .. } = self.request_batch() {
-            let indexes = self.request_batch().iris_code_indexes();
-            if !indexes.is_empty() {
-                let set: HashSet<usize> = indexes.iter().copied().collect();
-                if set.len() != indexes.len() {
-                    return Err(ServiceClientError::InvalidOptions(
-                        "RequestBatchOptions Iris descriptor set contains duplicates".to_string(),
-                    ));
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 

@@ -3,7 +3,8 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use super::aws::AwsClient;
 use components::{
-    RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesGenerator, SharesUploader,
+    RequestEnqueuer, RequestGenerator, RequestGeneratorConfig, ResponseDequeuer, SharesGenerator,
+    SharesUploader,
 };
 use typeset::{Initialize, ProcessRequestBatch};
 
@@ -34,9 +35,8 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
         opts: ServiceClientOptions,
         opts_aws: AwsOptions,
     ) -> Result<Self, ServiceClientError> {
-        // Ensure options are validated and relevant 2nd order
-        // information is assigned.
-        opts.validate_and_parse()?;
+        // Ensure options & 2nd order config are validated.
+        opts.validate()?;
 
         let aws_client = AwsClient::async_from(opts_aws).await;
 
