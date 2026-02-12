@@ -75,6 +75,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for ServiceC
             AwsOptions::from(&options),
         )
         .await
+        .unwrap()
     }
 }
 

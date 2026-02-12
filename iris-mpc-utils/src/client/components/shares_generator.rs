@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use aws_sdk_sqs::operation::cancel_message_move_task;
 use itertools::Itertools;
 use rand::{CryptoRng, Rng, SeedableRng};
 
+use super::super::typeset::{IrisDescriptor, IrisPairDescriptor};
 use crate::{
     constants::N_PARTIES,
     irises::{
@@ -11,6 +11,7 @@ use crate::{
         GaloisRingSharedIrisForUpload,
     },
 };
+
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes, utils::serialization::iris_ndjson::IrisSelection,
 };
@@ -25,9 +26,8 @@ where
         rng: R,
     },
     FromFile {
-        // Iris shares read from NDJSON file.
+        // Iris shares read from an NDJSON file.
         iris_shares: Vec<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
-        // ii: impl Iterator<Item = [GaloisRingSharedIrisForUpload; N_PARTIES],
     },
 }
 
@@ -65,16 +65,34 @@ where
     }
 
     /// Generates pairs of Iris shares for upstream processing.
-    pub(crate) fn generate(&mut self) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
-        [self.generate_single(), self.generate_single()]
+    pub(crate) fn generate(
+        &mut self,
+        iris_pair: Option<&IrisPairDescriptor>,
+    ) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
+        let (left_desc, right_desc) = match iris_pair {
+            Some(descriptor) => (Some(descriptor.left()), Some(descriptor.right())),
+            None => (None, None),
+        };
+
+        [
+            self.generate_single(left_desc),
+            self.generate_single(right_desc),
+        ]
     }
 
-    fn generate_single(&mut self) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
+    fn generate_single(
+        &mut self,
+        maybe_iris_descriptor: Option<&IrisDescriptor>,
+    ) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
         match self {
             Self::FromCompute { rng } => generate_iris_shares_for_upload(rng, None),
-            Self::FromFile { iris_shares } => {
-                iris_shares.pop().expect("Shares generator is exhausted")
-            }
+            Self::FromFile { iris_shares } => match maybe_iris_descriptor {
+                Some(iris_descriptor) => iris_shares[iris_descriptor.index() - 1].clone(),
+                None => match maybe_iris_descriptor {
+                    Some(iris_descriptor) => iris_shares[iris_descriptor.index()].clone(),
+                    None => iris_shares.pop().expect("Shares generator is exhausted"),
+                },
+            },
         }
     }
 }
@@ -96,11 +114,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_new_compute_1() {
+    #[test]
+    fn test_new_compute_1() {
         let mut generator = SharesGenerator::<StdRng>::new_compute_1();
         for _ in 0..10 {
-            let _ = generator.generate();
+            let _ = generator.generate(None);
         }
     }
 }

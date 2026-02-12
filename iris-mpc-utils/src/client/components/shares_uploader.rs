@@ -45,14 +45,34 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ProcessRequestBatch for SharesUplo
         // Set shares to be uploaded.
         let mut shares: Vec<_> = Vec::new();
         for request in batch.requests_mut().iter_mut() {
-            if let Some(identifier) = match request {
+            let maybe_pair = match request {
                 Request::IdentityDeletion { .. } => None,
-                Request::Reauthorization { reauth_id, .. } => Some(reauth_id),
-                Request::ResetCheck { reset_id, .. } => Some(reset_id),
-                Request::ResetUpdate { reset_id, .. } => Some(reset_id),
-                Request::Uniqueness { signup_id, .. } => Some(signup_id),
-            } {
-                shares.push((identifier, self.shares_generator.generate()));
+                Request::Reauthorization {
+                    reauth_id,
+                    iris_pair,
+                    ..
+                } => Some((reauth_id, iris_pair)),
+                Request::ResetCheck {
+                    reset_id,
+                    iris_pair,
+                    ..
+                } => Some((reset_id, iris_pair)),
+                Request::ResetUpdate {
+                    reset_id,
+                    iris_pair,
+                    ..
+                } => Some((reset_id, iris_pair)),
+                Request::Uniqueness {
+                    signup_id,
+                    iris_pair,
+                    ..
+                } => Some((signup_id, iris_pair)),
+            };
+            if let Some((identifier, iris_pair)) = maybe_pair {
+                shares.push((
+                    identifier,
+                    self.shares_generator.generate(iris_pair.as_ref()),
+                ));
             }
         }
 

@@ -38,6 +38,10 @@ impl RequestInfo {
         }
     }
 
+    pub(super) fn label(&self) -> String {
+        self.label.clone().unwrap_or_default()
+    }
+
     pub(super) fn is_fully_correlated(&self) -> bool {
         self.correlation_set.iter().all(|c| c.is_some())
     }
@@ -57,6 +61,9 @@ impl RequestInfo {
 
 impl fmt::Display for RequestInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Request-{}.{}", self.batch_idx, self.batch_item_idx)
+        match &self.label {
+            Some(label) => write!(f, "{}", label),
+            None => write!(f, "{}.{}", self.batch_idx, self.batch_item_idx),
+        }
     }
 }
