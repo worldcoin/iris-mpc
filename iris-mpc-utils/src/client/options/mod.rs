@@ -13,7 +13,7 @@ pub use aws::AwsOptions;
 pub(crate) use descriptors::{
     IrisDescriptorOptions, IrisPairDescriptorOptions, UniquenessRequestDescriptorOptions,
 };
-pub(crate) use requests::{RequestBatchOptions, RequestPayloadOptions};
+pub(crate) use requests::{RequestBatchOptions, RequestOptions, RequestPayloadOptions};
 pub(crate) use shares::{IrisCodeSelectionStrategyOptions, SharesGeneratorOptions};
 
 /// Service client configuration.
@@ -38,7 +38,13 @@ impl ServiceClientOptions {
         &self.shares_generator
     }
 
-    pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+    pub(crate) fn validate_and_parse(&self) -> Result<(), ServiceClientError> {
+        self.validate()?;
+
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), ServiceClientError> {
         // Error if complex request batch is being used alongside compute shares generation.
         match self.request_batch() {
             RequestBatchOptions::Complex { .. } => match self.shares_generator() {

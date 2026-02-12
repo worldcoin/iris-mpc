@@ -63,3 +63,12 @@ pub enum UniquenessRequestDescriptor {
     // Unique signup id of system request being processed.
     SignupId(uuid::Uuid),
 }
+
+impl UniquenessRequestDescriptor {
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            Self::Label(label) => Some(label),
+            _ => None,
+        }
+    }
+}

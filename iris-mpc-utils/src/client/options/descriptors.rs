@@ -66,6 +66,13 @@ pub enum UniquenessRequestDescriptorOptions {
 }
 
 impl UniquenessRequestDescriptorOptions {
+    pub fn label(&self) -> Option<String> {
+        match self {
+            Self::Label(label) => Some(label.clone()),
+            _ => None,
+        }
+    }
+
     pub fn new_label(label: &str) -> Self {
         Self::Label(label.to_string())
     }

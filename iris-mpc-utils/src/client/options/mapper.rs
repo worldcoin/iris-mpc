@@ -11,12 +11,12 @@ use crate::{
         components::{RequestGenerator, RequestGeneratorConfig, SharesGenerator},
         options::{
             AwsOptions, IrisCodeSelectionStrategyOptions, IrisDescriptorOptions,
-            IrisPairDescriptorOptions, RequestBatchOptions, RequestPayloadOptions,
+            IrisPairDescriptorOptions, RequestBatchOptions, RequestOptions, RequestPayloadOptions,
             ServiceClientOptions, SharesGeneratorOptions, UniquenessRequestDescriptorOptions,
         },
         typeset::{
-            IrisDescriptor, IrisPairDescriptor, RequestBatch, RequestBatchKind, RequestBatchSize,
-            UniquenessRequestDescriptor,
+            IrisDescriptor, IrisPairDescriptor, RequestBatch, RequestBatchKind, RequestBatchSet,
+            RequestBatchSize, UniquenessRequestDescriptor,
         },
     },
 };
@@ -69,6 +69,61 @@ impl From<&IrisCodeSelectionStrategyOptions> for IrisSelection {
     }
 }
 
+impl From<&Vec<Vec<RequestOptions>>> for RequestBatchSet {
+    fn from(opts: &Vec<Vec<RequestOptions>>) -> Self {
+        let batches: Vec<RequestBatch> = opts
+            .iter()
+            .enumerate()
+            .map(|(batch_idx, opts_batch)| {
+                let mut batch = RequestBatch::new(batch_idx, vec![]);
+                for opts_request in opts_batch {
+                    match opts_request.payload() {
+                        RequestPayloadOptions::IdentityDeletion { parent } => {
+                            batch.push_new_identity_deletion(
+                                UniquenessRequestDescriptor::from(parent),
+                                opts_request.label(),
+                                parent.label(),
+                            );
+                        }
+                        RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
+                            batch.push_new_reauthorization(
+                                UniquenessRequestDescriptor::from(parent),
+                                Some(IrisPairDescriptor::from(iris_pair)),
+                                opts_request.label(),
+                                parent.label(),
+                            );
+                        }
+                        RequestPayloadOptions::ResetCheck { iris_pair } => {
+                            batch.push_new_reset_check(
+                                opts_request.label(),
+                                Some(IrisPairDescriptor::from(iris_pair)),
+                            );
+                        }
+                        RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
+                            batch.push_new_reset_update(
+                                UniquenessRequestDescriptor::from(parent),
+                                Some(IrisPairDescriptor::from(iris_pair)),
+                                opts_request.label(),
+                                parent.label(),
+                            );
+                        }
+                        RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
+                            batch.push_new_uniqueness(
+                                opts_request.label().clone(),
+                                Some(IrisPairDescriptor::from(iris_pair)),
+                            );
+                        }
+                    }
+                }
+
+                batch
+            })
+            .collect();
+
+        RequestBatchSet::new(batches)
+    }
+}
+
 impl From<&ServiceClientOptions> for RequestGenerator {
     fn from(config: &ServiceClientOptions) -> Self {
         Self::new(RequestGeneratorConfig::from(config))
@@ -82,54 +137,7 @@ impl From<&ServiceClientOptions> for RequestGeneratorConfig {
                 batches: opts_batches,
             } => {
                 tracing::info!("Parsing RequestBatchOptions::Complex");
-
-                let batches: Vec<RequestBatch> = opts_batches
-                    .iter()
-                    .enumerate()
-                    .map(|(batch_idx, opts_batch)| {
-                        let mut batch = RequestBatch::new(batch_idx, vec![]);
-                        for opts_request in opts_batch {
-                            match opts_request.payload() {
-                                RequestPayloadOptions::IdentityDeletion { parent } => {
-                                    batch.push_new_identity_deletion(
-                                        UniquenessRequestDescriptor::from(parent),
-                                        opts_request.label().clone(),
-                                    );
-                                }
-                                RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
-                                    batch.push_new_reauthorization(
-                                        UniquenessRequestDescriptor::from(parent),
-                                        opts_request.label().clone(),
-                                        Some(IrisPairDescriptor::from(iris_pair)),
-                                    );
-                                }
-                                RequestPayloadOptions::ResetCheck { iris_pair } => {
-                                    batch.push_new_reset_check(
-                                        opts_request.label().clone(),
-                                        Some(IrisPairDescriptor::from(iris_pair)),
-                                    );
-                                }
-                                RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
-                                    batch.push_new_reset_update(
-                                        UniquenessRequestDescriptor::from(parent),
-                                        opts_request.label().clone(),
-                                        Some(IrisPairDescriptor::from(iris_pair)),
-                                    );
-                                }
-                                RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
-                                    batch.push_new_uniqueness(
-                                        opts_request.label().clone(),
-                                        Some(IrisPairDescriptor::from(iris_pair)),
-                                    );
-                                }
-                            }
-                        }
-
-                        batch
-                    })
-                    .collect();
-
-                Self::Complex(batches)
+                Self::Complex(RequestBatchSet::from(opts_batches))
             }
             RequestBatchOptions::Simple {
                 batch_count,

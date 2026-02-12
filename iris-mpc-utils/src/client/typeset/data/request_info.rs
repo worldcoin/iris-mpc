@@ -20,12 +20,19 @@ pub struct RequestInfo {
     /// User assigned label ... used to associate child/parent requests.
     label: Option<String>,
 
+    /// User assigned label ... used to associate child/parent requests.
+    label_of_parent: Option<String>,
+
     /// Set of processing states.
     state_history: Vec<RequestStatus>,
 }
 
 impl RequestInfo {
-    pub(super) fn new(batch: &RequestBatch, label: Option<String>) -> Self {
+    pub(super) fn new(
+        batch: &RequestBatch,
+        label: Option<String>,
+        label_of_parent: Option<String>,
+    ) -> Self {
         let mut state_history = Vec::with_capacity(RequestStatus::VARIANT_COUNT);
         state_history.push(RequestStatus::default());
 
@@ -34,6 +41,7 @@ impl RequestInfo {
             batch_item_idx: batch.next_item_idx(),
             correlation_set: [const { None }; N_PARTIES],
             label,
+            label_of_parent,
             state_history,
         }
     }

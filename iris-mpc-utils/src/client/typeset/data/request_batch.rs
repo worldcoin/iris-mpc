@@ -89,9 +89,10 @@ impl RequestBatch {
         &mut self,
         parent: UniquenessRequestDescriptor,
         label: Option<String>,
+        label_of_parent: Option<String>,
     ) {
         self.push_request(Request::IdentityDeletion {
-            info: RequestInfo::new(self, label),
+            info: RequestInfo::new(self, label, label_of_parent),
             parent,
         });
     }
@@ -100,11 +101,12 @@ impl RequestBatch {
     pub(crate) fn push_new_reauthorization(
         &mut self,
         parent: UniquenessRequestDescriptor,
-        label: Option<String>,
         iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+        label_of_parent: Option<String>,
     ) {
         self.push_request(Request::Reauthorization {
-            info: RequestInfo::new(self, label),
+            info: RequestInfo::new(self, label, label_of_parent),
             iris_pair,
             parent,
             reauth_id: uuid::Uuid::new_v4(),
@@ -118,7 +120,7 @@ impl RequestBatch {
         iris_pair: Option<IrisPairDescriptor>,
     ) {
         self.push_request(Request::ResetCheck {
-            info: RequestInfo::new(self, label),
+            info: RequestInfo::new(self, label, None),
             iris_pair,
             reset_id: uuid::Uuid::new_v4(),
         });
@@ -128,11 +130,12 @@ impl RequestBatch {
     pub(crate) fn push_new_reset_update(
         &mut self,
         parent: UniquenessRequestDescriptor,
-        label: Option<String>,
         iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+        label_of_parent: Option<String>,
     ) {
         self.push_request(Request::ResetUpdate {
-            info: RequestInfo::new(self, label),
+            info: RequestInfo::new(self, label, label_of_parent),
             iris_pair,
             parent,
             reset_id: uuid::Uuid::new_v4(),
@@ -147,7 +150,7 @@ impl RequestBatch {
     ) -> uuid::Uuid {
         let signup_id = uuid::Uuid::new_v4();
         self.push_request(Request::Uniqueness {
-            info: RequestInfo::new(self, label),
+            info: RequestInfo::new(self, label, None),
             iris_pair,
             signup_id,
         });
@@ -208,6 +211,31 @@ impl From<&String> for RequestBatchKind {
     }
 }
 
+/// Encapsulates a constructed set of request batches for processing.
+pub struct RequestBatchSet {
+    // Associated set of request batches.
+    batches: Vec<RequestBatch>,
+}
+
+impl RequestBatchSet {
+    pub(crate) fn new(batches: Vec<RequestBatch>) -> Self {
+        Self { batches }
+    }
+
+    pub(crate) fn batches(&self) -> &Vec<RequestBatch> {
+        &self.batches
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.batches.len()
+    }
+
+    // Assigns inter request dependencies as per user definition.
+    pub(crate) fn set_dependencies(&mut self) {
+        unimplemented!()
+    }
+}
+
 /// Encapsulates inputs used to compute size of a request batch.
 #[derive(Debug, Clone)]
 pub enum RequestBatchSize {
@@ -244,10 +272,10 @@ mod tests {
             for _ in 0..10 {
                 let parent_ref =
                     UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None));
-                batch.push_new_reauthorization(parent_ref.clone(), None, None);
+                batch.push_new_reauthorization(parent_ref.clone(), None, None, None);
                 batch.push_new_reset_check(None, None);
-                batch.push_new_reset_update(parent_ref.clone(), None, None);
-                batch.push_new_identity_deletion(parent_ref.clone(), None);
+                batch.push_new_reset_update(parent_ref.clone(), None, None, None);
+                batch.push_new_identity_deletion(parent_ref.clone(), None, None);
             }
 
             batch
@@ -259,10 +287,10 @@ mod tests {
             for _ in 0..10 {
                 let serial_id = 1;
                 let parent_ref = UniquenessRequestDescriptor::IrisSerialId(serial_id);
-                batch.push_new_reauthorization(parent_ref.clone(), None, None);
+                batch.push_new_reauthorization(parent_ref.clone(), None, None, None);
                 batch.push_new_reset_check(None, None);
-                batch.push_new_reset_update(parent_ref.clone(), None, None);
-                batch.push_new_identity_deletion(parent_ref.clone(), None);
+                batch.push_new_reset_update(parent_ref.clone(), None, None, None);
+                batch.push_new_identity_deletion(parent_ref.clone(), None, None);
             }
 
             batch

@@ -59,10 +59,6 @@ impl RequestBatchOptions {
             _ => vec![],
         }
     }
-
-    pub(crate) fn validate(&self) {
-        unimplemented!()
-    }
 }
 
 /// Options over an individual request within a batch.
@@ -83,8 +79,8 @@ impl RequestOptions {
         }
     }
 
-    pub fn label(&self) -> &Option<String> {
-        &self.label
+    pub fn label(&self) -> Option<String> {
+        self.label.clone()
     }
 
     pub fn payload(&self) -> &RequestPayloadOptions {

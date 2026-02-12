@@ -44,7 +44,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ProcessRequestBatch for SharesUplo
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set shares to be uploaded.
         let mut shares: Vec<_> = Vec::new();
-        for request in batch.requests_mut().iter_mut() {
+        for request in batch.requests() {
             let maybe_pair = match request {
                 Request::IdentityDeletion { .. } => None,
                 Request::Reauthorization {

@@ -34,7 +34,9 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
         opts: ServiceClientOptions,
         opts_aws: AwsOptions,
     ) -> Result<Self, ServiceClientError> {
-        opts.validate()?;
+        // Ensure options are validated and relevant 2nd order
+        // information is assigned.
+        opts.validate_and_parse()?;
 
         let aws_client = AwsClient::async_from(opts_aws).await;
 

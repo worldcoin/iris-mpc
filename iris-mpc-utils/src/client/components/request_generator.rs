@@ -1,7 +1,7 @@
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::super::typeset::{
-    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError,
+    RequestBatch, RequestBatchKind, RequestBatchSet, RequestBatchSize, ServiceClientError,
     UniquenessRequestDescriptor,
 };
 
@@ -36,9 +36,11 @@ impl RequestGenerator {
         }
 
         let batch = match &self.config {
-            RequestGeneratorConfig::Complex(batch_set) => {
-                batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
-            }
+            RequestGeneratorConfig::Complex(batch_set) => batch_set
+                .batches()
+                .get(self.next_batch_idx() - 1)
+                .unwrap()
+                .clone(),
             RequestGeneratorConfig::Simple {
                 batch_size,
                 batch_kind,
@@ -88,16 +90,16 @@ fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReque
 
     match kind {
         smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-            batch.push_new_identity_deletion(parent.unwrap(), None);
+            batch.push_new_identity_deletion(parent.unwrap(), None, None);
         }
         smpc_request::REAUTH_MESSAGE_TYPE => {
-            batch.push_new_reauthorization(parent.unwrap(), None, None);
+            batch.push_new_reauthorization(parent.unwrap(), None, None, None);
         }
         smpc_request::RESET_CHECK_MESSAGE_TYPE => {
             batch.push_new_reset_check(None, None);
         }
         smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
-            batch.push_new_reset_update(parent.unwrap(), None, None);
+            batch.push_new_reset_update(parent.unwrap(), None, None, None);
         }
         smpc_request::UNIQUENESS_MESSAGE_TYPE => {
             batch.push_new_uniqueness(None, None);
@@ -127,7 +129,7 @@ fn push_new_uniqueness_maybe(
 /// Set of variants over request generation inputs.
 pub(crate) enum RequestGeneratorConfig {
     /// A pre-built known set of request batches.
-    Complex(Vec<RequestBatch>),
+    Complex(RequestBatchSet),
     /// Parameters permitting single kind batches to be generated.
     Simple {
         /// Number of request batches to generate.

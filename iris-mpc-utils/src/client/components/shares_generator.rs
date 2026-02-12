@@ -69,17 +69,18 @@ where
         &mut self,
         iris_pair: Option<&IrisPairDescriptor>,
     ) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
-        let (left_desc, right_desc) = match iris_pair {
+        let (maybe_left_desc, maybe_right_desc) = match iris_pair {
             Some(descriptor) => (Some(descriptor.left()), Some(descriptor.right())),
             None => (None, None),
         };
 
         [
-            self.generate_single(left_desc),
-            self.generate_single(right_desc),
+            self.generate_single(maybe_left_desc),
+            self.generate_single(maybe_right_desc),
         ]
     }
 
+    /// Generates a single set of Iris shares for upstream processing.
     fn generate_single(
         &mut self,
         maybe_iris_descriptor: Option<&IrisDescriptor>,
@@ -88,10 +89,7 @@ where
             Self::FromCompute { rng } => generate_iris_shares_for_upload(rng, None),
             Self::FromFile { iris_shares } => match maybe_iris_descriptor {
                 Some(iris_descriptor) => iris_shares[iris_descriptor.index() - 1].clone(),
-                None => match maybe_iris_descriptor {
-                    Some(iris_descriptor) => iris_shares[iris_descriptor.index()].clone(),
-                    None => iris_shares.pop().expect("Shares generator is exhausted"),
-                },
+                None => iris_shares.pop().expect("Shares generator is exhausted"),
             },
         }
     }
