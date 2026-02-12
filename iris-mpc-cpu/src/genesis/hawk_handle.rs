@@ -1,5 +1,5 @@
 use super::{
-    hawk_job::{Job, JobRequest, JobResult},
+    hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING},
     utils,
 };
 use crate::{
@@ -15,12 +15,13 @@ use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{
     future::Future,
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+    time::Instant,
 };
-use tokio::{
-    sync::{self, mpsc, oneshot},
-    time::timeout,
-};
+use tokio::sync::{self, mpsc, oneshot};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "Hawk-Handle";
@@ -344,9 +345,12 @@ impl Handle {
                     ),
                 ))
             }
-            JobRequest::Sync { shutdown } => {
+            JobRequest::Sync {
+                shutdown,
+                sync_status,
+            } => {
                 let _ = done_tx;
-                let mismatched = HawkSession::sync_peers(shutdown, sessions).await?;
+                let mismatched = HawkSession::sync_peers(shutdown, sync_status, sessions).await?;
                 Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
@@ -406,9 +410,31 @@ impl Handle {
     ///
     /// Used to periodically synchronize db persistence threads of MPC nodes in
     /// genesis protocol.
-    pub async fn sync_peers(&mut self, shutdown: bool) -> Result<bool> {
-        let r = self.submit_request(JobRequest::Sync { shutdown }).await;
-        let (_, r) = timeout(Duration::from_secs(2), r).await??;
+    pub async fn sync_peers(
+        &mut self,
+        shutdown: bool,
+        sync_done: Option<oneshot::Receiver<()>>,
+    ) -> Result<bool> {
+        let status = Arc::new(AtomicU8::new(SYNC_RUNNING));
+        if let Some(ch) = sync_done {
+            let status = status.clone();
+            tokio::spawn(async move {
+                match ch.await {
+                    Ok(()) => status.store(SYNC_DONE, Ordering::Relaxed),
+                    Err(_) => status.store(SYNC_ERROR, Ordering::Relaxed),
+                }
+            });
+        } else {
+            status.store(SYNC_DONE, Ordering::Relaxed);
+        }
+
+        let r = self
+            .submit_request(JobRequest::Sync {
+                shutdown,
+                sync_status: status,
+            })
+            .await;
+        let (_, r) = r.await?;
         match r {
             JobResult::Sync { mismatched } => Ok(mismatched),
             _ => bail!("invalid job result"),

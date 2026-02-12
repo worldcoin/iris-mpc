@@ -5,12 +5,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
     libssl-dev \
-    texinfo \
-    libcap2-bin \
     pkg-config \
     git \
-    devscripts \
-    debhelper \
     ca-certificates \
     protobuf-compiler \
     wget
@@ -32,7 +28,7 @@ COPY . .
 ENV RUSTFLAGS="-C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse"
 RUN cargo build -p iris-mpc-bins --release --target=aarch64-unknown-linux-gnu --bin iris-mpc-hawk-genesis
 
-FROM ubuntu:22.04
+FROM public.ecr.aws/ubuntu/ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG ARCHITECTURE
@@ -59,7 +55,6 @@ RUN curl -o /usr/local/share/ca-certificates/ca_party_prod_0.crt https://wf-ampc
 
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
-
 
 COPY --from=build-app /src/iris-mpc-upgrade-hawk/target/aarch64-unknown-linux-gnu/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
 
