@@ -1,103 +1,74 @@
 # Running Service Client Utility
 
-A new HNSW tool, named `service-client` has been developed to support end-to-end system testing.  The tool's design intent is to support the dispatch of various traffic patterns into the system.  Such patterns will differ in terms of time (short vs extended bursts) and/or content (different request types).  
+The `service-client` tool supports end-to-end system testing by dispatching various traffic patterns into the system. Patterns differ in terms of time (short vs extended bursts) and/or content (different request types).
 
 ### Environments
 
-The tool is designed to be used in the following environments:
+- **dev-dkr**: Local dockerised development environment (LocalStack)
+- **dev-stg**: Remote AWS staged development environment
 
-- *dev-dkr*: Local dockerised development environment
+## Prerequisites
 
-- *dev-stg*: Remote AWS staged development environment
+### AWS Profile
 
-## Prelude: Setup Datadog & AWS accounts
+Add the relevant profile to your `~/.aws/config`. Reference templates are in `scripts/iris-mpc-utils/service-client/profiles/`.
+
+For **dev-dkr** (LocalStack), add the `worldcoin-dev-dkr` profile and set credentials to `test`/`test` in `~/.aws/credentials`.
+
+For **dev-stg** (real AWS), add the `worldcoin-smpcv-io-vpc-dev` profile with your real credentials.
 
 ### DatadogHQ Account
 
 - Obtain credentials from TFH
-- Verify credentials @ Datadog login page
-    - [https://app.datadoghq.com/account/login](https://app.datadoghq.com/account/login?redirect=f)
+- Verify credentials @ [Datadog login page](https://app.datadoghq.com/account/login?redirect=f)
 
 ### AWS Management Console Account
 
 - Obtain credentials from TFH
-- Login to AWS Management Console
-    - https://aws.amazon.com/console/
-- Create Access Key
-    - Open “I AM” page
-    - Click tab: `Security credentials`
-    - Click button: `Create access key`
-    - Click option: `Command Line Interface (CLI)`
-    - Follow instructions to create access key and:
-        - Save: `Access Key`
-        - Save: `Secret access key`
+- Login to [AWS Management Console](https://aws.amazon.com/console/)
+- Create Access Key via IAM > Security credentials > Create access key > CLI
 
-## Step 1: Activate
+## Usage
 
 ```
-source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/activate
+scripts/iris-mpc-utils/service-client/run.sh [-e ENV] [EXEC_OPTS_TOML]
 ```
 
-*HINT*: you may wish to add activation to your local `~/.bashrc` file.
+### Examples
 
-## Step 2: View Help
+```bash
+# Default: dev-dkr environment, simple-1.toml request batch
+./run.sh
 
-```
-hnsw-service-client-init help
-hnsw-service-client-set-env help
-hnsw-service-client-exec help
-```
+# Staging environment
+./run.sh -e dev-stg
 
-## Step 3: Initialise
+# Custom request batch
+./run.sh requests/complex-1.toml
 
-Initialises local resources for each environment.  One time execution.
+# Staging with custom request batch
+./run.sh -e dev-stg path/to/custom.toml
 
-```
-hnsw-service-client-init
-```
-
-*NOTE*: you will be instructed to review/edit the following files:
-
-```
-${HOME}/.hnsw/service-client/aws-opts/dev-dkr/aws-credentials
-${HOME}/.hnsw/service-client/aws-opts/dev-stg/aws-credentials
+# Help
+./run.sh -h
 ```
 
-## Step 4: Start Session
+## Request Batch Examples
 
-Starts service client session against a supported environment.  One time execution per terminal session.
+Pre-built request batches are in `scripts/iris-mpc-utils/service-client/requests/`:
 
-```
-hnsw-service-client-set-env dev-dkr
-```
+| File | Description |
+|------|-------------|
+| `simple-1.toml` | Uniqueness requests |
+| `simple-2.toml` | Reauth requests |
+| `simple-3.toml` | Reset update requests |
+| `simple-4.toml` | Identity deletion requests |
+| `simple-5.toml` | Reset check requests |
+| `complex-1.toml` | Multi-operation batch with dependencies |
 
-Options: 
-- env = dev-dkr | dev-stg
+### Custom request batch: computed shares
 
-Defaults: 
-- env = dev-dkr
-
-*NOTE*: Repeat if you switch between supported environments within a terminal session.
-
-## Step 5: Execute
-
-```
-hnsw-service-client-exec PATH-TO-A-SERVICE-CLIENT-EXEC-OPTIONS-FILE
-```
-
-Defaults: 
-- filepath = ${HOME}/.hnsw/service-client/exec-opts/examples/example-1.toml
-
-## Example Service Client Execution Options.
-
-It is good practice to create a local folder, e.g. `~/.hnsw/service-client/my-exec-opts`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
-
-### Example 1.
-
-- Simple uniqueness requests
-- Iris shares generated on the fly
-
-```
+```toml
 [request_batch.Simple]
 batch_count = 10
 batch_size = 10
@@ -107,12 +78,9 @@ batch_kind = "uniqueness"
 rng_seed = 42
 ```
 
-### Example 2.
+### Custom request batch: shares from file
 
-- Simple uniqueness requests
-- Iris shares generated from an Iris codes NDJSON file
-
-```
+```toml
 [request_batch.Simple]
 batch_count = 10
 batch_size = 10
@@ -122,19 +90,4 @@ batch_kind = "uniqueness"
 path_to_ndjson_file = "YOUR-WORKING-DIR/iris-mpc/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson"
 rng_seed = 42
 selection_strategy = "All"
-```
-
-### Example 3.
-
-- Simple reauth requests
-- Iris shares generated on the fly
-
-```
-[request_batch.Simple]
-batch_count = 10
-batch_size = 10
-batch_kind = "reauth"
-
-[shares_generator.FromCompute]
-rng_seed = 42
 ```
