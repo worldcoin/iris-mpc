@@ -273,202 +273,74 @@ impl UniquenessRequestDescriptorOptions {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use serde_json;
-    use toml;
+mod tests {
+    use super::*;
 
-    use iris_mpc_common::helpers::smpc_request;
-
-    use crate::client::typeset::{IrisDescriptor, IrisPairDescriptor};
-
-    use super::{
-        RequestBatchOptions, RequestOptions, RequestPayloadOptions,
-        UniquenessRequestDescriptorOptions,
-    };
-
-    pub(crate) const REQUEST_DESCRIPTOR_0: &str = "IdentityDeletion-0";
-    pub(crate) const REQUEST_DESCRIPTOR_1: &str = "ResetCheck-0";
-    pub(crate) const REQUEST_DESCRIPTOR_2: &str = "ResetUpdate-0";
-    pub(crate) const REQUEST_DESCRIPTOR_3: &str = "Reauthorisation-0";
-    pub(crate) const REQUEST_DESCRIPTOR_4_00: &str = "Uniqueness-00";
-    pub(crate) const REQUEST_DESCRIPTOR_4_01: &str = "Uniqueness-01";
-    pub(crate) const REQUEST_DESCRIPTOR_4_02: &str = "Uniqueness-02";
-    pub(crate) const REQUEST_DESCRIPTOR_4_10: &str = "Uniqueness-10";
-    pub(crate) const REQUEST_DESCRIPTOR_4_11: &str = "Uniqueness-11";
-    pub(crate) const REQUEST_DESCRIPTOR_4_12: &str = "Uniqueness-12";
-
-    impl IrisPairDescriptor {
-        pub(crate) fn new_0(offset: usize) -> Self {
-            Self::new(
-                IrisDescriptor::new(offset + 1),
-                IrisDescriptor::new(offset + 2),
-            )
-        }
+    #[test]
+    fn test_request_batch_options_simple_roundtrip() {
+        let toml_str = r#"
+            [Simple]
+            batch_count = 2
+            batch_size = 10
+            batch_kind = "uniqueness"
+        "#;
+        let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
+        let _ = toml::to_string(&opts).unwrap();
     }
 
-    impl UniquenessRequestDescriptorOptions {
-        #[allow(dead_code)]
-        pub(crate) fn new_4_00() -> Self {
-            Self::new_label(REQUEST_DESCRIPTOR_4_00)
-        }
-
-        #[allow(dead_code)]
-        pub(crate) fn new_4_01() -> Self {
-            Self::new_label(REQUEST_DESCRIPTOR_4_01)
-        }
-
-        #[allow(dead_code)]
-        pub(crate) fn new_4_02() -> Self {
-            Self::new_label(REQUEST_DESCRIPTOR_4_02)
-        }
-
-        pub(crate) fn new_4_10() -> Self {
-            Self::new_label(REQUEST_DESCRIPTOR_4_10)
-        }
-
-        pub(crate) fn new_4_11() -> Self {
-            Self::new_label(REQUEST_DESCRIPTOR_4_11)
-        }
-
-        pub(crate) fn new_4_12() -> Self {
-            Self::new_label(REQUEST_DESCRIPTOR_4_12)
-        }
+    #[test]
+    fn test_request_batch_options_simple_with_serial_id_roundtrip() {
+        let toml_str = r#"
+            [Simple]
+            batch_count = 2
+            batch_size = 10
+            batch_kind = "reauth"
+            known_iris_serial_id = 1
+        "#;
+        let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
+        let _ = toml::to_string(&opts).unwrap();
     }
 
-    impl RequestBatchOptions {
-        fn new_complex_1() -> Self {
-            Self::new_complex(vec![
-                RequestOptions::new_batch_0(),
-                RequestOptions::new_batch_1(),
-            ])
-        }
-
-        fn new_simple_1() -> Self {
-            Self::new_simple(smpc_request::UNIQUENESS_MESSAGE_TYPE, 10, 10, None)
-        }
-    }
-
-    impl RequestOptions {
-        /// Identity deletion.
-        fn new_0() -> Self {
-            Self::new(
-                Some(REQUEST_DESCRIPTOR_0),
-                RequestPayloadOptions::IdentityDeletion {
-                    parent: UniquenessRequestDescriptorOptions::new_4_10(),
-                },
-            )
-        }
-
-        /// Reauthorisation.
-        fn new_1() -> Self {
-            Self::new(
-                Some(REQUEST_DESCRIPTOR_1),
-                RequestPayloadOptions::Reauthorisation {
-                    iris_pair: IrisPairDescriptor::new_0(20),
-                    parent: UniquenessRequestDescriptorOptions::new_4_11(),
-                },
-            )
-        }
-
-        /// ResetCheck.
-        fn new_2() -> Self {
-            Self::new(
-                Some(REQUEST_DESCRIPTOR_2),
-                RequestPayloadOptions::ResetCheck {
-                    iris_pair: IrisPairDescriptor::new_0(22),
-                },
-            )
-        }
-
-        /// ResetUpdate.
-        fn new_3() -> Self {
-            Self::new(
-                Some(REQUEST_DESCRIPTOR_3),
-                RequestPayloadOptions::ResetUpdate {
-                    iris_pair: IrisPairDescriptor::new_0(24),
-                    parent: UniquenessRequestDescriptorOptions::new_4_12(),
-                },
-            )
-        }
-
-        /// Uniqueness 00.
-        fn new_4(descriptor_label: &str, iris_pair_offset: usize) -> Self {
-            Self::new(
-                Some(descriptor_label),
-                RequestPayloadOptions::Uniqueness {
-                    iris_pair: IrisPairDescriptor::new_0(iris_pair_offset),
-                    insertion_layers: None,
-                },
-            )
-        }
-
-        /// Uniqueness 00.
-        fn new_4_00() -> Self {
-            Self::new_4(REQUEST_DESCRIPTOR_4_00, 0)
-        }
-
-        /// Uniqueness 01.
-        fn new_4_01() -> Self {
-            Self::new_4(REQUEST_DESCRIPTOR_4_01, 2)
-        }
-
-        /// Uniqueness 02.
-        fn new_4_02() -> Self {
-            Self::new_4(REQUEST_DESCRIPTOR_4_02, 4)
-        }
-
-        /// Uniqueness 10.
-        fn new_4_10() -> Self {
-            Self::new_4(REQUEST_DESCRIPTOR_4_10, 10)
-        }
-
-        /// Uniqueness 11.
-        fn new_4_11() -> Self {
-            Self::new_4(REQUEST_DESCRIPTOR_4_11, 12)
-        }
-
-        /// Uniqueness 12.
-        fn new_4_12() -> Self {
-            Self::new_4(REQUEST_DESCRIPTOR_4_12, 14)
-        }
-
-        fn new_batch_0() -> Vec<Self> {
-            // Uniqueness only.
-            vec![Self::new_4_00(), Self::new_4_01(), Self::new_4_02()]
-        }
-
-        fn new_batch_1() -> Vec<Self> {
-            vec![
-                Self::new_0(),
-                Self::new_1(),
-                Self::new_2(),
-                Self::new_3(),
-                Self::new_4_10(),
-                Self::new_4_11(),
-                Self::new_4_12(),
+    #[test]
+    fn test_request_batch_options_complex_roundtrip() {
+        let toml_str = r#"
+            [Complex]
+            batches = [
+                [
+                    { label = "Uniqueness-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                    { label = "Uniqueness-1", payload = { Uniqueness = { iris_pair = [{ index = 3 }, { index = 4 }] } } },
+                ],
+                [
+                    { label = "Deletion-0", payload = { IdentityDeletion = { parent = { Label = "Uniqueness-0" } } } },
+                    { label = "Reauth-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = { Label = "Uniqueness-1" } } } },
+                    { label = "Check-0", payload = { ResetCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
+                    { label = "Update-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = { Label = "Uniqueness-0" } } } },
+                ],
             ]
-        }
+        "#;
+        let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
+        let _ = toml::to_string(&opts).unwrap();
     }
 
     #[test]
-    fn test_serialise_request_batch_options_to_json() {
-        for entity_factory in [
-            RequestBatchOptions::new_complex_1,
-            RequestBatchOptions::new_simple_1,
-        ] {
-            let entity = entity_factory();
-            let _ = serde_json::to_string(&entity).unwrap();
-        }
+    fn test_shares_generator_options_from_compute_roundtrip() {
+        let toml_str = r#"
+            [FromCompute]
+            rng_seed = 42
+        "#;
+        let opts: SharesGeneratorOptions = toml::from_str(toml_str).unwrap();
+        let _ = toml::to_string(&opts).unwrap();
     }
 
     #[test]
-    fn test_serialise_request_batch_options_to_toml() {
-        for entity_factory in [
-            RequestBatchOptions::new_complex_1,
-            RequestBatchOptions::new_simple_1,
-        ] {
-            let entity = entity_factory();
-            let _ = toml::to_string(&entity).unwrap();
-        }
+    fn test_shares_generator_options_from_file_roundtrip() {
+        let toml_str = r#"
+            [FromFile]
+            path_to_ndjson_file = "/tmp/irises.ndjson"
+            rng_seed = 42
+            selection_strategy = "All"
+        "#;
+        let opts: SharesGeneratorOptions = toml::from_str(toml_str).unwrap();
+        let _ = toml::to_string(&opts).unwrap();
     }
 }

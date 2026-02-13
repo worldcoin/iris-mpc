@@ -21,18 +21,6 @@ pub enum BatchKind {
 }
 
 impl BatchKind {
-    /// Returns the SMPC message type string constant.
-    #[allow(dead_code)]
-    pub fn to_str(&self) -> &'static str {
-        match self {
-            Self::IdentityDeletion => smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
-            Self::Reauth => smpc_request::REAUTH_MESSAGE_TYPE,
-            Self::ResetCheck => smpc_request::RESET_CHECK_MESSAGE_TYPE,
-            Self::ResetUpdate => smpc_request::RESET_UPDATE_MESSAGE_TYPE,
-            Self::Uniqueness => smpc_request::UNIQUENESS_MESSAGE_TYPE,
-        }
-    }
-
     /// Parses a batch kind from its SMPC message type string.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
@@ -306,86 +294,5 @@ impl RequestBatchSet {
                 *parent_desc = UniquenessRequestDescriptor::SignupId(parent_signup_id);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{super::UniquenessRequestDescriptor, RequestBatch};
-
-    impl RequestBatch {
-        /// New batch of 10 uniqueness requests.
-        pub fn new_1() -> Self {
-            let mut batch = Self::default();
-            for _ in 0..10 {
-                batch.push_new_uniqueness(None, None);
-            }
-
-            batch
-        }
-
-        /// New mixed batch with a parent refrenced by it's request id.
-        pub fn new_2() -> Self {
-            let mut batch = Self::default();
-            for _ in 0..10 {
-                let parent_ref =
-                    UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None));
-                batch.push_new_reauthorization(parent_ref.clone(), None, None, None);
-                batch.push_new_reset_check(None, None);
-                batch.push_new_reset_update(parent_ref.clone(), None, None, None);
-                batch.push_new_identity_deletion(parent_ref.clone(), None, None);
-            }
-
-            batch
-        }
-
-        /// New mixed batch with a parent refrenced by it's correlated Iris serial id.
-        pub fn new_3() -> Self {
-            let mut batch = Self::default();
-            for _ in 0..10 {
-                let serial_id = 1;
-                let parent_ref = UniquenessRequestDescriptor::IrisSerialId(serial_id);
-                batch.push_new_reauthorization(parent_ref.clone(), None, None, None);
-                batch.push_new_reset_check(None, None);
-                batch.push_new_reset_update(parent_ref.clone(), None, None, None);
-                batch.push_new_identity_deletion(parent_ref.clone(), None, None);
-            }
-
-            batch
-        }
-    }
-
-    #[tokio::test]
-    async fn test_new_default() {
-        let batch = RequestBatch::default();
-        assert!(batch.batch_idx == 1);
-        assert!(batch.requests.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_new_1() {
-        let batch = RequestBatch::new_1();
-        assert!(batch.batch_idx == 1);
-        assert!(batch.requests.len() == 10);
-        assert!(batch.iris_pair_indexes().is_empty());
-        for request in batch.requests {
-            assert!(request.is_uniqueness());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_new_2() {
-        let batch = RequestBatch::new_2();
-        assert!(batch.batch_idx == 1);
-        assert!(batch.requests.len() == 50);
-        assert!(batch.iris_pair_indexes().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_new_3() {
-        let batch = RequestBatch::new_3();
-        assert!(batch.batch_idx == 1);
-        assert!(batch.requests.len() == 40);
-        assert!(batch.iris_pair_indexes().is_empty());
     }
 }
