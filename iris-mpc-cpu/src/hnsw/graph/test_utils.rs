@@ -4,7 +4,11 @@ use std::sync::Arc;
 
 use super::{graph_store::GraphPg, layered_graph::EntryPoint};
 use crate::{
-    execution::hawk_main::BothEyes,
+    execution::hawk_main::StoreId, hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem,
+    protocol::shared_iris::GaloisRingSharedIris,
+};
+use crate::{
+    execution::hawk_main::{BothEyes, LEFT},
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
@@ -19,10 +23,6 @@ use crate::{
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
     },
-};
-use crate::{
-    execution::hawk_main::StoreId, hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem,
-    protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
 use clap::ValueEnum;
@@ -179,6 +179,21 @@ impl DbContext {
         Ok(())
     }
 
+    /// loads a graph to memory from a file and then persists it to the database
+    pub async fn load_side_from_file(&self, path: &Path, side: usize, dbg: bool) -> Result<()> {
+        let graph = deserialize_side(path).await?;
+        if dbg {
+            println!("loaded graph for eye {side}:");
+            println!("{:#?}", graph);
+        }
+        let store_id = match side {
+            LEFT => StoreId::Left,
+            _ => StoreId::Right,
+        };
+
+        self.persist_graph_db(graph, store_id).await?;
+        Ok(())
+    }
     /// loads the graph from database to memory, writes it to a file,
     /// loads another graph from the file, and finally verifies that
     /// the loaded graph equals the stored graph.
@@ -335,6 +350,11 @@ async fn serialize_graph(
 }
 
 async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+    let data = tokio::fs::read(path).await?;
+    Ok(bincode::deserialize(&data)?)
+}
+
+async fn deserialize_side(path: &Path) -> Result<GraphMem<PlaintextVectorRef>> {
     let data = tokio::fs::read(path).await?;
     Ok(bincode::deserialize(&data)?)
 }
