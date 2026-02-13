@@ -36,6 +36,7 @@ use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
@@ -304,11 +305,38 @@ impl<'a> BatchProcessor<'a> {
 
     async fn poll_exact_messages(&mut self, num_to_poll: u32) -> Result<(), ReceiveRequestError> {
         let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
+        let poll_start = Instant::now();
         tracing::info!(
             "Batch ID: {}. Polling SQS for up to {} messages.",
             current_batch_id,
             num_to_poll
         );
+
+        // Snapshot locks on modifications table to diagnose contention with
+        // persist_modification's EXCLUSIVE lock trigger
+        if let Ok(locks) = sqlx::query_as::<_, (i32, String, bool)>(
+            "SELECT l.pid, l.mode, l.granted \
+             FROM pg_locks l \
+             WHERE l.relation = 'modifications'::regclass"
+        )
+        .fetch_all(&self.iris_store.pool)
+        .await
+        {
+            if !locks.is_empty() {
+                for (pid, mode, granted) in &locks {
+                    tracing::info!(
+                        "Batch ID: {}. modifications lock: pid={}, mode={}, granted={}",
+                        current_batch_id, pid, mode, granted
+                    );
+                }
+            } else {
+                tracing::info!(
+                    "Batch ID: {}. No locks on modifications table",
+                    current_batch_id
+                );
+            }
+        }
+
         let queue_url = &self.config.requests_queue_url;
 
         while self.msg_counter < num_to_poll as usize {
@@ -363,10 +391,11 @@ impl<'a> BatchProcessor<'a> {
             }
         }
         tracing::info!(
-            "Batch ID: {}. Finished polling SQS. Processed {} messages for this batch attempt (target: {}).",
+            "Batch ID: {}. Finished polling SQS. Processed {} messages for this batch attempt (target: {}). poll_exact_messages took {:.2}s",
             current_batch_id,
             self.msg_counter,
-            num_to_poll
+            num_to_poll,
+            poll_start.elapsed().as_secs_f64()
         );
         Ok(())
     }
@@ -947,10 +976,24 @@ async fn persist_modification(
         tracing::debug!("Persistence is disabled, skipping modification persistence");
         return Modification::default();
     }
-    iris_store
+    let start = Instant::now();
+    let result = iris_store
         .insert_modification(serial_id, request_type, s3_url)
         .await
-        .expect("Failed to insert modification into store")
+        .expect("Failed to insert modification into store");
+    let elapsed = start.elapsed();
+    if elapsed.as_secs() >= 1 {
+        tracing::warn!(
+            "persist_modification took {:.2}s (request_type={}, serial_id={:?})",
+            elapsed.as_secs_f64(), request_type, serial_id
+        );
+    } else {
+        tracing::info!(
+            "persist_modification took {:.3}s (request_type={}, serial_id={:?})",
+            elapsed.as_secs_f64(), request_type, serial_id
+        );
+    }
+    result
 }
 
 pub async fn get_own_batch_sync_state(

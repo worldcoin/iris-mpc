@@ -1465,10 +1465,16 @@ impl HawkMutation {
         // Execute one batch per side
         for (side, batch_updates) in updates_by_side {
             if !batch_updates.is_empty() {
+                let rows = batch_updates.len();
+                let start = Instant::now();
                 graph_tx
                     .with_graph(side)
                     .batch_set_links(batch_updates)
                     .await?;
+                tracing::info!(
+                    "batch_set_links({}): {} rows in {:.2}s",
+                    side, rows, start.elapsed().as_secs_f64()
+                );
             }
         }
 

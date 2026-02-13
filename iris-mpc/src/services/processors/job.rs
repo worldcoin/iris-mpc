@@ -284,13 +284,56 @@ pub async fn process_job_result(
     // RowExclusiveLock held by UPDATE. Committing early releases the lock before
     // the expensive batch_set_links INSERT runs.
     if !config.disable_persistence {
+        let tx1_start = Instant::now();
         let mut mod_tx = store.tx().await?;
         store
             .update_modifications(&mut mod_tx, &modifications.values().collect::<Vec<_>>())
             .await?;
         mod_tx.commit().await?;
+        tracing::info!(
+            "[TX1] update_modifications committed in {:.2}s ({} modifications)",
+            tx1_start.elapsed().as_secs_f64(),
+            modifications.len()
+        );
     }
 
+    // Log hawk_graph_links table stats before the expensive TX2
+    if !config.disable_persistence {
+        if let Ok(rows) = sqlx::query_as::<_, (String, Option<i64>, Option<i64>, Option<String>)>(
+            "SELECT relname, n_live_tup, n_dead_tup, last_autovacuum::text \
+             FROM pg_stat_user_tables WHERE relname LIKE 'hawk_graph_links%'"
+        )
+        .fetch_all(&store.pool)
+        .await
+        {
+            for (relname, live, dead, last_vac) in &rows {
+                tracing::info!(
+                    "[DB stats] {}: live_tup={}, dead_tup={}, last_autovacuum={}",
+                    relname, live.unwrap_or(0), dead.unwrap_or(0),
+                    last_vac.as_deref().unwrap_or("never")
+                );
+            }
+        }
+        if let Ok(rows) = sqlx::query_as::<_, (String, Option<i64>, Option<i64>)>(
+            "SELECT s.relname, s.heap_blks_read, s.heap_blks_hit \
+             FROM pg_statio_user_tables s WHERE s.relname LIKE 'hawk_graph_links%'"
+        )
+        .fetch_all(&store.pool)
+        .await
+        {
+            for (relname, reads, hits) in &rows {
+                let r = reads.unwrap_or(0) as f64;
+                let h = hits.unwrap_or(0) as f64;
+                let ratio = if r + h > 0.0 { h / (r + h) } else { 0.0 };
+                tracing::info!(
+                    "[DB stats] {}: heap_blks_read={}, heap_blks_hit={}, cache_hit_ratio={:.4}",
+                    relname, reads.unwrap_or(0), hits.unwrap_or(0), ratio
+                );
+            }
+        }
+    }
+
+    let tx2_start = Instant::now();
     let mut iris_tx = store.tx().await?;
 
     if !codes_and_masks.is_empty() && !config.disable_persistence {
@@ -387,6 +430,10 @@ pub async fn process_job_result(
         }
 
         persist(iris_tx, graph_store, hawk_mutation, config).await?;
+        tracing::info!(
+            "[TX2] iris + graph_links committed in {:.2}s",
+            tx2_start.elapsed().as_secs_f64()
+        );
     }
 
     for memory_serial_id in memory_serial_ids {
