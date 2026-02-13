@@ -301,7 +301,7 @@ pub async fn process_job_result(
     if !config.disable_persistence {
         if let Ok(rows) = sqlx::query_as::<_, (String, Option<i64>, Option<i64>, Option<String>)>(
             "SELECT relname, n_live_tup, n_dead_tup, last_autovacuum::text \
-             FROM pg_stat_user_tables WHERE relname LIKE 'hawk_graph_links%'"
+             FROM pg_stat_user_tables WHERE relname LIKE 'hawk_graph_links%'",
         )
         .fetch_all(&store.pool)
         .await
@@ -309,14 +309,16 @@ pub async fn process_job_result(
             for (relname, live, dead, last_vac) in &rows {
                 tracing::info!(
                     "[DB stats] {}: live_tup={}, dead_tup={}, last_autovacuum={}",
-                    relname, live.unwrap_or(0), dead.unwrap_or(0),
+                    relname,
+                    live.unwrap_or(0),
+                    dead.unwrap_or(0),
                     last_vac.as_deref().unwrap_or("never")
                 );
             }
         }
         if let Ok(rows) = sqlx::query_as::<_, (String, Option<i64>, Option<i64>)>(
             "SELECT s.relname, s.heap_blks_read, s.heap_blks_hit \
-             FROM pg_statio_user_tables s WHERE s.relname LIKE 'hawk_graph_links%'"
+             FROM pg_statio_user_tables s WHERE s.relname LIKE 'hawk_graph_links%'",
         )
         .fetch_all(&store.pool)
         .await
@@ -327,7 +329,10 @@ pub async fn process_job_result(
                 let ratio = if r + h > 0.0 { h / (r + h) } else { 0.0 };
                 tracing::info!(
                     "[DB stats] {}: heap_blks_read={}, heap_blks_hit={}, cache_hit_ratio={:.4}",
-                    relname, reads.unwrap_or(0), hits.unwrap_or(0), ratio
+                    relname,
+                    reads.unwrap_or(0),
+                    hits.unwrap_or(0),
+                    ratio
                 );
             }
         }

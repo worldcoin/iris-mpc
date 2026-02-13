@@ -317,7 +317,7 @@ impl<'a> BatchProcessor<'a> {
         if let Ok(locks) = sqlx::query_as::<_, (i32, String, bool)>(
             "SELECT l.pid, l.mode, l.granted \
              FROM pg_locks l \
-             WHERE l.relation = 'modifications'::regclass"
+             WHERE l.relation = 'modifications'::regclass",
         )
         .fetch_all(&self.iris_store.pool)
         .await
@@ -326,7 +326,10 @@ impl<'a> BatchProcessor<'a> {
                 for (pid, mode, granted) in &locks {
                     tracing::info!(
                         "Batch ID: {}. modifications lock: pid={}, mode={}, granted={}",
-                        current_batch_id, pid, mode, granted
+                        current_batch_id,
+                        pid,
+                        mode,
+                        granted
                     );
                 }
             } else {
@@ -985,12 +988,16 @@ async fn persist_modification(
     if elapsed.as_secs() >= 1 {
         tracing::warn!(
             "persist_modification took {:.2}s (request_type={}, serial_id={:?})",
-            elapsed.as_secs_f64(), request_type, serial_id
+            elapsed.as_secs_f64(),
+            request_type,
+            serial_id
         );
     } else {
         tracing::info!(
             "persist_modification took {:.3}s (request_type={}, serial_id={:?})",
-            elapsed.as_secs_f64(), request_type, serial_id
+            elapsed.as_secs_f64(),
+            request_type,
+            serial_id
         );
     }
     result

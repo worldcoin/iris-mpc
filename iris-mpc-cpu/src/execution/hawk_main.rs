@@ -1473,7 +1473,9 @@ impl HawkMutation {
                     .await?;
                 tracing::info!(
                     "batch_set_links({}): {} rows in {:.2}s",
-                    side, rows, start.elapsed().as_secs_f64()
+                    side,
+                    rows,
+                    start.elapsed().as_secs_f64()
                 );
             }
         }
