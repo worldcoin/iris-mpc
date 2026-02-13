@@ -1,43 +1,31 @@
 #!/bin/sh
 
-# 1M irises that match the graph.dat
-curl "https://drive.usercontent.google.com/download?id=1je1stRXfVrHy2LRVcfg-SrRiz_yw33S4&export=download&confirm=t" -o /tmp/irises.ndjson
+# opt-in codes left, right
+aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_right.dat /tmp/graph_right.dat
+aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_left.dat /tmp/graph_left.dat
 
-curl "https://drive.usercontent.google.com/download?id=1whFu0GIezDA2_YD9eMr9cY60oU0BF_Ao&export=download&confirm=t" -o /tmp/irises2M.ndjson
-
-curl "https://drive.usercontent.google.com/download?id=1vjswOMB7Yn-f7TDOqfzQr1_ZS-ubSg4E&export=download&confirm=t" -o /tmp/graph.dat
-
+aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/gallery_left.ndjson /tmp/gallery_left_right_interleaved.ndjson
 
 
-echo "starting"
+echo "starting left init"
 /bin/init-single-db \
   --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
-  --source "/tmp/irises.ndjson" \
+  --source "/tmp/gallery_left_right_interleaved.ndjson" \
   --db-url "$SMPC__CPU_DATABASE__URL" \
-  --db-schema "genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID" \
-  --target-db-size 1048576
-echo "cpu1M init done"
-/bin/init-single-db \
-    --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
-    --source "/tmp/irises.ndjson" \
-    --db-url "$SMPC__CPU_DATABASE__URL" \
-    --db-schema "genesis_gpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID" \
-    --target-db-size 1048576
-echo "gpu1M init done"
-/bin/init-single-db \
-    --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
-    --source "/tmp/irises2M.ndjson" \
-    --db-url "$SMPC__CPU_DATABASE__URL" \
-    --db-schema "genesis_gpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID" \
-    --target-db-size 2097152 \
-    --skip 0
-echo "1M irises added to gpu"
-/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph.dat restore-db
-echo "restore graph done"
+  --db-schema "SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID" \
+  --target-db-size 287895
+
+echo "starting restore graph left"
+/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_left.dat restore-side --side "left"
+echo "restore graph left done"
+
+echo "starting restore graph right"
+/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_right.dat restore-side --side "right"
+echo "restore graph right done"
 
 psql "$SMPC__CPU_DATABASE__URL" -c "
 INSERT INTO persistent_state (domain, \"key\", \"value\")
-VALUES ('genesis', 'last_indexed_iris_id', '1048576')
+VALUES ('genesis', 'last_indexed_iris_id', '287895')
 ON CONFLICT (domain, \"key\")
 DO UPDATE SET \"value\" = EXCLUDED.\"value\";
 "
