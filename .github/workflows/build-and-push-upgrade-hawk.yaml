@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - "chore/arm-genesis-build"
+      - "chore/arm-genesis-buildgb"
 
   release:
     types:
