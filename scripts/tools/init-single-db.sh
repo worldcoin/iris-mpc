@@ -10,11 +10,11 @@ echo "starting"
   --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
   --source "/tmp/irises.ndjson" \
   --db-url "$SMPC__CPU_DATABASE__URL" \
-  --db-schema "correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID" \
+  --db-schema "SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID" \
   --target-db-size 577316
 echo "correctness_test_stage CPU init done"
 
-/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph.dat restore-db
+/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph.dat restore-db
 echo "restore graph done"
 
 psql "$SMPC__CPU_DATABASE__URL" -c "
