@@ -1,8 +1,8 @@
 #!/bin/sh
 
 # 1M irises that match the graph.dat
-aws s3 cp s3://wf-smpcv2-stage-sync-protocol/output-graph-all-data.dat /tmp/graph.dat
-aws s3 cp s3://wf-smpcv2-stage-sync-protocol/gallery_iris_wsubject_ids_final_split.ndjson /tmp/irises.ndjson
+aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/output-graph-all-data.dat /tmp/graph.dat
+aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/gallery_iris_wsubject_ids_final_split.ndjson /tmp/irises.ndjson
 
 
 echo "starting"
