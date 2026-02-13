@@ -2,7 +2,7 @@
 
 # 1M irises that match the graph.dat
 aws s3 cp s3://wf-smpcv2-stage-sync-protocol/output-graph-all-data.dat /tmp/graph.dat
-aws s3 cp s3://wf-smpcv2-stage-sync-protocol/all_data_iris_wsubject_ids.ndjson /tmp/irises.ndjson
+aws s3 cp s3://wf-smpcv2-stage-sync-protocol/gallery_iris_wsubject_ids_final_split.ndjson /tmp/irises.ndjson
 
 
 echo "starting"
@@ -10,16 +10,16 @@ echo "starting"
   --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
   --source "/tmp/irises.ndjson" \
   --db-url "$SMPC__CPU_DATABASE__URL" \
-  --db-schema "genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID" \
+  --db-schema "correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID" \
   --target-db-size 577316
-echo "cpu1M init done"
+echo "correctness_test_stage CPU init done"
 /bin/init-single-db \
     --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
     --source "/tmp/irises.ndjson" \
     --db-url "$SMPC__CPU_DATABASE__URL" \
-    --db-schema "genesis_gpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID" \
+    --db-schema "correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID" \
     --target-db-size 577316
-echo "gpu1M init done"
+echo "correctness_test_stage GPU init done"
 /bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema genesis_cpu1M_dev_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph.dat restore-db
 echo "restore graph done"
 
