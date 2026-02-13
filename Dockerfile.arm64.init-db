@@ -46,7 +46,7 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "a
   ./aws/install && \
   aws --version
 
-RUN apt-get update && apt-get install -y ca-certificates curl
+RUN apt-get update && apt-get install -y ca-certificates curl postgresql-client
 RUN curl -o /usr/local/share/ca-certificates/ca_party_dev_0.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_0.pem && \
     curl -o /usr/local/share/ca-certificates/ca_party_dev_1.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_1.pem && \
     curl -o /usr/local/share/ca-certificates/ca_party_dev_2.crt https://wf-ampc-hnsw-ca-dev-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_dev_2.pem
