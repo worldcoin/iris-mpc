@@ -278,25 +278,6 @@ pub async fn process_job_result(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Update modification results in a separate transaction to minimize lock
-    // duration on the modifications table. The assign_modification_id() trigger
-    // takes an EXCLUSIVE table lock on INSERT, which conflicts with the
-    // RowExclusiveLock held by UPDATE. Committing early releases the lock before
-    // the expensive batch_set_links INSERT runs.
-    if !config.disable_persistence {
-        let tx1_start = Instant::now();
-        let mut mod_tx = store.tx().await?;
-        store
-            .update_modifications(&mut mod_tx, &modifications.values().collect::<Vec<_>>())
-            .await?;
-        mod_tx.commit().await?;
-        tracing::info!(
-            "[TX1] update_modifications committed in {:.2}s ({} modifications)",
-            tx1_start.elapsed().as_secs_f64(),
-            modifications.len()
-        );
-    }
-
     // Log hawk_graph_links table stats before the expensive TX2
     if !config.disable_persistence {
         if let Ok(rows) = sqlx::query_as::<_, (String, Option<i64>, Option<i64>, Option<String>)>(
@@ -438,6 +419,29 @@ pub async fn process_job_result(
         tracing::info!(
             "[TX2] iris + graph_links committed in {:.2}s",
             tx2_start.elapsed().as_secs_f64()
+        );
+    }
+
+    // Update modification results in a separate transaction AFTER iris+graph
+    // data is committed. This order is critical for crash safety: if we crash
+    // between TX2 and this TX1, the data is already written and the recovery
+    // path (compare_modifications) will re-apply the modification metadata
+    // from the other parties. The reverse order would cause silent data loss.
+    //
+    // This is separated from TX2 to minimize lock duration on the modifications
+    // table: the assign_modification_id() trigger takes an EXCLUSIVE table lock
+    // on INSERT, which conflicts with the RowExclusiveLock held by UPDATE.
+    if !config.disable_persistence {
+        let tx1_start = Instant::now();
+        let mut mod_tx = store.tx().await?;
+        store
+            .update_modifications(&mut mod_tx, &modifications.values().collect::<Vec<_>>())
+            .await?;
+        mod_tx.commit().await?;
+        tracing::info!(
+            "[TX1] update_modifications committed in {:.2}s ({} modifications)",
+            tx1_start.elapsed().as_secs_f64(),
+            modifications.len()
         );
     }
 
