@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IRIS_MPC_BINS="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-RESOURCES="${IRIS_MPC_BINS}/resources/iris-mpc-utils/service-client"
 
 usage() {
     cat <<EOF
@@ -17,7 +16,7 @@ Options:
 
 Arguments:
   EXEC_OPTS_TOML  Path to execution options TOML file
-                  (default: .../exec-options/simple-1.toml)
+                  (default: requests/simple-1.toml)
 
 Examples:
   $(basename "$0")
@@ -46,8 +45,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-aws_opts="${RESOURCES}/aws-options/${env}-aws-config.toml"
-exec_opts="${exec_opts:-${RESOURCES}/exec-options/simple-1.toml}"
+aws_opts="${SCRIPT_DIR}/env/${env}.toml"
+exec_opts="${exec_opts:-${SCRIPT_DIR}/requests/simple-1.toml}"
 
 if [[ ! -f "${aws_opts}" ]]; then
     echo "Error: unknown environment '${env}'" >&2
