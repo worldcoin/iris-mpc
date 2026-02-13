@@ -18,7 +18,7 @@ impl RequestGenerator {
     fn batch_count(&self) -> usize {
         match &self.config {
             RequestGeneratorConfig::Simple { batch_count, .. } => *batch_count,
-            RequestGeneratorConfig::Complex(batch_set) => batch_set.len(),
+            RequestGeneratorConfig::Complex(batch_set) => batch_set.batches().len(),
         }
     }
 

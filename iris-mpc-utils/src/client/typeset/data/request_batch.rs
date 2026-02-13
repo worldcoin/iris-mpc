@@ -219,20 +219,16 @@ pub struct RequestBatchSet {
 }
 
 impl RequestBatchSet {
+    pub(crate) fn new(batches: Vec<RequestBatch>) -> Self {
+        Self { batches }
+    }
+
     pub(crate) fn batches(&self) -> &Vec<RequestBatch> {
         &self.batches
     }
 
     fn batches_mut(&mut self) -> &mut Vec<RequestBatch> {
         &mut self.batches
-    }
-
-    pub(crate) fn new(batches: Vec<RequestBatch>) -> Self {
-        Self { batches }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.batches.len()
     }
 
     fn requests(&self) -> Vec<&Request> {
@@ -292,8 +288,6 @@ impl RequestBatchSet {
                     } => parent_desc,
                     _ => continue,
                 };
-
-                println!("123");
 
                 *parent_desc = UniquenessRequestDescriptor::SignupId(parent_signup_id);
             }
