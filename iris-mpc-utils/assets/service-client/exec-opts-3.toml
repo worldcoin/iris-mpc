@@ -6,6 +6,6 @@ batch_size = 10
 batch_kind = "uniqueness"
 
 [shares_generator.FromFile]
-path_to_ndjson_file = "/Users/asladeofgreen/.itech/wcoin/repos/iris-mpc/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson"
+path_to_ndjson_file = "${IRIS_MPC_HOME}/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson"
 rng_seed = 42
 selection_strategy = "All"
