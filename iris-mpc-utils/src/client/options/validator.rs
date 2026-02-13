@@ -63,6 +63,7 @@ impl ServiceClientOptions {
                 batch_count,
                 batch_kind,
                 batch_size,
+                known_iris_serial_id: maybe_known_iris_serial_id,
                 ..
             } => {
                 // Error if total requests exceed arbitrary limit.
@@ -73,7 +74,7 @@ impl ServiceClientOptions {
                     ));
                 }
 
-                // Error it batch kind cannot be mapped to a supported SMPC request type.
+                // Error if batch kind cannot be mapped to a supported SMPC request type.
                 if ![
                     smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
                     smpc_request::REAUTH_MESSAGE_TYPE,
@@ -88,6 +89,16 @@ impl ServiceClientOptions {
                         batch_kind
                     )));
                 };
+
+                // Error if known serial id exceeds reasonable upper bound.
+                if let Some(known_iris_serial_id) = maybe_known_iris_serial_id {
+                    if *known_iris_serial_id > 20_000_000_u32 {
+                        return Err(ServiceClientError::InvalidOptions(format!(
+                            "RequestBatchOptions::Simple known_iris_serial_id ({}) exceeds reasonable upper bound",
+                            known_iris_serial_id
+                        )));
+                    }
+                }
             }
         }
 

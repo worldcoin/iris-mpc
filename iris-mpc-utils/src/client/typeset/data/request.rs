@@ -55,7 +55,7 @@ pub enum Request {
 }
 
 impl Request {
-    fn info(&self) -> &RequestInfo {
+    pub(crate) fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
@@ -92,24 +92,17 @@ impl Request {
     /// Returns true if deemed a child of previous system request.
     pub(super) fn is_child(&self, parent: &Self) -> bool {
         // A child of a uniqueness request can be derived by comparing signup identifiers.
-        match self {
-            Self::IdentityDeletion {
-                parent: parent_ref, ..
-            }
-            | Self::Reauthorization {
-                parent: parent_ref, ..
-            }
-            | Self::ResetUpdate {
-                parent: parent_ref, ..
-            } => {
-                matches!(
-                    (parent_ref, parent),
-                    (UniquenessRequestDescriptor::SignupId(uniqueness_signup_id), Self::Uniqueness { signup_id, .. })
-                    if signup_id == uniqueness_signup_id
-                )
-            }
-            _ => false,
-        }
+        let parent_ref = match self {
+            Self::IdentityDeletion { parent, .. }
+            | Self::Reauthorization { parent, .. }
+            | Self::ResetUpdate { parent, .. } => parent,
+            _ => return false,
+        };
+        matches!(
+            (parent_ref, parent),
+            (UniquenessRequestDescriptor::SignupId(parent_signup_id), Self::Uniqueness { signup_id, .. })
+            if signup_id == parent_signup_id
+        )
     }
 
     /// Returns true if a system response is deemed to be correlated with this system request.
@@ -122,16 +115,16 @@ impl Request {
                 )
             }
             (Self::Reauthorization { reauth_id, .. }, ResponsePayload::Reauthorization(result)) => {
-                reauth_id.to_string() == result.reauth_id
+                result.reauth_id == reauth_id.to_string()
             }
             (Self::ResetCheck { reset_id, .. }, ResponsePayload::ResetCheck(result)) => {
-                reset_id.to_string() == result.reset_id
+                result.reset_id == reset_id.to_string()
             }
             (Self::ResetUpdate { reset_id, .. }, ResponsePayload::ResetUpdate(result)) => {
-                reset_id.to_string() == result.reset_id
+                result.reset_id == reset_id.to_string()
             }
             (Self::Uniqueness { signup_id, .. }, ResponsePayload::Uniqueness(result)) => {
-                signup_id.to_string() == result.signup_id
+                result.signup_id == signup_id.to_string()
             }
             _ => false,
         }
@@ -157,6 +150,19 @@ impl Request {
                 }
                 _ => true,
             }
+    }
+
+    pub(crate) fn label(&self) -> &Option<String> {
+        self.info().label()
+    }
+
+    pub(crate) fn parent_descriptor(&self) -> Option<&UniquenessRequestDescriptor> {
+        match self {
+            Self::IdentityDeletion { parent, .. }
+            | Self::Reauthorization { parent, .. }
+            | Self::ResetUpdate { parent, .. } => Some(parent),
+            _ => None,
+        }
     }
 
     /// Sets correlated response and maybe sets request state.

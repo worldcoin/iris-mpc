@@ -25,6 +25,9 @@ pub struct RequestInfo {
 
     /// Set of processing states.
     state_history: Vec<RequestStatus>,
+
+    /// Associated unique identifier.
+    uid: uuid::Uuid,
 }
 
 impl RequestInfo {
@@ -43,16 +46,24 @@ impl RequestInfo {
             label,
             label_of_parent,
             state_history,
+            uid: uuid::Uuid::new_v4(),
         }
     }
 
-    #[allow(dead_code)]
-    pub(super) fn label(&self) -> String {
-        self.label.clone().unwrap_or_default()
+    pub(super) fn label(&self) -> &Option<String> {
+        &self.label
+    }
+
+    pub(super) fn uid(&self) -> &uuid::Uuid {
+        &self.uid
     }
 
     pub(super) fn is_fully_correlated(&self) -> bool {
         self.correlation_set.iter().all(|c| c.is_some())
+    }
+
+    pub(super) fn status(&self) -> &RequestStatus {
+        self.state_history.last().unwrap()
     }
 
     pub(super) fn set_correlation(&mut self, response: &ResponsePayload) {
@@ -61,10 +72,6 @@ impl RequestInfo {
 
     pub(super) fn set_status(&mut self, new_state: RequestStatus) {
         self.state_history.push(new_state);
-    }
-
-    pub(super) fn status(&self) -> &RequestStatus {
-        self.state_history.last().unwrap()
     }
 }
 

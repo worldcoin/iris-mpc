@@ -146,6 +146,15 @@ pub(crate) enum RequestGeneratorConfig {
     },
 }
 
+impl RequestGeneratorConfig {
+    // Reassigns parent descriptors.
+    pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
+        if let RequestGeneratorConfig::Complex(batch_set) = self {
+            batch_set.set_child_parent_descriptors_from_labels();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;

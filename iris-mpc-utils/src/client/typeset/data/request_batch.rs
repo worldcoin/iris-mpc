@@ -117,8 +117,8 @@ impl RequestBatch {
     /// Extends requests collection with a new ResetCheck request.
     pub(crate) fn push_new_reset_check(
         &mut self,
-        label: Option<String>,
         iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
     ) {
         self.push_request(Request::ResetCheck {
             info: RequestInfo::new(self, label, None),
@@ -146,8 +146,8 @@ impl RequestBatch {
     /// Extends requests collection with a new Uniqueness request.
     pub(crate) fn push_new_uniqueness(
         &mut self,
-        label: Option<String>,
         iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
     ) -> uuid::Uuid {
         let signup_id = uuid::Uuid::new_v4();
         self.push_request(Request::Uniqueness {
@@ -219,16 +219,85 @@ pub struct RequestBatchSet {
 }
 
 impl RequestBatchSet {
-    pub(crate) fn new(batches: Vec<RequestBatch>) -> Self {
-        Self { batches }
-    }
-
     pub(crate) fn batches(&self) -> &Vec<RequestBatch> {
         &self.batches
     }
 
+    fn batches_mut(&mut self) -> &mut Vec<RequestBatch> {
+        &mut self.batches
+    }
+
+    pub(crate) fn new(batches: Vec<RequestBatch>) -> Self {
+        Self { batches }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.batches.len()
+    }
+
+    fn requests(&self) -> Vec<&Request> {
+        self.batches()
+            .iter()
+            .flat_map(|batch| batch.requests())
+            .collect()
+    }
+
+    fn requests_mut(&mut self) -> Vec<&mut Request> {
+        self.batches_mut()
+            .iter_mut()
+            .flat_map(|batch| batch.requests_mut())
+            .collect()
+    }
+
+    fn requests_with_parent_descriptor_of_label(&self) -> Vec<(Request, uuid::Uuid)> {
+        let mut result = vec![];
+        for maybe_child in self.requests() {
+            if let Some(_parent_descriptor @ UniquenessRequestDescriptor::Label(parent_label)) =
+                maybe_child.parent_descriptor()
+            {
+                for maybe_parent in self.requests() {
+                    if let Some(maybe_parent_label) = maybe_parent.label() {
+                        if maybe_parent_label == parent_label {
+                            if let Request::Uniqueness { signup_id, .. } = maybe_parent {
+                                result.push((maybe_child.clone(), *signup_id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
+        for (child, parent_signup_id) in self.requests_with_parent_descriptor_of_label() {
+            for child_mut in self.requests_mut() {
+                if child_mut.info().uid() != child.info().uid() {
+                    continue;
+                }
+
+                let parent_desc = match child_mut {
+                    Request::IdentityDeletion {
+                        parent: parent_desc,
+                        ..
+                    }
+                    | Request::Reauthorization {
+                        parent: parent_desc,
+                        ..
+                    }
+                    | Request::ResetUpdate {
+                        parent: parent_desc,
+                        ..
+                    } => parent_desc,
+                    _ => continue,
+                };
+
+                println!("123");
+
+                *parent_desc = UniquenessRequestDescriptor::SignupId(parent_signup_id);
+            }
+        }
     }
 }
 

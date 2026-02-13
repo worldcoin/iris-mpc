@@ -26,39 +26,24 @@ use crate::{
 
 #[async_from::async_trait]
 impl AsyncFrom<AwsOptions> for AwsClient {
-    async fn async_from(config: AwsOptions) -> Self {
-        AwsClient::new(AwsClientConfig::async_from(config).await)
+    async fn async_from(opts: AwsOptions) -> Self {
+        AwsClient::new(AwsClientConfig::async_from(opts).await)
     }
 }
 
 #[async_from::async_trait]
 impl AsyncFrom<AwsOptions> for AwsClientConfig {
-    async fn async_from(config: AwsOptions) -> Self {
+    async fn async_from(opts: AwsOptions) -> Self {
         AwsClientConfig::new(
-            config.environment().to_owned(),
-            config.public_key_base_url().to_owned(),
-            config.s3_request_bucket_name().to_owned(),
-            config.sns_request_topic_arn().to_owned(),
-            config.sqs_long_poll_wait_time().to_owned(),
-            config.sqs_response_queue_url().to_owned(),
-            config.sqs_wait_time_seconds().to_owned(),
+            opts.environment().to_owned(),
+            opts.public_key_base_url().to_owned(),
+            opts.s3_request_bucket_name().to_owned(),
+            opts.sns_request_topic_arn().to_owned(),
+            opts.sqs_long_poll_wait_time().to_owned(),
+            opts.sqs_response_queue_url().to_owned(),
+            opts.sqs_wait_time_seconds().to_owned(),
         )
         .await
-    }
-}
-
-impl From<&IrisPairDescriptorOptions> for IrisPairDescriptor {
-    fn from(opts: &IrisPairDescriptorOptions) -> Self {
-        Self::new(
-            IrisDescriptor::from(opts.left()),
-            IrisDescriptor::from(opts.right()),
-        )
-    }
-}
-
-impl From<&IrisDescriptorOptions> for IrisDescriptor {
-    fn from(opts: &IrisDescriptorOptions) -> Self {
-        IrisDescriptor::new(opts.index(), opts.mutation())
     }
 }
 
@@ -69,6 +54,21 @@ impl From<&IrisCodeSelectionStrategyOptions> for IrisSelection {
             IrisCodeSelectionStrategyOptions::Even => Self::Even,
             IrisCodeSelectionStrategyOptions::Odd => Self::Odd,
         }
+    }
+}
+
+impl From<&IrisDescriptorOptions> for IrisDescriptor {
+    fn from(opts: &IrisDescriptorOptions) -> Self {
+        IrisDescriptor::new(opts.index(), opts.mutation())
+    }
+}
+
+impl From<&IrisPairDescriptorOptions> for IrisPairDescriptor {
+    fn from(opts: &IrisPairDescriptorOptions) -> Self {
+        Self::new(
+            IrisDescriptor::from(opts.left()),
+            IrisDescriptor::from(opts.right()),
+        )
     }
 }
 
@@ -98,8 +98,8 @@ impl From<&Vec<Vec<RequestOptions>>> for RequestBatchSet {
                         }
                         RequestPayloadOptions::ResetCheck { iris_pair } => {
                             batch.push_new_reset_check(
-                                opts_request.label(),
                                 Some(IrisPairDescriptor::from(iris_pair)),
+                                opts_request.label(),
                             );
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
@@ -112,8 +112,8 @@ impl From<&Vec<Vec<RequestOptions>>> for RequestBatchSet {
                         }
                         RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
                             batch.push_new_uniqueness(
-                                opts_request.label().clone(),
                                 Some(IrisPairDescriptor::from(iris_pair)),
+                                opts_request.label().clone(),
                             );
                         }
                     }
@@ -128,8 +128,11 @@ impl From<&Vec<Vec<RequestOptions>>> for RequestBatchSet {
 }
 
 impl From<&ServiceClientOptions> for RequestGenerator {
-    fn from(config: &ServiceClientOptions) -> Self {
-        Self::new(RequestGeneratorConfig::from(config))
+    fn from(opts: &ServiceClientOptions) -> Self {
+        let mut config = RequestGeneratorConfig::from(opts);
+        config.set_child_parent_descriptors_from_labels();
+
+        Self::new(config)
     }
 }
 

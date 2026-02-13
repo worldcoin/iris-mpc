@@ -21,6 +21,10 @@ impl IrisDescriptor {
     pub fn index(&self) -> usize {
         self.index
     }
+
+    pub fn mutation(&self) -> &Option<()> {
+        &self.mutation
+    }
 }
 
 /// A descriptor over a pair of Iris codes cached within a file.
@@ -45,10 +49,6 @@ impl IrisPairDescriptor {
 
     pub fn right(&self) -> &IrisDescriptor {
         &self.0 .1
-    }
-
-    pub fn indexes(&self) -> (usize, usize) {
-        (self.left().index(), self.right().index())
     }
 }
 
