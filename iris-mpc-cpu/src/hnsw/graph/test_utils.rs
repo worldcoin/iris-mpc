@@ -194,6 +194,7 @@ impl DbContext {
         self.persist_graph_db(graph, store_id).await?;
         Ok(())
     }
+
     /// loads the graph from database to memory, writes it to a file,
     /// loads another graph from the file, and finally verifies that
     /// the loaded graph equals the stored graph.

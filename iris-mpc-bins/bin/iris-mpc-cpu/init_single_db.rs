@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hnsw::graph::test_utils::DbContext,
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
@@ -55,19 +55,9 @@ struct Args {
     #[clap(long, default_value = "42")]
     iris_shares_rnd: u64,
 
-    /// Skip insertion of specific serial IDs ... used primarily in genesis testing.
-    #[clap(long, num_args = 1..)]
-    skip_insert_serial_ids: Vec<u32>,
-
     /// skip the first X irises in the file.
     #[clap(long)]
     skip: Option<usize>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct IrisCodeWithSerialId {
-    pub iris_code: IrisCode,
-    pub serial_id: SerialId,
 }
 
 #[allow(non_snake_case)]

@@ -56,11 +56,11 @@ enum Side {
     Right,
 }
 
-impl Into<usize> for Side {
-    fn into(self) -> usize {
-        match self {
-            Self::Left => LEFT,
-            Self::Right => RIGHT,
+impl From<Side> for usize {
+    fn from(side: Side) -> usize {
+        match side {
+            Side::Left => LEFT,
+            Side::Right => RIGHT,
         }
     }
 }
