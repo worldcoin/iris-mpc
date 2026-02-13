@@ -56,10 +56,10 @@ impl ResponsePayload {
         };
 
         if has_error {
-            let reason = error_reason.unwrap_or("unknown error");
             Err(ServiceClientError::ResponseError(format!(
                 "{}: {:?}",
-                reason, self
+                error_reason.unwrap_or("unknown error"),
+                self
             )))
         } else {
             Ok(())

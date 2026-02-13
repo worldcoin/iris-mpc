@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use itertools::Itertools;
 use rand::{CryptoRng, Rng, SeedableRng};
 
+use super::super::typeset::{IrisDescriptor, IrisPairDescriptor};
 use crate::{
     constants::N_PARTIES,
     irises::{
@@ -10,6 +11,7 @@ use crate::{
         GaloisRingSharedIrisForUpload,
     },
 };
+
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes, utils::serialization::iris_ndjson::IrisSelection,
 };
@@ -24,23 +26,8 @@ where
         rng: R,
     },
     FromFile {
-        // Current batch of Iris shares read from file system.
-        batch: Vec<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
-
-        // Count of cached batches.
-        batch_count: usize,
-
-        // Number of lines to skip after having read a chunk from NDJSON file.
-        n_skip: usize,
-
-        // Number of lines to step over having read a chunk from NDJSON file.
-        n_step: usize,
-
-        // Path to an NDJSON file.
-        path_to_ndjson_file: PathBuf,
-
-        // A random number generator acting as an entropy source.
-        rng: R,
+        // Iris shares read from an NDJSON file.
+        iris_shares: Vec<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
     },
 }
 
@@ -48,8 +35,6 @@ impl<R> SharesGenerator<R>
 where
     R: Rng + CryptoRng + SeedableRng + Send,
 {
-    const READ_BUFFER_SIZE: usize = 100;
-
     pub fn new_compute(rng_seed: Option<u64>) -> Self {
         Self::FromCompute {
             rng: rng_seed
@@ -66,48 +51,46 @@ where
         let (n_skip, n_step) = selection_strategy
             .unwrap_or(IrisSelection::All)
             .skip_and_step();
+        let mut rng = rng_seed
+            .map(R::seed_from_u64)
+            .unwrap_or_else(R::from_entropy);
+        let iris_shares = read_iris_shares_for_upload(path_to_ndjson_file.as_path(), &mut rng)
+            .unwrap()
+            .skip(n_skip)
+            .step_by(n_step);
 
         Self::FromFile {
-            batch: Vec::with_capacity(Self::READ_BUFFER_SIZE),
-            batch_count: 0,
-            n_skip,
-            n_step,
-            path_to_ndjson_file,
-            rng: rng_seed
-                .map(R::seed_from_u64)
-                .unwrap_or_else(R::from_entropy),
+            iris_shares: iris_shares.collect_vec(),
         }
     }
 
     /// Generates pairs of Iris shares for upstream processing.
-    pub(crate) fn generate(&mut self) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
-        [self.generate_single(), self.generate_single()]
+    pub(crate) fn generate(
+        &mut self,
+        iris_pair: Option<&IrisPairDescriptor>,
+    ) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
+        let (maybe_left_desc, maybe_right_desc) = match iris_pair {
+            Some(descriptor) => (Some(descriptor.left()), Some(descriptor.right())),
+            None => (None, None),
+        };
+
+        [
+            self.generate_single(maybe_left_desc),
+            self.generate_single(maybe_right_desc),
+        ]
     }
 
-    fn generate_single(&mut self) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
+    /// Generates a single set of Iris shares for upstream processing.
+    fn generate_single(
+        &mut self,
+        maybe_iris_descriptor: Option<&IrisDescriptor>,
+    ) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
         match self {
             Self::FromCompute { rng } => generate_iris_shares_for_upload(rng, None),
-            Self::FromFile {
-                batch,
-                batch_count,
-                n_skip,
-                n_step,
-                path_to_ndjson_file,
-                rng,
-            } => {
-                if batch.is_empty() {
-                    // TODO: revisit skip/take ... etc.
-                    *batch = read_iris_shares_for_upload(path_to_ndjson_file, rng)
-                        .unwrap()
-                        .skip(Self::READ_BUFFER_SIZE * *batch_count)
-                        .take(Self::READ_BUFFER_SIZE)
-                        .skip(*n_skip)
-                        .step_by(*n_step)
-                        .collect_vec();
-                    *batch_count += 1;
-                }
-                batch.pop().expect("Shares generator is exhausted")
-            }
+            Self::FromFile { iris_shares } => match maybe_iris_descriptor {
+                Some(iris_descriptor) => iris_shares[iris_descriptor.index() - 1].clone(),
+                None => iris_shares.pop().expect("Shares generator is exhausted"),
+            },
         }
     }
 }
@@ -129,17 +112,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_new_compute_1() {
+    #[test]
+    fn test_new_compute_1() {
         let mut generator = SharesGenerator::<StdRng>::new_compute_1();
         for _ in 0..10 {
-            let _ = generator.generate();
+            let _ = generator.generate(None);
         }
-    }
-
-    #[tokio::test]
-    async fn test_new_file_1() {
-        let _ = SharesGenerator::<StdRng>::new_file_1();
-        // TODO: invoke the generate function and fix stack overflow error.
     }
 }

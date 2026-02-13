@@ -1,10 +1,14 @@
 use std::fmt;
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::helpers::smpc_request;
 
-use super::{Request, RequestInfo, RequestStatus, ResponsePayload, UniquenessReference};
+use super::{
+    IrisPairDescriptor, Request, RequestInfo, RequestStatus, ResponsePayload,
+    UniquenessRequestDescriptor,
+};
 
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +40,7 @@ impl RequestBatch {
         }
     }
 
-    /// Returns maybe ordinal identifier of a correlated request.
+    /// Maybe returns ordinal identifier of a correlated request.
     pub(crate) fn get_idx_of_correlated(&self, response: &ResponsePayload) -> Option<usize> {
         self.requests
             .iter()
@@ -60,6 +64,17 @@ impl RequestBatch {
         self.requests.iter().any(|r| r.is_enqueued())
     }
 
+    /// Returns ordered set of unique Iris indexes used across the batch.
+    #[allow(dead_code)]
+    pub(crate) fn iris_pair_indexes(&self) -> Vec<usize> {
+        self.requests
+            .iter()
+            .flat_map(|r| r.iris_pair_indexes())
+            .unique()
+            .sorted()
+            .collect()
+    }
+
     /// Returns true if there are any requests deemed enqueueable.
     pub(crate) fn is_enqueueable(&self) -> bool {
         self.requests.iter().any(|r| r.is_enqueueable())
@@ -71,44 +86,73 @@ impl RequestBatch {
     }
 
     /// Extends requests collection with a new IdentityDeletion request.
-    pub(crate) fn push_new_identity_deletion(&mut self, uniqueness_ref: UniquenessReference) {
+    pub(crate) fn push_new_identity_deletion(
+        &mut self,
+        parent: UniquenessRequestDescriptor,
+        label: Option<String>,
+        label_of_parent: Option<String>,
+    ) {
         self.push_request(Request::IdentityDeletion {
-            info: RequestInfo::new(self),
-            uniqueness_ref,
+            info: RequestInfo::new(self, label, label_of_parent),
+            parent,
         });
     }
 
     /// Extends requests collection with a new Reauthorization request.
-    pub(crate) fn push_new_reauthorization(&mut self, uniqueness_ref: UniquenessReference) {
+    pub(crate) fn push_new_reauthorization(
+        &mut self,
+        parent: UniquenessRequestDescriptor,
+        iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+        label_of_parent: Option<String>,
+    ) {
         self.push_request(Request::Reauthorization {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label, label_of_parent),
+            iris_pair,
+            parent,
             reauth_id: uuid::Uuid::new_v4(),
-            uniqueness_ref: uniqueness_ref.clone(),
         });
     }
 
     /// Extends requests collection with a new ResetCheck request.
-    pub(crate) fn push_new_reset_check(&mut self) {
+    pub(crate) fn push_new_reset_check(
+        &mut self,
+        iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+    ) {
         self.push_request(Request::ResetCheck {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label, None),
+            iris_pair,
             reset_id: uuid::Uuid::new_v4(),
         });
     }
 
     /// Extends requests collection with a new ResetUpdate request.
-    pub(crate) fn push_new_reset_update(&mut self, uniqueness_ref: UniquenessReference) {
+    pub(crate) fn push_new_reset_update(
+        &mut self,
+        parent: UniquenessRequestDescriptor,
+        iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+        label_of_parent: Option<String>,
+    ) {
         self.push_request(Request::ResetUpdate {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label, label_of_parent),
+            iris_pair,
+            parent,
             reset_id: uuid::Uuid::new_v4(),
-            uniqueness_ref,
         });
     }
 
     /// Extends requests collection with a new Uniqueness request.
-    pub(crate) fn push_new_uniqueness(&mut self) -> uuid::Uuid {
+    pub(crate) fn push_new_uniqueness(
+        &mut self,
+        iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+    ) -> uuid::Uuid {
         let signup_id = uuid::Uuid::new_v4();
         self.push_request(Request::Uniqueness {
-            info: RequestInfo::new(self),
+            info: RequestInfo::new(self, label, None),
+            iris_pair,
             signup_id,
         });
         signup_id
@@ -168,6 +212,89 @@ impl From<&String> for RequestBatchKind {
     }
 }
 
+/// Encapsulates a constructed set of request batches for processing.
+pub struct RequestBatchSet {
+    // Associated set of request batches.
+    batches: Vec<RequestBatch>,
+}
+
+impl RequestBatchSet {
+    pub(crate) fn new(batches: Vec<RequestBatch>) -> Self {
+        Self { batches }
+    }
+
+    pub(crate) fn batches(&self) -> &Vec<RequestBatch> {
+        &self.batches
+    }
+
+    fn batches_mut(&mut self) -> &mut Vec<RequestBatch> {
+        &mut self.batches
+    }
+
+    fn requests(&self) -> Vec<&Request> {
+        self.batches()
+            .iter()
+            .flat_map(|batch| batch.requests())
+            .collect()
+    }
+
+    fn requests_mut(&mut self) -> Vec<&mut Request> {
+        self.batches_mut()
+            .iter_mut()
+            .flat_map(|batch| batch.requests_mut())
+            .collect()
+    }
+
+    fn requests_with_parent_descriptor_of_label(&self) -> Vec<(Request, uuid::Uuid)> {
+        let mut result = vec![];
+        for maybe_child in self.requests() {
+            if let Some(_parent_descriptor @ UniquenessRequestDescriptor::Label(parent_label)) =
+                maybe_child.parent_descriptor()
+            {
+                for maybe_parent in self.requests() {
+                    if let Some(maybe_parent_label) = maybe_parent.label() {
+                        if maybe_parent_label == parent_label {
+                            if let Request::Uniqueness { signup_id, .. } = maybe_parent {
+                                result.push((maybe_child.clone(), *signup_id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
+        for (child, parent_signup_id) in self.requests_with_parent_descriptor_of_label() {
+            for child_mut in self.requests_mut() {
+                if child_mut.info().uid() != child.info().uid() {
+                    continue;
+                }
+
+                let parent_desc = match child_mut {
+                    Request::IdentityDeletion {
+                        parent: parent_desc,
+                        ..
+                    }
+                    | Request::Reauthorization {
+                        parent: parent_desc,
+                        ..
+                    }
+                    | Request::ResetUpdate {
+                        parent: parent_desc,
+                        ..
+                    } => parent_desc,
+                    _ => continue,
+                };
+
+                *parent_desc = UniquenessRequestDescriptor::SignupId(parent_signup_id);
+            }
+        }
+    }
+}
+
 /// Encapsulates inputs used to compute size of a request batch.
 #[derive(Debug, Clone)]
 pub enum RequestBatchSize {
@@ -185,14 +312,14 @@ impl fmt::Display for RequestBatchSize {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::UniquenessReference, RequestBatch};
+    use super::{super::UniquenessRequestDescriptor, RequestBatch};
 
     impl RequestBatch {
         /// New batch of 10 uniqueness requests.
         pub fn new_1() -> Self {
             let mut batch = Self::default();
             for _ in 0..10 {
-                batch.push_new_uniqueness();
+                batch.push_new_uniqueness(None, None);
             }
 
             batch
@@ -202,11 +329,12 @@ mod tests {
         pub fn new_2() -> Self {
             let mut batch = Self::default();
             for _ in 0..10 {
-                let signup_id = batch.push_new_uniqueness();
-                batch.push_new_reauthorization(UniquenessReference::SignupId(signup_id));
-                batch.push_new_reset_check();
-                batch.push_new_reset_update(UniquenessReference::SignupId(signup_id));
-                batch.push_new_identity_deletion(UniquenessReference::SignupId(signup_id));
+                let parent_ref =
+                    UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None));
+                batch.push_new_reauthorization(parent_ref.clone(), None, None, None);
+                batch.push_new_reset_check(None, None);
+                batch.push_new_reset_update(parent_ref.clone(), None, None, None);
+                batch.push_new_identity_deletion(parent_ref.clone(), None, None);
             }
 
             batch
@@ -217,10 +345,11 @@ mod tests {
             let mut batch = Self::default();
             for _ in 0..10 {
                 let serial_id = 1;
-                batch.push_new_reauthorization(UniquenessReference::IrisSerialId(serial_id));
-                batch.push_new_reset_check();
-                batch.push_new_reset_update(UniquenessReference::IrisSerialId(serial_id));
-                batch.push_new_identity_deletion(UniquenessReference::IrisSerialId(serial_id));
+                let parent_ref = UniquenessRequestDescriptor::IrisSerialId(serial_id);
+                batch.push_new_reauthorization(parent_ref.clone(), None, None, None);
+                batch.push_new_reset_check(None, None);
+                batch.push_new_reset_update(parent_ref.clone(), None, None, None);
+                batch.push_new_identity_deletion(parent_ref.clone(), None, None);
             }
 
             batch
@@ -239,6 +368,7 @@ mod tests {
         let batch = RequestBatch::new_1();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 10);
+        assert!(batch.iris_pair_indexes().is_empty());
         for request in batch.requests {
             assert!(request.is_uniqueness());
         }
@@ -249,6 +379,7 @@ mod tests {
         let batch = RequestBatch::new_2();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 50);
+        assert!(batch.iris_pair_indexes().is_empty());
     }
 
     #[tokio::test]
@@ -256,5 +387,6 @@ mod tests {
         let batch = RequestBatch::new_3();
         assert!(batch.batch_idx == 1);
         assert!(batch.requests.len() == 40);
+        assert!(batch.iris_pair_indexes().is_empty());
     }
 }

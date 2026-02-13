@@ -13,6 +13,9 @@ pub enum ServiceClientError {
     #[error("Initialisation error: {0}")]
     InitialisationError(String),
 
+    #[error("Options error: {0}")]
+    InvalidOptions(String),
+
     #[error("Response error: {0}")]
     ResponseError(String),
 }

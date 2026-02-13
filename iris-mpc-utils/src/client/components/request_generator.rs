@@ -1,7 +1,8 @@
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::super::typeset::{
-    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError, UniquenessReference,
+    RequestBatch, RequestBatchKind, RequestBatchSet, RequestBatchSize, ServiceClientError,
+    UniquenessRequestDescriptor,
 };
 
 /// Generates batches of SMPC service requests.
@@ -10,21 +11,21 @@ pub(crate) struct RequestGenerator {
     generated_batch_count: usize,
 
     // Parameters determining how batches are generated.
-    params: RequestGeneratorParams,
+    config: RequestGeneratorConfig,
 }
 
 impl RequestGenerator {
     fn batch_count(&self) -> usize {
-        match &self.params {
-            RequestGeneratorParams::Simple { batch_count, .. } => *batch_count,
-            RequestGeneratorParams::KnownSet(batch_set) => batch_set.len(),
+        match &self.config {
+            RequestGeneratorConfig::Simple { batch_count, .. } => *batch_count,
+            RequestGeneratorConfig::Complex(batch_set) => batch_set.batches().len(),
         }
     }
 
-    pub(crate) fn new(params: RequestGeneratorParams) -> Self {
+    pub(crate) fn new(config: RequestGeneratorConfig) -> Self {
         Self {
             generated_batch_count: 0,
-            params,
+            config,
         }
     }
 
@@ -34,8 +35,13 @@ impl RequestGenerator {
             return Ok(None);
         }
 
-        let batch = match &self.params {
-            RequestGeneratorParams::Simple {
+        let batch = match &self.config {
+            RequestGeneratorConfig::Complex(batch_set) => batch_set
+                .batches()
+                .get(self.next_batch_idx() - 1)
+                .unwrap()
+                .clone(),
+            RequestGeneratorConfig::Simple {
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
@@ -57,9 +63,6 @@ impl RequestGenerator {
                 }
                 batch
             }
-            RequestGeneratorParams::KnownSet(batch_set) => {
-                batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
-            }
         };
 
         self.generated_batch_count += 1;
@@ -73,7 +76,7 @@ impl RequestGenerator {
 }
 
 /// Pushes a new request onto the batch.
-fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReference>) {
+fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessRequestDescriptor>) {
     assert!(
         matches!(
             kind,
@@ -87,19 +90,19 @@ fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessRefer
 
     match kind {
         smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-            batch.push_new_identity_deletion(parent.unwrap());
+            batch.push_new_identity_deletion(parent.unwrap(), None, None);
         }
         smpc_request::REAUTH_MESSAGE_TYPE => {
-            batch.push_new_reauthorization(parent.unwrap());
+            batch.push_new_reauthorization(parent.unwrap(), None, None, None);
         }
         smpc_request::RESET_CHECK_MESSAGE_TYPE => {
-            batch.push_new_reset_check();
+            batch.push_new_reset_check(None, None);
         }
         smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
-            batch.push_new_reset_update(parent.unwrap());
+            batch.push_new_reset_update(parent.unwrap(), None, None, None);
         }
         smpc_request::UNIQUENESS_MESSAGE_TYPE => {
-            batch.push_new_uniqueness();
+            batch.push_new_uniqueness(None, None);
         }
         _ => unreachable!(),
     }
@@ -110,21 +113,23 @@ fn push_new_uniqueness_maybe(
     batch: &mut RequestBatch,
     kind: &str,
     serial_id: Option<IrisSerialId>,
-) -> Option<UniquenessReference> {
+) -> Option<UniquenessRequestDescriptor> {
     match kind {
         smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => None,
         smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
         | smpc_request::REAUTH_MESSAGE_TYPE
         | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
-            Some(serial_id) => UniquenessReference::IrisSerialId(serial_id),
-            None => UniquenessReference::SignupId(batch.push_new_uniqueness()),
+            Some(serial_id) => UniquenessRequestDescriptor::IrisSerialId(serial_id),
+            None => UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None)),
         }),
         _ => panic!("Invalid request kind"),
     }
 }
 
 /// Set of variants over request generation inputs.
-pub(crate) enum RequestGeneratorParams {
+pub(crate) enum RequestGeneratorConfig {
+    /// A pre-built known set of request batches.
+    Complex(RequestBatchSet),
     /// Parameters permitting single kind batches to be generated.
     Simple {
         /// Number of request batches to generate.
@@ -139,8 +144,15 @@ pub(crate) enum RequestGeneratorParams {
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
     },
-    /// A pre-built known set of request batches.
-    KnownSet(Vec<RequestBatch>),
+}
+
+impl RequestGeneratorConfig {
+    // Reassigns parent descriptors.
+    pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
+        if let RequestGeneratorConfig::Complex(batch_set) = self {
+            batch_set.set_child_parent_descriptors_from_labels();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -148,12 +160,22 @@ mod tests {
     use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 
     use super::{
-        super::super::typeset::{RequestBatch, RequestBatchKind, RequestBatchSize},
-        RequestGeneratorParams,
+        super::super::typeset::{
+            RequestBatch, RequestBatchKind, RequestBatchSet, RequestBatchSize,
+        },
+        RequestGeneratorConfig,
     };
 
-    impl RequestGeneratorParams {
-        pub fn new_1() -> Self {
+    impl RequestGeneratorConfig {
+        fn new_1() -> Self {
+            Self::Complex(RequestBatchSet::new(vec![
+                RequestBatch::default(),
+                RequestBatch::default(),
+                RequestBatch::default(),
+            ]))
+        }
+
+        pub fn new_2() -> Self {
             Self::Simple {
                 batch_count: 1,
                 batch_size: RequestBatchSize::Static(1),
@@ -161,23 +183,15 @@ mod tests {
                 known_iris_serial_id: None,
             }
         }
-
-        fn new_2() -> Self {
-            Self::KnownSet(vec![
-                RequestBatch::default(),
-                RequestBatch::default(),
-                RequestBatch::default(),
-            ])
-        }
     }
 
     #[tokio::test]
     async fn test_new_1() {
-        let _ = RequestGeneratorParams::new_1();
+        let _ = RequestGeneratorConfig::new_1();
     }
 
     #[tokio::test]
     async fn test_new_2() {
-        let _ = RequestGeneratorParams::new_2();
+        let _ = RequestGeneratorConfig::new_2();
     }
 }

@@ -3,19 +3,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid;
 
-use iris_mpc_common::IrisSerialId;
-
-use super::{RequestInfo, RequestStatus, ResponsePayload};
-
-/// Enumeration over uniqueness request references. Applies to: IdentityDeletion ^ Reauthorization ^ ResetUpdate.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UniquenessReference {
-    // A serial identifier assigned from either a processed uniqueness result or a user input override.
-    IrisSerialId(IrisSerialId),
-    // Unique signup id of system request being processed.
-    SignupId(uuid::Uuid),
-}
+use super::{
+    IrisPairDescriptor, RequestInfo, RequestStatus, ResponsePayload, UniquenessRequestDescriptor,
+};
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,41 +13,49 @@ pub enum Request {
     IdentityDeletion {
         // Standard request information.
         info: RequestInfo,
-        // Weak reference to associated uniqueness.
-        uniqueness_ref: UniquenessReference,
+        // Weak reference to associated uniqueness request.
+        parent: UniquenessRequestDescriptor,
     },
     Reauthorization {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair: Option<IrisPairDescriptor>,
+        // Weak reference to associated uniqueness request.
+        parent: UniquenessRequestDescriptor,
         // Operation identifier.
         reauth_id: uuid::Uuid,
-        // Weak reference to associated uniqueness.
-        uniqueness_ref: UniquenessReference,
     },
     ResetCheck {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair: Option<IrisPairDescriptor>,
         // Operation identifier.
         reset_id: uuid::Uuid,
     },
     ResetUpdate {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair: Option<IrisPairDescriptor>,
+        // Weak reference to associated uniqueness request.
+        parent: UniquenessRequestDescriptor,
         // Operation identifier.
         reset_id: uuid::Uuid,
-        // Weak reference to associated uniqueness.
-        uniqueness_ref: UniquenessReference,
     },
     Uniqueness {
         // Standard request information.
         info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair: Option<IrisPairDescriptor>,
         // Iris sign-up identifier.
         signup_id: uuid::Uuid,
     },
 }
 
 impl Request {
-    fn info(&self) -> &RequestInfo {
+    pub(crate) fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
@@ -77,44 +75,56 @@ impl Request {
         }
     }
 
+    #[allow(dead_code)]
+    pub(super) fn iris_pair_indexes(&self) -> Vec<usize> {
+        match self {
+            Self::IdentityDeletion { .. } => vec![],
+            Self::Reauthorization { iris_pair, .. }
+            | Self::ResetCheck { iris_pair, .. }
+            | Self::ResetUpdate { iris_pair, .. }
+            | Self::Uniqueness { iris_pair, .. } => match iris_pair {
+                Some(iris_pair) => vec![iris_pair.left().index(), iris_pair.right().index()],
+                None => vec![],
+            },
+        }
+    }
+
     /// Returns true if deemed a child of previous system request.
     pub(super) fn is_child(&self, parent: &Self) -> bool {
         // A child of a uniqueness request can be derived by comparing signup identifiers.
-        match self {
-            Self::IdentityDeletion { uniqueness_ref, .. }
-            | Self::Reauthorization { uniqueness_ref, .. }
-            | Self::ResetUpdate { uniqueness_ref, .. } => {
-                matches!(
-                    (uniqueness_ref, parent),
-                    (UniquenessReference::SignupId(uniqueness_signup_id), Self::Uniqueness { signup_id, .. })
-                    if signup_id == uniqueness_signup_id
-                )
-            }
-            _ => false,
-        }
+        let parent_ref = match self {
+            Self::IdentityDeletion { parent, .. }
+            | Self::Reauthorization { parent, .. }
+            | Self::ResetUpdate { parent, .. } => parent,
+            _ => return false,
+        };
+        matches!(
+            (parent_ref, parent),
+            (UniquenessRequestDescriptor::SignupId(parent_signup_id), Self::Uniqueness { signup_id, .. })
+            if signup_id == parent_signup_id
+        )
     }
 
     /// Returns true if a system response is deemed to be correlated with this system request.
     pub(super) fn is_correlation(&self, response: &ResponsePayload) -> bool {
         match (self, response) {
-            (
-                Self::IdentityDeletion { uniqueness_ref, .. },
-                ResponsePayload::IdentityDeletion(result),
-            ) => matches!(
-                uniqueness_ref,
-                UniquenessReference::IrisSerialId(serial_id) if *serial_id == result.serial_id
-            ),
+            (Self::IdentityDeletion { parent, .. }, ResponsePayload::IdentityDeletion(result)) => {
+                matches!(
+                    parent,
+                    UniquenessRequestDescriptor::IrisSerialId(serial_id) if *serial_id == result.serial_id
+                )
+            }
             (Self::Reauthorization { reauth_id, .. }, ResponsePayload::Reauthorization(result)) => {
-                reauth_id.to_string() == result.reauth_id
+                result.reauth_id == reauth_id.to_string()
             }
             (Self::ResetCheck { reset_id, .. }, ResponsePayload::ResetCheck(result)) => {
-                reset_id.to_string() == result.reset_id
+                result.reset_id == reset_id.to_string()
             }
             (Self::ResetUpdate { reset_id, .. }, ResponsePayload::ResetUpdate(result)) => {
-                reset_id.to_string() == result.reset_id
+                result.reset_id == reset_id.to_string()
             }
             (Self::Uniqueness { signup_id, .. }, ResponsePayload::Uniqueness(result)) => {
-                signup_id.to_string() == result.signup_id
+                result.signup_id == signup_id.to_string()
             }
             _ => false,
         }
@@ -129,17 +139,30 @@ impl Request {
     pub(crate) fn is_enqueueable(&self) -> bool {
         matches!(self.info().status(), RequestStatus::SharesUploaded)
             && match self {
-                Self::IdentityDeletion { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                Self::IdentityDeletion { parent, .. } => {
+                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
-                Self::Reauthorization { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                Self::Reauthorization { parent, .. } => {
+                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
-                Self::ResetUpdate { uniqueness_ref, .. } => {
-                    matches!(uniqueness_ref, UniquenessReference::IrisSerialId(_))
+                Self::ResetUpdate { parent, .. } => {
+                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
                 _ => true,
             }
+    }
+
+    pub(crate) fn label(&self) -> &Option<String> {
+        self.info().label()
+    }
+
+    pub(crate) fn parent_descriptor(&self) -> Option<&UniquenessRequestDescriptor> {
+        match self {
+            Self::IdentityDeletion { parent, .. }
+            | Self::Reauthorization { parent, .. }
+            | Self::ResetUpdate { parent, .. } => Some(parent),
+            _ => None,
+        }
     }
 
     /// Sets correlated response and maybe sets request state.
@@ -153,7 +176,7 @@ impl Request {
 
     /// Updates request status.
     pub(crate) fn set_status(&mut self, new_state: RequestStatus) {
-        tracing::info!("{} :: State -> {}", &self, new_state);
+        tracing::info!("{} :: {}", &self, new_state);
         self.info_mut().set_status(new_state);
     }
 }
