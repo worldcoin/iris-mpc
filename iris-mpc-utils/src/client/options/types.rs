@@ -190,23 +190,6 @@ impl RequestBatchOptions {
         }
     }
 
-    /// Returns set of declared request labels.
-    #[allow(dead_code)]
-    pub(crate) fn labels_by_batch_idx(&self) -> std::collections::HashMap<String, usize> {
-        match self {
-            Self::Complex { batches } => batches
-                .iter()
-                .enumerate()
-                .flat_map(|(batch_idx, batch)| {
-                    batch
-                        .iter()
-                        .filter_map(move |item| item.label().map(|l| (l, batch_idx)))
-                })
-                .collect(),
-            _ => std::collections::HashMap::new(),
-        }
-    }
-
     /// Returns set of declared parent request labels.
     pub(crate) fn labels_of_parents(&self) -> Vec<String> {
         match self {
