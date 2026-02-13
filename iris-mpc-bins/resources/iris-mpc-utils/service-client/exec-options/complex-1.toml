@@ -23,15 +23,15 @@ batches = [
 ],
     [
     { label = "00-IdentityDeletion", payload = { IdentityDeletion = { parent = { Label = "40-Uniqueness" } } } },
-    { label = "10-ResetCheck", payload = { Reauthorisation = { iris_pair = [
+    { label = "10-Reauthorisation", payload = { Reauthorisation = { iris_pair = [
     { index = 11 },
     { index = 12 },
 ], parent = { Label = "41-Uniqueness" } } } },
-    { label = "20-ResetUpdate", payload = { ResetCheck = { iris_pair = [
+    { label = "20-ResetCheck", payload = { ResetCheck = { iris_pair = [
     { index = 13 },
     { index = 14 },
 ] } } },
-    { label = "30-Reauthorisation", payload = { ResetUpdate = { iris_pair = [
+    { label = "30-ResetUpdate", payload = { ResetUpdate = { iris_pair = [
     { index = 15 },
     { index = 16 },
 ], parent = { Label = "42-Uniqueness" } } } },
