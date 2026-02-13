@@ -1,9 +1,7 @@
 use std::collections::HashSet;
 
-use iris_mpc_common::helpers::smpc_request;
-
 use super::{
-    super::typeset::ServiceClientError,
+    super::typeset::{BatchKind, ServiceClientError},
     types::{RequestBatchOptions, SharesGeneratorOptions},
     ServiceClientOptions,
 };
@@ -75,20 +73,12 @@ impl ServiceClientOptions {
                 }
 
                 // Error if batch kind cannot be mapped to a supported SMPC request type.
-                if ![
-                    smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
-                    smpc_request::REAUTH_MESSAGE_TYPE,
-                    smpc_request::RESET_CHECK_MESSAGE_TYPE,
-                    smpc_request::RESET_UPDATE_MESSAGE_TYPE,
-                    smpc_request::UNIQUENESS_MESSAGE_TYPE,
-                ]
-                .contains(&batch_kind.as_str())
-                {
+                if BatchKind::from_str(batch_kind).is_none() {
                     return Err(ServiceClientError::InvalidOptions(format!(
                         "RequestBatchOptions::Simple batch_kind ({}) is unsupported",
                         batch_kind
                     )));
-                };
+                }
 
                 // Error if known serial id exceeds reasonable upper bound.
                 if let Some(known_iris_serial_id) = maybe_known_iris_serial_id {

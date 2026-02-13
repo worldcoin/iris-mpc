@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::IrisSerialId;
+use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
+
+use crate::client::typeset::IrisPairDescriptor;
 
 /// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,71 +57,6 @@ impl AwsOptions {
 
     pub fn sqs_wait_time_seconds(&self) -> &usize {
         &self.sqs_wait_time_seconds
-    }
-}
-
-/// Enumeration over types of strategy to apply when selecting
-/// Iris codes from an NDJSON file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum IrisCodeSelectionStrategyOptions {
-    // All Iris codes are selected.
-    All,
-    // Every other Iris code is selected beginning at an even offset.
-    Even,
-    // Every other Iris code is selected beginning at an odd offset.
-    Odd,
-}
-
-/// A descriptor over an Iris code cached within a file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IrisDescriptorOptions {
-    // Ordinal identifer typically pointing to a row within an NDJSON file.
-    index: usize,
-
-    // TODO: Optionally apply noise, rotations, mirroring, etc.
-    mutation: Option<()>,
-}
-
-impl IrisDescriptorOptions {
-    pub fn new(index: usize, mutation: Option<()>) -> Self {
-        Self { index, mutation }
-    }
-
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
-    pub fn mutation(&self) -> Option<()> {
-        self.mutation
-    }
-}
-
-/// A descriptor over a pair of Iris codes cached within a file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IrisPairDescriptorOptions((IrisDescriptorOptions, IrisDescriptorOptions));
-
-impl IrisPairDescriptorOptions {
-    pub fn new(left: IrisDescriptorOptions, right: IrisDescriptorOptions) -> Self {
-        Self((left, right))
-    }
-
-    pub fn new_from_indexes(left: usize, right: usize) -> Self {
-        Self::new(
-            IrisDescriptorOptions::new(left, None),
-            IrisDescriptorOptions::new(right, None),
-        )
-    }
-
-    pub fn left(&self) -> &IrisDescriptorOptions {
-        &self.0 .0
-    }
-
-    pub fn right(&self) -> &IrisDescriptorOptions {
-        &self.0 .1
-    }
-
-    pub fn indexes(&self) -> (usize, usize) {
-        (self.left().index, self.right().index)
     }
 }
 
@@ -229,7 +167,7 @@ impl RequestOptions {
         &self.payload
     }
 
-    pub fn iris_pair(&self) -> Option<&IrisPairDescriptorOptions> {
+    pub fn iris_pair(&self) -> Option<&IrisPairDescriptor> {
         self.payload().iris_pair()
     }
 
@@ -247,27 +185,27 @@ pub enum RequestPayloadOptions {
     },
     // Options over a reauthorisation request payload.
     Reauthorisation {
-        iris_pair: IrisPairDescriptorOptions,
+        iris_pair: IrisPairDescriptor,
         parent: UniquenessRequestDescriptorOptions,
     },
     // Options over a reset check request payload.
     ResetCheck {
-        iris_pair: IrisPairDescriptorOptions,
+        iris_pair: IrisPairDescriptor,
     },
     // Options over a reset update request payload.
     ResetUpdate {
-        iris_pair: IrisPairDescriptorOptions,
+        iris_pair: IrisPairDescriptor,
         parent: UniquenessRequestDescriptorOptions,
     },
     // Options over a uniqueness request payload.
     Uniqueness {
-        iris_pair: IrisPairDescriptorOptions,
+        iris_pair: IrisPairDescriptor,
         insertion_layers: Option<(usize, usize)>,
     },
 }
 
 impl RequestPayloadOptions {
-    pub fn iris_pair(&self) -> Option<&IrisPairDescriptorOptions> {
+    pub fn iris_pair(&self) -> Option<&IrisPairDescriptor> {
         match &self {
             Self::IdentityDeletion { .. } | Self::ResetCheck { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
@@ -303,7 +241,7 @@ pub enum SharesGeneratorOptions {
         rng_seed: Option<u64>,
 
         // Instruction in respect of Iris code selection.
-        selection_strategy: Option<IrisCodeSelectionStrategyOptions>,
+        selection_strategy: Option<IrisSelection>,
     },
 }
 
@@ -341,9 +279,11 @@ pub(crate) mod tests {
 
     use iris_mpc_common::helpers::smpc_request;
 
+    use crate::client::typeset::{IrisDescriptor, IrisPairDescriptor};
+
     use super::{
-        IrisDescriptorOptions, IrisPairDescriptorOptions, RequestBatchOptions, RequestOptions,
-        RequestPayloadOptions, UniquenessRequestDescriptorOptions,
+        RequestBatchOptions, RequestOptions, RequestPayloadOptions,
+        UniquenessRequestDescriptorOptions,
     };
 
     pub(crate) const REQUEST_DESCRIPTOR_0: &str = "IdentityDeletion-0";
@@ -357,11 +297,11 @@ pub(crate) mod tests {
     pub(crate) const REQUEST_DESCRIPTOR_4_11: &str = "Uniqueness-11";
     pub(crate) const REQUEST_DESCRIPTOR_4_12: &str = "Uniqueness-12";
 
-    impl IrisPairDescriptorOptions {
+    impl IrisPairDescriptor {
         pub(crate) fn new_0(offset: usize) -> Self {
             Self::new(
-                IrisDescriptorOptions::new(offset + 1, None),
-                IrisDescriptorOptions::new(offset + 2, None),
+                IrisDescriptor::new(offset + 1),
+                IrisDescriptor::new(offset + 2),
             )
         }
     }
@@ -424,7 +364,7 @@ pub(crate) mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_1),
                 RequestPayloadOptions::Reauthorisation {
-                    iris_pair: IrisPairDescriptorOptions::new_0(20),
+                    iris_pair: IrisPairDescriptor::new_0(20),
                     parent: UniquenessRequestDescriptorOptions::new_4_11(),
                 },
             )
@@ -435,7 +375,7 @@ pub(crate) mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_2),
                 RequestPayloadOptions::ResetCheck {
-                    iris_pair: IrisPairDescriptorOptions::new_0(22),
+                    iris_pair: IrisPairDescriptor::new_0(22),
                 },
             )
         }
@@ -445,7 +385,7 @@ pub(crate) mod tests {
             Self::new(
                 Some(REQUEST_DESCRIPTOR_3),
                 RequestPayloadOptions::ResetUpdate {
-                    iris_pair: IrisPairDescriptorOptions::new_0(24),
+                    iris_pair: IrisPairDescriptor::new_0(24),
                     parent: UniquenessRequestDescriptorOptions::new_4_12(),
                 },
             )
@@ -456,7 +396,7 @@ pub(crate) mod tests {
             Self::new(
                 Some(descriptor_label),
                 RequestPayloadOptions::Uniqueness {
-                    iris_pair: IrisPairDescriptorOptions::new_0(iris_pair_offset),
+                    iris_pair: IrisPairDescriptor::new_0(iris_pair_offset),
                     insertion_layers: None,
                 },
             )
@@ -507,38 +447,6 @@ pub(crate) mod tests {
                 Self::new_4_11(),
                 Self::new_4_12(),
             ]
-        }
-    }
-
-    #[test]
-    fn test_new_request_options() {
-        for entity_factory in [
-            RequestOptions::new_0,
-            RequestOptions::new_1,
-            RequestOptions::new_2,
-            RequestOptions::new_3,
-            RequestOptions::new_4_00,
-            RequestOptions::new_4_01,
-            RequestOptions::new_4_02,
-        ] {
-            let _ = entity_factory();
-        }
-    }
-
-    #[test]
-    fn test_new_request_options_batch() {
-        for entity_factory in [RequestOptions::new_batch_0, RequestOptions::new_batch_1] {
-            let _ = entity_factory();
-        }
-    }
-
-    #[test]
-    fn test_new_request_batch_options_1() {
-        for entity_factory in [
-            RequestBatchOptions::new_complex_1,
-            RequestBatchOptions::new_simple_1,
-        ] {
-            let _ = entity_factory();
         }
     }
 

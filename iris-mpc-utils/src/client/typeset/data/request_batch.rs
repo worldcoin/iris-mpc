@@ -10,6 +10,50 @@ use super::{
     UniquenessRequestDescriptor,
 };
 
+/// Typed representation of a batch request kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchKind {
+    IdentityDeletion,
+    Reauth,
+    ResetCheck,
+    ResetUpdate,
+    Uniqueness,
+}
+
+impl BatchKind {
+    /// Returns the SMPC message type string constant.
+    #[allow(dead_code)]
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Self::IdentityDeletion => smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
+            Self::Reauth => smpc_request::REAUTH_MESSAGE_TYPE,
+            Self::ResetCheck => smpc_request::RESET_CHECK_MESSAGE_TYPE,
+            Self::ResetUpdate => smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+            Self::Uniqueness => smpc_request::UNIQUENESS_MESSAGE_TYPE,
+        }
+    }
+
+    /// Parses a batch kind from its SMPC message type string.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => Some(Self::IdentityDeletion),
+            smpc_request::REAUTH_MESSAGE_TYPE => Some(Self::Reauth),
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => Some(Self::ResetCheck),
+            smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(Self::ResetUpdate),
+            smpc_request::UNIQUENESS_MESSAGE_TYPE => Some(Self::Uniqueness),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this batch kind requires a parent uniqueness request.
+    pub fn requires_parent(&self) -> bool {
+        matches!(
+            self,
+            Self::IdentityDeletion | Self::Reauth | Self::ResetUpdate
+        )
+    }
+}
+
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestBatch {
@@ -182,36 +226,6 @@ impl fmt::Display for RequestBatch {
     }
 }
 
-/// Encapsulates inputs used to derive the kind of request batch.
-#[derive(Debug, Clone)]
-pub enum RequestBatchKind {
-    /// All requests are of same type.
-    Simple(&'static str),
-}
-
-impl fmt::Display for RequestBatchKind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Simple(kind) => write!(f, "{}", kind),
-        }
-    }
-}
-
-impl From<&String> for RequestBatchKind {
-    fn from(value: &String) -> Self {
-        Self::Simple(match value.as_str() {
-            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
-            }
-            smpc_request::REAUTH_MESSAGE_TYPE => smpc_request::REAUTH_MESSAGE_TYPE,
-            smpc_request::RESET_CHECK_MESSAGE_TYPE => smpc_request::RESET_CHECK_MESSAGE_TYPE,
-            smpc_request::RESET_UPDATE_MESSAGE_TYPE => smpc_request::RESET_UPDATE_MESSAGE_TYPE,
-            smpc_request::UNIQUENESS_MESSAGE_TYPE => smpc_request::UNIQUENESS_MESSAGE_TYPE,
-            _ => panic!("Unsupported request batch kind"),
-        })
-    }
-}
-
 /// Encapsulates a constructed set of request batches for processing.
 pub struct RequestBatchSet {
     // Associated set of request batches.
@@ -291,21 +305,6 @@ impl RequestBatchSet {
 
                 *parent_desc = UniquenessRequestDescriptor::SignupId(parent_signup_id);
             }
-        }
-    }
-}
-
-/// Encapsulates inputs used to compute size of a request batch.
-#[derive(Debug, Clone)]
-pub enum RequestBatchSize {
-    /// Batch size is static.
-    Static(usize),
-}
-
-impl fmt::Display for RequestBatchSize {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Static(size) => write!(f, "{}", size),
         }
     }
 }
