@@ -278,6 +278,19 @@ pub async fn process_job_result(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Update modification results in a separate transaction to minimize lock
+    // duration on the modifications table. The assign_modification_id() trigger
+    // takes an EXCLUSIVE table lock on INSERT, which conflicts with the
+    // RowExclusiveLock held by UPDATE. Committing early releases the lock before
+    // the expensive batch_set_links INSERT runs.
+    if !config.disable_persistence {
+        let mut mod_tx = store.tx().await?;
+        store
+            .update_modifications(&mut mod_tx, &modifications.values().collect::<Vec<_>>())
+            .await?;
+        mod_tx.commit().await?;
+    }
+
     let mut iris_tx = store.tx().await?;
 
     if !codes_and_masks.is_empty() && !config.disable_persistence {
@@ -299,11 +312,6 @@ pub async fn process_job_result(
     }
 
     if !config.disable_persistence {
-        // update modification results in db
-        store
-            .update_modifications(&mut iris_tx, &modifications.values().collect::<Vec<_>>())
-            .await?;
-
         // persist reauth results into db
         for (i, success) in successful_reauths.iter().enumerate() {
             if !success {
