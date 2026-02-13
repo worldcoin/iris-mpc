@@ -21,7 +21,7 @@ jobs:
   docker:
     timeout-minutes: 60
     runs-on:
-      labels: ubuntu-22.04-16core
+      labels: arm64-ubuntu-22.04-16core
     permissions:
       packages: write
       contents: read
