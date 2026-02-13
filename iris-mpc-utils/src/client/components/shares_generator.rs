@@ -88,7 +88,7 @@ where
         match self {
             Self::FromCompute { rng } => generate_iris_shares_for_upload(rng, None),
             Self::FromFile { iris_shares } => match maybe_iris_descriptor {
-                Some(iris_descriptor) => iris_shares[iris_descriptor.index() - 1].clone(),
+                Some(iris_descriptor) => iris_shares[iris_descriptor.index()].clone(),
                 None => iris_shares.pop().expect("Shares generator is exhausted"),
             },
         }
