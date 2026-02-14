@@ -166,4 +166,3 @@ impl From<&UniquenessRequestDescriptorOptions> for UniquenessRequestDescriptor {
         }
     }
 }
-
