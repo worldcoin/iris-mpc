@@ -1,103 +1,77 @@
 # Running Service Client Utility
 
-A new HNSW tool, named `service-client` has been developed to support end-to-end system testing.  The tool's design intent is to support the dispatch of various traffic patterns into the system.  Such patterns will differ in terms of time (short vs extended bursts) and/or content (different request types).  
+The `service-client` tool supports end-to-end system testing by dispatching various traffic patterns into the system. Patterns differ in terms of time (short vs extended bursts) and/or content (different request types).
 
 ### Environments
 
-The tool is designed to be used in the following environments:
+- **dev-dkr**: Local dockerised development environment (LocalStack)
+- **dev-stg**: Remote AWS staged development environment
 
-- *dev-dkr*: Local dockerised development environment
+## Prerequisites
 
-- *dev-stg*: Remote AWS staged development environment
+### AWS Profile
 
-## Prelude: Setup Datadog & AWS accounts
+For **dev-dkr** (LocalStack), add the following to `~/.aws/config` and `~/.aws/credentials`:
 
-### DatadogHQ Account
+```ini
+# ~/.aws/config
+[profile worldcoin-dev-dkr]
+region = us-east-1
+...
+[profile worldcoin-smpcv-io-vpc-dev-dkr]
+source_profile = worldcoin-dev-dkr
+role_arn = arn:aws:iam::238407200320:role/ampc-hnsw-developer-role
 
-- Obtain credentials from TFH
-- Verify credentials @ Datadog login page
-    - [https://app.datadoghq.com/account/login](https://app.datadoghq.com/account/login?redirect=f)
 
-### AWS Management Console Account
-
-- Obtain credentials from TFH
-- Login to AWS Management Console
-    - https://aws.amazon.com/console/
-- Create Access Key
-    - Open “I AM” page
-    - Click tab: `Security credentials`
-    - Click button: `Create access key`
-    - Click option: `Command Line Interface (CLI)`
-    - Follow instructions to create access key and:
-        - Save: `Access Key`
-        - Save: `Secret access key`
-
-## Step 1: Activate
-
-```
-source YOUR-WORKING-DIR/iris-mpc/iris-mpc-bins/scripts/iris-mpc-utils/service-client/activate
+# ~/.aws/credentials
+[worldcoin-dev-dkr]
+aws_access_key_id = test
+aws_secret_access_key = test
 ```
 
-*HINT*: you may wish to add activation to your local `~/.bashrc` file.
+For **dev-stg** (real AWS), the client only needs the VPC profile (`worldcoin-smpcv-io-vpc-dev`). See [deploy/dev/README.md](../../deploy/dev/README.md) for full AWS account setup.
 
-## Step 2: View Help
-
-```
-hnsw-service-client-init help
-hnsw-service-client-set-env help
-hnsw-service-client-exec help
-```
-
-## Step 3: Initialise
-
-Initialises local resources for each environment.  One time execution.
+## Usage
 
 ```
-hnsw-service-client-init
+scripts/iris-mpc-utils/service-client/run.sh [-e ENV] [EXEC_OPTS_TOML]
 ```
 
-*NOTE*: you will be instructed to review/edit the following files:
+### Examples
 
-```
-${HOME}/.hnsw/service-client/aws-opts/dev-dkr/aws-credentials
-${HOME}/.hnsw/service-client/aws-opts/dev-stg/aws-credentials
-```
+```bash
+# Default: dev-dkr environment, simple-1.toml request batch
+./run.sh
 
-## Step 4: Start Session
+# Staging environment
+./run.sh -e dev-stg
 
-Starts service client session against a supported environment.  One time execution per terminal session.
+# Custom request batch
+./run.sh requests/complex-1.toml
 
-```
-hnsw-service-client-set-env dev-dkr
-```
+# Staging with custom request batch
+./run.sh -e dev-stg path/to/custom.toml
 
-Options: 
-- env = dev-dkr | dev-stg
-
-Defaults: 
-- env = dev-dkr
-
-*NOTE*: Repeat if you switch between supported environments within a terminal session.
-
-## Step 5: Execute
-
-```
-hnsw-service-client-exec PATH-TO-A-SERVICE-CLIENT-EXEC-OPTIONS-FILE
+# Help
+./run.sh -h
 ```
 
-Defaults: 
-- filepath = ${HOME}/.hnsw/service-client/exec-opts/examples/example-1.toml
+## Request Batch Examples
 
-## Example Service Client Execution Options.
+Pre-built request batches are in `scripts/iris-mpc-utils/service-client/requests/`:
 
-It is good practice to create a local folder, e.g. `~/.hnsw/service-client/my-exec-opts`, into which to store execution option files.  Below is a non-exhaustive set of example execution option files. 
+| File | Description |
+|------|-------------|
+| `simple-1.toml` | Uniqueness requests |
+| `simple-2.toml` | Reauth requests |
+| `simple-3.toml` | Reset update requests |
+| `simple-4.toml` | Identity deletion requests |
+| `simple-5.toml` | Reset check requests |
+| `complex-1.toml` | Multi-operation batch with dependencies |
 
-### Example 1.
+### Custom request batch: computed shares
 
-- Simple uniqueness requests
-- Iris shares generated on the fly
-
-```
+```toml
 [request_batch.Simple]
 batch_count = 10
 batch_size = 10
@@ -107,12 +81,9 @@ batch_kind = "uniqueness"
 rng_seed = 42
 ```
 
-### Example 2.
+### Custom request batch: shares from file
 
-- Simple uniqueness requests
-- Iris shares generated from an Iris codes NDJSON file
-
-```
+```toml
 [request_batch.Simple]
 batch_count = 10
 batch_size = 10
@@ -122,19 +93,4 @@ batch_kind = "uniqueness"
 path_to_ndjson_file = "YOUR-WORKING-DIR/iris-mpc/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson"
 rng_seed = 42
 selection_strategy = "All"
-```
-
-### Example 3.
-
-- Simple reauth requests
-- Iris shares generated on the fly
-
-```
-[request_batch.Simple]
-batch_count = 10
-batch_size = 10
-batch_kind = "reauth"
-
-[shares_generator.FromCompute]
-rng_seed = 42
 ```
