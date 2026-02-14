@@ -31,6 +31,11 @@ exec_opts=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -e)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: -e requires a non-empty environment argument." >&2
+                usage
+                exit 1
+            fi
             env="$2"
             shift 2
             ;;
