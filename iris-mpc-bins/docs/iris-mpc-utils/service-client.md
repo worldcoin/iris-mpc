@@ -11,22 +11,25 @@ The `service-client` tool supports end-to-end system testing by dispatching vari
 
 ### AWS Profile
 
-Add the relevant profile to your `~/.aws/config`. Reference templates are in `scripts/iris-mpc-utils/service-client/profiles/`.
+For **dev-dkr** (LocalStack), add the following to `~/.aws/config` and `~/.aws/credentials`:
 
-For **dev-dkr** (LocalStack), add the `worldcoin-dev-dkr` profile and set credentials to `test`/`test` in `~/.aws/credentials`.
+```ini
+# ~/.aws/config
+[profile worldcoin-dev-dkr]
+region = us-east-1
+...
+[profile worldcoin-smpcv-io-vpc-dev-dkr]
+source_profile = worldcoin-dev-dkr
+role_arn = arn:aws:iam::238407200320:role/ampc-hnsw-developer-role
 
-For **dev-stg** (real AWS), add the `worldcoin-smpcv-io-vpc-dev` profile with your real credentials.
 
-### DatadogHQ Account
+# ~/.aws/credentials
+[worldcoin-dev-dkr]
+aws_access_key_id = test
+aws_secret_access_key = test
+```
 
-- Obtain credentials from TFH
-- Verify credentials @ [Datadog login page](https://app.datadoghq.com/account/login?redirect=f)
-
-### AWS Management Console Account
-
-- Obtain credentials from TFH
-- Login to [AWS Management Console](https://aws.amazon.com/console/)
-- Create Access Key via IAM > Security credentials > Create access key > CLI
+For **dev-stg** (real AWS), the client only needs the VPC profile (`worldcoin-smpcv-io-vpc-dev`). See [deploy/dev/README.md](../../deploy/dev/README.md) for full AWS account setup.
 
 ## Usage
 

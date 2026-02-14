@@ -67,7 +67,7 @@ unset AWS_ENDPOINT_URL 2>/dev/null || true
 
 case "${env}" in
     dev-dkr)
-        export AWS_PROFILE="worldcoin-dev-dkr"
+        export AWS_PROFILE="worldcoin-smpcv-io-vpc-dev-dkr"
         export AWS_ENDPOINT_URL="http://localhost:4566"
         ;;
     dev-stg)
