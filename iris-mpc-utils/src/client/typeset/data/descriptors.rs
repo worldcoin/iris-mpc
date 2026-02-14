@@ -8,22 +8,15 @@ use iris_mpc_common::IrisSerialId;
 pub struct IrisDescriptor {
     // Ordinal identifer pointing to a row within an NDJSON file.
     index: usize,
-
-    // TODO: Optionally apply noise, rotations, mirroring, etc.
-    mutation: Option<()>,
 }
 
 impl IrisDescriptor {
-    pub fn new(index: usize, mutation: Option<()>) -> Self {
-        Self { index, mutation }
+    pub fn new(index: usize) -> Self {
+        Self { index }
     }
 
     pub fn index(&self) -> usize {
         self.index
-    }
-
-    pub fn mutation(&self) -> &Option<()> {
-        &self.mutation
     }
 }
 
@@ -37,10 +30,7 @@ impl IrisPairDescriptor {
     }
 
     pub fn new_from_indexes(left: usize, right: usize) -> Self {
-        Self::new(
-            IrisDescriptor::new(left, None),
-            IrisDescriptor::new(right, None),
-        )
+        Self::new(IrisDescriptor::new(left), IrisDescriptor::new(right))
     }
 
     pub fn left(&self) -> &IrisDescriptor {

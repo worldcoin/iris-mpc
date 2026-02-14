@@ -3,13 +3,10 @@ use std::path::PathBuf;
 use async_from::{self, AsyncFrom};
 use rand::{CryptoRng, Rng, SeedableRng};
 
-use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
-
 use super::{
     super::ServiceClientOptions,
     types::{
-        AwsOptions, IrisCodeSelectionStrategyOptions, IrisDescriptorOptions,
-        IrisPairDescriptorOptions, RequestBatchOptions, RequestOptions, RequestPayloadOptions,
+        AwsOptions, RequestBatchOptions, RequestOptions, RequestPayloadOptions,
         SharesGeneratorOptions, UniquenessRequestDescriptorOptions,
     },
 };
@@ -17,10 +14,7 @@ use crate::{
     aws::{AwsClient, AwsClientConfig},
     client::{
         components::{RequestGenerator, RequestGeneratorConfig, SharesGenerator},
-        typeset::{
-            IrisDescriptor, IrisPairDescriptor, RequestBatch, RequestBatchKind, RequestBatchSet,
-            RequestBatchSize, UniquenessRequestDescriptor,
-        },
+        typeset::{BatchKind, RequestBatch, RequestBatchSet, UniquenessRequestDescriptor},
     },
 };
 
@@ -47,31 +41,6 @@ impl AsyncFrom<AwsOptions> for AwsClientConfig {
     }
 }
 
-impl From<&IrisCodeSelectionStrategyOptions> for IrisSelection {
-    fn from(opts: &IrisCodeSelectionStrategyOptions) -> Self {
-        match opts {
-            IrisCodeSelectionStrategyOptions::All => Self::All,
-            IrisCodeSelectionStrategyOptions::Even => Self::Even,
-            IrisCodeSelectionStrategyOptions::Odd => Self::Odd,
-        }
-    }
-}
-
-impl From<&IrisDescriptorOptions> for IrisDescriptor {
-    fn from(opts: &IrisDescriptorOptions) -> Self {
-        IrisDescriptor::new(opts.index(), opts.mutation())
-    }
-}
-
-impl From<&IrisPairDescriptorOptions> for IrisPairDescriptor {
-    fn from(opts: &IrisPairDescriptorOptions) -> Self {
-        Self::new(
-            IrisDescriptor::from(opts.left()),
-            IrisDescriptor::from(opts.right()),
-        )
-    }
-}
-
 impl From<&Vec<Vec<RequestOptions>>> for RequestBatchSet {
     fn from(opts: &Vec<Vec<RequestOptions>>) -> Self {
         let batches: Vec<RequestBatch> = opts
@@ -91,28 +60,28 @@ impl From<&Vec<Vec<RequestOptions>>> for RequestBatchSet {
                         RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
                             batch.push_new_reauthorization(
                                 UniquenessRequestDescriptor::from(parent),
-                                Some(IrisPairDescriptor::from(iris_pair)),
+                                Some(iris_pair.clone()),
                                 opts_request.label(),
                                 parent.label(),
                             );
                         }
                         RequestPayloadOptions::ResetCheck { iris_pair } => {
                             batch.push_new_reset_check(
-                                Some(IrisPairDescriptor::from(iris_pair)),
+                                Some(iris_pair.clone()),
                                 opts_request.label(),
                             );
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                             batch.push_new_reset_update(
                                 UniquenessRequestDescriptor::from(parent),
-                                Some(IrisPairDescriptor::from(iris_pair)),
+                                Some(iris_pair.clone()),
                                 opts_request.label(),
                                 parent.label(),
                             );
                         }
                         RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
                             batch.push_new_uniqueness(
-                                Some(IrisPairDescriptor::from(iris_pair)),
+                                Some(iris_pair.clone()),
                                 opts_request.label().clone(),
                             );
                         }
@@ -154,8 +123,9 @@ impl From<&ServiceClientOptions> for RequestGeneratorConfig {
                 tracing::info!("Parsing RequestBatchOptions::Simple");
                 Self::Simple {
                     batch_count: *batch_count,
-                    batch_size: RequestBatchSize::Static(*batch_size),
-                    batch_kind: RequestBatchKind::from(batch_kind),
+                    batch_size: *batch_size,
+                    batch_kind: BatchKind::from_str(batch_kind)
+                        .unwrap_or_else(|| panic!("Unsupported batch kind: {}", batch_kind)),
                     known_iris_serial_id: *known_iris_serial_id,
                 }
             }
@@ -179,7 +149,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> From<&ServiceClientOptions> for Sh
                 SharesGenerator::new_file(
                     PathBuf::from(path_to_ndjson_file),
                     *rng_seed,
-                    selection_strategy.as_ref().map(IrisSelection::from),
+                    *selection_strategy,
                 )
             }
         }
