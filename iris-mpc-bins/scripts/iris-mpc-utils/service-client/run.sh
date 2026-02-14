@@ -55,7 +55,7 @@ exec_opts="${exec_opts:-${SCRIPT_DIR}/requests/simple-1.toml}"
 
 if [[ ! -f "${aws_opts}" ]]; then
     echo "Error: unknown environment '${env}'" >&2
-    echo "Valid: dev-dkr, dev-stg" >&2
+    echo "Valid environments: dev-dkr (default), dev-stg" >&2
     exit 1
 fi
 
