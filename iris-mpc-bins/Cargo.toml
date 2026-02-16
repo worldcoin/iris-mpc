@@ -148,6 +148,10 @@ name = "init-test-dbs"
 path = "bin/iris-mpc-cpu/init_test_dbs.rs"
 
 [[bin]]
+name = "init-single-db"
+path = "bin/iris-mpc-cpu/init_single_db.rs"
+
+[[bin]]
 name = "local_hnsw"
 path = "bin/iris-mpc-cpu/local_hnsw.rs"
 
