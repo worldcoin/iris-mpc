@@ -3,7 +3,6 @@ use uuid;
 
 use iris_mpc_common::IrisSerialId;
 
-
 /// A descriptor over an Iris code cached within an NDJSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrisDescriptor {
