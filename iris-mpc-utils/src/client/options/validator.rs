@@ -95,3 +95,115 @@ impl ServiceClientOptions {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ServiceClientOptions;
+
+    fn opts(toml_str: &str) -> ServiceClientOptions {
+        toml::from_str(toml_str).expect("Failed to parse TOML")
+    }
+
+    fn assert_invalid_options(opts: &ServiceClientOptions, expected_substr: &str) {
+        let err = opts.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(expected_substr),
+            "Expected error containing '{}', got: {}",
+            expected_substr,
+            msg
+        );
+    }
+
+    // -- Complex error paths --
+
+    #[test]
+    fn complex_rejects_from_compute_shares_generator() {
+        let o = opts(
+            r#"
+            [shares_generator.FromCompute]
+            rng_seed = 42
+            [request_batch.Complex]
+            batches = [[
+                { payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+            ]]
+        "#,
+        );
+        assert_invalid_options(&o, "can only be used with SharesGeneratorOptions::FromFile");
+    }
+
+    #[test]
+    fn complex_rejects_duplicate_iris_descriptors() {
+        // Index 1 appears in both iris pairs (left of first, left of second).
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 3 }] } } },
+            ]]
+        "#,
+        );
+        assert_invalid_options(&o, "duplicate Iris descriptors");
+    }
+
+    #[test]
+    fn complex_rejects_duplicate_labels() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "dup", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                { label = "dup", payload = { Uniqueness = { iris_pair = [{ index = 3 }, { index = 4 }] } } },
+            ]]
+        "#,
+        );
+        assert_invalid_options(&o, "duplicate labels");
+    }
+
+    #[test]
+    fn complex_rejects_invalid_parent_label() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                { label = "D-0", payload = { IdentityDeletion = { parent = { Label = "missing" } } } },
+            ]]
+        "#,
+        );
+        assert_invalid_options(&o, "parent label 'missing' that is not found in labels");
+    }
+
+    // -- Complex happy path --
+
+    #[test]
+    fn complex_valid_multi_batch_passes() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                    { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 3 }, { index = 4 }] } } },
+                ],
+                [
+                    { label = "D-0", payload = { IdentityDeletion = { parent = { Label = "U-0" } } } },
+                    { label = "R-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = { Label = "U-1" } } } },
+                    { label = "RC-0", payload = { ResetCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
+                    { label = "RU-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = { Label = "U-0" } } } },
+                ],
+            ]
+        "#,
+        );
+        o.validate().expect("should pass validation");
+    }
+}
