@@ -42,10 +42,10 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
         Ok(Self {
             shares_uploader: SharesUploader::new(
                 aws_client.clone(),
-                SharesGenerator::<R>::from(&opts),
+                SharesGenerator::<R>::from_options(&opts),
             ),
             request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::from(&opts),
+            request_generator: RequestGenerator::from_options(&opts)?,
             response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
         })
     }

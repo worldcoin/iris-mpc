@@ -9,6 +9,7 @@ use super::{
     IrisPairDescriptor, Request, RequestInfo, RequestStatus, ResponsePayload,
     UniquenessRequestDescriptor,
 };
+use crate::client::options::{RequestOptions, RequestPayloadOptions};
 
 /// Typed representation of a batch request kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +224,59 @@ pub struct RequestBatchSet {
 impl RequestBatchSet {
     pub(crate) fn new(batches: Vec<RequestBatch>) -> Self {
         Self { batches }
+    }
+
+    pub(crate) fn from_options(opts: &[Vec<RequestOptions>]) -> Self {
+        let batches: Vec<RequestBatch> = opts
+            .iter()
+            .enumerate()
+            .map(|(batch_idx, opts_batch)| {
+                let mut batch = RequestBatch::new(batch_idx, vec![]);
+                for opts_request in opts_batch {
+                    match opts_request.payload() {
+                        RequestPayloadOptions::IdentityDeletion { parent } => {
+                            batch.push_new_identity_deletion(
+                                UniquenessRequestDescriptor::from_options(parent),
+                                opts_request.label(),
+                                parent.label(),
+                            );
+                        }
+                        RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
+                            batch.push_new_reauthorization(
+                                UniquenessRequestDescriptor::from_options(parent),
+                                Some(iris_pair.clone()),
+                                opts_request.label(),
+                                parent.label(),
+                            );
+                        }
+                        RequestPayloadOptions::ResetCheck { iris_pair } => {
+                            batch.push_new_reset_check(
+                                Some(iris_pair.clone()),
+                                opts_request.label(),
+                            );
+                        }
+                        RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
+                            batch.push_new_reset_update(
+                                UniquenessRequestDescriptor::from_options(parent),
+                                Some(iris_pair.clone()),
+                                opts_request.label(),
+                                parent.label(),
+                            );
+                        }
+                        RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
+                            batch.push_new_uniqueness(
+                                Some(iris_pair.clone()),
+                                opts_request.label().clone(),
+                            );
+                        }
+                    }
+                }
+
+                batch
+            })
+            .collect();
+
+        RequestBatchSet::new(batches)
     }
 
     pub(crate) fn batches(&self) -> &Vec<RequestBatch> {

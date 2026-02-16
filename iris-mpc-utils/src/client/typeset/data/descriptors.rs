@@ -3,6 +3,8 @@ use uuid;
 
 use iris_mpc_common::IrisSerialId;
 
+use crate::client::options::UniquenessRequestDescriptorOptions;
+
 /// A descriptor over an Iris code cached within an NDJSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrisDescriptor {
@@ -55,6 +57,15 @@ pub enum UniquenessRequestDescriptor {
 }
 
 impl UniquenessRequestDescriptor {
+    pub(crate) fn from_options(opts: &UniquenessRequestDescriptorOptions) -> Self {
+        match opts {
+            UniquenessRequestDescriptorOptions::SerialId(serial_id) => {
+                Self::IrisSerialId(*serial_id)
+            }
+            UniquenessRequestDescriptorOptions::Label(label) => Self::Label(label.clone()),
+        }
+    }
+
     pub fn label(&self) -> Option<&str> {
         match self {
             Self::Label(label) => Some(label),
