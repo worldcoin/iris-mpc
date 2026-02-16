@@ -4,7 +4,6 @@ use iris_mpc_common::helpers::smpc_request;
 
 use super::super::typeset::{
     ProcessRequestBatch, Request, RequestBatch, RequestPayload, RequestStatus, ServiceClientError,
-    UniquenessRequestDescriptor,
 };
 use crate::aws::{types::SnsMessageInfo, AwsClient};
 
@@ -60,10 +59,9 @@ impl From<&Request> for RequestPayload {
         match request {
             Request::IdentityDeletion { parent, .. } => {
                 Self::IdentityDeletion(smpc_request::IdentityDeletionRequest {
-                    serial_id: match parent {
-                        UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
-                        _ => panic!("Invalid uniqueness reference"),
-                    },
+                    serial_id: parent
+                        .get_serial_id()
+                        .expect("response not received for parent request"),
                 })
             }
             Request::Reauthorization {
@@ -72,10 +70,9 @@ impl From<&Request> for RequestPayload {
                 batch_size: Some(1),
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
-                serial_id: match parent {
-                    UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
-                    _ => panic!("Invalid uniqueness reference"),
-                },
+                serial_id: parent
+                    .get_serial_id()
+                    .expect("response not received for parent request"),
                 skip_persistence: None,
                 use_or_rule: false,
             }),
@@ -91,10 +88,9 @@ impl From<&Request> for RequestPayload {
             } => Self::ResetUpdate(smpc_request::ResetUpdateRequest {
                 reset_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
-                serial_id: match parent {
-                    UniquenessRequestDescriptor::IrisSerialId(serial_id) => *serial_id,
-                    _ => panic!("Invalid uniqueness reference"),
-                },
+                serial_id: parent
+                    .get_serial_id()
+                    .expect("response not received for parent request"),
             }),
             Request::Uniqueness { signup_id, .. } => {
                 Self::Uniqueness(smpc_request::UniquenessRequest {

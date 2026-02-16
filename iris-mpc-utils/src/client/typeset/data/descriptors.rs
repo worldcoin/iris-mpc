@@ -61,4 +61,11 @@ impl UniquenessRequestDescriptor {
             _ => None,
         }
     }
+
+    pub fn get_serial_id(&self) -> Option<IrisSerialId> {
+        match self {
+            Self::IrisSerialId(r) => Some(*r),
+            _ => None,
+        }
+    }
 }
