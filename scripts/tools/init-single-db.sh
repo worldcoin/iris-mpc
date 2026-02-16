@@ -24,6 +24,7 @@ echo "starting restore graph right"
 echo "restore graph right done"
 
 psql "$SMPC__CPU_DATABASE__URL" -c "
+SET search_path TO \"SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID\";
 INSERT INTO persistent_state (domain, \"key\", \"value\")
 VALUES ('genesis', 'last_indexed_iris_id', '287895')
 ON CONFLICT (domain, \"key\")
