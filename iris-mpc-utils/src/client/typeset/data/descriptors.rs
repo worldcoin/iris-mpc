@@ -45,10 +45,14 @@ impl IrisPairDescriptor {
 }
 
 /// Enumeration over uniqueness request references. Applies to: IdentityDeletion ^ Reauthorization ^ ResetUpdate.
+/// This descriptor, when parsed from a toml file, will be either Label or SignupId. After a UniquessResult is received,
+/// it will be updated to IrisSerialId with the corresponding serial id.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UniquenessRequestDescriptor {
     // A serial identifier assigned from either a processed uniqueness result or a user input override.
+    // Note that this is the id of an entry in the Iris database, where each entry has a left and right iris.
+    // the IrisSerialId is returned with the UniquessResul
     IrisSerialId(IrisSerialId),
     // Label to identify request within batch/file scope.
     Label(String),
