@@ -39,7 +39,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG ARCHITECTURE
 ENV ARCHITECTURE=$ARCHITECTURE
 
-RUN apt-get update && apt-get install -y ca-certificates curl unzip
+RUN apt-get update && apt-get install -y ca-certificates curl unzip postgresql-client
 
 RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "awscliv2.zip" && \
   unzip awscliv2.zip && \

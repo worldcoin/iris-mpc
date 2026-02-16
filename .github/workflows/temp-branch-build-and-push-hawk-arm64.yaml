@@ -3,11 +3,7 @@ name: Branch - Hawk Build and push Arm64 docker image
 on:
   push:
     branches:
-      - "dev"
-      - "feat/reauth_anon_stats"
-
-    paths-ignore:
-      - "deploy/**"
+      - "chore/build-init-db-image"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -56,4 +52,4 @@ jobs:
             ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.arm64.hawk
+          file: Dockerfile.arm64.init-db
