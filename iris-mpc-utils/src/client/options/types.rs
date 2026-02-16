@@ -181,12 +181,12 @@ impl RequestOptions {
 pub enum RequestPayloadOptions {
     // Options over a deletion request payload.
     IdentityDeletion {
-        parent: UniquenessRequestDescriptorOptions,
+        parent: String,
     },
     // Options over a reauthorisation request payload.
     Reauthorisation {
         iris_pair: IrisPairDescriptor,
-        parent: UniquenessRequestDescriptorOptions,
+        parent: String,
     },
     // Options over a reset check request payload.
     ResetCheck {
@@ -195,7 +195,7 @@ pub enum RequestPayloadOptions {
     // Options over a reset update request payload.
     ResetUpdate {
         iris_pair: IrisPairDescriptor,
-        parent: UniquenessRequestDescriptorOptions,
+        parent: String,
     },
     // Options over a uniqueness request payload.
     Uniqueness {
@@ -216,9 +216,9 @@ impl RequestPayloadOptions {
 
     pub fn label_of_parent(&self) -> Option<String> {
         match &self {
-            Self::IdentityDeletion { parent } => parent.label(),
-            Self::Reauthorisation { parent, .. } => parent.label(),
-            Self::ResetUpdate { parent, .. } => parent.label(),
+            Self::IdentityDeletion { parent }
+            | Self::Reauthorisation { parent, .. }
+            | Self::ResetUpdate { parent, .. } => Some(parent.clone()),
             _ => None,
         }
     }
@@ -243,33 +243,6 @@ pub enum SharesGeneratorOptions {
         // Instruction in respect of Iris code selection.
         selection_strategy: Option<IrisSelection>,
     },
-}
-
-/// A descriptor over a system Request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UniquenessRequestDescriptorOptions {
-    // Label to identify request within batch/file scope.
-    Label(String),
-
-    // Iris serial identifer as assigned by remote system.
-    SerialId(IrisSerialId),
-}
-
-impl UniquenessRequestDescriptorOptions {
-    pub fn label(&self) -> Option<String> {
-        match self {
-            Self::Label(label) => Some(label.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn new_label(label: &str) -> Self {
-        Self::Label(label.to_string())
-    }
-
-    pub fn new_serial_id(serial_id: IrisSerialId) -> Self {
-        Self::SerialId(serial_id)
-    }
 }
 
 #[cfg(test)]
@@ -311,10 +284,10 @@ mod tests {
                     { label = "Uniqueness-1", payload = { Uniqueness = { iris_pair = [{ index = 3 }, { index = 4 }] } } },
                 ],
                 [
-                    { label = "Deletion-0", payload = { IdentityDeletion = { parent = { Label = "Uniqueness-0" } } } },
-                    { label = "Reauth-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = { Label = "Uniqueness-1" } } } },
+                    { label = "Deletion-0", payload = { IdentityDeletion = { parent = "Uniqueness-0" } } },
+                    { label = "Reauth-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = "Uniqueness-1" } } },
                     { label = "Check-0", payload = { ResetCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
-                    { label = "Update-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = { Label = "Uniqueness-0" } } } },
+                    { label = "Update-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = "Uniqueness-0" } } },
                 ],
             ]
         "#;

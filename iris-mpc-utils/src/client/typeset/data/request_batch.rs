@@ -236,17 +236,17 @@ impl RequestBatchSet {
                     match opts_request.payload() {
                         RequestPayloadOptions::IdentityDeletion { parent } => {
                             batch.push_new_identity_deletion(
-                                UniquenessRequestDescriptor::from_options(parent),
+                                UniquenessRequestDescriptor::from_label(parent),
                                 opts_request.label(),
-                                parent.label(),
+                                Some(parent.clone()),
                             );
                         }
                         RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
                             batch.push_new_reauthorization(
-                                UniquenessRequestDescriptor::from_options(parent),
+                                UniquenessRequestDescriptor::from_label(parent),
                                 Some(iris_pair.clone()),
                                 opts_request.label(),
-                                parent.label(),
+                                Some(parent.clone()),
                             );
                         }
                         RequestPayloadOptions::ResetCheck { iris_pair } => {
@@ -257,10 +257,10 @@ impl RequestBatchSet {
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                             batch.push_new_reset_update(
-                                UniquenessRequestDescriptor::from_options(parent),
+                                UniquenessRequestDescriptor::from_label(parent),
                                 Some(iris_pair.clone()),
                                 opts_request.label(),
-                                parent.label(),
+                                Some(parent.clone()),
                             );
                         }
                         RequestPayloadOptions::Uniqueness { iris_pair, .. } => {

@@ -174,11 +174,11 @@ mod tests {
             [request_batch.Complex]
             batches = [[
                 { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
-                { label = "D-0", payload = { IdentityDeletion = { parent = { Label = "missing" } } } },
+                { label = "D-0", payload = { IdentityDeletion = { parent = "deadbeef" } } },
             ]]
         "#,
         );
-        assert_invalid_options(&o, "parent label 'missing' that is not found in labels");
+        assert_invalid_options(&o, "parent label 'deadbeef' that is not found in labels");
     }
 
     // -- Complex happy path --
@@ -196,10 +196,10 @@ mod tests {
                     { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 3 }, { index = 4 }] } } },
                 ],
                 [
-                    { label = "D-0", payload = { IdentityDeletion = { parent = { Label = "U-0" } } } },
-                    { label = "R-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = { Label = "U-1" } } } },
+                    { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
+                    { label = "R-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = "U-1" } } },
                     { label = "RC-0", payload = { ResetCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
-                    { label = "RU-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = { Label = "U-0" } } } },
+                    { label = "RU-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = "U-0" } } },
                 ],
             ]
         "#,
