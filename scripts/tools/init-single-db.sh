@@ -4,7 +4,7 @@
 aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_right.dat /tmp/graph_right.dat
 aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_left.dat /tmp/graph_left.dat
 
-aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/gallery_left.ndjson /tmp/gallery_left_right_interleaved.ndjson
+aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/gallery_left_right_interleaved.ndjson /tmp/gallery_left_right_interleaved.ndjson
 
 
 echo "starting left init"
