@@ -16,11 +16,11 @@ echo "starting left init"
   --target-db-size 287895
 
 echo "starting restore graph left"
-/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_left.dat restore-side --side "left"
+/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_left.dat restore-side "left"
 echo "restore graph left done"
 
 echo "starting restore graph right"
-/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_right.dat restore-side --side "right"
+/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_right.dat restore-side "right"
 echo "restore graph right done"
 
 psql "$SMPC__CPU_DATABASE__URL" -c "
