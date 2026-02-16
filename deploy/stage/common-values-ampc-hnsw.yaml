@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.25.0@sha256:1e6f5de6f2d2a9c6c998f80cffc84dc9dc31b90d5778914a37f326578fbebd1d"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:9588d8b41e1763a5a7cf05d545c633a1164b3f1f-arm64"
 
 environment: stage
 replicaCount: 1
@@ -38,7 +38,7 @@ readinessProbe:
 
 startupProbe:
   initialDelaySeconds: 60
-  failureThreshold: 120
+  failureThreshold: 240
   periodSeconds: 30
   httpGet:
     path: /ready
