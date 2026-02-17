@@ -672,7 +672,41 @@ async fn run_main_server_loop(
                 batch.request_types.len()
             );
 
-            batch.sync_batch_entries(config).await?;
+            // Retry batch sync entries indefinitely. The external
+            // get_batch_sync_entries() has a hardcoded 20s timeout per attempt.
+            // Under heavy batch load, cross-party skew can exceed 20s when
+            // persist_modification is blocked by the modifications table lock.
+            // Retrying instead of crashing lets us keep processing.
+            let sync_start = Instant::now();
+            let mut sync_attempts = 0u32;
+            loop {
+                if shutdown_handler.is_shutting_down() {
+                    tracing::info!("Shutdown requested during batch sync retry, exiting");
+                    return Ok(());
+                }
+                sync_attempts += 1;
+                match batch.sync_batch_entries(config).await {
+                    Ok(()) => break,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Batch sync entries attempt {} failed after {:.1}s: {:?}. Retrying...",
+                            sync_attempts,
+                            sync_start.elapsed().as_secs_f64(),
+                            e
+                        );
+                    }
+                }
+            }
+            let sync_elapsed = sync_start.elapsed().as_secs_f64();
+            if sync_attempts > 1 {
+                tracing::warn!(
+                    "Batch sync entries succeeded after {} attempts ({:.1}s)",
+                    sync_attempts,
+                    sync_elapsed
+                );
+            }
+            metrics::histogram!("batch_sync_entries_duration").record(sync_elapsed);
+            metrics::histogram!("batch_sync_entries_retries").record((sync_attempts - 1) as f64);
             batch.retain_valid_entries();
 
             // start trace span - with single TraceId and single ParentTraceID

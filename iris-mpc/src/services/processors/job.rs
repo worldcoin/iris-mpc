@@ -278,10 +278,14 @@ pub async fn process_job_result(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
 
     if !codes_and_masks.is_empty() && !config.disable_persistence {
+        let step_start = Instant::now();
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
+        metrics::histogram!("persist_insert_irises_duration")
+            .record(step_start.elapsed().as_secs_f64());
 
         // Check if the serial_ids match between memory and db.
         if memory_serial_ids != db_serial_ids {
@@ -300,9 +304,12 @@ pub async fn process_job_result(
 
     if !config.disable_persistence {
         // update modification results in db
+        let step_start = Instant::now();
         store
             .update_modifications(&mut iris_tx, &modifications.values().collect::<Vec<_>>())
             .await?;
+        metrics::histogram!("persist_update_modifications_duration")
+            .record(step_start.elapsed().as_secs_f64());
 
         // persist reauth results into db
         for (i, success) in successful_reauths.iter().enumerate() {
@@ -378,7 +385,11 @@ pub async fn process_job_result(
                 .await?;
         }
 
+        let step_start = Instant::now();
         persist(iris_tx, graph_store, hawk_mutation, config).await?;
+        metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
+        metrics::histogram!("persist_total_duration")
+            .record(persist_total_start.elapsed().as_secs_f64());
     }
 
     for memory_serial_id in memory_serial_ids {
