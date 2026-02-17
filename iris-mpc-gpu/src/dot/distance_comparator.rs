@@ -18,7 +18,6 @@ const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const OPEN_RESULTS_BATCH_FUNCTION: &str = "openResultsBatch";
 const OPEN_RESULTS_INDEX_FUNCTION: &str = "openResultsWithIndexMapping";
-const STORE_ANON_STATS_FUNCTION: &str = "storeAnonStats";
 const STORE_ANON_STATS_INDEX_FUNCTION: &str = "storeAnonStatsWithIndexMapping";
 const PARTIAL_DB_RESULTS_FUNCTION: &str = "partialDbResults";
 const MERGE_DB_RESULTS_FUNCTION: &str = "mergeDbResults";
@@ -35,7 +34,6 @@ pub struct DistanceComparator {
     pub merge_db_kernels: Vec<CudaFunction>,
     pub merge_batch_kernels: Vec<CudaFunction>,
     pub merge_batch_with_bitmap_kernels: Vec<CudaFunction>,
-    pub anon_stats_kernels: Vec<CudaFunction>,
     pub anon_stats_index_kernels: Vec<CudaFunction>,
     pub query_length: usize,
     pub max_db_size: usize,
@@ -70,7 +68,6 @@ impl DistanceComparator {
         let mut merge_db_kernels = Vec::new();
         let mut merge_batch_kernels = Vec::new();
         let mut merge_batch_with_bitmap_kernels: Vec<CudaFunction> = Vec::new();
-        let mut anon_stats_kernels: Vec<CudaFunction> = Vec::new();
         let mut anon_stats_index_kernels: Vec<CudaFunction> = Vec::new();
         let mut opened_results = vec![];
         let mut final_results = vec![];
@@ -104,7 +101,6 @@ impl DistanceComparator {
                         MERGE_BATCH_RESULTS_FUNCTION,
                         MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION,
                         PARTIAL_DB_RESULTS_FUNCTION,
-                        STORE_ANON_STATS_FUNCTION,
                         STORE_ANON_STATS_INDEX_FUNCTION,
                     ],
                 )
@@ -123,7 +119,6 @@ impl DistanceComparator {
             let merge_batch_results_with_bitmap_function = device
                 .get_func("", MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION)
                 .unwrap();
-            let store_anon_stats_function = device.get_func("", STORE_ANON_STATS_FUNCTION).unwrap();
             let store_anon_stats_index_function = device
                 .get_func("", STORE_ANON_STATS_INDEX_FUNCTION)
                 .unwrap();
@@ -164,7 +159,6 @@ impl DistanceComparator {
             merge_db_kernels.push(merge_db_results_function);
             merge_batch_kernels.push(merge_batch_results_function);
             merge_batch_with_bitmap_kernels.push(merge_batch_results_with_bitmap_function);
-            anon_stats_kernels.push(store_anon_stats_function);
             anon_stats_index_kernels.push(store_anon_stats_index_function);
         }
 
@@ -177,7 +171,6 @@ impl DistanceComparator {
             merge_db_kernels,
             merge_batch_kernels,
             merge_batch_with_bitmap_kernels,
-            anon_stats_kernels,
             anon_stats_index_kernels,
             query_length,
             max_db_size,
@@ -206,63 +199,6 @@ impl DistanceComparator {
         results2: &[CudaView<u64>],
         results3: &[CudaView<u64>],
         matches_bitmap: &[CudaSlice<u64>],
-        db_sizes: &[usize],
-        real_db_sizes: &[usize],
-        offset: usize,
-        total_db_sizes: &[usize],
-        ignore_db_results: &[bool],
-        batch_size: usize,
-        streams: &[CudaStream],
-    ) {
-        for i in 0..self.device_manager.device_count() {
-            // Those correspond to 0 length dbs, which were just artificially increased to
-            // length 1 to avoid division by zero in the kernel
-            if ignore_db_results[i] {
-                continue;
-            }
-            let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
-            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
-            let cfg = launch_config_from_elements_and_threads(
-                num_elements as u32,
-                threads_per_block,
-                &self.device_manager.devices()[i],
-            );
-            self.device_manager.device(i).bind_to_thread().unwrap();
-
-            unsafe {
-                self.open_kernels[i]
-                    .clone()
-                    .launch_on_stream(
-                        &streams[i],
-                        cfg,
-                        (
-                            &results1[i],
-                            &results2[i],
-                            &results3[i],
-                            &matches_bitmap[i],
-                            db_sizes[i],
-                            (batch_size * ROTATIONS) as u64,
-                            offset,
-                            num_elements,
-                            real_db_sizes[i],
-                            total_db_sizes[i],
-                            &self.partial_match_counter[i],
-                            &self.partial_results_query_indices[i],
-                            &self.partial_results_db_indices[i],
-                            &self.partial_results_rotations[i],
-                        ),
-                    )
-                    .unwrap();
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn store_anon_stats(
-        &self,
-        results1: &[CudaView<u64>],
-        results2: &[CudaView<u64>],
-        results3: &[CudaView<u64>],
         db_sizes: &[usize],
         real_db_sizes: &[usize],
         offset: usize,
@@ -302,7 +238,7 @@ impl DistanceComparator {
             .unwrap();
 
             unsafe {
-                self.anon_stats_kernels[i]
+                self.open_kernels[i]
                     .clone()
                     .launch_on_stream(
                         &streams[i],
@@ -311,6 +247,7 @@ impl DistanceComparator {
                             &results1[i],
                             &results2[i],
                             &results3[i],
+                            &matches_bitmap[i],
                             db_sizes[i],
                             (batch_size * ROTATIONS) as u64,
                             offset,
