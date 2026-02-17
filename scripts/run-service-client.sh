@@ -37,8 +37,8 @@ File resolution order (for bare filenames):
 
 Examples:
   $(basename "$0")
-  $(basename "$0") complex-1.toml -i 20250710-1k.ndjson
-  $(basename "$0") -e dev-stg complex-1.toml -i 20250710-1k.ndjson
+  $(basename "$0") -i 20250710-1k.ndjson complex-1.toml
+  $(basename "$0") -e dev-stg -i 20250710-1k.ndjson complex-1.toml
   $(basename "$0") -e dev-stg /absolute/path/to/custom.toml
 EOF
 }

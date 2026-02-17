@@ -34,23 +34,23 @@ For **dev-stg** (real AWS), the client only needs the VPC profile (`worldcoin-sm
 ## Usage
 
 ```
-scripts/run-service-client.sh [-e ENV] [EXEC_OPTS_TOML]
+scripts/run-service-client.sh [-e ENV] [-i IRIS_SHARES] [TOML_FILE]
 ```
 
 ### Examples
 
 ```bash
 # Default: dev-dkr environment, simple-1.toml request batch
-./scripts/run-service-client.sh 
+./scripts/run-service-client.sh
 
 # Staging environment
-./scripts/run-service-client.sh  -e dev-stg
+./scripts/run-service-client.sh -e dev-stg
 
 # Custom request batch
-./scripts/run-service-client.sh complex-1.toml -i 20250710-1k.ndjson
+./scripts/run-service-client.sh -i 20250710-1k.ndjson complex-1.toml
 
 # Staging with custom request batch
-./scripts/run-service-client.sh  -e dev-stg path/to/custom.toml
+./scripts/run-service-client.sh -e dev-stg -i 20250710-1k.ndjson complex-1.toml
 
 # Help
 ./scripts/run-service-client.sh -h
