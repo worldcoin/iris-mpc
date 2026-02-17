@@ -74,6 +74,7 @@ impl ServiceClientOptions {
 
                 // Error if a child request references a parent in the same or later batch.
                 // can't ResetUpdate, Delete, etc a Uniqueness request that is in the same batch
+                // todo: change this if the system ever tests inputs which are purposely invalid
                 let mut labels_seen = HashSet::new();
                 for batch in batches {
                     for item in batch {
