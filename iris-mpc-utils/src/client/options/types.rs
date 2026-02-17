@@ -116,8 +116,52 @@ impl RequestBatchOptions {
         }
     }
 
+    /// Returns the first duplicate label found, if any.
+    pub(crate) fn find_duplicate_label(&self) -> Option<String> {
+        let labels = self.labels();
+        let mut seen = std::collections::HashSet::with_capacity(labels.len());
+        labels.into_iter().find(|l| !seen.insert(l.clone()))
+    }
+
+    /// Validates that every parent label references a declared Uniqueness request.
+    /// Returns `Ok(())` if valid, or `Err(message)` describing the first violation.
+    pub(crate) fn validate_parents(&self) -> Result<(), String> {
+        match self {
+            Self::Complex { batches } => {
+                let all_items: Vec<_> = batches.iter().flat_map(|batch| batch.iter()).collect();
+                let all_labels: std::collections::HashSet<_> =
+                    all_items.iter().filter_map(|item| item.label()).collect();
+                let uniqueness_labels: std::collections::HashSet<_> = all_items
+                    .iter()
+                    .filter(|item| {
+                        matches!(item.payload(), RequestPayloadOptions::Uniqueness { .. })
+                    })
+                    .filter_map(|item| item.label())
+                    .collect();
+                for item in &all_items {
+                    if let Some(parent_label) = item.label_of_parent() {
+                        if !all_labels.contains(&parent_label) {
+                            return Err(format!(
+                                "contains a parent label '{}' that is not found in labels",
+                                parent_label
+                            ));
+                        }
+                        if !uniqueness_labels.contains(&parent_label) {
+                            return Err(format!(
+                                "parent '{}' must be a Uniqueness request",
+                                parent_label
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Returns set of declared request labels.
-    pub(crate) fn labels(&self) -> Vec<String> {
+    pub fn labels(&self) -> Vec<String> {
         match self {
             Self::Complex { batches } => batches
                 .iter()
@@ -125,28 +169,6 @@ impl RequestBatchOptions {
                 .filter_map(|item| item.label())
                 .collect(),
             _ => vec![],
-        }
-    }
-
-    /// Returns set of declared parent request labels.
-    pub(crate) fn labels_of_parents(&self) -> Vec<String> {
-        match self {
-            Self::Complex { batches } => batches
-                .iter()
-                .flat_map(|batch| batch.iter())
-                .filter_map(|item| item.label_of_parent())
-                .collect(),
-            _ => vec![],
-        }
-    }
-
-    pub(crate) fn validate_parents(&self) -> bool {
-        match self {
-            Self::Complex { batches } => batches
-                .iter()
-                .flat_map(|batch| batch.iter())
-                .all(|item| matches!(item.payload(), RequestPayloadOptions::Uniqueness { .. })),
-            _ => true,
         }
     }
 }

@@ -61,37 +61,20 @@ impl ServiceClientOptions {
                     }
                 }
 
-                if !self.request_batch().validate_parents() {
-                    return Err(ServiceClientError::InvalidOptions(
-                        "RequestBatchOptions::Complex contains invalid parent request".to_string(),
-                    ));
-                }
-
                 // Error if there are duplicate labels.
-                let labels = self.request_batch().labels();
-                if !labels.is_empty() {
-                    let mut set = HashSet::with_capacity(labels.len());
-                    if !labels.iter().all(|l| set.insert(l)) {
-                        return Err(ServiceClientError::InvalidOptions(
-                            "RequestBatchOptions::Complex contains duplicate labels".to_string(),
-                        ));
-                    }
+                if let Some(dup) = self.request_batch().find_duplicate_label() {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::Complex contains duplicate label '{}'",
+                        dup
+                    )));
                 }
 
-                // Error if there are invalid parent labels.
-                let labels_of_parents = self.request_batch().labels_of_parents();
-                if !labels_of_parents.is_empty() {
-                    let labels_set: HashSet<_> = labels.iter().collect();
-                    for label_of_parent in &labels_of_parents {
-                        if !labels_set.contains(label_of_parent) {
-                            return Err(ServiceClientError::InvalidOptions(
-                                format!(
-                                    "RequestBatchOptions::Complex contains a parent label '{}' that is not found in labels",
-                                    label_of_parent
-                                ),
-                            ));
-                        }
-                    }
+                // Error if parent labels are invalid (not declared or not Uniqueness).
+                if let Err(msg) = self.request_batch().validate_parents() {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::Complex {}",
+                        msg
+                    )));
                 }
 
                 // Error if a child request references a parent in the same or later batch.
@@ -221,7 +204,7 @@ mod tests {
             ]]
         "#,
         );
-        assert_invalid_options(&o, "duplicate labels");
+        assert_invalid_options(&o, "duplicate label");
     }
 
     #[test]
