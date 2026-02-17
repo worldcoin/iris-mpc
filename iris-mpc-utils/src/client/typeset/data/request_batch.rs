@@ -273,28 +273,28 @@ impl RequestBatchSet {
                         RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
                             batch.push_new_reauthorization(
                                 UniquenessRequestDescriptor::from_label(parent),
-                                Some(iris_pair.clone()),
+                                Some(*iris_pair),
                                 opts_request.label(),
                                 Some(parent.clone()),
                             );
                         }
                         RequestPayloadOptions::ResetCheck { iris_pair } => {
                             batch.push_new_reset_check(
-                                Some(iris_pair.clone()),
+                                Some(*iris_pair),
                                 opts_request.label(),
                             );
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                             batch.push_new_reset_update(
                                 UniquenessRequestDescriptor::from_label(parent),
-                                Some(iris_pair.clone()),
+                                Some(*iris_pair),
                                 opts_request.label(),
                                 Some(parent.clone()),
                             );
                         }
                         RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
                             batch.push_new_uniqueness(
-                                Some(iris_pair.clone()),
+                                Some(*iris_pair),
                                 opts_request.label().clone(),
                             );
                         }

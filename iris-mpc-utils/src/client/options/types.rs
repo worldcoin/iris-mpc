@@ -116,19 +116,6 @@ impl RequestBatchOptions {
         }
     }
 
-    /// Returns set of Iris code indexes to be read from NDJSON file.
-    pub(crate) fn iris_code_indexes(&self) -> Vec<usize> {
-        match self {
-            Self::Complex { batches } => batches
-                .iter()
-                .flat_map(|batch| batch.iter())
-                .filter_map(|item| item.iris_pair())
-                .flat_map(|iris_pair| [iris_pair.left().index(), iris_pair.right().index()])
-                .collect(),
-            _ => vec![],
-        }
-    }
-
     /// Returns set of declared request labels.
     pub(crate) fn labels(&self) -> Vec<String> {
         match self {
