@@ -5,6 +5,7 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use super::super::typeset::{IrisDescriptor, IrisPairDescriptor};
 use crate::{
+    client::options::{ServiceClientOptions, SharesGeneratorOptions},
     constants::N_PARTIES,
     irises::{
         generate_iris_shares_for_upload, reader::read_iris_shares_for_upload,
@@ -35,6 +36,27 @@ impl<R> SharesGenerator<R>
 where
     R: Rng + CryptoRng + SeedableRng + Send,
 {
+    pub(crate) fn from_options(opts: &ServiceClientOptions) -> Self {
+        match opts.shares_generator() {
+            SharesGeneratorOptions::FromCompute { rng_seed } => {
+                tracing::info!("Parsing SharesGeneratorOptions::FromCompute");
+                SharesGenerator::<R>::new_compute(*rng_seed)
+            }
+            SharesGeneratorOptions::FromFile {
+                path_to_ndjson_file,
+                rng_seed,
+                selection_strategy,
+            } => {
+                tracing::info!("Parsing SharesGeneratorOptions::FromFile");
+                SharesGenerator::new_file(
+                    PathBuf::from(path_to_ndjson_file),
+                    *rng_seed,
+                    *selection_strategy,
+                )
+            }
+        }
+    }
+
     pub fn new_compute(rng_seed: Option<u64>) -> Self {
         Self::FromCompute {
             rng: rng_seed

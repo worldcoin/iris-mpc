@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-pub(crate) mod mapper;
 mod types;
 mod validator;
 
 pub use types::AwsOptions;
-pub(crate) use types::{RequestBatchOptions, SharesGeneratorOptions};
+pub(crate) use types::{
+    RequestBatchOptions, RequestOptions, RequestPayloadOptions, SharesGeneratorOptions,
+};
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

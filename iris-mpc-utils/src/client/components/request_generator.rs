@@ -3,6 +3,7 @@ use iris_mpc_common::IrisSerialId;
 use super::super::typeset::{
     BatchKind, RequestBatch, RequestBatchSet, ServiceClientError, UniquenessRequestDescriptor,
 };
+use crate::client::options::{RequestBatchOptions, ServiceClientOptions};
 
 /// Generates batches of SMPC service requests.
 pub(crate) struct RequestGenerator {
@@ -26,6 +27,12 @@ impl RequestGenerator {
             generated_batch_count: 0,
             config,
         }
+    }
+
+    pub(crate) fn from_options(opts: &ServiceClientOptions) -> Result<Self, ServiceClientError> {
+        let mut config = RequestGeneratorConfig::try_from_options(opts)?;
+        config.set_child_parent_descriptors_from_labels();
+        Ok(Self::new(config))
     }
 
     /// Generates batches of request until exhausted.
@@ -136,6 +143,38 @@ pub(crate) enum RequestGeneratorConfig {
 }
 
 impl RequestGeneratorConfig {
+    pub(crate) fn try_from_options(
+        opts: &ServiceClientOptions,
+    ) -> Result<Self, ServiceClientError> {
+        match opts.request_batch() {
+            RequestBatchOptions::Complex {
+                batches: opts_batches,
+            } => {
+                tracing::info!("Parsing RequestBatchOptions::Complex");
+                Ok(Self::Complex(RequestBatchSet::from_options(opts_batches)))
+            }
+            RequestBatchOptions::Simple {
+                batch_count,
+                batch_size,
+                batch_kind,
+                known_iris_serial_id,
+            } => {
+                tracing::info!("Parsing RequestBatchOptions::Simple");
+                Ok(Self::Simple {
+                    batch_count: *batch_count,
+                    batch_size: *batch_size,
+                    batch_kind: BatchKind::from_str(batch_kind).ok_or_else(|| {
+                        ServiceClientError::InvalidOptions(format!(
+                            "Unsupported batch kind: {}",
+                            batch_kind
+                        ))
+                    })?,
+                    known_iris_serial_id: *known_iris_serial_id,
+                })
+            }
+        }
+    }
+
     // Reassigns parent descriptors.
     pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
         if let RequestGeneratorConfig::Complex(batch_set) = self {
