@@ -1,0 +1,50 @@
+[shares_generator.FromFile]
+rng_seed = 42
+selection_strategy = "All"
+
+[request_batch.Complex]
+batches = [
+  [
+    { label = "00-U-Solo", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+  ],
+  [
+    { label = "00-D", payload = { IdentityDeletion = { parent = "00-U-Solo" } } },
+    { label = "01-RC", payload = { ResetCheck = { iris_pair = [{ index = 3 }, { index = 4 }] } } },
+    { label = "02-RC", payload = { ResetCheck = { iris_pair = [{ index = 5 }, { index = 6 }] } } },
+    { label = "03-RC", payload = { ResetCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
+    { label = "04-RC", payload = { ResetCheck = { iris_pair = [{ index = 9 }, { index = 10 }] } } },
+    { label = "05-RC", payload = { ResetCheck = { iris_pair = [{ index = 11 }, { index = 12 }] } } },
+    { label = "06-RC", payload = { ResetCheck = { iris_pair = [{ index = 13 }, { index = 14 }] } } },
+    { label = "07-RC", payload = { ResetCheck = { iris_pair = [{ index = 15 }, { index = 16 }] } } },
+    { label = "08-RC", payload = { ResetCheck = { iris_pair = [{ index = 17 }, { index = 18 }] } } },
+    { label = "09-RC", payload = { ResetCheck = { iris_pair = [{ index = 19 }, { index = 20 }] } } },
+    { label = "10-RC", payload = { ResetCheck = { iris_pair = [{ index = 21 }, { index = 22 }] } } },
+    { label = "11-RC", payload = { ResetCheck = { iris_pair = [{ index = 23 }, { index = 24 }] } } },
+    { label = "12-RC", payload = { ResetCheck = { iris_pair = [{ index = 25 }, { index = 26 }] } } },
+    { label = "13-RC", payload = { ResetCheck = { iris_pair = [{ index = 27 }, { index = 28 }] } } },
+    { label = "14-RC", payload = { ResetCheck = { iris_pair = [{ index = 29 }, { index = 30 }] } } },
+    { label = "15-RC", payload = { ResetCheck = { iris_pair = [{ index = 31 }, { index = 32 }] } } },
+    { label = "16-RC", payload = { ResetCheck = { iris_pair = [{ index = 33 }, { index = 34 }] } } },
+    { label = "17-RC", payload = { ResetCheck = { iris_pair = [{ index = 35 }, { index = 36 }] } } },
+    { label = "18-RC", payload = { ResetCheck = { iris_pair = [{ index = 37 }, { index = 38 }] } } },
+    { label = "19-RC", payload = { ResetCheck = { iris_pair = [{ index = 39 }, { index = 40 }] } } },
+    { label = "20-RC", payload = { ResetCheck = { iris_pair = [{ index = 41 }, { index = 42 }] } } },
+    { label = "21-RC", payload = { ResetCheck = { iris_pair = [{ index = 43 }, { index = 44 }] } } },
+    { label = "22-RC", payload = { ResetCheck = { iris_pair = [{ index = 45 }, { index = 46 }] } } },
+    { label = "23-RC", payload = { ResetCheck = { iris_pair = [{ index = 47 }, { index = 48 }] } } },
+    { label = "24-RC", payload = { ResetCheck = { iris_pair = [{ index = 49 }, { index = 50 }] } } },
+    { label = "25-RC", payload = { ResetCheck = { iris_pair = [{ index = 51 }, { index = 52 }] } } },
+    { label = "26-RC", payload = { ResetCheck = { iris_pair = [{ index = 53 }, { index = 54 }] } } },
+    { label = "27-RC", payload = { ResetCheck = { iris_pair = [{ index = 55 }, { index = 56 }] } } },
+    { label = "28-RC", payload = { ResetCheck = { iris_pair = [{ index = 57 }, { index = 58 }] } } },
+    { label = "29-RC", payload = { ResetCheck = { iris_pair = [{ index = 59 }, { index = 60 }] } } },
+    { label = "30-RC", payload = { ResetCheck = { iris_pair = [{ index = 61 }, { index = 62 }] } } },
+    { label = "31-RC", payload = { ResetCheck = { iris_pair = [{ index = 63 }, { index = 64 }] } } },
+  ],
+  [
+    { label = "00-U-Solo2", payload = { Uniqueness = { iris_pair = [{ index = 65 }, { index = 66 }] } } },
+  ],
+  [
+    { label = "00-D-Solo", payload = { IdentityDeletion = { parent = "00-U-Solo2" } } },
+  ],
+]
