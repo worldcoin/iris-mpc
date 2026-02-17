@@ -45,8 +45,11 @@ env:
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
 
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_correctness_test_backup"
+
   - name: SMPC__MAX_BATCH_SIZE
-    value: "1"
+    value: "64"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
