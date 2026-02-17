@@ -33,4 +33,15 @@ batches = [
       { index = 16 },
     ], parent = "42-Uniqueness" } } },
   ],
+  [
+    { label = "01-DupDeletion", payload = { IdentityDeletion = { parent = "40-Uniqueness" } } },
+    { label = "02-DupUniqueness", payload = { Uniqueness = { iris_pair = [
+      { index = 1 },
+      { index = 2 },
+    ] } } },
+    { label = "03-DupResetCheck", payload = { ResetCheck = { iris_pair = [
+      { index = 13 },
+      { index = 14 },
+    ] } } },
+  ],
 ]

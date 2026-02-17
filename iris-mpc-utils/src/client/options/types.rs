@@ -103,6 +103,19 @@ impl RequestBatchOptions {
         }
     }
 
+    /// Returns set of Iris code pairs as (left_index, right_index) tuples.
+    pub(crate) fn iris_code_pairs(&self) -> Vec<(usize, usize)> {
+        match self {
+            Self::Complex { batches } => batches
+                .iter()
+                .flat_map(|batch| batch.iter())
+                .filter_map(|item| item.iris_pair())
+                .map(|iris_pair| (iris_pair.left().index(), iris_pair.right().index()))
+                .collect(),
+            _ => vec![],
+        }
+    }
+
     /// Returns set of Iris code indexes to be read from NDJSON file.
     pub(crate) fn iris_code_indexes(&self) -> Vec<usize> {
         match self {

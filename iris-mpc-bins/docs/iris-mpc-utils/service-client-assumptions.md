@@ -22,7 +22,7 @@
 
 - **Parent-before-child**: A child request's parent Uniqueness must be in a strictly earlier batch. Same-batch parent-child is not permitted.
 - **Labels are global**: All labels across all batches must be unique.
-- **Iris indexes are global**: No two requests across any batch may reference the same iris code index.
+- **Iris pair integrity**: An individual iris index may only appear within one unique pair. Duplicate pairs (same indexes) and swapped pairs (left/right reversed, for mirroring attack testing) are allowed. Sharing an index across different pairs is rejected.
 
 ## Uniqueness Response Semantics
 

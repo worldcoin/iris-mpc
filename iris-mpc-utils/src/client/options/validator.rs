@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     super::typeset::{BatchKind, ServiceClientError},
@@ -33,15 +33,31 @@ impl ServiceClientOptions {
                     return Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()));
                 }
 
-                // Error if there are duplicate Iris descriptors.
-                let indexes = self.request_batch().iris_code_indexes();
-                if !indexes.is_empty() {
-                    let mut set = HashSet::with_capacity(indexes.len());
-                    if !indexes.iter().all(|i| set.insert(i)) {
-                        return Err(ServiceClientError::InvalidOptions(
-                            "RequestBatchOptions::Complex contains duplicate Iris descriptors "
-                                .to_string(),
-                        ));
+                // Error if an iris index appears in multiple different pairs.
+                // Duplicate pairs (same or swapped eyes) are allowed for testing
+                // duplicate enrollment and mirroring attacks.
+                {
+                    let mut index_to_pair: HashMap<usize, (usize, usize)> = HashMap::new();
+                    for pair in self.request_batch().iris_code_pairs() {
+                        let normalized = if pair.0 <= pair.1 {
+                            pair
+                        } else {
+                            (pair.1, pair.0)
+                        };
+                        for idx in [normalized.0, normalized.1] {
+                            if let Some(existing) = index_to_pair.get(&idx) {
+                                if *existing != normalized {
+                                    return Err(ServiceClientError::InvalidOptions(
+                                        format!(
+                                            "RequestBatchOptions::Complex: iris index {} appears in multiple different pairs",
+                                            idx
+                                        ),
+                                    ));
+                                }
+                            } else {
+                                index_to_pair.insert(idx, normalized);
+                            }
+                        }
                     }
                 }
 
@@ -170,8 +186,8 @@ mod tests {
     }
 
     #[test]
-    fn complex_rejects_duplicate_iris_descriptors() {
-        // Index 1 appears in both iris pairs (left of first, left of second).
+    fn complex_rejects_iris_index_in_multiple_pairs() {
+        // Index 1 appears in two different pairs: (1,2) and (1,3).
         let o = opts(
             r#"
             [shares_generator.FromFile]
@@ -183,7 +199,7 @@ mod tests {
             ]]
         "#,
         );
-        assert_invalid_options(&o, "duplicate Iris descriptors");
+        assert_invalid_options(&o, "iris index 1 appears in multiple different pairs");
     }
 
     #[test]
@@ -255,6 +271,44 @@ mod tests {
     }
 
     // -- Complex happy path --
+
+    #[test]
+    fn complex_allows_duplicate_iris_pair() {
+        // Same pair [1,2] used twice (duplicate enrollment test).
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                    { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                ],
+            ]
+        "#,
+        );
+        o.validate().expect("duplicate pair should be allowed");
+    }
+
+    #[test]
+    fn complex_allows_swapped_iris_pair() {
+        // Pair [1,2] and [2,1] (mirroring attack test).
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                    { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 2 }, { index = 1 }] } } },
+                ],
+            ]
+        "#,
+        );
+        o.validate().expect("swapped pair should be allowed");
+    }
 
     #[test]
     fn complex_valid_multi_batch_passes() {
