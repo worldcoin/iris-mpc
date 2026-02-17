@@ -387,8 +387,7 @@ pub async fn process_job_result(
 
         let step_start = Instant::now();
         persist(iris_tx, graph_store, hawk_mutation, config).await?;
-        metrics::histogram!("persist_commit_duration")
-            .record(step_start.elapsed().as_secs_f64());
+        metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
         metrics::histogram!("persist_total_duration")
             .record(persist_total_start.elapsed().as_secs_f64());
     }
