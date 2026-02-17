@@ -1,8 +1,4 @@
-<<<<<<< Updated upstream
-image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.25.0@sha256:1e6f5de6f2d2a9c6c998f80cffc84dc9dc31b90d5778914a37f326578fbebd1d"
-=======
 image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.28.1@sha256:0d6c108064aa4be50587403d7869b928cb83a4acfa8c5b14ced3f3bb802cd4dc"
->>>>>>> Stashed changes
 
 environment: stage
 replicaCount: 1
