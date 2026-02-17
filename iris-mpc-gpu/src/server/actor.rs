@@ -3,7 +3,7 @@ use crate::{
     dot::{
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
-        PartialResultsWithRotations, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
+        PartialResultsWithRotations, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS, THRESHOLD_A,
     },
     helpers::{
         self,
@@ -1879,6 +1879,7 @@ impl ServerActor {
                 self.phase2_batch.compare_threshold_masked_many(
                     &code_dots_batch,
                     &mask_dots_batch,
+                    THRESHOLD_A,
                     batch_streams,
                 );
                 tracing::info!(party_id = self.party_id, "batch_threshold end");
@@ -2057,8 +2058,12 @@ impl ServerActor {
             "db_threshold",
             self.enable_debug_timing,
             {
-                self.phase2
-                    .compare_threshold_masked_many(&code_dots, &mask_dots, &self.streams[0]);
+                self.phase2.compare_threshold_masked_many(
+                    &code_dots,
+                    &mask_dots,
+                    THRESHOLD_A,
+                    &self.streams[0],
+                );
             }
         );
 
@@ -2412,6 +2417,7 @@ impl ServerActor {
                         self.phase2.compare_threshold_masked_many(
                             &code_dots,
                             &mask_dots,
+                            THRESHOLD_A,
                             request_streams,
                         );
                     }

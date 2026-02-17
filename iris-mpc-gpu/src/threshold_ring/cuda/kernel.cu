@@ -189,10 +189,10 @@ __device__ void finalize_lift(U32 *mask, U32 *code_lift, U16 *mask_corr1,
 }
 
 __device__ void lift_mul_sub(U32 *mask, U16 *mask_corr1, U16 *mask_corr2,
-                             U16 *code) {
+                             U16 *code, U32 a) {
   U32 lifted;
   finalize_lift(mask, &lifted, mask_corr1, mask_corr2, code);
-  *mask *= A;
+  *mask *= a;
   *mask -= lifted;
 }
 
@@ -409,11 +409,11 @@ extern "C" __global__ void lift_split(U16 *in_a, U16 *in_b, U32 *lifted_a,
 extern "C" __global__ void shared_lift_mul_sub(U32 *mask_a, U32 *mask_b,
                                                U16 *mask_corr_a,
                                                U16 *mask_corr_b, U16 *code_a,
-                                               U16 *code_b, int id, size_t n) {
+                                               U16 *code_b, U32 threshold_a, int id, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    lift_mul_sub(&mask_a[i], &mask_corr_a[i], &mask_corr_a[i + n], &code_a[i]);
-    lift_mul_sub(&mask_b[i], &mask_corr_b[i], &mask_corr_b[i + n], &code_b[i]);
+    lift_mul_sub(&mask_a[i], &mask_corr_a[i], &mask_corr_a[i + n], &code_a[i], threshold_a);
+    lift_mul_sub(&mask_b[i], &mask_corr_b[i], &mask_corr_b[i + n], &code_b[i], threshold_a);
     switch (id) {
     case 0:
       mask_a[i] -= 1; // Transforms the <= into <
