@@ -302,7 +302,7 @@ impl DistanceComparator {
             .unwrap();
 
             unsafe {
-                self.open_kernels[i]
+                self.anon_stats_kernels[i]
                     .clone()
                     .launch_on_stream(
                         &streams[i],
@@ -455,7 +455,7 @@ impl DistanceComparator {
             .unwrap();
 
             unsafe {
-                self.open_index_mapping_kernels[i]
+                self.anon_stats_index_kernels[i]
                     .clone()
                     .launch_on_stream(
                         &streams[i],
