@@ -279,10 +279,7 @@ impl RequestBatchSet {
                             );
                         }
                         RequestPayloadOptions::ResetCheck { iris_pair } => {
-                            batch.push_new_reset_check(
-                                Some(*iris_pair),
-                                opts_request.label(),
-                            );
+                            batch.push_new_reset_check(Some(*iris_pair), opts_request.label());
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                             batch.push_new_reset_update(
