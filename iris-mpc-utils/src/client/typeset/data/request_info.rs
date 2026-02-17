@@ -73,6 +73,10 @@ impl RequestInfo {
     pub(super) fn set_status(&mut self, new_state: RequestStatus) {
         self.state_history.push(new_state);
     }
+
+    pub(super) fn first_correlation(&self) -> Option<&ResponsePayload> {
+        self.correlation_set.iter().find_map(|c| c.as_ref())
+    }
 }
 
 impl fmt::Display for RequestInfo {

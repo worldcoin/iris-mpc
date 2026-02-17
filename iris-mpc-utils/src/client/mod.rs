@@ -51,6 +51,8 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
     }
 
     pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
+        let mut cross_batch_resolutions = std::collections::HashMap::new();
+
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
             println!(
@@ -61,9 +63,17 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
             println!("------------------------------------------------------------------------");
 
             self.shares_uploader.process_batch(&mut batch).await?;
+            batch.resolve_cross_batch_parents(&cross_batch_resolutions);
             while batch.is_enqueueable() {
                 self.request_enqueuer.process_batch(&mut batch).await?;
                 self.response_dequeuer.process_batch(&mut batch).await?;
+            }
+
+            // Collect uniqueness resolutions for future batches.
+            for request in batch.requests() {
+                if let Some((signup_id, serial_id)) = request.uniqueness_resolution() {
+                    cross_batch_resolutions.insert(signup_id, serial_id);
+                }
             }
         }
 

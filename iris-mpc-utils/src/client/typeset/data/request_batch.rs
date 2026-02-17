@@ -1,9 +1,9 @@
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use iris_mpc_common::helpers::smpc_request;
+use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::{
     IrisPairDescriptor, Request, RequestInfo, RequestStatus, ResponsePayload,
@@ -106,6 +106,35 @@ impl RequestBatch {
             .unique()
             .sorted()
             .collect()
+    }
+
+    /// Resolves cross-batch parent dependencies using results from previously processed batches.
+    pub(crate) fn resolve_cross_batch_parents(
+        &mut self,
+        resolutions: &HashMap<uuid::Uuid, IrisSerialId>,
+    ) {
+        for request in self.requests_mut() {
+            let parent_desc = match request {
+                Request::IdentityDeletion {
+                    parent: parent_desc,
+                    ..
+                }
+                | Request::Reauthorization {
+                    parent: parent_desc,
+                    ..
+                }
+                | Request::ResetUpdate {
+                    parent: parent_desc,
+                    ..
+                } => parent_desc,
+                _ => continue,
+            };
+            if let UniquenessRequestDescriptor::SignupId(signup_id) = parent_desc {
+                if let Some(serial_id) = resolutions.get(signup_id) {
+                    *parent_desc = UniquenessRequestDescriptor::IrisSerialId(*serial_id);
+                }
+            }
+        }
     }
 
     /// Returns true if there are any requests deemed enqueueable.

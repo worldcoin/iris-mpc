@@ -3,6 +3,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid;
 
+use iris_mpc_common::IrisSerialId;
+
 use super::{
     IrisPairDescriptor, RequestInfo, RequestStatus, ResponsePayload, UniquenessRequestDescriptor,
 };
@@ -154,6 +156,28 @@ impl Request {
 
     pub(crate) fn label(&self) -> &Option<String> {
         self.info().label()
+    }
+
+    /// For a fully correlated Uniqueness request, returns the (signup_id, serial_id) mapping.
+    pub(crate) fn uniqueness_resolution(&self) -> Option<(uuid::Uuid, IrisSerialId)> {
+        if let Self::Uniqueness {
+            signup_id, info, ..
+        } = self
+        {
+            if !matches!(info.status(), RequestStatus::Correlated) {
+                return None;
+            }
+            if let Some(ResponsePayload::Uniqueness(result)) = info.first_correlation() {
+                let serial_id = result.serial_id.or_else(|| {
+                    result
+                        .matched_serial_ids
+                        .as_ref()
+                        .and_then(|m| m.first().copied())
+                })?;
+                return Some((*signup_id, serial_id));
+            }
+        }
+        None
     }
 
     pub(crate) fn parent_descriptor(&self) -> Option<&UniquenessRequestDescriptor> {
