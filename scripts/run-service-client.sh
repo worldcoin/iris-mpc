@@ -29,7 +29,7 @@ Arguments:
               (default: simple-1.toml)
 
 File resolution order (for bare filenames):
-  0. CWD
+  0. absolute path
   1. iris-mpc-bins/data/
   2. iris-mpc-utils/assets/iris-codes-plaintext/
   3. iris-mpc-utils/assets/service-client/
