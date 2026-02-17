@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use super::{
     super::typeset::{BatchKind, ServiceClientError},
     types::{RequestBatchOptions, SharesGeneratorOptions},
@@ -24,7 +22,7 @@ impl ServiceClientOptions {
         }
 
         match self.request_batch() {
-            RequestBatchOptions::Complex { batches } => {
+            RequestBatchOptions::Complex { .. } => {
                 // Error if used alongside compute shares generation.
                 if matches!(
                     self.shares_generator(),
@@ -33,70 +31,21 @@ impl ServiceClientOptions {
                     return Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()));
                 }
 
-                // Error if an iris index appears in multiple different pairs.
-                // Duplicate pairs (same or swapped eyes) are allowed for testing
-                // duplicate enrollment and mirroring attacks.
-                {
-                    let mut index_to_pair: HashMap<usize, (usize, usize)> = HashMap::new();
-                    for pair in self.request_batch().iris_code_pairs() {
-                        let normalized = if pair.0 <= pair.1 {
-                            pair
-                        } else {
-                            (pair.1, pair.0)
-                        };
-                        for idx in [normalized.0, normalized.1] {
-                            if let Some(existing) = index_to_pair.get(&idx) {
-                                if *existing != normalized {
-                                    return Err(ServiceClientError::InvalidOptions(
-                                        format!(
-                                            "RequestBatchOptions::Complex: iris index {} appears in multiple different pairs",
-                                            idx
-                                        ),
-                                    ));
-                                }
-                            } else {
-                                index_to_pair.insert(idx, normalized);
-                            }
-                        }
+                let rb = self.request_batch();
+                for result in [
+                    rb.validate_iris_pairs(),
+                    rb.find_duplicate_label().map_or(Ok(()), |dup| {
+                        Err(format!("contains duplicate label '{}'", dup))
+                    }),
+                    rb.validate_parents(),
+                    rb.validate_batch_ordering(),
+                ] {
+                    if let Err(msg) = result {
+                        return Err(ServiceClientError::InvalidOptions(format!(
+                            "RequestBatchOptions::Complex {}",
+                            msg
+                        )));
                     }
-                }
-
-                // Error if there are duplicate labels.
-                if let Some(dup) = self.request_batch().find_duplicate_label() {
-                    return Err(ServiceClientError::InvalidOptions(format!(
-                        "RequestBatchOptions::Complex contains duplicate label '{}'",
-                        dup
-                    )));
-                }
-
-                // Error if parent labels are invalid (not declared or not Uniqueness).
-                if let Err(msg) = self.request_batch().validate_parents() {
-                    return Err(ServiceClientError::InvalidOptions(format!(
-                        "RequestBatchOptions::Complex {}",
-                        msg
-                    )));
-                }
-
-                // Error if a child request references a parent in the same or later batch.
-                // can't ResetUpdate, Delete, etc a Uniqueness request that is in the same batch
-                // todo: change this if the system ever tests inputs which are purposely invalid
-                let mut labels_seen = HashSet::new();
-                for batch in batches {
-                    for item in batch {
-                        if let Some(parent_label) = item.label_of_parent() {
-                            if !labels_seen.contains(&parent_label) {
-                                return Err(ServiceClientError::InvalidOptions(
-                                    format!(
-                                        "RequestBatchOptions::Complex: parent '{}' must be in an earlier batch",
-                                        parent_label
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    let batch_labels: HashSet<_> =
-                        batch.iter().filter_map(|item| item.label()).collect();
-                    labels_seen.extend(batch_labels);
                 }
             }
             RequestBatchOptions::Simple {

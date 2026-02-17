@@ -112,11 +112,14 @@ impl RequestBatchOptions {
                 .filter_map(|item| item.iris_pair())
                 .map(|iris_pair| (iris_pair.left().index(), iris_pair.right().index()))
                 .collect(),
-            _ => vec![],
+            _ => unreachable!("not valid for Simple variant"),
         }
     }
 
     /// Returns the first duplicate label found, if any.
+    ///
+    /// # Panics
+    /// Panics if called on `RequestBatchOptions::Simple`.
     pub(crate) fn find_duplicate_label(&self) -> Option<String> {
         let labels = self.labels();
         let mut seen = std::collections::HashSet::with_capacity(labels.len());
@@ -156,7 +159,63 @@ impl RequestBatchOptions {
                 }
                 Ok(())
             }
-            _ => Ok(()),
+            _ => unreachable!("not valid for Simple variant"),
+        }
+    }
+
+    /// Returns an error if any iris index appears in multiple different pairs.
+    /// Duplicate pairs (same or swapped eyes) are allowed.
+    ///
+    /// # Panics
+    /// Panics if called on `RequestBatchOptions::Simple`.
+    pub(crate) fn validate_iris_pairs(&self) -> Result<(), String> {
+        let mut index_to_pair: std::collections::HashMap<usize, (usize, usize)> =
+            std::collections::HashMap::new();
+        for pair in self.iris_code_pairs() {
+            let normalized = if pair.0 <= pair.1 {
+                pair
+            } else {
+                (pair.1, pair.0)
+            };
+            for idx in [normalized.0, normalized.1] {
+                if let Some(existing) = index_to_pair.get(&idx) {
+                    if *existing != normalized {
+                        return Err(format!(
+                            "iris index {} appears in multiple different pairs",
+                            idx
+                        ));
+                    }
+                } else {
+                    index_to_pair.insert(idx, normalized);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns an error if a child references a parent in the same or later batch.
+    pub(crate) fn validate_batch_ordering(&self) -> Result<(), String> {
+        match self {
+            Self::Complex { batches } => {
+                let mut labels_seen = std::collections::HashSet::new();
+                for batch in batches {
+                    for item in batch {
+                        if let Some(parent_label) = item.label_of_parent() {
+                            if !labels_seen.contains(&parent_label) {
+                                return Err(format!(
+                                    "parent '{}' must be in an earlier batch",
+                                    parent_label
+                                ));
+                            }
+                        }
+                    }
+                    let batch_labels: std::collections::HashSet<_> =
+                        batch.iter().filter_map(|item| item.label()).collect();
+                    labels_seen.extend(batch_labels);
+                }
+                Ok(())
+            }
+            _ => unreachable!("not valid for Simple variant"),
         }
     }
 
@@ -168,7 +227,7 @@ impl RequestBatchOptions {
                 .flat_map(|batch| batch.iter())
                 .filter_map(|item| item.label())
                 .collect(),
-            _ => vec![],
+            _ => unreachable!("not valid for Simple variant"),
         }
     }
 }
