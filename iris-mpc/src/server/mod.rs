@@ -680,6 +680,10 @@ async fn run_main_server_loop(
             let sync_start = Instant::now();
             let mut sync_attempts = 0u32;
             loop {
+                if shutdown_handler.is_shutting_down() {
+                    tracing::info!("Shutdown requested during batch sync retry, exiting");
+                    return Ok(());
+                }
                 sync_attempts += 1;
                 match batch.sync_batch_entries(config).await {
                     Ok(()) => break,
