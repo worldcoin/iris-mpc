@@ -61,6 +61,12 @@ impl ServiceClientOptions {
                     }
                 }
 
+                if !self.request_batch().validate_parents() {
+                    return Err(ServiceClientError::InvalidOptions(
+                        "RequestBatchOptions::Complex contains invalid parent request".to_string(),
+                    ));
+                }
+
                 // Error if there are duplicate labels.
                 let labels = self.request_batch().labels();
                 if !labels.is_empty() {

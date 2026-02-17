@@ -139,6 +139,16 @@ impl RequestBatchOptions {
             _ => vec![],
         }
     }
+
+    pub(crate) fn validate_parents(&self) -> bool {
+        match self {
+            Self::Complex { batches } => batches
+                .iter()
+                .flat_map(|batch| batch.iter())
+                .all(|item| matches!(item.payload(), RequestPayloadOptions::Uniqueness { .. })),
+            _ => true,
+        }
+    }
 }
 
 /// Options over an individual request within a batch.
