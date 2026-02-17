@@ -1,9 +1,9 @@
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use iris_mpc_common::helpers::smpc_request;
+use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::{
     IrisPairDescriptor, Request, RequestInfo, RequestStatus, ResponsePayload,
@@ -106,6 +106,35 @@ impl RequestBatch {
             .unique()
             .sorted()
             .collect()
+    }
+
+    /// Resolves cross-batch parent dependencies using results from previously processed batches.
+    pub(crate) fn resolve_cross_batch_parents(
+        &mut self,
+        resolutions: &HashMap<uuid::Uuid, IrisSerialId>,
+    ) {
+        for request in self.requests_mut() {
+            let parent_desc = match request {
+                Request::IdentityDeletion {
+                    parent: parent_desc,
+                    ..
+                }
+                | Request::Reauthorization {
+                    parent: parent_desc,
+                    ..
+                }
+                | Request::ResetUpdate {
+                    parent: parent_desc,
+                    ..
+                } => parent_desc,
+                _ => continue,
+            };
+            if let UniquenessRequestDescriptor::SignupId(signup_id) = parent_desc {
+                if let Some(serial_id) = resolutions.get(signup_id) {
+                    *parent_desc = UniquenessRequestDescriptor::IrisSerialId(*serial_id);
+                }
+            }
+        }
     }
 
     /// Returns true if there are any requests deemed enqueueable.
@@ -244,28 +273,25 @@ impl RequestBatchSet {
                         RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
                             batch.push_new_reauthorization(
                                 UniquenessRequestDescriptor::from_label(parent),
-                                Some(iris_pair.clone()),
+                                Some(*iris_pair),
                                 opts_request.label(),
                                 Some(parent.clone()),
                             );
                         }
                         RequestPayloadOptions::ResetCheck { iris_pair } => {
-                            batch.push_new_reset_check(
-                                Some(iris_pair.clone()),
-                                opts_request.label(),
-                            );
+                            batch.push_new_reset_check(Some(*iris_pair), opts_request.label());
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                             batch.push_new_reset_update(
                                 UniquenessRequestDescriptor::from_label(parent),
-                                Some(iris_pair.clone()),
+                                Some(*iris_pair),
                                 opts_request.label(),
                                 Some(parent.clone()),
                             );
                         }
                         RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
                             batch.push_new_uniqueness(
-                                Some(iris_pair.clone()),
+                                Some(*iris_pair),
                                 opts_request.label().clone(),
                             );
                         }

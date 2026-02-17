@@ -103,38 +103,70 @@ impl RequestBatchOptions {
         }
     }
 
-    /// Returns set of Iris code indexes to be read from NDJSON file.
-    pub(crate) fn iris_code_indexes(&self) -> Vec<usize> {
+    /// Returns set of Iris code pairs as (left_index, right_index) tuples.
+    pub(crate) fn iris_code_pairs(&self) -> Vec<(usize, usize)> {
         match self {
             Self::Complex { batches } => batches
                 .iter()
                 .flat_map(|batch| batch.iter())
                 .filter_map(|item| item.iris_pair())
-                .flat_map(|iris_pair| [iris_pair.left().index(), iris_pair.right().index()])
+                .map(|iris_pair| (iris_pair.left().index(), iris_pair.right().index()))
                 .collect(),
             _ => vec![],
         }
     }
 
+    /// Returns the first duplicate label found, if any.
+    pub(crate) fn find_duplicate_label(&self) -> Option<String> {
+        let labels = self.labels();
+        let mut seen = std::collections::HashSet::with_capacity(labels.len());
+        labels.into_iter().find(|l| !seen.insert(l.clone()))
+    }
+
+    /// Validates that every parent label references a declared Uniqueness request.
+    /// Returns `Ok(())` if valid, or `Err(message)` describing the first violation.
+    pub(crate) fn validate_parents(&self) -> Result<(), String> {
+        match self {
+            Self::Complex { batches } => {
+                let all_items: Vec<_> = batches.iter().flat_map(|batch| batch.iter()).collect();
+                let all_labels: std::collections::HashSet<_> =
+                    all_items.iter().filter_map(|item| item.label()).collect();
+                let uniqueness_labels: std::collections::HashSet<_> = all_items
+                    .iter()
+                    .filter(|item| {
+                        matches!(item.payload(), RequestPayloadOptions::Uniqueness { .. })
+                    })
+                    .filter_map(|item| item.label())
+                    .collect();
+                for item in &all_items {
+                    if let Some(parent_label) = item.label_of_parent() {
+                        if !all_labels.contains(&parent_label) {
+                            return Err(format!(
+                                "contains a parent label '{}' that is not found in labels",
+                                parent_label
+                            ));
+                        }
+                        if !uniqueness_labels.contains(&parent_label) {
+                            return Err(format!(
+                                "parent '{}' must be a Uniqueness request",
+                                parent_label
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Returns set of declared request labels.
-    pub(crate) fn labels(&self) -> Vec<String> {
+    pub fn labels(&self) -> Vec<String> {
         match self {
             Self::Complex { batches } => batches
                 .iter()
                 .flat_map(|batch| batch.iter())
                 .filter_map(|item| item.label())
-                .collect(),
-            _ => vec![],
-        }
-    }
-
-    /// Returns set of declared parent request labels.
-    pub(crate) fn labels_of_parents(&self) -> Vec<String> {
-        match self {
-            Self::Complex { batches } => batches
-                .iter()
-                .flat_map(|batch| batch.iter())
-                .filter_map(|item| item.label_of_parent())
                 .collect(),
             _ => vec![],
         }
@@ -234,8 +266,9 @@ pub enum SharesGeneratorOptions {
     },
     /// Shares are generated from a pre-built file.
     FromFile {
-        // Path to an NDJSON file.
-        path_to_ndjson_file: String,
+        // Path to an NDJSON file (optional in TOML; can be supplied via CLI).
+        #[serde(default)]
+        path_to_ndjson_file: Option<String>,
 
         // An optional RNG seed.
         rng_seed: Option<u64>,
@@ -315,5 +348,22 @@ mod tests {
         "#;
         let opts: SharesGeneratorOptions = toml::from_str(toml_str).unwrap();
         let _ = toml::to_string(&opts).unwrap();
+    }
+
+    #[test]
+    fn test_shares_generator_options_from_file_without_path_roundtrip() {
+        let toml_str = r#"
+            [FromFile]
+            rng_seed = 42
+            selection_strategy = "All"
+        "#;
+        let opts: SharesGeneratorOptions = toml::from_str(toml_str).unwrap();
+        match &opts {
+            SharesGeneratorOptions::FromFile {
+                path_to_ndjson_file,
+                ..
+            } => assert!(path_to_ndjson_file.is_none()),
+            _ => panic!("Expected FromFile variant"),
+        }
     }
 }

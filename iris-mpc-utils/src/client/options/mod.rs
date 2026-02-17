@@ -29,17 +29,28 @@ impl ServiceClientOptions {
     pub fn shares_generator(&self) -> &SharesGeneratorOptions {
         &self.shares_generator
     }
+
+    /// Overrides the NDJSON file path when shares generator is `FromFile`.
+    pub fn set_iris_shares_path(&mut self, path: &str) {
+        if let SharesGeneratorOptions::FromFile {
+            path_to_ndjson_file,
+            ..
+        } = &mut self.shares_generator
+        {
+            *path_to_ndjson_file = Some(path.to_string());
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ServiceClientOptions;
-    use crate::fsys::{local::get_path_to_service_client_exec_opts, reader::read_toml};
+    use crate::fsys::{local::get_path_to_service_client_simple_opts, reader::read_toml};
 
     #[test]
     fn test_exec_opts_deserialization() {
-        (1..=2).for_each(move |opts_idx| {
-            let path_to_opts = get_path_to_service_client_exec_opts(opts_idx);
+        (1..=5).for_each(move |opts_idx| {
+            let path_to_opts = get_path_to_service_client_simple_opts(opts_idx);
             let _ = read_toml::<ServiceClientOptions>(path_to_opts.as_path())
                 .expect("Failed to deserialize service client exec options file");
         });

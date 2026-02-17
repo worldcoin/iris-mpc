@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     super::typeset::{BatchKind, ServiceClientError},
@@ -8,8 +8,23 @@ use super::{
 
 impl ServiceClientOptions {
     pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+        // Error if FromFile is used without a path to the NDJSON file.
+        if let SharesGeneratorOptions::FromFile {
+            path_to_ndjson_file,
+            ..
+        } = self.shares_generator()
+        {
+            if path_to_ndjson_file.as_deref().unwrap_or("").is_empty() {
+                return Err(ServiceClientError::InvalidOptions(
+                    "SharesGeneratorOptions::FromFile requires a path to the NDJSON file \
+                     (provide via CLI --path-to-iris-shares)"
+                        .to_string(),
+                ));
+            }
+        }
+
         match self.request_batch() {
-            RequestBatchOptions::Complex { .. } => {
+            RequestBatchOptions::Complex { batches } => {
                 // Error if used alongside compute shares generation.
                 if matches!(
                     self.shares_generator(),
@@ -18,43 +33,70 @@ impl ServiceClientOptions {
                     return Err(ServiceClientError::InvalidOptions("RequestBatchOptions::Complex can only be used with SharesGeneratorOptions::FromFile".to_string()));
                 }
 
-                // Error if there are duplicate Iris descriptors.
-                let indexes = self.request_batch().iris_code_indexes();
-                if !indexes.is_empty() {
-                    let mut set = HashSet::with_capacity(indexes.len());
-                    if !indexes.iter().all(|i| set.insert(i)) {
-                        return Err(ServiceClientError::InvalidOptions(
-                            "RequestBatchOptions::Complex contains duplicate Iris descriptors "
-                                .to_string(),
-                        ));
+                // Error if an iris index appears in multiple different pairs.
+                // Duplicate pairs (same or swapped eyes) are allowed for testing
+                // duplicate enrollment and mirroring attacks.
+                {
+                    let mut index_to_pair: HashMap<usize, (usize, usize)> = HashMap::new();
+                    for pair in self.request_batch().iris_code_pairs() {
+                        let normalized = if pair.0 <= pair.1 {
+                            pair
+                        } else {
+                            (pair.1, pair.0)
+                        };
+                        for idx in [normalized.0, normalized.1] {
+                            if let Some(existing) = index_to_pair.get(&idx) {
+                                if *existing != normalized {
+                                    return Err(ServiceClientError::InvalidOptions(
+                                        format!(
+                                            "RequestBatchOptions::Complex: iris index {} appears in multiple different pairs",
+                                            idx
+                                        ),
+                                    ));
+                                }
+                            } else {
+                                index_to_pair.insert(idx, normalized);
+                            }
+                        }
                     }
                 }
 
                 // Error if there are duplicate labels.
-                let labels = self.request_batch().labels();
-                if !labels.is_empty() {
-                    let mut set = HashSet::with_capacity(labels.len());
-                    if !labels.iter().all(|l| set.insert(l)) {
-                        return Err(ServiceClientError::InvalidOptions(
-                            "RequestBatchOptions::Complex contains duplicate labels".to_string(),
-                        ));
-                    }
+                if let Some(dup) = self.request_batch().find_duplicate_label() {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::Complex contains duplicate label '{}'",
+                        dup
+                    )));
                 }
 
-                // Error if there are invalid parent labels.
-                let labels_of_parents = self.request_batch().labels_of_parents();
-                if !labels_of_parents.is_empty() {
-                    let labels_set: HashSet<_> = labels.iter().collect();
-                    for label_of_parent in &labels_of_parents {
-                        if !labels_set.contains(label_of_parent) {
-                            return Err(ServiceClientError::InvalidOptions(
-                                format!(
-                                    "RequestBatchOptions::Complex contains a parent label '{}' that is not found in labels",
-                                    label_of_parent
-                                ),
-                            ));
+                // Error if parent labels are invalid (not declared or not Uniqueness).
+                if let Err(msg) = self.request_batch().validate_parents() {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::Complex {}",
+                        msg
+                    )));
+                }
+
+                // Error if a child request references a parent in the same or later batch.
+                // can't ResetUpdate, Delete, etc a Uniqueness request that is in the same batch
+                // todo: change this if the system ever tests inputs which are purposely invalid
+                let mut labels_seen = HashSet::new();
+                for batch in batches {
+                    for item in batch {
+                        if let Some(parent_label) = item.label_of_parent() {
+                            if !labels_seen.contains(&parent_label) {
+                                return Err(ServiceClientError::InvalidOptions(
+                                    format!(
+                                        "RequestBatchOptions::Complex: parent '{}' must be in an earlier batch",
+                                        parent_label
+                                    ),
+                                ));
+                            }
                         }
                     }
+                    let batch_labels: HashSet<_> =
+                        batch.iter().filter_map(|item| item.label()).collect();
+                    labels_seen.extend(batch_labels);
                 }
             }
             RequestBatchOptions::Simple {
@@ -133,8 +175,8 @@ mod tests {
     }
 
     #[test]
-    fn complex_rejects_duplicate_iris_descriptors() {
-        // Index 1 appears in both iris pairs (left of first, left of second).
+    fn complex_rejects_iris_index_in_multiple_pairs() {
+        // Index 1 appears in two different pairs: (1,2) and (1,3).
         let o = opts(
             r#"
             [shares_generator.FromFile]
@@ -146,7 +188,7 @@ mod tests {
             ]]
         "#,
         );
-        assert_invalid_options(&o, "duplicate Iris descriptors");
+        assert_invalid_options(&o, "iris index 1 appears in multiple different pairs");
     }
 
     #[test]
@@ -162,7 +204,7 @@ mod tests {
             ]]
         "#,
         );
-        assert_invalid_options(&o, "duplicate labels");
+        assert_invalid_options(&o, "duplicate label");
     }
 
     #[test]
@@ -181,7 +223,81 @@ mod tests {
         assert_invalid_options(&o, "parent label 'deadbeef' that is not found in labels");
     }
 
+    #[test]
+    fn complex_rejects_parent_in_later_batch() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
+                ],
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                ],
+            ]
+        "#,
+        );
+        assert_invalid_options(&o, "parent 'U-0' must be in an earlier batch");
+    }
+
+    #[test]
+    fn complex_rejects_parent_in_same_batch() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
+            ]]
+        "#,
+        );
+        assert_invalid_options(&o, "parent 'U-0' must be in an earlier batch");
+    }
+
     // -- Complex happy path --
+
+    #[test]
+    fn complex_allows_duplicate_iris_pair() {
+        // Same pair [1,2] used twice (duplicate enrollment test).
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                    { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                ],
+            ]
+        "#,
+        );
+        o.validate().expect("duplicate pair should be allowed");
+    }
+
+    #[test]
+    fn complex_allows_swapped_iris_pair() {
+        // Pair [1,2] and [2,1] (mirroring attack test).
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                    { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 2 }, { index = 1 }] } } },
+                ],
+            ]
+        "#,
+        );
+        o.validate().expect("swapped pair should be allowed");
+    }
 
     #[test]
     fn complex_valid_multi_batch_passes() {

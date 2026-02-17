@@ -37,6 +37,10 @@ struct CliOptions {
     /// Path to AWS options.
     #[clap(long)]
     path_to_opts_aws: String,
+
+    /// Path to iris shares NDJSON file (required when shares_generator is FromFile).
+    #[clap(long)]
+    path_to_iris_shares: Option<String>,
 }
 
 impl CliOptions {
@@ -60,9 +64,13 @@ Iris-MPC Service Client Options:
         {}
     exec options
         {}
+    iris shares
+        {}
 ------------------------------------------------------------------------
                 ",
-            self.path_to_opts_aws, self.path_to_opts,
+            self.path_to_opts_aws,
+            self.path_to_opts,
+            self.path_to_iris_shares.as_deref().unwrap_or("(none)"),
         )
     }
 }
@@ -70,12 +78,13 @@ Iris-MPC Service Client Options:
 #[async_from::async_trait]
 impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for ServiceClient<R> {
     async fn async_from(options: CliOptions) -> Self {
-        ServiceClient::<R>::new(
-            ServiceClientOptions::from(&options),
-            AwsOptions::from(&options),
-        )
-        .await
-        .unwrap()
+        let mut opts = ServiceClientOptions::from(&options);
+        if let Some(ref iris_path) = options.path_to_iris_shares {
+            opts.set_iris_shares_path(iris_path);
+        }
+        ServiceClient::<R>::new(opts, AwsOptions::from(&options))
+            .await
+            .unwrap()
     }
 }
 
