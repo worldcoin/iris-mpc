@@ -24,7 +24,7 @@ impl ServiceClientOptions {
         }
 
         match self.request_batch() {
-            RequestBatchOptions::Complex { .. } => {
+            RequestBatchOptions::Complex { batches } => {
                 // Error if used alongside compute shares generation.
                 if matches!(
                     self.shares_generator(),
@@ -70,6 +70,28 @@ impl ServiceClientOptions {
                             ));
                         }
                     }
+                }
+
+                // Error if a child request references a parent in a later batch.
+                let mut labels_seen = HashSet::new();
+                for batch in batches {
+                    let batch_labels: HashSet<_> =
+                        batch.iter().filter_map(|item| item.label()).collect();
+                    for item in batch {
+                        if let Some(parent_label) = item.label_of_parent() {
+                            if !labels_seen.contains(&parent_label)
+                                && !batch_labels.contains(&parent_label)
+                            {
+                                return Err(ServiceClientError::InvalidOptions(
+                                        format!(
+                                            "RequestBatchOptions::Complex: parent '{}' must be in the same or an earlier batch",
+                                            parent_label
+                                        ),
+                                    ));
+                            }
+                        }
+                    }
+                    labels_seen.extend(batch_labels);
                 }
             }
             RequestBatchOptions::Simple {
@@ -194,6 +216,26 @@ mod tests {
         "#,
         );
         assert_invalid_options(&o, "parent label 'deadbeef' that is not found in labels");
+    }
+
+    #[test]
+    fn complex_rejects_parent_in_later_batch() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
+                ],
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                ],
+            ]
+        "#,
+        );
+        assert_invalid_options(&o, "parent 'U-0' must be in the same or an earlier batch");
     }
 
     // -- Complex happy path --
