@@ -4,7 +4,7 @@ use uuid;
 use iris_mpc_common::IrisSerialId;
 
 /// A descriptor over an Iris code cached within an NDJSON file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct IrisDescriptor {
     // Ordinal identifer pointing to a row within an NDJSON file.
     index: usize,
@@ -21,7 +21,7 @@ impl IrisDescriptor {
 }
 
 /// A descriptor over a pair of Iris codes cached within a file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct IrisPairDescriptor((IrisDescriptor, IrisDescriptor));
 
 impl IrisPairDescriptor {

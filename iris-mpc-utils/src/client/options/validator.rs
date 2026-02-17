@@ -72,25 +72,24 @@ impl ServiceClientOptions {
                     }
                 }
 
-                // Error if a child request references a parent in a later batch.
+                // Error if a child request references a parent in the same or later batch.
+                // can't ResetUpdate, Delete, etc a Uniqueness request that is in the same batch
                 let mut labels_seen = HashSet::new();
                 for batch in batches {
-                    let batch_labels: HashSet<_> =
-                        batch.iter().filter_map(|item| item.label()).collect();
                     for item in batch {
                         if let Some(parent_label) = item.label_of_parent() {
-                            if !labels_seen.contains(&parent_label)
-                                && !batch_labels.contains(&parent_label)
-                            {
+                            if !labels_seen.contains(&parent_label) {
                                 return Err(ServiceClientError::InvalidOptions(
-                                        format!(
-                                            "RequestBatchOptions::Complex: parent '{}' must be in the same or an earlier batch",
-                                            parent_label
-                                        ),
-                                    ));
+                                    format!(
+                                        "RequestBatchOptions::Complex: parent '{}' must be in an earlier batch",
+                                        parent_label
+                                    ),
+                                ));
                             }
                         }
                     }
+                    let batch_labels: HashSet<_> =
+                        batch.iter().filter_map(|item| item.label()).collect();
                     labels_seen.extend(batch_labels);
                 }
             }
@@ -235,7 +234,23 @@ mod tests {
             ]
         "#,
         );
-        assert_invalid_options(&o, "parent 'U-0' must be in the same or an earlier batch");
+        assert_invalid_options(&o, "parent 'U-0' must be in an earlier batch");
+    }
+
+    #[test]
+    fn complex_rejects_parent_in_same_batch() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
+            ]]
+        "#,
+        );
+        assert_invalid_options(&o, "parent 'U-0' must be in an earlier batch");
     }
 
     // -- Complex happy path --

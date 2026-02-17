@@ -67,30 +67,29 @@ impl Request {
         }
     }
 
-    pub(crate) fn get_shares_info(&self) -> Option<(Uuid, IrisPairDescriptor)> {
+    pub(crate) fn get_shares_info(&self) -> Option<(uuid::Uuid, Option<IrisPairDescriptor>)> {
         match self {
             Request::IdentityDeletion { .. } => None,
             Request::Reauthorization {
                 reauth_id,
                 iris_pair,
                 ..
-            } => Some((reauth_id, iris_pair)),
+            } => Some((*reauth_id, *iris_pair)),
             Request::ResetCheck {
                 reset_id,
                 iris_pair,
                 ..
-            } => Some((reset_id, iris_pair)),
+            } => Some((*reset_id, *iris_pair)),
             Request::ResetUpdate {
                 reset_id,
                 iris_pair,
                 ..
-            } => Some((reset_id, iris_pair)),
+            } => Some((*reset_id, *iris_pair)),
             Request::Uniqueness {
                 signup_id,
                 iris_pair,
                 ..
-            } => Some((signup_id, iris_pair)),
-            _ => None,
+            } => Some((*signup_id, *iris_pair)),
         }
     }
 

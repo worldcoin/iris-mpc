@@ -8,7 +8,7 @@ use super::{
     },
     SharesGenerator,
 };
-use crate::{aws::AwsClient, client::typeset::Request};
+use crate::aws::AwsClient;
 
 /// A component responsible for uploading Iris shares to AWS services
 /// in advance of system request processing.
