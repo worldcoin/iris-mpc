@@ -4,6 +4,7 @@ use crate::{
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
         PartialResultsWithRotations, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS, THRESHOLD_A,
+        THRESHOLD_ANON_STATS_A,
     },
     helpers::{
         self,
@@ -2037,7 +2038,7 @@ impl ServerActor {
 
         // ---- END PHASE 1 ----
 
-        // ---- START PHASE 2 ----
+        // ---- START PHASE 2 FOR ANON STATS ----
         let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
         let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
         let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
@@ -2055,24 +2056,19 @@ impl ServerActor {
             &self.device_manager,
             &self.streams[0],
             events,
-            "db_threshold",
+            "db_threshold_anon_stats",
             self.enable_debug_timing,
             {
                 self.phase2.compare_threshold_masked_many(
                     &code_dots,
                     &mask_dots,
-                    THRESHOLD_A,
+                    THRESHOLD_ANON_STATS_A,
                     &self.streams[0],
                 );
             }
         );
 
         let res = self.phase2.take_result_buffer();
-
-        let db_match_bitmap = match eye_db {
-            Eye::Left => &self.db_match_list_left,
-            Eye::Right => &self.db_match_list_right,
-        };
 
         let (
             match_distances_buffers_codes,
@@ -2091,14 +2087,13 @@ impl ServerActor {
             &self.device_manager,
             &self.streams[0],
             events,
-            "db_open",
+            "db_open_anon_stats",
             self.enable_debug_timing,
             {
-                open_subset_results(
+                save_anon_stats_subset_results(
                     &mut self.phase2,
                     &res,
                     &self.distance_comparator,
-                    db_match_bitmap,
                     max_chunk_size * self.max_batch_size * ROTATIONS / 64,
                     &dot_chunk_size,
                     &chunk_size,
@@ -2118,6 +2113,55 @@ impl ServerActor {
                     &self.streams[0],
                     db_subset_idx,
                     batch_reauth_targets,
+                );
+                self.phase2.return_result_buffer(res);
+            }
+        );
+
+        // ---- START PHASE 2 FOR MATCHING ----
+        //
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_threshold",
+            self.enable_debug_timing,
+            {
+                self.phase2.compare_threshold_masked_many(
+                    &code_dots,
+                    &mask_dots,
+                    THRESHOLD_A,
+                    &self.streams[0],
+                );
+            }
+        );
+        let res = self.phase2.take_result_buffer();
+
+        let db_match_bitmap = match eye_db {
+            Eye::Left => &self.db_match_list_left,
+            Eye::Right => &self.db_match_list_right,
+        };
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_open",
+            self.enable_debug_timing,
+            {
+                open_subset_results(
+                    &mut self.phase2,
+                    &res,
+                    &self.distance_comparator,
+                    db_match_bitmap,
+                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                    &dot_chunk_size,
+                    &chunk_size,
+                    &self.current_db_sizes,
+                    &ignore_device_results,
+                    batch_size,
+                    &self.streams[0],
+                    db_subset_idx,
                 );
                 self.phase2.return_result_buffer(res);
             }
@@ -2393,7 +2437,7 @@ impl ServerActor {
 
             // ---- END PHASE 1 ----
 
-            // ---- START PHASE 2 ----
+            // ---- START PHASE 2 FOR ANON STATS ----
             let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
             let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
             let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
@@ -2411,13 +2455,13 @@ impl ServerActor {
                     &self.device_manager,
                     request_streams,
                     events,
-                    "db_threshold",
+                    "db_threshold_anon_stats",
                     self.enable_debug_timing,
                     {
                         self.phase2.compare_threshold_masked_many(
                             &code_dots,
                             &mask_dots,
-                            THRESHOLD_A,
+                            THRESHOLD_ANON_STATS_A,
                             request_streams,
                         );
                     }
@@ -2439,14 +2483,13 @@ impl ServerActor {
                     &self.device_manager,
                     request_streams,
                     events,
-                    "db_open",
+                    "db_open_anon_stats",
                     self.enable_debug_timing,
                     {
-                        open(
+                        save_anon_stats(
                             &mut self.phase2,
                             &res,
                             &self.distance_comparator,
-                            db_match_bitmap,
                             max_chunk_size * self.max_batch_size * ROTATIONS / 64,
                             &dot_chunk_size,
                             &chunk_size,
@@ -2466,6 +2509,50 @@ impl ServerActor {
                                 / 100,
                             request_streams,
                             batch_reauth_targets,
+                        );
+                        self.phase2.return_result_buffer(res);
+                    }
+                );
+
+                // ---- START PHASE 2 FOR ANON STATS ----
+                record_stream_time!(
+                    &self.device_manager,
+                    request_streams,
+                    events,
+                    "db_threshold",
+                    self.enable_debug_timing,
+                    {
+                        self.phase2.compare_threshold_masked_many(
+                            &code_dots,
+                            &mask_dots,
+                            THRESHOLD_A,
+                            request_streams,
+                        );
+                    }
+                );
+
+                let res = self.phase2.take_result_buffer();
+
+                record_stream_time!(
+                    &self.device_manager,
+                    request_streams,
+                    events,
+                    "db_open",
+                    self.enable_debug_timing,
+                    {
+                        open(
+                            &mut self.phase2,
+                            &res,
+                            &self.distance_comparator,
+                            db_match_bitmap,
+                            max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                            &dot_chunk_size,
+                            &chunk_size,
+                            offset,
+                            &self.current_db_sizes,
+                            &ignore_device_results,
+                            batch_size,
+                            request_streams,
                         );
                         self.phase2.return_result_buffer(res);
                     }
@@ -2797,6 +2884,59 @@ fn open(
     offset: usize,
     total_db_sizes: &[usize],
     ignore_db_results: &[bool],
+    batch_size: usize,
+    streams: &[CudaStream],
+) {
+    let n_devices = x.len();
+    let mut a = Vec::with_capacity(n_devices);
+    let mut b = Vec::with_capacity(n_devices);
+    let mut c = Vec::with_capacity(n_devices);
+
+    cudarc::nccl::result::group_start().unwrap();
+    for (idx, res) in x.iter().enumerate() {
+        // Result is in bit 0
+        let res = res.get_offset(0, chunk_size);
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
+            .unwrap();
+        a.push(res.a);
+        b.push(res.b);
+    }
+    for (idx, res) in x.iter().enumerate() {
+        let mut res = res.get_offset(1, chunk_size);
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
+            .unwrap();
+        c.push(res.a);
+    }
+    cudarc::nccl::result::group_end().unwrap();
+
+    distance_comparator.open_results(
+        &a,
+        &b,
+        &c,
+        matches_bitmap,
+        db_sizes,
+        real_db_sizes,
+        offset,
+        total_db_sizes,
+        ignore_db_results,
+        batch_size,
+        streams,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_anon_stats(
+    party: &mut Circuits,
+    x: &[ChunkShare<u64>],
+    distance_comparator: &DistanceComparator,
+    chunk_size: usize,
+    db_sizes: &[usize],
+    real_db_sizes: &[usize],
+    offset: usize,
+    total_db_sizes: &[usize],
+    ignore_db_results: &[bool],
     match_distances_buffers_codes: &[ChunkShare<u16>],
     match_distances_buffers_masks: &[ChunkShare<u16>],
     match_distances_counters: &[CudaSlice<u32>],
@@ -2854,19 +2994,6 @@ fn open(
         streams,
         reauth_target_idx,
     );
-    distance_comparator.open_results(
-        &a,
-        &b,
-        &c,
-        matches_bitmap,
-        db_sizes,
-        real_db_sizes,
-        offset,
-        total_db_sizes,
-        ignore_db_results,
-        batch_size,
-        streams,
-    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2875,6 +3002,58 @@ fn open_subset_results(
     x: &[ChunkShare<u64>],
     distance_comparator: &DistanceComparator,
     matches_bitmap: &[CudaSlice<u64>],
+    chunk_size: usize,
+    db_sizes: &[usize],
+    real_db_sizes: &[usize],
+    total_db_sizes: &[usize],
+    ignore_db_results: &[bool],
+    batch_size: usize,
+    streams: &[CudaStream],
+    index_mapping: &[Vec<u32>],
+) {
+    let n_devices = x.len();
+    let mut a = Vec::with_capacity(n_devices);
+    let mut b = Vec::with_capacity(n_devices);
+    let mut c = Vec::with_capacity(n_devices);
+
+    cudarc::nccl::result::group_start().unwrap();
+    for (idx, res) in x.iter().enumerate() {
+        // Result is in bit 0
+        let res = res.get_offset(0, chunk_size);
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
+            .unwrap();
+        a.push(res.a);
+        b.push(res.b);
+    }
+    for (idx, res) in x.iter().enumerate() {
+        let mut res = res.get_offset(1, chunk_size);
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
+            .unwrap();
+        c.push(res.a);
+    }
+    cudarc::nccl::result::group_end().unwrap();
+
+    distance_comparator.open_results_with_index_mapping(
+        &a,
+        &b,
+        &c,
+        matches_bitmap,
+        db_sizes,
+        real_db_sizes,
+        total_db_sizes,
+        ignore_db_results,
+        batch_size,
+        streams,
+        index_mapping,
+    );
+}
+#[allow(clippy::too_many_arguments)]
+fn save_anon_stats_subset_results(
+    party: &mut Circuits,
+    x: &[ChunkShare<u64>],
+    distance_comparator: &DistanceComparator,
     chunk_size: usize,
     db_sizes: &[usize],
     real_db_sizes: &[usize],
@@ -2937,19 +3116,6 @@ fn open_subset_results(
         streams,
         index_mapping,
         reauth_target_idx,
-    );
-    distance_comparator.open_results_with_index_mapping(
-        &a,
-        &b,
-        &c,
-        matches_bitmap,
-        db_sizes,
-        real_db_sizes,
-        total_db_sizes,
-        ignore_db_results,
-        batch_size,
-        streams,
-        index_mapping,
     );
 }
 
