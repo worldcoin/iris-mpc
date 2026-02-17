@@ -10,8 +10,7 @@ pub const ROTATIONS: usize = iris_mpc_common::ROTATIONS;
 pub const THRESHOLD_B: u32 = 1u32 << 16;
 pub const MATCHING_THRESHOLD: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub const THRESHOLD_A: u32 = ((1.0 - 2.0 * MATCHING_THRESHOLD) * (THRESHOLD_B as f64)) as u32;
-pub const MATCHING_THRESHOLD_ANON_STATS: f64 =
-    iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
+pub const MATCHING_THRESHOLD_ANON_STATS: f64 = 0.375;
 pub const THRESHOLD_ANON_STATS_A: u32 =
     ((1.0 - 2.0 * MATCHING_THRESHOLD_ANON_STATS) * (THRESHOLD_B as f64)) as u32;
 

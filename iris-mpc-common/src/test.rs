@@ -28,7 +28,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 375 / 1000; // 0.375 * 12800
+const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 345 / 1000; // 0.345 * 12800
 
 const LEFT: usize = 0;
 const RIGHT: usize = 1;
