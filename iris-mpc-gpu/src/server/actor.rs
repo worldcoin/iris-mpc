@@ -2827,11 +2827,10 @@ fn open(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results(
+    distance_comparator.store_anon_stats(
         &a,
         &b,
         &c,
-        matches_bitmap,
         db_sizes,
         real_db_sizes,
         offset,
@@ -2848,6 +2847,19 @@ fn open(
         max_bucket_distances,
         streams,
         reauth_target_idx,
+    );
+    distance_comparator.open_results(
+        &a,
+        &b,
+        &c,
+        matches_bitmap,
+        db_sizes,
+        real_db_sizes,
+        offset,
+        total_db_sizes,
+        ignore_db_results,
+        batch_size,
+        streams,
     );
 }
 
@@ -2899,11 +2911,10 @@ fn open_subset_results(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.open_results_with_index_mapping(
+    distance_comparator.store_anon_stats_with_index_mapping(
         &a,
         &b,
         &c,
-        matches_bitmap,
         db_sizes,
         real_db_sizes,
         total_db_sizes,
@@ -2920,6 +2931,19 @@ fn open_subset_results(
         streams,
         index_mapping,
         reauth_target_idx,
+    );
+    distance_comparator.open_results_with_index_mapping(
+        &a,
+        &b,
+        &c,
+        matches_bitmap,
+        db_sizes,
+        real_db_sizes,
+        total_db_sizes,
+        ignore_db_results,
+        batch_size,
+        streams,
+        index_mapping,
     );
 }
 
