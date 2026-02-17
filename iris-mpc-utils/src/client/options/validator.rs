@@ -8,6 +8,21 @@ use super::{
 
 impl ServiceClientOptions {
     pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+        // Error if FromFile is used without a path to the NDJSON file.
+        if let SharesGeneratorOptions::FromFile {
+            path_to_ndjson_file,
+            ..
+        } = self.shares_generator()
+        {
+            if path_to_ndjson_file.as_deref().unwrap_or("").is_empty() {
+                return Err(ServiceClientError::InvalidOptions(
+                    "SharesGeneratorOptions::FromFile requires a path to the NDJSON file \
+                     (provide via CLI --path-to-iris-shares)"
+                        .to_string(),
+                ));
+            }
+        }
+
         match self.request_batch() {
             RequestBatchOptions::Complex { .. } => {
                 // Error if used alongside compute shares generation.

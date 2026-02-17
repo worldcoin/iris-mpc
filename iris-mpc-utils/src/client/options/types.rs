@@ -234,8 +234,9 @@ pub enum SharesGeneratorOptions {
     },
     /// Shares are generated from a pre-built file.
     FromFile {
-        // Path to an NDJSON file.
-        path_to_ndjson_file: String,
+        // Path to an NDJSON file (optional in TOML; can be supplied via CLI).
+        #[serde(default)]
+        path_to_ndjson_file: Option<String>,
 
         // An optional RNG seed.
         rng_seed: Option<u64>,
@@ -315,5 +316,22 @@ mod tests {
         "#;
         let opts: SharesGeneratorOptions = toml::from_str(toml_str).unwrap();
         let _ = toml::to_string(&opts).unwrap();
+    }
+
+    #[test]
+    fn test_shares_generator_options_from_file_without_path_roundtrip() {
+        let toml_str = r#"
+            [FromFile]
+            rng_seed = 42
+            selection_strategy = "All"
+        "#;
+        let opts: SharesGeneratorOptions = toml::from_str(toml_str).unwrap();
+        match &opts {
+            SharesGeneratorOptions::FromFile {
+                path_to_ndjson_file,
+                ..
+            } => assert!(path_to_ndjson_file.is_none()),
+            _ => panic!("Expected FromFile variant"),
+        }
     }
 }

@@ -34,31 +34,31 @@ For **dev-stg** (real AWS), the client only needs the VPC profile (`worldcoin-sm
 ## Usage
 
 ```
-scripts/iris-mpc-utils/service-client/run.sh [-e ENV] [EXEC_OPTS_TOML]
+scripts/run-service-client.sh [-e ENV] [EXEC_OPTS_TOML]
 ```
 
 ### Examples
 
 ```bash
 # Default: dev-dkr environment, simple-1.toml request batch
-./run.sh
+./scripts/run-service-client.sh 
 
 # Staging environment
-./run.sh -e dev-stg
+./scripts/run-service-client.sh  -e dev-stg
 
 # Custom request batch
-./run.sh requests/complex-1.toml
+./scripts/run-service-client.sh complex-1.toml -i 20250710-1k.ndjson
 
 # Staging with custom request batch
-./run.sh -e dev-stg path/to/custom.toml
+./scripts/run-service-client.sh  -e dev-stg path/to/custom.toml
 
 # Help
-./run.sh -h
+./scripts/run-service-client.sh -h
 ```
 
 ## Request Batch Examples
 
-Pre-built request batches are in `scripts/iris-mpc-utils/service-client/requests/`:
+Pre-built request batches are in `iris-mpc-utils/assets/service-client/`:
 
 | File | Description |
 |------|-------------|
@@ -90,6 +90,7 @@ batch_size = 10
 batch_kind = "uniqueness"
 
 [shares_generator.FromFile]
+# this path can be overridden by providing a .ndjson file to run-service-client.sh.
 path_to_ndjson_file = "YOUR-WORKING-DIR/iris-mpc/iris-mpc-utils/assets/iris-codes-plaintext/20250710-1k.ndjson"
 rng_seed = 42
 selection_strategy = "All"

@@ -29,6 +29,17 @@ impl ServiceClientOptions {
     pub fn shares_generator(&self) -> &SharesGeneratorOptions {
         &self.shares_generator
     }
+
+    /// Overrides the NDJSON file path when shares generator is `FromFile`.
+    pub fn set_iris_shares_path(&mut self, path: &str) {
+        if let SharesGeneratorOptions::FromFile {
+            path_to_ndjson_file,
+            ..
+        } = &mut self.shares_generator
+        {
+            *path_to_ndjson_file = Some(path.to_string());
+        }
+    }
 }
 
 #[cfg(test)]

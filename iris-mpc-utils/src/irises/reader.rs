@@ -15,6 +15,7 @@ use crate::{constants::N_PARTIES, fsys};
 
 /// Returns iterator over Iris codes deserialized from an ndjson file.
 pub fn read_iris_codes(path_to_ndjson: &Path) -> Result<impl Iterator<Item = IrisCode>, Error> {
+    println!("path to ndjson: {:?}", path_to_ndjson);
     let stream = fsys::reader::read_json_iter::<Base64IrisCode>(path_to_ndjson)
         .unwrap()
         .map(|res| res.unwrap())

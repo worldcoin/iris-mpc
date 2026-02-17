@@ -48,8 +48,11 @@ where
                 selection_strategy,
             } => {
                 tracing::info!("Parsing SharesGeneratorOptions::FromFile");
+                let path = path_to_ndjson_file
+                    .as_deref()
+                    .expect("FromFile requires path_to_ndjson_file (set via CLI --path-to-iris-shares)");
                 SharesGenerator::new_file(
-                    PathBuf::from(path_to_ndjson_file),
+                    PathBuf::from(path),
                     *rng_seed,
                     *selection_strategy,
                 )
