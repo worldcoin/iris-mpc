@@ -706,7 +706,7 @@ async fn run_main_server_loop(
                 );
             }
             metrics::histogram!("batch_sync_entries_duration").record(sync_elapsed);
-            metrics::gauge!("batch_sync_entries_retries").set(sync_attempts as f64);
+            metrics::histogram!("batch_sync_entries_retries").record((sync_attempts - 1) as f64);
             batch.retain_valid_entries();
 
             // start trace span - with single TraceId and single ParentTraceID
