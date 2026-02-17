@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use iris_mpc_common::helpers::smpc_request;
+use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
 use super::super::typeset::{
     ProcessRequestBatch, Request, RequestBatch, RequestPayload, RequestStatus, ServiceClientError,
@@ -18,6 +18,20 @@ pub(crate) struct RequestEnqueuer {
 impl RequestEnqueuer {
     pub fn new(aws_client: AwsClient) -> Self {
         Self { aws_client }
+    }
+
+    /// Publishes a deletion request for a single serial ID during cleanup.
+    pub(crate) async fn publish_deletion(
+        &self,
+        serial_id: IrisSerialId,
+    ) -> Result<(), ServiceClientError> {
+        let payload =
+            RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest { serial_id });
+        let sns_msg_info = SnsMessageInfo::from(payload);
+        self.aws_client
+            .sns_publish_json(sns_msg_info)
+            .await
+            .map_err(ServiceClientError::AwsServiceError)
     }
 }
 

@@ -206,6 +206,44 @@ impl Request {
         None
     }
 
+    /// For a fully correlated request, returns the serial ID and whether it was created (true)
+    /// or deleted (false). Used to track live serial IDs for cleanup.
+    pub(crate) fn serial_id_tracking(&self) -> Option<(IrisSerialId, bool)> {
+        match self {
+            Self::Uniqueness { info, .. } => {
+                if !matches!(info.status(), RequestStatus::Correlated) {
+                    return None;
+                }
+                if let Some(ResponsePayload::Uniqueness(result)) = info.first_correlation() {
+                    let serial_id = result.serial_id.or_else(|| {
+                        result
+                            .matched_serial_ids
+                            .as_ref()
+                            .and_then(|m| m.first().copied())
+                    })?;
+                    Some((serial_id, true))
+                } else {
+                    None
+                }
+            }
+            Self::IdentityDeletion { info, .. } => {
+                if !matches!(info.status(), RequestStatus::Correlated) {
+                    return None;
+                }
+                if let Some(ResponsePayload::IdentityDeletion(result)) = info.first_correlation() {
+                    if result.success {
+                        Some((result.serial_id, false))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn parent_descriptor(&self) -> Option<&UniquenessRequestDescriptor> {
         match self {
             Self::IdentityDeletion { parent, .. }

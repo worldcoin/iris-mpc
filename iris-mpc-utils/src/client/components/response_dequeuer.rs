@@ -1,9 +1,12 @@
 use async_trait::async_trait;
 use serde_json;
 
-use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+use iris_mpc_common::{
+    helpers::smpc_request::{
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    },
+    IrisSerialId,
 };
 
 use super::super::typeset::{
@@ -61,6 +64,32 @@ impl ProcessRequestBatch for ResponseDequeuer {
 impl ResponseDequeuer {
     pub fn new(aws_client: AwsClient) -> Self {
         Self { aws_client }
+    }
+
+    /// Receives deletion responses from SQS during cleanup phase.
+    /// Returns the serial IDs of confirmed deletions and purges the corresponding messages.
+    pub(crate) async fn receive_deletion_responses(
+        &self,
+    ) -> Result<Vec<IrisSerialId>, ServiceClientError> {
+        let mut confirmed = Vec::new();
+        for sqs_msg in self
+            .aws_client
+            .sqs_receive_messages(Some(N_PARTIES))
+            .await
+            .map_err(ServiceClientError::AwsServiceError)?
+        {
+            let response = ResponsePayload::from(&sqs_msg);
+            if let ResponsePayload::IdentityDeletion(result) = &response {
+                if result.success {
+                    confirmed.push(result.serial_id);
+                }
+            }
+            self.aws_client
+                .sqs_purge_response_queue_message(&sqs_msg)
+                .await
+                .map_err(ServiceClientError::AwsServiceError)?;
+        }
+        Ok(confirmed)
     }
 
     /// Attempts to correlate an SQS response with a previously dispatched request.  If correlated
