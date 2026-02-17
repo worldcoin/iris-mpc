@@ -89,6 +89,7 @@ impl ResponseDequeuer {
             }
             Ok(Some(()))
         } else {
+            tracing::warn!("Failed to correlate response: {:#?}", &response);
             Ok(None)
         }
     }
