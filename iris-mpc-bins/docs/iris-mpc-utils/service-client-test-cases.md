@@ -275,42 +275,7 @@ Mix of D, RA, RC, RU referencing batch 0 parents:
 ---
 
 ## TC-7: Orphaned Children (No Parent Signup)
-
-**Requires validation logic change:** Currently `validate_parents()` rejects parent labels that don't reference a declared Uniqueness request. This test case requires either (a) relaxing that validation or (b) adding a new `UniquenessRequestDescriptor` variant for "external" serial IDs.
-
-**Goal:** Submit child requests whose parent signup never occurred in any batch, simulating a pre-existing database entry.
-
-### Proposed Approach
-
-Add a new TOML option for specifying a known `IrisSerialId` directly:
-
-```toml
-{ label = "00-D-Orphan", payload = { IdentityDeletion = { parent_serial_id = 42 } } }
-```
-
-This would map to `UniquenessRequestDescriptor::IrisSerialId(42)` at parse time, bypassing label resolution entirely.
-
-### Batch 0 (32 requests: children with direct serial ID parents)
-
-| # | Label | Type | Iris Pair | Parent | Notes |
-|---|-------|------|-----------|--------|-------|
-| 1-8 | `00-D-Orphan` .. `07-D-Orphan` | D | -- | serial_id: 1..8 | Delete pre-existing entries |
-| 9-16 | `08-RA-Orphan` .. `15-RA-Orphan` | RA | [1,2]..[15,16] | serial_id: 1..8 | Reauth against pre-existing |
-| 17-24 | `16-RC-Orphan` .. `23-RC-Orphan` | RC | [17,18]..[31,32] | -- | Independent (no parent needed) |
-| 25-32 | `24-RU-Orphan` .. `31-RU-Orphan` | RU | [33,34]..[47,48] | serial_id: 1..8 | Reset update against pre-existing |
-
-**Validates:**
-- Children with `IrisSerialId` parents are immediately enqueueable (no resolution needed).
-- Deletion of entries that were not enrolled via this service client run.
-- Reauth and ResetUpdate against externally-known serial IDs.
-- System correctly processes requests against database entries created by previous runs or other clients.
-
-### Validation Changes Needed
-
-1. `RequestPayloadOptions`: Add `parent_serial_id: Option<IrisSerialId>` to `IdentityDeletion`, `Reauthorisation`, and `ResetUpdate` as an alternative to `parent: String`.
-2. `RequestBatchSet::from_options`: When `parent_serial_id` is present, create `UniquenessRequestDescriptor::IrisSerialId(id)` directly.
-3. `validate_parents()`: Skip validation for requests using `parent_serial_id`.
-4. `validate_batch_ordering()`: Skip ordering check for `parent_serial_id` references.
+out of scope. not going to do it. the system was designed to prevent this.
 
 ---
 
@@ -484,13 +449,3 @@ Re-enroll using the **same iris pairs** as the entries deleted in batch 1 (pairs
 
 ---
 
-## Summary of Validation Changes Needed
-
-| Test Case | Change Required | Description |
-|-----------|-----------------|-------------|
-| TC-7 | New TOML field | `parent_serial_id` as alternative to `parent` label for direct `IrisSerialId` reference |
-| TC-7 | Validation skip | `validate_parents()` and `validate_batch_ordering()` skip `parent_serial_id` entries |
-| TC-7 | Parser update | `from_options()` maps `parent_serial_id` to `UniquenessRequestDescriptor::IrisSerialId` |
-| TC-8 | Validation relaxation | `validate_batch_ordering()` allows same-batch parent references when parent precedes child |
-
-All other test cases (TC-1 through TC-6, TC-9 through TC-12) work with the current validation logic.
