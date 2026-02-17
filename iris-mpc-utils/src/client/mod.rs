@@ -131,7 +131,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
     }
 
     async fn cleanup(&mut self, live_serial_ids: &mut HashSet<IrisSerialId>) {
-        println!("Cleaning up {} serial IDs", live_serial_ids.len(),);
+        println!("Cleaning up {} serial IDs", live_serial_ids.len());
 
         // Send deletion requests for all live serial IDs.
         for &serial_id in live_serial_ids.iter() {
