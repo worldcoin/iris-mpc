@@ -36,7 +36,7 @@ impl<R> SharesGenerator<R>
 where
     R: Rng + CryptoRng + SeedableRng + Send,
 {
-    pub(crate) fn from_options(opts: &ServiceClientOptions) -> Self {
+    pub fn from_options(opts: &ServiceClientOptions) -> Self {
         match opts.shares_generator() {
             SharesGeneratorOptions::FromCompute { rng_seed } => {
                 tracing::info!("Parsing SharesGeneratorOptions::FromCompute");
@@ -52,6 +52,26 @@ where
                     "FromFile requires path_to_ndjson_file (set via CLI --path-to-iris-shares)",
                 );
                 SharesGenerator::new_file(PathBuf::from(path), *rng_seed, *selection_strategy)
+            }
+        }
+    }
+
+    pub fn from_options2(opts: SharesGeneratorOptions) -> Self {
+        match opts {
+            SharesGeneratorOptions::FromCompute { rng_seed } => {
+                tracing::info!("Parsing SharesGeneratorOptions::FromCompute");
+                SharesGenerator::<R>::new_compute(rng_seed)
+            }
+            SharesGeneratorOptions::FromFile {
+                path_to_ndjson_file,
+                rng_seed,
+                selection_strategy,
+            } => {
+                tracing::info!("Parsing SharesGeneratorOptions::FromFile");
+                let path = path_to_ndjson_file.as_deref().expect(
+                    "FromFile requires path_to_ndjson_file (set via CLI --path-to-iris-shares)",
+                );
+                SharesGenerator::new_file(PathBuf::from(path), rng_seed, selection_strategy)
             }
         }
     }
