@@ -10,7 +10,7 @@ use crate::{
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, sync::Arc, time::Instant, vec};
+use std::{collections::BTreeMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -107,7 +107,7 @@ async fn aggregate_results(
     mut rx: UnboundedReceiver<IsMatch>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
     rx.close();
-    let mut join = HashMap::new();
+    let mut join = BTreeMap::new();
 
     // For each pair of request, reduce the result of all rotations with boolean ANY.
     while let Some(match_result) = rx.recv().await {
@@ -119,16 +119,15 @@ async fn aggregate_results(
     let mut match_lists = vec![Vec::new(); n_requests];
 
     // Report pairs with a left OR right match.
-    join.into_iter()
-        .filter(|(_, [left, right])| *left || *right)
-        .sorted()
-        .for_each(|((i_request, earlier_request), [left, right])| {
+    for ((i_request, earlier_request), [left, right]) in join {
+        if left || right {
             // This request matches a request that came before it in the batch.
             match_lists[i_request].push(IntraMatch {
                 other_request_i: earlier_request,
                 is_match: [left, right],
-            });
-        });
+            })
+        }
+    }
 
     Ok(match_lists)
 }
