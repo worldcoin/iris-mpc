@@ -9,7 +9,7 @@ use serde::{
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
 
-use crate::client::typeset::{IrisPairDescriptor, PendingItem, RequestBatch};
+use crate::client::typeset::IrisPairDescriptor;
 
 /// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -420,68 +420,12 @@ pub enum SharesGeneratorOptions {
 }
 
 impl IntoIterator for RequestBatchOptions {
-    type Item = RequestBatch;
-    type IntoIter = std::vec::IntoIter<RequestBatch>;
+    type Item = Vec<RequestOptions>;
+    type IntoIter = std::vec::IntoIter<Vec<RequestOptions>>;
 
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            RequestBatchOptions::Complex { batches } => {
-                let mut v = vec![];
-                for (batch_idx, opts_batch) in batches.into_iter().enumerate() {
-                    let mut batch = RequestBatch::new(batch_idx + 1, vec![]);
-                    for opts_request in opts_batch {
-                        match opts_request.payload().clone() {
-                            RequestPayloadOptions::IdentityDeletion { parent } => match parent {
-                                Parent::Id(serial_id) => {
-                                    batch.push_new_identity_deletion(
-                                        serial_id,
-                                        opts_request.label(),
-                                    );
-                                }
-                                Parent::Label(label) => {
-                                    batch.push_pending(PendingItem::new(label, opts_request));
-                                }
-                            },
-                            RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
-                                match parent {
-                                    Parent::Id(serial_id) => {
-                                        batch.push_new_reauthorization(
-                                            serial_id,
-                                            iris_pair,
-                                            opts_request.label(),
-                                        );
-                                    }
-                                    Parent::Label(label) => {
-                                        batch.push_pending(PendingItem::new(label, opts_request));
-                                    }
-                                }
-                            }
-                            RequestPayloadOptions::ResetCheck { iris_pair } => {
-                                batch.push_new_reset_check(iris_pair, opts_request.label());
-                            }
-                            RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
-                                match parent {
-                                    Parent::Id(serial_id) => {
-                                        batch.push_new_reset_update(
-                                            serial_id,
-                                            iris_pair,
-                                            opts_request.label(),
-                                        );
-                                    }
-                                    Parent::Label(label) => {
-                                        batch.push_pending(PendingItem::new(label, opts_request));
-                                    }
-                                }
-                            }
-                            RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
-                                batch.push_new_uniqueness(Some(iris_pair), opts_request.label());
-                            }
-                        }
-                    }
-                    v.push(batch);
-                }
-                v.into_iter()
-            }
+            RequestBatchOptions::Complex { batches } => batches.into_iter(),
             RequestBatchOptions::Simple {
                 batch_count,
                 batch_kind,
@@ -500,49 +444,56 @@ impl IntoIterator for RequestBatchOptions {
                         | RESET_UPDATE_MESSAGE_TYPE
                 );
 
-                let mut v = vec![];
-                for i in 0..batch_count {
+                let mut v: Vec<Vec<RequestOptions>> = vec![];
+                for _ in 0..batch_count {
                     if !requires_parent {
-                        let mut batch = RequestBatch::new(i + 1, vec![]);
-                        for _ in 0..batch_size {
-                            match batch_kind.as_str() {
-                                UNIQUENESS_MESSAGE_TYPE => {
-                                    batch.push_new_uniqueness(None, None);
-                                }
-                                _ => {
-                                    batch.push_new_reset_check(None, None);
-                                }
-                            }
-                        }
+                        let batch = (0..batch_size)
+                            .map(|_| match batch_kind.as_str() {
+                                UNIQUENESS_MESSAGE_TYPE => RequestOptions::new(
+                                    None,
+                                    RequestPayloadOptions::Uniqueness {
+                                        iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                                        insertion_layers: None,
+                                    },
+                                ),
+                                _ => RequestOptions::new(
+                                    None,
+                                    RequestPayloadOptions::ResetCheck { iris_pair: None },
+                                ),
+                            })
+                            .collect();
                         v.push(batch);
                     } else {
                         // Two batches: uniqueness preamble (with UUID labels) + desired type
-                        // (pending on those labels via Parent::Label).
-                        let mut uniqueness_batch = RequestBatch::new(i * 2 + 1, vec![]);
-                        let mut child_batch = RequestBatch::new(i * 2 + 2, vec![]);
+                        // (referencing those labels via Parent::Label).
+                        let mut uniqueness_batch = vec![];
+                        let mut child_batch = vec![];
                         for _ in 0..batch_size {
                             let label = uuid::Uuid::new_v4().to_string();
-                            uniqueness_batch.push_new_uniqueness(None, Some(label.clone()));
+                            uniqueness_batch.push(RequestOptions::new(
+                                Some(label.as_str()),
+                                RequestPayloadOptions::Uniqueness {
+                                    iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                                    insertion_layers: None,
+                                },
+                            ));
                             let payload = match batch_kind.as_str() {
                                 IDENTITY_DELETION_MESSAGE_TYPE => {
                                     RequestPayloadOptions::IdentityDeletion {
-                                        parent: Parent::Label(label.clone()),
+                                        parent: Parent::Label(label),
                                     }
                                 }
                                 REAUTH_MESSAGE_TYPE => RequestPayloadOptions::Reauthorisation {
                                     iris_pair: None,
-                                    parent: Parent::Label(label.clone()),
+                                    parent: Parent::Label(label),
                                 },
                                 RESET_UPDATE_MESSAGE_TYPE => RequestPayloadOptions::ResetUpdate {
                                     iris_pair: None,
-                                    parent: Parent::Label(label.clone()),
+                                    parent: Parent::Label(label),
                                 },
                                 _ => unreachable!("already checked requires_parent"),
                             };
-                            child_batch.push_pending(PendingItem::new(
-                                label,
-                                RequestOptions::new(None, payload),
-                            ));
+                            child_batch.push(RequestOptions::new(None, payload));
                         }
                         v.push(uniqueness_batch);
                         v.push(child_batch);
