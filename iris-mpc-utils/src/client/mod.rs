@@ -5,6 +5,8 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_common::IrisSerialId;
 
+use crate::client::options::{RequestBatchOptions, SharesGeneratorOptions};
+
 use super::aws::AwsClient;
 use components::{
     RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesGenerator, SharesUploader,
@@ -17,6 +19,64 @@ pub use typeset::ServiceClientError;
 mod components;
 mod options;
 mod typeset;
+
+pub struct ServiceClient2 {
+    aws_client: AwsClient,
+    request_batch: RequestBatchOptions,
+    shares_generator: SharesGeneratorOptions,
+}
+
+impl ServiceClient2 {
+    pub async fn new(
+        opts_aws: AwsOptions,
+        request_batch: RequestBatchOptions,
+        shares_generator: SharesGeneratorOptions,
+    ) -> Result<Self, ServiceClientError> {
+        let aws_client = AwsClient::async_from(opts_aws).await;
+
+        // todo: better validation code
+        for result in [
+            request_batch.validate_iris_pairs(),
+            request_batch.find_duplicate_label().map_or(Ok(()), |dup| {
+                Err(format!("contains duplicate label '{}'", dup))
+            }),
+            request_batch.validate_parents(),
+            request_batch.validate_batch_ordering(),
+        ] {
+            if let Err(msg) = result {
+                return Err(ServiceClientError::InvalidOptions(format!(
+                    "RequestBatchOptions::Complex {}",
+                    msg
+                )));
+            }
+        }
+
+        Ok(Self {
+            aws_client,
+            request_batch,
+            shares_generator,
+        })
+    }
+
+    pub async fn exec(mut self) {
+        self.init().await.expect("init failed");
+        todo!()
+    }
+
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
+        self.aws_client
+            .set_public_keyset()
+            .await
+            .map_err(ServiceClientError::AwsServiceError)?;
+
+        self.aws_client
+            .sqs_purge_response_queue()
+            .await
+            .map_err(ServiceClientError::AwsServiceError)?;
+
+        Ok(())
+    }
+}
 
 /// A utility for enqueuing system requests & correlating with system responses.
 pub struct ServiceClient<R: Rng + CryptoRng + SeedableRng + Send> {
