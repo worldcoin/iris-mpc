@@ -39,7 +39,7 @@ env:
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_HN\SW_URL
         name: application
 
   - name: SMPC__MAX_DB_SIZE
@@ -109,7 +109,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "true"
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "ampc-hnsw-db-exporter-store-node-0-stage--eun1-az3--x-s3"
