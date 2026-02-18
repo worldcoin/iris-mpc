@@ -125,7 +125,7 @@ async fn aggregate_results(
             match_lists[i_request].push(IntraMatch {
                 other_request_i: earlier_request,
                 is_match: [left, right],
-            })
+            });
         }
     }
 
