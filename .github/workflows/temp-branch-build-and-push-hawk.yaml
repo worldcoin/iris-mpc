@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "dev"
-      - "fix/split-persistence-transactions"
     paths-ignore:
       - "deploy/**"
 
