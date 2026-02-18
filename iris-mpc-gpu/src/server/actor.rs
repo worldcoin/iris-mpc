@@ -1015,7 +1015,8 @@ impl ServerActor {
             .flatten()
             .copied()
             .chain(batch.reauth_target_indices.values().copied())
-            .unique()
+            .sorted()
+            .dedup()
             .collect_vec();
 
         for or_idx in or_indices_and_reauth {
