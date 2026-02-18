@@ -39,7 +39,7 @@ env:
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HN\SW_URL
+        key: DATABASE_AURORA_HNSW_URL
         name: application
 
   - name: SMPC__MAX_DB_SIZE
