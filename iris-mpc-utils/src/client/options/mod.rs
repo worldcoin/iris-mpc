@@ -4,7 +4,7 @@ mod types;
 mod validator;
 
 pub use types::AwsOptions;
-pub(crate) use types::{
+pub use types::{
     Parent, RequestBatchOptions, RequestOptions, RequestPayloadOptions, SharesGeneratorOptions,
 };
 
@@ -15,10 +15,10 @@ pub struct ServiceClientOptions {
     prestate: Option<String>,
 
     // Associated request batch generation configuration.
-    request_batch: RequestBatchOptions,
+    pub request_batch: RequestBatchOptions,
 
     // Associated Iris shares generator configuration.
-    shares_generator: SharesGeneratorOptions,
+    pub shares_generator: SharesGeneratorOptions,
 }
 
 impl ServiceClientOptions {

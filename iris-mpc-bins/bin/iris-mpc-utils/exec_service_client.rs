@@ -3,10 +3,10 @@ use std::{fmt, path::PathBuf};
 use async_from::{self, AsyncFrom};
 use clap::Parser;
 use eyre::Result;
-use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
+use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_utils::{
-    client::{AwsOptions, ServiceClient, ServiceClientOptions},
+    client::{AwsOptions, ServiceClient, ServiceClient2, ServiceClientOptions},
     fsys::reader::read_toml,
 };
 
@@ -17,13 +17,19 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    let mut client = ServiceClient::<StdRng>::async_from(options.clone()).await;
-    if let Err(e) = client.init().await {
-        tracing::error!("Initialisation failure: {}", e);
-        return Err(e.into());
+    let mut opts = ServiceClientOptions::from(&options);
+    if let Some(ref iris_path) = options.path_to_iris_shares {
+        opts.set_iris_shares_path(iris_path);
     }
 
-    client.exec().await?;
+    let client = ServiceClient2::new(
+        AwsOptions::from(&options),
+        opts.request_batch,
+        opts.shares_generator,
+    )
+    .await?;
+
+    client.exec().await;
 
     Ok(())
 }

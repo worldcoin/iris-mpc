@@ -37,19 +37,21 @@ impl ServiceClient2 {
         let shares_generator = SharesGenerator::<StdRng>::from_options2(shares_generator);
 
         // todo: better validation code
-        for result in [
-            request_batch.validate_iris_pairs(),
-            request_batch.find_duplicate_label().map_or(Ok(()), |dup| {
-                Err(format!("contains duplicate label '{}'", dup))
-            }),
-            request_batch.validate_parents(),
-            request_batch.validate_batch_ordering(),
-        ] {
-            if let Err(msg) = result {
-                return Err(ServiceClientError::InvalidOptions(format!(
-                    "RequestBatchOptions::Complex {}",
-                    msg
-                )));
+        if matches!(request_batch, RequestBatchOptions::Complex { .. }) {
+            for result in [
+                request_batch.validate_iris_pairs(),
+                request_batch.find_duplicate_label().map_or(Ok(()), |dup| {
+                    Err(format!("contains duplicate label '{}'", dup))
+                }),
+                request_batch.validate_parents(),
+                request_batch.validate_batch_ordering(),
+            ] {
+                if let Err(msg) = result {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::Complex {}",
+                        msg
+                    )));
+                }
             }
         }
 
@@ -73,7 +75,10 @@ impl ServiceClient2 {
         let mut outstanding_requests: HashMap<Uuid, typeset::RequestInfo> = HashMap::new();
 
         for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
-            // For each item in the batch.
+            // Phase 1: Gather all requests and pre-generate shares.
+            let mut batch_requests: Vec<typeset::Request> = Vec::new();
+            let mut batch_shares = Vec::new();
+
             for (item_idx, opts) in batch.iter().enumerate() {
                 // Look up the iris serial id for uniquess_labels for anything in the batch that
                 // needs it; if not there, drop the item and emit a warning.
@@ -143,28 +148,52 @@ impl ServiceClient2 {
                     }
                 };
 
-                // Upload shares for request types that require them (all except IdentityDeletion).
-                if let Some((op_uuid, iris_pair)) = request.get_shares_info() {
+                // Pre-generate shares for request types that require them.
+                let shares_info = if let Some((op_uuid, iris_pair)) = request.get_shares_info() {
                     let shares = self.shares_generator.generate(iris_pair.as_ref());
-                    self.aws_client
-                        .s3_upload_iris_shares(&op_uuid, &shares)
-                        .await
-                        .expect("S3 shares upload failed");
-                }
+                    Some((op_uuid, shares))
+                } else {
+                    None
+                };
 
-                // Send a request and add it to outstanding_requests. If it is a uniqueness
-                // request, add the label and uuid to uuid_to_labels.
+                batch_requests.push(request);
+                batch_shares.push(shares_info);
+            }
+
+            // Phase 2: Upload all shares in parallel.
+            futures::future::join_all(
+                batch_shares
+                    .iter()
+                    .filter_map(|opt| opt.as_ref())
+                    .map(|(op_uuid, shares)| {
+                        self.aws_client.s3_upload_iris_shares(op_uuid, shares)
+                    }),
+            )
+            .await
+            .into_iter()
+            .for_each(|r| {
+                r.expect("S3 shares upload failed");
+            });
+
+            // Phase 3: Wait before publishing to allow shares to propagate.
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+            // Phase 4: Publish all requests in parallel.
+            futures::future::join_all(batch_requests.iter().map(|request| {
                 self.aws_client
-                    .sns_publish_json(SnsMessageInfo::from(&request))
-                    .await
-                    .expect("SNS publish failed");
+                    .sns_publish_json(SnsMessageInfo::from(request))
+            }))
+            .await
+            .into_iter()
+            .for_each(|r| r.expect("SNS publish failed"));
 
-                // Track in outstanding_requests keyed by correlation UUID. IdentityDeletion
-                // correlates by serial_id rather than UUID, so it is not tracked here.
-                let opt_tracking_uuid: Option<Uuid> = match &request {
+            // Phase 5: Track in outstanding_requests keyed by correlation UUID. IdentityDeletion
+            // correlates by serial_id rather than UUID, so it is not tracked here.
+            for request in &batch_requests {
+                let opt_tracking_uuid: Option<Uuid> = match request {
                     typeset::Request::Uniqueness { signup_id, .. } => {
-                        if let Some(label) = opts.label() {
-                            uuid_to_labels.insert(*signup_id, label);
+                        if let Some(label) = request.info().label() {
+                            uuid_to_labels.insert(*signup_id, label.clone());
                         }
                         Some(*signup_id)
                     }
@@ -249,6 +278,8 @@ impl ServiceClient2 {
                         .expect("SQS message purge failed");
                 }
             }
+
+            tracing::info!("Client finished. Responses to non-deletion requests have been received")
         }
     }
 
