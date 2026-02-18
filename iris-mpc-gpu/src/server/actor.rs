@@ -1017,6 +1017,7 @@ impl ServerActor {
             .copied()
             .chain(batch.reauth_target_indices.values().copied())
             .unique()
+            .sorted()
             .collect_vec();
 
         for or_idx in or_indices_and_reauth {
@@ -1035,7 +1036,6 @@ impl ServerActor {
                 partial_matches_side1[device_idx as usize].push(db_idx);
             }
         }
-        dbg!(&partial_matches_side1);
 
         // clear the db_match_list since we used it for prefiltering
         for dst in [
