@@ -188,7 +188,7 @@ impl AwsClient {
             .into_iter()
             .map(|msg| {
                 let msg = SqsMessageInfo::from(&msg);
-                tracing::debug!("AWS-SQS: received message -> {}", msg);
+                tracing::info!("AWS-SQS: received message -> {}", msg);
                 msg
             });
 

@@ -133,6 +133,8 @@ impl ResponseDequeuer {
             if let ResponsePayload::IdentityDeletion(result) = &response {
                 if result.success {
                     confirmed.push(result.serial_id);
+                } else {
+                    tracing::warn!("Deletion failed: {:#?}", result);
                 }
             }
             self.aws_client
