@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/reauth_anon_stats"
+      - "fix/split-persistence-transactions"
 
     paths-ignore:
       - "deploy/**"
