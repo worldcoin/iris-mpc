@@ -1429,10 +1429,10 @@ impl HawkMutation {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
         // Group updates by side: side -> (key -> neighbors)
         // Key: (serial_id, version_id, layer)
-        let mut updates_by_side: BothEyes<Vec<(i64, i16, i16, Vec<_>)>> = Default::default();
+        let mut updates_by_side: BothEyes<BTreeMap<(i64, i16, i16), Vec<_>>> = Default::default();
 
         for mutation in self.0 {
-            for (side, updates_vec, plan_opt) in
+            for (side, updates_map, plan_opt) in
                 izip!(STORE_IDS, updates_by_side.iter_mut(), mutation.plans)
             {
                 if let Some(plan) = plan_opt {
@@ -1450,23 +1450,16 @@ impl HawkMutation {
 
                     // Buffer link updates by side
                     for ((inserted_vector, lc), neighbors) in plan.updates {
-                        let entry = (
+                        let key = (
                             inserted_vector.serial_id() as i64,
                             inserted_vector.version_id(),
                             lc as i16,
-                            neighbors,
                         );
-                        updates_vec.push(entry);
+                        // Deduplicate: If multiple updates for the same node exist, the last one wins
+                        updates_map.insert(key, neighbors);
                     }
                 }
             }
-        }
-
-        // Deduplicate: If multiple updates for the same node exist, the last one wins
-        for updates_vec in updates_by_side.iter_mut() {
-            updates_vec.reverse();
-            updates_vec.sort_by_key(|(sid, vid, lc, _)| (*sid, *vid, *lc));
-            updates_vec.dedup_by_key(|(sid, vid, lc, _)| (*sid, *vid, *lc));
         }
 
         // Execute one batch per side
