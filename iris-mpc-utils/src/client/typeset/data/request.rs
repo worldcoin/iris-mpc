@@ -185,65 +185,6 @@ impl Request {
         self.info().label()
     }
 
-    /// For a Complete Uniqueness request with a label, returns (label, serial_id) for
-    /// cross-batch parent resolution.
-    pub fn uniqueness_label_resolution(&self) -> Option<(String, IrisSerialId)> {
-        if let Self::Uniqueness { info, .. } = self {
-            if !matches!(info.status(), RequestStatus::Complete) {
-                return None;
-            }
-            let label = info.label().as_ref()?.clone();
-            if let Some(ResponsePayload::Uniqueness(result)) = info.first_response() {
-                let serial_id = result.serial_id.or_else(|| {
-                    result
-                        .matched_serial_ids
-                        .as_ref()
-                        .and_then(|m| m.first().copied())
-                })?;
-                return Some((label, serial_id));
-            }
-        }
-        None
-    }
-
-    /// For a Complete request, returns the serial ID and whether it was created (true)
-    /// or deleted (false). Used to track live serial IDs for cleanup.
-    pub fn serial_id_tracking(&self) -> Option<(IrisSerialId, bool)> {
-        match self {
-            Self::Uniqueness { info, .. } => {
-                if !matches!(info.status(), RequestStatus::Complete) {
-                    return None;
-                }
-                if let Some(ResponsePayload::Uniqueness(result)) = info.first_response() {
-                    let serial_id = result.serial_id.or_else(|| {
-                        result
-                            .matched_serial_ids
-                            .as_ref()
-                            .and_then(|m| m.first().copied())
-                    })?;
-                    Some((serial_id, true))
-                } else {
-                    None
-                }
-            }
-            Self::IdentityDeletion { info, .. } => {
-                if !matches!(info.status(), RequestStatus::Complete) {
-                    return None;
-                }
-                if let Some(ResponsePayload::IdentityDeletion(result)) = info.first_response() {
-                    if result.success {
-                        Some((result.serial_id, false))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// Records a node response. Returns true if all parties have now responded (request is Complete).
     pub fn record_response(&mut self, response: &ResponsePayload) -> bool {
         tracing::info!("{} :: response -> Node-{}", &self, response.node_id());

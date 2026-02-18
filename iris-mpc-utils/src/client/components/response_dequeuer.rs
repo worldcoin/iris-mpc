@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde_json;
+use std::collections::{HashMap, HashSet};
 
 use iris_mpc_common::{
     helpers::smpc_request::{
@@ -10,7 +11,7 @@ use iris_mpc_common::{
 };
 
 use super::super::typeset::{
-    Initialize, ProcessRequestBatch, Request, RequestBatch, ResponsePayload, ServiceClientError,
+    Initialize, Request, RequestBatch, ResponsePayload, ServiceClientError,
 };
 use crate::{
     aws::{types::SqsMessageInfo, AwsClient},
@@ -33,9 +34,17 @@ impl Initialize for ResponseDequeuer {
     }
 }
 
-#[async_trait]
-impl ProcessRequestBatch for ResponseDequeuer {
-    async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
+impl ResponseDequeuer {
+    pub fn new(aws_client: AwsClient) -> Self {
+        Self { aws_client }
+    }
+
+    pub(crate) async fn process_batch(
+        &mut self,
+        batch: &mut RequestBatch,
+        live_serial_ids: &mut HashSet<IrisSerialId>,
+        label_resolutions: &mut HashMap<String, IrisSerialId>,
+    ) -> Result<(), ServiceClientError> {
         while batch.has_enqueued_items() {
             for sqs_msg in self
                 .aws_client
@@ -52,11 +61,25 @@ impl ProcessRequestBatch for ResponseDequeuer {
 
                     if is_now_complete {
                         // If a Uniqueness request is now complete, activate any intra-batch
-                        // pending children that were waiting for this parent.
+                        // pending children and update tracking maps.
                         if let Some((parent_key, serial_id)) =
                             extract_uniqueness_activation_info(batch, idx, &response)
                         {
                             batch.activate_pending(&parent_key, serial_id);
+                            live_serial_ids.insert(serial_id);
+
+                            // Record label resolution for cross-batch parent lookups.
+                            if let Request::Uniqueness { info, .. } = &batch.requests()[idx] {
+                                if let Some(label) = info.label() {
+                                    label_resolutions.insert(label.clone(), serial_id);
+                                }
+                            }
+                        }
+
+                        if let ResponsePayload::IdentityDeletion(result) = &response {
+                            if result.success {
+                                live_serial_ids.remove(&result.serial_id);
+                            }
                         }
                     }
 
@@ -73,12 +96,6 @@ impl ProcessRequestBatch for ResponseDequeuer {
         }
 
         Ok(())
-    }
-}
-
-impl ResponseDequeuer {
-    pub fn new(aws_client: AwsClient) -> Self {
-        Self { aws_client }
     }
 
     /// Receives deletion responses from SQS during cleanup phase.
@@ -116,7 +133,10 @@ fn extract_uniqueness_activation_info(
     idx: usize,
     response: &ResponsePayload,
 ) -> Option<(String, IrisSerialId)> {
-    if let Request::Uniqueness { signup_id, info, .. } = &batch.requests()[idx] {
+    if let Request::Uniqueness {
+        signup_id, info, ..
+    } = &batch.requests()[idx]
+    {
         let serial_id = if let ResponsePayload::Uniqueness(result) = response {
             result.serial_id.or_else(|| {
                 result

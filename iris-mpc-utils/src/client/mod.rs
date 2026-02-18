@@ -114,23 +114,9 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
             // Enqueue and dequeue until all enqueueable and enqueued items are processed.
             while batch.is_enqueueable() || batch.has_enqueued_items() {
                 self.request_enqueuer.process_batch(&mut batch).await?;
-                self.response_dequeuer.process_batch(&mut batch).await?;
-            }
-
-            // Collect label resolutions from completed Uniqueness requests for future batches.
-            for request in batch.requests() {
-                if let Some((label, serial_id)) = request.uniqueness_label_resolution() {
-                    label_resolutions.insert(label, serial_id);
-                }
-
-                // Track serial IDs: add for uniqueness enrollments, remove for deletions.
-                if let Some((serial_id, created)) = request.serial_id_tracking() {
-                    if created {
-                        live_serial_ids.insert(serial_id);
-                    } else {
-                        live_serial_ids.remove(&serial_id);
-                    }
-                }
+                self.response_dequeuer
+                    .process_batch(&mut batch, live_serial_ids, &mut label_resolutions)
+                    .await?;
             }
         }
 
@@ -157,6 +143,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
                         Ok(confirmed) => {
                             for serial_id in confirmed {
                                 pending.remove(&serial_id);
+                                println!("Cleaned up id {:?}", serial_id);
                             }
                         }
                         Err(e) => {
