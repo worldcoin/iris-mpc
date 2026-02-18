@@ -163,6 +163,7 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextVectorRef>) -> GraphMe
     for layer in layers {
         let links = layer.get_links_map();
         let mut shared_layer = Layer::new();
+        #[allow(clippy::iter_over_hash_type, reason = "TODO")]
         for (source_v, queue) in links {
             let mut shared_queue = vec![];
             for target_v in queue.iter() {

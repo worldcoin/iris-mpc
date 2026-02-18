@@ -658,6 +658,7 @@ mod tests {
             let links = layer.get_links_map();
             let new_links = new_layer.get_links_map();
 
+            #[allow(clippy::iter_over_hash_type, reason = "TODO")]
             for (point_id, queue) in links.iter() {
                 let new_point_id = point_ids_map[point_id];
                 let new_queue_vec = new_links[&new_point_id].to_vec();

@@ -431,6 +431,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         let mut links_blobs = Vec::with_capacity(updates.len());
         let graph_id = self.graph_id();
 
+        #[allow(clippy::iter_over_hash_type, reason = "TODO")]
         for ((sid, vid, layer), neighbors) in updates {
             serial_ids.push(sid);
             version_ids.push(vid as i32);

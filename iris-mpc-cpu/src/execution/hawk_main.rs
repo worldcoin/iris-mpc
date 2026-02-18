@@ -1463,6 +1463,7 @@ impl HawkMutation {
         }
 
         // Execute one batch per side
+        #[allow(clippy::iter_over_hash_type, reason = "TODO")]
         for (side, batch_updates) in updates_by_side {
             if !batch_updates.is_empty() {
                 graph_tx

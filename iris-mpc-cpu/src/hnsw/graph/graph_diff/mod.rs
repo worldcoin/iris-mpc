@@ -44,6 +44,7 @@ where
 
     for (i, (lhs_layer, rhs_layer)) in lhs.layers.iter().zip(rhs.layers.iter()).enumerate() {
         differ.start_layer(i);
+        #[allow(clippy::iter_over_hash_type, reason = "TODO")]
         for (node, lhs_nbhd) in lhs_layer.links.iter() {
             if let Some(rhs_nbhd) = rhs_layer.links.get(node) {
                 differ.diff_neighborhood(i, node, lhs_nbhd, rhs_nbhd);

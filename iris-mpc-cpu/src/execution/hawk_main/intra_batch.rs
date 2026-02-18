@@ -119,6 +119,7 @@ async fn aggregate_results(
     let mut match_lists = vec![Vec::new(); n_requests];
 
     // Report pairs with a left OR right match.
+    #[allow(clippy::iter_over_hash_type, reason = "TODO")]
     for ((i_request, earlier_request), [left, right]) in join {
         if left || right {
             // This request matches a request that came before it in the batch.

@@ -98,6 +98,7 @@ impl Step1 {
         step1.luc_ids = luc_ids;
         step1.request_type = request_type;
 
+        #[allow(clippy::iter_over_hash_type, reason = "TODO")]
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
                 [true, true] => step1.inner_join.push((vector_id, [true, true])),
