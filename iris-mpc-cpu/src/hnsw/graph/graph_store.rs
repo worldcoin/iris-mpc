@@ -11,7 +11,7 @@ use futures::StreamExt;
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{error::BoxDynError, types::Json, PgConnection, Postgres, Row, Transaction};
-use std::{collections::HashMap, marker::PhantomData, ops::DerefMut, str::FromStr};
+use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 use tokio::sync::mpsc;
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
@@ -423,7 +423,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
 
     pub async fn batch_set_links(
         &mut self,
-        updates: HashMap<(i64, i16, i16), Vec<V::VectorRef>>,
+        updates: Vec<(i64, i16, i16, Vec<V::VectorRef>)>,
     ) -> Result<()> {
         let mut serial_ids = Vec::with_capacity(updates.len());
         let mut version_ids = Vec::with_capacity(updates.len());
@@ -431,8 +431,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         let mut links_blobs = Vec::with_capacity(updates.len());
         let graph_id = self.graph_id();
 
-        #[allow(clippy::iter_over_hash_type, reason = "TODO")]
-        for ((sid, vid, layer), neighbors) in updates {
+        for (sid, vid, layer, neighbors) in updates {
             serial_ids.push(sid);
             version_ids.push(vid as i32);
             layers.push(layer);

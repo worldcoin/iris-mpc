@@ -18,7 +18,7 @@ use crate::{
         plaintext_store::{PlaintextStore, PlaintextVectorRef},
         TEST_DISTANCE_FN,
     },
-    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
+    hnsw::{GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     shares::{RingElement, Share},
@@ -151,29 +151,10 @@ pub async fn eval_vector_distance(
 
 /// Converts a plaintext graph store to a secret-shared graph store.
 ///
-/// If recompute_distance is true, distances are recomputed from scratch via
-/// SMPC. Otherwise, distances are naively converted from plaintext ones
-/// via trivial shares,
-/// i.e., the sharing of a value x is a triple (x, 0, 0).
+/// Previously this involved conversion of cached distances, but since distances
+/// are not currently cached this operation is a clone plus type cast.
 async fn graph_from_plain(graph_store: &GraphMem<PlaintextVectorRef>) -> GraphMem<Aby3VectorRef> {
-    let ep = graph_store.get_first_entry_point().await;
-    let layers = graph_store.get_layers();
-
-    let mut shared_layers = vec![];
-    for layer in layers {
-        let links = layer.get_links_map();
-        let mut shared_layer = Layer::new();
-        #[allow(clippy::iter_over_hash_type, reason = "TODO")]
-        for (source_v, queue) in links {
-            let mut shared_queue = vec![];
-            for target_v in queue.iter() {
-                shared_queue.push(*target_v);
-            }
-            shared_layer.set_links(*source_v, shared_queue);
-        }
-        shared_layers.push(shared_layer);
-    }
-    GraphMem::from_precomputed(ep.into_iter().collect::<Vec<_>>(), shared_layers)
+    graph_store.clone()
 }
 
 /// Generates 3 pairs of vector stores and graphs from a plaintext

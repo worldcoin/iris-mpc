@@ -152,7 +152,10 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     // Initialize existing vector stores
     let mut left_store = PlaintextStore::new();
     let mut right_store = PlaintextStore::new();
-    #[allow(clippy::iter_over_hash_type, reason = "TODO")]
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "HashMap keys are primary key for insertion, so result is independent of insertion ordering."
+    )]
     for (serial_id, (version, left_iris, right_iris)) in state.src_db.irises.iter() {
         let vector_id = IrisVectorId::new(*serial_id, *version);
         left_store
