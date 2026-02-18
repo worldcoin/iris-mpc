@@ -78,13 +78,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
             }
         };
 
-        // Cleanup phase.
-        if !live_serial_ids.is_empty() {
-            self.cleanup(&mut live_serial_ids).await;
-        } else {
-            println!("Cleanup complete. All deletions confirmed.");
-        }
-
+        self.cleanup(live_serial_ids).await;
         Ok(())
     }
 
@@ -123,43 +117,17 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
         Ok(())
     }
 
-    async fn cleanup(&mut self, live_serial_ids: &mut HashSet<IrisSerialId>) {
+    async fn cleanup(&self, live_serial_ids: HashSet<IrisSerialId>) {
         println!("Cleaning up {} serial IDs", live_serial_ids.len());
 
         // Send deletion requests for all live serial IDs.
-        for &serial_id in live_serial_ids.iter() {
+        for serial_id in live_serial_ids.into_iter() {
             if let Err(e) = self.request_enqueuer.publish_deletion(serial_id).await {
                 eprintln!("Failed to send deletion for serial_id {}: {}", serial_id, e);
             }
         }
 
-        // Collect responses, with second Ctrl+C as escape hatch.
-        let mut pending = live_serial_ids.clone();
-        let response_dequeuer = &self.response_dequeuer;
-        tokio::select! {
-            _ = async {
-                while !pending.is_empty() {
-                    match response_dequeuer.receive_deletion_responses().await {
-                        Ok(confirmed) => {
-                            for serial_id in confirmed {
-                                pending.remove(&serial_id);
-                                println!("Cleaned up id {:?}", serial_id);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Error receiving deletion responses: {}", e);
-                        }
-                    }
-                }
-            } => {
-                println!("Cleanup complete. All deletions confirmed.");
-            }
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!(
-                    "\nSecond Ctrl+C received. {} serial IDs were NOT confirmed deleted",
-                    pending.len()
-                );
-            }
-        }
+        // iris-mpc-hawk will not send responses for a batch of just deletions
+        println!("Cleanup complete. Deletions have been submitted.");
     }
 }

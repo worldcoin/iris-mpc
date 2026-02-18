@@ -114,7 +114,7 @@ impl AwsClient {
         &self,
         sns_msg_info: SnsMessageInfo,
     ) -> Result<(), AwsClientError> {
-        tracing::debug!("AWS-SNS: publishing message -> {}", sns_msg_info);
+        tracing::info!("AWS-SNS: publishing message -> {}", sns_msg_info);
         self.sns
             .publish()
             .topic_arn(self.config().sns_request_topic_arn())

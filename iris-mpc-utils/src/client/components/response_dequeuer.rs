@@ -116,34 +116,6 @@ impl ResponseDequeuer {
 
         Ok(())
     }
-
-    /// Receives deletion responses from SQS during cleanup phase.
-    /// Returns the serial IDs of confirmed deletions and purges the corresponding messages.
-    pub(crate) async fn receive_deletion_responses(
-        &self,
-    ) -> Result<Vec<IrisSerialId>, ServiceClientError> {
-        let mut confirmed = Vec::new();
-        for sqs_msg in self
-            .aws_client
-            .sqs_receive_messages(Some(N_PARTIES))
-            .await
-            .map_err(ServiceClientError::AwsServiceError)?
-        {
-            let response = ResponsePayload::from(&sqs_msg);
-            if let ResponsePayload::IdentityDeletion(result) = &response {
-                if result.success {
-                    confirmed.push(result.serial_id);
-                } else {
-                    tracing::warn!("Deletion failed: {:#?}", result);
-                }
-            }
-            self.aws_client
-                .sqs_purge_response_queue_message(&sqs_msg)
-                .await
-                .map_err(ServiceClientError::AwsServiceError)?;
-        }
-        Ok(confirmed)
-    }
 }
 
 /// Extracts the (parent_key, serial_id) needed to activate pending children when a Uniqueness
