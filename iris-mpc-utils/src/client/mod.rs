@@ -1,9 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_from::{self, AsyncFrom};
 use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_common::IrisSerialId;
+use uuid::Uuid;
 
 use crate::client::options::{RequestBatchOptions, SharesGeneratorOptions};
 
@@ -60,6 +61,25 @@ impl ServiceClient2 {
 
     pub async fn exec(mut self) {
         self.init().await.expect("init failed");
+
+        // need to track all the uniqueness requests sent, and their serial ids. also need to track which requests are dependent on a parent.
+        let mut uniquess_labels: HashMap<String, IrisSerialId> = HashMap::new();
+        let mut uuid_to_labels: HashMap<Uuid, String> = HashMap::new();
+        let mut outstanding_requests: HashMap<Uuid, typeset::RequestInfo> = HashMap::new();
+
+        for batch in self.request_batch.into_iter() {
+            // for each item in the batch
+
+            // look up the iris serial id for uniqueness_labels for anything in the batch that needs it if not there, drop the item i the batch and emit a warning
+
+            // send a request and add it to outstanding requests. if it is a uniqueness request, add the label and uuid to uuid_to_labels
+
+            // after doing this for everything in the batch, do a new loop, where you do the following:
+
+            // wait for responses, updating outstanding_requests. for uniqueness results, get the label from uuid_to_labels and then add the iris serial id to uniqueness_labels.
+            todo!();
+        }
+
         todo!()
     }
 
