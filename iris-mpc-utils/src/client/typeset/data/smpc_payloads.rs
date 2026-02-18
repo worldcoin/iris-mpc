@@ -7,7 +7,7 @@ use super::super::errors::ServiceClientError;
 /// Enumeration over request messages enqueued upon system ingress queue.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum RequestPayload {
+pub enum RequestPayload {
     IdentityDeletion(smpc_request::IdentityDeletionRequest),
     Reauthorization(smpc_request::ReAuthRequest),
     ResetCheck(smpc_request::ResetCheckRequest),
@@ -17,7 +17,7 @@ pub(crate) enum RequestPayload {
 
 /// Enumeration over response messages dequeued from system egress queue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) enum ResponsePayload {
+pub enum ResponsePayload {
     IdentityDeletion(smpc_response::IdentityDeletionResult),
     Reauthorization(smpc_response::ReAuthResult),
     ResetCheck(smpc_response::ResetCheckResult),
@@ -26,7 +26,7 @@ pub(crate) enum ResponsePayload {
 }
 
 impl ResponsePayload {
-    pub(super) fn node_id(&self) -> usize {
+    pub fn node_id(&self) -> usize {
         match self {
             Self::IdentityDeletion(result) => result.node_id,
             Self::Reauthorization(result) => result.node_id,
@@ -37,7 +37,7 @@ impl ResponsePayload {
     }
 
     /// Validates the response, returning an error if the response indicates failure.
-    pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+    pub fn validate(&self) -> Result<(), ServiceClientError> {
         let (has_error, error_reason) = match self {
             Self::IdentityDeletion(result) => (!result.success, None),
             Self::Reauthorization(result) => (

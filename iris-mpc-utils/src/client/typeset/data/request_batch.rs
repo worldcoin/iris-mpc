@@ -5,11 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 
-use super::{
-    IrisPairDescriptor, Request, RequestInfo, RequestStatus, ResponsePayload,
-    UniquenessRequestDescriptor,
-};
-use crate::client::options::{RequestOptions, RequestPayloadOptions};
+use super::{IrisPairDescriptor, Request, RequestInfo, RequestStatus, ResponsePayload};
+use crate::client::options::{Parent, RequestOptions, RequestPayloadOptions};
 
 /// Typed representation of a batch request kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,14 +40,56 @@ impl BatchKind {
     }
 }
 
+/// A child request waiting for its parent's serial ID to be resolved.
+#[derive(Debug, Clone)]
+pub struct PendingItem {
+    /// The key used to match against parent resolution (label string or signup_id string).
+    parent_key: String,
+    /// Pre-generated operation UUID (used as the S3 key for share upload).
+    op_id: uuid::Uuid,
+    /// Original request options, used to build the Request on activation.
+    opts: RequestOptions,
+}
+
+impl PendingItem {
+    pub(crate) fn new(parent_key: String, opts: RequestOptions) -> Self {
+        Self {
+            parent_key,
+            op_id: uuid::Uuid::new_v4(),
+            opts,
+        }
+    }
+
+    /// Returns (op_id, optional iris_pair) for share upload.
+    pub(crate) fn shares_info(&self) -> (uuid::Uuid, Option<&IrisPairDescriptor>) {
+        (self.op_id, self.opts.iris_pair())
+    }
+
+    pub(crate) fn op_id(&self) -> uuid::Uuid {
+        self.op_id
+    }
+
+    pub(crate) fn label(&self) -> Option<String> {
+        self.opts.label()
+    }
+
+    pub(crate) fn payload(&self) -> &RequestPayloadOptions {
+        self.opts.payload()
+    }
+}
+
 /// A data structure representing a batch of requests dispatched for system processing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestBatch {
     /// Ordinal batch identifier to distinguish batches.
     batch_idx: usize,
 
-    /// Requests in batch.
+    /// Active requests in batch.
     requests: Vec<Request>,
+
+    /// Requests waiting for their parent's serial ID to be resolved.
+    #[serde(skip)]
+    pending: Vec<PendingItem>,
 }
 
 impl RequestBatch {
@@ -66,29 +105,29 @@ impl RequestBatch {
         &mut self.requests
     }
 
+    pub(crate) fn pending(&self) -> &[PendingItem] {
+        &self.pending
+    }
+
     pub(crate) fn new(batch_idx: usize, requests: Vec<Request>) -> Self {
         Self {
             batch_idx,
             requests,
+            pending: vec![],
         }
     }
 
-    /// Maybe returns ordinal identifier of a correlated request.
+    /// Adds a pending item waiting for parent resolution.
+    pub(crate) fn push_pending(&mut self, item: PendingItem) {
+        self.pending.push(item);
+    }
+
+    /// Maybe returns ordinal identifier of a request matching the given response.
     pub(crate) fn get_idx_of_correlated(&self, response: &ResponsePayload) -> Option<usize> {
         self.requests
             .iter()
             .enumerate()
             .find(|(_, r)| r.is_correlation(response))
-            .map(|(idx, _)| idx)
-    }
-
-    /// Maybe returns ordinal identifier a correlated request's child.
-    pub(crate) fn get_idx_of_child(&self, idx_of_correlated: usize) -> Option<usize> {
-        let correlated = &self.requests[idx_of_correlated];
-        self.requests
-            .iter()
-            .enumerate()
-            .find(|(_, r)| r.is_child(correlated))
             .map(|(idx, _)| idx)
     }
 
@@ -108,32 +147,50 @@ impl RequestBatch {
             .collect()
     }
 
-    /// Resolves cross-batch parent dependencies using results from previously processed batches.
-    pub(crate) fn resolve_cross_batch_parents(
-        &mut self,
-        resolutions: &HashMap<uuid::Uuid, IrisSerialId>,
-    ) {
-        for request in self.requests_mut() {
-            let parent_desc = match request {
-                Request::IdentityDeletion {
-                    parent: parent_desc,
-                    ..
-                }
-                | Request::Reauthorization {
-                    parent: parent_desc,
-                    ..
-                }
-                | Request::ResetUpdate {
-                    parent: parent_desc,
-                    ..
-                } => parent_desc,
-                _ => continue,
-            };
-            if let UniquenessRequestDescriptor::SignupId(signup_id) = parent_desc {
-                if let Some(serial_id) = resolutions.get(signup_id) {
-                    *parent_desc = UniquenessRequestDescriptor::IrisSerialId(*serial_id);
-                }
+    /// Activates all pending items whose `parent_key` matches, resolving them to full Requests.
+    /// The new requests are added with `SharesUploaded` status (shares already uploaded at batch start).
+    pub(crate) fn activate_pending(&mut self, parent_key: &str, serial_id: IrisSerialId) {
+        let mut to_activate = Vec::new();
+        self.pending.retain(|item| {
+            if item.parent_key == parent_key {
+                to_activate.push(item.clone());
+                false
+            } else {
+                true
             }
+        });
+
+        for item in to_activate {
+            let batch_idx = self.batch_idx;
+            let batch_item_idx = self.next_item_idx();
+            let mut request = Request::from_pending(batch_idx, batch_item_idx, &item, serial_id);
+            request.set_status(RequestStatus::SharesUploaded);
+            self.requests.push(request);
+        }
+    }
+
+    /// Resolves all pending items whose `parent_key` is in the given resolutions map.
+    /// Used at batch start for cross-batch Complex mode parents.
+    pub(crate) fn activate_cross_batch_pending(
+        &mut self,
+        resolutions: &HashMap<String, IrisSerialId>,
+    ) {
+        let mut to_activate: Vec<(PendingItem, IrisSerialId)> = Vec::new();
+        self.pending.retain(|item| {
+            if let Some(&serial_id) = resolutions.get(&item.parent_key) {
+                to_activate.push((item.clone(), serial_id));
+                false
+            } else {
+                true
+            }
+        });
+
+        for (item, serial_id) in to_activate {
+            let batch_idx = self.batch_idx;
+            let batch_item_idx = self.next_item_idx();
+            let mut request = Request::from_pending(batch_idx, batch_item_idx, &item, serial_id);
+            request.set_status(RequestStatus::SharesUploaded);
+            self.requests.push(request);
         }
     }
 
@@ -144,18 +201,17 @@ impl RequestBatch {
 
     /// Returns next batch item ordinal identifier.
     pub(super) fn next_item_idx(&self) -> usize {
-        &self.requests().len() + 1
+        self.requests().len() + 1
     }
 
     /// Extends requests collection with a new IdentityDeletion request.
     pub(crate) fn push_new_identity_deletion(
         &mut self,
-        parent: UniquenessRequestDescriptor,
+        parent: IrisSerialId,
         label: Option<String>,
-        label_of_parent: Option<String>,
     ) {
         self.push_request(Request::IdentityDeletion {
-            info: RequestInfo::new(self, label, label_of_parent),
+            info: RequestInfo::new(self, label),
             parent,
         });
     }
@@ -163,13 +219,12 @@ impl RequestBatch {
     /// Extends requests collection with a new Reauthorization request.
     pub(crate) fn push_new_reauthorization(
         &mut self,
-        parent: UniquenessRequestDescriptor,
+        parent: IrisSerialId,
         iris_pair: Option<IrisPairDescriptor>,
         label: Option<String>,
-        label_of_parent: Option<String>,
     ) {
         self.push_request(Request::Reauthorization {
-            info: RequestInfo::new(self, label, label_of_parent),
+            info: RequestInfo::new(self, label),
             iris_pair,
             parent,
             reauth_id: uuid::Uuid::new_v4(),
@@ -183,7 +238,7 @@ impl RequestBatch {
         label: Option<String>,
     ) {
         self.push_request(Request::ResetCheck {
-            info: RequestInfo::new(self, label, None),
+            info: RequestInfo::new(self, label),
             iris_pair,
             reset_id: uuid::Uuid::new_v4(),
         });
@@ -192,20 +247,19 @@ impl RequestBatch {
     /// Extends requests collection with a new ResetUpdate request.
     pub(crate) fn push_new_reset_update(
         &mut self,
-        parent: UniquenessRequestDescriptor,
+        parent: IrisSerialId,
         iris_pair: Option<IrisPairDescriptor>,
         label: Option<String>,
-        label_of_parent: Option<String>,
     ) {
         self.push_request(Request::ResetUpdate {
-            info: RequestInfo::new(self, label, label_of_parent),
+            info: RequestInfo::new(self, label),
             iris_pair,
             parent,
             reset_id: uuid::Uuid::new_v4(),
         });
     }
 
-    /// Extends requests collection with a new Uniqueness request.
+    /// Extends requests collection with a new Uniqueness request, returning the signup_id.
     pub(crate) fn push_new_uniqueness(
         &mut self,
         iris_pair: Option<IrisPairDescriptor>,
@@ -213,7 +267,7 @@ impl RequestBatch {
     ) -> uuid::Uuid {
         let signup_id = uuid::Uuid::new_v4();
         self.push_request(Request::Uniqueness {
-            info: RequestInfo::new(self, label, None),
+            info: RequestInfo::new(self, label),
             iris_pair,
             signup_id,
         });
@@ -263,37 +317,54 @@ impl RequestBatchSet {
                 let mut batch = RequestBatch::new(batch_idx, vec![]);
                 for opts_request in opts_batch {
                     match opts_request.payload() {
-                        RequestPayloadOptions::IdentityDeletion { parent } => {
-                            batch.push_new_identity_deletion(
-                                UniquenessRequestDescriptor::from_label(parent),
-                                opts_request.label(),
-                                Some(parent.clone()),
-                            );
-                        }
+                        RequestPayloadOptions::IdentityDeletion { parent } => match parent {
+                            Parent::Id(serial_id) => {
+                                batch.push_new_identity_deletion(*serial_id, opts_request.label());
+                            }
+                            Parent::Label(label) => {
+                                batch.push_pending(PendingItem::new(
+                                    label.clone(),
+                                    opts_request.clone(),
+                                ));
+                            }
+                        },
                         RequestPayloadOptions::Reauthorisation { iris_pair, parent } => {
-                            batch.push_new_reauthorization(
-                                UniquenessRequestDescriptor::from_label(parent),
-                                Some(*iris_pair),
-                                opts_request.label(),
-                                Some(parent.clone()),
-                            );
+                            match parent {
+                                Parent::Id(serial_id) => {
+                                    batch.push_new_reauthorization(
+                                        *serial_id,
+                                        *iris_pair,
+                                        opts_request.label(),
+                                    );
+                                }
+                                Parent::Label(label) => {
+                                    batch.push_pending(PendingItem::new(
+                                        label.clone(),
+                                        opts_request.clone(),
+                                    ));
+                                }
+                            }
                         }
                         RequestPayloadOptions::ResetCheck { iris_pair } => {
-                            batch.push_new_reset_check(Some(*iris_pair), opts_request.label());
+                            batch.push_new_reset_check(*iris_pair, opts_request.label());
                         }
-                        RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
-                            batch.push_new_reset_update(
-                                UniquenessRequestDescriptor::from_label(parent),
-                                Some(*iris_pair),
-                                opts_request.label(),
-                                Some(parent.clone()),
-                            );
-                        }
+                        RequestPayloadOptions::ResetUpdate { iris_pair, parent } => match parent {
+                            Parent::Id(serial_id) => {
+                                batch.push_new_reset_update(
+                                    *serial_id,
+                                    *iris_pair,
+                                    opts_request.label(),
+                                );
+                            }
+                            Parent::Label(label) => {
+                                batch.push_pending(PendingItem::new(
+                                    label.clone(),
+                                    opts_request.clone(),
+                                ));
+                            }
+                        },
                         RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
-                            batch.push_new_uniqueness(
-                                Some(*iris_pair),
-                                opts_request.label().clone(),
-                            );
+                            batch.push_new_uniqueness(Some(*iris_pair), opts_request.label());
                         }
                     }
                 }
@@ -307,72 +378,5 @@ impl RequestBatchSet {
 
     pub(crate) fn batches(&self) -> &Vec<RequestBatch> {
         &self.batches
-    }
-
-    fn batches_mut(&mut self) -> &mut Vec<RequestBatch> {
-        &mut self.batches
-    }
-
-    fn requests(&self) -> Vec<&Request> {
-        self.batches()
-            .iter()
-            .flat_map(|batch| batch.requests())
-            .collect()
-    }
-
-    fn requests_mut(&mut self) -> Vec<&mut Request> {
-        self.batches_mut()
-            .iter_mut()
-            .flat_map(|batch| batch.requests_mut())
-            .collect()
-    }
-
-    fn requests_with_parent_descriptor_of_label(&self) -> Vec<(Request, uuid::Uuid)> {
-        let mut result = vec![];
-        for maybe_child in self.requests() {
-            if let Some(_parent_descriptor @ UniquenessRequestDescriptor::Label(parent_label)) =
-                maybe_child.parent_descriptor()
-            {
-                for maybe_parent in self.requests() {
-                    if let Some(maybe_parent_label) = maybe_parent.label() {
-                        if maybe_parent_label == parent_label {
-                            if let Request::Uniqueness { signup_id, .. } = maybe_parent {
-                                result.push((maybe_child.clone(), *signup_id));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        result
-    }
-
-    pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
-        for (child, parent_signup_id) in self.requests_with_parent_descriptor_of_label() {
-            for child_mut in self.requests_mut() {
-                if child_mut.info().uid() != child.info().uid() {
-                    continue;
-                }
-
-                let parent_desc = match child_mut {
-                    Request::IdentityDeletion {
-                        parent: parent_desc,
-                        ..
-                    }
-                    | Request::Reauthorization {
-                        parent: parent_desc,
-                        ..
-                    }
-                    | Request::ResetUpdate {
-                        parent: parent_desc,
-                        ..
-                    } => parent_desc,
-                    _ => continue,
-                };
-
-                *parent_desc = UniquenessRequestDescriptor::SignupId(parent_signup_id);
-            }
-        }
     }
 }

@@ -11,7 +11,6 @@ use iris_mpc_common::{
 
 use super::super::typeset::{
     Initialize, ProcessRequestBatch, Request, RequestBatch, ResponsePayload, ServiceClientError,
-    UniquenessRequestDescriptor,
 };
 use crate::{
     aws::{types::SqsMessageInfo, AwsClient},
@@ -43,16 +42,32 @@ impl ProcessRequestBatch for ResponseDequeuer {
                 .sqs_receive_messages(Some(N_PARTIES))
                 .await?
             {
-                if self
-                    .maybe_correlate_response_and_update_child_request(
-                        batch,
-                        ResponsePayload::from(&sqs_msg),
-                    )?
-                    .is_some()
-                {
+                let response = ResponsePayload::from(&sqs_msg);
+
+                // Validate response — allow errors to propagate upwards.
+                response.validate()?;
+
+                if let Some(idx) = batch.get_idx_of_correlated(&response) {
+                    let is_now_complete = batch.requests_mut()[idx].record_response(&response);
+
+                    if is_now_complete {
+                        // If a Uniqueness request is now complete, activate any intra-batch
+                        // pending children that were waiting for this parent.
+                        if let Some((parent_key, serial_id)) =
+                            extract_uniqueness_activation_info(batch, idx, &response)
+                        {
+                            batch.activate_pending(&parent_key, serial_id);
+                        }
+                    }
+
                     self.aws_client
                         .sqs_purge_response_queue_message(&sqs_msg)
                         .await?;
+                } else {
+                    tracing::warn!(
+                        "Orphan response: no matching request found: {:#?}",
+                        &response
+                    );
                 }
             }
         }
@@ -91,59 +106,37 @@ impl ResponseDequeuer {
         }
         Ok(confirmed)
     }
+}
 
-    /// Attempts to correlate an SQS response with a previously dispatched request.  If correlated
-    /// then sets the correlation and updates a child request (if found).
-    fn maybe_correlate_response_and_update_child_request(
-        &mut self,
-        batch: &mut RequestBatch,
-        response: ResponsePayload,
-    ) -> Result<Option<()>, ServiceClientError> {
-        // Validate response ... allow errors to propogate upwards.
-        response.validate()?;
-
-        // If a correlation then update state accordingly. When fully correlated then
-        // dispatch child request(s) if appropriate.
-        if let Some(idx_of_correlated) = batch.get_idx_of_correlated(&response) {
-            if batch.requests_mut()[idx_of_correlated]
-                .set_correlation(&response)
-                .is_some()
-            {
-                if let Some(idx_of_child) = batch.get_idx_of_child(idx_of_correlated) {
-                    self.maybe_update_child_request(
-                        &mut batch.requests_mut()[idx_of_child],
-                        &response,
-                    );
-                }
-            }
-            Ok(Some(()))
+/// Extracts the (parent_key, serial_id) needed to activate pending children when a Uniqueness
+/// request completes. The parent_key is the request's label (Complex mode) or signup_id string
+/// (Simple intra-batch mode).
+fn extract_uniqueness_activation_info(
+    batch: &RequestBatch,
+    idx: usize,
+    response: &ResponsePayload,
+) -> Option<(String, IrisSerialId)> {
+    if let Request::Uniqueness { signup_id, info, .. } = &batch.requests()[idx] {
+        let serial_id = if let ResponsePayload::Uniqueness(result) = response {
+            result.serial_id.or_else(|| {
+                result
+                    .matched_serial_ids
+                    .as_ref()
+                    .and_then(|m| m.first().copied())
+            })?
         } else {
-            tracing::warn!("Failed to correlate response: {:#?}", &response);
-            Ok(None)
-        }
-    }
+            return None;
+        };
 
-    /// Attempts to update a child request with data returned from it's parent's response.
-    fn maybe_update_child_request(&mut self, request: &mut Request, response: &ResponsePayload) {
-        match request {
-            Request::IdentityDeletion { parent, .. }
-            | Request::Reauthorization { parent, .. }
-            | Request::ResetUpdate { parent, .. } => {
-                if let ResponsePayload::Uniqueness(result) = response {
-                    let serial_id = result
-                        .serial_id
-                        .or_else(|| {
-                            result
-                                .matched_serial_ids
-                                .as_ref()
-                                .and_then(|matched| matched.first().copied())
-                        })
-                        .unwrap_or_else(|| panic!("Unmatched uniqueness request: {:?}", result));
-                    *parent = UniquenessRequestDescriptor::IrisSerialId(serial_id);
-                }
-            }
-            _ => panic!("Unsupported parent data"),
-        }
+        // Use label for Complex mode, signup_id string for Simple intra-batch mode.
+        let parent_key = info
+            .label()
+            .clone()
+            .unwrap_or_else(|| signup_id.to_string());
+
+        Some((parent_key, serial_id))
+    } else {
+        None
     }
 }
 

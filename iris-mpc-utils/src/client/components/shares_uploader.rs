@@ -44,12 +44,23 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ProcessRequestBatch for SharesUplo
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set shares to be uploaded.
         let mut shares: Vec<_> = Vec::new();
+
+        // Upload shares for active requests.
         for request in batch.requests() {
             if let Some((identifier, iris_pair)) = request.get_shares_info() {
                 shares.push((
                     identifier,
                     self.shares_generator.generate(iris_pair.as_ref()),
                 ));
+            }
+        }
+
+        // Upload shares for pending items that have an iris_pair
+        // (Complex mode cross-batch children whose shares must be ready before activation).
+        for item in batch.pending() {
+            let (op_id, iris_pair) = item.shares_info();
+            if let Some(iris_pair) = iris_pair {
+                shares.push((op_id, self.shares_generator.generate(Some(iris_pair))));
             }
         }
 
@@ -66,7 +77,7 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ProcessRequestBatch for SharesUplo
             .collect();
         futures::future::try_join_all(tasks).await?;
 
-        // Update state of requests.
+        // Update state of active requests.
         batch.set_request_status(RequestStatus::SharesUploaded);
 
         Ok(())

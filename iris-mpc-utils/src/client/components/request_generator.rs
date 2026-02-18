@@ -1,9 +1,9 @@
 use iris_mpc_common::IrisSerialId;
 
-use super::super::typeset::{
-    BatchKind, RequestBatch, RequestBatchSet, ServiceClientError, UniquenessRequestDescriptor,
+use super::super::typeset::{BatchKind, PendingItem, RequestBatch, RequestBatchSet, ServiceClientError};
+use crate::client::options::{
+    Parent, RequestBatchOptions, RequestOptions, RequestPayloadOptions, ServiceClientOptions,
 };
-use crate::client::options::{RequestBatchOptions, ServiceClientOptions};
 
 /// Generates batches of SMPC service requests.
 pub(crate) struct RequestGenerator {
@@ -30,8 +30,7 @@ impl RequestGenerator {
     }
 
     pub(crate) fn from_options(opts: &ServiceClientOptions) -> Result<Self, ServiceClientError> {
-        let mut config = RequestGeneratorConfig::try_from_options(opts)?;
-        config.set_child_parent_descriptors_from_labels();
+        let config = RequestGeneratorConfig::try_from_options(opts)?;
         Ok(Self::new(config))
     }
 
@@ -56,9 +55,9 @@ impl RequestGenerator {
                 let batch_idx = self.next_batch_idx();
                 let mut batch = RequestBatch::new(batch_idx, vec![]);
                 for _ in 0..*batch_size {
-                    let parent =
+                    let parent_result =
                         push_new_uniqueness_maybe(&mut batch, batch_kind, *known_iris_serial_id);
-                    push_new(&mut batch, batch_kind, parent);
+                    push_new(&mut batch, batch_kind, parent_result);
                 }
                 batch
             }
@@ -74,12 +73,35 @@ impl RequestGenerator {
     }
 }
 
-/// Pushes a new request onto the batch.
-fn push_new(
+/// Result of maybe-creating a uniqueness parent request.
+enum ParentResult {
+    /// Parent serial ID is already known.
+    Known(IrisSerialId),
+    /// Parent is an intra-batch Uniqueness; child should wait via PendingItem.
+    Pending(String),
+}
+
+/// Maybe extends the batch with a Uniqueness request for child requests to reference.
+fn push_new_uniqueness_maybe(
     batch: &mut RequestBatch,
     kind: &BatchKind,
-    parent: Option<UniquenessRequestDescriptor>,
-) {
+    serial_id: Option<IrisSerialId>,
+) -> Option<ParentResult> {
+    if !kind.requires_parent() {
+        return None;
+    }
+
+    Some(match serial_id {
+        Some(serial_id) => ParentResult::Known(serial_id),
+        None => {
+            let signup_id = batch.push_new_uniqueness(None, None);
+            ParentResult::Pending(signup_id.to_string())
+        }
+    })
+}
+
+/// Pushes a new request (or pending item) onto the batch.
+fn push_new(batch: &mut RequestBatch, kind: &BatchKind, parent: Option<ParentResult>) {
     assert_eq!(
         kind.requires_parent(),
         parent.is_some(),
@@ -87,39 +109,59 @@ fn push_new(
         kind
     );
 
-    match kind {
-        BatchKind::IdentityDeletion => {
-            batch.push_new_identity_deletion(parent.unwrap(), None, None);
-        }
-        BatchKind::Reauth => {
-            batch.push_new_reauthorization(parent.unwrap(), None, None, None);
-        }
-        BatchKind::ResetCheck => {
-            batch.push_new_reset_check(None, None);
-        }
-        BatchKind::ResetUpdate => {
-            batch.push_new_reset_update(parent.unwrap(), None, None, None);
-        }
-        BatchKind::Uniqueness => {
+    match (kind, parent) {
+        (BatchKind::Uniqueness, None) => {
             batch.push_new_uniqueness(None, None);
         }
+        (BatchKind::ResetCheck, None) => {
+            batch.push_new_reset_check(None, None);
+        }
+        (BatchKind::IdentityDeletion, Some(ParentResult::Known(serial_id))) => {
+            batch.push_new_identity_deletion(serial_id, None);
+        }
+        (BatchKind::Reauth, Some(ParentResult::Known(serial_id))) => {
+            batch.push_new_reauthorization(serial_id, None, None);
+        }
+        (BatchKind::ResetUpdate, Some(ParentResult::Known(serial_id))) => {
+            batch.push_new_reset_update(serial_id, None, None);
+        }
+        (BatchKind::IdentityDeletion, Some(ParentResult::Pending(parent_key))) => {
+            batch.push_pending(PendingItem::new(
+                parent_key.clone(),
+                RequestOptions::new(
+                    None,
+                    RequestPayloadOptions::IdentityDeletion {
+                        parent: Parent::Label(parent_key),
+                    },
+                ),
+            ));
+        }
+        (BatchKind::Reauth, Some(ParentResult::Pending(parent_key))) => {
+            batch.push_pending(PendingItem::new(
+                parent_key.clone(),
+                RequestOptions::new(
+                    None,
+                    RequestPayloadOptions::Reauthorisation {
+                        iris_pair: None,
+                        parent: Parent::Label(parent_key),
+                    },
+                ),
+            ));
+        }
+        (BatchKind::ResetUpdate, Some(ParentResult::Pending(parent_key))) => {
+            batch.push_pending(PendingItem::new(
+                parent_key.clone(),
+                RequestOptions::new(
+                    None,
+                    RequestPayloadOptions::ResetUpdate {
+                        iris_pair: None,
+                        parent: Parent::Label(parent_key),
+                    },
+                ),
+            ));
+        }
+        _ => unreachable!("Invalid combination of BatchKind and parent"),
     }
-}
-
-/// Maybe extends collection with a uniqueness request to be referenced from other requests.
-fn push_new_uniqueness_maybe(
-    batch: &mut RequestBatch,
-    kind: &BatchKind,
-    serial_id: Option<IrisSerialId>,
-) -> Option<UniquenessRequestDescriptor> {
-    if !kind.requires_parent() {
-        return None;
-    }
-
-    Some(match serial_id {
-        Some(serial_id) => UniquenessRequestDescriptor::IrisSerialId(serial_id),
-        None => UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None)),
-    })
 }
 
 /// Set of variants over request generation inputs.
@@ -172,13 +214,6 @@ impl RequestGeneratorConfig {
                     known_iris_serial_id: *known_iris_serial_id,
                 })
             }
-        }
-    }
-
-    // Reassigns parent descriptors.
-    pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
-        if let RequestGeneratorConfig::Complex(batch_set) = self {
-            batch_set.set_child_parent_descriptors_from_labels();
         }
     }
 }

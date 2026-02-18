@@ -5,7 +5,7 @@ mod validator;
 
 pub use types::AwsOptions;
 pub(crate) use types::{
-    RequestBatchOptions, RequestOptions, RequestPayloadOptions, SharesGeneratorOptions,
+    Parent, RequestBatchOptions, RequestOptions, RequestPayloadOptions, SharesGeneratorOptions,
 };
 
 /// Service client configuration.

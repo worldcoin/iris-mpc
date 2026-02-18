@@ -92,7 +92,9 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
         &mut self,
         live_serial_ids: &mut HashSet<IrisSerialId>,
     ) -> Result<(), ServiceClientError> {
-        let mut cross_batch_resolutions = std::collections::HashMap::new();
+        // Maps Uniqueness request labels → resolved serial IDs for cross-batch parent resolution.
+        let mut label_resolutions: std::collections::HashMap<String, IrisSerialId> =
+            std::collections::HashMap::new();
 
         while let Some(mut batch) = self.request_generator.next().await.unwrap() {
             println!("------------------------------------------------------------------------");
@@ -103,17 +105,22 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
             );
             println!("------------------------------------------------------------------------");
 
+            // Upload shares for all active requests (and pending items with iris_pairs).
             self.shares_uploader.process_batch(&mut batch).await?;
-            batch.resolve_cross_batch_parents(&cross_batch_resolutions);
-            while batch.is_enqueueable() {
+
+            // Activate pending items whose parent label was resolved in a previous batch.
+            batch.activate_cross_batch_pending(&label_resolutions);
+
+            // Enqueue and dequeue until all enqueueable and enqueued items are processed.
+            while batch.is_enqueueable() || batch.has_enqueued_items() {
                 self.request_enqueuer.process_batch(&mut batch).await?;
                 self.response_dequeuer.process_batch(&mut batch).await?;
             }
 
-            // Collect uniqueness resolutions for future batches and track serial IDs.
+            // Collect label resolutions from completed Uniqueness requests for future batches.
             for request in batch.requests() {
-                if let Some((signup_id, serial_id)) = request.uniqueness_resolution() {
-                    cross_batch_resolutions.insert(signup_id, serial_id);
+                if let Some((label, serial_id)) = request.uniqueness_label_resolution() {
+                    label_resolutions.insert(label, serial_id);
                 }
 
                 // Track serial IDs: add for uniqueness enrollments, remove for deletions.
