@@ -1035,6 +1035,7 @@ impl ServerActor {
                 partial_matches_side1[device_idx as usize].push(db_idx);
             }
         }
+        dbg!(&partial_matches_side1);
 
         // clear the db_match_list since we used it for prefiltering
         for dst in [
@@ -2293,15 +2294,6 @@ impl ServerActor {
                 .match_distances_buffer_mirror
                 .load_counters(&self.device_manager, eye_db),
         };
-
-        // ---- START BATCH DEDUP ----
-        self.compare_query_against_self(
-            compact_device_queries,
-            compact_device_sums,
-            events,
-            eye_db,
-        );
-        // ---- END BATCH DEDUP ----
 
         // which database are we querying against
         let (code_db_slices, mask_db_slices) = match eye_db {
