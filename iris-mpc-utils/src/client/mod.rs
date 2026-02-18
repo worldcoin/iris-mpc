@@ -278,9 +278,12 @@ impl ServiceClient2 {
                         .expect("SQS message purge failed");
                 }
             }
-
-            tracing::info!("Client finished. Responses to non-deletion requests have been received")
+            tracing::info!(
+                "Batch {} finished. Responses to non-deletion requests have been received",
+                batch_idx
+            );
         }
+        tracing::info!("Client finished.");
     }
 
     async fn init(&mut self) -> Result<(), ServiceClientError> {
