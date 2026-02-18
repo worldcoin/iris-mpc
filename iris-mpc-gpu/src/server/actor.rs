@@ -2745,6 +2745,10 @@ impl ServerActor {
 
 /// Internal helper function to log the timers of measured cuda streams.
 fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "Only logging, order does not matter"
+    )]
     for (name, event_vecs) in &events {
         let duration: f32 = event_vecs
             .chunks(2)
