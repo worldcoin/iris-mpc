@@ -147,6 +147,12 @@ impl RequestBatch {
             .collect()
     }
 
+    /// Removes all pending items whose `parent_key` matches without activating them.
+    /// Used when a parent request completes with an error.
+    pub(crate) fn drop_pending(&mut self, parent_key: &str) {
+        self.pending.retain(|item| item.parent_key != parent_key);
+    }
+
     /// Activates all pending items whose `parent_key` matches, resolving them to full Requests.
     /// The new requests are added with `SharesUploaded` status (shares already uploaded at batch start).
     pub(crate) fn activate_pending(&mut self, parent_key: &str, serial_id: IrisSerialId) {

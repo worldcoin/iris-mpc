@@ -185,6 +185,10 @@ impl Request {
         self.info().label()
     }
 
+    pub fn has_error_response(&self) -> bool {
+        self.info().has_error_response()
+    }
+
     /// Records a node response. Returns true if all parties have now responded (request is Complete).
     pub fn record_response(&mut self, response: &ResponsePayload) -> bool {
         tracing::info!("{} :: response -> Node-{}", &self, response.node_id());

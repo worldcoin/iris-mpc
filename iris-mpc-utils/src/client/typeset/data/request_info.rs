@@ -75,6 +75,14 @@ impl RequestInfo {
     pub fn first_response(&self) -> Option<&ResponsePayload> {
         self.responses.iter().find_map(|c| c.as_ref())
     }
+
+    pub fn responses(&self) -> &[Option<ResponsePayload>; N_PARTIES] {
+        &self.responses
+    }
+
+    pub fn has_error_response(&self) -> bool {
+        self.responses.iter().flatten().any(|r| r.is_error())
+    }
 }
 
 impl fmt::Display for RequestInfo {

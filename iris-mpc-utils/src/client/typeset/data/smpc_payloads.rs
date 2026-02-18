@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::helpers::{smpc_request, smpc_response};
 
-use super::super::errors::ServiceClientError;
-
 /// Enumeration over request messages enqueued upon system ingress queue.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -36,33 +34,25 @@ impl ResponsePayload {
         }
     }
 
-    /// Validates the response, returning an error if the response indicates failure.
-    pub fn validate(&self) -> Result<(), ServiceClientError> {
-        let (has_error, error_reason) = match self {
-            Self::IdentityDeletion(result) => (!result.success, None),
-            Self::Reauthorization(result) => (
-                result.error.unwrap_or(false),
-                result.error_reason.as_deref(),
-            ),
-            Self::ResetCheck(result) => (
-                result.error.unwrap_or(false),
-                result.error_reason.as_deref(),
-            ),
-            Self::ResetUpdate(_) => (false, None),
-            Self::Uniqueness(result) => (
-                result.error.unwrap_or(false),
-                result.error_reason.as_deref(),
-            ),
-        };
+    /// Returns true if the response indicates a processing error.
+    pub fn is_error(&self) -> bool {
+        match self {
+            Self::IdentityDeletion(result) => !result.success,
+            Self::Reauthorization(result) => result.error.unwrap_or(false),
+            Self::ResetCheck(result) => result.error.unwrap_or(false),
+            Self::ResetUpdate(_) => false,
+            Self::Uniqueness(result) => result.error.unwrap_or(false),
+        }
+    }
 
-        if has_error {
-            Err(ServiceClientError::ResponseError(format!(
-                "{}: {:?}",
-                error_reason.unwrap_or("unknown error"),
-                self
-            )))
-        } else {
-            Ok(())
+    /// Returns the error reason string if one is available.
+    pub fn error_reason(&self) -> Option<&str> {
+        match self {
+            Self::IdentityDeletion(_) => None,
+            Self::Reauthorization(result) => result.error_reason.as_deref(),
+            Self::ResetCheck(result) => result.error_reason.as_deref(),
+            Self::ResetUpdate(_) => None,
+            Self::Uniqueness(result) => result.error_reason.as_deref(),
         }
     }
 }

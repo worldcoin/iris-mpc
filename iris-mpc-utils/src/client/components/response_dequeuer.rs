@@ -53,25 +53,44 @@ impl ResponseDequeuer {
             {
                 let response = ResponsePayload::from(&sqs_msg);
 
-                // Validate response — allow errors to propagate upwards.
-                response.validate()?;
-
                 if let Some(idx) = batch.get_idx_of_correlated(&response) {
+                    // Warn on error response but still record it — errors count as responses.
+                    if response.is_error() {
+                        tracing::warn!(
+                            "{} :: Error response -> Node-{}: {}",
+                            &batch.requests()[idx],
+                            response.node_id(),
+                            response.error_reason().unwrap_or("unknown error"),
+                        );
+                    }
+
                     let is_now_complete = batch.requests_mut()[idx].record_response(&response);
 
                     if is_now_complete {
-                        // If a Uniqueness request is now complete, activate any intra-batch
-                        // pending children and update tracking maps.
-                        if let Some((parent_key, serial_id)) =
-                            extract_uniqueness_activation_info(batch, idx, &response)
-                        {
-                            batch.activate_pending(&parent_key, serial_id);
-                            live_serial_ids.insert(serial_id);
+                        let has_error = batch.requests()[idx].has_error_response();
 
-                            // Record label resolution for cross-batch parent lookups.
-                            if let Request::Uniqueness { info, .. } = &batch.requests()[idx] {
-                                if let Some(label) = info.label() {
-                                    label_resolutions.insert(label.clone(), serial_id);
+                        // Check serial ID consistency across nodes for completed Uniqueness requests.
+                        check_uniqueness_serial_id_consistency(batch, idx);
+
+                        // Activate or drop intra-batch pending children based on outcome.
+                        if let Some((parent_key, serial_id)) =
+                            extract_uniqueness_activation_info(batch, idx)
+                        {
+                            if has_error {
+                                tracing::warn!(
+                                    "{} :: Completed with errors — dropping pending children",
+                                    &batch.requests()[idx],
+                                );
+                                batch.drop_pending(&parent_key);
+                            } else {
+                                batch.activate_pending(&parent_key, serial_id);
+                                live_serial_ids.insert(serial_id);
+
+                                // Record label resolution for cross-batch parent lookups.
+                                if let Request::Uniqueness { info, .. } = &batch.requests()[idx] {
+                                    if let Some(label) = info.label() {
+                                        label_resolutions.insert(label.clone(), serial_id);
+                                    }
                                 }
                             }
                         }
@@ -126,27 +145,27 @@ impl ResponseDequeuer {
 }
 
 /// Extracts the (parent_key, serial_id) needed to activate pending children when a Uniqueness
-/// request completes. The parent_key is the request's label (Complex mode) or signup_id string
-/// (Simple intra-batch mode).
+/// request completes. Uses all stored node responses to find a serial_id. Returns None if the
+/// request is not a Uniqueness type or if no serial_id is present in any stored response.
+/// The parent_key is the request's label (Complex mode) or signup_id string (Simple mode).
 fn extract_uniqueness_activation_info(
     batch: &RequestBatch,
     idx: usize,
-    response: &ResponsePayload,
 ) -> Option<(String, IrisSerialId)> {
     if let Request::Uniqueness {
         signup_id, info, ..
     } = &batch.requests()[idx]
     {
-        let serial_id = if let ResponsePayload::Uniqueness(result) = response {
-            result.serial_id.or_else(|| {
+        // Search all stored node responses for a serial_id.
+        let serial_id = info.responses().iter().find_map(|opt| {
+            if let Some(ResponsePayload::Uniqueness(result)) = opt {
                 result
-                    .matched_serial_ids
-                    .as_ref()
-                    .and_then(|m| m.first().copied())
-            })?
-        } else {
-            return None;
-        };
+                    .serial_id
+                    .or_else(|| result.matched_serial_ids.as_ref()?.first().copied())
+            } else {
+                None
+            }
+        })?;
 
         // Use label for Complex mode, signup_id string for Simple intra-batch mode.
         let parent_key = info
@@ -157,6 +176,34 @@ fn extract_uniqueness_activation_info(
         Some((parent_key, serial_id))
     } else {
         None
+    }
+}
+
+/// Warns if the serial_ids returned by different nodes for a completed Uniqueness request differ.
+fn check_uniqueness_serial_id_consistency(batch: &RequestBatch, idx: usize) {
+    if let Request::Uniqueness { info, .. } = &batch.requests()[idx] {
+        let serial_ids: Vec<IrisSerialId> = info
+            .responses()
+            .iter()
+            .filter_map(|opt| {
+                if let Some(ResponsePayload::Uniqueness(result)) = opt {
+                    result.serial_id
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if serial_ids.len() > 1 {
+            let first = serial_ids[0];
+            if serial_ids.iter().any(|&s| s != first) {
+                tracing::warn!(
+                    "{} :: Inconsistent serial_ids across nodes: {:?}",
+                    info,
+                    serial_ids,
+                );
+            }
+        }
     }
 }
 
