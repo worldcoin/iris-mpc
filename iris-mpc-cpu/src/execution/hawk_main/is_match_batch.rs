@@ -44,9 +44,10 @@ async fn per_side(
     let n_sessions = sessions.len();
     assert_eq!(queries.len(), n_requests);
 
-    tracing::info!("per_side_match_batch sessions: {}", n_sessions);
-    tracing::info!("per_side_match_batch requests:{}", n_requests);
-    tracing::info!("per_side_match_batch tasks: {}", n_tasks);
+    tracing::info!(
+        "per_side_match_batch: {} sessions, {} requests, {} tasks",
+        n_sessions, n_requests, n_tasks,
+    );
 
     // Arc the requested vectors rather than cloning them.
     let missing_vector_ids = missing_vector_ids.into_iter().map(Arc::new);

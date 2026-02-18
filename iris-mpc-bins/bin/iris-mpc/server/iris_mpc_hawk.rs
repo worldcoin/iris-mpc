@@ -21,6 +21,7 @@ fn main() -> Result<()> {
         .build()
         .unwrap();
 
+    let party_id = config.party_id;
     runtime.block_on(async {
         println!("Init tracing");
         let _tracing_shutdown_handle = match initialize_tracing(config.service.clone()) {
@@ -36,7 +37,11 @@ fn main() -> Result<()> {
                 tracing::info!("Server exited normally");
             }
             Err(e) => {
-                tracing::error!("Server exited with error: {:?}", e);
+                tracing::error!(
+                    "EXIT_SUMMARY party={} error=\"{:?}\"",
+                    party_id,
+                    e
+                );
                 exit(1);
             }
         }
