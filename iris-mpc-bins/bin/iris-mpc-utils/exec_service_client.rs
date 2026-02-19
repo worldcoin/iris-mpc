@@ -6,7 +6,7 @@ use eyre::Result;
 use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_utils::{
-    client::{AwsOptions, ServiceClient, ServiceClient2, ServiceClientOptions},
+    client::{AwsOptions, ServiceClient2, ServiceClientOptions},
     fsys::reader::read_toml,
 };
 
@@ -29,7 +29,7 @@ pub async fn main() -> Result<()> {
     )
     .await?;
 
-    client.exec().await;
+    ServiceClient2::run(client).await;
 
     Ok(())
 }

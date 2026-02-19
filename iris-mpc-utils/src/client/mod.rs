@@ -1,18 +1,21 @@
 use std::collections::{HashMap, HashSet};
 
 use async_from::{self, AsyncFrom};
-use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
+use rand::rngs::StdRng;
 
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
 use uuid::Uuid;
 
-use crate::client::options::{RequestBatchOptions, SharesGeneratorOptions};
+use crate::{
+    aws::types::SnsMessageInfo,
+    client::{
+        options::{RequestBatchOptions, SharesGeneratorOptions},
+        typeset::RequestPayload,
+    },
+};
 
 use super::aws::AwsClient;
-use components::{
-    RequestEnqueuer, RequestGenerator, ResponseDequeuer, SharesGenerator, SharesUploader,
-};
-use typeset::{Initialize, ProcessRequestBatch};
+use components::SharesGenerator;
 
 pub use options::{AwsOptions, ServiceClientOptions};
 pub use typeset::ServiceClientError;
@@ -62,7 +65,57 @@ impl ServiceClient2 {
         })
     }
 
-    pub async fn exec(mut self) {
+    async fn init(&mut self) -> Result<(), ServiceClientError> {
+        self.aws_client
+            .set_public_keyset()
+            .await
+            .map_err(ServiceClientError::AwsServiceError)?;
+
+        self.aws_client
+            .sqs_purge_response_queue()
+            .await
+            .map_err(ServiceClientError::AwsServiceError)?;
+
+        Ok(())
+    }
+
+    pub async fn run(mut sc: Self) {
+        sc.init().await.expect("service client init failed");
+
+        let aws_client = sc.aws_client.clone();
+        let mut live_serial_ids: HashSet<IrisSerialId> = HashSet::new();
+
+        // Run main batch loop, interruptible by Ctrl+C.
+        tokio::select! {
+            _ = sc.exec(&mut live_serial_ids) => {
+                tracing::info!("service client finished");
+            },
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("\nCtrl+C received. Initiating cleanup...");
+            }
+        };
+
+        tracing::info!("Cleaning up {} serial IDs", live_serial_ids.len());
+
+        // Send deletion requests for all live serial IDs.
+        for serial_id in live_serial_ids.into_iter() {
+            let payload = RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest {
+                serial_id,
+            });
+            let sns_msg_info = SnsMessageInfo::from(payload);
+            if let Err(e) = aws_client
+                .sns_publish_json(sns_msg_info)
+                .await
+                .map_err(ServiceClientError::AwsServiceError)
+            {
+                tracing::error!("Failed to send deletion for serial_id {}: {}", serial_id, e);
+            }
+
+            // iris-mpc-hawk will not send responses for a batch of just deletions
+            tracing::info!("Cleanup complete. Deletions have been submitted.");
+        }
+    }
+    async fn exec(mut self, live_serial_ids: &mut HashSet<IrisSerialId>) {
         use crate::aws::types::SnsMessageInfo;
         use crate::client::options::{Parent, RequestPayloadOptions};
         use crate::constants::N_PARTIES;
@@ -224,7 +277,15 @@ impl ServiceClient2 {
 
                     // Extract correlation UUID from response (IdentityDeletion has none).
                     let corr_uuid: Option<Uuid> = match &response {
-                        typeset::ResponsePayload::Uniqueness(r) => r.signup_id.parse().ok(),
+                        typeset::ResponsePayload::Uniqueness(r) => {
+                            // track these to clean them up later
+                            if let Some(serial_id) = r.serial_id {
+                                live_serial_ids.insert(serial_id);
+                            } else {
+                                tracing::warn!("received Uniqueness response without a serial id");
+                            }
+                            r.signup_id.parse().ok()
+                        }
                         typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
                         typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
                         typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
@@ -286,134 +347,5 @@ impl ServiceClient2 {
                 batch_idx
             );
         }
-        tracing::info!("Client finished.");
-    }
-
-    async fn init(&mut self) -> Result<(), ServiceClientError> {
-        self.aws_client
-            .set_public_keyset()
-            .await
-            .map_err(ServiceClientError::AwsServiceError)?;
-
-        self.aws_client
-            .sqs_purge_response_queue()
-            .await
-            .map_err(ServiceClientError::AwsServiceError)?;
-
-        Ok(())
-    }
-}
-
-/// A utility for enqueuing system requests & correlating with system responses.
-pub struct ServiceClient<R: Rng + CryptoRng + SeedableRng + Send> {
-    // Component that enqueues system requests upon system ingress queues.
-    request_enqueuer: RequestEnqueuer,
-
-    // Component that generates system requests.
-    request_generator: RequestGenerator,
-
-    // Component that dequeues system responses from system egress queues.
-    response_dequeuer: ResponseDequeuer,
-
-    // Component that uploads iris shares to services prior to request processing.
-    shares_uploader: SharesUploader<R>,
-}
-
-impl<R: Rng + CryptoRng + SeedableRng + Send> ServiceClient<R> {
-    pub async fn new(
-        opts: ServiceClientOptions,
-        opts_aws: AwsOptions,
-    ) -> Result<Self, ServiceClientError> {
-        // Ensure options & 2nd order config are validated.
-        opts.validate()?;
-
-        let aws_client = AwsClient::async_from(opts_aws).await;
-
-        Ok(Self {
-            shares_uploader: SharesUploader::new(
-                aws_client.clone(),
-                SharesGenerator::<R>::from_options(&opts),
-            ),
-            request_enqueuer: RequestEnqueuer::new(aws_client.clone()),
-            request_generator: RequestGenerator::from_options(&opts)?,
-            response_dequeuer: ResponseDequeuer::new(aws_client.clone()),
-        })
-    }
-
-    pub async fn init(&mut self) -> Result<(), ServiceClientError> {
-        for initializer in [self.shares_uploader.init(), self.response_dequeuer.init()] {
-            initializer.await.map_err(|e| {
-                tracing::error!("Service client: component initialisation failed: {}", e);
-                ServiceClientError::InitialisationError(e.to_string())
-            })?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn exec(&mut self) -> Result<(), ServiceClientError> {
-        let mut live_serial_ids: HashSet<IrisSerialId> = HashSet::new();
-
-        // Run main batch loop, interruptible by Ctrl+C.
-        tokio::select! {
-            result = self._exec(&mut live_serial_ids) => {
-                result?;
-            }
-            _ = tokio::signal::ctrl_c() => {
-                println!("\nCtrl+C received. Initiating cleanup...");
-            }
-        };
-
-        self.cleanup(live_serial_ids).await;
-        Ok(())
-    }
-
-    async fn _exec(
-        &mut self,
-        live_serial_ids: &mut HashSet<IrisSerialId>,
-    ) -> Result<(), ServiceClientError> {
-        // Maps Uniqueness request labels → resolved serial IDs for cross-batch parent resolution.
-        let mut label_resolutions: std::collections::HashMap<String, IrisSerialId> =
-            std::collections::HashMap::new();
-
-        while let Some(mut batch) = self.request_generator.next().await.unwrap() {
-            println!("------------------------------------------------------------------------");
-            println!(
-                "Processing Batch {}: size={}",
-                batch.batch_idx(),
-                batch.requests().len()
-            );
-            println!("------------------------------------------------------------------------");
-
-            // Upload shares for all active requests (and pending items with iris_pairs).
-            self.shares_uploader.process_batch(&mut batch).await?;
-
-            // Activate pending items whose parent label was resolved in a previous batch.
-            batch.activate_cross_batch_pending(&label_resolutions);
-
-            // Enqueue and dequeue until all enqueueable and enqueued items are processed.
-            while batch.is_enqueueable() || batch.has_enqueued_items() {
-                self.request_enqueuer.process_batch(&mut batch).await?;
-                self.response_dequeuer
-                    .process_batch(&mut batch, live_serial_ids, &mut label_resolutions)
-                    .await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn cleanup(&self, live_serial_ids: HashSet<IrisSerialId>) {
-        println!("Cleaning up {} serial IDs", live_serial_ids.len());
-
-        // Send deletion requests for all live serial IDs.
-        for serial_id in live_serial_ids.into_iter() {
-            if let Err(e) = self.request_enqueuer.publish_deletion(serial_id).await {
-                eprintln!("Failed to send deletion for serial_id {}: {}", serial_id, e);
-            }
-        }
-
-        // iris-mpc-hawk will not send responses for a batch of just deletions
-        println!("Cleanup complete. Deletions have been submitted.");
     }
 }
