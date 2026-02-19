@@ -5,9 +5,9 @@ mod request_info;
 mod request_status;
 mod smpc_payloads;
 
-pub(crate) use descriptors::{IrisDescriptor, IrisPairDescriptor, UniquenessRequestDescriptor};
-pub(crate) use request::Request;
-pub(crate) use request_batch::{BatchKind, RequestBatch, RequestBatchSet};
-pub(crate) use request_info::RequestInfo;
-pub(crate) use request_status::RequestStatus;
-pub(crate) use smpc_payloads::{RequestPayload, ResponsePayload};
+pub use descriptors::{IrisDescriptor, IrisPairDescriptor};
+pub use request::Request;
+pub use request_batch::{BatchKind, RequestBatch};
+pub use request_info::RequestInfo;
+pub use request_status::RequestStatus;
+pub use smpc_payloads::{RequestPayload, ResponsePayload};

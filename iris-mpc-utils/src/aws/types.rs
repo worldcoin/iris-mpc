@@ -1,7 +1,12 @@
 use std::fmt;
 
+use iris_mpc_common::helpers::smpc_request;
 use serde::ser::Serialize;
 use serde_json;
+
+use crate::client::{Request, RequestPayload};
+
+const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 // Helper type encapsulating AWS-S3 object information.
 #[derive(Debug)]
@@ -129,5 +134,43 @@ impl SqsMessageInfo {
 impl fmt::Display for SqsMessageInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.kind)
+    }
+}
+
+impl From<&Request> for SnsMessageInfo {
+    fn from(request: &Request) -> Self {
+        Self::from(RequestPayload::from(request))
+    }
+}
+
+impl From<RequestPayload> for SnsMessageInfo {
+    fn from(body: RequestPayload) -> Self {
+        match body {
+            RequestPayload::IdentityDeletion(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::Reauthorization(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::REAUTH_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::ResetCheck(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_CHECK_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::ResetUpdate(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::Uniqueness(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::UNIQUENESS_MESSAGE_TYPE,
+                &body,
+            ),
+        }
     }
 }

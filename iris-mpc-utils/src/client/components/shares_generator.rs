@@ -5,7 +5,7 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use super::super::typeset::{IrisDescriptor, IrisPairDescriptor};
 use crate::{
-    client::options::{ServiceClientOptions, SharesGeneratorOptions},
+    client::options::SharesGeneratorOptions,
     constants::N_PARTIES,
     irises::{
         generate_iris_shares_for_upload, reader::read_iris_shares_for_upload,
@@ -36,11 +36,11 @@ impl<R> SharesGenerator<R>
 where
     R: Rng + CryptoRng + SeedableRng + Send,
 {
-    pub(crate) fn from_options(opts: &ServiceClientOptions) -> Self {
-        match opts.shares_generator() {
+    pub fn from_options(opts: SharesGeneratorOptions) -> Self {
+        match opts {
             SharesGeneratorOptions::FromCompute { rng_seed } => {
                 tracing::info!("Parsing SharesGeneratorOptions::FromCompute");
-                SharesGenerator::<R>::new_compute(*rng_seed)
+                SharesGenerator::<R>::new_compute(rng_seed)
             }
             SharesGeneratorOptions::FromFile {
                 path_to_ndjson_file,
@@ -51,7 +51,7 @@ where
                 let path = path_to_ndjson_file.as_deref().expect(
                     "FromFile requires path_to_ndjson_file (set via CLI --path-to-iris-shares)",
                 );
-                SharesGenerator::new_file(PathBuf::from(path), *rng_seed, *selection_strategy)
+                SharesGenerator::new_file(PathBuf::from(path), rng_seed, selection_strategy)
             }
         }
     }
@@ -128,6 +128,7 @@ mod tests {
             Self::new_compute(Some(42))
         }
 
+        #[allow(dead_code)]
         pub(crate) fn new_file_1() -> Self {
             Self::new_file(get_path_to_ndjson(), Some(42), None)
         }

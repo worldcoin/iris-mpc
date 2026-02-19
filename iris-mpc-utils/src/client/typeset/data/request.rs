@@ -5,9 +5,7 @@ use uuid;
 
 use iris_mpc_common::IrisSerialId;
 
-use super::{
-    IrisPairDescriptor, RequestInfo, RequestStatus, ResponsePayload, UniquenessRequestDescriptor,
-};
+use super::{IrisPairDescriptor, RequestInfo, RequestStatus, ResponsePayload};
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,16 +13,16 @@ pub enum Request {
     IdentityDeletion {
         // Standard request information.
         info: RequestInfo,
-        // Weak reference to associated uniqueness request.
-        parent: UniquenessRequestDescriptor,
+        // Serial ID of associated uniqueness request (always known at creation).
+        parent: IrisSerialId,
     },
     Reauthorization {
         // Standard request information.
         info: RequestInfo,
         // Associated Iris pair descriptor ... used to build deterministic graphs.
         iris_pair: Option<IrisPairDescriptor>,
-        // Weak reference to associated uniqueness request.
-        parent: UniquenessRequestDescriptor,
+        // Serial ID of associated uniqueness request (always known at creation).
+        parent: IrisSerialId,
         // Operation identifier.
         reauth_id: uuid::Uuid,
     },
@@ -41,8 +39,8 @@ pub enum Request {
         info: RequestInfo,
         // Associated Iris pair descriptor ... used to build deterministic graphs.
         iris_pair: Option<IrisPairDescriptor>,
-        // Weak reference to associated uniqueness request.
-        parent: UniquenessRequestDescriptor,
+        // Serial ID of associated uniqueness request (always known at creation).
+        parent: IrisSerialId,
         // Operation identifier.
         reset_id: uuid::Uuid,
     },
@@ -57,7 +55,7 @@ pub enum Request {
 }
 
 impl Request {
-    pub(crate) fn info(&self) -> &RequestInfo {
+    pub fn info(&self) -> &RequestInfo {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
@@ -67,7 +65,7 @@ impl Request {
         }
     }
 
-    pub(crate) fn get_shares_info(&self) -> Option<(uuid::Uuid, Option<IrisPairDescriptor>)> {
+    pub fn get_shares_info(&self) -> Option<(uuid::Uuid, Option<IrisPairDescriptor>)> {
         match self {
             Request::IdentityDeletion { .. } => None,
             Request::Reauthorization {
@@ -104,7 +102,7 @@ impl Request {
     }
 
     #[allow(dead_code)]
-    pub(super) fn iris_pair_indexes(&self) -> Vec<usize> {
+    pub fn iris_pair_indexes(&self) -> Vec<usize> {
         match self {
             Self::IdentityDeletion { .. } => vec![],
             Self::Reauthorization { iris_pair, .. }
@@ -117,30 +115,11 @@ impl Request {
         }
     }
 
-    /// Returns true if deemed a child of previous system request.
-    pub(super) fn is_child(&self, parent: &Self) -> bool {
-        // A child of a uniqueness request can be derived by comparing signup identifiers.
-        let parent_ref = match self {
-            Self::IdentityDeletion { parent, .. }
-            | Self::Reauthorization { parent, .. }
-            | Self::ResetUpdate { parent, .. } => parent,
-            _ => return false,
-        };
-        matches!(
-            (parent_ref, parent),
-            (UniquenessRequestDescriptor::SignupId(parent_signup_id), Self::Uniqueness { signup_id, .. })
-            if signup_id == parent_signup_id
-        )
-    }
-
     /// Returns true if a system response is deemed to be correlated with this system request.
-    pub(super) fn is_correlation(&self, response: &ResponsePayload) -> bool {
+    pub fn is_correlation(&self, response: &ResponsePayload) -> bool {
         match (self, response) {
             (Self::IdentityDeletion { parent, .. }, ResponsePayload::IdentityDeletion(result)) => {
-                matches!(
-                    parent,
-                    UniquenessRequestDescriptor::IrisSerialId(serial_id) if *serial_id == result.serial_id
-                )
+                *parent == result.serial_id
             }
             (Self::Reauthorization { reauth_id, .. }, ResponsePayload::Reauthorization(result)) => {
                 result.reauth_id == reauth_id.to_string()
@@ -159,73 +138,36 @@ impl Request {
     }
 
     /// Returns true if request has been enqueued for system processing.
-    pub(super) fn is_enqueued(&self) -> bool {
+    pub fn is_enqueued(&self) -> bool {
         matches!(self.info().status(), RequestStatus::Enqueued)
     }
 
-    /// Returns true if generated and not awaiting data returned from a parent request.
-    pub(crate) fn is_enqueueable(&self) -> bool {
+    /// Returns true if shares have been uploaded and the request is ready to enqueue.
+    /// Since the parent serial ID is always known at Request creation time, no extra check needed.
+    pub fn is_enqueueable(&self) -> bool {
         matches!(self.info().status(), RequestStatus::SharesUploaded)
-            && match self {
-                Self::IdentityDeletion { parent, .. } => {
-                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
-                }
-                Self::Reauthorization { parent, .. } => {
-                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
-                }
-                Self::ResetUpdate { parent, .. } => {
-                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
-                }
-                _ => true,
-            }
     }
 
-    pub(crate) fn label(&self) -> &Option<String> {
+    pub fn label(&self) -> &Option<String> {
         self.info().label()
     }
 
-    /// For a fully correlated Uniqueness request, returns the (signup_id, serial_id) mapping.
-    pub(crate) fn uniqueness_resolution(&self) -> Option<(uuid::Uuid, IrisSerialId)> {
-        if let Self::Uniqueness {
-            signup_id, info, ..
-        } = self
-        {
-            if !matches!(info.status(), RequestStatus::Correlated) {
-                return None;
-            }
-            if let Some(ResponsePayload::Uniqueness(result)) = info.first_correlation() {
-                let serial_id = result.serial_id.or_else(|| {
-                    result
-                        .matched_serial_ids
-                        .as_ref()
-                        .and_then(|m| m.first().copied())
-                })?;
-                return Some((*signup_id, serial_id));
-            }
-        }
-        None
+    pub fn has_error_response(&self) -> bool {
+        self.info().has_error_response()
     }
 
-    pub(crate) fn parent_descriptor(&self) -> Option<&UniquenessRequestDescriptor> {
-        match self {
-            Self::IdentityDeletion { parent, .. }
-            | Self::Reauthorization { parent, .. }
-            | Self::ResetUpdate { parent, .. } => Some(parent),
-            _ => None,
+    /// Records a node response. Returns true if all parties have now responded (request is Complete).
+    pub fn record_response(&mut self, response: &ResponsePayload) -> bool {
+        tracing::info!("{} :: response -> Node-{}", &self, response.node_id());
+        let is_complete = self.info_mut().record_response(response);
+        if is_complete {
+            self.set_status(RequestStatus::Complete);
         }
-    }
-
-    /// Sets correlated response and maybe sets request state.
-    pub(crate) fn set_correlation(&mut self, response: &ResponsePayload) -> Option<()> {
-        tracing::info!("{} :: Correlated -> Node-{}", &self, response.node_id());
-        self.info_mut().set_correlation(response);
-        self.info().is_fully_correlated().then(|| {
-            self.set_status(RequestStatus::Correlated);
-        })
+        is_complete
     }
 
     /// Updates request status.
-    pub(crate) fn set_status(&mut self, new_state: RequestStatus) {
+    pub fn set_status(&mut self, new_state: RequestStatus) {
         tracing::info!("{} :: {}", &self, new_state);
         self.info_mut().set_status(new_state);
     }
