@@ -290,17 +290,24 @@ impl ServiceClient2 {
                             let is_complete = outstanding_deletions
                                 .get_mut(&r.serial_id)
                                 .map(|info| info.record_response(&response));
-                            if is_complete.unwrap_or_default() {
-                                if !r.success {
-                                    tracing::warn!("Deletion failed for serial id {}", r.serial_id);
-                                } else {
-                                    live_serial_ids.remove(&r.serial_id);
-                                    outstanding_deletions.remove(&r.serial_id);
+                            match is_complete {
+                                None => {
+                                    tracing::warn!(
+                                        "Received IdentityDeletion response: not tracked in outstanding_requests"
+                                    );
                                 }
-                            } else {
-                                tracing::warn!(
-                                    "Received IdentityDeletion response: not tracked in outstanding_requests"
-                                );
+                                Some(true) => {
+                                    if !r.success {
+                                        tracing::warn!(
+                                            "Deletion failed for serial id {}",
+                                            r.serial_id
+                                        );
+                                    } else {
+                                        live_serial_ids.remove(&r.serial_id);
+                                        outstanding_deletions.remove(&r.serial_id);
+                                    }
+                                }
+                                Some(false) => {}
                             }
                             None
                         }
