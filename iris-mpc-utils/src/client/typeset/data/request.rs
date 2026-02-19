@@ -182,7 +182,7 @@ impl Request {
             parts.push(format!("{:.16}", lbl));
         }
         if let Some((key, id)) = op_id {
-            parts.push(format!("{}={:.16}", key, id));
+            parts.push(format!("{}={:.16}", key, id.to_string()));
         }
         if let Some(sid) = serial_id {
             parts.push(format!("serial={}", sid));

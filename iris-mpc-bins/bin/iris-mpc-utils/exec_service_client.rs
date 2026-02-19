@@ -1,4 +1,4 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, path::PathBuf, time::UNIX_EPOCH};
 
 use clap::Parser;
 use eyre::Result;
@@ -8,9 +8,24 @@ use iris_mpc_utils::{
     fsys::reader::read_toml,
 };
 
+struct UtcHms;
+
+impl tracing_subscriber::fmt::time::FormatTime for UtcHms {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> fmt::Result {
+        let secs = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        write!(w, "{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+    }
+}
+
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_timer(UtcHms)
+        .with_ansi(false)
+        .init();
 
     let options = CliOptions::parse();
     tracing::info!("{}", options);
