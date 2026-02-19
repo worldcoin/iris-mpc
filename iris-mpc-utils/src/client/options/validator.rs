@@ -64,7 +64,7 @@ impl ServiceClientOptions {
                 }
 
                 // Error if batch kind cannot be mapped to a supported SMPC request type.
-                if BatchKind::from_str(batch_kind).is_none() {
+                if BatchKind::parse(batch_kind).is_none() {
                     return Err(ServiceClientError::InvalidOptions(format!(
                         "RequestBatchOptions::Simple batch_kind ({}) is unsupported",
                         batch_kind

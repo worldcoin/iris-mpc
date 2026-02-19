@@ -19,7 +19,7 @@ pub enum BatchKind {
 
 impl BatchKind {
     /// Parses a batch kind from its SMPC message type string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => Some(Self::IdentityDeletion),
             smpc_request::REAUTH_MESSAGE_TYPE => Some(Self::Reauth),

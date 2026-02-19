@@ -280,11 +280,9 @@ impl ServiceClient2 {
                     };
 
                     if let Some(uuid) = corr_uuid {
-                        let is_complete = if let Some(info) = outstanding_requests.get_mut(&uuid) {
-                            Some(info.record_response(&response))
-                        } else {
-                            None
-                        };
+                        let is_complete = outstanding_requests
+                            .get_mut(&uuid)
+                            .map(|info| info.record_response(&response));
 
                         match is_complete {
                             None => {
