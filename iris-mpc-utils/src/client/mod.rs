@@ -277,7 +277,14 @@ impl ServiceClient2 {
                         typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
                         typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
                         typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
-                        typeset::ResponsePayload::IdentityDeletion(_) => None,
+                        typeset::ResponsePayload::IdentityDeletion(_r) => {
+                            /*if !r.success {
+                                tracing::warn!("Deletion failed for serial id {}", r.serial_id);
+                            } else {
+                                live_serial_ids.remove(&r.serial_id);
+                            }*/
+                            None
+                        }
                     };
 
                     if let Some(uuid) = corr_uuid {
@@ -318,9 +325,7 @@ impl ServiceClient2 {
                                                 }
                                             });
                                         if let Some(serial_id) = maybe_serial_id {
-                                            if let Some(label) =
-                                                signup_id_to_labels.remove(&uuid)
-                                            {
+                                            if let Some(label) = signup_id_to_labels.remove(&uuid) {
                                                 uniqueness_labels.insert(label, serial_id);
                                             }
                                             // track these to clean them up later
