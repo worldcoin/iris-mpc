@@ -152,7 +152,7 @@ impl Request {
         self.info().label()
     }
 
-    /// Returns a log tag containing the request type, UUID, label (if set), and iris serial ID (if present).
+    /// Returns a log tag containing the request type, label (if set), operation UUID, and iris serial ID (if present).
     pub fn log_tag(&self) -> String {
         let kind = match self {
             Self::IdentityDeletion { .. } => "IdentityDeletion",
@@ -161,7 +161,6 @@ impl Request {
             Self::ResetUpdate { .. } => "ResetUpdate",
             Self::Uniqueness { .. } => "Uniqueness",
         };
-        let uid = self.info().uid();
         let label = self.info().label();
         let serial_id: Option<IrisSerialId> = match self {
             Self::IdentityDeletion { parent, .. }
@@ -169,10 +168,21 @@ impl Request {
             | Self::ResetUpdate { parent, .. } => Some(*parent),
             Self::ResetCheck { .. } | Self::Uniqueness { .. } => None,
         };
+        let op_id: Option<(&str, uuid::Uuid)> = match self {
+            Self::Uniqueness { signup_id, .. } => Some(("signup_id", *signup_id)),
+            Self::Reauthorization { reauth_id, .. } => Some(("reauth_id", *reauth_id)),
+            Self::ResetCheck { reset_id, .. } | Self::ResetUpdate { reset_id, .. } => {
+                Some(("reset_id", *reset_id))
+            }
+            Self::IdentityDeletion { .. } => None,
+        };
 
-        let mut parts = vec![kind.to_string(), uid.to_string()];
+        let mut parts = vec![kind.to_string()];
         if let Some(lbl) = label {
-            parts.push(lbl.clone());
+            parts.push(lbl.chars().take(10).collect());
+        }
+        if let Some((key, id)) = op_id {
+            parts.push(format!("{}={}", key, id));
         }
         if let Some(sid) = serial_id {
             parts.push(format!("serial={}", sid));
