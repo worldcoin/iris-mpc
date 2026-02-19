@@ -106,7 +106,7 @@ impl From<&Request> for RequestPayload {
             Request::Reauthorization {
                 reauth_id, parent, ..
             } => Self::Reauthorization(smpc_request::ReAuthRequest {
-                batch_size: Some(1),
+                batch_size: None,
                 reauth_id: reauth_id.to_string(),
                 s3_key: reauth_id.to_string(),
                 serial_id: *parent,
@@ -115,7 +115,7 @@ impl From<&Request> for RequestPayload {
             }),
             Request::ResetCheck { reset_id, .. } => {
                 Self::ResetCheck(smpc_request::ResetCheckRequest {
-                    batch_size: Some(1),
+                    batch_size: None,
                     reset_id: reset_id.to_string(),
                     s3_key: reset_id.to_string(),
                 })
@@ -129,7 +129,7 @@ impl From<&Request> for RequestPayload {
             }),
             Request::Uniqueness { signup_id, .. } => {
                 Self::Uniqueness(smpc_request::UniquenessRequest {
-                    batch_size: Some(1),
+                    batch_size: None,
                     s3_key: signup_id.to_string(),
                     signup_id: signup_id.to_string(),
                     or_rule_serial_ids: None,
