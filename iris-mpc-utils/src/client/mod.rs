@@ -291,18 +291,22 @@ impl ServiceClient2 {
                             match is_complete {
                                 None => {
                                     tracing::warn!(
-                                        "Received IdentityDeletion response: not tracked in outstanding_requests"
-                                    );
+                                    "Received IdentityDeletion response: not tracked in outstanding_requests"
+                                );
                                 }
                                 Some(true) => {
-                                    if !r.success {
-                                        tracing::warn!(
-                                            "Deletion failed for serial id {}",
-                                            r.serial_id
-                                        );
-                                    } else {
-                                        live_serial_ids.remove(&r.serial_id);
-                                        outstanding_deletions.remove(&r.serial_id);
+                                    if let Some(info) = outstanding_deletions.remove(&r.serial_id) {
+                                        if info.has_error_response() {
+                                            let details = info.get_error_msgs();
+                                            tracing::warn!(
+                                                "Deletion request {} completed with errors: {}",
+                                                info,
+                                                details
+                                            );
+                                            error_log.push(info);
+                                        } else {
+                                            live_serial_ids.remove(&r.serial_id);
+                                        }
                                     }
                                 }
                                 Some(false) => {}
