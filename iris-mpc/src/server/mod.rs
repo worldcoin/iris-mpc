@@ -616,8 +616,6 @@ async fn run_main_server_loop(
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_error_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let res: Result<()> = async {
-        tracing::info!("Entering main loop");
-
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
 
@@ -666,11 +664,6 @@ async fn run_main_server_loop(
                 .expect("Failed to lock CURRENT_VALID_ENTRIES") = batch_valid_entries.clone();
 
             tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
-            tracing::info!(
-                "Received batch with {} valid entries and {} request types",
-                batch_valid_entries.clone().len(),
-                batch.request_types.len()
-            );
 
             // Retry batch sync entries indefinitely. The external
             // get_batch_sync_entries() has a hardcoded 20s timeout per attempt.
@@ -710,7 +703,14 @@ async fn run_main_server_loop(
             batch.retain_valid_entries();
 
             // start trace span - with single TraceId and single ParentTraceID
-            tracing::info!("Received batch in {:?}", now.elapsed());
+            tracing::info!(
+                "Received batch in {:.1}s ({} queries, sync {:.1}s/{} attempt{})",
+                now.elapsed().as_secs_f64(),
+                batch.request_types.len(),
+                sync_elapsed,
+                sync_attempts,
+                if sync_attempts != 1 { "s" } else { "" },
+            );
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
             metrics::gauge!("batch_size").set(batch.request_types.len() as f64);
@@ -752,6 +752,16 @@ async fn run_main_server_loop(
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
             tx_results.send(result).await?;
+
+            tracing::info!(
+                "BATCH_SUMMARY batch_id={} party={} queries={} hash={} compute_ms={} total_ms={}",
+                current_batch_id_atomic.load(Ordering::SeqCst),
+                party_id,
+                batch.request_types.len(),
+                hex::encode(&batch_hash[0..4]),
+                pprof_start.elapsed().as_millis(),
+                now.elapsed().as_millis(),
+            );
 
             // If enabled, stop pprof and upload artifacts tagged with batch info
             if let Some(guard) = pprof_guard.take() {

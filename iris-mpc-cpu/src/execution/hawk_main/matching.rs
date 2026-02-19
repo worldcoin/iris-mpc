@@ -258,8 +258,6 @@ impl BatchStep3 {
 
         let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
 
-        tracing::info!("Decisions: {:?}", decisions);
-
         for request in &self.0 {
             tracing::info!(
                 "Processing request type normal: {:?} mirror {:?}",
