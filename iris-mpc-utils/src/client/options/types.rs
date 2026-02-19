@@ -1,4 +1,10 @@
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::{
+    de::{self, Deserializer, Visitor},
+    ser::Serializer,
+    Deserialize, Serialize,
+};
 
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
@@ -57,6 +63,68 @@ impl AwsOptions {
 
     pub fn sqs_wait_time_seconds(&self) -> &usize {
         &self.sqs_wait_time_seconds
+    }
+}
+
+/// A parent reference: either a label (resolved later) or a known serial ID.
+///
+/// In TOML:
+///   `parent = "some-label"` → `Parent::Label` (child waits for parent)
+///   `parent = 42`           → `Parent::Id`    (serial_id already known)
+#[derive(Debug, Clone)]
+pub enum Parent {
+    /// A label referring to a Uniqueness request whose serial ID is not yet known.
+    Label(String),
+    /// A known Iris serial ID; no dependency resolution needed.
+    Id(IrisSerialId),
+}
+
+impl Serialize for Parent {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Parent::Label(s) => serializer.serialize_str(s),
+            Parent::Id(id) => serializer.serialize_u32(*id),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Parent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ParentVisitor;
+
+        impl<'de> Visitor<'de> for ParentVisitor {
+            type Value = Parent;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "a string label or an integer serial ID")
+            }
+
+            fn visit_u32<E: de::Error>(self, v: u32) -> Result<Self::Value, E> {
+                Ok(Parent::Id(v))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                u32::try_from(v)
+                    .map(Parent::Id)
+                    .map_err(|_| E::custom("serial ID out of range for u32"))
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                u32::try_from(v)
+                    .map(Parent::Id)
+                    .map_err(|_| E::custom("serial ID must be non-negative"))
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(Parent::Label(v.to_string()))
+            }
+
+            fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+                Ok(Parent::Label(v))
+            }
+        }
+
+        deserializer.deserialize_any(ParentVisitor)
     }
 }
 
@@ -126,7 +194,7 @@ impl RequestBatchOptions {
         labels.into_iter().find(|l| !seen.insert(l.clone()))
     }
 
-    /// Validates that every parent label references a declared Uniqueness request.
+    /// Validates that every `Parent::Label` references a declared Uniqueness request.
     /// Returns `Ok(())` if valid, or `Err(message)` describing the first violation.
     pub(crate) fn validate_parents(&self) -> Result<(), String> {
         match self {
@@ -193,7 +261,7 @@ impl RequestBatchOptions {
         Ok(())
     }
 
-    /// Returns an error if a child references a parent in the same or later batch.
+    /// Returns an error if a `Parent::Label` child references a parent in the same or later batch.
     pub(crate) fn validate_batch_ordering(&self) -> Result<(), String> {
         match self {
             Self::Complex { batches } => {
@@ -262,6 +330,7 @@ impl RequestOptions {
         self.payload().iris_pair()
     }
 
+    /// Returns the parent label if this request has a `Parent::Label` parent.
     pub fn label_of_parent(&self) -> Option<String> {
         self.payload().label_of_parent()
     }
@@ -272,21 +341,24 @@ impl RequestOptions {
 pub enum RequestPayloadOptions {
     // Options over a deletion request payload.
     IdentityDeletion {
-        parent: String,
+        parent: Parent,
     },
     // Options over a reauthorisation request payload.
     Reauthorisation {
-        iris_pair: IrisPairDescriptor,
-        parent: String,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
+        parent: Parent,
     },
     // Options over a reset check request payload.
     ResetCheck {
-        iris_pair: IrisPairDescriptor,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
     },
     // Options over a reset update request payload.
     ResetUpdate {
-        iris_pair: IrisPairDescriptor,
-        parent: String,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
+        parent: Parent,
     },
     // Options over a uniqueness request payload.
     Uniqueness {
@@ -298,18 +370,28 @@ pub enum RequestPayloadOptions {
 impl RequestPayloadOptions {
     pub fn iris_pair(&self) -> Option<&IrisPairDescriptor> {
         match &self {
-            Self::IdentityDeletion { .. } | Self::ResetCheck { .. } => None,
+            Self::IdentityDeletion { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
-            | Self::ResetUpdate { iris_pair, .. }
-            | Self::Uniqueness { iris_pair, .. } => Some(iris_pair),
+            | Self::ResetCheck { iris_pair, .. }
+            | Self::ResetUpdate { iris_pair, .. } => iris_pair.as_ref(),
+            Self::Uniqueness { iris_pair, .. } => Some(iris_pair),
         }
     }
 
+    /// Returns the parent label only for `Parent::Label` variants.
     pub fn label_of_parent(&self) -> Option<String> {
         match &self {
-            Self::IdentityDeletion { parent }
-            | Self::Reauthorisation { parent, .. }
-            | Self::ResetUpdate { parent, .. } => Some(parent.clone()),
+            Self::IdentityDeletion {
+                parent: Parent::Label(l),
+            }
+            | Self::Reauthorisation {
+                parent: Parent::Label(l),
+                ..
+            }
+            | Self::ResetUpdate {
+                parent: Parent::Label(l),
+                ..
+            } => Some(l.clone()),
             _ => None,
         }
     }
@@ -335,6 +417,97 @@ pub enum SharesGeneratorOptions {
         // Instruction in respect of Iris code selection.
         selection_strategy: Option<IrisSelection>,
     },
+}
+
+impl IntoIterator for RequestBatchOptions {
+    type Item = Vec<RequestOptions>;
+    type IntoIter = std::vec::IntoIter<Vec<RequestOptions>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            RequestBatchOptions::Complex { batches } => batches.into_iter(),
+            RequestBatchOptions::Simple {
+                batch_count,
+                batch_kind,
+                batch_size,
+                ..
+            } => {
+                use iris_mpc_common::helpers::smpc_request::{
+                    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+                    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+                    UNIQUENESS_MESSAGE_TYPE,
+                };
+
+                let requires_parent = matches!(
+                    batch_kind.as_str(),
+                    IDENTITY_DELETION_MESSAGE_TYPE
+                        | REAUTH_MESSAGE_TYPE
+                        | RESET_UPDATE_MESSAGE_TYPE
+                );
+
+                let mut v: Vec<Vec<RequestOptions>> = vec![];
+                for _ in 0..batch_count {
+                    if !requires_parent {
+                        let batch = (0..batch_size)
+                            .map(|_| match batch_kind.as_str() {
+                                UNIQUENESS_MESSAGE_TYPE => RequestOptions::new(
+                                    None,
+                                    RequestPayloadOptions::Uniqueness {
+                                        iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                                        insertion_layers: None,
+                                    },
+                                ),
+                                RESET_CHECK_MESSAGE_TYPE => RequestOptions::new(
+                                    None,
+                                    RequestPayloadOptions::ResetCheck { iris_pair: None },
+                                ),
+                                _ => unreachable!(
+                                    "Simple batch_kind '{}' should have been rejected by validation",
+                                    batch_kind
+                                ),
+                            })
+                            .collect();
+                        v.push(batch);
+                    } else {
+                        // Two batches: uniqueness preamble (with UUID labels) + desired type
+                        // (referencing those labels via Parent::Label).
+                        let mut uniqueness_batch = vec![];
+                        let mut child_batch = vec![];
+                        for _ in 0..batch_size {
+                            let label = uuid::Uuid::new_v4().to_string();
+                            uniqueness_batch.push(RequestOptions::new(
+                                Some(label.as_str()),
+                                RequestPayloadOptions::Uniqueness {
+                                    iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                                    insertion_layers: None,
+                                },
+                            ));
+                            let payload = match batch_kind.as_str() {
+                                IDENTITY_DELETION_MESSAGE_TYPE => {
+                                    RequestPayloadOptions::IdentityDeletion {
+                                        parent: Parent::Label(label),
+                                    }
+                                }
+                                REAUTH_MESSAGE_TYPE => RequestPayloadOptions::Reauthorisation {
+                                    iris_pair: None,
+                                    parent: Parent::Label(label),
+                                },
+                                RESET_UPDATE_MESSAGE_TYPE => RequestPayloadOptions::ResetUpdate {
+                                    iris_pair: None,
+                                    parent: Parent::Label(label),
+                                },
+                                _ => unreachable!("already checked requires_parent"),
+                            };
+                            child_batch.push(RequestOptions::new(None, payload));
+                        }
+                        v.push(uniqueness_batch);
+                        v.push(child_batch);
+                    }
+                }
+                v.into_iter()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -385,6 +558,45 @@ mod tests {
         "#;
         let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
         let _ = toml::to_string(&opts).unwrap();
+    }
+
+    #[test]
+    fn test_parent_label_deserialization() {
+        let toml_str = r#"
+            [Complex]
+            batches = [[
+                { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
+            ]]
+        "#;
+        let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
+        if let RequestBatchOptions::Complex { batches } = &opts {
+            let deletion = &batches[0][1];
+            if let RequestPayloadOptions::IdentityDeletion { parent } = deletion.payload() {
+                assert!(matches!(parent, Parent::Label(l) if l == "U-0"));
+            } else {
+                panic!("Expected IdentityDeletion");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parent_id_deserialization() {
+        let toml_str = r#"
+            [Complex]
+            batches = [[
+                { label = "D-0", payload = { IdentityDeletion = { parent = 42 } } },
+            ]]
+        "#;
+        let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
+        if let RequestBatchOptions::Complex { batches } = &opts {
+            let deletion = &batches[0][0];
+            if let RequestPayloadOptions::IdentityDeletion { parent } = deletion.payload() {
+                assert!(matches!(parent, Parent::Id(42)));
+            } else {
+                panic!("Expected IdentityDeletion");
+            }
+        }
     }
 
     #[test]

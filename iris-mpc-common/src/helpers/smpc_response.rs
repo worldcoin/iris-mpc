@@ -105,6 +105,11 @@ impl UniquenessResult {
             full_face_mirror_attack_detected: false,
         }
     }
+
+    pub fn get_serial_id(&self) -> Option<u32> {
+        self.serial_id
+            .or_else(|| self.matched_serial_ids.as_ref()?.first().copied())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

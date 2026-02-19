@@ -14,14 +14,11 @@ pub struct RequestInfo {
     /// Associated request batch item ordinal identifier.
     batch_item_idx: usize,
 
-    /// Correlated system responses returned by MPC nodes.
-    correlation_set: [Option<ResponsePayload>; N_PARTIES],
+    /// System responses returned by MPC nodes (one per party).
+    responses: [Option<ResponsePayload>; N_PARTIES],
 
     /// User assigned label ... used to associate child/parent requests.
     label: Option<String>,
-
-    /// User assigned label ... used to associate child/parent requests.
-    label_of_parent: Option<String>,
 
     /// Set of processing states.
     state_history: Vec<RequestStatus>,
@@ -31,51 +28,76 @@ pub struct RequestInfo {
 }
 
 impl RequestInfo {
-    pub(super) fn new(
-        batch: &RequestBatch,
-        label: Option<String>,
-        label_of_parent: Option<String>,
-    ) -> Self {
+    pub fn new(batch: &RequestBatch, label: Option<String>) -> Self {
+        Self::with_indices(batch.batch_idx(), batch.next_item_idx(), label)
+    }
+
+    pub fn with_indices(batch_idx: usize, batch_item_idx: usize, label: Option<String>) -> Self {
         let mut state_history = Vec::with_capacity(RequestStatus::VARIANT_COUNT);
         state_history.push(RequestStatus::default());
 
         Self {
-            batch_idx: batch.batch_idx(),
-            batch_item_idx: batch.next_item_idx(),
-            correlation_set: [const { None }; N_PARTIES],
+            batch_idx,
+            batch_item_idx,
+            responses: [const { None }; N_PARTIES],
             label,
-            label_of_parent,
             state_history,
             uid: uuid::Uuid::new_v4(),
         }
     }
 
-    pub(super) fn label(&self) -> &Option<String> {
+    pub fn label(&self) -> &Option<String> {
         &self.label
     }
 
-    pub(super) fn uid(&self) -> &uuid::Uuid {
+    pub fn uid(&self) -> &uuid::Uuid {
         &self.uid
     }
 
-    pub(super) fn is_fully_correlated(&self) -> bool {
-        self.correlation_set.iter().all(|c| c.is_some())
+    pub fn is_complete(&self) -> bool {
+        self.responses.iter().all(|c| c.is_some())
     }
 
-    pub(super) fn status(&self) -> &RequestStatus {
+    pub fn status(&self) -> &RequestStatus {
         self.state_history.last().unwrap()
     }
 
-    pub(super) fn set_correlation(&mut self, response: &ResponsePayload) {
-        self.correlation_set[response.node_id()] = Some(response.clone());
+    /// Records a response from a node. Returns true if all parties have now responded.
+    pub fn record_response(&mut self, response: &ResponsePayload) -> bool {
+        self.responses[response.node_id()] = Some(response.clone());
+        self.is_complete()
     }
 
-    pub(super) fn set_status(&mut self, new_state: RequestStatus) {
+    pub fn set_status(&mut self, new_state: RequestStatus) {
         self.state_history.push(new_state);
     }
 
-    pub(super) fn first_correlation(&self) -> Option<&ResponsePayload> {
-        self.correlation_set.iter().find_map(|c| c.as_ref())
+    pub fn first_response(&self) -> Option<&ResponsePayload> {
+        self.responses.iter().find_map(|c| c.as_ref())
+    }
+
+    pub fn responses(&self) -> &[Option<ResponsePayload>; N_PARTIES] {
+        &self.responses
+    }
+
+    pub fn has_error_response(&self) -> bool {
+        self.responses.iter().flatten().any(|r| r.is_error())
+    }
+
+    pub fn get_error_msgs(&self) -> String {
+        self.responses
+            .iter()
+            .flatten()
+            .filter(|r| r.is_error())
+            .map(|r| {
+                format!(
+                    "node {}: {}",
+                    r.node_id(),
+                    r.error_reason().unwrap_or("no reason given")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
