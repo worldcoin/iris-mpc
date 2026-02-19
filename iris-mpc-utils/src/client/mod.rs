@@ -121,6 +121,7 @@ impl ServiceClient2 {
         let mut uniqueness_labels: HashMap<String, IrisSerialId> = HashMap::new();
         let mut signup_id_to_labels: HashMap<Uuid, String> = HashMap::new();
         let mut outstanding_requests: HashMap<Uuid, typeset::RequestInfo> = HashMap::new();
+        let mut outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo> = HashMap::new();
         let mut error_log: Vec<typeset::RequestInfo> = Vec::new();
 
         for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
@@ -252,7 +253,10 @@ impl ServiceClient2 {
                     typeset::Request::Reauthorization { reauth_id, .. } => Some(*reauth_id),
                     typeset::Request::ResetCheck { reset_id, .. }
                     | typeset::Request::ResetUpdate { reset_id, .. } => Some(*reset_id),
-                    typeset::Request::IdentityDeletion { .. } => None,
+                    typeset::Request::IdentityDeletion { parent, .. } => {
+                        outstanding_deletions.insert(*parent, request.info().clone());
+                        None
+                    }
                 };
                 if let Some(tracking_uuid) = opt_tracking_uuid {
                     outstanding_requests.insert(tracking_uuid, request.info().clone());
@@ -262,7 +266,7 @@ impl ServiceClient2 {
             // After doing this for everything in the batch, wait for responses, updating
             // outstanding_requests. For uniqueness results, get the label from uuid_to_labels
             // and then add the iris serial id to uniquess_labels.
-            while !outstanding_requests.is_empty() {
+            while !outstanding_requests.is_empty() || !outstanding_deletions.is_empty() {
                 for sqs_msg in self
                     .aws_client
                     .sqs_receive_messages(Some(N_PARTIES))
@@ -277,12 +281,17 @@ impl ServiceClient2 {
                         typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
                         typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
                         typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
-                        typeset::ResponsePayload::IdentityDeletion(_r) => {
-                            /*if !r.success {
-                                tracing::warn!("Deletion failed for serial id {}", r.serial_id);
-                            } else {
-                                live_serial_ids.remove(&r.serial_id);
-                            }*/
+                        typeset::ResponsePayload::IdentityDeletion(r) => {
+                            let is_complete = outstanding_deletions
+                                .get_mut(&r.serial_id)
+                                .map(|info| info.record_response(&response));
+                            if is_complete.unwrap_or_default() {
+                                if !r.success {
+                                    tracing::warn!("Deletion failed for serial id {}", r.serial_id);
+                                } else {
+                                    live_serial_ids.remove(&r.serial_id);
+                                }
+                            }
                             None
                         }
                     };
