@@ -6,7 +6,6 @@ use uuid;
 use iris_mpc_common::IrisSerialId;
 
 use super::{IrisPairDescriptor, RequestInfo, RequestStatus, ResponsePayload};
-use crate::client::typeset::data::request_batch::PendingItem;
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,38 +112,6 @@ impl Request {
                 Some(iris_pair) => vec![iris_pair.left().index(), iris_pair.right().index()],
                 None => vec![],
             },
-        }
-    }
-
-    /// Creates a Request from a PendingItem once the parent serial ID is known.
-    /// The resulting request has `Ready` status; caller is responsible for setting `SharesUploaded`.
-    pub fn from_pending(
-        batch_idx: usize,
-        batch_item_idx: usize,
-        item: &PendingItem,
-        serial_id: IrisSerialId,
-    ) -> Self {
-        use crate::client::options::RequestPayloadOptions;
-
-        let info = RequestInfo::with_indices(batch_idx, batch_item_idx, item.label());
-        match item.payload() {
-            RequestPayloadOptions::IdentityDeletion { .. } => Request::IdentityDeletion {
-                info,
-                parent: serial_id,
-            },
-            RequestPayloadOptions::Reauthorisation { iris_pair, .. } => Request::Reauthorization {
-                info,
-                iris_pair: *iris_pair,
-                parent: serial_id,
-                reauth_id: item.op_id(),
-            },
-            RequestPayloadOptions::ResetUpdate { iris_pair, .. } => Request::ResetUpdate {
-                info,
-                iris_pair: *iris_pair,
-                parent: serial_id,
-                reset_id: item.op_id(),
-            },
-            _ => panic!("from_pending: invalid payload type for pending item"),
         }
     }
 

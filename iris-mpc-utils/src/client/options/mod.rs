@@ -4,9 +4,7 @@ mod types;
 mod validator;
 
 pub use types::AwsOptions;
-pub use types::{
-    Parent, RequestBatchOptions, RequestOptions, RequestPayloadOptions, SharesGeneratorOptions,
-};
+pub use types::{Parent, RequestBatchOptions, RequestPayloadOptions, SharesGeneratorOptions};
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -34,7 +34,7 @@ impl ServiceClient2 {
         shares_generator: SharesGeneratorOptions,
     ) -> Result<Self, ServiceClientError> {
         let aws_client = AwsClient::async_from(opts_aws).await;
-        let shares_generator = SharesGenerator::<StdRng>::from_options2(shares_generator);
+        let shares_generator = SharesGenerator::<StdRng>::from_options(shares_generator);
 
         // todo: better validation code
         if matches!(request_batch, RequestBatchOptions::Complex { .. }) {

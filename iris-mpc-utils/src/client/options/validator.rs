@@ -5,7 +5,7 @@ use super::{
 };
 
 impl ServiceClientOptions {
-    pub(crate) fn validate(&self) -> Result<(), ServiceClientError> {
+    pub fn validate(&self) -> Result<(), ServiceClientError> {
         // Error if FromFile is used without a path to the NDJSON file.
         if let SharesGeneratorOptions::FromFile {
             path_to_ndjson_file,
@@ -106,8 +106,6 @@ mod tests {
         );
     }
 
-    // -- Complex error paths --
-
     #[test]
     fn complex_rejects_from_compute_shares_generator() {
         let o = opts(
@@ -125,7 +123,6 @@ mod tests {
 
     #[test]
     fn complex_rejects_iris_index_in_multiple_pairs() {
-        // Index 1 appears in two different pairs: (1,2) and (1,3).
         let o = opts(
             r#"
             [shares_generator.FromFile]
@@ -208,11 +205,8 @@ mod tests {
         assert_invalid_options(&o, "parent 'U-0' must be in an earlier batch");
     }
 
-    // -- Complex happy path --
-
     #[test]
     fn complex_allows_duplicate_iris_pair() {
-        // Same pair [1,2] used twice (duplicate enrollment test).
         let o = opts(
             r#"
             [shares_generator.FromFile]
@@ -231,7 +225,6 @@ mod tests {
 
     #[test]
     fn complex_allows_swapped_iris_pair() {
-        // Pair [1,2] and [2,1] (mirroring attack test).
         let o = opts(
             r#"
             [shares_generator.FromFile]
