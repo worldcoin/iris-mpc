@@ -46,7 +46,7 @@ env:
     value: "2000000"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_correctness_test"
+    value: ""
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
