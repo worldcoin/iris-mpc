@@ -140,6 +140,10 @@ fn unsplit_tasks<T>(chunks: Vec<std::result::Result<Result<Vec<T>>, JoinError>>)
 
 fn aggregate_rotation_results(results: VecRotations<MapEdges<bool>>) -> MapEdges<bool> {
     results.iter().fold(HashMap::new(), |mut acc, m| {
+        #[allow(
+            clippy::iter_over_hash_type,
+            reason = "Only aggregating hashmaps using logical OR, not relying on order."
+        )]
         for (v, is_match) in m {
             *acc.entry(*v).or_default() |= is_match;
         }
