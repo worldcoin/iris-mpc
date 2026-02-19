@@ -290,7 +290,12 @@ impl ServiceClient2 {
                                     tracing::warn!("Deletion failed for serial id {}", r.serial_id);
                                 } else {
                                     live_serial_ids.remove(&r.serial_id);
+                                    outstanding_deletions.remove(&r.serial_id);
                                 }
+                            } else {
+                                tracing::warn!(
+                                    "Received IdentityDeletion response: not tracked in outstanding_requests"
+                                );
                             }
                             None
                         }
@@ -345,10 +350,6 @@ impl ServiceClient2 {
                             }
                             Some(false) => {}
                         }
-                    } else {
-                        tracing::warn!(
-                            "Received IdentityDeletion response: not tracked in outstanding_requests"
-                        );
                     }
 
                     self.aws_client
