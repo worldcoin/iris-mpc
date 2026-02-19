@@ -152,6 +152,34 @@ impl Request {
         self.info().label()
     }
 
+    /// Returns a log tag containing the request type, UUID, label (if set), and iris serial ID (if present).
+    pub fn log_tag(&self) -> String {
+        let kind = match self {
+            Self::IdentityDeletion { .. } => "IdentityDeletion",
+            Self::Reauthorization { .. } => "Reauthorization",
+            Self::ResetCheck { .. } => "ResetCheck",
+            Self::ResetUpdate { .. } => "ResetUpdate",
+            Self::Uniqueness { .. } => "Uniqueness",
+        };
+        let uid = self.info().uid();
+        let label = self.info().label();
+        let serial_id: Option<IrisSerialId> = match self {
+            Self::IdentityDeletion { parent, .. }
+            | Self::Reauthorization { parent, .. }
+            | Self::ResetUpdate { parent, .. } => Some(*parent),
+            Self::ResetCheck { .. } | Self::Uniqueness { .. } => None,
+        };
+
+        let mut parts = vec![kind.to_string(), uid.to_string()];
+        if let Some(lbl) = label {
+            parts.push(lbl.clone());
+        }
+        if let Some(sid) = serial_id {
+            parts.push(format!("serial={}", sid));
+        }
+        parts.join(" | ")
+    }
+
     pub fn has_error_response(&self) -> bool {
         self.info().has_error_response()
     }
