@@ -8,8 +8,9 @@ use serde::{
 
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
+use uuid::Uuid;
 
-use crate::client::typeset::IrisPairDescriptor;
+use crate::client::{typeset::IrisPairDescriptor, Request, RequestInfo};
 
 /// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,6 +334,51 @@ impl RequestOptions {
     /// Returns the parent label if this request has a `Parent::Label` parent.
     pub fn label_of_parent(&self) -> Option<String> {
         self.payload().label_of_parent()
+    }
+
+    pub fn make_request(
+        &self,
+        info: RequestInfo,
+        parent_serial_id: Option<IrisSerialId>,
+    ) -> Request {
+        let corr_uuid = Uuid::new_v4();
+
+        match self.payload() {
+            RequestPayloadOptions::Uniqueness { iris_pair, .. } => Request::Uniqueness {
+                info,
+                iris_pair: Some(*iris_pair),
+                signup_id: corr_uuid,
+            },
+            RequestPayloadOptions::Reauthorisation { iris_pair, .. } => Request::Reauthorization {
+                info,
+                iris_pair: *iris_pair,
+                parent: parent_serial_id.unwrap(),
+                reauth_id: corr_uuid,
+            },
+            RequestPayloadOptions::ResetCheck { iris_pair } => Request::ResetCheck {
+                info,
+                iris_pair: *iris_pair,
+                reset_id: corr_uuid,
+            },
+            RequestPayloadOptions::ResetUpdate { iris_pair, .. } => Request::ResetUpdate {
+                info,
+                iris_pair: *iris_pair,
+                parent: parent_serial_id.unwrap(),
+                reset_id: corr_uuid,
+            },
+            RequestPayloadOptions::IdentityDeletion { .. } => Request::IdentityDeletion {
+                info,
+                parent: parent_serial_id.unwrap(),
+            },
+        }
+    }
+
+    pub fn get_parent(&self) -> Option<Parent> {
+        match self.payload() {
+            RequestPayloadOptions::IdentityDeletion { parent }
+            | RequestPayloadOptions::Reauthorisation { parent, .. } => Some(parent.clone()),
+            _ => None,
+        }
     }
 }
 
