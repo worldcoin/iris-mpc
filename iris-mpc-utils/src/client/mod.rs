@@ -110,17 +110,15 @@ impl ServiceClient2 {
             {
                 tracing::error!("Failed to send deletion for serial_id {}: {}", serial_id, e);
             }
-
-            // iris-mpc-hawk will not send responses for a batch of just deletions
-            tracing::info!("Cleanup complete. Deletions have been submitted.");
         }
+        // iris-mpc-hawk will not send responses for a batch of just deletions
+        tracing::info!("Cleanup complete. Deletions have been submitted.");
     }
+
     async fn exec(mut self, live_serial_ids: &mut HashSet<IrisSerialId>) {
         use crate::aws::types::SnsMessageInfo;
         use crate::client::options::{Parent, RequestPayloadOptions};
         use crate::constants::N_PARTIES;
-
-        self.init().await.expect("init failed");
 
         // need to track all the uniqueness requests sent, and their serial ids. also need to track which requests are dependent on a parent.
         let mut uniqueness_labels: HashMap<String, IrisSerialId> = HashMap::new();
