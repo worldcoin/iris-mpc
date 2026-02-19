@@ -16,7 +16,13 @@ impl tracing_subscriber::fmt::time::FormatTime for UtcHms {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        write!(w, "{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+        write!(
+            w,
+            "{:02}:{:02}:{:02}",
+            (secs / 3600) % 24,
+            (secs / 60) % 60,
+            secs % 60
+        )
     }
 }
 

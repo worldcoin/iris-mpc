@@ -117,14 +117,8 @@ impl ServiceClient2 {
     async fn exec(mut self, live_serial_ids: &mut HashSet<IrisSerialId>) {
         use crate::aws::types::SnsMessageInfo;
         use crate::client::options::{Parent, RequestPayloadOptions};
-        use crate::constants::N_PARTIES;
 
-        // need to track all the uniqueness requests sent, and their serial ids. also need to track which requests are dependent on a parent.
-        let mut uniqueness_labels: HashMap<String, IrisSerialId> = HashMap::new();
-        let mut signup_id_to_labels: HashMap<Uuid, String> = HashMap::new();
-        let mut outstanding_requests: HashMap<Uuid, typeset::RequestInfo> = HashMap::new();
-        let mut outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo> = HashMap::new();
-        let mut error_log: Vec<typeset::RequestInfo> = Vec::new();
+        let mut state = ExecState::new();
 
         for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
             // Phase 1: Gather all requests and pre-generate shares.
@@ -140,7 +134,7 @@ impl ServiceClient2 {
                     | RequestPayloadOptions::ResetUpdate { parent, .. } => match parent {
                         Parent::Id(id) => Some(*id),
                         Parent::Label(label) => {
-                            if let Some(&serial_id) = uniqueness_labels.get(label.as_str()) {
+                            if let Some(&serial_id) = state.uniqueness_labels.get(label.as_str()) {
                                 Some(serial_id)
                             } else {
                                 tracing::warn!(
@@ -244,146 +238,193 @@ impl ServiceClient2 {
 
             // Phase 5: Track in outstanding_requests keyed by correlation UUID. IdentityDeletion
             // correlates by serial_id rather than UUID, so it is not tracked here.
-            for request in &batch_requests {
-                let opt_tracking_uuid: Option<Uuid> = match request {
-                    typeset::Request::Uniqueness { signup_id, .. } => {
-                        if let Some(label) = request.info().label() {
-                            signup_id_to_labels.insert(*signup_id, label.clone());
-                        }
-                        Some(*signup_id)
-                    }
-                    typeset::Request::Reauthorization { reauth_id, .. } => Some(*reauth_id),
-                    typeset::Request::ResetCheck { reset_id, .. }
-                    | typeset::Request::ResetUpdate { reset_id, .. } => Some(*reset_id),
-                    typeset::Request::IdentityDeletion { parent, .. } => {
-                        outstanding_deletions.insert(*parent, request.info().clone());
-                        None
-                    }
-                };
-                if let Some(tracking_uuid) = opt_tracking_uuid {
-                    outstanding_requests.insert(tracking_uuid, request.info().clone());
-                }
-            }
+            state.track_batch_requests(&batch_requests);
 
             // After doing this for everything in the batch, wait for responses, updating
             // outstanding_requests. For uniqueness results, get the label from uuid_to_labels
             // and then add the iris serial id to uniquess_labels.
-            while !outstanding_requests.is_empty() || !outstanding_deletions.is_empty() {
-                for sqs_msg in self
-                    .aws_client
-                    .sqs_receive_messages(Some(N_PARTIES))
-                    .await
-                    .expect("SQS receive failed")
-                {
-                    let response = typeset::ResponsePayload::from(&sqs_msg);
-                    tracing::info!("AWS-SNS received {}", response.log_tag());
-
-                    // Extract correlation UUID from response (IdentityDeletion has none).
-                    let corr_uuid: Option<Uuid> = match &response {
-                        typeset::ResponsePayload::Uniqueness(r) => r.signup_id.parse().ok(),
-                        typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
-                        typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
-                        typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
-                        typeset::ResponsePayload::IdentityDeletion(r) => {
-                            let is_complete = outstanding_deletions
-                                .get_mut(&r.serial_id)
-                                .map(|info| info.record_response(&response));
-                            match is_complete {
-                                None => {
-                                    tracing::warn!(
-                                    "Received IdentityDeletion response: not tracked in outstanding_requests"
-                                );
-                                }
-                                Some(true) => {
-                                    if let Some(info) = outstanding_deletions.remove(&r.serial_id) {
-                                        if info.has_error_response() {
-                                            let details = info.get_error_msgs();
-                                            tracing::warn!(
-                                                "Deletion request {} completed with errors: {}",
-                                                info,
-                                                details
-                                            );
-                                            error_log.push(info);
-                                        } else {
-                                            live_serial_ids.remove(&r.serial_id);
-                                        }
-                                    }
-                                }
-                                Some(false) => {}
-                            }
-                            None
-                        }
-                    };
-
-                    if let Some(uuid) = corr_uuid {
-                        let is_complete = outstanding_requests
-                            .get_mut(&uuid)
-                            .map(|info| info.record_response(&response));
-
-                        match is_complete {
-                            None => {
-                                tracing::warn!(
-                                    "Orphan response: no matching request for UUID {}",
-                                    uuid
-                                );
-                            }
-                            Some(true) => {
-                                if let Some(info) = outstanding_requests.remove(&uuid) {
-                                    if info.has_error_response() {
-                                        let details = info.get_error_msgs();
-                                        tracing::warn!(
-                                            "request {} completed with errors: {}",
-                                            info,
-                                            details
-                                        );
-                                        signup_id_to_labels.remove(&uuid);
-                                        error_log.push(info);
-                                    } else {
-                                        // For uniqueness: search all node responses for a serial_id
-                                        // and record it against the request's label.
-                                        let maybe_serial_id =
-                                            info.responses().iter().find_map(|opt| {
-                                                if let Some(typeset::ResponsePayload::Uniqueness(
-                                                    result,
-                                                )) = opt
-                                                {
-                                                    result.get_serial_id()
-                                                } else {
-                                                    None
-                                                }
-                                            });
-                                        if let Some(serial_id) = maybe_serial_id {
-                                            if let Some(label) = signup_id_to_labels.remove(&uuid) {
-                                                uniqueness_labels.insert(label, serial_id);
-                                            }
-                                            // track these to clean them up later
-                                            live_serial_ids.insert(serial_id);
-                                        }
-                                    }
-                                }
-                            }
-                            Some(false) => {}
-                        }
-                    }
-
-                    self.aws_client
-                        .sqs_purge_response_queue_message(&sqs_msg)
-                        .await
-                        .expect("SQS message purge failed");
-                }
-            }
+            state
+                .process_responses(&self.aws_client, live_serial_ids)
+                .await;
             tracing::info!(
                 "Batch {} finished. Responses to non-deletion requests have been received",
                 batch_idx
             );
         }
 
-        if !error_log.is_empty() {
+        state.report_errors();
+    }
+}
+
+// Holds the cross-batch state needed while processing requests and responses.
+struct ExecState {
+    uniqueness_labels: HashMap<String, IrisSerialId>,
+    signup_id_to_labels: HashMap<Uuid, String>,
+    outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
+    outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo>,
+    error_log: Vec<typeset::RequestInfo>,
+}
+
+impl ExecState {
+    fn new() -> Self {
+        Self {
+            uniqueness_labels: HashMap::new(),
+            signup_id_to_labels: HashMap::new(),
+            outstanding_requests: HashMap::new(),
+            outstanding_deletions: HashMap::new(),
+            error_log: Vec::new(),
+        }
+    }
+
+    // Phase 5: Register published requests so responses can be correlated. IdentityDeletion
+    // correlates by serial_id rather than UUID, so it goes into outstanding_deletions.
+    fn track_batch_requests(&mut self, batch_requests: &[typeset::Request]) {
+        for request in batch_requests {
+            let opt_tracking_uuid: Option<Uuid> = match request {
+                typeset::Request::Uniqueness { signup_id, .. } => {
+                    if let Some(label) = request.info().label() {
+                        self.signup_id_to_labels.insert(*signup_id, label.clone());
+                    }
+                    Some(*signup_id)
+                }
+                typeset::Request::Reauthorization { reauth_id, .. } => Some(*reauth_id),
+                typeset::Request::ResetCheck { reset_id, .. }
+                | typeset::Request::ResetUpdate { reset_id, .. } => Some(*reset_id),
+                typeset::Request::IdentityDeletion { parent, .. } => {
+                    self.outstanding_deletions
+                        .insert(*parent, request.info().clone());
+                    None
+                }
+            };
+            if let Some(tracking_uuid) = opt_tracking_uuid {
+                self.outstanding_requests
+                    .insert(tracking_uuid, request.info().clone());
+            }
+        }
+    }
+
+    // Drains outstanding_requests and outstanding_deletions by polling SQS until both are empty.
+    async fn process_responses(
+        &mut self,
+        aws_client: &AwsClient,
+        live_serial_ids: &mut HashSet<IrisSerialId>,
+    ) {
+        use crate::constants::N_PARTIES;
+
+        while !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
+            for sqs_msg in aws_client
+                .sqs_receive_messages(Some(N_PARTIES))
+                .await
+                .expect("SQS receive failed")
+            {
+                let response = typeset::ResponsePayload::from(&sqs_msg);
+                tracing::info!("AWS-SNS received {}", response.log_tag());
+
+                // Extract correlation UUID from response (IdentityDeletion has none).
+                let corr_uuid: Option<Uuid> = match &response {
+                    typeset::ResponsePayload::Uniqueness(r) => r.signup_id.parse().ok(),
+                    typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
+                    typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
+                    typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
+                    typeset::ResponsePayload::IdentityDeletion(r) => {
+                        let is_complete = self
+                            .outstanding_deletions
+                            .get_mut(&r.serial_id)
+                            .map(|info| info.record_response(&response));
+                        match is_complete {
+                            None => {
+                                tracing::warn!(
+                                    "Received IdentityDeletion response: not tracked in outstanding_requests"
+                                );
+                            }
+                            Some(true) => {
+                                if let Some(info) = self.outstanding_deletions.remove(&r.serial_id)
+                                {
+                                    if info.has_error_response() {
+                                        let details = info.get_error_msgs();
+                                        tracing::warn!(
+                                            "Deletion request {} completed with errors: {}",
+                                            info,
+                                            details
+                                        );
+                                        self.error_log.push(info);
+                                    } else {
+                                        live_serial_ids.remove(&r.serial_id);
+                                    }
+                                }
+                            }
+                            Some(false) => {}
+                        }
+                        None
+                    }
+                };
+
+                if let Some(uuid) = corr_uuid {
+                    let is_complete = self
+                        .outstanding_requests
+                        .get_mut(&uuid)
+                        .map(|info| info.record_response(&response));
+
+                    match is_complete {
+                        None => {
+                            tracing::warn!(
+                                "Orphan response: no matching request for UUID {}",
+                                uuid
+                            );
+                        }
+                        Some(true) => {
+                            if let Some(info) = self.outstanding_requests.remove(&uuid) {
+                                if info.has_error_response() {
+                                    let details = info.get_error_msgs();
+                                    tracing::warn!(
+                                        "request {} completed with errors: {}",
+                                        info,
+                                        details
+                                    );
+                                    self.signup_id_to_labels.remove(&uuid);
+                                    self.error_log.push(info);
+                                } else {
+                                    // For uniqueness: search all node responses for a serial_id
+                                    // and record it against the request's label.
+                                    let maybe_serial_id = info.responses().iter().find_map(|opt| {
+                                        if let Some(typeset::ResponsePayload::Uniqueness(result)) =
+                                            opt
+                                        {
+                                            result.get_serial_id()
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                    if let Some(serial_id) = maybe_serial_id {
+                                        if let Some(label) = self.signup_id_to_labels.remove(&uuid)
+                                        {
+                                            self.uniqueness_labels.insert(label, serial_id);
+                                        }
+                                        // track these to clean them up later
+                                        live_serial_ids.insert(serial_id);
+                                    }
+                                }
+                            }
+                        }
+                        Some(false) => {}
+                    }
+                }
+
+                aws_client
+                    .sqs_purge_response_queue_message(&sqs_msg)
+                    .await
+                    .expect("SQS message purge failed");
+            }
+        }
+    }
+
+    fn report_errors(&self) {
+        if !self.error_log.is_empty() {
             tracing::warn!(
                 "=== {} request(s) completed with errors ===",
-                error_log.len()
+                self.error_log.len()
             );
-            for info in &error_log {
+            for info in &self.error_log {
                 let details = info.get_error_msgs();
                 tracing::warn!("  {}: {}", info, details);
             }
