@@ -317,10 +317,12 @@ impl ServiceClient2 {
                                                     None
                                                 }
                                             });
-                                        if let (Some(serial_id), Some(label)) =
-                                            (maybe_serial_id, signup_id_to_labels.remove(&uuid))
-                                        {
-                                            uniqueness_labels.insert(label, serial_id);
+                                        if let Some(serial_id) = maybe_serial_id {
+                                            if let Some(label) =
+                                                signup_id_to_labels.remove(&uuid)
+                                            {
+                                                uniqueness_labels.insert(label, serial_id);
+                                            }
                                             // track these to clean them up later
                                             live_serial_ids.insert(serial_id);
                                         }
