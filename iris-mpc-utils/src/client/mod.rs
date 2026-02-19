@@ -275,15 +275,7 @@ impl ServiceClient2 {
 
                     // Extract correlation UUID from response (IdentityDeletion has none).
                     let corr_uuid: Option<Uuid> = match &response {
-                        typeset::ResponsePayload::Uniqueness(r) => {
-                            // track these to clean them up later
-                            if let Some(serial_id) = r.serial_id {
-                                live_serial_ids.insert(serial_id);
-                            } else {
-                                tracing::warn!("received Uniqueness response without a serial id");
-                            }
-                            r.signup_id.parse().ok()
-                        }
+                        typeset::ResponsePayload::Uniqueness(r) => r.signup_id.parse().ok(),
                         typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
                         typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
                         typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
@@ -323,6 +315,8 @@ impl ServiceClient2 {
                                         (maybe_serial_id, signup_id_to_labels.remove(&uuid))
                                     {
                                         uniqueness_labels.insert(label, serial_id);
+                                        // track these to clean them up later
+                                        live_serial_ids.insert(serial_id);
                                     }
                                 }
                             }

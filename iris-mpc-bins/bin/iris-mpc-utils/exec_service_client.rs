@@ -81,19 +81,6 @@ Iris-MPC Service Client Options:
     }
 }
 
-#[async_from::async_trait]
-impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for ServiceClient<R> {
-    async fn async_from(options: CliOptions) -> Self {
-        let mut opts = ServiceClientOptions::from(&options);
-        if let Some(ref iris_path) = options.path_to_iris_shares {
-            opts.set_iris_shares_path(iris_path);
-        }
-        ServiceClient::<R>::new(opts, AwsOptions::from(&options))
-            .await
-            .unwrap()
-    }
-}
-
 impl From<&CliOptions> for ServiceClientOptions {
     fn from(options: &CliOptions) -> Self {
         read_toml::<Self>(options.path_to_opts().as_path())
