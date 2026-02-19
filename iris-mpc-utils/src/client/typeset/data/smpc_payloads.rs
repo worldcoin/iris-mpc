@@ -47,6 +47,42 @@ impl ResponsePayload {
         }
     }
 
+    /// Returns a log tag containing the response type, node ID, and operation identifier.
+    pub fn log_tag(&self) -> String {
+        match self {
+            Self::IdentityDeletion(result) => {
+                format!(
+                    "IdentityDeletion | node={} | serial={}",
+                    result.node_id, result.serial_id
+                )
+            }
+            Self::Reauthorization(result) => {
+                format!(
+                    "Reauthorization | node={} | reauth_id={}",
+                    result.node_id, result.reauth_id
+                )
+            }
+            Self::ResetCheck(result) => {
+                format!(
+                    "ResetCheck | node={} | reset_id={}",
+                    result.node_id, result.reset_id
+                )
+            }
+            Self::ResetUpdate(result) => {
+                format!(
+                    "ResetUpdate | node={} | reset_id={}",
+                    result.node_id, result.reset_id
+                )
+            }
+            Self::Uniqueness(result) => {
+                format!(
+                    "Uniqueness | node={} | signup_id={}",
+                    result.node_id, result.signup_id
+                )
+            }
+        }
+    }
+
     /// Returns the error reason string if one is available.
     pub fn error_reason(&self) -> Option<&str> {
         match self {

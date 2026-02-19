@@ -114,7 +114,6 @@ impl AwsClient {
         &self,
         sns_msg_info: SnsMessageInfo,
     ) -> Result<(), AwsClientError> {
-        tracing::info!("AWS-SNS: publishing message -> {}", sns_msg_info);
         self.sns
             .publish()
             .topic_arn(self.config().sns_request_topic_arn())
@@ -186,11 +185,7 @@ impl AwsClient {
             .messages
             .unwrap_or_default()
             .into_iter()
-            .map(|msg| {
-                let msg = SqsMessageInfo::from(&msg);
-                tracing::info!("AWS-SQS: received message -> {}", msg);
-                msg
-            });
+            .map(|msg| SqsMessageInfo::from(&msg));
 
         Ok(mapped)
     }
