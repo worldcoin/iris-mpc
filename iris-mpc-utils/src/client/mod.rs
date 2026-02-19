@@ -70,8 +70,8 @@ impl ServiceClient2 {
         self.init().await.expect("init failed");
 
         // need to track all the uniqueness requests sent, and their serial ids. also need to track which requests are dependent on a parent.
-        let mut uniquess_labels: HashMap<String, IrisSerialId> = HashMap::new();
-        let mut uuid_to_labels: HashMap<Uuid, String> = HashMap::new();
+        let mut uniqueness_labels: HashMap<String, IrisSerialId> = HashMap::new();
+        let mut signup_id_to_labels: HashMap<Uuid, String> = HashMap::new();
         let mut outstanding_requests: HashMap<Uuid, typeset::RequestInfo> = HashMap::new();
 
         for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
@@ -88,7 +88,7 @@ impl ServiceClient2 {
                     | RequestPayloadOptions::ResetUpdate { parent, .. } => match parent {
                         Parent::Id(id) => Some(*id),
                         Parent::Label(label) => {
-                            if let Some(&serial_id) = uniquess_labels.get(label.as_str()) {
+                            if let Some(&serial_id) = uniqueness_labels.get(label.as_str()) {
                                 Some(serial_id)
                             } else {
                                 tracing::warn!(
@@ -174,6 +174,7 @@ impl ServiceClient2 {
             .for_each(|r| {
                 r.expect("S3 shares upload failed");
             });
+            drop(batch_shares);
 
             // Phase 3: Wait before publishing to allow shares to propagate.
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -185,7 +186,9 @@ impl ServiceClient2 {
             }))
             .await
             .into_iter()
-            .for_each(|r| r.expect("SNS publish failed"));
+            .for_each(|r| {
+                r.expect("SNS publish failed");
+            });
 
             // Phase 5: Track in outstanding_requests keyed by correlation UUID. IdentityDeletion
             // correlates by serial_id rather than UUID, so it is not tracked here.
@@ -193,7 +196,7 @@ impl ServiceClient2 {
                 let opt_tracking_uuid: Option<Uuid> = match request {
                     typeset::Request::Uniqueness { signup_id, .. } => {
                         if let Some(label) = request.info().label() {
-                            uuid_to_labels.insert(*signup_id, label.clone());
+                            signup_id_to_labels.insert(*signup_id, label.clone());
                         }
                         Some(*signup_id)
                     }
@@ -258,9 +261,9 @@ impl ServiceClient2 {
                                         }
                                     });
                                     if let (Some(serial_id), Some(label)) =
-                                        (maybe_serial_id, uuid_to_labels.remove(&uuid))
+                                        (maybe_serial_id, signup_id_to_labels.remove(&uuid))
                                     {
-                                        uniquess_labels.insert(label, serial_id);
+                                        uniqueness_labels.insert(label, serial_id);
                                     }
                                 }
                             }
