@@ -179,10 +179,10 @@ impl Request {
 
         let mut parts = vec![kind.to_string()];
         if let Some(lbl) = label {
-            parts.push(lbl.chars().take(10).collect());
+            parts.push(format!("{:.16}", lbl));
         }
         if let Some((key, id)) = op_id {
-            parts.push(format!("{}={}", key, id));
+            parts.push(format!("{}={:.16}", key, id));
         }
         if let Some(sid) = serial_id {
             parts.push(format!("serial={}", sid));
