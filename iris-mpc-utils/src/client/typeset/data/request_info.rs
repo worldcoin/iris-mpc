@@ -83,6 +83,22 @@ impl RequestInfo {
     pub fn has_error_response(&self) -> bool {
         self.responses.iter().flatten().any(|r| r.is_error())
     }
+
+    pub fn get_error_msgs(&self) -> String {
+        self.responses
+            .iter()
+            .flatten()
+            .filter(|r| r.is_error())
+            .map(|r| {
+                format!(
+                    "node {}: {}",
+                    r.node_id(),
+                    r.error_reason().unwrap_or("no reason given")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 impl fmt::Display for RequestInfo {

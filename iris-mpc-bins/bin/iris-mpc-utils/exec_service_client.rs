@@ -1,9 +1,7 @@
 use std::{fmt, path::PathBuf};
 
-use async_from::{self, AsyncFrom};
 use clap::Parser;
 use eyre::Result;
-use rand::{CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_utils::{
     client::{AwsOptions, ServiceClient2, ServiceClientOptions},

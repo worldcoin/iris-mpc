@@ -121,6 +121,7 @@ impl ServiceClient2 {
         let mut uniqueness_labels: HashMap<String, IrisSerialId> = HashMap::new();
         let mut signup_id_to_labels: HashMap<Uuid, String> = HashMap::new();
         let mut outstanding_requests: HashMap<Uuid, typeset::RequestInfo> = HashMap::new();
+        let mut error_log: Vec<typeset::RequestInfo> = Vec::new();
 
         for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
             // Phase 1: Gather all requests and pre-generate shares.
@@ -293,25 +294,36 @@ impl ServiceClient2 {
                             }
                             Some(true) => {
                                 if let Some(info) = outstanding_requests.remove(&uuid) {
-                                    // For uniqueness: search all node responses for a serial_id
-                                    // and record it against the request's label.
-                                    let maybe_serial_id = info.responses().iter().find_map(|opt| {
-                                        if let Some(typeset::ResponsePayload::Uniqueness(result)) =
-                                            opt
+                                    if info.has_error_response() {
+                                        let details = info.get_error_msgs();
+                                        tracing::warn!(
+                                            "request {} completed with errors: {}",
+                                            info,
+                                            details
+                                        );
+                                        signup_id_to_labels.remove(&uuid);
+                                        error_log.push(info);
+                                    } else {
+                                        // For uniqueness: search all node responses for a serial_id
+                                        // and record it against the request's label.
+                                        let maybe_serial_id =
+                                            info.responses().iter().find_map(|opt| {
+                                                if let Some(typeset::ResponsePayload::Uniqueness(
+                                                    result,
+                                                )) = opt
+                                                {
+                                                    result.get_serial_id()
+                                                } else {
+                                                    None
+                                                }
+                                            });
+                                        if let (Some(serial_id), Some(label)) =
+                                            (maybe_serial_id, signup_id_to_labels.remove(&uuid))
                                         {
-                                            result.serial_id.or_else(|| {
-                                                result.matched_serial_ids.as_ref()?.first().copied()
-                                            })
-                                        } else {
-                                            None
+                                            uniqueness_labels.insert(label, serial_id);
+                                            // track these to clean them up later
+                                            live_serial_ids.insert(serial_id);
                                         }
-                                    });
-                                    if let (Some(serial_id), Some(label)) =
-                                        (maybe_serial_id, signup_id_to_labels.remove(&uuid))
-                                    {
-                                        uniqueness_labels.insert(label, serial_id);
-                                        // track these to clean them up later
-                                        live_serial_ids.insert(serial_id);
                                     }
                                 }
                             }
@@ -333,6 +345,17 @@ impl ServiceClient2 {
                 "Batch {} finished. Responses to non-deletion requests have been received",
                 batch_idx
             );
+        }
+
+        if !error_log.is_empty() {
+            tracing::warn!(
+                "=== {} request(s) completed with errors ===",
+                error_log.len()
+            );
+            for info in &error_log {
+                let details = info.get_error_msgs();
+                tracing::warn!("  {}: {}", info, details);
+            }
         }
     }
 }

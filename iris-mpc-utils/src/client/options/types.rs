@@ -433,7 +433,8 @@ impl IntoIterator for RequestBatchOptions {
                 ..
             } => {
                 use iris_mpc_common::helpers::smpc_request::{
-                    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+                    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+                    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
                     UNIQUENESS_MESSAGE_TYPE,
                 };
 
@@ -456,9 +457,13 @@ impl IntoIterator for RequestBatchOptions {
                                         insertion_layers: None,
                                     },
                                 ),
-                                _ => RequestOptions::new(
+                                RESET_CHECK_MESSAGE_TYPE => RequestOptions::new(
                                     None,
                                     RequestPayloadOptions::ResetCheck { iris_pair: None },
+                                ),
+                                _ => unreachable!(
+                                    "Simple batch_kind '{}' should have been rejected by validation",
+                                    batch_kind
                                 ),
                             })
                             .collect();
