@@ -5,7 +5,8 @@ mod types;
 pub use types::AwsOptions;
 pub use types::{Parent, RequestBatchOptions, SharesGeneratorOptions};
 
-use crate::client::{BatchKind, ServiceClientError};
+use crate::client::ServiceClientError;
+use iris_mpc_common::helpers::smpc_request;
 
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,7 +102,14 @@ impl ServiceClientOptions {
                 }
 
                 // Error if batch kind cannot be mapped to a supported SMPC request type.
-                if BatchKind::parse(batch_kind).is_none() {
+                if !matches!(
+                    batch_kind.as_str(),
+                    smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+                        | smpc_request::REAUTH_MESSAGE_TYPE
+                        | smpc_request::RESET_CHECK_MESSAGE_TYPE
+                        | smpc_request::RESET_UPDATE_MESSAGE_TYPE
+                        | smpc_request::UNIQUENESS_MESSAGE_TYPE
+                ) {
                     return Err(ServiceClientError::InvalidOptions(format!(
                         "RequestBatchOptions::Simple batch_kind ({}) is unsupported",
                         batch_kind

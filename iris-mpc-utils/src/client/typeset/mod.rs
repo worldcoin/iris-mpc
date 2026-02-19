@@ -2,7 +2,6 @@ mod data;
 mod errors;
 
 pub use data::{
-    BatchKind, IrisDescriptor, IrisPairDescriptor, Request, RequestBatch, RequestInfo,
-    RequestPayload, RequestStatus, ResponsePayload,
+    IrisDescriptor, IrisPairDescriptor, Request, RequestInfo, RequestPayload, ResponsePayload,
 };
 pub use errors::ServiceClientError;
