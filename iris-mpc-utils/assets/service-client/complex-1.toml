@@ -17,6 +17,10 @@ batches = [
       { index = 5 },
       { index = 6 },
     ] } } },
+    { label = "43-Uniqueness", payload = { Uniqueness = { iris_pair = [
+      { index = 8 },
+      { index = 9 },
+    ] } } },
   ],
   [
     { label = "00-IdentityDeletion", payload = { IdentityDeletion = { parent = "40-Uniqueness" } } },
@@ -42,6 +46,10 @@ batches = [
     { label = "03-DupResetCheck", payload = { ResetCheck = { iris_pair = [
       { index = 13 },
       { index = 14 },
+    ] } } },
+    { label = "44-DupeUniqueness", payload = { Uniqueness = { iris_pair = [
+      { index = 8 },
+      { index = 9 },
     ] } } },
   ],
 ]
