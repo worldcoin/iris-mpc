@@ -232,17 +232,15 @@ impl ServiceClient2 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
             // Phase 4: Publish all requests in parallel.
-            futures::future::join_all(batch_requests.iter().map(|request| {
+            for request in batch_requests.iter() {
                 let log_tag = request.log_tag();
                 let sns_msg_info = SnsMessageInfo::from(request);
                 tracing::info!("AWS-SNS publishing {}", log_tag);
-                self.aws_client.sns_publish_json(sns_msg_info)
-            }))
-            .await
-            .into_iter()
-            .for_each(|r| {
-                r.expect("SNS publish failed");
-            });
+                self.aws_client
+                    .sns_publish_json(sns_msg_info)
+                    .await
+                    .expect("SNS publish failed");
+            }
 
             // Phase 5: Track in outstanding_requests keyed by correlation UUID. IdentityDeletion
             // correlates by serial_id rather than UUID, so it is not tracked here.
