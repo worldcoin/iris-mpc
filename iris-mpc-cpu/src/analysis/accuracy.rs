@@ -270,6 +270,10 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
 
             // We only care about the values (rotation, min_mutation_key) from the
             // first map. The 'id' is now just a "count"
+            #[allow(
+                clippy::iter_over_hash_type,
+                reason = "we use the key for inserting, order does not matter"
+            )]
             for ((_id, rotation), min_mutation_key) in min_failure_map {
                 let rotation_hist = histogram_map.entry(rotation).or_default();
                 *rotation_hist.entry(min_mutation_key).or_default() += 1;
