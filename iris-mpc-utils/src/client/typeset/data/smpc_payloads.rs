@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use iris_mpc_common::helpers::{smpc_request, smpc_response};
 
+use crate::{aws::types::SqsMessageInfo, client::typeset::Request};
+
 /// Enumeration over request messages enqueued upon system ingress queue.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -53,6 +55,83 @@ impl ResponsePayload {
             Self::ResetCheck(result) => result.error_reason.as_deref(),
             Self::ResetUpdate(_) => None,
             Self::Uniqueness(result) => result.error_reason.as_deref(),
+        }
+    }
+}
+
+impl From<&Request> for RequestPayload {
+    fn from(request: &Request) -> Self {
+        match request {
+            Request::IdentityDeletion { parent, .. } => {
+                Self::IdentityDeletion(smpc_request::IdentityDeletionRequest { serial_id: *parent })
+            }
+            Request::Reauthorization {
+                reauth_id, parent, ..
+            } => Self::Reauthorization(smpc_request::ReAuthRequest {
+                batch_size: Some(1),
+                reauth_id: reauth_id.to_string(),
+                s3_key: reauth_id.to_string(),
+                serial_id: *parent,
+                skip_persistence: None,
+                use_or_rule: false,
+            }),
+            Request::ResetCheck { reset_id, .. } => {
+                Self::ResetCheck(smpc_request::ResetCheckRequest {
+                    batch_size: Some(1),
+                    reset_id: reset_id.to_string(),
+                    s3_key: reset_id.to_string(),
+                })
+            }
+            Request::ResetUpdate {
+                reset_id, parent, ..
+            } => Self::ResetUpdate(smpc_request::ResetUpdateRequest {
+                reset_id: reset_id.to_string(),
+                s3_key: reset_id.to_string(),
+                serial_id: *parent,
+            }),
+            Request::Uniqueness { signup_id, .. } => {
+                Self::Uniqueness(smpc_request::UniquenessRequest {
+                    batch_size: Some(1),
+                    s3_key: signup_id.to_string(),
+                    signup_id: signup_id.to_string(),
+                    or_rule_serial_ids: None,
+                    skip_persistence: None,
+                    full_face_mirror_attacks_detection_enabled: Some(true),
+                    disable_anonymized_stats: None,
+                })
+            }
+        }
+    }
+}
+
+impl From<&SqsMessageInfo> for ResponsePayload {
+    fn from(msg: &SqsMessageInfo) -> Self {
+        let body = msg.body();
+        let kind = msg.kind();
+
+        macro_rules! parse_response {
+            ($variant:ident) => {
+                ResponsePayload::$variant(serde_json::from_str(body).unwrap())
+            };
+        }
+
+        match kind {
+            iris_mpc_common::helpers::smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                parse_response!(IdentityDeletion)
+            }
+            iris_mpc_common::helpers::smpc_request::REAUTH_MESSAGE_TYPE => {
+                parse_response!(Reauthorization)
+            }
+            iris_mpc_common::helpers::smpc_request::RESET_CHECK_MESSAGE_TYPE => {
+                parse_response!(ResetCheck)
+            }
+            iris_mpc_common::helpers::smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
+                parse_response!(ResetUpdate)
+            }
+            iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE => {
+                parse_response!(Uniqueness)
+            }
+            _ => panic!("Unsupported system response type: {kind}"),
         }
     }
 }

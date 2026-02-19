@@ -8,17 +8,14 @@ use uuid::Uuid;
 
 use crate::{
     aws::types::SnsMessageInfo,
-    client::{
-        options::{RequestBatchOptions, SharesGeneratorOptions},
-        typeset::RequestPayload,
-    },
+    client::options::{RequestBatchOptions, SharesGeneratorOptions},
 };
 
 use super::aws::AwsClient;
 use components::SharesGenerator;
 
 pub use options::{AwsOptions, ServiceClientOptions};
-pub use typeset::ServiceClientError;
+pub use typeset::*;
 
 mod components;
 mod options;
