@@ -231,7 +231,7 @@ impl ServiceClient2 {
             // Phase 3: Wait before publishing to allow shares to propagate.
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-            // Phase 4: Publish all requests in parallel.
+            // Phase 4: Publish all requests
             for request in batch_requests.iter() {
                 let log_tag = request.log_tag();
                 let sns_msg_info = SnsMessageInfo::from(request);
