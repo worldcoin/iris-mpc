@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 mod types;
 
 pub use types::AwsOptions;
-pub use types::{Parent, RequestBatchOptions, RequestPayloadOptions, SharesGeneratorOptions};
+pub use types::{Parent, RequestBatchOptions, SharesGeneratorOptions};
 
 use crate::client::{BatchKind, ServiceClientError};
 
