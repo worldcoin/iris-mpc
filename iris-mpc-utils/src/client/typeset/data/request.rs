@@ -5,7 +5,7 @@ use uuid;
 
 use iris_mpc_common::IrisSerialId;
 
-use super::{IrisPairDescriptor, RequestInfo, RequestStatus, ResponsePayload};
+use super::{IrisPairDescriptor, RequestInfo};
 
 /// Encapsulates data pertinent to a system processing request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,67 +91,6 @@ impl Request {
         }
     }
 
-    fn info_mut(&mut self) -> &mut RequestInfo {
-        match self {
-            Self::IdentityDeletion { info, .. }
-            | Self::Reauthorization { info, .. }
-            | Self::ResetCheck { info, .. }
-            | Self::ResetUpdate { info, .. }
-            | Self::Uniqueness { info, .. } => info,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn iris_pair_indexes(&self) -> Vec<usize> {
-        match self {
-            Self::IdentityDeletion { .. } => vec![],
-            Self::Reauthorization { iris_pair, .. }
-            | Self::ResetCheck { iris_pair, .. }
-            | Self::ResetUpdate { iris_pair, .. }
-            | Self::Uniqueness { iris_pair, .. } => match iris_pair {
-                Some(iris_pair) => vec![iris_pair.left().index(), iris_pair.right().index()],
-                None => vec![],
-            },
-        }
-    }
-
-    /// Returns true if a system response is deemed to be correlated with this system request.
-    pub fn is_correlation(&self, response: &ResponsePayload) -> bool {
-        match (self, response) {
-            (Self::IdentityDeletion { parent, .. }, ResponsePayload::IdentityDeletion(result)) => {
-                *parent == result.serial_id
-            }
-            (Self::Reauthorization { reauth_id, .. }, ResponsePayload::Reauthorization(result)) => {
-                result.reauth_id == reauth_id.to_string()
-            }
-            (Self::ResetCheck { reset_id, .. }, ResponsePayload::ResetCheck(result)) => {
-                result.reset_id == reset_id.to_string()
-            }
-            (Self::ResetUpdate { reset_id, .. }, ResponsePayload::ResetUpdate(result)) => {
-                result.reset_id == reset_id.to_string()
-            }
-            (Self::Uniqueness { signup_id, .. }, ResponsePayload::Uniqueness(result)) => {
-                result.signup_id == signup_id.to_string()
-            }
-            _ => false,
-        }
-    }
-
-    /// Returns true if request has been enqueued for system processing.
-    pub fn is_enqueued(&self) -> bool {
-        matches!(self.info().status(), RequestStatus::Enqueued)
-    }
-
-    /// Returns true if shares have been uploaded and the request is ready to enqueue.
-    /// Since the parent serial ID is always known at Request creation time, no extra check needed.
-    pub fn is_enqueueable(&self) -> bool {
-        matches!(self.info().status(), RequestStatus::SharesUploaded)
-    }
-
-    pub fn label(&self) -> &Option<String> {
-        self.info().label()
-    }
-
     /// Returns a log tag containing the request type, label (if set), operation UUID, and iris serial ID (if present).
     pub fn log_tag(&self) -> String {
         let kind = match self {
@@ -192,22 +131,6 @@ impl Request {
 
     pub fn has_error_response(&self) -> bool {
         self.info().has_error_response()
-    }
-
-    /// Records a node response. Returns true if all parties have now responded (request is Complete).
-    pub fn record_response(&mut self, response: &ResponsePayload) -> bool {
-        tracing::info!("{} :: response -> Node-{}", &self, response.node_id());
-        let is_complete = self.info_mut().record_response(response);
-        if is_complete {
-            self.set_status(RequestStatus::Complete);
-        }
-        is_complete
-    }
-
-    /// Updates request status.
-    pub fn set_status(&mut self, new_state: RequestStatus) {
-        tracing::info!("{} :: {}", &self, new_state);
-        self.info_mut().set_status(new_state);
     }
 }
 

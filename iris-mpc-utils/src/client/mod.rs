@@ -266,12 +266,27 @@ impl ExecState {
     ) {
         use crate::constants::N_PARTIES;
 
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+
         while !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
-            for sqs_msg in aws_client
-                .sqs_receive_messages(Some(N_PARTIES))
-                .await
-                .expect("SQS receive failed")
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            let messages = match tokio::time::timeout(
+                remaining,
+                aws_client.sqs_receive_messages(Some(N_PARTIES)),
+            )
+            .await
             {
+                Ok(result) => result.expect("SQS receive failed"),
+                Err(_) => {
+                    break;
+                }
+            };
+
+            for sqs_msg in messages {
                 let response = typeset::ResponsePayload::from(&sqs_msg);
                 tracing::info!("AWS-SNS received {}", response.log_tag());
 
@@ -293,11 +308,19 @@ impl ExecState {
                                 );
                             }
                             Some(true) => {
-                                if !r.success {
-                                    tracing::warn!("Deletion failed for serial id {}", r.serial_id);
-                                } else {
-                                    live_serial_ids.remove(&r.serial_id);
-                                    self.outstanding_deletions.remove(&r.serial_id);
+                                if let Some(info) = self.outstanding_deletions.remove(&r.serial_id)
+                                {
+                                    if info.has_error_response() {
+                                        let details = info.get_error_msgs();
+                                        tracing::warn!(
+                                            "Deletion request {} completed with errors: {}",
+                                            info,
+                                            details
+                                        );
+                                        self.error_log.push(info);
+                                    } else {
+                                        live_serial_ids.remove(&r.serial_id);
+                                    }
                                 }
                             }
                             Some(false) => {}
@@ -362,6 +385,18 @@ impl ExecState {
                     .await
                     .expect("SQS message purge failed");
             }
+        }
+
+        if !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
+            tracing::warn!(
+                "Batch timed out after 60s: {} requests, {} deletions still pending",
+                self.outstanding_requests.len(),
+                self.outstanding_deletions.len()
+            );
+            self.error_log
+                .extend(self.outstanding_requests.drain().map(|(_, info)| info));
+            self.error_log
+                .extend(self.outstanding_deletions.drain().map(|(_, info)| info));
         }
     }
 
