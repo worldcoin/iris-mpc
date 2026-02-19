@@ -128,6 +128,7 @@ mod tests {
             Self::new_compute(Some(42))
         }
 
+        #[allow(dead_code)]
         pub(crate) fn new_file_1() -> Self {
             Self::new_file(get_path_to_ndjson(), Some(42), None)
         }
