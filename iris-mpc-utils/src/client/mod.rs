@@ -184,18 +184,16 @@ impl ServiceClient2 {
             // Phase 3: Wait before publishing to allow shares to propagate.
             sleep(Duration::from_secs(1)).await;
 
-            // Phase 4: Publish all requests in parallel.
-            futures::future::join_all(batch_requests.iter().map(|request| {
+            // Phase 4: Publish all requests
+            for request in batch_requests.iter() {
                 let log_tag = request.log_tag();
                 let sns_msg_info = SnsMessageInfo::from(request);
                 tracing::info!("AWS-SNS publishing {}", log_tag);
-                self.aws_client.sns_publish_json(sns_msg_info)
-            }))
-            .await
-            .into_iter()
-            .for_each(|r| {
-                r.expect("SNS publish failed");
-            });
+                self.aws_client
+                    .sns_publish_json(sns_msg_info)
+                    .await
+                    .expect("SNS publish failed");
+            }
 
             // Phase 5: Track published requests so we can match incoming responses.
             state.track_batch_requests(&batch_requests);
