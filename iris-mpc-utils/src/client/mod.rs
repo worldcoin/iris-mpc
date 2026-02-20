@@ -111,7 +111,7 @@ impl ServiceClient2 {
             {
                 tracing::error!("Failed to send deletion for serial_id {}: {}", serial_id, e);
             } else {
-                tracing::info!("AWS-SNS: publishing Deletion for -> {}", serial_id);
+                tracing::info!("publishing Deletion for {}", serial_id);
             }
         }
         // iris-mpc-hawk will not send responses for a batch of just deletions
@@ -192,7 +192,7 @@ impl ServiceClient2 {
             for request in batch_requests.iter() {
                 let log_tag = request.log_tag();
                 let sns_msg_info = SnsMessageInfo::from(request);
-                tracing::info!("AWS-SNS publishing {}", log_tag);
+                tracing::info!("publishing {}", log_tag);
                 self.aws_client
                     .sns_publish_json(sns_msg_info)
                     .await
@@ -304,7 +304,7 @@ impl ExecState {
 
             for sqs_msg in messages {
                 let response = typeset::ResponsePayload::from(&sqs_msg);
-                tracing::info!("AWS-SNS received {}", response.log_tag());
+                tracing::info!("received {}", response.log_tag());
 
                 // Extract correlation UUID from response (IdentityDeletion has none).
                 let corr_uuid: Option<Uuid> = match &response {
