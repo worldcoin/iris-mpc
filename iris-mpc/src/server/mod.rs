@@ -616,8 +616,6 @@ async fn run_main_server_loop(
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_error_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let res: Result<()> = async {
-        tracing::info!("Entering main loop");
-
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
 
@@ -666,17 +664,53 @@ async fn run_main_server_loop(
                 .expect("Failed to lock CURRENT_VALID_ENTRIES") = batch_valid_entries.clone();
 
             tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
-            tracing::info!(
-                "Received batch with {} valid entries and {} request types",
-                batch_valid_entries.clone().len(),
-                batch.request_types.len()
-            );
 
-            batch.sync_batch_entries(config).await?;
+            // Retry batch sync entries indefinitely. The external
+            // get_batch_sync_entries() has a hardcoded 20s timeout per attempt.
+            // Under heavy batch load, cross-party skew can exceed 20s when
+            // persist_modification is blocked by the modifications table lock.
+            // Retrying instead of crashing lets us keep processing.
+            let sync_start = Instant::now();
+            let mut sync_attempts = 0u32;
+            loop {
+                if shutdown_handler.is_shutting_down() {
+                    tracing::info!("Shutdown requested during batch sync retry, exiting");
+                    return Ok(());
+                }
+                sync_attempts += 1;
+                match batch.sync_batch_entries(config).await {
+                    Ok(()) => break,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Batch sync entries attempt {} failed after {:.1}s: {:?}. Retrying...",
+                            sync_attempts,
+                            sync_start.elapsed().as_secs_f64(),
+                            e
+                        );
+                    }
+                }
+            }
+            let sync_elapsed = sync_start.elapsed().as_secs_f64();
+            if sync_attempts > 1 {
+                tracing::warn!(
+                    "Batch sync entries succeeded after {} attempts ({:.1}s)",
+                    sync_attempts,
+                    sync_elapsed
+                );
+            }
+            metrics::histogram!("batch_sync_entries_duration").record(sync_elapsed);
+            metrics::histogram!("batch_sync_entries_retries").record((sync_attempts - 1) as f64);
             batch.retain_valid_entries();
 
             // start trace span - with single TraceId and single ParentTraceID
-            tracing::info!("Received batch in {:?}", now.elapsed());
+            tracing::info!(
+                "Received batch in {:.1}s ({} queries, sync {:.1}s/{} attempt{})",
+                now.elapsed().as_secs_f64(),
+                batch.request_types.len(),
+                sync_elapsed,
+                sync_attempts,
+                if sync_attempts != 1 { "s" } else { "" },
+            );
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
             metrics::gauge!("batch_size").set(batch.request_types.len() as f64);
@@ -718,6 +752,16 @@ async fn run_main_server_loop(
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
             tx_results.send(result).await?;
+
+            tracing::info!(
+                "BATCH_SUMMARY batch_id={} party={} queries={} hash={} compute_ms={} total_ms={}",
+                current_batch_id_atomic.load(Ordering::SeqCst),
+                party_id,
+                batch.request_types.len(),
+                hex::encode(&batch_hash[0..4]),
+                pprof_start.elapsed().as_millis(),
+                now.elapsed().as_millis(),
+            );
 
             // If enabled, stop pprof and upload artifacts tagged with batch info
             if let Some(guard) = pprof_guard.take() {

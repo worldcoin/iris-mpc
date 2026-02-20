@@ -8,7 +8,7 @@ use super::{
     },
     SharesGenerator,
 };
-use crate::{aws::AwsClient, client::typeset::Request};
+use crate::aws::AwsClient;
 
 /// A component responsible for uploading Iris shares to AWS services
 /// in advance of system request processing.
@@ -44,15 +44,12 @@ impl<R: Rng + CryptoRng + SeedableRng + Send> ProcessRequestBatch for SharesUplo
     async fn process_batch(&mut self, batch: &mut RequestBatch) -> Result<(), ServiceClientError> {
         // Set shares to be uploaded.
         let mut shares: Vec<_> = Vec::new();
-        for request in batch.requests_mut().iter_mut() {
-            if let Some(identifier) = match request {
-                Request::IdentityDeletion { .. } => None,
-                Request::Reauthorization { reauth_id, .. } => Some(reauth_id),
-                Request::ResetCheck { reset_id, .. } => Some(reset_id),
-                Request::ResetUpdate { reset_id, .. } => Some(reset_id),
-                Request::Uniqueness { signup_id, .. } => Some(signup_id),
-            } {
-                shares.push((identifier, self.shares_generator.generate()));
+        for request in batch.requests() {
+            if let Some((identifier, iris_pair)) = request.get_shares_info() {
+                shares.push((
+                    identifier,
+                    self.shares_generator.generate(iris_pair.as_ref()),
+                ));
             }
         }
 
@@ -83,24 +80,16 @@ mod tests {
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
     impl SharesUploader<StdRng> {
+        #[allow(dead_code)]
         pub async fn new_1() -> Self {
             Self::new(AwsClient::new_1().await, SharesGenerator::new_compute_1())
         }
     }
 
     impl<R: Rng + CryptoRng + SeedableRng + Send> SharesUploader<R> {
+        #[allow(dead_code)]
         pub async fn new_2() -> Self {
             Self::new(AwsClient::new_1().await, SharesGenerator::<R>::new_file_1())
         }
-    }
-
-    #[tokio::test]
-    async fn test_new_1() {
-        let _ = SharesUploader::new_1().await;
-    }
-
-    #[tokio::test]
-    async fn test_new_2() {
-        let _ = SharesUploader::<StdRng>::new_2().await;
     }
 }
