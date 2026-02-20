@@ -9,7 +9,8 @@ pub use ampc_actor_utils::protocol::ops::{
 };
 use ampc_actor_utils::protocol::{
     binary::{
-        and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k, open_bin, single_extract_msb,
+        and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k_to_32, open_bin,
+        single_extract_msb,
     },
     ops::{
         batch_signed_lift_vec_ring48, conditionally_select_distance, cross_mul,
@@ -72,7 +73,7 @@ pub async fn lift_and_compare_threshold(
     code_dist: Share<u16>,
     mask_dist: Share<u16>,
 ) -> Result<Share<Bit>> {
-    let mut y = mul_lift_2k::<B_BITS>(&code_dist);
+    let mut y = mul_lift_2k_to_32::<B_BITS>(&code_dist);
     let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x
         .pop()
