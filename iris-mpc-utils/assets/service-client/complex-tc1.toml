@@ -101,9 +101,9 @@ batches = [
     { label = "25-RC2", payload = { ResetCheck = { iris_pair = [{ index = 155 }, { index = 156 }] } } },
     { label = "26-RC2", payload = { ResetCheck = { iris_pair = [{ index = 157 }, { index = 158 }] } } },
     { label = "27-RC2", payload = { ResetCheck = { iris_pair = [{ index = 159 }, { index = 160 }] } } },
-    { label = "28-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 161 }, { index = 162 }], parent = "24-U" } } },
-    { label = "29-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 163 }, { index = 164 }], parent = "25-U" } } },
-    { label = "30-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 165 }, { index = 166 }], parent = "26-U" } } },
-    { label = "31-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 167 }, { index = 168 }], parent = "27-U" } } },
+    { label = "28-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 161 }, { index = 162 }], parent = "08-U" } } },
+    { label = "29-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 163 }, { index = 164 }], parent = "09-U" } } },
+    { label = "30-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 165 }, { index = 166 }], parent = "10-U" } } },
+    { label = "31-RU2", payload = { ResetUpdate = { iris_pair = [{ index = 167 }, { index = 168 }], parent = "11-U" } } },
   ],
 ]
