@@ -168,6 +168,10 @@ impl AwsClient {
     }
 
     /// Dequeues messages from all SQS system response queues concurrently.
+    ///
+    /// Uses short polling (wait_time=0) so that empty queues return instantly
+    /// rather than blocking the entire poll cycle. Sleeps briefly when no
+    /// messages are found on any queue to avoid busy-looping.
     pub async fn sqs_receive_messages(
         &self,
         max_messages: Option<usize>,
@@ -179,13 +183,12 @@ impl AwsClient {
             .map(|queue_url| {
                 let sqs = self.sqs.clone();
                 let queue_url = queue_url.clone();
-                let wait_time = self.config().sqs_wait_time_seconds() as i32;
                 let max_msgs = max_messages.unwrap_or(1) as i32;
                 async move {
                     let response = sqs
                         .receive_message()
                         .queue_url(&queue_url)
-                        .wait_time_seconds(wait_time)
+                        .wait_time_seconds(0)
                         .max_number_of_messages(max_msgs)
                         .send()
                         .await
@@ -239,6 +242,12 @@ impl AwsClient {
         for result in results {
             all_messages.extend(result?);
         }
+
+        // If no messages found on any queue, sleep briefly to avoid busy-looping.
+        if all_messages.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+
         Ok(all_messages)
     }
 }

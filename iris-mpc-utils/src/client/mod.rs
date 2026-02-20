@@ -266,12 +266,26 @@ impl ExecState {
     ) {
         use crate::constants::N_PARTIES;
 
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let timeout_secs: u64 = 360;
+        let start = tokio::time::Instant::now();
+        let deadline = start + std::time::Duration::from_secs(timeout_secs);
+        let mut next_progress = start + std::time::Duration::from_secs(60);
 
         while !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
                 break;
+            }
+
+            if tokio::time::Instant::now() >= next_progress {
+                let elapsed = start.elapsed().as_secs();
+                tracing::info!(
+                    "Waiting for responses... {}s elapsed, {} requests and {} deletions still pending",
+                    elapsed,
+                    self.outstanding_requests.len(),
+                    self.outstanding_deletions.len()
+                );
+                next_progress += std::time::Duration::from_secs(60);
             }
 
             let messages = match tokio::time::timeout(
@@ -389,7 +403,8 @@ impl ExecState {
 
         if !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
             tracing::warn!(
-                "Batch timed out after 60s: {} requests, {} deletions still pending",
+                "Batch timed out after {}s: {} requests, {} deletions still pending",
+                timeout_secs,
                 self.outstanding_requests.len(),
                 self.outstanding_deletions.len()
             );
