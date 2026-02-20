@@ -1,0 +1,51 @@
+[shares_generator.FromFile]
+rng_seed = 42
+selection_strategy = "All"
+
+[request_batch.Complex]
+batches = [
+  [
+    { label = "00-U", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+    { label = "01-U", payload = { Uniqueness = { iris_pair = [{ index = 3 }, { index = 4 }] } } },
+    { label = "02-U", payload = { Uniqueness = { iris_pair = [{ index = 5 }, { index = 6 }] } } },
+    { label = "03-U", payload = { Uniqueness = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
+    { label = "04-U", payload = { Uniqueness = { iris_pair = [{ index = 9 }, { index = 10 }] } } },
+    { label = "05-U", payload = { Uniqueness = { iris_pair = [{ index = 11 }, { index = 12 }] } } },
+    { label = "06-U", payload = { Uniqueness = { iris_pair = [{ index = 13 }, { index = 14 }] } } },
+    { label = "07-U", payload = { Uniqueness = { iris_pair = [{ index = 15 }, { index = 16 }] } } },
+  ],
+  [
+    { label = "00-RA-R1", payload = { Reauthorisation = { iris_pair = [{ index = 17 }, { index = 18 }], parent = "00-U" } } },
+    { label = "01-RA-R1", payload = { Reauthorisation = { iris_pair = [{ index = 19 }, { index = 20 }], parent = "01-U" } } },
+    { label = "02-RA-R1", payload = { Reauthorisation = { iris_pair = [{ index = 21 }, { index = 22 }], parent = "02-U" } } },
+    { label = "03-RA-R1", payload = { Reauthorisation = { iris_pair = [{ index = 23 }, { index = 24 }], parent = "03-U" } } },
+    { label = "04-RA-R2", payload = { Reauthorisation = { iris_pair = [{ index = 25 }, { index = 26 }], parent = "00-U" } } },
+    { label = "05-RA-R2", payload = { Reauthorisation = { iris_pair = [{ index = 27 }, { index = 28 }], parent = "01-U" } } },
+    { label = "06-RA-R2", payload = { Reauthorisation = { iris_pair = [{ index = 29 }, { index = 30 }], parent = "02-U" } } },
+    { label = "07-RA-R2", payload = { Reauthorisation = { iris_pair = [{ index = 31 }, { index = 32 }], parent = "03-U" } } },
+    { label = "08-RC", payload = { ResetCheck = { iris_pair = [{ index = 33 }, { index = 34 }] } } },
+    { label = "09-RC", payload = { ResetCheck = { iris_pair = [{ index = 35 }, { index = 36 }] } } },
+    { label = "10-RC", payload = { ResetCheck = { iris_pair = [{ index = 37 }, { index = 38 }] } } },
+    { label = "11-RC", payload = { ResetCheck = { iris_pair = [{ index = 39 }, { index = 40 }] } } },
+    { label = "12-RC", payload = { ResetCheck = { iris_pair = [{ index = 41 }, { index = 42 }] } } },
+    { label = "13-RC", payload = { ResetCheck = { iris_pair = [{ index = 43 }, { index = 44 }] } } },
+    { label = "14-RC", payload = { ResetCheck = { iris_pair = [{ index = 45 }, { index = 46 }] } } },
+    { label = "15-RC", payload = { ResetCheck = { iris_pair = [{ index = 47 }, { index = 48 }] } } },
+    { label = "16-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 49 }, { index = 50 }], parent = "00-U" } } },
+    { label = "17-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 51 }, { index = 52 }], parent = "01-U" } } },
+    { label = "18-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 53 }, { index = 54 }], parent = "02-U" } } },
+    { label = "19-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 55 }, { index = 56 }], parent = "03-U" } } },
+    { label = "20-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 57 }, { index = 58 }], parent = "04-U" } } },
+    { label = "21-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 59 }, { index = 60 }], parent = "05-U" } } },
+    { label = "22-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 61 }, { index = 62 }], parent = "06-U" } } },
+    { label = "23-RU-R1", payload = { ResetUpdate = { iris_pair = [{ index = 63 }, { index = 64 }], parent = "07-U" } } },
+    { label = "24-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 65 }, { index = 66 }], parent = "00-U" } } },
+    { label = "25-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 67 }, { index = 68 }], parent = "01-U" } } },
+    { label = "26-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 69 }, { index = 70 }], parent = "02-U" } } },
+    { label = "27-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 71 }, { index = 72 }], parent = "03-U" } } },
+    { label = "28-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 73 }, { index = 74 }], parent = "04-U" } } },
+    { label = "29-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 75 }, { index = 76 }], parent = "05-U" } } },
+    { label = "30-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 77 }, { index = 78 }], parent = "06-U" } } },
+    { label = "31-RU-R2", payload = { ResetUpdate = { iris_pair = [{ index = 79 }, { index = 80 }], parent = "07-U" } } },
+  ],
+]

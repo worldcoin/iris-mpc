@@ -1,0 +1,44 @@
+[shares_generator.FromFile]
+rng_seed = 42
+selection_strategy = "All"
+
+[request_batch.Complex]
+batches = [
+  [
+    { label = "00-U-SingleParent", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+  ],
+  [
+    { label = "00-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "01-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "02-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "03-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "04-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "05-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "06-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "07-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "08-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "09-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "10-D", payload = { IdentityDeletion = { parent = "00-U-SingleParent" } } },
+    { label = "11-RA", payload = { Reauthorisation = { iris_pair = [{ index = 3 }, { index = 4 }], parent = "00-U-SingleParent" } } },
+    { label = "12-RA", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = "00-U-SingleParent" } } },
+    { label = "13-RA", payload = { Reauthorisation = { iris_pair = [{ index = 7 }, { index = 8 }], parent = "00-U-SingleParent" } } },
+    { label = "14-RA", payload = { Reauthorisation = { iris_pair = [{ index = 9 }, { index = 10 }], parent = "00-U-SingleParent" } } },
+    { label = "15-RA", payload = { Reauthorisation = { iris_pair = [{ index = 11 }, { index = 12 }], parent = "00-U-SingleParent" } } },
+    { label = "16-RA", payload = { Reauthorisation = { iris_pair = [{ index = 13 }, { index = 14 }], parent = "00-U-SingleParent" } } },
+    { label = "17-RA", payload = { Reauthorisation = { iris_pair = [{ index = 15 }, { index = 16 }], parent = "00-U-SingleParent" } } },
+    { label = "18-RA", payload = { Reauthorisation = { iris_pair = [{ index = 17 }, { index = 18 }], parent = "00-U-SingleParent" } } },
+    { label = "19-RA", payload = { Reauthorisation = { iris_pair = [{ index = 19 }, { index = 20 }], parent = "00-U-SingleParent" } } },
+    { label = "20-RA", payload = { Reauthorisation = { iris_pair = [{ index = 21 }, { index = 22 }], parent = "00-U-SingleParent" } } },
+    { label = "21-RU", payload = { ResetUpdate = { iris_pair = [{ index = 23 }, { index = 24 }], parent = "00-U-SingleParent" } } },
+    { label = "22-RU", payload = { ResetUpdate = { iris_pair = [{ index = 25 }, { index = 26 }], parent = "00-U-SingleParent" } } },
+    { label = "23-RU", payload = { ResetUpdate = { iris_pair = [{ index = 27 }, { index = 28 }], parent = "00-U-SingleParent" } } },
+    { label = "24-RU", payload = { ResetUpdate = { iris_pair = [{ index = 29 }, { index = 30 }], parent = "00-U-SingleParent" } } },
+    { label = "25-RU", payload = { ResetUpdate = { iris_pair = [{ index = 31 }, { index = 32 }], parent = "00-U-SingleParent" } } },
+    { label = "26-RU", payload = { ResetUpdate = { iris_pair = [{ index = 33 }, { index = 34 }], parent = "00-U-SingleParent" } } },
+    { label = "27-RU", payload = { ResetUpdate = { iris_pair = [{ index = 35 }, { index = 36 }], parent = "00-U-SingleParent" } } },
+    { label = "28-RU", payload = { ResetUpdate = { iris_pair = [{ index = 37 }, { index = 38 }], parent = "00-U-SingleParent" } } },
+    { label = "29-RU", payload = { ResetUpdate = { iris_pair = [{ index = 39 }, { index = 40 }], parent = "00-U-SingleParent" } } },
+    { label = "30-RU", payload = { ResetUpdate = { iris_pair = [{ index = 41 }, { index = 42 }], parent = "00-U-SingleParent" } } },
+    { label = "31-RU", payload = { ResetUpdate = { iris_pair = [{ index = 43 }, { index = 44 }], parent = "00-U-SingleParent" } } },
+  ],
+]
