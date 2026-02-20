@@ -5,7 +5,7 @@ use aws_sdk_s3::{
 };
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{types::Message as SqsMessage, Client as SQSClient};
+use aws_sdk_sqs::Client as SQSClient;
 use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
@@ -129,19 +129,22 @@ impl AwsClient {
             })
     }
 
-    /// Purges SQS response queue.
+    /// Purges all SQS response queues.
     pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
-        tracing::debug!("AWS-SQS: purging system response queue");
-        self.sqs
-            .purge_queue()
-            .queue_url(self.config().sqs_response_queue_url())
-            .send()
-            .await
-            .map(|_| {})
-            .map_err(|e| {
-                tracing::error!("AWS-SQS: response queue purge error: {}", e);
-                AwsClientError::SqsPurgeQueueError(e.to_string())
-            })
+        tracing::debug!("AWS-SQS: purging system response queues");
+        for queue_url in self.config().sqs_response_queue_urls() {
+            self.sqs
+                .purge_queue()
+                .queue_url(queue_url)
+                .send()
+                .await
+                .map(|_| {})
+                .map_err(|e| {
+                    tracing::error!("AWS-SQS: response queue purge error: {}", e);
+                    AwsClientError::SqsPurgeQueueError(e.to_string())
+                })?;
+        }
+        Ok(())
     }
 
     /// Purges SQS response queue message.
@@ -151,7 +154,7 @@ impl AwsClient {
     ) -> Result<(), AwsClientError> {
         self.sqs
             .delete_message()
-            .queue_url(self.config().sqs_response_queue_url())
+            .queue_url(sqs_msg.queue_url())
             .receipt_handle(sqs_msg.receipt_handle())
             .send()
             .await
@@ -164,56 +167,79 @@ impl AwsClient {
             })
     }
 
-    /// Dequeues messages from SQS system response queue.
+    /// Dequeues messages from all SQS system response queues concurrently.
     pub async fn sqs_receive_messages(
         &self,
         max_messages: Option<usize>,
-    ) -> Result<impl Iterator<Item = SqsMessageInfo>, AwsClientError> {
-        let response = self
-            .sqs
-            .receive_message()
-            .queue_url(self.config().sqs_response_queue_url())
-            .wait_time_seconds(self.config().sqs_wait_time_seconds() as i32)
-            .max_number_of_messages(max_messages.unwrap_or(1) as i32)
-            .send()
-            .await
-            .map_err(|e| {
-                tracing::error!("AWS-SQS received message error -> {}", e);
-                AwsClientError::SqsReceiveMessageError(e.to_string())
-            })?;
-        let mapped = response
-            .messages
-            .unwrap_or_default()
-            .into_iter()
-            .map(|msg| SqsMessageInfo::from(&msg));
+    ) -> Result<Vec<SqsMessageInfo>, AwsClientError> {
+        let futures: Vec<_> = self
+            .config()
+            .sqs_response_queue_urls()
+            .iter()
+            .map(|queue_url| {
+                let sqs = self.sqs.clone();
+                let queue_url = queue_url.clone();
+                let wait_time = self.config().sqs_wait_time_seconds() as i32;
+                let max_msgs = max_messages.unwrap_or(1) as i32;
+                async move {
+                    let response = sqs
+                        .receive_message()
+                        .queue_url(&queue_url)
+                        .wait_time_seconds(wait_time)
+                        .max_number_of_messages(max_msgs)
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            tracing::error!(
+                                "AWS-SQS received message error (queue: {}) -> {}",
+                                queue_url,
+                                e
+                            );
+                            AwsClientError::SqsReceiveMessageError(e.to_string())
+                        })?;
+                    let messages: Vec<SqsMessageInfo> = response
+                        .messages
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|msg| {
+                            let decoded: serde_json::Value =
+                                serde_json::from_str(msg.body().expect("Empty JSON string"))
+                                    .expect("Invalid JSON string");
+                            let msg_kind = decoded
+                                .get("MessageAttributes")
+                                .and_then(|v| v.get("message_type"))
+                                .and_then(|v| v.get("Value"))
+                                .and_then(|v| v.as_str())
+                                .expect("Missing message_type")
+                                .to_string();
+                            let msg_body = decoded
+                                .get("Message")
+                                .and_then(|v| v.as_str())
+                                .expect("Missing Message")
+                                .to_string();
+                            let msg_receipt_handle = msg
+                                .receipt_handle()
+                                .expect("Missing receipt_handle")
+                                .to_string();
+                            SqsMessageInfo::new(
+                                msg_kind,
+                                msg_body,
+                                queue_url.clone(),
+                                msg_receipt_handle,
+                            )
+                        })
+                        .collect();
+                    Ok::<_, AwsClientError>(messages)
+                }
+            })
+            .collect();
 
-        Ok(mapped)
-    }
-}
-
-impl From<&SqsMessage> for SqsMessageInfo {
-    fn from(msg: &SqsMessage) -> Self {
-        let decoded: serde_json::Value =
-            serde_json::from_str(msg.body().expect("Empty JSON string"))
-                .expect("Invalid JSON string");
-        let msg_kind = decoded
-            .get("MessageAttributes")
-            .and_then(|v| v.get("message_type"))
-            .and_then(|v| v.get("Value"))
-            .and_then(|v| v.as_str())
-            .expect("Missing message_type")
-            .to_string();
-        let msg_body = decoded
-            .get("Message")
-            .and_then(|v| v.as_str())
-            .expect("Missing Message")
-            .to_string();
-        let msg_receipt_handle = msg
-            .receipt_handle()
-            .expect("Missing receipt_handle")
-            .to_string();
-
-        SqsMessageInfo::new(msg_kind, msg_body, msg_receipt_handle)
+        let results = futures::future::join_all(futures).await;
+        let mut all_messages = Vec::new();
+        for result in results {
+            all_messages.extend(result?);
+        }
+        Ok(all_messages)
     }
 }
 

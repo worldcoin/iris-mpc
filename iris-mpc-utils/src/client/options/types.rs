@@ -30,8 +30,8 @@ pub struct AwsOptions {
     /// SQS: long polling interval (seconds).
     sqs_long_poll_wait_time: usize,
 
-    /// SQS: system response eqgress queue URL.
-    sqs_response_queue_url: String,
+    /// SQS: system response egress queue URLs.
+    sqs_response_queue_urls: Vec<String>,
 
     /// SQS: wait time (seconds) between receive message polling.
     sqs_wait_time_seconds: usize,
@@ -58,8 +58,8 @@ impl AwsOptions {
         &self.sqs_long_poll_wait_time
     }
 
-    pub fn sqs_response_queue_url(&self) -> &String {
-        &self.sqs_response_queue_url
+    pub fn sqs_response_queue_urls(&self) -> &Vec<String> {
+        &self.sqs_response_queue_urls
     }
 
     pub fn sqs_wait_time_seconds(&self) -> &usize {

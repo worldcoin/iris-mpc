@@ -105,6 +105,9 @@ pub struct SqsMessageInfo {
     // SQS message kind - e.g. "uniqueness".
     kind: String,
 
+    // SQS queue URL from which the message was received.
+    queue_url: String,
+
     // SQS message receipt handle for subsequent purging.
     receipt_handle: String,
 }
@@ -118,14 +121,19 @@ impl SqsMessageInfo {
         &self.kind
     }
 
+    pub fn queue_url(&self) -> &str {
+        &self.queue_url
+    }
+
     pub fn receipt_handle(&self) -> &str {
         &self.receipt_handle
     }
 
-    pub fn new(kind: String, body: String, receipt_handle: String) -> Self {
+    pub fn new(kind: String, body: String, queue_url: String, receipt_handle: String) -> Self {
         Self {
             body,
             kind,
+            queue_url,
             receipt_handle,
         }
     }

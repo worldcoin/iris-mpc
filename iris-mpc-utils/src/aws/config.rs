@@ -35,8 +35,8 @@ pub struct AwsClientConfig {
     /// SQS: long polling interval (seconds).
     sqs_long_poll_wait_time: usize,
 
-    /// SQS: system response eqgress queue URL.
-    sqs_response_queue_url: String,
+    /// SQS: system response egress queue URLs.
+    sqs_response_queue_urls: Vec<String>,
 
     /// SQS: wait time (seconds) between receive message polling.
     sqs_wait_time_seconds: usize,
@@ -51,7 +51,7 @@ impl AsyncFrom<AwsOptions> for AwsClientConfig {
             opts.s3_request_bucket_name().to_owned(),
             opts.sns_request_topic_arn().to_owned(),
             opts.sqs_long_poll_wait_time().to_owned(),
-            opts.sqs_response_queue_url().to_owned(),
+            opts.sqs_response_queue_urls().to_owned(),
             opts.sqs_wait_time_seconds().to_owned(),
         )
         .await
@@ -79,8 +79,8 @@ impl AwsClientConfig {
         &self.sns_request_topic_arn
     }
 
-    pub(crate) fn sqs_response_queue_url(&self) -> &String {
-        &self.sqs_response_queue_url
+    pub(crate) fn sqs_response_queue_urls(&self) -> &Vec<String> {
+        &self.sqs_response_queue_urls
     }
 
     pub(crate) fn sqs_wait_time_seconds(&self) -> usize {
@@ -93,7 +93,7 @@ impl AwsClientConfig {
         s3_request_bucket_name: String,
         sns_request_topic_arn: String,
         sqs_long_poll_wait_time: usize,
-        sqs_response_queue_url: String,
+        sqs_response_queue_urls: Vec<String>,
         sqs_wait_time_seconds: usize,
     ) -> Self {
         Self {
@@ -103,7 +103,7 @@ impl AwsClientConfig {
             sdk: get_sdk_config().await,
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
-            sqs_response_queue_url,
+            sqs_response_queue_urls,
             sqs_wait_time_seconds,
         }
     }
@@ -194,7 +194,10 @@ impl AwsClientConfig {
         let s3_request_bucket_name = String::from(constants::AWS_S3_REQUEST_BUCKET_NAME);
         let sns_request_topic_arn = String::from(constants::AWS_SNS_REQUEST_TOPIC_ARN);
         let sqs_long_poll_wait_time = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
-        let sqs_response_queue_url = String::from(constants::AWS_SQS_RESPONSE_QUEUE_URL);
+        let sqs_response_queue_urls = constants::AWS_SQS_RESPONSE_QUEUE_URLS
+            .iter()
+            .map(|s| String::from(*s))
+            .collect();
         let sqs_wait_time_seconds = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
 
         AwsClientConfig::new(
@@ -203,7 +206,7 @@ impl AwsClientConfig {
             s3_request_bucket_name,
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
-            sqs_response_queue_url,
+            sqs_response_queue_urls,
             sqs_wait_time_seconds,
         )
         .await
