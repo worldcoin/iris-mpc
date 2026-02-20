@@ -10,7 +10,7 @@ use crate::{
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, sync::Arc, time::Instant, vec};
+use std::{collections::BTreeMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -107,7 +107,7 @@ async fn aggregate_results(
     mut rx: UnboundedReceiver<IsMatch>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
     rx.close();
-    let mut join = HashMap::new();
+    let mut join = BTreeMap::new();
 
     // For each pair of request, reduce the result of all rotations with boolean ANY.
     while let Some(match_result) = rx.recv().await {

@@ -17,12 +17,25 @@ pub struct RequestInfo {
     /// Correlated system responses returned by MPC nodes.
     correlation_set: [Option<ResponsePayload>; N_PARTIES],
 
+    /// User assigned label ... used to associate child/parent requests.
+    label: Option<String>,
+
+    /// User assigned label ... used to associate child/parent requests.
+    label_of_parent: Option<String>,
+
     /// Set of processing states.
     state_history: Vec<RequestStatus>,
+
+    /// Associated unique identifier.
+    uid: uuid::Uuid,
 }
 
 impl RequestInfo {
-    pub(super) fn new(batch: &RequestBatch) -> Self {
+    pub(super) fn new(
+        batch: &RequestBatch,
+        label: Option<String>,
+        label_of_parent: Option<String>,
+    ) -> Self {
         let mut state_history = Vec::with_capacity(RequestStatus::VARIANT_COUNT);
         state_history.push(RequestStatus::default());
 
@@ -30,12 +43,27 @@ impl RequestInfo {
             batch_idx: batch.batch_idx(),
             batch_item_idx: batch.next_item_idx(),
             correlation_set: [const { None }; N_PARTIES],
+            label,
+            label_of_parent,
             state_history,
+            uid: uuid::Uuid::new_v4(),
         }
+    }
+
+    pub(super) fn label(&self) -> &Option<String> {
+        &self.label
+    }
+
+    pub(super) fn uid(&self) -> &uuid::Uuid {
+        &self.uid
     }
 
     pub(super) fn is_fully_correlated(&self) -> bool {
         self.correlation_set.iter().all(|c| c.is_some())
+    }
+
+    pub(super) fn status(&self) -> &RequestStatus {
+        self.state_history.last().unwrap()
     }
 
     pub(super) fn set_correlation(&mut self, response: &ResponsePayload) {
@@ -46,13 +74,16 @@ impl RequestInfo {
         self.state_history.push(new_state);
     }
 
-    pub(super) fn status(&self) -> &RequestStatus {
-        self.state_history.last().unwrap()
+    pub(super) fn first_correlation(&self) -> Option<&ResponsePayload> {
+        self.correlation_set.iter().find_map(|c| c.as_ref())
     }
 }
 
 impl fmt::Display for RequestInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Request-{}.{}", self.batch_idx, self.batch_item_idx)
+        match &self.label {
+            Some(label) => write!(f, "{}", label),
+            None => write!(f, "{}.{}", self.batch_idx, self.batch_item_idx),
+        }
     }
 }
