@@ -8,8 +8,8 @@ use crate::{
     client::options::SharesGeneratorOptions,
     constants::N_PARTIES,
     irises::{
-        generate_iris_shares_for_upload, reader::read_iris_shares_for_upload,
-        GaloisRingSharedIrisForUpload,
+        generate_iris_shares_for_upload, generate_iris_shares_mirrored_for_upload,
+        reader::read_iris_shares_for_upload, GaloisRingSharedIrisForUpload,
     },
 };
 
@@ -112,6 +112,42 @@ where
                 Some(iris_descriptor) => iris_shares[iris_descriptor.index()].clone(),
                 None => iris_shares.pop().expect("Shares generator is exhausted"),
             },
+        }
+    }
+
+    /// Generates pairs of mirrored Iris shares for upstream processing.
+    pub(crate) fn generate_mirrored(
+        &mut self,
+        iris_pair: Option<&IrisPairDescriptor>,
+    ) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
+        let (maybe_left_desc, maybe_right_desc) = match iris_pair {
+            Some(descriptor) => (Some(descriptor.left()), Some(descriptor.right())),
+            None => (None, None),
+        };
+
+        [
+            self.generate_single_mirrored(maybe_left_desc),
+            self.generate_single_mirrored(maybe_right_desc),
+        ]
+    }
+
+    /// Generates a single set of mirrored Iris shares for upstream processing.
+    fn generate_single_mirrored(
+        &mut self,
+        maybe_iris_descriptor: Option<&IrisDescriptor>,
+    ) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
+        match self {
+            Self::FromCompute { rng } => generate_iris_shares_mirrored_for_upload(rng, None),
+            Self::FromFile { iris_shares } => {
+                let base = match maybe_iris_descriptor {
+                    Some(iris_descriptor) => iris_shares[iris_descriptor.index()].clone(),
+                    None => iris_shares.pop().expect("Shares generator is exhausted"),
+                };
+                base.map(|share| GaloisRingSharedIrisForUpload {
+                    code: share.code.mirrored_code(),
+                    mask: share.mask.mirrored_mask(),
+                })
+            }
         }
     }
 }

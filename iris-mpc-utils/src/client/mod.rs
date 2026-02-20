@@ -155,7 +155,11 @@ impl ServiceClient2 {
 
                 // Pre-generate shares for request types that require them.
                 let shares_info = if let Some((op_uuid, iris_pair)) = request.get_shares_info() {
-                    let shares = self.shares_generator.generate(iris_pair.as_ref());
+                    let shares = if opts.is_mirrored() {
+                        self.shares_generator.generate_mirrored(iris_pair.as_ref())
+                    } else {
+                        self.shares_generator.generate(iris_pair.as_ref())
+                    };
                     Some((op_uuid, shares))
                 } else {
                     None

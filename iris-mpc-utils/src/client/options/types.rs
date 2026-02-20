@@ -344,7 +344,8 @@ impl RequestOptions {
         let corr_uuid = Uuid::new_v4();
 
         match self.payload() {
-            RequestPayloadOptions::Uniqueness { iris_pair, .. } => Request::Uniqueness {
+            RequestPayloadOptions::Uniqueness { iris_pair, .. }
+            | RequestPayloadOptions::Mirrored { iris_pair, .. } => Request::Uniqueness {
                 info,
                 iris_pair: Some(*iris_pair),
                 signup_id: corr_uuid,
@@ -371,6 +372,10 @@ impl RequestOptions {
                 parent: parent_serial_id.unwrap(),
             },
         }
+    }
+
+    pub fn is_mirrored(&self) -> bool {
+        matches!(self.payload(), RequestPayloadOptions::Mirrored { .. })
     }
 
     pub fn get_parent(&self) -> Option<Parent> {
@@ -412,6 +417,12 @@ pub enum RequestPayloadOptions {
         iris_pair: IrisPairDescriptor,
         insertion_layers: Option<(usize, usize)>,
     },
+    // Options over a mirrored uniqueness request payload.
+    // Generates a Uniqueness request whose iris shares are mirror-transformed.
+    Mirrored {
+        iris_pair: IrisPairDescriptor,
+        insertion_layers: Option<(usize, usize)>,
+    },
 }
 
 impl RequestPayloadOptions {
@@ -421,7 +432,9 @@ impl RequestPayloadOptions {
             Self::Reauthorisation { iris_pair, .. }
             | Self::ResetCheck { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. } => iris_pair.as_ref(),
-            Self::Uniqueness { iris_pair, .. } => Some(iris_pair),
+            Self::Uniqueness { iris_pair, .. } | Self::Mirrored { iris_pair, .. } => {
+                Some(iris_pair)
+            }
         }
     }
 
