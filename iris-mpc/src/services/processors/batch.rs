@@ -415,6 +415,7 @@ impl<'a> BatchProcessor<'a> {
             }
             _ => {
                 self.delete_message(&sqs_message).await?;
+                self.msg_counter += 1;
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                 Ok(())
             }
@@ -448,6 +449,7 @@ impl<'a> BatchProcessor<'a> {
                                 identity_deletion_request.serial_id,
                                 identity_deletion_request,
                             );
+                self.msg_counter += 1;
                 return Ok(());
             }
 
@@ -474,6 +476,7 @@ impl<'a> BatchProcessor<'a> {
             self.msg_counter += 1;
         } else {
             tracing::warn!("Identity deletions are disabled");
+            self.msg_counter += 1;
         }
 
         Ok(())
@@ -550,6 +553,7 @@ impl<'a> BatchProcessor<'a> {
 
         if !self.config.hawk_server_reauths_enabled {
             tracing::warn!("Reauth is disabled, skipping reauth request");
+            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -559,6 +563,7 @@ impl<'a> BatchProcessor<'a> {
             tracing::error!(
                 "Received a reauth request with use_or_rule set to true, but LUC is not enabled. Skipping request."
             );
+            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -573,6 +578,7 @@ impl<'a> BatchProcessor<'a> {
                                 reauth_request.serial_id,
                                 reauth_request,
                             );
+            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -637,6 +643,7 @@ impl<'a> BatchProcessor<'a> {
 
         if !self.config.hawk_server_resets_enabled {
             tracing::warn!("Reset is disabled, skipping reset request");
+            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -689,8 +696,25 @@ impl<'a> BatchProcessor<'a> {
 
         if !self.config.hawk_server_resets_enabled {
             tracing::warn!("Reset is disabled, skipping reset request");
+            self.msg_counter += 1;
             return Ok(());
         }
+
+        // Check for duplicate serial_id before downloading S3 shares to avoid wasted work
+        if self
+            .batch_query
+            .modifications
+            .contains_key(&RequestSerialId(reset_update_request.serial_id))
+        {
+            tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reset_update_request.serial_id,
+                                reset_update_request,
+                            );
+            self.msg_counter += 1;
+            return Ok(());
+        }
+
         let semaphore = Arc::clone(&self.semaphore);
         let s3_client = self.s3_client.clone();
         let bucket_name = self.config.shares_bucket_name.clone();
@@ -717,19 +741,6 @@ impl<'a> BatchProcessor<'a> {
                 return Err(ReceiveRequestError::FailedToJoinHandle(e));
             }
         };
-
-        if self
-            .batch_query
-            .modifications
-            .contains_key(&RequestSerialId(reset_update_request.serial_id))
-        {
-            tracing::warn!(
-                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                reset_update_request.serial_id,
-                                reset_update_request,
-                            );
-            return Ok(());
-        }
 
         let modification = persist_modification(
             self.config.disable_persistence,
