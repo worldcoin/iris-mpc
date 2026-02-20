@@ -51,12 +51,6 @@ env:
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
     value: "_minfhd"
 
-  - name: SMPC__HNSW_PARAM_EF_CONSTR
-    value: "4000"
-
-  - name: SMPC__HNSW_PARAM_EF_SEARCH
-    value: "4000"
-
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
 
