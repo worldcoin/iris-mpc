@@ -206,7 +206,11 @@ impl RequestBatchOptions {
                 let uniqueness_labels: std::collections::HashSet<_> = all_items
                     .iter()
                     .filter(|item| {
-                        matches!(item.payload(), RequestPayloadOptions::Uniqueness { .. })
+                        matches!(
+                            item.payload(),
+                            RequestPayloadOptions::Uniqueness { .. }
+                                | RequestPayloadOptions::Mirrored { .. }
+                        )
                     })
                     .filter_map(|item| item.label())
                     .collect();
@@ -220,7 +224,7 @@ impl RequestBatchOptions {
                         }
                         if !uniqueness_labels.contains(&parent_label) {
                             return Err(format!(
-                                "parent '{}' must be a Uniqueness request",
+                                "parent '{}' must be a Uniqueness or Mirrored request",
                                 parent_label
                             ));
                         }

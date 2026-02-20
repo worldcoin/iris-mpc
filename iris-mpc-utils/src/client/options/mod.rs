@@ -279,6 +279,45 @@ mod tests {
     }
 
     #[test]
+    fn complex_allows_mirrored_request_type() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                    { label = "M-0", payload = { Mirrored = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                ],
+            ]
+        "#,
+        );
+        o.validate().expect("Mirrored request type should be valid");
+    }
+
+    #[test]
+    fn complex_allows_mirrored_as_parent() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [
+                [
+                    { label = "M-0", payload = { Mirrored = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                ],
+                [
+                    { label = "D-0", payload = { IdentityDeletion = { parent = "M-0" } } },
+                ],
+            ]
+        "#,
+        );
+        o.validate()
+            .expect("Mirrored request should be a valid parent");
+    }
+
+    #[test]
     fn complex_allows_swapped_iris_pair() {
         let o = opts(
             r#"
