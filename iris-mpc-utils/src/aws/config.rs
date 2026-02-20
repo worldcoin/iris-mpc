@@ -37,9 +37,6 @@ pub struct AwsClientConfig {
 
     /// SQS: system response egress queue URLs.
     sqs_response_queue_urls: Vec<String>,
-
-    /// SQS: wait time (seconds) between receive message polling.
-    sqs_wait_time_seconds: usize,
 }
 
 #[async_from::async_trait]
@@ -83,10 +80,6 @@ impl AwsClientConfig {
         &self.sqs_response_queue_urls
     }
 
-    pub(crate) fn sqs_wait_time_seconds(&self) -> usize {
-        self.sqs_wait_time_seconds
-    }
-
     pub async fn new(
         environment: String,
         public_key_base_url: String,
@@ -94,7 +87,7 @@ impl AwsClientConfig {
         sns_request_topic_arn: String,
         sqs_long_poll_wait_time: usize,
         sqs_response_queue_urls: Vec<String>,
-        sqs_wait_time_seconds: usize,
+        _sqs_wait_time_seconds: usize,
     ) -> Self {
         Self {
             environment,
@@ -104,7 +97,6 @@ impl AwsClientConfig {
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
             sqs_response_queue_urls,
-            sqs_wait_time_seconds,
         }
     }
 }

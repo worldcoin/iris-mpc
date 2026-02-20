@@ -78,7 +78,10 @@ impl ResponsePayload {
                 format!(
                     "Uniqueness | node={} |serial_id={} | is_match={} | signup_id={:.16}",
                     result.node_id,
-                    result.get_serial_id().unwrap_or(u32::MAX),
+                    result
+                        .get_serial_id()
+                        .map(|id| format!("{id}"))
+                        .unwrap_or(String::from("_")),
                     result.is_match,
                     result.signup_id
                 )
