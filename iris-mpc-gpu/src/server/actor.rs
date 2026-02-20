@@ -999,8 +999,11 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // FETCH PARTIAL FULL SCAN PARTIAL RESULTS
         ///////////////////////////////////////////////////////////////////
-        tracing::info!("Fetching partial {} results", self.full_scan_side);
-        let mut partial_matches_side1 = self.distance_comparator.get_partial_results(
+        tracing::info!(
+            "Fetching partial {} results from prefiltering",
+            self.full_scan_side
+        );
+        let mut prefiltered_ids_side1 = self.distance_comparator.get_partial_results(
             match self.full_scan_side {
                 Eye::Left => &self.db_match_list_left,
                 Eye::Right => &self.db_match_list_right,
@@ -1032,8 +1035,8 @@ impl ServerActor {
                 continue;
             }
             // only add non-duplicates, this is a linear scan, but the number of elements in this loop should be somewhat small
-            if !partial_matches_side1[device_idx as usize].contains(&db_idx) {
-                partial_matches_side1[device_idx as usize].push(db_idx);
+            if !prefiltered_ids_side1[device_idx as usize].contains(&db_idx) {
+                prefiltered_ids_side1[device_idx as usize].push(db_idx);
             }
         }
 
@@ -1050,14 +1053,14 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // COMPARE FIRST EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-        if partial_matches_side1
+        if prefiltered_ids_side1
             .iter()
             .any(|x| x.len() >= DB_CHUNK_SIZE)
         {
             tracing::warn!(
-                "Partial matches {} too large, doing multiple subsets: {} > {}",
+                "Prefiltered partial matches {} too large, doing multiple subsets: {} > {}",
                 self.full_scan_side,
-                partial_matches_side1
+                prefiltered_ids_side1
                     .iter()
                     .map(|x| x.len())
                     .max()
@@ -1076,7 +1079,7 @@ impl ServerActor {
                 &mut events,
                 self.full_scan_side,
                 batch_size,
-                &partial_matches_side1,
+                &prefiltered_ids_side1,
                 orientation,
                 &batch_operations,
                 &batch.skip_persistence,
@@ -1135,21 +1138,6 @@ impl ServerActor {
             }
         );
 
-        if partial_matches_side1
-            .iter()
-            .any(|x| x.len() >= DB_CHUNK_SIZE)
-        {
-            tracing::warn!(
-                "Partial matches {} too large, doing multiple subsets: {} > {}",
-                self.full_scan_side,
-                partial_matches_side1
-                    .iter()
-                    .map(|x| x.len())
-                    .max()
-                    .unwrap_or(0),
-                DB_CHUNK_SIZE
-            );
-        }
         tracing::info!("Comparing {} eye queries against DB subset", other_side);
         let (partial_results_with_rotations_side2, one_sided_distance_cache_side2) = self
             .compare_query_against_db_subset_and_self(
@@ -1158,7 +1146,7 @@ impl ServerActor {
                 &mut events,
                 other_side,
                 batch_size,
-                &partial_matches_side1,
+                &prefiltered_ids_side1,
                 orientation,
                 &batch_operations,
                 &batch.skip_persistence,
