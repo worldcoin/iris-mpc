@@ -12,8 +12,7 @@ echo "starting left init"
   --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
   --source "/tmp/gallery_left_right_interleaved.ndjson" \
   --db-url "$SMPC__CPU_DATABASE__URL" \
-  --db-schema "SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID" \
-  --target-db-size 287895
+  --db-schema "SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID"
 
 echo "starting restore graph left"
 /bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_left.dat restore-side "left"
@@ -26,7 +25,7 @@ echo "restore graph right done"
 psql "$SMPC__CPU_DATABASE__URL" -c "
 SET search_path TO \"SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID\";
 INSERT INTO persistent_state (domain, \"key\", \"value\")
-VALUES ('genesis', 'last_indexed_iris_id', '287895')
+VALUES ('genesis', 'last_indexed_iris_id', '280422')
 ON CONFLICT (domain, \"key\")
 DO UPDATE SET \"value\" = EXCLUDED.\"value\";
 "
