@@ -20,3 +20,10 @@ I made a branch called sw/service_client_6 where error handling is improved and 
 Interesting observations:
 - I sent a duplicate deletion in i  think complex-tc1.toml and the servers never saw it. though this was before i switched to sending requests one at a time. this may not be worth looking at further.
 - the complex-tc2.toml has mirrored iris codes and these all get non-matching uniqueness results, which means the mirroring detection did not work 
+
+# MC (Feb 20)
+
+I played with sw/service_client_6. Two things:
+- Batch processing had further bugs w.r.t msg_counter; it didn't get incremented when skipping modifications for the same serial id; this made some batches stuck
+- Claude noted there are separate SQS response queues for each request type so I had it change the client to check all these queues for replies.
+- There was an issue with localstack SQS ordering about a year ago, but it should be fixed in the version we're using. Worth checking for a stale image. Details on Slack
