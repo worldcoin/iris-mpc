@@ -22,7 +22,7 @@ impl DistanceFn {
     pub fn plaintext_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
         match self {
             Fhd => a.get_distance_fraction(b),
-            MinFhd => a.get_min_distance_fraction_rotation_aware::<HAWK_MINFHD_ROTATIONS>(b),
+            MinFhd => a.get_min_fhd_distance_fraction_rotation_aware::<HAWK_MINFHD_ROTATIONS>(b),
         }
     }
 
@@ -161,26 +161,28 @@ impl DistanceMinimalRotation {
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<u32>>> {
-        let dot_start = std::time::Instant::now();
+        let total_start = std::time::Instant::now();
         let ds_and_ts = store
             .workers
             .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
             .await?;
-        metrics::histogram!("eval_distance_dot_product_duration")
-            .record(dot_start.elapsed().as_secs_f64());
-
-        let lift_start = std::time::Instant::now();
+        let gr_to_lifted_start = std::time::Instant::now();
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        metrics::histogram!("eval_distance_lift_duration")
-            .record(lift_start.elapsed().as_secs_f64());
-
-        let omin_start = std::time::Instant::now();
+        let gr_to_lifted_duration = gr_to_lifted_start.elapsed();
+        let oblivious_min_start = std::time::Instant::now();
         let result = store
             .oblivious_min_distance_batch(transpose_from_flat(&distances))
             .await;
-        metrics::histogram!("eval_distance_oblivious_min_duration")
-            .record(omin_start.elapsed().as_secs_f64());
-
+        let oblivious_min_duration = oblivious_min_start.elapsed();
+        let total_duration = total_start.elapsed();
+        if !total_duration.is_zero() {
+            let total_secs = total_duration.as_secs_f64();
+            let gr_to_lifted_percent = (gr_to_lifted_duration.as_secs_f64() / total_secs) * 100.0;
+            let oblivious_min_percent = (oblivious_min_duration.as_secs_f64() / total_secs) * 100.0;
+            metrics::histogram!("eval_distance_gr_to_lifted_percent").record(gr_to_lifted_percent);
+            metrics::histogram!("eval_distance_oblivious_min_percent")
+                .record(oblivious_min_percent);
+        }
         result
     }
 
