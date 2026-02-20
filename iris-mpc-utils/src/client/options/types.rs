@@ -376,7 +376,8 @@ impl RequestOptions {
     pub fn get_parent(&self) -> Option<Parent> {
         match self.payload() {
             RequestPayloadOptions::IdentityDeletion { parent }
-            | RequestPayloadOptions::Reauthorisation { parent, .. } => Some(parent.clone()),
+            | RequestPayloadOptions::Reauthorisation { parent, .. }
+            | RequestPayloadOptions::ResetUpdate { parent, .. } => Some(parent.clone()),
             _ => None,
         }
     }
