@@ -150,49 +150,11 @@ impl ServiceClient2 {
                     _ => None,
                 };
 
-                // Generate a fresh correlation UUID and create RequestInfo.
-                let corr_uuid = Uuid::new_v4();
+                // Generate a fresh RequestInfo.
                 let info = typeset::RequestInfo::with_indices(batch_idx, item_idx, opts.label());
 
                 // Build a Request from the options and resolved parent data.
-                let request = match opts.payload() {
-                    RequestPayloadOptions::Uniqueness { iris_pair, .. } => {
-                        typeset::Request::Uniqueness {
-                            info,
-                            iris_pair: Some(*iris_pair),
-                            signup_id: corr_uuid,
-                        }
-                    }
-                    RequestPayloadOptions::Reauthorisation { iris_pair, .. } => {
-                        typeset::Request::Reauthorization {
-                            info,
-                            iris_pair: *iris_pair,
-                            parent: parent_serial_id.unwrap(),
-                            reauth_id: corr_uuid,
-                        }
-                    }
-                    RequestPayloadOptions::ResetCheck { iris_pair } => {
-                        typeset::Request::ResetCheck {
-                            info,
-                            iris_pair: *iris_pair,
-                            reset_id: corr_uuid,
-                        }
-                    }
-                    RequestPayloadOptions::ResetUpdate { iris_pair, .. } => {
-                        typeset::Request::ResetUpdate {
-                            info,
-                            iris_pair: *iris_pair,
-                            parent: parent_serial_id.unwrap(),
-                            reset_id: corr_uuid,
-                        }
-                    }
-                    RequestPayloadOptions::IdentityDeletion { .. } => {
-                        typeset::Request::IdentityDeletion {
-                            info,
-                            parent: parent_serial_id.unwrap(),
-                        }
-                    }
-                };
+                let request = opts.make_request(info, parent_serial_id);
 
                 // Pre-generate shares for request types that require them.
                 let shares_info = if let Some((op_uuid, iris_pair)) = request.get_shares_info() {
