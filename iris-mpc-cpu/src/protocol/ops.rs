@@ -37,8 +37,8 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 /// Compares the distance between two iris pairs to a threshold.
 ///
 /// - Takes as input two code and mask dot products between two irises,
-///   i.e., code_dist = <iris1.code, iris2.code> and mask_dist = <iris1.mask, iris2.mask>.
-/// - Lifts the two dot products to the ring Z_{2^32}.
+///   i.e., code_dist = <iris1.code, iris2.code> and mask_dist = <iris1.mask, iris2.mask>,
+///   already lifted to 32 bits if they are originally 16-bit.
 /// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
 ///   * MATCH_THRESHOLD_RATIO) * B as f64).
 /// - Compares mask_dist * A > code_dist * B.
