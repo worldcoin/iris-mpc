@@ -614,7 +614,8 @@ impl VectorStore for Aby3Store {
         metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
         metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
         let start = std::time::Instant::now();
-        let result = self.distance_fn
+        let result = self
+            .distance_fn
             .eval_distance_batch(self, query, vectors)
             .await;
         metrics::histogram!("eval_distance_batch_duration").record(start.elapsed().as_secs_f64());

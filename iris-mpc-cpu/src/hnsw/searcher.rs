@@ -1133,8 +1133,7 @@ impl HnswSearcher {
 
             opened_so_far += new_opened.len();
             visited_so_far += c_links.len();
-            metrics::histogram!("layer_search_visited_per_iteration")
-                .record(c_links.len() as f64);
+            metrics::histogram!("layer_search_visited_per_iteration").record(c_links.len() as f64);
 
             debug!(
                 event_type = Operation::OpenNode.id(),
