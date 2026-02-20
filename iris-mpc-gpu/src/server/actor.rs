@@ -929,7 +929,7 @@ impl ServerActor {
         }
 
         ///////////////////////////////////////////////////////////////////
-        // COMPARE FULL SCAN EYE QUERIES
+        // COMPARE FULL SCAN EYE QUERIES, PREFILTERING
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing {} eye queries", self.full_scan_side);
         // *Query* variant including Lagrange interpolation.
@@ -983,18 +983,18 @@ impl ServerActor {
             self.full_scan_side
         );
 
-        let (partial_results_with_rotations_side1, one_sided_distance_cache_side1) = self
-            .compare_query_against_db_and_self(
-                &compact_device_queries_side1,
-                &compact_device_sums_side1,
-                &mut events,
-                self.full_scan_side,
-                batch_size,
-                orientation,
-                &batch_operations,
-                &batch.skip_persistence,
-                &batch_reauth_targets,
-            );
+        // prefilter the database with a higher threshold, also saving anon stats
+        let one_sided_distance_cache_side1 = self.compare_query_against_db_and_self_prefiltering(
+            &compact_device_queries_side1,
+            &compact_device_sums_side1,
+            &mut events,
+            self.full_scan_side,
+            batch_size,
+            orientation,
+            &batch_operations,
+            &batch.skip_persistence,
+            &batch_reauth_targets,
+        );
 
         ///////////////////////////////////////////////////////////////////
         // FETCH PARTIAL FULL SCAN PARTIAL RESULTS
@@ -1017,6 +1017,7 @@ impl ServerActor {
             .copied()
             .chain(batch.reauth_target_indices.values().copied())
             .unique()
+            .sorted()
             .collect_vec();
 
         for or_idx in or_indices_and_reauth {
@@ -1035,6 +1036,53 @@ impl ServerActor {
                 partial_matches_side1[device_idx as usize].push(db_idx);
             }
         }
+
+        // clear the db_match_list since we used it for prefiltering
+        for dst in [
+            &self.db_match_list_left,
+            &self.db_match_list_right,
+            &self.batch_match_list_left,
+            &self.batch_match_list_right,
+        ] {
+            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
+        }
+
+        ///////////////////////////////////////////////////////////////////
+        // COMPARE FIRST EYE QUERIES
+        ///////////////////////////////////////////////////////////////////
+        if partial_matches_side1
+            .iter()
+            .any(|x| x.len() >= DB_CHUNK_SIZE)
+        {
+            tracing::warn!(
+                "Partial matches {} too large, doing multiple subsets: {} > {}",
+                self.full_scan_side,
+                partial_matches_side1
+                    .iter()
+                    .map(|x| x.len())
+                    .max()
+                    .unwrap_or(0),
+                DB_CHUNK_SIZE
+            );
+        }
+        tracing::info!(
+            "Comparing {} eye queries against DB subset",
+            self.full_scan_side
+        );
+        let (partial_results_with_rotations_side1, _) = self
+            .compare_query_against_db_subset_and_self(
+                &compact_device_queries_side1,
+                &compact_device_sums_side1,
+                &mut events,
+                self.full_scan_side,
+                batch_size,
+                &partial_matches_side1,
+                orientation,
+                &batch_operations,
+                &batch.skip_persistence,
+                false, // skip anon stats, we already collected it for side1
+                &batch_reauth_targets,
+            );
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE OTHER EYE QUERIES
@@ -1087,45 +1135,36 @@ impl ServerActor {
             }
         );
 
-        let (partial_results_with_rotations_side2, one_sided_distance_cache_side2) =
-            if partial_matches_side1
-                .iter()
-                .any(|x| x.len() >= DB_CHUNK_SIZE)
-            {
-                tracing::warn!(
-                    "Partial matches {} too large, doing full match: {} > {}",
-                    self.full_scan_side,
-                    partial_matches_side1.len(),
-                    DB_CHUNK_SIZE
-                );
-
-                tracing::info!("Comparing {} eye queries against DB and self", other_side);
-                self.compare_query_against_db_and_self(
-                    &compact_device_queries_side2,
-                    &compact_device_sums_side2,
-                    &mut events,
-                    other_side,
-                    batch_size,
-                    orientation,
-                    &batch_operations,
-                    &batch.skip_persistence,
-                    &batch_reauth_targets,
-                )
-            } else {
-                tracing::info!("Comparing {} eye queries against DB subset", other_side);
-                self.compare_query_against_db_subset_and_self(
-                    &compact_device_queries_side2,
-                    &compact_device_sums_side2,
-                    &mut events,
-                    other_side,
-                    batch_size,
-                    &partial_matches_side1,
-                    orientation,
-                    &batch_operations,
-                    &batch.skip_persistence,
-                    &batch_reauth_targets,
-                )
-            };
+        if partial_matches_side1
+            .iter()
+            .any(|x| x.len() >= DB_CHUNK_SIZE)
+        {
+            tracing::warn!(
+                "Partial matches {} too large, doing multiple subsets: {} > {}",
+                self.full_scan_side,
+                partial_matches_side1
+                    .iter()
+                    .map(|x| x.len())
+                    .max()
+                    .unwrap_or(0),
+                DB_CHUNK_SIZE
+            );
+        }
+        tracing::info!("Comparing {} eye queries against DB subset", other_side);
+        let (partial_results_with_rotations_side2, one_sided_distance_cache_side2) = self
+            .compare_query_against_db_subset_and_self(
+                &compact_device_queries_side2,
+                &compact_device_sums_side2,
+                &mut events,
+                other_side,
+                batch_size,
+                &partial_matches_side1,
+                orientation,
+                &batch_operations,
+                &batch.skip_persistence,
+                true, // collect anon stats for the second side
+                &batch_reauth_targets,
+            );
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
@@ -1921,6 +1960,7 @@ impl ServerActor {
         orientation: Orientation,
         operations: &[AnonStatsOperation],
         skip_persistence: &[bool],
+        save_anon_stats: bool,
         batch_reauth_targets: &[Vec<u64>],
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         let old_distance_cache_counters = match orientation {
@@ -1955,217 +1995,234 @@ impl ServerActor {
             Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
         };
 
-        // We copied over a subset of the db, so we match against DB chunks of the given sizes
-        let chunk_size = db_subset_idx.iter().map(|x| x.len()).collect::<Vec<_>>();
-        let dot_chunk_size = chunk_size
-            .iter()
-            .map(|&s| s.max(1).div_ceil(64) * 64)
-            .collect::<Vec<_>>();
+        let max_subset_size = db_subset_idx.iter().map(|x| x.len()).max().unwrap_or(0);
 
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "prefetch_db_chunk",
-            self.enable_debug_timing,
-            {
-                self.codes_engine.prefetch_db_subset_into_chunk_buffers(
-                    code_db_slices,
-                    &self.code_chunk_buffers[0],
-                    db_subset_idx,
+        for idx in (0..max_subset_size).step_by(DB_CHUNK_SIZE) {
+            let start = idx;
+            let end = idx + DB_CHUNK_SIZE;
+            let db_subset_idx_chunk = db_subset_idx
+                .iter()
+                .map(|indices| {
+                    let len = indices.len();
+                    indices[start.min(len)..end.min(len)].to_vec()
+                })
+                .collect::<Vec<_>>();
+            // We copied over a subset of the db, so we match against DB chunks of the given sizes
+            let chunk_size = db_subset_idx_chunk
+                .iter()
+                .map(|x| x.len())
+                .collect::<Vec<_>>();
+            let dot_chunk_size = chunk_size
+                .iter()
+                .map(|&s| s.max(1).div_ceil(64) * 64)
+                .collect::<Vec<_>>();
+
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "prefetch_db_chunk",
+                self.enable_debug_timing,
+                {
+                    self.codes_engine.prefetch_db_subset_into_chunk_buffers(
+                        code_db_slices,
+                        &self.code_chunk_buffers[0],
+                        &db_subset_idx_chunk,
+                        &self.streams[0],
+                    );
+                    self.masks_engine.prefetch_db_subset_into_chunk_buffers(
+                        mask_db_slices,
+                        &self.mask_chunk_buffers[0],
+                        &db_subset_idx_chunk,
+                        &self.streams[0],
+                    );
+                }
+            );
+
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "db_dot",
+                self.enable_debug_timing,
+                {
+                    compact_device_queries.dot_products_against_db(
+                        &mut self.codes_engine,
+                        &mut self.masks_engine,
+                        &CudaVec2DSlicerRawPointer::from(&self.code_chunk_buffers[0]),
+                        &CudaVec2DSlicerRawPointer::from(&self.mask_chunk_buffers[0]),
+                        &dot_chunk_size,
+                        0,
+                        &self.streams[0],
+                        &self.cublas_handles[0],
+                    );
+                }
+            );
+
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "db_reduce",
+                self.enable_debug_timing,
+                {
+                    compact_device_sums.compute_dot_reducer_against_prepared_db(
+                        &mut self.codes_engine,
+                        &mut self.masks_engine,
+                        &self.code_chunk_buffers[0].sums,
+                        &self.mask_chunk_buffers[0].sums,
+                        &dot_chunk_size,
+                        &self.streams[0],
+                    );
+                }
+            );
+
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "db_reshare",
+                self.enable_debug_timing,
+                {
+                    self.codes_engine
+                        .reshare_results(&dot_chunk_size, &self.streams[0]);
+                    self.masks_engine
+                        .reshare_results(&dot_chunk_size, &self.streams[0]);
+                }
+            );
+
+            // ---- END PHASE 1 ----
+
+            // ---- START PHASE 2 FOR ANON STATS ----
+            let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
+            let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
+            let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
+            let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+
+            // ignore all device results where the chunk size is 0
+            let ignore_device_results: Vec<bool> = chunk_size.iter().map(|&s| s == 0).collect();
+
+            assert_eq!(
+                (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
+                0,
+                "Phase 2 input size must be a multiple of 64"
+            );
+            self.phase2
+                .set_chunk_size(max_chunk_size * self.max_batch_size * ROTATIONS / 64);
+
+            if save_anon_stats {
+                record_stream_time!(
+                    &self.device_manager,
                     &self.streams[0],
+                    events,
+                    "db_threshold_anon_stats",
+                    self.enable_debug_timing,
+                    {
+                        self.phase2.compare_threshold_masked_many(
+                            &code_dots,
+                            &mask_dots,
+                            THRESHOLD_ANON_STATS_A,
+                            &self.streams[0],
+                        );
+                    }
                 );
-                self.masks_engine.prefetch_db_subset_into_chunk_buffers(
-                    mask_db_slices,
-                    &self.mask_chunk_buffers[0],
-                    db_subset_idx,
-                    &self.streams[0],
-                );
-            }
-        );
 
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_dot",
-            self.enable_debug_timing,
-            {
-                compact_device_queries.dot_products_against_db(
-                    &mut self.codes_engine,
-                    &mut self.masks_engine,
-                    &CudaVec2DSlicerRawPointer::from(&self.code_chunk_buffers[0]),
-                    &CudaVec2DSlicerRawPointer::from(&self.mask_chunk_buffers[0]),
-                    &dot_chunk_size,
-                    0,
-                    &self.streams[0],
-                    &self.cublas_handles[0],
-                );
-            }
-        );
-
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_reduce",
-            self.enable_debug_timing,
-            {
-                compact_device_sums.compute_dot_reducer_against_prepared_db(
-                    &mut self.codes_engine,
-                    &mut self.masks_engine,
-                    &self.code_chunk_buffers[0].sums,
-                    &self.mask_chunk_buffers[0].sums,
-                    &dot_chunk_size,
-                    &self.streams[0],
-                );
-            }
-        );
-
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_reshare",
-            self.enable_debug_timing,
-            {
-                self.codes_engine
-                    .reshare_results(&dot_chunk_size, &self.streams[0]);
-                self.masks_engine
-                    .reshare_results(&dot_chunk_size, &self.streams[0]);
-            }
-        );
-
-        // ---- END PHASE 1 ----
-
-        // ---- START PHASE 2 FOR ANON STATS ----
-        let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
-        let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
-        let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
-        let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
-
-        assert_eq!(
-            (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
-            0,
-            "Phase 2 input size must be a multiple of 64"
-        );
-        self.phase2
-            .set_chunk_size(max_chunk_size * self.max_batch_size * ROTATIONS / 64);
-
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_threshold_anon_stats",
-            self.enable_debug_timing,
-            {
-                self.phase2.compare_threshold_masked_many(
-                    &code_dots,
-                    &mask_dots,
-                    THRESHOLD_ANON_STATS_A,
-                    &self.streams[0],
-                );
-            }
-        );
-
-        let res = self.phase2.take_result_buffer();
-
-        let (
-            match_distances_buffers_codes,
-            match_distances_buffers_masks,
-            match_distances_counters,
-            match_distances_indices,
-        ) = match orientation {
-            Orientation::Normal => self.match_distances_buffer.get_buffers(eye_db),
-            Orientation::Mirror => self.match_distances_buffer_mirror.get_buffers(eye_db),
-        };
-
-        // ignore all device results where the chunk size is 0
-        let ignore_device_results: Vec<bool> = chunk_size.iter().map(|&s| s == 0).collect();
-
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_open_anon_stats",
-            self.enable_debug_timing,
-            {
-                save_anon_stats_subset_results(
-                    &mut self.phase2,
-                    &res,
-                    &self.distance_comparator,
-                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
-                    &dot_chunk_size,
-                    &chunk_size,
-                    &self.current_db_sizes,
-                    &ignore_device_results,
+                let res = self.phase2.take_result_buffer();
+                let (
                     match_distances_buffers_codes,
                     match_distances_buffers_masks,
                     match_distances_counters,
                     match_distances_indices,
-                    self.internal_batch_counter,
-                    &code_dots,
-                    &mask_dots,
-                    batch_size,
-                    self.match_distances_buffer_size
-                        * (100 + self.match_distances_buffer_size_extra_percent)
-                        / 100,
-                    &self.streams[0],
-                    db_subset_idx,
-                    batch_reauth_targets,
-                );
-                self.phase2.return_result_buffer(res);
-            }
-        );
+                ) = match orientation {
+                    Orientation::Normal => self.match_distances_buffer.get_buffers(eye_db),
+                    Orientation::Mirror => self.match_distances_buffer_mirror.get_buffers(eye_db),
+                };
 
-        // ---- START PHASE 2 FOR MATCHING ----
-        //
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_threshold",
-            self.enable_debug_timing,
-            {
-                self.phase2.compare_threshold_masked_many(
-                    &code_dots,
-                    &mask_dots,
-                    THRESHOLD_A,
+                record_stream_time!(
+                    &self.device_manager,
                     &self.streams[0],
+                    events,
+                    "db_open_anon_stats",
+                    self.enable_debug_timing,
+                    {
+                        save_anon_stats_subset_results(
+                            &mut self.phase2,
+                            &res,
+                            &self.distance_comparator,
+                            max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                            &dot_chunk_size,
+                            &chunk_size,
+                            &self.current_db_sizes,
+                            &ignore_device_results,
+                            match_distances_buffers_codes,
+                            match_distances_buffers_masks,
+                            match_distances_counters,
+                            match_distances_indices,
+                            self.internal_batch_counter,
+                            &code_dots,
+                            &mask_dots,
+                            batch_size,
+                            self.match_distances_buffer_size
+                                * (100 + self.match_distances_buffer_size_extra_percent)
+                                / 100,
+                            &self.streams[0],
+                            &db_subset_idx_chunk,
+                            batch_reauth_targets,
+                        );
+                        self.phase2.return_result_buffer(res);
+                    }
                 );
             }
-        );
-        let res = self.phase2.take_result_buffer();
 
-        let db_match_bitmap = match eye_db {
-            Eye::Left => &self.db_match_list_left,
-            Eye::Right => &self.db_match_list_right,
-        };
+            // ---- START PHASE 2 FOR MATCHING ----
+            //
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "db_threshold",
+                self.enable_debug_timing,
+                {
+                    self.phase2.compare_threshold_masked_many(
+                        &code_dots,
+                        &mask_dots,
+                        THRESHOLD_A,
+                        &self.streams[0],
+                    );
+                }
+            );
+            let res = self.phase2.take_result_buffer();
 
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "db_open",
-            self.enable_debug_timing,
-            {
-                open_subset_results(
-                    &mut self.phase2,
-                    &res,
-                    &self.distance_comparator,
-                    db_match_bitmap,
-                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
-                    &dot_chunk_size,
-                    &chunk_size,
-                    &self.current_db_sizes,
-                    &ignore_device_results,
-                    batch_size,
-                    &self.streams[0],
-                    db_subset_idx,
-                );
-                self.phase2.return_result_buffer(res);
-            }
-        );
+            let db_match_bitmap = match eye_db {
+                Eye::Left => &self.db_match_list_left,
+                Eye::Right => &self.db_match_list_right,
+            };
+
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "db_open",
+                self.enable_debug_timing,
+                {
+                    open_subset_results(
+                        &mut self.phase2,
+                        &res,
+                        &self.distance_comparator,
+                        db_match_bitmap,
+                        max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                        &dot_chunk_size,
+                        &chunk_size,
+                        &self.current_db_sizes,
+                        &ignore_device_results,
+                        batch_size,
+                        &self.streams[0],
+                        &db_subset_idx_chunk,
+                    );
+                    self.phase2.return_result_buffer(res);
+                }
+            );
+        }
 
         // Retrieve partial results
         let partial_results_with_rotations = self
@@ -2188,50 +2245,57 @@ impl ServerActor {
             0,
             &self.streams[0],
         );
-        let new_partial_match_buffer = match orientation {
-            Orientation::Normal => self.match_distances_buffer.load_additions_since(
-                &self.device_manager,
-                eye_db,
-                old_distance_cache_counters,
-                self.match_distances_buffer_size
-                    * (100 + self.match_distances_buffer_size_extra_percent)
-                    / 100,
-                &self.streams[0],
-                operations,
-                skip_persistence,
-                batch_reauth_targets,
-                self.distance_comparator.query_length as u64,
-                self.distance_comparator.max_db_size as u64,
-            ),
-            Orientation::Mirror => self.match_distances_buffer_mirror.load_additions_since(
-                &self.device_manager,
-                eye_db,
-                old_distance_cache_counters,
-                self.match_distances_buffer_size
-                    * (100 + self.match_distances_buffer_size_extra_percent)
-                    / 100,
-                &self.streams[0],
-                operations,
-                skip_persistence,
-                batch_reauth_targets,
-                self.distance_comparator.query_length as u64,
-                self.distance_comparator.max_db_size as u64,
-            ),
-        };
+        if save_anon_stats {
+            let new_partial_match_buffer = match orientation {
+                Orientation::Normal => self.match_distances_buffer.load_additions_since(
+                    &self.device_manager,
+                    eye_db,
+                    old_distance_cache_counters,
+                    self.match_distances_buffer_size
+                        * (100 + self.match_distances_buffer_size_extra_percent)
+                        / 100,
+                    &self.streams[0],
+                    operations,
+                    skip_persistence,
+                    batch_reauth_targets,
+                    self.distance_comparator.query_length as u64,
+                    self.distance_comparator.max_db_size as u64,
+                ),
+                Orientation::Mirror => self.match_distances_buffer_mirror.load_additions_since(
+                    &self.device_manager,
+                    eye_db,
+                    old_distance_cache_counters,
+                    self.match_distances_buffer_size
+                        * (100 + self.match_distances_buffer_size_extra_percent)
+                        / 100,
+                    &self.streams[0],
+                    operations,
+                    skip_persistence,
+                    batch_reauth_targets,
+                    self.distance_comparator.query_length as u64,
+                    self.distance_comparator.max_db_size as u64,
+                ),
+            };
 
-        self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
-        match orientation {
-            Orientation::Normal => {
-                self.reset_anon_stats_distance_cache(eye_db, Orientation::Normal)
-            }
-            Orientation::Mirror => {
-                self.reset_anon_stats_distance_cache(eye_db, Orientation::Mirror)
-            }
-        };
-        (partial_results_with_rotations, new_partial_match_buffer)
+            self.persist_one_sided_caches(eye_db, orientation, &new_partial_match_buffer);
+            match orientation {
+                Orientation::Normal => {
+                    self.reset_anon_stats_distance_cache(eye_db, Orientation::Normal)
+                }
+                Orientation::Mirror => {
+                    self.reset_anon_stats_distance_cache(eye_db, Orientation::Mirror)
+                }
+            };
+            (partial_results_with_rotations, new_partial_match_buffer)
+        } else {
+            (
+                partial_results_with_rotations,
+                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()],
+            )
+        }
     }
     #[allow(clippy::too_many_arguments)]
-    fn compare_query_against_db_and_self(
+    fn compare_query_against_db_and_self_prefiltering(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
         compact_device_sums: &DeviceCompactSums,
@@ -2242,7 +2306,7 @@ impl ServerActor {
         operations: &[AnonStatsOperation],
         skip_persistence: &[bool],
         batch_reauth_targets: &[Vec<u64>],
-    ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
+    ) -> Vec<OneSidedDistanceCache> {
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => self
                 .match_distances_buffer
@@ -2251,15 +2315,6 @@ impl ServerActor {
                 .match_distances_buffer_mirror
                 .load_counters(&self.device_manager, eye_db),
         };
-
-        // ---- START BATCH DEDUP ----
-        self.compare_query_against_self(
-            compact_device_queries,
-            compact_device_sums,
-            events,
-            eye_db,
-        );
-        // ---- END BATCH DEDUP ----
 
         // which database are we querying against
         let (code_db_slices, mask_db_slices) = match eye_db {
@@ -2486,10 +2541,11 @@ impl ServerActor {
                     "db_open_anon_stats",
                     self.enable_debug_timing,
                     {
-                        save_anon_stats(
+                        open(
                             &mut self.phase2,
                             &res,
                             &self.distance_comparator,
+                            db_match_bitmap,
                             max_chunk_size * self.max_batch_size * ROTATIONS / 64,
                             &dot_chunk_size,
                             &chunk_size,
@@ -2509,50 +2565,6 @@ impl ServerActor {
                                 / 100,
                             request_streams,
                             batch_reauth_targets,
-                        );
-                        self.phase2.return_result_buffer(res);
-                    }
-                );
-
-                // ---- START PHASE 2 FOR ANON STATS ----
-                record_stream_time!(
-                    &self.device_manager,
-                    request_streams,
-                    events,
-                    "db_threshold",
-                    self.enable_debug_timing,
-                    {
-                        self.phase2.compare_threshold_masked_many(
-                            &code_dots,
-                            &mask_dots,
-                            THRESHOLD_A,
-                            request_streams,
-                        );
-                    }
-                );
-
-                let res = self.phase2.take_result_buffer();
-
-                record_stream_time!(
-                    &self.device_manager,
-                    request_streams,
-                    events,
-                    "db_open",
-                    self.enable_debug_timing,
-                    {
-                        open(
-                            &mut self.phase2,
-                            &res,
-                            &self.distance_comparator,
-                            db_match_bitmap,
-                            max_chunk_size * self.max_batch_size * ROTATIONS / 64,
-                            &dot_chunk_size,
-                            &chunk_size,
-                            offset,
-                            &self.current_db_sizes,
-                            &ignore_device_results,
-                            batch_size,
-                            request_streams,
                         );
                         self.phase2.return_result_buffer(res);
                     }
@@ -2578,28 +2590,6 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
         tracing::info!(party_id = self.party_id, "db search finished");
-
-        // Retrieve partial results with rotations
-        let partial_results_with_rotations = self
-            .distance_comparator
-            .get_partial_results_with_rotations(&self.streams[0]);
-
-        // Reset the partial results buffers and counter for re-use
-        for dst in [
-            &self.distance_comparator.partial_results_query_indices,
-            &self.distance_comparator.partial_results_db_indices,
-            &self.distance_comparator.partial_match_counter,
-        ] {
-            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
-        }
-
-        // Reset rotations buffer separately due to different type (i8 vs u32)
-        reset_slice(
-            self.device_manager.devices(),
-            &self.distance_comparator.partial_results_rotations,
-            0,
-            &self.streams[0],
-        );
 
         // Reset the results buffers for reuse
         for dst in &[&self.results, &self.batch_results, &self.final_results] {
@@ -2647,7 +2637,7 @@ impl ServerActor {
                 self.reset_anon_stats_distance_cache(eye_db, Orientation::Mirror)
             }
         };
-        (partial_results_with_rotations, new_partial_match_buffer)
+        new_partial_match_buffer
     }
 
     fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
@@ -2884,59 +2874,6 @@ fn open(
     offset: usize,
     total_db_sizes: &[usize],
     ignore_db_results: &[bool],
-    batch_size: usize,
-    streams: &[CudaStream],
-) {
-    let n_devices = x.len();
-    let mut a = Vec::with_capacity(n_devices);
-    let mut b = Vec::with_capacity(n_devices);
-    let mut c = Vec::with_capacity(n_devices);
-
-    cudarc::nccl::result::group_start().unwrap();
-    for (idx, res) in x.iter().enumerate() {
-        // Result is in bit 0
-        let res = res.get_offset(0, chunk_size);
-        party.comms()[idx]
-            .send_view(&res.b, party.next_id(), &streams[idx])
-            .unwrap();
-        a.push(res.a);
-        b.push(res.b);
-    }
-    for (idx, res) in x.iter().enumerate() {
-        let mut res = res.get_offset(1, chunk_size);
-        party.comms()[idx]
-            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
-            .unwrap();
-        c.push(res.a);
-    }
-    cudarc::nccl::result::group_end().unwrap();
-
-    distance_comparator.open_results(
-        &a,
-        &b,
-        &c,
-        matches_bitmap,
-        db_sizes,
-        real_db_sizes,
-        offset,
-        total_db_sizes,
-        ignore_db_results,
-        batch_size,
-        streams,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn save_anon_stats(
-    party: &mut Circuits,
-    x: &[ChunkShare<u64>],
-    distance_comparator: &DistanceComparator,
-    chunk_size: usize,
-    db_sizes: &[usize],
-    real_db_sizes: &[usize],
-    offset: usize,
-    total_db_sizes: &[usize],
-    ignore_db_results: &[bool],
     match_distances_buffers_codes: &[ChunkShare<u16>],
     match_distances_buffers_masks: &[ChunkShare<u16>],
     match_distances_counters: &[CudaSlice<u32>],
@@ -2973,10 +2910,11 @@ fn save_anon_stats(
     }
     cudarc::nccl::result::group_end().unwrap();
 
-    distance_comparator.store_anon_stats(
+    distance_comparator.open_results(
         &a,
         &b,
         &c,
+        matches_bitmap,
         db_sizes,
         real_db_sizes,
         offset,
