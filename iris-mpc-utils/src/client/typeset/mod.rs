@@ -3,8 +3,8 @@ mod errors;
 mod traits;
 
 pub(crate) use data::{
-    Request, RequestBatch, RequestBatchKind, RequestBatchSize, RequestPayload, RequestStatus,
-    ResponsePayload, UniquenessReference,
+    BatchKind, IrisDescriptor, IrisPairDescriptor, Request, RequestBatch, RequestBatchSet,
+    RequestPayload, RequestStatus, ResponsePayload, UniquenessRequestDescriptor,
 };
 pub use errors::ServiceClientError;
 pub(crate) use traits::{Initialize, ProcessRequestBatch};
