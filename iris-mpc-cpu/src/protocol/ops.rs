@@ -423,19 +423,19 @@ pub async fn cross_compare(
 
 /// NHD constants used in the polynomial approximation of the normalized distance.
 /// The comparison `nhd(d1) < nhd(d2)` is reduced to checking the sign of
-/// `nmr(d1)*ml2 - nmr(d2)*ml1` where
-/// `nmr(d) = ml*(ml - 10*hd) - 73728*hd`.
+/// `nmr(d1)*md2 - nmr(d2)*md1` where
+/// `nmr(d) = md*(md - 10*cd) - 73728*cd`.
 const NHD_LINEAR_COEFF: u64 = 10;
 const NHD_CORRECTION: u64 = 73728;
 
 /// Computes the NHD cross product for comparing pairs of distances.
 ///
-/// For each pair (d1, d2), computes `nmr(d1)*d2.ml - nmr(d2)*d1.ml` where
-/// `nmr(d) = d.ml*(d.ml - 10*d.hd) - 73728*d.hd`.
+/// For each pair (d1, d2), computes `nmr(d1)*d2.md - nmr(d2)*d1.md` where
+/// `nmr(d) = md*(md - 10*cd) - 73728*cd`.
 ///
 /// This requires 2 interactive rounds:
-/// - Round 1: compute `product_i = ml_i * (ml_i - 10*hd_i)` for each distance
-/// - Round 2: compute the cross product `nmr_1*ml_2 - nmr_2*ml_1` and reshare
+/// - Round 1: compute `product_i = md_i * (md_i - 10*cd_i)` for each distance
+/// - Round 2: compute the cross product `nmr_1*md_2 - nmr_2*md_1` and reshare
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn nhd_cross_mul(
     session: &mut Session,
@@ -443,7 +443,7 @@ pub async fn nhd_cross_mul(
 ) -> Result<Vec<Share<Ring48>>> {
     let n = distances.len();
 
-    // ---- Round 1: interactive multiply to get product_i = ml_i * linear_i ----
+    // ---- Round 1: interactive multiply to get product_i = md_i * linear_i ----
     // For each pair we compute 2 products (one per distance).
     let (prf_my_r1, prf_prev_r1) = session.prf.gen_rands_batch::<Ring48>(2 * n);
 
@@ -451,11 +451,11 @@ pub async fn nhd_cross_mul(
         .iter()
         .enumerate()
         .flat_map(|(i, (d1, d2))| {
-            // linear_i = ml_i - 10*hd_i
+            // linear_i = md_i - 10*cd_i
             let linear1 = d1.mask_dot - d1.code_dot * Ring48(NHD_LINEAR_COEFF);
             let linear2 = d2.mask_dot - d2.code_dot * Ring48(NHD_LINEAR_COEFF);
 
-            // product_i = ml_i * linear_i (local part of replicated multiplication)
+            // product_i = md_i * linear_i (local part of replicated multiplication)
             let prod1_a = prf_my_r1.0[2 * i] - prf_prev_r1.0[2 * i] + &d1.mask_dot * &linear1;
             let prod2_a =
                 prf_my_r1.0[2 * i + 1] - prf_prev_r1.0[2 * i + 1] + &d2.mask_dot * &linear2;
@@ -469,7 +469,7 @@ pub async fn nhd_cross_mul(
         .await?;
     let round1_b: Vec<RingElement<Ring48>> = Ring48::into_vec(network.receive_prev().await?)?;
 
-    // Reconstruct product shares and compute nmr_i = product_i - 73728*hd_i
+    // Reconstruct product shares and compute nmr_i = product_i - 73728*cd_i
     let nmrs: Vec<(Share<Ring48>, Share<Ring48>)> = (0..n)
         .map(|i| {
             let prod1 = Share::new(round1_a[2 * i], round1_b[2 * i]);
@@ -480,7 +480,7 @@ pub async fn nhd_cross_mul(
         })
         .collect();
 
-    // ---- Round 2: cross product nmr_1*ml_2 - nmr_2*ml_1 and reshare ----
+    // ---- Round 2: cross product nmr_1*md_2 - nmr_2*md_1 and reshare ----
     let (prf_my_r2, prf_prev_r2) = session.prf.gen_rands_batch::<Ring48>(n);
 
     let round2_a: Vec<RingElement<Ring48>> = izip!(
@@ -505,7 +505,7 @@ pub async fn nhd_cross_mul(
         .collect())
 }
 
-/// For every pair of NHD distance shares (d1, d2), computes d2 < d1 and opens it.
+/// For every pair of NHD distance shares (d1, d2), computes d1 < d2 and opens it.
 pub async fn nhd_cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
@@ -516,7 +516,7 @@ pub async fn nhd_cross_compare(
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
-/// For every pair of NHD distance shares (d1, d2), computes the secret-shared bit d2 < d1.
+/// For every pair of NHD distance shares (d1, d2), computes the secret-shared bit d1 < d2.
 pub async fn nhd_oblivious_cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
@@ -525,7 +525,7 @@ pub async fn nhd_oblivious_cross_compare(
     extract_msb_batch(session, &diff).await
 }
 
-/// For every pair of NHD distance shares (d1, d2), computes the secret-shared bit d2 < d1
+/// For every pair of NHD distance shares (d1, d2), computes the secret-shared bit d1 < d2
 /// and lifts it to Ring48 shares.
 pub async fn nhd_oblivious_cross_compare_lifted(
     session: &mut Session,
@@ -1530,20 +1530,20 @@ mod tests {
 
     /// Plaintext NHD comparison: returns true if nhd(d1) < nhd(d2), i.e., d1 is
     /// a better match.
-    fn plaintext_nhd_less_than(hd1: i64, ml1: i64, hd2: i64, ml2: i64) -> bool {
-        let nmr1 = ml1 * (ml1 - 10 * hd1) - 73728 * hd1;
-        let nmr2 = ml2 * (ml2 - 10 * hd2) - 73728 * hd2;
-        // nmr1*ml2 < nmr2*ml1 means nhd(d1) < nhd(d2)
-        // But our protocol computes nmr1*ml2 - nmr2*ml1 and extracts the MSB,
+    fn plaintext_nhd_less_than(cd1: i64, md1: i64, cd2: i64, md2: i64) -> bool {
+        let nmr1 = md1 * (md1 - 10 * cd1) - 73728 * cd1;
+        let nmr2 = md2 * (md2 - 10 * cd2) - 73728 * cd2;
+        // nmr1*md2 < nmr2*md1 means nhd(d1) < nhd(d2)
+        // But our protocol computes nmr1*md2 - nmr2*md1 and extracts the MSB,
         // which gives 1 when the result is negative, i.e., nhd(d1) < nhd(d2).
-        nmr1 * ml2 < nmr2 * ml1
+        nmr1 * md2 < nmr2 * md1
     }
 
     #[tokio::test]
     async fn test_nhd_cross_compare() {
         let mut rng = AesRng::seed_from_u64(42_u64);
 
-        // Test with known values: (hd1=100, ml1=500) vs (hd2=200, ml2=600)
+        // Test with known values: (cd1=100, md1=500) vs (cd2=200, md2=600)
         // These represent (code_dot, mask_dot) pairs.
         let test_cases: Vec<(u16, u16, u16, u16)> = vec![
             (100, 500, 200, 600),
@@ -1552,10 +1552,10 @@ mod tests {
             (10, 200, 10, 300),
         ];
 
-        // Create shares of all values: [hd1, ml1, hd2, ml2, ...]
+        // Create shares of all values: [cd1, md1, cd2, md2, ...]
         let flat_values: Vec<u16> = test_cases
             .iter()
-            .flat_map(|(hd1, ml1, hd2, ml2)| [*hd1, *ml1, *hd2, *ml2])
+            .flat_map(|(cd1, md1, cd2, md2)| [*cd1, *md1, *cd2, *md2])
             .collect();
         let shares = create_array_sharing(&mut rng, &flat_values);
 
@@ -1596,13 +1596,13 @@ mod tests {
         assert_eq!(results[1], results[2]);
 
         // Check against plaintext
-        for (i, (hd1, ml1, hd2, ml2)) in test_cases.iter().enumerate() {
+        for (i, (cd1, md1, cd2, md2)) in test_cases.iter().enumerate() {
             let expected =
-                plaintext_nhd_less_than(*hd1 as i64, *ml1 as i64, *hd2 as i64, *ml2 as i64);
+                plaintext_nhd_less_than(*cd1 as i64, *md1 as i64, *cd2 as i64, *md2 as i64);
             assert_eq!(
                 results[0][i], expected,
                 "NHD comparison mismatch for ({}, {}) vs ({}, {}): got {}, expected {}",
-                hd1, ml1, hd2, ml2, results[0][i], expected
+                cd1, md1, cd2, md2, results[0][i], expected
             );
         }
     }
