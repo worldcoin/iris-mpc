@@ -31,6 +31,7 @@ pub async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_timer(UtcHms)
         .with_ansi(false)
+        .with_target(false)
         .init();
 
     let options = CliOptions::parse();

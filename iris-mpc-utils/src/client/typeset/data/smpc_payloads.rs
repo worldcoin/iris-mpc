@@ -52,14 +52,14 @@ impl ResponsePayload {
         match self {
             Self::IdentityDeletion(result) => {
                 format!(
-                    "IdentityDeletion | node={} | serial={:.16}",
-                    result.node_id, result.serial_id
+                    "IdentityDeletion | node={} | serial={} | success={}",
+                    result.node_id, result.serial_id, result.success
                 )
             }
             Self::Reauthorization(result) => {
                 format!(
-                    "Reauthorization | node={} | serial_id={} | reauth_id={:.16}",
-                    result.node_id, result.serial_id, result.reauth_id
+                    "Reauthorization | node={} | serial_id={} | success={} | reauth_id={:.16}",
+                    result.node_id, result.serial_id, result.success, result.reauth_id
                 )
             }
             Self::ResetCheck(result) => {
@@ -76,9 +76,10 @@ impl ResponsePayload {
             }
             Self::Uniqueness(result) => {
                 format!(
-                    "Uniqueness | node={} |serial_id={} | signup_id={:.16}",
+                    "Uniqueness | node={} |serial_id={} | is_match={} | signup_id={:.16}",
                     result.node_id,
                     result.get_serial_id().unwrap_or(u32::MAX),
+                    result.is_match,
                     result.signup_id
                 )
             }
