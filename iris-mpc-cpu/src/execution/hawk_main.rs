@@ -1553,8 +1553,11 @@ impl HawkHandle {
         sessions: &mut SessionGroups,
         request: HawkRequest,
     ) -> Result<HawkResult> {
-        tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
+        tracing::info!(
+            "Processing a Hawk job ({} queries)",
+            request.batch.request_ids.len()
+        );
 
         let request = request
             .numa_realloc(hawk_actor.workers_handle.clone())
@@ -1563,14 +1566,6 @@ impl HawkHandle {
         // All deletions in a batch are applied at the beginning of batch processing
         // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
-
-        tracing::info!(
-            "Processing an Hawk job with request types: {:?}, reauth targets: {:?}, skip persistence: {:?}, reauth use or rule: {:?}",
-            request.batch.request_types,
-            request.batch.reauth_target_indices,
-            request.batch.skip_persistence,
-            request.batch.reauth_use_or_rule,
-        );
 
         // Compute search results for a given orientation and compute matching information
         let do_search = async |orient| -> Result<_> {
@@ -1666,7 +1661,6 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-        tracing::info!("Finished processing a Hawk job…");
         Ok(results)
     }
 
