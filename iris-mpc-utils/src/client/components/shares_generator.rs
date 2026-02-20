@@ -116,12 +116,13 @@ where
     }
 
     /// Generates pairs of mirrored Iris shares for upstream processing.
+    /// this function swaps the irises too, so that the user doesn't have to.
     pub(crate) fn generate_mirrored(
         &mut self,
         iris_pair: Option<&IrisPairDescriptor>,
     ) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
         let (maybe_left_desc, maybe_right_desc) = match iris_pair {
-            Some(descriptor) => (Some(descriptor.left()), Some(descriptor.right())),
+            Some(descriptor) => (Some(descriptor.right()), Some(descriptor.left())),
             None => (None, None),
         };
 
