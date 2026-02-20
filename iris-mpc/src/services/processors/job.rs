@@ -397,7 +397,12 @@ pub async fn process_job_result(
         metrics::gauge!("results_inserted.latest_serial_id").set((memory_serial_id + 1) as f64);
     }
 
-    tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
+    let n_uniqueness = uniqueness_results.len();
+    let n_reauth = reauth_results.len();
+    let n_reset_check = reset_check_results.len();
+    let n_reset_update = reset_update_results.len();
+    let n_deletion = identity_deletion_results.len();
+
     send_results_to_sns(
         uniqueness_results,
         &metadata,
@@ -408,7 +413,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!("Sending {} reauth results", reauth_results.len());
     send_results_to_sns(
         reauth_results,
         &metadata,
@@ -419,10 +423,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!(
-        "Sending {} identity deletion results",
-        identity_deletion_results.len()
-    );
     send_results_to_sns(
         identity_deletion_results,
         &metadata,
@@ -433,7 +433,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!("Sending {} reset check results", reset_check_results.len());
     send_results_to_sns(
         reset_check_results,
         &metadata,
@@ -444,10 +443,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!(
-        "Sending {} reset update results",
-        reset_update_results.len()
-    );
     send_results_to_sns(
         reset_update_results,
         &metadata,
@@ -459,6 +454,18 @@ pub async fn process_job_result(
     .await?;
 
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
+
+    tracing::info!(
+        "RESULT_SUMMARY party={} uniqueness={} reauth={} reset_check={} reset_update={} deletion={} persist_ms={} total_ms={}",
+        party_id,
+        n_uniqueness,
+        n_reauth,
+        n_reset_check,
+        n_reset_update,
+        n_deletion,
+        persist_total_start.elapsed().as_millis(),
+        now.elapsed().as_millis(),
+    );
 
     shutdown_handler.decrement_batches_pending_completion();
 
