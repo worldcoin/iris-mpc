@@ -3,6 +3,7 @@ use crate::{
     protocol::shared_iris::ArcIris,
 };
 use ampc_actor_utils::fast_metrics::FastHistogram;
+use ampc_actor_utils::network::value::NetworkInt;
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
     sub_pub,
@@ -17,7 +18,6 @@ use ampc_actor_utils::protocol::{
         oblivious_cross_compare,
     },
 };
-use ampc_actor_utils::network::value::NetworkInt;
 use ampc_secret_sharing::shares::ring48::Ring48;
 pub use ampc_secret_sharing::shares::{
     bit::Bit,
@@ -456,10 +456,9 @@ pub async fn nhd_cross_mul(
             let linear2 = d2.mask_dot - d2.code_dot * Ring48(NHD_LINEAR_COEFF);
 
             // product_i = ml_i * linear_i (local part of replicated multiplication)
-            let prod1_a = prf_my_r1.0[2 * i] - prf_prev_r1.0[2 * i]
-                + &d1.mask_dot * &linear1;
-            let prod2_a = prf_my_r1.0[2 * i + 1] - prf_prev_r1.0[2 * i + 1]
-                + &d2.mask_dot * &linear2;
+            let prod1_a = prf_my_r1.0[2 * i] - prf_prev_r1.0[2 * i] + &d1.mask_dot * &linear1;
+            let prod2_a =
+                prf_my_r1.0[2 * i + 1] - prf_prev_r1.0[2 * i + 1] + &d2.mask_dot * &linear2;
             [prod1_a, prod2_a]
         })
         .collect();
@@ -468,8 +467,7 @@ pub async fn nhd_cross_mul(
     network
         .send_next(Ring48::new_network_vec(round1_a.clone()))
         .await?;
-    let round1_b: Vec<RingElement<Ring48>> =
-        Ring48::into_vec(network.receive_prev().await?)?;
+    let round1_b: Vec<RingElement<Ring48>> = Ring48::into_vec(network.receive_prev().await?)?;
 
     // Reconstruct product shares and compute nmr_i = product_i - 73728*hd_i
     let nmrs: Vec<(Share<Ring48>, Share<Ring48>)> = (0..n)
@@ -500,8 +498,7 @@ pub async fn nhd_cross_mul(
     network
         .send_next(Ring48::new_network_vec(round2_a.clone()))
         .await?;
-    let round2_b: Vec<RingElement<Ring48>> =
-        Ring48::into_vec(network.receive_prev().await?)?;
+    let round2_b: Vec<RingElement<Ring48>> = Ring48::into_vec(network.receive_prev().await?)?;
 
     Ok(izip!(round2_a, round2_b)
         .map(|(a, b)| Share::new(a, b))
