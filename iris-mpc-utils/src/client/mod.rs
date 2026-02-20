@@ -1,9 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use async_from::{self, AsyncFrom};
 use rand::rngs::StdRng;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
+use tokio::time::{sleep, timeout, Instant};
 use uuid::Uuid;
 
 use crate::{
@@ -178,7 +182,7 @@ impl ServiceClient2 {
             drop(batch_shares);
 
             // Phase 3: Wait before publishing to allow shares to propagate.
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await;
 
             // Phase 4: Publish all requests in parallel.
             futures::future::join_all(batch_requests.iter().map(|request| {
@@ -267,17 +271,17 @@ impl ExecState {
         use crate::constants::N_PARTIES;
 
         let timeout_secs: u64 = 360;
-        let start = tokio::time::Instant::now();
-        let deadline = start + std::time::Duration::from_secs(timeout_secs);
-        let mut next_progress = start + std::time::Duration::from_secs(60);
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(timeout_secs);
+        let mut next_progress = start + Duration::from_secs(60);
 
         while !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
             }
 
-            if tokio::time::Instant::now() >= next_progress {
+            if Instant::now() >= next_progress {
                 let elapsed = start.elapsed().as_secs();
                 tracing::info!(
                     "Waiting for responses... {}s elapsed, {} requests and {} deletions still pending",
@@ -285,20 +289,16 @@ impl ExecState {
                     self.outstanding_requests.len(),
                     self.outstanding_deletions.len()
                 );
-                next_progress += std::time::Duration::from_secs(60);
+                next_progress += Duration::from_secs(60);
             }
 
-            let messages = match tokio::time::timeout(
-                remaining,
-                aws_client.sqs_receive_messages(Some(N_PARTIES)),
-            )
-            .await
-            {
-                Ok(result) => result.expect("SQS receive failed"),
-                Err(_) => {
-                    break;
-                }
-            };
+            let messages =
+                match timeout(remaining, aws_client.sqs_receive_messages(Some(N_PARTIES))).await {
+                    Ok(result) => result.expect("SQS receive failed"),
+                    Err(_) => {
+                        break;
+                    }
+                };
 
             for sqs_msg in messages {
                 let response = typeset::ResponsePayload::from(&sqs_msg);
