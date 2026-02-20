@@ -14,3 +14,9 @@ I made a branch called sw/sc_refactor where i made a version of the service clie
 
 note that as we discussed, iris-mpc-hawk does not send responses for deletion requests unless there is a non-deletion request in the batch. and this may be a bug.
 
+# SW
+I made a branch called sw/service_client_6 where error handling is improved and the monolithic exec() function now delegates some processing to a state machine. Logs have useful information so that an AI assistant (or human) can compare with the logs for iris-mpc-hawk. Submitting requests all at once seems to break localstack by making the iris-mpc-hawk nodes disagree on the next item in the batch.
+
+Interesting observations:
+- I sent a duplicate deletion in i  think complex-tc1.toml and the servers never saw it. though this was before i switched to sending requests one at a time. this may not be worth looking at further.
+- the complex-tc2.toml has mirrored iris codes and these all get non-matching uniqueness results, which means the mirroring detection did not work 
