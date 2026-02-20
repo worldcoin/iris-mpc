@@ -293,7 +293,10 @@ impl<'a> BatchProcessor<'a> {
         tracing::info!(
             "Batch ID: {}. First Signup ID: {}. Formed batch with requests: {:?}",
             batch_id,
-            self.batch_query.request_ids.first().unwrap_or(&"<empty>".to_string()),
+            self.batch_query
+                .request_ids
+                .first()
+                .unwrap_or(&"<empty>".to_string()),
             self.batch_query
                 .request_ids
                 .iter()

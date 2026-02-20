@@ -1554,7 +1554,10 @@ impl HawkHandle {
         request: HawkRequest,
     ) -> Result<HawkResult> {
         let now = Instant::now();
-        tracing::info!("Processing a Hawk job ({} queries)", request.batch.request_ids.len());
+        tracing::info!(
+            "Processing a Hawk job ({} queries)",
+            request.batch.request_ids.len()
+        );
 
         let request = request
             .numa_realloc(hawk_actor.workers_handle.clone())
@@ -1563,7 +1566,6 @@ impl HawkHandle {
         // All deletions in a batch are applied at the beginning of batch processing
         // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
-
 
         // Compute search results for a given orientation and compute matching information
         let do_search = async |orient| -> Result<_> {

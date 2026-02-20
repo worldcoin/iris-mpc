@@ -37,11 +37,7 @@ fn main() -> Result<()> {
                 tracing::info!("Server exited normally");
             }
             Err(e) => {
-                tracing::error!(
-                    "EXIT_SUMMARY party={} error=\"{:?}\"",
-                    party_id,
-                    e
-                );
+                tracing::error!("EXIT_SUMMARY party={} error=\"{:?}\"", party_id, e);
                 exit(1);
             }
         }

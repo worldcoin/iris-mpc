@@ -46,7 +46,9 @@ async fn per_side(
 
     tracing::info!(
         "per_side_match_batch: {} sessions, {} requests, {} tasks",
-        n_sessions, n_requests, n_tasks,
+        n_sessions,
+        n_requests,
+        n_tasks,
     );
 
     // Arc the requested vectors rather than cloning them.
