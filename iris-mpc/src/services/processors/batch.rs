@@ -465,6 +465,8 @@ impl<'a> BatchProcessor<'a> {
                 identity_deletion_request.serial_id - 1,
                 batch_metadata,
             );
+
+            self.msg_counter += 1;
         } else {
             tracing::warn!("Identity deletions are disabled");
         }
