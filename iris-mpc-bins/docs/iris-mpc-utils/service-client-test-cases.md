@@ -281,36 +281,7 @@ out of scope. not going to do it. the system was designed to prevent this.
 
 ## TC-8: Intra-Batch Parent-Child (Same-Batch Dependency)
 
-**Requires validation logic change:** Currently `validate_batch_ordering()` rejects children that reference parents in the same batch. The runtime `exec()` loop *does* handle intra-batch child dispatch via `get_idx_of_child()`, but only when the parent correlates first.
-
-**Goal:** Verify that the enqueue-correlate-enqueue loop within a single batch correctly dispatches children after their parent correlates.
-
-### Batch 0 (32 requests: 16 parents + 16 same-batch children)
-
-| # | Label | Type | Iris Pair | Parent | Notes |
-|---|-------|------|-----------|--------|-------|
-| 1 | `00-U` | U | [1, 2] | -- | Parent |
-| 2 | `01-D` | D | -- | `00-U` | Same-batch child |
-| 3 | `02-U` | U | [3, 4] | -- | Parent |
-| 4 | `03-RA` | RA | [5, 6] | `02-U` | Same-batch child |
-| 5 | `04-U` | U | [7, 8] | -- | Parent |
-| 6 | `05-RU` | RU | [9, 10] | `04-U` | Same-batch child |
-| ... | ... | ... | ... | ... | Interleaved parent/child pairs |
-| 31 | `30-U` | U | [61, 62] | -- | Parent |
-| 32 | `31-D` | D | -- | `30-U` | Same-batch child |
-
-**Expected flow per parent/child pair:**
-1. Shares uploaded for all 32 requests.
-2. First `is_enqueueable()` pass: only the 16 U requests are enqueueable (children still have `Label`/`SignupId` descriptor, not `IrisSerialId`).
-3. U requests enqueued, responses correlated.
-4. `maybe_update_child_request` resolves child's parent descriptor to `IrisSerialId`.
-5. Second `is_enqueueable()` pass: children now enqueueable.
-6. Children enqueued and correlated.
-
-### Validation Changes Needed
-
-1. `validate_batch_ordering()`: Allow same-batch references where the parent appears before the child in the array.
-2. `set_child_parent_descriptors_from_labels()`: Already handles cross-batch; needs to also work for intra-batch (which it does, since it searches all requests).
+not relevant, was for an old version of service client
 
 ---
 
