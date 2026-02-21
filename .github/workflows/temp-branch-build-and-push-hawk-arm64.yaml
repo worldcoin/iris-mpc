@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "feat/reauth_anon_stats"
+      - "dk/separate_anon_stats_and_match"
 
     paths-ignore:
       - "deploy/**"
