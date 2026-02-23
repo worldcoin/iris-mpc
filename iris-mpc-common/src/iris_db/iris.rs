@@ -240,6 +240,13 @@ impl IrisCode {
         code
     }
 
+    pub fn fully_random<R: Rng>(rng: &mut R) -> Self {
+        IrisCode {
+            code: IrisCodeArray::random_rng(rng),
+            mask: IrisCodeArray::random_rng(rng),
+        }
+    }
+
     /// Generate a random iris code but with pattern_size number of equal bits in each column.
     /// The purpose of this is to have iris codes that keep similarity across rotations.
     /// The distance between one of those iris codes and its nth rotation (in each direction)
@@ -458,6 +465,14 @@ impl IrisCode {
         min_distance
     }
 
+    fn get_nhd_nmr(hd: u16, md: u16) -> i64 {
+        md as i64 * (20_i64 * hd as i64 - 9 * md as i64) + 147456_i64 * hd as i64
+    }
+
+    fn less_than_nhd(d1: (i64, u16), d2: (i64, u16)) -> bool {
+        d1.0 * (d2.1 as i64) < d2.0 * (d1.1 as i64)
+    }
+
     /// Return the pair (dot product of iris codes, dot product of masks) of an iris code
     /// against all rotations of another iris code using the IrisRotation enum.
     /// This avoids generating all rotation copies.
@@ -473,13 +488,7 @@ impl IrisCode {
         let self_mask = Self::transform_iris_code_array(&self.mask);
         let other_code = Self::transform_iris_code_array(&other.code);
         let other_mask = Self::transform_iris_code_array(&other.mask);
-
-        // numerator of normalized Hamming distance for comparison
-        fn nhd_nmr(hd: u16, md: u16) -> i64 {
-            md as i64 * (20_i64 * hd as i64 - 9 * md as i64) + 147456_i64 * hd as i64
-        }
-
-        let mut min_nmr = nhd_nmr(min_distance.0, min_distance.1);
+        let mut min_nmr = Self::get_nhd_nmr(min_distance.0, min_distance.1);
 
         // go through all rotations of other
         for rotation in IrisRotation::centered::<ROTATIONS>() {
@@ -491,8 +500,8 @@ impl IrisCode {
                 &rotation,
             );
             // normalized Hamming distance
-            let nmr = nhd_nmr(distance.0, distance.1);
-            if nmr * (min_distance.1 as i64) < min_nmr * (distance.1 as i64) {
+            let nmr = Self::get_nhd_nmr(distance.0, distance.1);
+            if Self::less_than_nhd((nmr, distance.1), (min_nmr, min_distance.1)) {
                 min_nmr = nmr;
                 min_distance = distance;
             }
@@ -924,16 +933,48 @@ mod tests {
     }
 
     /// Reference NHD computation from the formula:
-    /// nhd = 9/20 - (9/20 - fhd) * (ml / 2^14 + 9/20)
-    /// where fhd = cd / ml (Hamming distance over mask length)
-    fn reference_nhd(code_distance: u16, mask_len: u16) -> f64 {
-        let cd = code_distance as f64;
-        let ml = mask_len as f64;
-        if ml == 0.0 {
+    /// nhd = 9/20 - (9/20 - fhd) * (md / 2^14 + 9/20)
+    /// where fhd = hd / md (Hamming distance over mask length)
+    fn reference_nhd(hd: u16, md: u16) -> f64 {
+        if md == 0 {
             return f64::INFINITY;
         }
-        let fhd = cd / ml;
-        0.45 - (0.45 - fhd) * (ml / 16384.0 + 0.45)
+        let fhd = hd as f64 / md as f64;
+        0.45 - (0.45 - fhd) * (md as f64 / 16384.0 + 0.45)
+    }
+
+    fn less_than_via_nhd_nmr(distance1: (u16, u16), distance2: (u16, u16)) -> bool {
+        let nmr1 = IrisCode::get_nhd_nmr(distance1.0, distance1.1);
+        let nmr2 = IrisCode::get_nhd_nmr(distance2.0, distance2.1);
+        IrisCode::less_than_nhd((nmr1, distance1.1), (nmr2, distance2.1))
+    }
+
+    #[test]
+    fn test_nhd_matches_reference() {
+        let mut rng = SmallRng::seed_from_u64(99);
+        for _ in 0..100 {
+            let iris1 = IrisCode::fully_random(&mut rng);
+            let iris2 = IrisCode::fully_random(&mut rng);
+            let iris3 = IrisCode::fully_random(&mut rng);
+
+            let (hd1, md1) = iris1.get_distance_fraction(&iris2);
+            let (hd2, md2) = iris1.get_distance_fraction(&iris3);
+
+            let nhd1 = reference_nhd(hd1, md1);
+            let nhd2 = reference_nhd(hd2, md2);
+
+            if nhd1 - nhd2 < 1e-6 {
+                assert!(
+                    less_than_via_nhd_nmr((hd1, md1), (hd2, md2)),
+                    "NHD ordering should match NMR ordering"
+                );
+            } else if nhd2 - nhd1 < 1e-6 {
+                assert!(
+                    less_than_via_nhd_nmr((hd2, md2), (hd1, md1)),
+                    "NHD ordering should match NMR ordering"
+                );
+            }
+        }
     }
 
     #[test]
@@ -942,8 +983,8 @@ mod tests {
 
         let mut rng = SmallRng::seed_from_u64(123);
         for _ in 0..5 {
-            let iris1 = IrisCode::random_rng(&mut rng);
-            let iris2 = IrisCode::random_rng(&mut rng);
+            let iris1 = IrisCode::fully_random(&mut rng);
+            let iris2 = IrisCode::fully_random(&mut rng);
 
             // Brute-force: compute NHD for each rotation, find minimum
             let mut best_nhd = f64::INFINITY;
@@ -954,17 +995,17 @@ mod tests {
             let iris2_mask = IrisCode::transform_iris_code_array(&iris2.mask);
 
             for rotation in IrisRotation::centered::<31>() {
-                let (cd, md) = IrisCode::get_distance_fraction_with_rotation(
+                let (hd, md) = IrisCode::get_distance_fraction_with_rotation(
                     &iris2_code,
                     &iris2_mask,
                     &iris1_code,
                     &iris1_mask,
                     &rotation,
                 );
-                let nhd = reference_nhd(cd, md);
+                let nhd = reference_nhd(hd, md);
                 if nhd < best_nhd {
                     best_nhd = nhd;
-                    best_distance = (cd, md);
+                    best_distance = (hd, md);
                 }
             }
 
@@ -980,8 +1021,8 @@ mod tests {
     fn test_nhd_single_rotation() {
         // With ROTATIONS=1, only the center rotation is tested
         let mut rng = SmallRng::seed_from_u64(42);
-        let iris1 = IrisCode::random_rng(&mut rng);
-        let iris2 = IrisCode::random_rng(&mut rng);
+        let iris1 = IrisCode::fully_random(&mut rng);
+        let iris2 = IrisCode::fully_random(&mut rng);
 
         let result = iris1.get_min_nhd_distance_fraction_rotation_aware::<1>(&iris2);
         let direct = iris1.get_distance_fraction(&iris2);
@@ -995,12 +1036,12 @@ mod tests {
     fn test_nhd_similar_rotated_iris() {
         // Create a similar iris, rotate it, and verify NHD finds the right rotation
         let mut rng = SmallRng::seed_from_u64(77);
-        let iris1 = IrisCode::random_rng(&mut rng);
+        let iris1 = IrisCode::fully_random(&mut rng);
         let mut iris2 = iris1.get_similar_iris(&mut rng, 0.025);
         iris2.rotate_left(3);
 
-        let (cd, md) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
-        let nhd = reference_nhd(cd, md);
+        let (hd, md) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
+        let nhd = reference_nhd(hd, md);
         // The minimum NHD should be close to 0.025 (the similarity level)
         // since the function should find the optimal rotation
         assert!(
@@ -1014,7 +1055,7 @@ mod tests {
         // For full masks (all bits unmasked), check that NHD and FHD
         // agree on which rotation is best
         let mut rng = SmallRng::seed_from_u64(55);
-        let mut iris1 = IrisCode::random_rng(&mut rng);
+        let mut iris1 = IrisCode::fully_random(&mut rng);
         iris1.mask = IrisCodeArray::ONES;
         let mut iris2 = iris1.get_similar_iris(&mut rng, 0.05);
         iris2.mask = IrisCodeArray::ONES;
@@ -1035,8 +1076,8 @@ mod tests {
     fn test_nhd_sanity() {
         let mut rng = SmallRng::seed_from_u64(200);
         for _ in 0..5 {
-            let iris1 = IrisCode::random_rng(&mut rng);
-            let iris2 = IrisCode::random_rng(&mut rng);
+            let iris1 = IrisCode::fully_random(&mut rng);
+            let iris2 = IrisCode::fully_random(&mut rng);
 
             let (cd_3, md_3) = iris1.get_min_nhd_distance_fraction_rotation_aware::<3>(&iris2);
             let (cd_31, md_31) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
@@ -1072,8 +1113,8 @@ mod tests {
             assert_float_eq!(nhd_ab, nhd_ba, abs <= 1e-6);
 
             // Identical iris codes should have code_distance = 0
-            let (cd, md) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris1);
-            assert_eq!(cd, 0, "code distance for identical irises should be 0");
+            let (hd, md) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris1);
+            assert_eq!(hd, 0, "code distance for identical irises should be 0");
             assert!(md > 0, "mask dot product should be positive");
         }
     }
