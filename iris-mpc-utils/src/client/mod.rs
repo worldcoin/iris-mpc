@@ -198,21 +198,32 @@ impl ServiceClient {
             // Phase 3: Wait before publishing to allow shares to propagate.
             sleep(Duration::from_secs(S3_PROPAGATION_DELAY_SECS)).await;
 
-            // todo: if a request fails to publish, remove it fram batch_requests
-            // Phase 4: Publish all requests
+            // Phase 4: Publish requests. On failure, stop publishing and only
+            // track successfully published requests so their responses can be
+            // drained and serial IDs cleaned up. No further batches are processed.
+            let mut published_count = 0;
+            let mut sns_failed = false;
             for request in batch_requests.iter() {
                 let log_tag = request.log_tag();
                 let sns_msg_info = SnsMessageInfo::from(request);
                 if let Err(e) = self.aws_client.sns_publish_json(sns_msg_info).await {
-                    tracing::error!("SNS publish failed for request {}: {:?}", log_tag, e);
-                    continue;
+                    state.sns_publish_error = true;
+                    tracing::error!(
+                        "batch {}: SNS publish failed for request {}: {:?}",
+                        batch_idx,
+                        log_tag,
+                        e,
+                    );
+                    sns_failed = true;
+                    break;
                 } else {
                     tracing::info!("publishing {}", log_tag);
+                    published_count += 1;
                 }
             }
 
-            // Phase 5: Track published requests so we can match incoming responses.
-            state.track_batch_requests(&batch_requests);
+            // Phase 5: Track only successfully published requests.
+            state.track_batch_requests(&batch_requests[..published_count]);
 
             // Wait for all responses for this batch.
             state
@@ -223,6 +234,11 @@ impl ServiceClient {
                 "Batch {} finished. Responses to non-deletion requests have been received",
                 batch_idx
             );
+
+            if sns_failed {
+                tracing::error!("Stopping batch processing due to SNS publish failure");
+                break;
+            }
         }
 
         state.report_errors();
@@ -237,6 +253,7 @@ struct ExecState {
     outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo>,
     error_log: Vec<typeset::RequestInfo>,
     had_validation_errors: bool,
+    sns_publish_error: bool,
 }
 
 impl ExecState {
@@ -248,6 +265,7 @@ impl ExecState {
             outstanding_deletions: HashMap::new(),
             error_log: Vec::new(),
             had_validation_errors: false,
+            sns_publish_error: false,
         }
     }
 
@@ -455,6 +473,11 @@ impl ExecState {
         }
         if self.had_validation_errors {
             tracing::warn!("=== Validation errors occurred - check logs for details ===");
+        }
+        if self.sns_publish_error {
+            tracing::error!(
+                "=== SNS publish failure halted batch processing. check logs for details ==="
+            );
         }
     }
 }
