@@ -8,7 +8,7 @@ Test configurations for `iris-mpc-utils/assets/service-client/`. All use `Shares
 - Label format: `{sort_prefix}-{TestName}` (e.g. `00-U-Enroll`). Sort prefix controls display order.
 - Iris pair indexes reference 1-based rows in the NDJSON file. Each pair is `[left, right]`.
 - "Parent" always references a Uniqueness request label from a **strictly earlier** batch.
-- Notation: **U** = Uniqueness, **D** = IdentityDeletion, **RA** = Reauthorisation, **RC** = ResetCheck, **RU** = ResetUpdate.
+- Notation: **U** = Uniqueness, **M** = Mirrored, **D** = IdentityDeletion, **RA** = Reauthorisation, **RC** = ResetCheck, **RU** = ResetUpdate.
 
 ---
 
@@ -117,23 +117,23 @@ Uses remaining batch 0 parents (`24-U` through `31-U`) plus new enrollments.
 
 ## TC-2: Mirroring Attack Detection
 
-**Goal:** Submit uniqueness requests with swapped L/R iris pairs to exercise mirror attack detection. The system flag `full_face_mirror_attacks_detection_enabled` is set to `true` in the enqueuer.
+**Goal:** Submit Mirrored requests alongside normal Uniqueness requests to exercise mirror attack detection. Mirrored requests use the same iris pair as the original — the system swaps L/R internally.
 
 ### Batch 0 (32 requests: 16 normal + 16 mirrored)
 
 | # | Label | Type | Iris Pair | Notes |
 |---|-------|------|-----------|-------|
 | 1 | `00-U-Normal` | U | [1, 2] | Original enrollment |
-| 2 | `01-U-Mirror` | U | [2, 1] | **Swapped** L/R of entry 1 |
+| 2 | `01-M-Mirror` | M | [1, 2] | Mirrored; system swaps L/R internally |
 | 3 | `02-U-Normal` | U | [3, 4] | Original enrollment |
-| 4 | `03-U-Mirror` | U | [4, 3] | **Swapped** L/R of entry 3 |
+| 4 | `03-M-Mirror` | M | [3, 4] | Mirrored; system swaps L/R internally |
 | ... | ... | ... | ... | Repeat pattern for pairs [5,6]..[31,32] |
 | 31 | `30-U-Normal` | U | [31, 32] | Original enrollment |
-| 32 | `31-U-Mirror` | U | [32, 31] | **Swapped** L/R of entry 31 |
+| 32 | `31-M-Mirror` | M | [31, 32] | Mirrored; system swaps L/R internally |
 
 **Validates:**
-- Swapped iris pairs pass TOML validation (`validate_iris_pairs` normalizes pairs before comparison, so `[1,2]` and `[2,1]` are treated as the same pair).
-- System-level mirror attack detection flags the swapped enrollments.
+- Mirrored requests use the same iris pair as their normal counterpart; the system handles L/R swapping internally.
+- System-level mirror attack detection flags the mirrored enrollments.
 - Correlation still works for all 32 responses (both normal and mirrored).
 - The `matched_serial_ids` field in `UniquenessResult` reflects matches between normal and mirrored entries.
 
@@ -180,14 +180,14 @@ Uses remaining batch 0 parents (`24-U` through `31-U`) plus new enrollments.
 |---|-------|------|-----------|-------|
 | 1 | `00-U-Orig` | U | [1, 2] | First enrollment |
 | 2 | `01-U-Dup` | U | [1, 2] | Exact duplicate |
-| 3 | `02-U-Mirror` | U | [2, 1] | Mirror of [1,2] |
-| 4 | `03-U-MirrorDup` | U | [2, 1] | Duplicate mirror |
+| 3 | `02-M-Mirror` | M | [1, 2] | Mirrored; system swaps L/R internally |
+| 4 | `03-M-MirrorDup` | M | [1, 2] | Duplicate mirror |
 | 5 | `04-U-Orig` | U | [3, 4] | First enrollment |
 | 6 | `05-U-Dup` | U | [3, 4] | Exact duplicate |
-| 7 | `06-U-Mirror` | U | [4, 3] | Mirror of [3,4] |
-| 8 | `07-U-MirrorDup` | U | [4, 3] | Duplicate mirror |
+| 7 | `06-M-Mirror` | M | [3, 4] | Mirrored; system swaps L/R internally |
+| 8 | `07-M-MirrorDup` | M | [3, 4] | Duplicate mirror |
 | ... | ... | ... | ... | Repeat pattern for pairs [5,6]..[15,16] |
-| 29-32 | | U | [15,16] / [16,15] | Last group |
+| 29-32 | | U/M | [15,16] | Last group |
 
 ### Batch 1 (32 requests: lifecycle ops on batch 0)
 
@@ -195,7 +195,7 @@ Mix of D, RA, RC, RU referencing batch 0 parents:
 
 | # | Label | Type | Iris Pair | Parent | Notes |
 |---|-------|------|-----------|--------|-------|
-| 1-8 | `00-D` .. `07-D` | D | -- | `00-U-Orig` .. `07-U-MirrorDup` | Delete both originals and mirrors |
+| 1-8 | `00-D` .. `07-D` | D | -- | `00-U-Orig` .. `07-M-MirrorDup` | Delete both originals and mirrors |
 | 9-16 | `08-RA` .. `15-RA` | RA | [17,18]..[24,25] | `04-U-Orig` .. various | Reauth against dup+mirror parents |
 | 17-24 | `16-RC` .. `23-RC` | RC | [25,26]..[32,33] | -- | Independent reset checks |
 | 25-32 | `24-RU` .. `31-RU` | RU | [33,34]..[40,41] | Various batch 0 parents | Reset updates against dup/mirror parents |
