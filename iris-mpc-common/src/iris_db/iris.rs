@@ -937,16 +937,6 @@ mod tests {
     }
 
     #[test]
-    fn test_nhd_identical_irises() {
-        let mut rng = rand::thread_rng();
-        let iris = IrisCode::random_rng(&mut rng);
-        let (cd, md) = iris.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris);
-        // Identical iris codes should have code_distance = 0
-        assert_eq!(cd, 0, "code distance for identical irises should be 0");
-        assert!(md > 0, "mask dot product should be positive");
-    }
-
-    #[test]
     fn test_nhd_agrees_with_brute_force() {
         use crate::galois_engine::degree4::IrisRotation;
 
@@ -1020,27 +1010,6 @@ mod tests {
     }
 
     #[test]
-    fn test_nhd_min_is_less_or_equal_center() {
-        // The minimum over rotations should be <= the center-only distance
-        let mut rng = SmallRng::seed_from_u64(99);
-        for _ in 0..5 {
-            let iris1 = IrisCode::random_rng(&mut rng);
-            let iris2 = IrisCode::random_rng(&mut rng);
-
-            let (cd_min, md_min) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
-            let nhd_min = reference_nhd(cd_min, md_min);
-
-            let (cd_center, md_center) = iris1.get_distance_fraction(&iris2);
-            let nhd_center = reference_nhd(cd_center, md_center);
-
-            assert!(
-                nhd_min <= nhd_center + 1e-10,
-                "min NHD ({nhd_min}) should be <= center NHD ({nhd_center})"
-            );
-        }
-    }
-
-    #[test]
     fn test_nhd_vs_fhd_same_minimum_rotation() {
         // For full masks (all bits unmasked), check that NHD and FHD
         // agree on which rotation is best
@@ -1063,36 +1032,49 @@ mod tests {
     }
 
     #[test]
-    fn test_nhd_symmetry() {
-        // NHD should be symmetric: nhd(a, b) == nhd(b, a)
-        let mut rng = SmallRng::seed_from_u64(111);
-        let iris1 = IrisCode::random_rng(&mut rng);
-        let iris2 = IrisCode::random_rng(&mut rng);
-
-        let result_ab = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
-        let result_ba = iris2.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris1);
-
-        let nhd_ab = reference_nhd(result_ab.0, result_ab.1);
-        let nhd_ba = reference_nhd(result_ba.0, result_ba.1);
-        assert_float_eq!(nhd_ab, nhd_ba, abs <= 1e-6);
-    }
-
-    #[test]
-    fn test_nhd_fewer_rotations_geq_more_rotations() {
-        // With fewer rotations, the minimum NHD should be >= than with more rotations
+    fn test_nhd_sanity() {
         let mut rng = SmallRng::seed_from_u64(200);
-        let iris1 = IrisCode::random_rng(&mut rng);
-        let iris2 = IrisCode::random_rng(&mut rng);
+        for _ in 0..5 {
+            let iris1 = IrisCode::random_rng(&mut rng);
+            let iris2 = IrisCode::random_rng(&mut rng);
 
-        let (cd_3, md_3) = iris1.get_min_nhd_distance_fraction_rotation_aware::<3>(&iris2);
-        let (cd_31, md_31) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
+            let (cd_3, md_3) = iris1.get_min_nhd_distance_fraction_rotation_aware::<3>(&iris2);
+            let (cd_31, md_31) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
 
-        let nhd_3 = reference_nhd(cd_3, md_3);
-        let nhd_31 = reference_nhd(cd_31, md_31);
+            let nhd_3 = reference_nhd(cd_3, md_3);
+            let nhd_31 = reference_nhd(cd_31, md_31);
 
-        assert!(
-            nhd_3 >= nhd_31 - 1e-10,
-            "fewer rotations ({nhd_3}) should give >= NHD than more rotations ({nhd_31})"
-        );
+            // With fewer rotations, the minimum NHD should be >= than with more rotations
+            assert!(
+                nhd_3 >= nhd_31 - 1e-10,
+                "fewer rotations ({nhd_3}) should give >= NHD than more rotations ({nhd_31})"
+            );
+
+            let (cd_center, md_center) = iris1.get_distance_fraction(&iris2);
+            let nhd_center = reference_nhd(cd_center, md_center);
+
+            // The minimum over rotations should be <= the center-only distance
+            assert!(
+                nhd_3 <= nhd_center + 1e-10,
+                "min NHD ({nhd_3}) should be <= center NHD ({nhd_center})"
+            );
+            assert!(
+                nhd_31 <= nhd_center + 1e-10,
+                "min NHD ({nhd_31}) should be <= center NHD ({nhd_center})"
+            );
+
+            // NHD should be symmetric: nhd(a, b) == nhd(b, a)
+            let result_ab = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris2);
+            let result_ba = iris2.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris1);
+
+            let nhd_ab = reference_nhd(result_ab.0, result_ab.1);
+            let nhd_ba = reference_nhd(result_ba.0, result_ba.1);
+            assert_float_eq!(nhd_ab, nhd_ba, abs <= 1e-6);
+
+            // Identical iris codes should have code_distance = 0
+            let (cd, md) = iris1.get_min_nhd_distance_fraction_rotation_aware::<31>(&iris1);
+            assert_eq!(cd, 0, "code distance for identical irises should be 0");
+            assert!(md > 0, "mask dot product should be positive");
+        }
     }
 }
