@@ -66,7 +66,28 @@ impl ServiceClientOptions {
                 percent_other,
                 ..
             } => {
-                todo!()
+                // Validate each percentage is between 0 and 100.
+                for (name, value) in [
+                    ("percent_uniqueness", percent_uniqueness),
+                    ("percent_reauth", percent_reauth),
+                    ("percent_other", percent_other),
+                ] {
+                    if *value > 100 {
+                        return Err(ServiceClientError::InvalidOptions(format!(
+                            "RequestBatchOptions::Random {} must be between 0 and 100, got {}",
+                            name, value
+                        )));
+                    }
+                }
+
+                // Validate percentages sum to 100.
+                let sum = percent_uniqueness + percent_reauth + percent_other;
+                if sum != 100 {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::Random percentages must sum to 100, got {}",
+                        sum
+                    )));
+                }
             }
             RequestBatchOptions::Complex { .. } => {
                 // Error if used alongside compute shares generation.
