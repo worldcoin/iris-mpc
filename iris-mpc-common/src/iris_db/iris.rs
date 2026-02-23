@@ -15,7 +15,7 @@ use rand::{
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-pub const MATCH_THRESHOLD_RATIO: f64 = 0.375;
+pub const MATCH_THRESHOLD_RATIO: f64 = 0.345;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
