@@ -1832,6 +1832,7 @@ impl Circuits {
         mask_lifted: &mut [ChunkShareView<u32>],
         mask_correction: &[ChunkShareView<u16>],
         code: &[ChunkShareView<u16>],
+        threshold_a: u32,
         streams: &[CudaStream],
     ) {
         assert_eq!(self.n_devices, mask_lifted.len());
@@ -1859,6 +1860,7 @@ impl Circuits {
                             &mc.b,
                             &c.a,
                             &c.b,
+                            threshold_a,
                             self.peer_id as u32,
                             self.chunk_size * 64,
                         ),
@@ -2517,6 +2519,7 @@ impl Circuits {
         &mut self,
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
+        threshold_a: u32,
         streams: &[CudaStream],
     ) {
         assert_eq!(self.n_devices, code_dots.len());
@@ -2531,7 +2534,7 @@ impl Circuits {
         let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
 
         self.lift_mpc(mask_dots, &mut x, &mut corrections, streams);
-        self.lift_mul_sub(&mut x, &corrections, code_dots, streams);
+        self.lift_mul_sub(&mut x, &corrections, code_dots, threshold_a, streams);
         self.extract_msb(&mut x, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
@@ -2591,9 +2594,10 @@ impl Circuits {
         &mut self,
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
+        threshold_a: u32,
         streams: &[CudaStream],
     ) {
-        self.compare_threshold_masked_many(code_dots, mask_dots, streams);
+        self.compare_threshold_masked_many(code_dots, mask_dots, threshold_a, streams);
         let mut result = self.take_result_buffer();
         self.or_reduce_result(&mut result, streams);
         // Result is in the first bit of the first GPU
