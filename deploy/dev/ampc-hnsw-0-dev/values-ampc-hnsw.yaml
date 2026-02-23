@@ -81,6 +81,12 @@ env:
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "96"
 
+  - name: SMPC__HNSW_PARAM_EF_CONSTR
+    value: "320"
+
+  - name: SMPC__HNSW_PARAM_EF_SEARCH
+    value: "320"
+
   - name: SMPC__DISABLE_PERSISTENCE
     value: "false"
 
