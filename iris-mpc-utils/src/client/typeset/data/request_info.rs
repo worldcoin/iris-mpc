@@ -63,7 +63,7 @@ impl RequestInfo {
             tracing::warn!(
                 "Ignoring response with out-of-range node_id {} (max {})",
                 node_id,
-                N_PARTIES
+                N_PARTIES - 1
             );
             return false;
         }

@@ -308,7 +308,17 @@ impl ExecState {
                 };
 
             for sqs_msg in messages {
-                let response = typeset::ResponsePayload::from(&sqs_msg);
+                let response = match typeset::ResponsePayload::try_from(&sqs_msg) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!(
+                            "failed to parse response payload for sqs msg {}: {}",
+                            sqs_msg.kind(),
+                            e
+                        );
+                        continue;
+                    }
+                };
                 tracing::info!("received {}", response.log_tag());
 
                 // Extract correlation UUID from response (IdentityDeletion has none).

@@ -545,7 +545,7 @@ fn random_into_iter(
     batch_size: usize,
     percent_uniqueness: usize,
     percent_reauth: usize,
-    _percent_other: usize,
+    percent_other: usize,
 ) -> std::vec::IntoIter<Vec<RequestOptions>> {
     use rand::seq::SliceRandom;
     use rand::Rng;
@@ -555,6 +555,11 @@ fn random_into_iter(
     let mut prev_labels: BTreeSet<String> = BTreeSet::new();
     let mut uniqueness_counter = 0;
     let mut rng = rand::thread_rng();
+
+    // Calculate number of each type of request in this batch
+    let num_uniqueness = (batch_size * percent_uniqueness) / 100;
+    let num_reauth = (batch_size * percent_reauth) / 100;
+    let num_other = (batch_size * percent_other) / 100;
 
     // Start with an initial batch of 50 uniqueness requests to seed the pool
     let mut initial_batch = Vec::new();
@@ -577,11 +582,6 @@ fn random_into_iter(
     // Generate the remaining batches
     for _batch_idx in 0..batch_count {
         let mut batch = Vec::new();
-
-        // Calculate number of each type of request in this batch
-        let num_uniqueness = (batch_size * percent_uniqueness) / 100;
-        let num_reauth = (batch_size * percent_reauth) / 100;
-        let num_other = batch_size.saturating_sub(num_uniqueness + num_reauth);
 
         let mut new_labels = BTreeSet::new();
 

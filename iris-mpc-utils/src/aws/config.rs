@@ -49,7 +49,6 @@ impl AsyncFrom<AwsOptions> for AwsClientConfig {
             opts.sns_request_topic_arn().to_owned(),
             opts.sqs_long_poll_wait_time().to_owned(),
             opts.sqs_response_queue_urls().to_owned(),
-            opts.sqs_wait_time_seconds().to_owned(),
         )
         .await
     }
@@ -87,7 +86,6 @@ impl AwsClientConfig {
         sns_request_topic_arn: String,
         sqs_long_poll_wait_time: usize,
         sqs_response_queue_urls: Vec<String>,
-        _sqs_wait_time_seconds: usize,
     ) -> Self {
         Self {
             environment,
@@ -190,7 +188,6 @@ impl AwsClientConfig {
             .iter()
             .map(|s| String::from(*s))
             .collect();
-        let sqs_wait_time_seconds = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
 
         AwsClientConfig::new(
             environment,
@@ -199,7 +196,6 @@ impl AwsClientConfig {
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
             sqs_response_queue_urls,
-            sqs_wait_time_seconds,
         )
         .await
     }

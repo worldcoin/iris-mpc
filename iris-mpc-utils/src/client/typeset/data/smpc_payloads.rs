@@ -157,14 +157,15 @@ impl From<&Request> for RequestPayload {
     }
 }
 
-impl From<&SqsMessageInfo> for ResponsePayload {
-    fn from(msg: &SqsMessageInfo) -> Self {
+impl TryFrom<&SqsMessageInfo> for ResponsePayload {
+    type Error = serde_json::Error;
+    fn try_from(msg: &SqsMessageInfo) -> Result<Self, Self::Error> {
         let body = msg.body();
         let kind = msg.kind();
 
         macro_rules! parse_response {
             ($variant:ident) => {
-                ResponsePayload::$variant(serde_json::from_str(body).unwrap())
+                serde_json::from_str(body).map(|x| ResponsePayload::$variant(x))
             };
         }
 
