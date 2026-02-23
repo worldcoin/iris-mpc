@@ -98,7 +98,13 @@ impl Step1 {
         step1.luc_ids = luc_ids;
         step1.request_type = request_type;
 
-        for (vector_id, is_match_lr) in full_join {
+        let full_join_partial_matches_ordered: Vec<_> = full_join
+            .into_iter()
+            .filter(|(_, [is_match_l, is_match_r])| *is_match_l || *is_match_r)
+            .sorted()
+            .collect();
+
+        for (vector_id, is_match_lr) in full_join_partial_matches_ordered {
             match is_match_lr {
                 [true, true] => step1.inner_join.push((vector_id, [true, true])),
                 [true, false] => step1.anti_join[LEFT].push(vector_id),
@@ -251,8 +257,6 @@ impl BatchStep3 {
         };
 
         let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
-
-        tracing::info!("Decisions: {:?}", decisions);
 
         for request in &self.0 {
             tracing::info!(

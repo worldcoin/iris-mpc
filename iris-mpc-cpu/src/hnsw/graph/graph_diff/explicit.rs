@@ -63,9 +63,17 @@ impl<V: Ref + Display> Display for ExplicitDiff<V> {
                         node,
                         diff.jaccard_state.compute()
                     )?;
+                    #[allow(
+                        clippy::iter_over_hash_type,
+                        reason = "Only used for display, not relying on order."
+                    )]
                     for neighbor in &diff.only_in_lhs {
                         writeln!(f, "  + {}", neighbor)?;
                     }
+                    #[allow(
+                        clippy::iter_over_hash_type,
+                        reason = "Only used for display, not relying on order."
+                    )]
                     for neighbor in &diff.only_in_rhs {
                         writeln!(f, "  - {}", neighbor)?;
                     }

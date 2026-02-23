@@ -359,6 +359,10 @@ impl TwoSidedDistanceCache {
         mut right: OneSidedDistanceCache,
     ) -> TwoSidedDistanceCache {
         let mut map = HashMap::new();
+        #[allow(
+            clippy::iter_over_hash_type,
+            reason = "We insert/remove based on key, order does not matter"
+        )]
         for (key, left_values) in left.map {
             if let Some(right_values) = right.map.remove(&key) {
                 map.insert(key, (left_values, right_values));
@@ -368,6 +372,10 @@ impl TwoSidedDistanceCache {
     }
 
     pub fn extend(&mut self, other: TwoSidedDistanceCache) {
+        #[allow(
+            clippy::iter_over_hash_type,
+            reason = "We insert/remove based on key, order does not matter"
+        )]
         for (key, (left_values, right_values)) in other.map {
             let res = self.map.insert(key, (left_values, right_values));
             assert!(

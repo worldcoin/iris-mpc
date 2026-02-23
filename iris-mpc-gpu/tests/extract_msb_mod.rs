@@ -8,6 +8,7 @@ mod extract_msb_mod_test {
     use eyre::Result;
     use iris_mpc_common::iris_db::iris::IrisCodeArray;
     use iris_mpc_gpu::{
+        dot::THRESHOLD_A,
         helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
         threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
     };
@@ -198,7 +199,7 @@ mod extract_msb_mod_test {
             party.synchronize_streams(&streams);
 
             let now = Instant::now();
-            party.lift_mul_sub(&mut x, &correction, &code_gpu, &streams);
+            party.lift_mul_sub(&mut x, &correction, &code_gpu, THRESHOLD_A, &streams);
             tracing::info!("id = {}, lift time: {:?}", id, now.elapsed());
             party.extract_msb(&mut x, &streams);
             tracing::info!("id = {}, extract time: {:?}", id, now.elapsed());

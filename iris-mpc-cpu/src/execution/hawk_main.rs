@@ -304,7 +304,7 @@ pub struct HawkActor {
     party_id: usize,
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
@@ -1429,11 +1429,12 @@ impl HawkMutation {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
         // Group updates by side: side -> (key -> neighbors)
         // Key: (serial_id, version_id, layer)
-        let mut updates_by_side: HashMap<StoreId, HashMap<(i64, i16, i16), Vec<_>>> =
-            HashMap::new();
+        let mut updates_by_side: BothEyes<BTreeMap<(i64, i16, i16), Vec<_>>> = Default::default();
 
         for mutation in self.0 {
-            for (side, plan_opt) in izip!(STORE_IDS, mutation.plans) {
+            for (side, updates_map, plan_opt) in
+                izip!(STORE_IDS, updates_by_side.iter_mut(), mutation.plans)
+            {
                 if let Some(plan) = plan_opt {
                     let mut graph = graph_tx.with_graph(side);
                     // Updating entry points sequentially is fine in practice
@@ -1448,7 +1449,6 @@ impl HawkMutation {
                     }
 
                     // Buffer link updates by side
-                    let side_map = updates_by_side.entry(side).or_default();
                     for ((inserted_vector, lc), neighbors) in plan.updates {
                         let key = (
                             inserted_vector.serial_id() as i64,
@@ -1456,14 +1456,14 @@ impl HawkMutation {
                             lc as i16,
                         );
                         // Deduplicate: If multiple updates for the same node exist, the last one wins
-                        side_map.insert(key, neighbors);
+                        updates_map.insert(key, neighbors);
                     }
                 }
             }
         }
 
         // Execute one batch per side
-        for (side, batch_updates) in updates_by_side {
+        for (side, batch_updates) in izip!(STORE_IDS, updates_by_side) {
             if !batch_updates.is_empty() {
                 graph_tx
                     .with_graph(side)
@@ -1553,8 +1553,11 @@ impl HawkHandle {
         sessions: &mut SessionGroups,
         request: HawkRequest,
     ) -> Result<HawkResult> {
-        tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
+        tracing::info!(
+            "Processing a Hawk job ({} queries)",
+            request.batch.request_ids.len()
+        );
 
         let request = request
             .numa_realloc(hawk_actor.workers_handle.clone())
@@ -1563,14 +1566,6 @@ impl HawkHandle {
         // All deletions in a batch are applied at the beginning of batch processing
         // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
-
-        tracing::info!(
-            "Processing an Hawk job with request types: {:?}, reauth targets: {:?}, skip persistence: {:?}, reauth use or rule: {:?}",
-            request.batch.request_types,
-            request.batch.reauth_target_indices,
-            request.batch.skip_persistence,
-            request.batch.reauth_use_or_rule,
-        );
 
         // Compute search results for a given orientation and compute matching information
         let do_search = async |orient| -> Result<_> {
@@ -1666,7 +1661,6 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-        tracing::info!("Finished processing a Hawk job…");
         Ok(results)
     }
 
