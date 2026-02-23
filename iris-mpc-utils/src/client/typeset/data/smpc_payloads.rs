@@ -99,6 +99,17 @@ impl ResponsePayload {
             Self::Uniqueness(result) => result.error_reason.as_deref(),
         }
     }
+
+    /// Validates the response against expected field values.
+    pub fn matches_expected(&self, expected: &serde_json::Value) -> Result<(), Vec<String>> {
+        match self {
+            Self::IdentityDeletion(result) => result.matches_expected(expected),
+            Self::Reauthorization(result) => result.matches_expected(expected),
+            Self::ResetCheck(result) => result.matches_expected(expected),
+            Self::ResetUpdate(result) => result.matches_expected(expected),
+            Self::Uniqueness(result) => result.matches_expected(expected),
+        }
+    }
 }
 
 impl From<&Request> for RequestPayload {

@@ -313,14 +313,28 @@ pub struct RequestOptions {
 
     // Inner request payload options.
     payload: RequestPayloadOptions,
+
+    // Optional expected response fields for validation.
+    #[serde(default)]
+    expected: Option<serde_json::Value>,
 }
 
 impl RequestOptions {
     pub fn new(label: Option<&str>, payload: RequestPayloadOptions) -> Self {
         Self {
             label: label.map(|s| s.to_string()),
+            expected: None,
             payload,
         }
+    }
+
+    pub fn with_expected(mut self, expected: serde_json::Value) -> Self {
+        self.expected = Some(expected);
+        self
+    }
+
+    pub fn expected(&self) -> Option<&serde_json::Value> {
+        self.expected.as_ref()
     }
 
     pub fn label(&self) -> Option<String> {
