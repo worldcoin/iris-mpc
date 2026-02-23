@@ -226,7 +226,7 @@ impl ServiceClient {
             state.track_batch_requests(&batch_requests[..published_count]);
 
             // Wait for all responses for this batch.
-            state
+            let responses_ok = state
                 .process_responses(&self.aws_client, live_serial_ids)
                 .await;
 
@@ -237,6 +237,11 @@ impl ServiceClient {
 
             if sns_failed {
                 tracing::error!("Stopping batch processing due to SNS publish failure");
+                break;
+            }
+
+            if let Err(e) = responses_ok {
+                tracing::error!("Stopping batch processing: {}", e);
                 break;
             }
         }
@@ -387,18 +392,21 @@ impl ExecState {
     }
 
     // Drains outstanding_requests and outstanding_deletions by polling SQS until both are empty.
+    // Returns an error if the batch times out with outstanding requests remaining.
     async fn process_responses(
         &mut self,
         aws_client: &AwsClient,
         live_serial_ids: &mut HashSet<IrisSerialId>,
-    ) {
+    ) -> Result<(), ServiceClientError> {
         use crate::constants::N_PARTIES;
 
         let start = Instant::now();
         let deadline = start + Duration::from_secs(RESPONSE_TIMEOUT_SECS);
         let mut next_progress = start + Duration::from_secs(PROGRESS_LOG_INTERVAL_SECS);
 
-        while !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
+        'OUTER: while !self.outstanding_requests.is_empty()
+            || !self.outstanding_deletions.is_empty()
+        {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -417,17 +425,21 @@ impl ExecState {
 
             let messages =
                 match timeout(remaining, aws_client.sqs_receive_messages(Some(N_PARTIES))).await {
-                    Ok(result) => result.expect("SQS receive failed"),
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => {
+                        tracing::error!("SQS receive failed: {:?}", e);
+                        break 'OUTER;
+                    }
                     Err(_) => {
                         break;
                     }
                 };
 
             for sqs_msg in messages {
-                aws_client
-                    .sqs_purge_response_queue_message(&sqs_msg)
-                    .await
-                    .expect("SQS message purge failed");
+                if let Err(e) = aws_client.sqs_purge_response_queue_message(&sqs_msg).await {
+                    tracing::error!("SQS message purge failed: {:?}", e);
+                    break 'OUTER;
+                }
 
                 let response = match typeset::ResponsePayload::try_from(&sqs_msg) {
                     Ok(r) => r,
@@ -446,17 +458,21 @@ impl ExecState {
         }
 
         if !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
-            tracing::warn!(
+            let msg = format!(
                 "Batch timed out after {}s: {} requests, {} deletions still pending",
                 RESPONSE_TIMEOUT_SECS,
                 self.outstanding_requests.len(),
                 self.outstanding_deletions.len()
             );
+            tracing::warn!("{}", msg);
             self.error_log
                 .extend(self.outstanding_requests.drain().map(|(_, info)| info));
             self.error_log
                 .extend(self.outstanding_deletions.drain().map(|(_, info)| info));
+            return Err(ServiceClientError::ResponseError(msg));
         }
+
+        Ok(())
     }
 
     fn report_errors(&self) {
