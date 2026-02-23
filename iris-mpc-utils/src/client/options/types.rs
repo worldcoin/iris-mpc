@@ -521,190 +521,206 @@ impl IntoIterator for RequestBatchOptions {
                 batch_size,
                 percent_uniqueness,
                 percent_reauth,
-                percent_other: _,
-            } => {
-                use rand::Rng;
-                use std::collections::BTreeSet;
-
-                let mut batches: Vec<Vec<RequestOptions>> = Vec::new();
-                let mut all_uniqueness_labels: BTreeSet<String> = BTreeSet::new();
-                let mut uniqueness_counter = 0;
-                let mut rng = rand::thread_rng();
-
-                for _batch_idx in 0..batch_count {
-                    let mut batch = Vec::new();
-
-                    // Calculate number of each type of request in this batch
-                    let num_uniqueness = (batch_size * percent_uniqueness) / 100;
-                    let num_reauth = (batch_size * percent_reauth) / 100;
-                    let num_other = batch_size.saturating_sub(num_uniqueness + num_reauth);
-
-                    // Generate uniqueness requests for this batch
-                    for _ in 0..num_uniqueness {
-                        let label = format!("uniqueness-{}", uniqueness_counter);
-                        uniqueness_counter += 1;
-
-                        batch.push(RequestOptions::new(
-                            Some(&label),
-                            RequestPayloadOptions::Uniqueness {
-                                iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
-                                insertion_layers: None,
-                            },
-                        ));
-
-                        all_uniqueness_labels.insert(label);
-                    }
-
-                    // Generate reauth requests
-                    for _ in 0..num_reauth {
-                        let payload = if !all_uniqueness_labels.is_empty() {
-                            let current_count = all_uniqueness_labels.len();
-                            let random_index = rng.gen_range(0..current_count);
-                            let parent_label = all_uniqueness_labels
-                                .iter()
-                                .nth(random_index)
-                                .unwrap()
-                                .clone();
-                            RequestPayloadOptions::Reauthorisation {
-                                iris_pair: None,
-                                parent: Parent::Label(parent_label),
-                            }
-                        } else {
-                            // No labels available yet, use ResetCheck as fallback
-                            RequestPayloadOptions::ResetCheck { iris_pair: None }
-                        };
-
-                        batch.push(RequestOptions::new(None, payload));
-                    }
-
-                    // Generate other requests
-                    for i in 0..num_other {
-                        let payload = if !all_uniqueness_labels.is_empty() {
-                            match i % 3 {
-                                0 => {
-                                    // IdentityDeletion - remove the label after using it
-                                    let current_count = all_uniqueness_labels.len();
-                                    let random_index = rng.gen_range(0..current_count);
-                                    let parent_label = all_uniqueness_labels
-                                        .iter()
-                                        .nth(random_index)
-                                        .unwrap()
-                                        .clone();
-                                    all_uniqueness_labels.remove(&parent_label);
-                                    RequestPayloadOptions::IdentityDeletion {
-                                        parent: Parent::Label(parent_label),
-                                    }
-                                }
-                                1 => RequestPayloadOptions::ResetCheck { iris_pair: None },
-                                2 => {
-                                    let current_count = all_uniqueness_labels.len();
-                                    let random_index = rng.gen_range(0..current_count);
-                                    let parent_label = all_uniqueness_labels
-                                        .iter()
-                                        .nth(random_index)
-                                        .unwrap()
-                                        .clone();
-                                    RequestPayloadOptions::ResetUpdate {
-                                        iris_pair: None,
-                                        parent: Parent::Label(parent_label),
-                                    }
-                                }
-                                _ => unreachable!(),
-                            }
-                        } else {
-                            // No labels available, use ResetCheck as fallback
-                            RequestPayloadOptions::ResetCheck { iris_pair: None }
-                        };
-
-                        batch.push(RequestOptions::new(None, payload));
-                    }
-
-                    batches.push(batch);
-                }
-
-                batches.into_iter()
-            }
+                percent_other,
+            } => random_into_iter(
+                batch_count,
+                batch_size,
+                percent_uniqueness,
+                percent_reauth,
+                percent_other,
+            ),
             RequestBatchOptions::Simple {
                 batch_count,
                 batch_kind,
                 batch_size,
                 ..
-            } => {
-                use iris_mpc_common::helpers::smpc_request::{
-                    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-                    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
-                };
-
-                let requires_parent = matches!(
-                    batch_kind.as_str(),
-                    IDENTITY_DELETION_MESSAGE_TYPE
-                        | REAUTH_MESSAGE_TYPE
-                        | RESET_UPDATE_MESSAGE_TYPE
-                );
-
-                let mut v: Vec<Vec<RequestOptions>> = vec![];
-                for _ in 0..batch_count {
-                    if !requires_parent {
-                        let batch = (0..batch_size)
-                            .map(|_| match batch_kind.as_str() {
-                                UNIQUENESS_MESSAGE_TYPE => RequestOptions::new(
-                                    None,
-                                    RequestPayloadOptions::Uniqueness {
-                                        iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
-                                        insertion_layers: None,
-                                    },
-                                ),
-                                RESET_CHECK_MESSAGE_TYPE => RequestOptions::new(
-                                    None,
-                                    RequestPayloadOptions::ResetCheck { iris_pair: None },
-                                ),
-                                _ => unreachable!(
-                                    "Simple batch_kind '{}' should have been rejected by validation",
-                                    batch_kind
-                                ),
-                            })
-                            .collect();
-                        v.push(batch);
-                    } else {
-                        // Two batches: uniqueness preamble (with UUID labels) + desired type
-                        // (referencing those labels via Parent::Label).
-                        let mut uniqueness_batch = vec![];
-                        let mut child_batch = vec![];
-                        for _ in 0..batch_size {
-                            let label = uuid::Uuid::new_v4().to_string();
-                            uniqueness_batch.push(RequestOptions::new(
-                                Some(label.as_str()),
-                                RequestPayloadOptions::Uniqueness {
-                                    iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
-                                    insertion_layers: None,
-                                },
-                            ));
-                            let payload = match batch_kind.as_str() {
-                                IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    RequestPayloadOptions::IdentityDeletion {
-                                        parent: Parent::Label(label),
-                                    }
-                                }
-                                REAUTH_MESSAGE_TYPE => RequestPayloadOptions::Reauthorisation {
-                                    iris_pair: None,
-                                    parent: Parent::Label(label),
-                                },
-                                RESET_UPDATE_MESSAGE_TYPE => RequestPayloadOptions::ResetUpdate {
-                                    iris_pair: None,
-                                    parent: Parent::Label(label),
-                                },
-                                _ => unreachable!("already checked requires_parent"),
-                            };
-                            child_batch.push(RequestOptions::new(None, payload));
-                        }
-                        v.push(uniqueness_batch);
-                        v.push(child_batch);
-                    }
-                }
-                v.into_iter()
-            }
+            } => simple_into_iter(batch_count, batch_kind, batch_size),
         }
     }
+}
+
+fn random_into_iter(
+    batch_count: usize,
+    batch_size: usize,
+    percent_uniqueness: usize,
+    percent_reauth: usize,
+    _percent_other: usize,
+) -> std::vec::IntoIter<Vec<RequestOptions>> {
+    use rand::Rng;
+    use std::collections::BTreeSet;
+
+    let mut batches: Vec<Vec<RequestOptions>> = Vec::new();
+    let mut all_uniqueness_labels: BTreeSet<String> = BTreeSet::new();
+    let mut uniqueness_counter = 0;
+    let mut rng = rand::thread_rng();
+
+    for _batch_idx in 0..batch_count {
+        let mut batch = Vec::new();
+
+        // Calculate number of each type of request in this batch
+        let num_uniqueness = (batch_size * percent_uniqueness) / 100;
+        let num_reauth = (batch_size * percent_reauth) / 100;
+        let num_other = batch_size.saturating_sub(num_uniqueness + num_reauth);
+
+        // Generate uniqueness requests for this batch
+        for _ in 0..num_uniqueness {
+            let label = format!("uniqueness-{}", uniqueness_counter);
+            uniqueness_counter += 1;
+
+            batch.push(RequestOptions::new(
+                Some(&label),
+                RequestPayloadOptions::Uniqueness {
+                    iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                    insertion_layers: None,
+                },
+            ));
+
+            all_uniqueness_labels.insert(label);
+        }
+
+        // Generate reauth requests
+        for _ in 0..num_reauth {
+            let payload = if !all_uniqueness_labels.is_empty() {
+                let current_count = all_uniqueness_labels.len();
+                let random_index = rng.gen_range(0..current_count);
+                let parent_label = all_uniqueness_labels
+                    .iter()
+                    .nth(random_index)
+                    .unwrap()
+                    .clone();
+                RequestPayloadOptions::Reauthorisation {
+                    iris_pair: None,
+                    parent: Parent::Label(parent_label),
+                }
+            } else {
+                // No labels available yet, use ResetCheck as fallback
+                RequestPayloadOptions::ResetCheck { iris_pair: None }
+            };
+
+            batch.push(RequestOptions::new(None, payload));
+        }
+
+        // Generate other requests
+        for i in 0..num_other {
+            let payload = if !all_uniqueness_labels.is_empty() {
+                match i % 3 {
+                    0 => {
+                        // IdentityDeletion - remove the label after using it
+                        let current_count = all_uniqueness_labels.len();
+                        let random_index = rng.gen_range(0..current_count);
+                        let parent_label = all_uniqueness_labels
+                            .iter()
+                            .nth(random_index)
+                            .unwrap()
+                            .clone();
+                        all_uniqueness_labels.remove(&parent_label);
+                        RequestPayloadOptions::IdentityDeletion {
+                            parent: Parent::Label(parent_label),
+                        }
+                    }
+                    1 => RequestPayloadOptions::ResetCheck { iris_pair: None },
+                    2 => {
+                        let current_count = all_uniqueness_labels.len();
+                        let random_index = rng.gen_range(0..current_count);
+                        let parent_label = all_uniqueness_labels
+                            .iter()
+                            .nth(random_index)
+                            .unwrap()
+                            .clone();
+                        RequestPayloadOptions::ResetUpdate {
+                            iris_pair: None,
+                            parent: Parent::Label(parent_label),
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                // No labels available, use ResetCheck as fallback
+                RequestPayloadOptions::ResetCheck { iris_pair: None }
+            };
+
+            batch.push(RequestOptions::new(None, payload));
+        }
+
+        batches.push(batch);
+    }
+
+    batches.into_iter()
+}
+
+fn simple_into_iter(
+    batch_count: usize,
+    batch_kind: String,
+    batch_size: usize,
+) -> std::vec::IntoIter<Vec<RequestOptions>> {
+    use iris_mpc_common::helpers::smpc_request::{
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    };
+
+    let requires_parent = matches!(
+        batch_kind.as_str(),
+        IDENTITY_DELETION_MESSAGE_TYPE | REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE
+    );
+
+    let mut v: Vec<Vec<RequestOptions>> = vec![];
+    for _ in 0..batch_count {
+        if !requires_parent {
+            let batch = (0..batch_size)
+                .map(|_| match batch_kind.as_str() {
+                    UNIQUENESS_MESSAGE_TYPE => RequestOptions::new(
+                        None,
+                        RequestPayloadOptions::Uniqueness {
+                            iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                            insertion_layers: None,
+                        },
+                    ),
+                    RESET_CHECK_MESSAGE_TYPE => RequestOptions::new(
+                        None,
+                        RequestPayloadOptions::ResetCheck { iris_pair: None },
+                    ),
+                    _ => unreachable!(
+                        "Simple batch_kind '{}' should have been rejected by validation",
+                        batch_kind
+                    ),
+                })
+                .collect();
+            v.push(batch);
+        } else {
+            // Two batches: uniqueness preamble (with UUID labels) + desired type
+            // (referencing those labels via Parent::Label).
+            let mut uniqueness_batch = vec![];
+            let mut child_batch = vec![];
+            for _ in 0..batch_size {
+                let label = uuid::Uuid::new_v4().to_string();
+                uniqueness_batch.push(RequestOptions::new(
+                    Some(label.as_str()),
+                    RequestPayloadOptions::Uniqueness {
+                        iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                        insertion_layers: None,
+                    },
+                ));
+                let payload = match batch_kind.as_str() {
+                    IDENTITY_DELETION_MESSAGE_TYPE => RequestPayloadOptions::IdentityDeletion {
+                        parent: Parent::Label(label),
+                    },
+                    REAUTH_MESSAGE_TYPE => RequestPayloadOptions::Reauthorisation {
+                        iris_pair: None,
+                        parent: Parent::Label(label),
+                    },
+                    RESET_UPDATE_MESSAGE_TYPE => RequestPayloadOptions::ResetUpdate {
+                        iris_pair: None,
+                        parent: Parent::Label(label),
+                    },
+                    _ => unreachable!("already checked requires_parent"),
+                };
+                child_batch.push(RequestOptions::new(None, payload));
+            }
+            v.push(uniqueness_batch);
+            v.push(child_batch);
+        }
+    }
+    v.into_iter()
 }
 
 #[cfg(test)]
