@@ -377,7 +377,7 @@ impl RequestOptions {
             RequestPayloadOptions::Uniqueness { iris_pair, .. }
             | RequestPayloadOptions::Mirrored { iris_pair, .. } => Request::Uniqueness {
                 info,
-                iris_pair: Some(*iris_pair),
+                iris_pair: *iris_pair,
                 signup_id: corr_uuid,
             },
             RequestPayloadOptions::Reauthorisation { iris_pair, .. } => Request::Reauthorization {
@@ -444,13 +444,15 @@ pub enum RequestPayloadOptions {
     },
     // Options over a uniqueness request payload.
     Uniqueness {
-        iris_pair: IrisPairDescriptor,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
         insertion_layers: Option<(usize, usize)>,
     },
     // Options over a mirrored uniqueness request payload.
     // Generates a Uniqueness request whose iris shares are mirror-transformed.
     Mirrored {
-        iris_pair: IrisPairDescriptor,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
         insertion_layers: Option<(usize, usize)>,
     },
 }
@@ -461,10 +463,9 @@ impl RequestPayloadOptions {
             Self::IdentityDeletion { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
             | Self::ResetCheck { iris_pair, .. }
-            | Self::ResetUpdate { iris_pair, .. } => iris_pair.as_ref(),
-            Self::Uniqueness { iris_pair, .. } | Self::Mirrored { iris_pair, .. } => {
-                Some(iris_pair)
-            }
+            | Self::ResetUpdate { iris_pair, .. }
+            | Self::Uniqueness { iris_pair, .. }
+            | Self::Mirrored { iris_pair, .. } => iris_pair.as_ref(),
         }
     }
 
@@ -563,7 +564,7 @@ fn random_into_iter(
         initial_batch.push(RequestOptions::new(
             Some(&label),
             RequestPayloadOptions::Uniqueness {
-                iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                iris_pair: None,
                 insertion_layers: None,
             },
         ));
@@ -591,7 +592,7 @@ fn random_into_iter(
             batch.push(RequestOptions::new(
                 Some(&label),
                 RequestPayloadOptions::Uniqueness {
-                    iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                    iris_pair: None,
                     insertion_layers: None,
                 },
             ));
@@ -683,7 +684,7 @@ fn simple_into_iter(
                     UNIQUENESS_MESSAGE_TYPE => RequestOptions::new(
                         None,
                         RequestPayloadOptions::Uniqueness {
-                            iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                            iris_pair: None,
                             insertion_layers: None,
                         },
                     ),
@@ -708,7 +709,7 @@ fn simple_into_iter(
                 uniqueness_batch.push(RequestOptions::new(
                     Some(label.as_str()),
                     RequestPayloadOptions::Uniqueness {
-                        iris_pair: IrisPairDescriptor::new_from_indexes(0, 0),
+                        iris_pair: None,
                         insertion_layers: None,
                     },
                 ));
