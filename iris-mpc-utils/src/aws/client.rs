@@ -10,9 +10,6 @@ use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
-/// Backoff duration when no SQS messages are received, to avoid busy-looping.
-const SQS_EMPTY_QUEUE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
-
 use super::{
     config::AwsClientConfig,
     errors::AwsClientError,
@@ -176,7 +173,9 @@ impl AwsClient {
     pub async fn sqs_receive_messages(
         &self,
         max_messages: Option<usize>,
+        long_poll_secs: Option<i32>,
     ) -> Result<Vec<SqsMessageInfo>, AwsClientError> {
+        let wait_time = long_poll_secs.unwrap_or(0);
         let futures: Vec<_> = self
             .config()
             .sqs_response_queue_urls()
@@ -189,7 +188,7 @@ impl AwsClient {
                     let response = sqs
                         .receive_message()
                         .queue_url(&queue_url)
-                        .wait_time_seconds(0)
+                        .wait_time_seconds(wait_time)
                         .max_number_of_messages(max_msgs)
                         .send()
                         .await
@@ -263,11 +262,6 @@ impl AwsClient {
         let mut all_messages = Vec::new();
         for result in results {
             all_messages.extend(result?);
-        }
-
-        // If no messages found on any queue, sleep briefly to avoid busy-looping.
-        if all_messages.is_empty() {
-            tokio::time::sleep(SQS_EMPTY_QUEUE_BACKOFF).await;
         }
 
         Ok(all_messages)

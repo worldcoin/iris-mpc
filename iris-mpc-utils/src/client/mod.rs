@@ -7,7 +7,7 @@ use async_from::{self, AsyncFrom};
 use rand::rngs::StdRng;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 
 use crate::{
@@ -418,17 +418,18 @@ impl ExecState {
                 next_progress += Duration::from_secs(PROGRESS_LOG_INTERVAL_SECS);
             }
 
-            let messages =
-                match timeout(remaining, aws_client.sqs_receive_messages(Some(N_PARTIES))).await {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(e)) => {
-                        tracing::error!("SQS receive failed: {:?}", e);
-                        break 'OUTER;
-                    }
-                    Err(_) => {
-                        break;
-                    }
-                };
+            // SQS long polling: cap at 20s (SQS maximum) and the remaining deadline.
+            let long_poll_secs = remaining.as_secs().min(1) as i32;
+            let messages = match aws_client
+                .sqs_receive_messages(Some(N_PARTIES), Some(long_poll_secs))
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("SQS receive failed: {:?}", e);
+                    break 'OUTER;
+                }
+            };
 
             for sqs_msg in messages {
                 if let Err(e) = aws_client.sqs_purge_response_queue_message(&sqs_msg).await {
