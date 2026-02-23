@@ -7,6 +7,7 @@ mod threshold_test {
     use eyre::Result;
     use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
     use iris_mpc_gpu::{
+        dot::THRESHOLD_A,
         helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
         threshold_ring::protocol::{ChunkShare, Circuits},
     };
@@ -201,7 +202,7 @@ mod threshold_test {
             party.synchronize_streams(&streams);
 
             let now = Instant::now();
-            party.compare_threshold_masked_many(&code_gpu, &mask_gpu, &streams);
+            party.compare_threshold_masked_many(&code_gpu, &mask_gpu, THRESHOLD_A, &streams);
             party.synchronize_streams(&streams);
             tracing::info!("id: {}, Starting tests...", id);
             tracing::info!("id: {}, compute time: {:?}", id, now.elapsed());

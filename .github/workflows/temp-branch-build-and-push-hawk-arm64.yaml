@@ -3,7 +3,12 @@ name: Branch - Hawk Build and push Arm64 docker image
 on:
   push:
     branches:
+      - "dev"
       - "chore/build-init-db-image"
+
+    paths-ignore:
+      - "deploy/**"
+
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
