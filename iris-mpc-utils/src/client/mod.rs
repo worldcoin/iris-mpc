@@ -116,7 +116,7 @@ impl ServiceClient {
 
         let mut state = ExecState::new();
 
-        for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
+        'OUTER: for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
             // Phase 1: Gather all requests and pre-generate shares.
             let mut batch_requests: Vec<typeset::Request> = Vec::new();
             let mut batch_shares = Vec::new();
@@ -177,22 +177,17 @@ impl ServiceClient {
                 batch_shares.push(shares_info);
             }
 
-            // Phase 2: Upload all shares in parallel.
-            futures::future::join_all(
-                batch_shares
-                    .iter()
-                    .filter_map(|opt| opt.as_ref())
-                    .map(|(op_uuid, shares)| {
-                        self.aws_client.s3_upload_iris_shares(op_uuid, shares)
-                    }),
-            )
-            .await
-            .into_iter()
-            .for_each(|r| {
-                if let Err(e) = r {
-                    panic!("S3 shares upload failed: {}", e);
+            // Phase 2: Upload all shares
+            for r in batch_shares
+                .iter()
+                .filter_map(|opt| opt.as_ref())
+                .map(|(op_uuid, shares)| self.aws_client.s3_upload_iris_shares(op_uuid, shares))
+            {
+                if let Err(e) = r.await {
+                    tracing::error!("S3 shares upload failed: {}", e);
+                    break 'OUTER;
                 }
-            });
+            }
             drop(batch_shares);
 
             // Phase 3: Wait before publishing to allow shares to propagate.
