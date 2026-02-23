@@ -8,15 +8,6 @@ env:
   - name: NCCL_SOCKET_IFNAME
     value: "ens,eth"
 
-  - name: NCCL_DEBUG
-    value: "INFO"
-
-  - name: NCCL_DEBUG_SUBSYS
-    value: "INIT,NET"
-
-  - name: FI_LOG_LEVEL
-    value: "INFO"
-
   - name: NCCL_IB_CUDA_SUPPORT
     value: "1"
 

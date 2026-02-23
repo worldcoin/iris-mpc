@@ -1,8 +1,9 @@
-use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
+use iris_mpc_common::IrisSerialId;
 
 use super::super::typeset::{
-    RequestBatch, RequestBatchKind, RequestBatchSize, ServiceClientError, UniquenessReference,
+    BatchKind, RequestBatch, RequestBatchSet, ServiceClientError, UniquenessRequestDescriptor,
 };
+use crate::client::options::{RequestBatchOptions, ServiceClientOptions};
 
 /// Generates batches of SMPC service requests.
 pub(crate) struct RequestGenerator {
@@ -10,22 +11,28 @@ pub(crate) struct RequestGenerator {
     generated_batch_count: usize,
 
     // Parameters determining how batches are generated.
-    params: RequestGeneratorParams,
+    config: RequestGeneratorConfig,
 }
 
 impl RequestGenerator {
     fn batch_count(&self) -> usize {
-        match &self.params {
-            RequestGeneratorParams::Simple { batch_count, .. } => *batch_count,
-            RequestGeneratorParams::KnownSet(batch_set) => batch_set.len(),
+        match &self.config {
+            RequestGeneratorConfig::Simple { batch_count, .. } => *batch_count,
+            RequestGeneratorConfig::Complex(batch_set) => batch_set.batches().len(),
         }
     }
 
-    pub(crate) fn new(params: RequestGeneratorParams) -> Self {
+    pub(crate) fn new(config: RequestGeneratorConfig) -> Self {
         Self {
             generated_batch_count: 0,
-            params,
+            config,
         }
+    }
+
+    pub(crate) fn from_options(opts: &ServiceClientOptions) -> Result<Self, ServiceClientError> {
+        let mut config = RequestGeneratorConfig::try_from_options(opts)?;
+        config.set_child_parent_descriptors_from_labels();
+        Ok(Self::new(config))
     }
 
     /// Generates batches of request until exhausted.
@@ -34,31 +41,26 @@ impl RequestGenerator {
             return Ok(None);
         }
 
-        let batch = match &self.params {
-            RequestGeneratorParams::Simple {
+        let batch = match &self.config {
+            RequestGeneratorConfig::Complex(batch_set) => batch_set
+                .batches()
+                .get(self.next_batch_idx() - 1)
+                .unwrap()
+                .clone(),
+            RequestGeneratorConfig::Simple {
                 batch_size,
                 batch_kind,
                 known_iris_serial_id,
                 ..
             } => {
                 let batch_idx = self.next_batch_idx();
-                let batch_size = match batch_size {
-                    RequestBatchSize::Static(size) => *size,
-                };
                 let mut batch = RequestBatch::new(batch_idx, vec![]);
-                for _ in 0..batch_size {
-                    match batch_kind {
-                        RequestBatchKind::Simple(kind) => {
-                            let parent =
-                                push_new_uniqueness_maybe(&mut batch, kind, *known_iris_serial_id);
-                            push_new(&mut batch, kind, parent);
-                        }
-                    }
+                for _ in 0..*batch_size {
+                    let parent =
+                        push_new_uniqueness_maybe(&mut batch, batch_kind, *known_iris_serial_id);
+                    push_new(&mut batch, batch_kind, parent);
                 }
                 batch
-            }
-            RequestGeneratorParams::KnownSet(batch_set) => {
-                batch_set.get(self.next_batch_idx() - 1).unwrap().clone()
             }
         };
 
@@ -73,111 +75,110 @@ impl RequestGenerator {
 }
 
 /// Pushes a new request onto the batch.
-fn push_new(batch: &mut RequestBatch, kind: &str, parent: Option<UniquenessReference>) {
-    assert!(
-        matches!(
-            kind,
-            smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE if parent.is_none()
-        ) || matches!(
-            kind,
-            smpc_request::IDENTITY_DELETION_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE | smpc_request::RESET_UPDATE_MESSAGE_TYPE if parent.is_some()
-        ),
-        "Invalid parent request association"
+fn push_new(
+    batch: &mut RequestBatch,
+    kind: &BatchKind,
+    parent: Option<UniquenessRequestDescriptor>,
+) {
+    assert_eq!(
+        kind.requires_parent(),
+        parent.is_some(),
+        "Invalid parent request association for {:?}",
+        kind
     );
 
     match kind {
-        smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-            batch.push_new_identity_deletion(parent.unwrap());
+        BatchKind::IdentityDeletion => {
+            batch.push_new_identity_deletion(parent.unwrap(), None, None);
         }
-        smpc_request::REAUTH_MESSAGE_TYPE => {
-            batch.push_new_reauthorization(parent.unwrap());
+        BatchKind::Reauth => {
+            batch.push_new_reauthorization(parent.unwrap(), None, None, None);
         }
-        smpc_request::RESET_CHECK_MESSAGE_TYPE => {
-            batch.push_new_reset_check();
+        BatchKind::ResetCheck => {
+            batch.push_new_reset_check(None, None);
         }
-        smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
-            batch.push_new_reset_update(parent.unwrap());
+        BatchKind::ResetUpdate => {
+            batch.push_new_reset_update(parent.unwrap(), None, None, None);
         }
-        smpc_request::UNIQUENESS_MESSAGE_TYPE => {
-            batch.push_new_uniqueness();
+        BatchKind::Uniqueness => {
+            batch.push_new_uniqueness(None, None);
         }
-        _ => unreachable!(),
     }
 }
 
-// Maybe extends collection with a uniqueness request to be referenced from other requests.
+/// Maybe extends collection with a uniqueness request to be referenced from other requests.
 fn push_new_uniqueness_maybe(
     batch: &mut RequestBatch,
-    kind: &str,
+    kind: &BatchKind,
     serial_id: Option<IrisSerialId>,
-) -> Option<UniquenessReference> {
-    match kind {
-        smpc_request::RESET_CHECK_MESSAGE_TYPE | smpc_request::UNIQUENESS_MESSAGE_TYPE => None,
-        smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
-        | smpc_request::REAUTH_MESSAGE_TYPE
-        | smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(match serial_id {
-            Some(serial_id) => UniquenessReference::IrisSerialId(serial_id),
-            None => UniquenessReference::SignupId(batch.push_new_uniqueness()),
-        }),
-        _ => panic!("Invalid request kind"),
+) -> Option<UniquenessRequestDescriptor> {
+    if !kind.requires_parent() {
+        return None;
     }
+
+    Some(match serial_id {
+        Some(serial_id) => UniquenessRequestDescriptor::IrisSerialId(serial_id),
+        None => UniquenessRequestDescriptor::SignupId(batch.push_new_uniqueness(None, None)),
+    })
 }
 
 /// Set of variants over request generation inputs.
-pub(crate) enum RequestGeneratorParams {
+pub(crate) enum RequestGeneratorConfig {
+    /// A pre-built known set of request batches.
+    Complex(RequestBatchSet),
     /// Parameters permitting single kind batches to be generated.
     Simple {
         /// Number of request batches to generate.
         batch_count: usize,
 
         /// Size of each batch.
-        batch_size: RequestBatchSize,
+        batch_size: usize,
 
         /// Determines type of requests to be included in each batch.
-        batch_kind: RequestBatchKind,
+        batch_kind: BatchKind,
 
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
     },
-    /// A pre-built known set of request batches.
-    KnownSet(Vec<RequestBatch>),
 }
 
-#[cfg(test)]
-mod tests {
-    use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
-
-    use super::{
-        super::super::typeset::{RequestBatch, RequestBatchKind, RequestBatchSize},
-        RequestGeneratorParams,
-    };
-
-    impl RequestGeneratorParams {
-        pub fn new_1() -> Self {
-            Self::Simple {
-                batch_count: 1,
-                batch_size: RequestBatchSize::Static(1),
-                batch_kind: RequestBatchKind::Simple(UNIQUENESS_MESSAGE_TYPE),
-                known_iris_serial_id: None,
+impl RequestGeneratorConfig {
+    pub(crate) fn try_from_options(
+        opts: &ServiceClientOptions,
+    ) -> Result<Self, ServiceClientError> {
+        match opts.request_batch() {
+            RequestBatchOptions::Complex {
+                batches: opts_batches,
+            } => {
+                tracing::info!("Parsing RequestBatchOptions::Complex");
+                Ok(Self::Complex(RequestBatchSet::from_options(opts_batches)))
+            }
+            RequestBatchOptions::Simple {
+                batch_count,
+                batch_size,
+                batch_kind,
+                known_iris_serial_id,
+            } => {
+                tracing::info!("Parsing RequestBatchOptions::Simple");
+                Ok(Self::Simple {
+                    batch_count: *batch_count,
+                    batch_size: *batch_size,
+                    batch_kind: BatchKind::from_str(batch_kind).ok_or_else(|| {
+                        ServiceClientError::InvalidOptions(format!(
+                            "Unsupported batch kind: {}",
+                            batch_kind
+                        ))
+                    })?,
+                    known_iris_serial_id: *known_iris_serial_id,
+                })
             }
         }
+    }
 
-        fn new_2() -> Self {
-            Self::KnownSet(vec![
-                RequestBatch::default(),
-                RequestBatch::default(),
-                RequestBatch::default(),
-            ])
+    // Reassigns parent descriptors.
+    pub(crate) fn set_child_parent_descriptors_from_labels(&mut self) {
+        if let RequestGeneratorConfig::Complex(batch_set) = self {
+            batch_set.set_child_parent_descriptors_from_labels();
         }
-    }
-
-    #[tokio::test]
-    async fn test_new_1() {
-        let _ = RequestGeneratorParams::new_1();
-    }
-
-    #[tokio::test]
-    async fn test_new_2() {
-        let _ = RequestGeneratorParams::new_2();
     }
 }

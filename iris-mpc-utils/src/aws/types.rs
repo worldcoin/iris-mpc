@@ -3,7 +3,7 @@ use std::fmt;
 use serde::ser::Serialize;
 use serde_json;
 
-// Helper type encpasulating AWS-S3 object information.
+// Helper type encapsulating AWS-S3 object information.
 #[derive(Debug)]
 pub struct S3ObjectInfo {
     // S3 object data.

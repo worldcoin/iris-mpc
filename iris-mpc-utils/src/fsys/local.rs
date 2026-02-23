@@ -45,6 +45,11 @@ pub fn get_path_to_root() -> PathBuf {
     Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).into()
 }
 
+/// Returns path to a service client simple options file.
+pub fn get_path_to_service_client_simple_opts(opts_idx: usize) -> PathBuf {
+    get_path_to_assets().join(format!("service-client/simple-{opts_idx}.toml",).as_str())
+}
+
 /// Returns path to sub-directory.
 pub fn get_path_to_subdir(name: &str) -> PathBuf {
     get_path_to_root().join(name)
@@ -54,7 +59,7 @@ pub fn get_path_to_subdir(name: &str) -> PathBuf {
 pub fn read_ndjson_file<'a, R: Rng + CryptoRng + 'a>(
     rng: &'a mut R,
 ) -> Result<impl Iterator<Item = [GaloisRingSharedIris; N_PARTIES]> + 'a, Error> {
-    irises::reader::read_iris_shares(get_path_to_ndjson().as_path(), 1000, 0, rng)
+    irises::reader::read_iris_shares(get_path_to_ndjson().as_path(), rng)
 }
 
 /// Returns a loaded node config file.
@@ -84,7 +89,8 @@ mod tests {
 
     use super::{
         get_path_to_assets, get_path_to_ndjson, get_path_to_node_config, get_path_to_root,
-        get_path_to_subdir, read_ndjson_file, read_node_config, read_node_config_set,
+        get_path_to_service_client_simple_opts, get_path_to_subdir, read_ndjson_file,
+        read_node_config, read_node_config_set,
     };
     use crate::constants::{NODE_CONFIG_KIND, PARTY_INDICES};
 
@@ -114,6 +120,13 @@ mod tests {
     #[test]
     fn test_get_path_to_root() {
         assert!(get_path_to_root().exists());
+    }
+
+    #[test]
+    fn test_get_path_to_service_client_simple_opts() {
+        (1..=5).for_each(move |opts_idx| {
+            assert!(get_path_to_service_client_simple_opts(opts_idx).exists());
+        });
     }
 
     #[test]

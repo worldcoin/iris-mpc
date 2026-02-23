@@ -6,10 +6,7 @@ use eyre::Result;
 use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_utils::{
-    client::{
-        AwsConfiguration, ServiceClient as Client,
-        ServiceClientConfiguration as ClientConfiguration,
-    },
+    client::{AwsOptions, ServiceClient, ServiceClientOptions},
     fsys::reader::read_toml,
 };
 
@@ -20,7 +17,7 @@ pub async fn main() -> Result<()> {
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    let mut client = Client::<StdRng>::async_from(options.clone()).await;
+    let mut client = ServiceClient::<StdRng>::async_from(options.clone()).await;
     if let Err(e) = client.init().await {
         tracing::error!("Initialisation failure: {}", e);
         return Err(e.into());
@@ -33,22 +30,26 @@ pub async fn main() -> Result<()> {
 
 #[derive(Debug, Parser, Clone)]
 struct CliOptions {
-    /// Path to service client configuration file.
+    /// Path to service client options.
     #[clap(long)]
-    path_to_config: String,
+    path_to_opts: String,
 
-    /// Path to AWS configuration file.
+    /// Path to AWS options.
     #[clap(long)]
-    path_to_config_aws: String,
+    path_to_opts_aws: String,
+
+    /// Path to iris shares NDJSON file (required when shares_generator is FromFile).
+    #[clap(long)]
+    path_to_iris_shares: Option<String>,
 }
 
 impl CliOptions {
-    fn path_to_config(&self) -> PathBuf {
-        PathBuf::from(self.path_to_config.clone())
+    fn path_to_opts(&self) -> PathBuf {
+        PathBuf::from(self.path_to_opts.clone())
     }
 
-    fn path_to_config_aws(&self) -> PathBuf {
-        PathBuf::from(self.path_to_config_aws.clone())
+    fn path_to_opts_aws(&self) -> PathBuf {
+        PathBuf::from(self.path_to_opts_aws.clone())
     }
 }
 
@@ -59,38 +60,44 @@ impl fmt::Display for CliOptions {
             "
 ------------------------------------------------------------------------
 Iris-MPC Service Client Options:
-    path_to_config
+    aws options
         {}
-    path_to_config_aws
+    exec options
+        {}
+    iris shares
         {}
 ------------------------------------------------------------------------
                 ",
-            self.path_to_config, self.path_to_config_aws,
+            self.path_to_opts_aws,
+            self.path_to_opts,
+            self.path_to_iris_shares.as_deref().unwrap_or("(none)"),
         )
     }
 }
 
 #[async_from::async_trait]
-impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for Client<R> {
+impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for ServiceClient<R> {
     async fn async_from(options: CliOptions) -> Self {
-        Client::<R>::new(
-            ClientConfiguration::from(&options),
-            AwsConfiguration::from(&options),
-        )
-        .await
+        let mut opts = ServiceClientOptions::from(&options);
+        if let Some(ref iris_path) = options.path_to_iris_shares {
+            opts.set_iris_shares_path(iris_path);
+        }
+        ServiceClient::<R>::new(opts, AwsOptions::from(&options))
+            .await
+            .unwrap()
     }
 }
 
-impl From<&CliOptions> for ClientConfiguration {
+impl From<&CliOptions> for ServiceClientOptions {
     fn from(options: &CliOptions) -> Self {
-        read_toml::<ClientConfiguration>(options.path_to_config().as_path())
+        read_toml::<Self>(options.path_to_opts().as_path())
             .expect("Failed to read service client configuration file")
     }
 }
 
-impl From<&CliOptions> for AwsConfiguration {
+impl From<&CliOptions> for AwsOptions {
     fn from(options: &CliOptions) -> Self {
-        read_toml::<AwsConfiguration>(options.path_to_config_aws().as_path())
+        read_toml::<Self>(options.path_to_opts_aws().as_path())
             .expect("Failed to read service client AWS configuration file")
     }
 }

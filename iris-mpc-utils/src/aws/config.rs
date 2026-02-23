@@ -1,5 +1,6 @@
 use std::{env, path::Path, time::Duration};
 
+use async_from::AsyncFrom;
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -7,6 +8,8 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Builder, config::Region, Client as SQSClient};
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+
+use crate::client::AwsOptions;
 
 /// Default AWS region - typically used in unit tests.
 const AWS_DEFAULT_REGION: &str = "us-east-1";
@@ -37,6 +40,22 @@ pub struct AwsClientConfig {
 
     /// SQS: wait time (seconds) between receive message polling.
     sqs_wait_time_seconds: usize,
+}
+
+#[async_from::async_trait]
+impl AsyncFrom<AwsOptions> for AwsClientConfig {
+    async fn async_from(opts: AwsOptions) -> Self {
+        AwsClientConfig::new(
+            opts.environment().to_owned(),
+            opts.public_key_base_url().to_owned(),
+            opts.s3_request_bucket_name().to_owned(),
+            opts.sns_request_topic_arn().to_owned(),
+            opts.sqs_long_poll_wait_time().to_owned(),
+            opts.sqs_response_queue_url().to_owned(),
+            opts.sqs_wait_time_seconds().to_owned(),
+        )
+        .await
+    }
 }
 
 impl AwsClientConfig {

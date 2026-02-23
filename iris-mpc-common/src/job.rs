@@ -356,6 +356,8 @@ pub struct ServerJobResult<A = ()> {
     // Boolean array to indicate if the query was unique which includes the matches that were not
     // entered into the DB
     pub matches_with_skip_persistence: Vec<bool>,
+    // Per-request skip persistence flag from the batch.
+    pub skip_persistence: Vec<bool>,
     // For each query, the serial ids to which the query matched to
     pub match_ids: Vec<Vec<u32>>,
     // For each query, the serial ids to which the query matched to for full face mirror attacks

@@ -289,9 +289,14 @@ impl<'a> BatchProcessor<'a> {
         // Process all parse tasks
         self.process_parse_tasks().await?;
 
+        let batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
         tracing::info!(
-            "Batch ID: {}. Formed batch with requests: {:?}",
-            self.current_batch_id_atomic.load(Ordering::SeqCst),
+            "Batch ID: {}. First Signup ID: {}. Formed batch with requests: {:?}",
+            batch_id,
+            self.batch_query
+                .request_ids
+                .first()
+                .unwrap_or(&"<empty>".to_string()),
             self.batch_query
                 .request_ids
                 .iter()
@@ -465,6 +470,8 @@ impl<'a> BatchProcessor<'a> {
                 identity_deletion_request.serial_id - 1,
                 batch_metadata,
             );
+
+            self.msg_counter += 1;
         } else {
             tracing::warn!("Identity deletions are disabled");
         }
@@ -605,7 +612,7 @@ impl<'a> BatchProcessor<'a> {
             REAUTH_MESSAGE_TYPE,
             batch_metadata,
             or_rule_indices,
-            false, // skip_persistence is only used for uniqueness requests
+            reauth_request.skip_persistence.unwrap_or(false),
         );
 
         self.add_iris_shares_task(reauth_request.s3_key)?;

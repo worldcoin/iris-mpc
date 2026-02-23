@@ -43,6 +43,7 @@ pub async fn process_job_result(
         metadata,
         matches,
         matches_with_skip_persistence,
+        skip_persistence,
         match_ids,
         partial_match_ids_left,
         partial_match_ids_right,
@@ -277,10 +278,14 @@ pub async fn process_job_result(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
 
     if !codes_and_masks.is_empty() && !config.disable_persistence {
+        let step_start = Instant::now();
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
+        metrics::histogram!("persist_insert_irises_duration")
+            .record(step_start.elapsed().as_secs_f64());
 
         // Check if the serial_ids match between memory and db.
         if memory_serial_ids != db_serial_ids {
@@ -299,13 +304,23 @@ pub async fn process_job_result(
 
     if !config.disable_persistence {
         // update modification results in db
+        let step_start = Instant::now();
         store
             .update_modifications(&mut iris_tx, &modifications.values().collect::<Vec<_>>())
             .await?;
+        metrics::histogram!("persist_update_modifications_duration")
+            .record(step_start.elapsed().as_secs_f64());
 
         // persist reauth results into db
         for (i, success) in successful_reauths.iter().enumerate() {
             if !success {
+                continue;
+            }
+            if skip_persistence.get(i).copied().unwrap_or(false) {
+                tracing::info!(
+                    "Skipping reauth persistence for request {} due to skip_persistence",
+                    request_ids[i]
+                );
                 continue;
             }
             let reauth_id = request_ids[i].clone();
@@ -370,7 +385,11 @@ pub async fn process_job_result(
                 .await?;
         }
 
+        let step_start = Instant::now();
         persist(iris_tx, graph_store, hawk_mutation, config).await?;
+        metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
+        metrics::histogram!("persist_total_duration")
+            .record(persist_total_start.elapsed().as_secs_f64());
     }
 
     for memory_serial_id in memory_serial_ids {
@@ -378,7 +397,12 @@ pub async fn process_job_result(
         metrics::gauge!("results_inserted.latest_serial_id").set((memory_serial_id + 1) as f64);
     }
 
-    tracing::info!("Sending {} uniqueness results", uniqueness_results.len());
+    let n_uniqueness = uniqueness_results.len();
+    let n_reauth = reauth_results.len();
+    let n_reset_check = reset_check_results.len();
+    let n_reset_update = reset_update_results.len();
+    let n_deletion = identity_deletion_results.len();
+
     send_results_to_sns(
         uniqueness_results,
         &metadata,
@@ -389,7 +413,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!("Sending {} reauth results", reauth_results.len());
     send_results_to_sns(
         reauth_results,
         &metadata,
@@ -400,10 +423,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!(
-        "Sending {} identity deletion results",
-        identity_deletion_results.len()
-    );
     send_results_to_sns(
         identity_deletion_results,
         &metadata,
@@ -414,7 +433,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!("Sending {} reset check results", reset_check_results.len());
     send_results_to_sns(
         reset_check_results,
         &metadata,
@@ -425,10 +443,6 @@ pub async fn process_job_result(
     )
     .await?;
 
-    tracing::info!(
-        "Sending {} reset update results",
-        reset_update_results.len()
-    );
     send_results_to_sns(
         reset_update_results,
         &metadata,
@@ -440,6 +454,18 @@ pub async fn process_job_result(
     .await?;
 
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
+
+    tracing::info!(
+        "RESULT_SUMMARY party={} uniqueness={} reauth={} reset_check={} reset_update={} deletion={} persist_ms={} total_ms={}",
+        party_id,
+        n_uniqueness,
+        n_reauth,
+        n_reset_check,
+        n_reset_update,
+        n_deletion,
+        persist_total_start.elapsed().as_millis(),
+        now.elapsed().as_millis(),
+    );
 
     shutdown_handler.decrement_batches_pending_completion();
 

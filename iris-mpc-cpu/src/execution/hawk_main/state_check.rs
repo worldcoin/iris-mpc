@@ -1,12 +1,20 @@
-use ampc_secret_sharing::{shares::bit::Bit, RingElement};
+use ampc_secret_sharing::RingElement;
 use eyre::{bail, eyre, Result};
 use futures::join;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use crate::{
     execution::hawk_main::{BothOrient, LEFT, RIGHT},
+    genesis::{SYNC_DONE, SYNC_ERROR},
     network::value::{NetworkValue, StateChecksum},
 };
 
@@ -39,25 +47,60 @@ impl SetHash {
 
 impl HawkSession {
     /// Returns true if there is a mismatch in shutdown states between nodes.
-    pub async fn sync_peers(shutdown: bool, sessions: &BothEyes<Vec<HawkSession>>) -> Result<bool> {
+    pub async fn sync_peers(
+        shutdown_flag: bool,
+        sync_status: Arc<AtomicU8>,
+        sessions: &BothEyes<Vec<HawkSession>>,
+    ) -> Result<bool> {
         let session = &sessions[0][0];
-        let mut store = session.aby3_store.write().await;
-        let msg = NetworkValue::RingElementBit(RingElement(Bit::new(shutdown)));
-        let net = &mut store.session.network_session;
-        net.send_prev(msg.clone()).await?;
-        net.send_next(msg).await?;
 
-        let decode = |msg| match msg {
-            Ok(NetworkValue::RingElementBit(elem)) => Ok(elem.0.convert()),
+        let decode_u16 = |msg| match msg {
+            Ok(NetworkValue::RingElement16(elem)) => Ok(elem.0),
             other => {
                 tracing::error!("Unexpected message format: {:?}", other);
                 Err(eyre!("Could not deserialize sync result"))
             }
         };
-        let prev_share = decode(net.receive_prev().await)?;
-        let next_share = decode(net.receive_next().await)?;
 
-        Ok(prev_share != shutdown || next_share != shutdown)
+        // Consensus loop — exchange "ready to exit" flags until all
+        // parties are ready. A party is ready when persistence completes (DONE)
+        // or the results thread crashes (ERROR).
+        // this step is combined with an exchange of the shutdown flag
+        let shutdown: u16 = if shutdown_flag { 1 } else { 0 } << 8;
+        let mut prev;
+        let mut next;
+        loop {
+            let my_status = sync_status.load(Ordering::Relaxed);
+            let msg = NetworkValue::RingElement16(RingElement(my_status as u16 | shutdown));
+
+            let mut store = session.aby3_store.write().await;
+            let net = &mut store.session.network_session;
+            net.send_prev(msg.clone()).await?;
+            net.send_next(msg).await?;
+            prev = decode_u16(net.receive_prev().await)?;
+            next = decode_u16(net.receive_next().await)?;
+            drop(store);
+
+            let ready = my_status >= SYNC_DONE;
+            if ready && (prev & 0xFF) as u8 >= SYNC_DONE && (next & 0xFF) as u8 >= SYNC_DONE {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Error exchange — if any party's results thread died, all
+        // parties bail with an error.
+        let my_error = sync_status.load(Ordering::Relaxed) == SYNC_ERROR;
+        let prev_error = (prev & 0xFF) as u8 == SYNC_ERROR;
+        let next_error = (next & 0xFF) as u8 == SYNC_ERROR;
+        if my_error || prev_error || next_error {
+            bail!("results thread terminated before persistence completed");
+        }
+
+        // Compare shutdown flags
+        let prev_shutdown = (prev >> 8) as u8 == 1;
+        let next_shutdown = (next >> 8) as u8 == 1;
+        Ok(prev_shutdown != shutdown_flag || next_shutdown != shutdown_flag)
     }
 
     pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSession>>>) -> Result<()> {
