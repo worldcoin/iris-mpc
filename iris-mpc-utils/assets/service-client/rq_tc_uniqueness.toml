@@ -1,0 +1,27 @@
+[shares_generator.FromFile]
+rng_seed = 42
+selection_strategy = "All"
+
+[request_batch.Complex]
+batches = [
+  # Batch 0: enroll -> expect is_match=false
+  [
+    { label = "00-U-Enroll", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+  ],
+  # Batch 1: enroll same iris pair -> expect is_match=true
+  [
+    { label = "00-U-EnrollDup", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+  ],
+  # Batch 2: delete -> expect success=true
+  [
+    { label = "00-D-Delete", payload = { IdentityDeletion = { parent = "00-U-Enroll" } } },
+  ],
+  # Batch 3: delete again -> expect failure (already deleted)
+  [
+    { label = "00-D-DeleteAgain", payload = { IdentityDeletion = { parent = "00-U-Enroll" } } },
+  ],
+  # Batch 4: enroll same iris pair again -> expect is_match=false
+  [
+    { label = "00-U-ReEnroll", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+  ],
+]

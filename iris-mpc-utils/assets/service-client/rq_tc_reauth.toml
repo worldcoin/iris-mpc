@@ -1,0 +1,27 @@
+[shares_generator.FromFile]
+rng_seed = 42
+selection_strategy = "All"
+
+[request_batch.Complex]
+batches = [
+  # Batch 0: enroll
+  [
+    { label = "00-U-Enroll", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+  ],
+  # Batch 1: delete
+  [
+    { label = "00-D-Delete", payload = { IdentityDeletion = { parent = "00-U-Enroll" } } },
+  ],
+  # Batch 2: reauth -> expect failure (identity was deleted)
+  [
+    { label = "00-RA-Fail", payload = { Reauthorisation = { iris_pair = [{ index = 1 }, { index = 2 }], parent = "00-U-Enroll" } } },
+  ],
+  # Batch 3: enroll again
+  [
+    { label = "00-U-ReEnroll", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+  ],
+  # Batch 4: reauth -> expect success
+  [
+    { label = "00-RA-Succeed", payload = { Reauthorisation = { iris_pair = [{ index = 1 }, { index = 2 }], parent = "00-U-ReEnroll" } } },
+  ],
+]
