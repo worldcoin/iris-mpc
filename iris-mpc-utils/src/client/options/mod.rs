@@ -60,6 +60,14 @@ impl ServiceClientOptions {
         }
 
         match self.request_batch() {
+            RequestBatchOptions::Random {
+                percent_uniqueness,
+                percent_reauth,
+                percent_other,
+                ..
+            } => {
+                todo!()
+            }
             RequestBatchOptions::Complex { .. } => {
                 // Error if used alongside compute shares generation.
                 if matches!(
