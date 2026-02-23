@@ -160,7 +160,7 @@ pub async fn nhd_lift_distances(
 
 /// Constant A used in the NHD threshold comparison.
 /// Guaranteed to be positive if MATCH_THRESHOLD_RATIO <= 0.4725.
-const A: u64 = 744144_u64 - (25.0 * B as f64 * MATCH_THRESHOLD_RATIO) as u64;
+const A: u64 = 774144_u64 - (25.0 * B as f64 * MATCH_THRESHOLD_RATIO) as u64;
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
@@ -268,8 +268,7 @@ mod tests {
     /// Plaintext NHD threshold check: returns true if the NHD distance is greater
     /// than the threshold (NOT match).
     fn plaintext_nhd_greater_than_threshold(cd: i64, md: i64) -> bool {
-        let a = A as i64;
-        md * (5 * md - 50 * cd) + a * md - 368640 * cd < 0
+        md * (5 * md - 50 * cd) + A as i64 * md - 368640 * cd < 0
     }
 
     #[tokio::test]
