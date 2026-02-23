@@ -475,9 +475,8 @@ impl IrisCode {
         let other_mask = Self::transform_iris_code_array(&other.mask);
 
         // numerator of normalized Hamming distance for comparison
-        fn nhd_nmr(code_dot: u16, mask_dot: u16) -> i64 {
-            let (cd, md) = (code_dot as i64, mask_dot as i64);
-            md * (20_i64 * cd - 9 * md) - 147456_i64 * cd
+        fn nhd_nmr(hd: u16, md: u16) -> i64 {
+            md as i64 * (20_i64 * hd as i64 - 9 * md as i64) + 147456_i64 * hd as i64
         }
 
         let mut min_nmr = nhd_nmr(min_distance.0, min_distance.1);
