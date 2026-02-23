@@ -424,6 +424,11 @@ impl ExecState {
                 };
 
             for sqs_msg in messages {
+                aws_client
+                    .sqs_purge_response_queue_message(&sqs_msg)
+                    .await
+                    .expect("SQS message purge failed");
+
                 let response = match typeset::ResponsePayload::try_from(&sqs_msg) {
                     Ok(r) => r,
                     Err(e) => {
@@ -436,13 +441,7 @@ impl ExecState {
                     }
                 };
                 tracing::info!("received {}", response.log_tag());
-
                 self.correlate_response(&response, live_serial_ids);
-
-                aws_client
-                    .sqs_purge_response_queue_message(&sqs_msg)
-                    .await
-                    .expect("SQS message purge failed");
             }
         }
 
