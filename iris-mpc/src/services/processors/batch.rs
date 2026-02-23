@@ -392,45 +392,43 @@ impl<'a> BatchProcessor<'a> {
             .string_value()
             .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
-        match request_type {
+        self.delete_message(&sqs_message).await?;
+
+        let res = match request_type {
             IDENTITY_DELETION_MESSAGE_TYPE => {
-                self.process_identity_deletion(&message, batch_metadata, &sqs_message)
+                self.process_identity_deletion(&message, batch_metadata)
                     .await
             }
             UNIQUENESS_MESSAGE_TYPE => {
-                self.process_uniqueness_request(&message, batch_metadata, &sqs_message)
+                self.process_uniqueness_request(&message, batch_metadata)
                     .await
             }
-            REAUTH_MESSAGE_TYPE => {
-                self.process_reauth_request(&message, batch_metadata, &sqs_message)
-                    .await
-            }
+            REAUTH_MESSAGE_TYPE => self.process_reauth_request(&message, batch_metadata).await,
             RESET_CHECK_MESSAGE_TYPE => {
-                self.process_reset_check_request(&message, batch_metadata, &sqs_message)
+                self.process_reset_check_request(&message, batch_metadata)
                     .await
             }
             RESET_UPDATE_MESSAGE_TYPE => {
-                self.process_reset_update_request(&message, batch_metadata, &sqs_message)
+                self.process_reset_update_request(&message, batch_metadata)
                     .await
             }
             _ => {
-                self.delete_message(&sqs_message).await?;
-                self.msg_counter += 1;
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                 Ok(())
             }
-        }
+        };
+
+        self.msg_counter += 1;
+        res
     }
 
     async fn process_identity_deletion(
         &mut self,
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
-        sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
         let sns_message_id = message.message_id.clone();
-        self.delete_message(sqs_message).await?;
 
         if self.config.hawk_server_deletions_enabled {
             let identity_deletion_request: IdentityDeletionRequest =
@@ -449,7 +447,6 @@ impl<'a> BatchProcessor<'a> {
                                 identity_deletion_request.serial_id,
                                 identity_deletion_request,
                             );
-                self.msg_counter += 1;
                 return Ok(());
             }
 
@@ -472,11 +469,8 @@ impl<'a> BatchProcessor<'a> {
                 identity_deletion_request.serial_id - 1,
                 batch_metadata,
             );
-
-            self.msg_counter += 1;
         } else {
             tracing::warn!("Identity deletions are disabled");
-            self.msg_counter += 1;
         }
 
         Ok(())
@@ -486,15 +480,12 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
-        sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         let sns_message_id = message.message_id.clone();
         let uniqueness_request: UniquenessRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
 
         metrics::counter!("request.received", "type" => "uniqueness_verification").increment(1);
-
-        self.delete_message(sqs_message).await?;
 
         // Persist in progress modification
         let modification = persist_modification(
@@ -511,8 +502,6 @@ impl<'a> BatchProcessor<'a> {
         );
 
         let or_rule_indices = self.update_luc_config_if_needed(&uniqueness_request);
-
-        self.msg_counter += 1;
 
         self.batch_query.push_matching_request(
             sns_message_id,
@@ -540,7 +529,6 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
-        sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         let sns_message_id = message.message_id.clone();
         let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
@@ -549,11 +537,8 @@ impl<'a> BatchProcessor<'a> {
         metrics::counter!("request.received", "type" => "reauth").increment(1);
         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-        self.delete_message(sqs_message).await?;
-
         if !self.config.hawk_server_reauths_enabled {
             tracing::warn!("Reauth is disabled, skipping reauth request");
-            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -563,7 +548,6 @@ impl<'a> BatchProcessor<'a> {
             tracing::error!(
                 "Received a reauth request with use_or_rule set to true, but LUC is not enabled. Skipping request."
             );
-            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -578,7 +562,6 @@ impl<'a> BatchProcessor<'a> {
                                 reauth_request.serial_id,
                                 reauth_request,
                             );
-            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -594,8 +577,6 @@ impl<'a> BatchProcessor<'a> {
         self.batch_query
             .modifications
             .insert(RequestSerialId(reauth_request.serial_id), modification);
-
-        self.msg_counter += 1;
 
         self.batch_query.reauth_target_indices.insert(
             reauth_request.reauth_id.clone(),
@@ -630,7 +611,6 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
-        sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         let sns_message_id = message.message_id.clone();
         let reset_check_request: ResetCheckRequest = serde_json::from_str(&message.message)
@@ -639,11 +619,8 @@ impl<'a> BatchProcessor<'a> {
         metrics::counter!("request.received", "type" => "reset_check").increment(1);
         tracing::debug!("Received reset check request: {:?}", reset_check_request);
 
-        self.delete_message(sqs_message).await?;
-
         if !self.config.hawk_server_resets_enabled {
             tracing::warn!("Reset is disabled, skipping reset request");
-            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -663,8 +640,6 @@ impl<'a> BatchProcessor<'a> {
             modification,
         );
 
-        self.msg_counter += 1;
-
         self.batch_query.push_matching_request(
             sns_message_id,
             reset_check_request.reset_id.clone(),
@@ -683,7 +658,6 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         message: &SQSMessage,
         _batch_metadata: BatchMetadata,
-        sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         let sns_message_id = message.message_id.clone();
         let reset_update_request: ResetUpdateRequest = serde_json::from_str(&message.message)
@@ -692,11 +666,8 @@ impl<'a> BatchProcessor<'a> {
         metrics::counter!("request.received", "type" => "reset_update").increment(1);
         tracing::debug!("Received reset update request: {:?}", reset_update_request);
 
-        self.delete_message(sqs_message).await?;
-
         if !self.config.hawk_server_resets_enabled {
             tracing::warn!("Reset is disabled, skipping reset request");
-            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -711,7 +682,6 @@ impl<'a> BatchProcessor<'a> {
                                 reset_update_request.serial_id,
                                 reset_update_request,
                             );
-            self.msg_counter += 1;
             return Ok(());
         }
 
@@ -755,8 +725,6 @@ impl<'a> BatchProcessor<'a> {
             RequestSerialId(reset_update_request.serial_id),
             modification,
         );
-
-        self.msg_counter += 1;
 
         self.batch_query.push_reset_update_request(
             sns_message_id,
