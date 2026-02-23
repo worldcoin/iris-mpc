@@ -38,32 +38,32 @@ pub struct AwsOptions {
 }
 
 impl AwsOptions {
-    pub fn environment(&self) -> &String {
+    pub fn environment(&self) -> &str {
         &self.environment
     }
 
-    pub fn public_key_base_url(&self) -> &String {
+    pub fn public_key_base_url(&self) -> &str {
         &self.public_key_base_url
     }
 
-    pub fn s3_request_bucket_name(&self) -> &String {
+    pub fn s3_request_bucket_name(&self) -> &str {
         &self.s3_request_bucket_name
     }
 
-    pub fn sns_request_topic_arn(&self) -> &String {
+    pub fn sns_request_topic_arn(&self) -> &str {
         &self.sns_request_topic_arn
     }
 
-    pub fn sqs_long_poll_wait_time(&self) -> &usize {
-        &self.sqs_long_poll_wait_time
+    pub fn sqs_long_poll_wait_time(&self) -> usize {
+        self.sqs_long_poll_wait_time
     }
 
-    pub fn sqs_response_queue_urls(&self) -> &Vec<String> {
+    pub fn sqs_response_queue_urls(&self) -> &[String] {
         &self.sqs_response_queue_urls
     }
 
-    pub fn sqs_wait_time_seconds(&self) -> &usize {
-        &self.sqs_wait_time_seconds
+    pub fn sqs_wait_time_seconds(&self) -> usize {
+        self.sqs_wait_time_seconds
     }
 }
 
@@ -370,38 +370,48 @@ impl RequestOptions {
         &self,
         info: RequestInfo,
         parent_serial_id: Option<IrisSerialId>,
-    ) -> Request {
+    ) -> Result<Request, String> {
         let corr_uuid = Uuid::new_v4();
 
-        match self.payload() {
+        let request = match self.payload() {
             RequestPayloadOptions::Uniqueness { iris_pair, .. }
             | RequestPayloadOptions::Mirrored { iris_pair, .. } => Request::Uniqueness {
                 info,
                 iris_pair: *iris_pair,
                 signup_id: corr_uuid,
             },
-            RequestPayloadOptions::Reauthorisation { iris_pair, .. } => Request::Reauthorization {
-                info,
-                iris_pair: *iris_pair,
-                parent: parent_serial_id.unwrap(),
-                reauth_id: corr_uuid,
-            },
+            RequestPayloadOptions::Reauthorisation { iris_pair, .. } => {
+                let parent =
+                    parent_serial_id.ok_or("Reauthorisation requires a parent serial ID")?;
+                Request::Reauthorization {
+                    info,
+                    iris_pair: *iris_pair,
+                    parent,
+                    reauth_id: corr_uuid,
+                }
+            }
             RequestPayloadOptions::ResetCheck { iris_pair } => Request::ResetCheck {
                 info,
                 iris_pair: *iris_pair,
                 reset_id: corr_uuid,
             },
-            RequestPayloadOptions::ResetUpdate { iris_pair, .. } => Request::ResetUpdate {
-                info,
-                iris_pair: *iris_pair,
-                parent: parent_serial_id.unwrap(),
-                reset_id: corr_uuid,
-            },
-            RequestPayloadOptions::IdentityDeletion { .. } => Request::IdentityDeletion {
-                info,
-                parent: parent_serial_id.unwrap(),
-            },
-        }
+            RequestPayloadOptions::ResetUpdate { iris_pair, .. } => {
+                let parent = parent_serial_id.ok_or("ResetUpdate requires a parent serial ID")?;
+                Request::ResetUpdate {
+                    info,
+                    iris_pair: *iris_pair,
+                    parent,
+                    reset_id: corr_uuid,
+                }
+            }
+            RequestPayloadOptions::IdentityDeletion { .. } => {
+                let parent =
+                    parent_serial_id.ok_or("IdentityDeletion requires a parent serial ID")?;
+                Request::IdentityDeletion { info, parent }
+            }
+        };
+
+        Ok(request)
     }
 
     pub fn is_mirrored(&self) -> bool {
@@ -549,10 +559,11 @@ fn random_into_iter(
 ) -> std::vec::IntoIter<Vec<RequestOptions>> {
     use rand::seq::SliceRandom;
     use rand::Rng;
-    use std::collections::BTreeSet;
+
+    const INITIAL_SEED_BATCH_SIZE: usize = 50;
 
     let mut batches: Vec<Vec<RequestOptions>> = Vec::new();
-    let mut prev_labels: BTreeSet<String> = BTreeSet::new();
+    let mut prev_labels: Vec<String> = Vec::new();
     let mut uniqueness_counter = 0;
     let mut rng = rand::thread_rng();
 
@@ -561,9 +572,9 @@ fn random_into_iter(
     let num_reauth = (batch_size * percent_reauth) / 100;
     let num_other = (batch_size * percent_other) / 100;
 
-    // Start with an initial batch of 50 uniqueness requests to seed the pool
+    // Start with an initial batch of uniqueness requests to seed the label pool.
     let mut initial_batch = Vec::new();
-    for _ in 0..50 {
+    for _ in 0..INITIAL_SEED_BATCH_SIZE {
         let label = format!("uniqueness-{}", uniqueness_counter);
         uniqueness_counter += 1;
 
@@ -575,7 +586,7 @@ fn random_into_iter(
             },
         ));
 
-        prev_labels.insert(label);
+        prev_labels.push(label);
     }
     batches.push(initial_batch);
 
@@ -583,7 +594,7 @@ fn random_into_iter(
     for _batch_idx in 0..batch_count {
         let mut batch = Vec::new();
 
-        let mut new_labels = BTreeSet::new();
+        let mut new_labels: Vec<String> = Vec::new();
 
         // Generate uniqueness requests for this batch
         for _ in 0..num_uniqueness {
@@ -598,14 +609,14 @@ fn random_into_iter(
                 },
             ));
 
-            new_labels.insert(label);
+            new_labels.push(label);
         }
 
         // Generate reauth requests - only reference labels from previous batches
         for _ in 0..num_reauth {
             let payload = if !prev_labels.is_empty() {
                 let random_index = rng.gen_range(0..prev_labels.len());
-                let parent_label = prev_labels.iter().nth(random_index).unwrap().clone();
+                let parent_label = prev_labels[random_index].clone();
                 RequestPayloadOptions::Reauthorisation {
                     iris_pair: None,
                     parent: Parent::Label(parent_label),
@@ -618,28 +629,32 @@ fn random_into_iter(
             batch.push(RequestOptions::new(None, payload));
         }
 
-        // Generate other requests - only reference labels from previous batches
+        // Generate other requests — only reference labels from previous batches.
+        // The i % 3 dispatch distributes types in a fixed 1:1:1 ratio:
+        //   0 → IdentityDeletion, 1 → ResetCheck, 2 → ResetUpdate
         for i in 0..num_other {
             let payload = if !prev_labels.is_empty() {
                 match i % 3 {
                     0 => {
-                        // IdentityDeletion - remove the label after using it
-                        let current_count = prev_labels.len();
-                        let random_index = rng.gen_range(0..current_count);
-                        let parent_label = prev_labels.iter().nth(random_index).unwrap().clone();
-                        prev_labels.remove(&parent_label);
+                        // IdentityDeletion — remove the label after using it
+                        let random_index = rng.gen_range(0..prev_labels.len());
+                        let parent_label = prev_labels.swap_remove(random_index);
                         RequestPayloadOptions::IdentityDeletion {
                             parent: Parent::Label(parent_label),
                         }
                     }
                     1 => RequestPayloadOptions::ResetCheck { iris_pair: None },
                     2 => {
-                        let current_count = prev_labels.len();
-                        let random_index = rng.gen_range(0..current_count);
-                        let parent_label = prev_labels.iter().nth(random_index).unwrap().clone();
-                        RequestPayloadOptions::ResetUpdate {
-                            iris_pair: None,
-                            parent: Parent::Label(parent_label),
+                        // Guard: prev_labels may have been emptied by earlier deletions
+                        if prev_labels.is_empty() {
+                            RequestPayloadOptions::ResetCheck { iris_pair: None }
+                        } else {
+                            let random_index = rng.gen_range(0..prev_labels.len());
+                            let parent_label = prev_labels[random_index].clone();
+                            RequestPayloadOptions::ResetUpdate {
+                                iris_pair: None,
+                                parent: Parent::Label(parent_label),
+                            }
                         }
                     }
                     _ => unreachable!(),
@@ -652,9 +667,7 @@ fn random_into_iter(
             batch.push(RequestOptions::new(None, payload));
         }
 
-        for x in new_labels.into_iter() {
-            prev_labels.insert(x);
-        }
+        prev_labels.extend(new_labels);
 
         batch.shuffle(&mut rng);
         batches.push(batch);

@@ -10,6 +10,9 @@ use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
 
+/// Backoff duration when no SQS messages are received, to avoid busy-looping.
+const SQS_EMPTY_QUEUE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
+
 use super::{
     config::AwsClientConfig,
     errors::AwsClientError,
@@ -18,7 +21,7 @@ use super::{
 };
 use crate::{client::AwsOptions, types::PublicKeyset};
 
-/// Encpasulates access to a node's set of AWS service clients.
+/// Encapsulates access to a node's set of AWS service clients.
 #[derive(Clone, Debug)]
 pub struct AwsClient {
     /// Associated configuration.
@@ -83,15 +86,13 @@ impl AwsClient {
             .put_object()
             .bucket(s3_obj_info.bucket())
             .key(s3_obj_info.key())
-            .body(ByteStream::new(SdkBody::from(
-                s3_obj_info.body().as_slice(),
-            )))
+            .body(ByteStream::new(SdkBody::from(s3_obj_info.body())))
             .send()
             .await
             .map(|_| ())
             .map_err(|e| {
                 tracing::error!("AWS-S3 upload error: {}", e);
-                AwsClientError::S3UploadError(s3_obj_info.key().clone(), e.to_string())
+                AwsClientError::S3UploadError(s3_obj_info.key().to_string(), e.to_string())
             })
     }
 
@@ -204,32 +205,53 @@ impl AwsClient {
                         .messages
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|msg| {
-                            let decoded: serde_json::Value =
-                                serde_json::from_str(msg.body().expect("Empty JSON string"))
-                                    .expect("Invalid JSON string");
-                            let msg_kind = decoded
+                        .filter_map(|msg| {
+                            let body_str = match msg.body() {
+                                Some(b) => b,
+                                None => {
+                                    tracing::warn!("SQS message has no body, skipping");
+                                    return None;
+                                }
+                            };
+                            let decoded: serde_json::Value = match serde_json::from_str(body_str) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    tracing::warn!("SQS message has invalid JSON body: {}", e);
+                                    return None;
+                                }
+                            };
+                            let msg_kind = match decoded
                                 .get("MessageAttributes")
                                 .and_then(|v| v.get("message_type"))
                                 .and_then(|v| v.get("Value"))
                                 .and_then(|v| v.as_str())
-                                .expect("Missing message_type")
-                                .to_string();
-                            let msg_body = decoded
-                                .get("Message")
-                                .and_then(|v| v.as_str())
-                                .expect("Missing Message")
-                                .to_string();
-                            let msg_receipt_handle = msg
-                                .receipt_handle()
-                                .expect("Missing receipt_handle")
-                                .to_string();
-                            SqsMessageInfo::new(
+                            {
+                                Some(k) => k.to_string(),
+                                None => {
+                                    tracing::warn!("SQS message missing message_type attribute");
+                                    return None;
+                                }
+                            };
+                            let msg_body = match decoded.get("Message").and_then(|v| v.as_str()) {
+                                Some(b) => b.to_string(),
+                                None => {
+                                    tracing::warn!("SQS message missing Message field");
+                                    return None;
+                                }
+                            };
+                            let msg_receipt_handle = match msg.receipt_handle() {
+                                Some(h) => h.to_string(),
+                                None => {
+                                    tracing::warn!("SQS message missing receipt_handle");
+                                    return None;
+                                }
+                            };
+                            Some(SqsMessageInfo::new(
                                 msg_kind,
                                 msg_body,
                                 queue_url.clone(),
                                 msg_receipt_handle,
-                            )
+                            ))
                         })
                         .collect();
                     Ok::<_, AwsClientError>(messages)
@@ -245,7 +267,7 @@ impl AwsClient {
 
         // If no messages found on any queue, sleep briefly to avoid busy-looping.
         if all_messages.is_empty() {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(SQS_EMPTY_QUEUE_BACKOFF).await;
         }
 
         Ok(all_messages)

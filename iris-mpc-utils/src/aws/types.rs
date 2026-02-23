@@ -22,19 +22,19 @@ pub struct S3ObjectInfo {
 }
 
 impl S3ObjectInfo {
-    pub fn body(&self) -> &Vec<u8> {
+    pub fn body(&self) -> &[u8] {
         &self.body
     }
 
-    pub fn bucket(&self) -> &String {
+    pub fn bucket(&self) -> &str {
         &self.bucket
     }
 
-    pub fn key(&self) -> &String {
+    pub fn key(&self) -> &str {
         &self.key
     }
 
-    pub fn new<T>(bucket: &String, key: &String, body: &T) -> Self
+    pub fn new<T>(bucket: &str, key: &str, body: &T) -> Self
     where
         T: ?Sized + Serialize,
     {
@@ -52,7 +52,7 @@ impl fmt::Display for S3ObjectInfo {
     }
 }
 
-// Helper type encpasulating an AWS-SQS message.
+// Helper type encapsulating an AWS-SQS message.
 #[derive(Debug)]
 pub struct SnsMessageInfo {
     // SNS message body - a JSON encoded string.
@@ -66,15 +66,15 @@ pub struct SnsMessageInfo {
 }
 
 impl SnsMessageInfo {
-    pub fn body(&self) -> &String {
+    pub fn body(&self) -> &str {
         &self.body
     }
 
-    pub fn group_id(&self) -> &String {
+    pub fn group_id(&self) -> &str {
         &self.group_id
     }
 
-    pub fn kind(&self) -> &String {
+    pub fn kind(&self) -> &str {
         &self.kind
     }
 
@@ -96,7 +96,7 @@ impl fmt::Display for SnsMessageInfo {
     }
 }
 
-// Helper type encpasulating an AWS-SQS message.
+// Helper type encapsulating an AWS-SQS message.
 #[derive(Debug)]
 pub struct SqsMessageInfo {
     // SNS message body - a JSON encoded string.

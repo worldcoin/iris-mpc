@@ -42,7 +42,7 @@ impl ResponsePayload {
             Self::IdentityDeletion(result) => !result.success,
             Self::Reauthorization(result) => result.error.unwrap_or(false),
             Self::ResetCheck(result) => result.error.unwrap_or(false),
-            Self::ResetUpdate(_) => false,
+            Self::ResetUpdate(result) => result.error.unwrap_or(false),
             Self::Uniqueness(result) => result.error.unwrap_or(false),
         }
     }
@@ -95,7 +95,7 @@ impl ResponsePayload {
             Self::IdentityDeletion(_) => None,
             Self::Reauthorization(result) => result.error_reason.as_deref(),
             Self::ResetCheck(result) => result.error_reason.as_deref(),
-            Self::ResetUpdate(_) => None,
+            Self::ResetUpdate(result) => result.error_reason.as_deref(),
             Self::Uniqueness(result) => result.error_reason.as_deref(),
         }
     }
@@ -185,7 +185,9 @@ impl TryFrom<&SqsMessageInfo> for ResponsePayload {
             iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE => {
                 parse_response!(Uniqueness)
             }
-            _ => panic!("Unsupported system response type: {kind}"),
+            _ => Err(serde::de::Error::custom(format!(
+                "Unsupported system response type: {kind}"
+            ))),
         }
     }
 }

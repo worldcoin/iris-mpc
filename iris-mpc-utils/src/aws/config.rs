@@ -14,7 +14,7 @@ use crate::client::AwsOptions;
 /// Default AWS region - typically used in unit tests.
 const AWS_DEFAULT_REGION: &str = "us-east-1";
 
-/// Encpasulates AWS service client configuration.
+/// Encapsulates AWS service client configuration.
 #[derive(Clone, Debug)]
 pub struct AwsClientConfig {
     /// Execution environment.
@@ -55,15 +55,15 @@ impl AsyncFrom<AwsOptions> for AwsClientConfig {
 }
 
 impl AwsClientConfig {
-    pub(crate) fn environment(&self) -> &String {
+    pub(crate) fn environment(&self) -> &str {
         &self.environment
     }
 
-    pub(crate) fn public_key_base_url(&self) -> &String {
+    pub(crate) fn public_key_base_url(&self) -> &str {
         &self.public_key_base_url
     }
 
-    pub(crate) fn s3_request_bucket_name(&self) -> &String {
+    pub(crate) fn s3_request_bucket_name(&self) -> &str {
         &self.s3_request_bucket_name
     }
 
@@ -71,11 +71,11 @@ impl AwsClientConfig {
         &self.sdk
     }
 
-    pub(crate) fn sns_request_topic_arn(&self) -> &String {
+    pub(crate) fn sns_request_topic_arn(&self) -> &str {
         &self.sns_request_topic_arn
     }
 
-    pub(crate) fn sqs_response_queue_urls(&self) -> &Vec<String> {
+    pub(crate) fn sqs_response_queue_urls(&self) -> &[String] {
         &self.sqs_response_queue_urls
     }
 

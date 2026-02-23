@@ -7,6 +7,8 @@ use super::aws::{
 };
 
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
+/// Placeholder value used for SNS message attributes in test/dev contexts.
+pub const SNS_TEST_ATTRIBUTE_VALUE: &str = "TEST";
 // Error Reasons
 pub const ERROR_FAILED_TO_PROCESS_IRIS_SHARES: &str = "failed_to_process_iris_shares";
 pub const ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH: &str = "skipped_request_previous_node_batch";
@@ -320,6 +322,10 @@ pub struct ResetUpdateAckResult {
     pub reset_id: String,
     pub node_id: usize,
     pub serial_id: u32,
+    #[serde(default)]
+    pub error: Option<bool>,
+    #[serde(default)]
+    pub error_reason: Option<String>,
 }
 
 impl ResetUpdateAckResult {
@@ -328,6 +334,23 @@ impl ResetUpdateAckResult {
             reset_id,
             node_id,
             serial_id,
+            error: None,
+            error_reason: None,
+        }
+    }
+
+    pub fn new_error_result(
+        reset_id: String,
+        node_id: usize,
+        serial_id: u32,
+        error_reason: &str,
+    ) -> Self {
+        Self {
+            reset_id,
+            node_id,
+            serial_id,
+            error: Some(true),
+            error_reason: Some(error_reason.to_string()),
         }
     }
 
@@ -363,7 +386,7 @@ pub fn create_sns_message_attributes(message_type: &str) -> HashMap<String, Mess
                 key.to_string(),
                 MessageAttributeValue::builder()
                     .data_type("String")
-                    .string_value("TEST")
+                    .string_value(SNS_TEST_ATTRIBUTE_VALUE)
                     .build()
                     .unwrap(),
             )

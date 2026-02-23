@@ -4,7 +4,7 @@ use clap::Parser;
 use eyre::Result;
 
 use iris_mpc_utils::{
-    client::{AwsOptions, ServiceClient2, ServiceClientOptions},
+    client::{AwsOptions, ServiceClient, ServiceClientOptions},
     fsys::reader::read_toml,
 };
 
@@ -41,15 +41,16 @@ pub async fn main() -> Result<()> {
     if let Some(ref iris_path) = options.path_to_iris_shares {
         opts.set_iris_shares_path(iris_path);
     }
+    opts.validate()?;
 
-    let client = ServiceClient2::new(
+    let client = ServiceClient::new(
         AwsOptions::from(&options),
         opts.request_batch,
         opts.shares_generator,
     )
     .await?;
 
-    ServiceClient2::run(client).await;
+    ServiceClient::run(client).await?;
 
     Ok(())
 }
@@ -71,11 +72,11 @@ struct CliOptions {
 
 impl CliOptions {
     fn path_to_opts(&self) -> PathBuf {
-        PathBuf::from(self.path_to_opts.clone())
+        PathBuf::from(&self.path_to_opts)
     }
 
     fn path_to_opts_aws(&self) -> PathBuf {
-        PathBuf::from(self.path_to_opts_aws.clone())
+        PathBuf::from(&self.path_to_opts_aws)
     }
 }
 

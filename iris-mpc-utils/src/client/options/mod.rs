@@ -8,6 +8,12 @@ pub use types::{Parent, RequestBatchOptions, SharesGeneratorOptions};
 use crate::client::ServiceClientError;
 use iris_mpc_common::helpers::smpc_request;
 
+/// Maximum total number of requests allowed in a Simple batch configuration.
+const MAX_SIMPLE_TOTAL_REQUESTS: usize = 1_000_000;
+
+/// Upper bound for serial IDs considered reasonable in a Simple batch configuration.
+const MAX_KNOWN_SERIAL_ID: u32 = 20_000_000;
+
 /// Service client configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceClientOptions {
@@ -123,11 +129,11 @@ impl ServiceClientOptions {
                 ..
             } => {
                 // Error if total requests exceed arbitrary limit.
-                if batch_count * batch_size > 1_000_000 {
-                    return Err(ServiceClientError::InvalidOptions(
-                        "RequestBatchOptions::Simple total requests will exceed limit of 1_000_000"
-                            .to_string(),
-                    ));
+                if batch_count * batch_size > MAX_SIMPLE_TOTAL_REQUESTS {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::Simple total requests will exceed limit of {}",
+                        MAX_SIMPLE_TOTAL_REQUESTS
+                    )));
                 }
 
                 // Error if batch kind cannot be mapped to a supported SMPC request type.
@@ -147,7 +153,7 @@ impl ServiceClientOptions {
 
                 // Error if known serial id exceeds reasonable upper bound.
                 if let Some(known_iris_serial_id) = maybe_known_iris_serial_id {
-                    if *known_iris_serial_id > 20_000_000_u32 {
+                    if *known_iris_serial_id > MAX_KNOWN_SERIAL_ID {
                         return Err(ServiceClientError::InvalidOptions(format!(
                             "RequestBatchOptions::Simple known_iris_serial_id ({}) exceeds reasonable upper bound",
                             known_iris_serial_id

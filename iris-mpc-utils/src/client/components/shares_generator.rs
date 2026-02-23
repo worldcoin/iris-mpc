@@ -158,16 +158,10 @@ mod tests {
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
     use super::SharesGenerator;
-    use crate::fsys::local::get_path_to_ndjson;
 
     impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
         pub(crate) fn new_compute_1() -> Self {
             Self::new_compute(Some(42))
-        }
-
-        #[allow(dead_code)]
-        pub(crate) fn new_file_1() -> Self {
-            Self::new_file(get_path_to_ndjson(), Some(42), None)
         }
     }
 
