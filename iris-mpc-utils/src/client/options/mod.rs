@@ -134,8 +134,10 @@ impl ServiceClientOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::ServiceClientOptions;
+    use super::{RequestBatchOptions, ServiceClientOptions};
+    use crate::client::ResponsePayload;
     use crate::fsys::{local::get_path_to_service_client_simple_opts, reader::read_toml};
+    use iris_mpc_common::helpers::smpc_response::UniquenessResult;
 
     fn opts(toml_str: &str) -> ServiceClientOptions {
         toml::from_str(toml_str).expect("Failed to parse TOML")
@@ -357,5 +359,118 @@ mod tests {
         "#,
         );
         o.validate().expect("should pass validation");
+    }
+
+    #[test]
+    fn complex_parses_expected_field() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "U-0", expected = { is_match = false }, payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+            ]]
+        "#,
+        );
+        o.validate().expect("should pass validation");
+        if let RequestBatchOptions::Complex { batches } = o.request_batch() {
+            let req = &batches[0][0];
+            let expected = req.expected().expect("expected field should be present");
+            assert_eq!(expected["is_match"], serde_json::Value::Bool(false));
+        } else {
+            panic!("Expected Complex variant");
+        }
+    }
+
+    #[test]
+    fn complex_parses_without_expected_field() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+            ]]
+        "#,
+        );
+        o.validate().expect("should pass validation");
+        if let RequestBatchOptions::Complex { batches } = o.request_batch() {
+            assert!(batches[0][0].expected().is_none());
+        } else {
+            panic!("Expected Complex variant");
+        }
+    }
+
+    #[test]
+    fn complex_parses_expected_with_multiple_fields() {
+        let o = opts(
+            r#"
+            [shares_generator.FromFile]
+            path_to_ndjson_file = "/tmp/test.ndjson"
+            [request_batch.Complex]
+            batches = [[
+                { label = "U-0", expected = { is_match = true, node_id = 1 }, payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+            ]]
+        "#,
+        );
+        o.validate().expect("should pass validation");
+        if let RequestBatchOptions::Complex { batches } = o.request_batch() {
+            let expected = batches[0][0].expected().unwrap();
+            assert_eq!(expected["is_match"], serde_json::Value::Bool(true));
+            assert_eq!(expected["node_id"], serde_json::json!(1));
+        } else {
+            panic!("Expected Complex variant");
+        }
+    }
+
+    fn make_uniqueness_result(is_match: bool) -> ResponsePayload {
+        ResponsePayload::Uniqueness(UniquenessResult::new(
+            0,
+            Some(1),
+            is_match,
+            "test-signup".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        ))
+    }
+
+    #[test]
+    fn expected_is_match_true_passes_when_response_matches() {
+        let response = make_uniqueness_result(true);
+        let expected = serde_json::json!({ "is_match": true });
+        response.matches_expected(&expected).expect("should match");
+    }
+
+    #[test]
+    fn expected_is_match_false_passes_when_response_matches() {
+        let response = make_uniqueness_result(false);
+        let expected = serde_json::json!({ "is_match": false });
+        response.matches_expected(&expected).expect("should match");
+    }
+
+    #[test]
+    fn expected_is_match_fails_on_mismatch() {
+        let response = make_uniqueness_result(false);
+        let expected = serde_json::json!({ "is_match": true });
+        let err = response.matches_expected(&expected).unwrap_err();
+        assert!(
+            err.iter().any(|m| m.contains("is_match")),
+            "error should mention is_match, got: {:?}",
+            err
+        );
     }
 }
