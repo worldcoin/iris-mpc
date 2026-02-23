@@ -137,7 +137,7 @@ pub enum RequestBatchOptions {
         // Batches of batches of request options.
         batches: Vec<Vec<RequestOptions>>,
     },
-    // Options for generating a set of simple request batches.
+    // Options for generating a set of homogeneous request batches.
     Simple {
         /// Number of request batches to generate.
         batch_count: usize,
@@ -150,6 +150,18 @@ pub enum RequestBatchOptions {
 
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
+    },
+    /// Used to make large heterogenerous batches with minimal configuration
+    Random {
+        batch_count: usize,
+
+        batch_size: usize,
+
+        percent_uniqueness: usize,
+
+        percent_reauth: usize,
+
+        percent_other: usize,
     },
 }
 
