@@ -6,11 +6,17 @@ selection_strategy = "All"
 batches = [
   # Batch 0: enroll -> expect is_match=false
   [
-    { label = "00-U-Enroll", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } }, expected = { is_match = false } },
+    { label = "00-U-Enroll", payload = { Uniqueness = { iris_pair = [
+      { index = 1 },
+      { index = 2 },
+    ] } }, expected = { is_match = false } },
   ],
   # Batch 1: enroll same iris pair -> expect is_match=true
   [
-    { label = "00-U-EnrollDup", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } }, expected = { is_match = true } },
+    { label = "00-U-EnrollDup", payload = { Uniqueness = { iris_pair = [
+      { index = 1 },
+      { index = 2 },
+    ] } }, expected = { is_match = true } },
   ],
   # Batch 2: delete -> expect success=true
   [
@@ -22,6 +28,9 @@ batches = [
   ],
   # Batch 4: enroll same iris pair again -> expect is_match=false
   [
-    { label = "00-U-ReEnroll", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } }, expected = { is_match = false } },
+    { label = "00-U-ReEnroll", payload = { Uniqueness = { iris_pair = [
+      { index = 1 },
+      { index = 2 },
+    ] } }, expected = { is_match = false } },
   ],
 ]
