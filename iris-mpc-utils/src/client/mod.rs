@@ -150,7 +150,12 @@ impl ServiceClient2 {
                     _ => None,
                 };
 
-                let info = typeset::RequestInfo::with_indices(batch_idx, item_idx, opts.label());
+                let info = typeset::RequestInfo::with_indices(
+                    batch_idx,
+                    item_idx,
+                    opts.label(),
+                    opts.expected().cloned(),
+                );
                 let request = opts.make_request(info, parent_serial_id);
 
                 // Pre-generate shares for request types that require them.

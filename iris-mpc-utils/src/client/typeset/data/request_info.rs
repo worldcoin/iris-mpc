@@ -20,17 +20,26 @@ pub struct RequestInfo {
     /// User assigned label ... used to associate child/parent requests.
     label: Option<String>,
 
+    /// optional validation logic
+    expected: Option<serde_json::Value>,
+
     /// Associated unique identifier.
     uid: uuid::Uuid,
 }
 
 impl RequestInfo {
-    pub fn with_indices(batch_idx: usize, batch_item_idx: usize, label: Option<String>) -> Self {
+    pub fn with_indices(
+        batch_idx: usize,
+        batch_item_idx: usize,
+        label: Option<String>,
+        expected: Option<serde_json::Value>,
+    ) -> Self {
         Self {
             batch_idx,
             batch_item_idx,
             responses: [const { None }; N_PARTIES],
             label,
+            expected,
             uid: uuid::Uuid::new_v4(),
         }
     }
@@ -61,6 +70,16 @@ impl RequestInfo {
         if self.responses[node_id].is_some() {
             tracing::warn!("Duplicate response for node_id {}", node_id);
         }
+
+        if let Err(err_msg) = self
+            .expected
+            .as_ref()
+            .map(|expected| response.matches_expected(expected))
+            .unwrap_or(Ok(()))
+        {
+            tracing::error!("validation failed for response: {:#?}", err_msg);
+        }
+
         self.responses[node_id] = Some(response.clone());
         self.is_complete()
     }
