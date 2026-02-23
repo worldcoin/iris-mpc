@@ -230,6 +230,7 @@ struct ExecState {
     outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
     outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo>,
     error_log: Vec<typeset::RequestInfo>,
+    had_validation_errors: bool,
 }
 
 impl ExecState {
@@ -240,6 +241,7 @@ impl ExecState {
             outstanding_requests: HashMap::new(),
             outstanding_deletions: HashMap::new(),
             error_log: Vec::new(),
+            had_validation_errors: false,
         }
     }
 
@@ -339,7 +341,7 @@ impl ExecState {
                                     "Received IdentityDeletion response: not tracked in outstanding_requests"
                                 );
                             }
-                            Some(true) => {
+                            Some(Ok(true)) => {
                                 if let Some(info) = self.outstanding_deletions.remove(&r.serial_id)
                                 {
                                     if info.has_error_response() {
@@ -355,7 +357,10 @@ impl ExecState {
                                     }
                                 }
                             }
-                            Some(false) => {}
+                            Some(Ok(false)) => {}
+                            Some(Err(_)) => {
+                                self.had_validation_errors = true;
+                            }
                         }
                         None
                     }
@@ -374,7 +379,7 @@ impl ExecState {
                                 uuid
                             );
                         }
-                        Some(true) => {
+                        Some(Ok(true)) => {
                             if let Some(info) = self.outstanding_requests.remove(&uuid) {
                                 if info.has_error_response() {
                                     let details = info.get_error_msgs();
@@ -408,7 +413,10 @@ impl ExecState {
                                 }
                             }
                         }
-                        Some(false) => {}
+                        Some(Ok(false)) => {}
+                        Some(Err(_)) => {
+                            self.had_validation_errors = true;
+                        }
                     }
                 }
 
@@ -443,6 +451,9 @@ impl ExecState {
                 let details = info.get_error_msgs();
                 tracing::warn!("  {}: {}", info, details);
             }
+        }
+        if self.had_validation_errors {
+            tracing::warn!("=== Validation errors occurred - check logs for details ===");
         }
     }
 }
