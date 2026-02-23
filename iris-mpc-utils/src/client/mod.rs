@@ -197,11 +197,12 @@ impl ServiceClient2 {
             for request in batch_requests.iter() {
                 let log_tag = request.log_tag();
                 let sns_msg_info = SnsMessageInfo::from(request);
-                tracing::info!("publishing {}", log_tag);
-                self.aws_client
-                    .sns_publish_json(sns_msg_info)
-                    .await
-                    .expect("SNS publish failed");
+                if let Err(e) = self.aws_client.sns_publish_json(sns_msg_info).await {
+                    tracing::error!("SNS publish failed: for request {}: {:?}", log_tag, e);
+                    break;
+                } else {
+                    tracing::info!("publishing {}", log_tag);
+                }
             }
 
             // Phase 5: Track published requests so we can match incoming responses.
