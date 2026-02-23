@@ -547,6 +547,7 @@ fn random_into_iter(
     percent_reauth: usize,
     _percent_other: usize,
 ) -> std::vec::IntoIter<Vec<RequestOptions>> {
+    use rand::seq::SliceRandom;
     use rand::Rng;
     use std::collections::BTreeSet;
 
@@ -655,6 +656,7 @@ fn random_into_iter(
             prev_labels.insert(x);
         }
 
+        batch.shuffle(&mut rng);
         batches.push(batch);
     }
 
