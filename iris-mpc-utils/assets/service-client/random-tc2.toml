@@ -6,4 +6,3 @@ batch_count = 2
 batch_size = 500
 percent_uniqueness = 90
 percent_reauth = 4
-percent_other = 6

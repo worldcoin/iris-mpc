@@ -160,8 +160,6 @@ pub enum RequestBatchOptions {
         percent_uniqueness: usize,
 
         percent_reauth: usize,
-
-        percent_other: usize,
     },
 }
 
@@ -532,14 +530,7 @@ impl IntoIterator for RequestBatchOptions {
                 batch_size,
                 percent_uniqueness,
                 percent_reauth,
-                percent_other,
-            } => random_into_iter(
-                batch_count,
-                batch_size,
-                percent_uniqueness,
-                percent_reauth,
-                percent_other,
-            ),
+            } => random_into_iter(batch_count, batch_size, percent_uniqueness, percent_reauth),
             RequestBatchOptions::Simple {
                 batch_count,
                 batch_kind,
@@ -555,7 +546,6 @@ fn random_into_iter(
     batch_size: usize,
     percent_uniqueness: usize,
     percent_reauth: usize,
-    percent_other: usize,
 ) -> std::vec::IntoIter<Vec<RequestOptions>> {
     use rand::seq::SliceRandom;
     use rand::Rng;
@@ -570,7 +560,7 @@ fn random_into_iter(
     // Calculate number of each type of request in this batch
     let num_uniqueness = (batch_size * percent_uniqueness) / 100;
     let num_reauth = (batch_size * percent_reauth) / 100;
-    let num_other = (batch_size * percent_other) / 100;
+    let num_other = batch_size.saturating_sub(num_uniqueness + num_reauth);
 
     // Start with an initial batch of uniqueness requests to seed the label pool.
     let mut initial_batch = Vec::new();

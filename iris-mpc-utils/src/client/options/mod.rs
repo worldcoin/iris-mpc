@@ -69,14 +69,12 @@ impl ServiceClientOptions {
             RequestBatchOptions::Random {
                 percent_uniqueness,
                 percent_reauth,
-                percent_other,
                 ..
             } => {
                 // Validate each percentage is between 0 and 100.
                 for (name, value) in [
                     ("percent_uniqueness", percent_uniqueness),
                     ("percent_reauth", percent_reauth),
-                    ("percent_other", percent_other),
                 ] {
                     if *value > 100 {
                         return Err(ServiceClientError::InvalidOptions(format!(
@@ -87,8 +85,8 @@ impl ServiceClientOptions {
                 }
 
                 // Validate percentages sum to 100.
-                let sum = percent_uniqueness + percent_reauth + percent_other;
-                if sum != 100 {
+                let sum = percent_uniqueness + percent_reauth;
+                if sum > 100 {
                     return Err(ServiceClientError::InvalidOptions(format!(
                         "RequestBatchOptions::Random percentages must sum to 100, got {}",
                         sum
