@@ -121,10 +121,7 @@ impl AwsClient {
             .send()
             .await
             .map(|_| {})
-            .map_err(|e| {
-                tracing::error!("AWS-SNS publishing error: {}", e);
-                AwsClientError::SnsPublishError(e.to_string())
-            })
+            .map_err(|e| AwsClientError::SnsPublishError(e.to_string()))
     }
 
     /// Purges all SQS response queues.

@@ -124,7 +124,7 @@ impl ServiceClient {
 
         for (batch_idx, batch) in request_batch.into_iter().enumerate() {
             if let Err(e) = self.handle_batch(batch_idx, batch).await {
-                tracing::error!("Stopping batch processing: {}", e);
+                tracing::error!("{}", e);
                 break;
             }
         }
@@ -147,26 +147,30 @@ impl ServiceClient {
         sleep(Duration::from_secs(S3_PROPAGATION_DELAY_SECS)).await;
 
         // Phase 4: Publish requests to SNS.
-        let published_count = self.publish_requests(batch_idx, &batch_requests).await?;
+        let published_count = self.publish_requests(batch_idx, &batch_requests).await;
 
         // Phase 5: Track published requests and wait for responses.
         self.state
             .track_batch_requests(&batch_requests[..published_count]);
-        self.state.process_responses(&self.aws_client).await?;
+        let process_result = self.state.process_responses(&self.aws_client).await;
 
+        // Check all error conditions and return consolidated error
         if self.state.sns_publish_error {
             return Err(ServiceClientError::ResponseError(format!(
-                "batch {} had SNS publish error",
+                "batch {} failed: SNS publish error occurred",
                 batch_idx
             )));
         }
 
         if self.state.had_validation_errors {
             return Err(ServiceClientError::ResponseError(format!(
-                "batch {} had validation errors",
+                "batch {} failed: validation or response errors occurred",
                 batch_idx
             )));
         }
+
+        // Propagate timeout or SQS errors from process_responses
+        process_result?;
 
         tracing::info!(
             "Batch {} finished. Responses to non-deletion requests have been received",
@@ -267,7 +271,7 @@ impl ServiceClient {
         &mut self,
         batch_idx: usize,
         batch_requests: &[typeset::Request],
-    ) -> Result<usize, ServiceClientError> {
+    ) -> usize {
         use crate::aws::types::SnsMessageInfo;
 
         let mut published_count = 0;
@@ -275,10 +279,12 @@ impl ServiceClient {
             let log_tag = request.log_tag();
             let sns_msg_info = SnsMessageInfo::from(request);
 
-            self.aws_client
-                .sns_publish_json(sns_msg_info)
-                .await
-                .map_err(|e| {
+            match self.aws_client.sns_publish_json(sns_msg_info).await {
+                Ok(_) => {
+                    tracing::info!("publishing {}", log_tag);
+                    published_count += 1;
+                }
+                Err(e) => {
                     self.state.sns_publish_error = true;
                     tracing::error!(
                         "batch {}: SNS publish failed for request {}: {:?}",
@@ -286,13 +292,12 @@ impl ServiceClient {
                         log_tag,
                         e,
                     );
-                    ServiceClientError::AwsServiceError(e)
-                })?;
-
-            tracing::info!("publishing {}", log_tag);
-            published_count += 1;
+                    // Stop publishing further requests, but return count of already published
+                    break;
+                }
+            }
         }
-        Ok(published_count)
+        published_count
     }
 }
 
@@ -529,20 +534,8 @@ impl ExecState {
     fn report_errors(&self) {
         if !self.error_log.is_empty() {
             tracing::warn!(
-                "=== {} request(s) completed with errors ===",
+                "=== Summary: {} request(s) failed (details logged above) ===",
                 self.error_log.len()
-            );
-            for info in &self.error_log {
-                let details = info.get_error_msgs();
-                tracing::warn!("  {}: {}", info, details);
-            }
-        }
-        if self.had_validation_errors {
-            tracing::warn!("=== Validation errors occurred - check logs for details ===");
-        }
-        if self.sns_publish_error {
-            tracing::error!(
-                "=== SNS publish failure halted batch processing. check logs for details ==="
             );
         }
     }
