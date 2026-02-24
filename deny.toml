@@ -80,3 +80,6 @@ license-files = [
 [[licenses.clarify]]
 name = "nix"
 expression = "MIT"
+license-files = [
+    { path = "LICENSE", hash = 0x6ec9b2e5 },
+]
