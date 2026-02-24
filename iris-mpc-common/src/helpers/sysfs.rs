@@ -1,5 +1,13 @@
 use std::fs;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
+
+// =============================================================================
+// Static Variables
+// =============================================================================
+
+/// The number of cores reserved for the tokio runtime.
+/// Set via `init()` before using other functions in this module.
+static TOKIO_THREAD_COUNT: OnceLock<usize> = OnceLock::new();
 
 /// Caches the number of NUMA nodes detected on the system.
 /// Defaults to 1 if not on Linux or if detection fails.
@@ -19,51 +27,26 @@ pub static SHARD_COUNT: LazyLock<usize> = LazyLock::new(|| {
     1
 });
 
-/// Caches the CPU IDs for NUMA node 0.
-pub static NODE_ZERO_CPUS: LazyLock<Vec<usize>> = LazyLock::new(|| get_cpus_for_node(0));
+// =============================================================================
+// Public API
+// =============================================================================
 
-/// Parses a Linux cpulist format string (e.g., "0-15,32-47") into a vector of CPU IDs.
-fn parse_cpulist(cpulist: &str) -> Vec<usize> {
-    let mut cpus = Vec::new();
-    for part in cpulist.trim().split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((start, end)) = part.split_once('-') {
-            if let (Ok(s), Ok(e)) = (start.parse::<usize>(), end.parse::<usize>()) {
-                cpus.extend(s..=e);
-            }
-        } else if let Ok(cpu) = part.parse::<usize>() {
-            cpus.push(cpu);
-        }
-    }
-    cpus
+/// Initialize the sysfs module with the number of tokio runtime threads.
+/// This must be called before using `restrict_tokio_runtime()` or the CPU
+/// allocation for worker threads will properly skip tokio-reserved cores.
+pub fn init(tokio_threads: usize) {
+    TOKIO_THREAD_COUNT.set(tokio_threads).ok();
 }
 
-/// Returns the CPU IDs belonging to the specified NUMA node.
-/// On non-Linux or if detection fails, returns all available CPU IDs for node 0,
-/// or an empty vec for other nodes.
-pub fn get_cpus_for_node(node: usize) -> Vec<usize> {
-    #[cfg(target_os = "linux")]
-    {
-        let path = format!("/sys/devices/system/node/node{}/cpulist", node);
-        if let Ok(contents) = fs::read_to_string(&path) {
-            return parse_cpulist(&contents);
-        }
-    }
-
-    // Fallback for non-Linux or if sysfs read fails:
-    // Node 0 gets all CPUs, other nodes get none
-    if node == 0 {
-        core_affinity::get_core_ids()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|c| c.id)
-            .collect()
-    } else {
-        Vec::new()
-    }
+/// Returns the CPU IDs belonging to the specified NUMA node, skipping
+/// the first X cores reserved for the tokio runtime (where X is set via `init()`).
+/// This ensures balanced core allocation across NUMA nodes for worker threads.
+/// On non-Linux or if detection fails, returns available CPU IDs for node 0
+/// (minus reserved cores), or an empty vec for other nodes.
+pub fn get_cores_for_node(node: usize) -> Vec<usize> {
+    let cpus = _get_cores_for_node(node);
+    let skip_count = *TOKIO_THREAD_COUNT.get().unwrap_or(&0);
+    cpus.into_iter().skip(skip_count).collect()
 }
 
 /// Returns a list of all available NUMA node IDs on the system.
@@ -95,34 +78,24 @@ pub fn get_numa_nodes() -> Vec<usize> {
     vec![0]
 }
 
-/// Returns the number of CPU cores on the specified NUMA node.
-pub fn get_cores_for_node(node: usize) -> usize {
-    get_cpus_for_node(node).len()
-}
-
-/// Restricts the current process to run only on CPUs belonging to NUMA node 0.
+/// Restricts the current process to run only on the first X CPUs of NUMA node 0,
+/// where X is the tokio thread count set via `init()`.
 /// On non-Linux systems, this is a no-op.
 #[cfg(target_os = "linux")]
-pub fn restrict_to_node_zero() {
-    restrict_to_node(0);
-}
-
-// On Mac or other OSs, this function becomes a no-op
-#[cfg(not(target_os = "linux"))]
-pub fn restrict_to_node_zero() {
-    // macOS uses Unified Memory; NUMA pinning isn't applicable/available via libc
-}
-
-/// Restricts the current process to run only on CPUs belonging to the specified NUMA node.
-/// On non-Linux systems, this is a no-op.
-#[cfg(target_os = "linux")]
-pub fn restrict_to_node(node: usize) {
+pub fn restrict_tokio_runtime() {
     use nix::sched::{sched_setaffinity, CpuSet};
     use nix::unistd::Pid;
 
-    let cpus = get_cpus_for_node(node);
+    let tokio_count = *TOKIO_THREAD_COUNT.get().unwrap_or(&0);
+    if tokio_count == 0 {
+        return; // No restriction if not initialized
+    }
+
+    let all_cpus = _get_cores_for_node(0);
+    let cpus: Vec<_> = all_cpus.into_iter().take(tokio_count).collect();
+
     if cpus.is_empty() {
-        eprintln!("Warning: No CPUs found for NUMA node {}", node);
+        eprintln!("Warning: No CPUs found for tokio runtime on node 0");
         return;
     }
 
@@ -136,79 +109,66 @@ pub fn restrict_to_node(node: usize) {
 
     if let Err(e) = sched_setaffinity(Pid::from_raw(0), &cpuset) {
         eprintln!(
-            "Warning: Failed to set CPU affinity for node {}: {}",
-            node, e
+            "Warning: Failed to set CPU affinity for tokio runtime: {}",
+            e
         );
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn restrict_to_node(_node: usize) {
-    // No-op on non-Linux systems
+pub fn restrict_tokio_runtime() {
+    // macOS uses Unified Memory; NUMA pinning isn't applicable/available via libc
 }
 
-/// Pins the current thread to a specific CPU core.
-/// On non-Linux systems, this is a no-op.
-#[cfg(target_os = "linux")]
-pub fn pin_thread_to_cpu(cpu: usize) {
-    use nix::sched::{sched_setaffinity, CpuSet};
-    use nix::unistd::Pid;
+// =============================================================================
+// Private Helper Functions
+// =============================================================================
 
-    let mut cpuset = CpuSet::new();
-    if let Err(e) = cpuset.set(cpu) {
-        eprintln!("Warning: Failed to set CPU {} in cpuset: {}", cpu, e);
-        return;
-    }
-
-    if let Err(e) = sched_setaffinity(Pid::from_raw(0), &cpuset) {
-        eprintln!("Warning: Failed to pin to CPU {}: {}", cpu, e);
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn pin_thread_to_cpu(_cpu: usize) {
-    // No-op on non-Linux systems
-}
-
-/// Returns the number of CPU cores on NUMA node 0.
-/// For a single-node system, this returns the total number of cores.
-pub fn get_node_zero_cores() -> usize {
-    NODE_ZERO_CPUS.len()
-}
-
-/// Sets the memory policy for the current thread to bind allocations to the specified NUMA node.
-/// On non-Linux systems, this is a no-op.
-#[allow(dead_code)]
-#[cfg(target_os = "linux")]
-pub fn set_mempolicy_for_node(node: usize) {
-    use nix::libc::{self, MPOL_BIND};
-    use std::io::Error;
-
-    unsafe {
-        // Set bit for the target node
-        let nodemask: libc::c_ulong = 1 << node;
-        // maxnode must be > highest node number
-        let maxnode: libc::c_ulong = 2;
-
-        let res = libc::syscall(
-            libc::SYS_set_mempolicy,
-            MPOL_BIND,
-            &nodemask as *const libc::c_ulong,
-            maxnode,
-        );
-
-        if res != 0 {
-            let err = Error::last_os_error();
-            eprintln!("Warning: set_mempolicy for node {} failed: {}", node, err);
+/// Parses a Linux cpulist format string (e.g., "0-15,32-47") into a vector of CPU IDs.
+fn parse_cpulist(cpulist: &str) -> Vec<usize> {
+    let mut cpus = Vec::new();
+    for part in cpulist.trim().split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((start, end)) = part.split_once('-') {
+            if let (Ok(s), Ok(e)) = (start.parse::<usize>(), end.parse::<usize>()) {
+                cpus.extend(s..=e);
+            }
+        } else if let Ok(cpu) = part.parse::<usize>() {
+            cpus.push(cpu);
         }
     }
+    cpus
 }
 
-#[allow(dead_code)]
-#[cfg(not(target_os = "linux"))]
-pub fn set_mempolicy_for_node(_node: usize) {
-    // No-op on non-Linux systems
+/// Internal helper that returns all CPU IDs for a node without skipping any.
+fn _get_cores_for_node(node: usize) -> Vec<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        let path = format!("/sys/devices/system/node/node{}/cpulist", node);
+        if let Ok(contents) = fs::read_to_string(&path) {
+            return parse_cpulist(&contents);
+        }
+    }
+
+    // Fallback for non-Linux or if sysfs read fails:
+    // Node 0 gets all CPUs, other nodes get none
+    if node == 0 {
+        core_affinity::get_core_ids()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    } else {
+        Vec::new()
+    }
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -265,17 +225,6 @@ mod tests {
         let mut sorted = nodes.clone();
         sorted.sort_unstable();
         assert_eq!(nodes, sorted);
-    }
-
-    #[test]
-    fn test_get_cores_for_node_zero() {
-        let cores = get_cores_for_node(0);
-        assert!(cores > 0, "Node 0 should have at least one core");
-    }
-
-    #[test]
-    fn test_get_node_zero_cores_matches_get_cores_for_node() {
-        assert_eq!(get_node_zero_cores(), get_cores_for_node(0));
     }
 
     #[test]

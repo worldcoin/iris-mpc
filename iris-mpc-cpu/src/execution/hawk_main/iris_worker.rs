@@ -18,7 +18,7 @@ use futures::future::try_join_all;
 use iris_mpc_common::vector_id::VectorId;
 use itertools::{izip, Itertools};
 use std::{
-    cmp, iter,
+    iter,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -477,19 +477,19 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
     }
 }
 
-const SHARD_COUNT: usize = 2;
-
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let mut core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.sort();
-    assert!(!core_ids.is_empty());
+    use iris_mpc_common::helpers::sysfs;
 
-    let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
-    let shard_index = shard_index % shard_count;
+    let numa_nodes = sysfs::get_numa_nodes();
+    let node = numa_nodes[shard_index % numa_nodes.len()];
 
-    let shard_size = core_ids.len() / shard_count;
-    let start = shard_index * shard_size;
-    let end = cmp::min(start + shard_size, core_ids.len());
+    let cpu_ids = sysfs::get_cores_for_node(node);
 
-    core_ids[start..end].to_vec()
+    assert!(
+        !cpu_ids.is_empty(),
+        "No CPUs available for NUMA node {}",
+        node
+    );
+
+    cpu_ids.into_iter().map(|id| CoreId { id }).collect()
 }
