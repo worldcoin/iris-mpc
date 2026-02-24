@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/reshare-protocol:v0.28.1@sha256:b318075fd9fd7cbb03cdcbf32e0f8c2af2c7017a7de542c111ec90b56d6f399a"
+image: "ghcr.io/worldcoin/reshare-protocol:v0.29.0@sha256:108ef42e058eb37ad325915b2f6ec092f3b11dc93dfdd7faffd3b258af7bc216"
 
 environment: stage
 replicaCount: 1
