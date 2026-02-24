@@ -155,9 +155,10 @@ impl ServiceClient {
         self.state.process_responses(&self.aws_client).await?;
 
         if self.state.sns_publish_error {
-            return Err(ServiceClientError::ResponseError(
-                "SNS publish error".to_string(),
-            ));
+            return Err(ServiceClientError::ResponseError(format!(
+                "batch {} had SNS publish error",
+                batch_idx
+            )));
         }
 
         tracing::info!(
