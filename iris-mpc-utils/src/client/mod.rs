@@ -513,13 +513,11 @@ impl ExecState {
             }
         }
 
-        if !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
-            for (_, info) in self.outstanding_requests.iter() {
-                tracing::warn!("Request still pending: {}", info);
-            }
-            for (_, info) in self.outstanding_deletions.iter() {
-                tracing::warn!("Deletion still pending: {}", info);
-            }
+        for (_, info) in self.outstanding_requests.iter() {
+            tracing::warn!("Request still pending: {}", info);
+        }
+        for (_, info) in self.outstanding_deletions.iter() {
+            tracing::warn!("Deletion still pending: {}", info);
         }
     }
 }
