@@ -100,7 +100,8 @@ pub fn get_cores_for_node(node: usize) -> usize {
     get_cpus_for_node(node).len()
 }
 
-// uses libc to avoid the need to install numa specific tools on the target
+/// Restricts the current process to run only on CPUs belonging to NUMA node 0.
+/// On non-Linux systems, this is a no-op.
 #[cfg(target_os = "linux")]
 pub fn restrict_to_node_zero() {
     restrict_to_node(0);
@@ -116,9 +117,8 @@ pub fn restrict_to_node_zero() {
 /// On non-Linux systems, this is a no-op.
 #[cfg(target_os = "linux")]
 pub fn restrict_to_node(node: usize) {
-    use libc::{cpu_set_t, sched_setaffinity, CPU_SET};
-    use std::io::Error;
-    use std::mem;
+    use nix::sched::{sched_setaffinity, CpuSet};
+    use nix::unistd::Pid;
 
     let cpus = get_cpus_for_node(node);
     if cpus.is_empty() {
@@ -126,19 +126,19 @@ pub fn restrict_to_node(node: usize) {
         return;
     }
 
-    unsafe {
-        let mut cpuset: cpu_set_t = mem::zeroed();
-        for &cpu in cpus.iter() {
-            CPU_SET(cpu, &mut cpuset);
+    let mut cpuset = CpuSet::new();
+    for &cpu in cpus.iter() {
+        if let Err(e) = cpuset.set(cpu) {
+            eprintln!("Warning: Failed to set CPU {} in cpuset: {}", cpu, e);
+            continue;
         }
+    }
 
-        if sched_setaffinity(0, mem::size_of::<cpu_set_t>(), &cpuset) != 0 {
-            let err = Error::last_os_error();
-            eprintln!(
-                "Warning: Failed to set CPU affinity for node {}: {}",
-                node, err
-            );
-        }
+    if let Err(e) = sched_setaffinity(Pid::from_raw(0), &cpuset) {
+        eprintln!(
+            "Warning: Failed to set CPU affinity for node {}: {}",
+            node, e
+        );
     }
 }
 
@@ -151,18 +151,17 @@ pub fn restrict_to_node(_node: usize) {
 /// On non-Linux systems, this is a no-op.
 #[cfg(target_os = "linux")]
 pub fn pin_thread_to_cpu(cpu: usize) {
-    use libc::{cpu_set_t, sched_setaffinity, CPU_SET};
-    use std::io::Error;
-    use std::mem;
+    use nix::sched::{sched_setaffinity, CpuSet};
+    use nix::unistd::Pid;
 
-    unsafe {
-        let mut cpuset: cpu_set_t = mem::zeroed();
-        CPU_SET(cpu, &mut cpuset);
+    let mut cpuset = CpuSet::new();
+    if let Err(e) = cpuset.set(cpu) {
+        eprintln!("Warning: Failed to set CPU {} in cpuset: {}", cpu, e);
+        return;
+    }
 
-        if sched_setaffinity(0, mem::size_of::<cpu_set_t>(), &cpuset) != 0 {
-            let err = Error::last_os_error();
-            eprintln!("Warning: Failed to pin to CPU {}: {}", cpu, err);
-        }
+    if let Err(e) = sched_setaffinity(Pid::from_raw(0), &cpuset) {
+        eprintln!("Warning: Failed to pin to CPU {}: {}", cpu, e);
     }
 }
 
@@ -182,8 +181,7 @@ pub fn get_node_zero_cores() -> usize {
 #[allow(dead_code)]
 #[cfg(target_os = "linux")]
 pub fn set_mempolicy_for_node(node: usize) {
-    use libc::MPOL_BIND;
-    use nix::libc;
+    use nix::libc::{self, MPOL_BIND};
     use std::io::Error;
 
     unsafe {
