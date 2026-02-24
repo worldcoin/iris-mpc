@@ -167,7 +167,7 @@ const A: u64 = 774_144_u64 - (25.0 * B as f64 * MATCH_THRESHOLD_RATIO) as u64;
 /// - Takes as input a pair of code and mask dot products between two irises,
 ///   i.e., `cd = <iris1.code, iris2.code>` and `md = <iris1.mask, iris2.mask>`,
 ///   already lifted to 48 bits if they are originally 16-bit.
-/// - Compares `md * (5 * md - 50 * cd) + A * md - 368_640 * cd < 0`.
+/// - Compares `md * (50 * cd - 5 * md) - A * md + 368_640 * cd < 0`.
 /// - This corresponds to "distance > threshold", that is NOT match.
 pub async fn nhd_greater_than_threshold(
     session: &mut Session,
@@ -175,7 +175,7 @@ pub async fn nhd_greater_than_threshold(
 ) -> Result<Vec<Share<Bit>>> {
     let n = distances.len();
 
-    // We check: [md * (5*md - 50*cd)] + A*md - 368640*cd < 0
+    // We check: [md * (50*cd - 5*md)] - A*md + 368640*cd < 0
     // The bracketed term requires one interactive multiplication round.
 
     let (prf_my, prf_prev) = session.prf.gen_rands_batch::<Ring48>(n);
@@ -184,7 +184,7 @@ pub async fn nhd_greater_than_threshold(
         .iter()
         .enumerate()
         .map(|(i, d)| {
-            let linear = d.mask_dot * Ring48(5) - d.code_dot * Ring48(50);
+            let linear = d.code_dot * Ring48(50) - d.mask_dot * Ring48(5);
             prf_my.0[i] - prf_prev.0[i] + &d.mask_dot * &linear
         })
         .collect();
@@ -198,7 +198,7 @@ pub async fn nhd_greater_than_threshold(
     let results: Vec<Share<Ring48>> = (0..n)
         .map(|i| {
             let product = Share::new(round_a[i], round_b[i]);
-            product + distances[i].mask_dot * Ring48(A) - distances[i].code_dot * Ring48(368640)
+            product - distances[i].mask_dot * Ring48(A) + distances[i].code_dot * Ring48(368640)
         })
         .collect();
 
@@ -274,7 +274,7 @@ mod tests {
     /// Reference plaintext NHD threshold check: returns true if the NHD distance is greater
     /// than the threshold (NOT match).
     fn reference_nhd_greater_than_threshold(cd: i64, md: i64) -> bool {
-        reference_nhd(cd, md) < MATCH_THRESHOLD_RATIO
+        reference_nhd(cd, md) > MATCH_THRESHOLD_RATIO
     }
 
     /// Convert negative values of `cd` represented in u16 to their signed i64 representation
@@ -291,20 +291,20 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(43_u64);
 
         // Test with known values of `(code_dot, mask_dot)` and their expected NHD threshold comparison result.
-        // It should hold that `abs(code dot) < mask_dot`
+        // It should hold that `abs(code dot) < mask_dot`.
+        // Expected boolean is computed as `nhd > MATCH_THRESHOLD_RATIO`.
         let test_cases: Vec<(u16, u16, bool)> = vec![
-            (100, 500, false), // nhd = 0.43 -> no match
-            (400, 500, true),  // nhd = 0.28 -> match
+            (100, 500, true),  // nhd = 0.43
+            (400, 500, false), // nhd = 0.28
             // Edge cases around the threshold with the same FHD
-            (1300, 3000, true), // nhd = 0.34 -> match
-            (13, 30, false),    // nhd = 0.37 -> no match
+            (1300, 3000, false), // nhd = 0.34
+            (13, 30, true),      // nhd = 0.37
             // Edge cases
-            (0, 0, false),               // nhd = infinity -> no match
-            (0, 100, false),             // nhd = 0.47 -> no match
-            (u16::MAX, 200, false),      // (-1, 200) -> nhd = 0.47 -> no match
-            (u16::MAX, 1, false),        // (-1, 1) -> nhd = 0.70 -> no match
-            (u16::MAX - 99, 100, false), // (-100, 100) -> nhd = 0.70 -> no match
-            (1, 1, true),                // nhd = 0.25 -> match
+            (0, 100, true),             // nhd = 0.47
+            (u16::MAX, 200, true),      // (-1, 200) -> nhd = 0.47
+            (u16::MAX, 1, true),        // (-1, 1) -> nhd = 0.70
+            (u16::MAX - 99, 100, true), // (-100, 100) -> nhd = 0.70
+            (1, 1, false),              // nhd = 0.25
         ];
 
         let flat_values: Vec<u16> = test_cases
