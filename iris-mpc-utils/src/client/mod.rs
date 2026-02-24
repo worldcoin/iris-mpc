@@ -42,6 +42,7 @@ const PROGRESS_LOG_INTERVAL_SECS: u64 = 60;
 /// - upload the corresponding iris shares (on failure exit early)
 /// - upload the requests (on failure, process the uploaded requests and then exit early)
 /// - receive the results (on failure, process the outstanding requests and then exit early)
+///
 /// Due to the need to continue processing to clean up requests when possible, error handling uses
 /// a ErrorBits struct rather than returning a Result immediately.
 pub struct ServiceClient {
