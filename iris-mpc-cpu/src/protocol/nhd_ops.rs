@@ -160,14 +160,14 @@ pub async fn nhd_lift_distances(
 
 /// Constant A used in the NHD threshold comparison.
 /// Guaranteed to be positive if MATCH_THRESHOLD_RATIO <= 0.4725.
-const A: u64 = 774144_u64 - (25.0 * B as f64 * MATCH_THRESHOLD_RATIO) as u64;
+const A: u64 = 774_144_u64 - (25.0 * B as f64 * MATCH_THRESHOLD_RATIO) as u64;
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
 /// - Takes as input a pair of code and mask dot products between two irises,
-///   i.e., cd = <iris1.code, iris2.code> and md = <iris1.mask, iris2.mask>,
+///   i.e., `cd = <iris1.code, iris2.code>` and `md = <iris1.mask, iris2.mask>`,
 ///   already lifted to 48 bits if they are originally 16-bit.
-/// - Compares md * (5 * md - 50 * cd) + A * md - 368640 * cd < 0.
+/// - Compares `md * (5 * md - 50 * cd) + A * md - 368_640 * cd < 0`.
 /// - This corresponds to "distance > threshold", that is NOT match.
 pub async fn nhd_greater_than_threshold(
     session: &mut Session,
@@ -254,39 +254,54 @@ mod tests {
         (player0, player1, player2)
     }
 
-    /// Plaintext NHD comparison: returns true if nhd(d1) < nhd(d2), i.e., d1 is
-    /// a better match.
-    fn plaintext_nhd_less_than(cd1: i64, md1: i64, cd2: i64, md2: i64) -> bool {
-        let nmr1 = md1 * (md1 - 10 * cd1) - 73728 * cd1;
-        let nmr2 = md2 * (md2 - 10 * cd2) - 73728 * cd2;
-        // nmr1*md2 < nmr2*md1 means nhd(d1) < nhd(d2)
-        // But our protocol computes nmr1*md2 - nmr2*md1 and extracts the MSB,
-        // which gives 1 when the result is negative, i.e., nhd(d1) < nhd(d2).
-        nmr1 * md2 < nmr2 * md1
+    fn reference_nhd(cd: i64, md: i64) -> f64 {
+        if md == 0 {
+            return f64::INFINITY; // Define NHD as infinity when mask dot product is zero to avoid division by zero
+        }
+        let cd_f = cd as f64;
+        let md_f = md as f64;
+        0.45 - (0.45 - (md_f - cd_f) / (2.0 * md_f)) * (md_f / 16384.0 + 0.45)
     }
 
-    /// Plaintext NHD threshold check: returns true if the NHD distance is greater
+    /// Reference plaintext NHD comparison: returns true if nhd(d1) < nhd(d2), i.e., d1 is
+    /// a better match.
+    fn reference_nhd_less_than(cd1: i64, md1: i64, cd2: i64, md2: i64) -> bool {
+        let dist1 = reference_nhd(cd1, md1);
+        let dist2 = reference_nhd(cd2, md2);
+        dist1 < dist2
+    }
+
+    /// Reference plaintext NHD threshold check: returns true if the NHD distance is greater
     /// than the threshold (NOT match).
-    fn plaintext_nhd_greater_than_threshold(cd: i64, md: i64) -> bool {
-        md * (5 * md - 50 * cd) + A as i64 * md - 368640 * cd < 0
+    fn reference_nhd_greater_than_threshold(cd: i64, md: i64) -> bool {
+        reference_nhd(cd, md) < MATCH_THRESHOLD_RATIO
     }
 
     #[tokio::test]
     async fn test_nhd_greater_than_threshold() {
         let mut rng = AesRng::seed_from_u64(43_u64);
 
-        // Test cases: (code_dot, mask_dot)
-        // Low cd/md ratio → match → greater_than_threshold = false
-        // High cd/md ratio → not match → greater_than_threshold = true
-        let test_cases: Vec<(u16, u16)> = vec![
-            (100, 500), // ratio 0.2, well below threshold
-            (400, 500), // ratio 0.8, well above threshold
-            (50, 1000), // ratio 0.05, very low
-            (300, 400), // ratio 0.75, above threshold
-            (10, 200),  // ratio 0.05, low
+        // Test with known values of `(code_dot, mask_dot)` and their expected NHD threshold comparison result.
+        // It should hold that `abs(code dot) < mask_dot`
+        let test_cases: Vec<(u16, u16, bool)> = vec![
+            (100, 500, false), // nhd = 0.43 -> no match
+            (400, 500, true),  // nhd = 0.28 -> match
+            // Edge cases around the threshold with the same FHD
+            (1300, 3000, true), // nhd = 0.34 -> match
+            (13, 30, false),    // nhd = 0.37 -> no match
+            // Edge cases
+            (0, 0, false),          // nhd = infinity -> no match
+            (0, 100, false),        // nhd = 0.47 -> no match
+            (u16::MAX, 200, false), // (-1, 200) -> nhd = 0.47 -> no match
+            (u16::MAX, 1, false),   // (-1, 1) -> nhd = 0.70 -> no match
+            (u16::MAX - 99, 100, false), // (-100, 100) -> nhd = 0.70 -> no match
+            (1, 1, true),           // nhd = 0.25 -> match
         ];
 
-        let flat_values: Vec<u16> = test_cases.iter().flat_map(|(cd, md)| [*cd, *md]).collect();
+        let flat_values: Vec<u16> = test_cases
+            .iter()
+            .flat_map(|(cd, md, _)| [*cd, *md])
+            .collect();
         let (p0, p1, p2) = create_array_sharing(&mut rng, &flat_values);
 
         let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
@@ -327,8 +342,19 @@ mod tests {
         assert_eq!(results[1], results[2]);
 
         // Check against plaintext
-        for (i, (cd, md)) in test_cases.iter().enumerate() {
-            let expected = plaintext_nhd_greater_than_threshold(*cd as i64, *md as i64);
+        for (i, (cd, md, expected)) in test_cases.into_iter().enumerate() {
+            // Convert negative values of `cd` represented in u16 to their signed i64 representation
+            let ref_cd = if cd > (1 << 15) {
+                cd as i64 - (1 << 16)
+            } else {
+                cd as i64
+            };
+            let reference = reference_nhd_greater_than_threshold(ref_cd, md as i64);
+            assert_eq!(
+                results[0][i], reference,
+                "Reference NHD threshold mismatch for (cd={}, md={}): got {}, expected {}",
+                cd, md, results[0][i], reference
+            );
             assert_eq!(
                 results[0][i], expected,
                 "NHD threshold mismatch for (cd={}, md={}): got {}, expected {}",
@@ -396,7 +422,7 @@ mod tests {
         // Check against plaintext
         for (i, (cd1, md1, cd2, md2)) in test_cases.iter().enumerate() {
             let expected =
-                plaintext_nhd_less_than(*cd1 as i64, *md1 as i64, *cd2 as i64, *md2 as i64);
+                reference_nhd_less_than(*cd1 as i64, *md1 as i64, *cd2 as i64, *md2 as i64);
             assert_eq!(
                 results[0][i], expected,
                 "NHD comparison mismatch for ({}, {}) vs ({}, {}): got {}, expected {}",
