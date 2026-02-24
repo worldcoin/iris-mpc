@@ -161,6 +161,13 @@ impl ServiceClient {
             )));
         }
 
+        if self.state.had_validation_errors {
+            return Err(ServiceClientError::ResponseError(format!(
+                "batch {} had validation errors",
+                batch_idx
+            )));
+        }
+
         tracing::info!(
             "Batch {} finished. Responses to non-deletion requests have been received",
             batch_idx
@@ -315,15 +322,16 @@ impl ExecState {
     }
 
     /// Records a response result against its tracked request info and handles completion.
-    /// Returns the completed `RequestInfo` if all parties have responded, or `None` otherwise.
+    /// Returns the completed `RequestInfo` if all parties have responded successfully.
+    /// Validation errors are logged and removed, returning `None`.
     fn handle_completion<K: std::fmt::Display + std::hash::Hash + Eq>(
         &mut self,
         key: &K,
         response: &typeset::ResponsePayload,
         map: &mut HashMap<K, typeset::RequestInfo>,
     ) -> Option<typeset::RequestInfo> {
-        let is_complete = map.get_mut(key).map(|info| info.record_response(response));
-        match is_complete {
+        let opt = map.get_mut(key).map(|info| info.record_response(response));
+        let is_complete = match opt {
             None => {
                 tracing::warn!(
                     "Received response not tracked in outstanding requests: {}",
@@ -331,19 +339,29 @@ impl ExecState {
                 );
                 None
             }
-            Some(Ok(true)) => {
+            Some(x) => x,
+        };
+
+        match is_complete {
+            Some(true) => {
                 let info = map.remove(key);
                 if let Some(ref info) = info {
                     if info.has_error_response() {
+                        self.had_validation_errors = true;
                         let details = info.get_error_msgs();
-                        tracing::warn!("request {} completed with errors: {}", info, details);
+                        tracing::error!("request {} completed with errors: {}", info, details);
                     }
                 }
                 info
             }
-            Some(Ok(false)) => None,
-            Some(Err(_)) => {
+            Some(false) => None,
+            None => {
                 self.had_validation_errors = true;
+                // Remove the request from outstanding map since it failed validation
+                if let Some(info) = map.remove(key) {
+                    tracing::error!("request {} failed validation", info);
+                    self.error_log.push(info);
+                }
                 None
             }
         }
@@ -359,12 +377,11 @@ impl ExecState {
             typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
             typeset::ResponsePayload::IdentityDeletion(r) => {
                 let mut deletions = std::mem::take(&mut self.outstanding_deletions);
-                if let Some(info) = self.handle_completion(&r.serial_id, response, &mut deletions) {
-                    if info.has_error_response() {
-                        self.error_log.push(info);
-                    } else {
-                        self.live_serial_ids.remove(&r.serial_id);
-                    }
+                if self
+                    .handle_completion(&r.serial_id, response, &mut deletions)
+                    .is_some()
+                {
+                    self.live_serial_ids.remove(&r.serial_id);
                 }
                 self.outstanding_deletions = deletions;
                 return;
@@ -374,10 +391,7 @@ impl ExecState {
         if let Some(uuid) = corr_uuid {
             let mut requests = std::mem::take(&mut self.outstanding_requests);
             if let Some(info) = self.handle_completion(&uuid, response, &mut requests) {
-                if info.has_error_response() {
-                    self.signup_id_to_labels.remove(&uuid);
-                    self.error_log.push(info);
-                } else {
+                if !info.has_error_response() {
                     // For uniqueness: search all node responses for a serial_id
                     // and record it against the request's label.
                     let maybe_serial_id = info.responses().iter().find_map(|opt| {

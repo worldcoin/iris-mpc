@@ -58,18 +58,19 @@ impl RequestInfo {
 
     /// Records a response from a node. Returns true if all parties have now responded.
     /// Returns Err if validation failed (error is still logged).
-    pub fn record_response(&mut self, response: &ResponsePayload) -> Result<bool, Vec<String>> {
+    pub fn record_response(&mut self, response: &ResponsePayload) -> Option<bool> {
         let node_id = response.node_id();
         if node_id >= N_PARTIES {
-            tracing::warn!(
-                "Ignoring response with out-of-range node_id {} (max {})",
+            tracing::error!(
+                "Received response with out-of-range node_id {} (max {})",
                 node_id,
                 N_PARTIES - 1
             );
-            return Ok(false);
+            return None;
         }
         if self.responses[node_id].is_some() {
-            tracing::warn!("Duplicate response for node_id {}", node_id);
+            tracing::error!("Duplicate response for node_id {}", node_id);
+            return None;
         }
 
         self.responses[node_id] = Some(response.clone());
@@ -81,9 +82,9 @@ impl RequestInfo {
             .unwrap_or(Ok(()))
         {
             tracing::error!("validation failed for response: {:#?}", err_msg);
-            Err(err_msg)
+            None
         } else {
-            Ok(self.is_complete())
+            Some(self.is_complete())
         }
     }
 
