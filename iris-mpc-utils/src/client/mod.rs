@@ -154,6 +154,12 @@ impl ServiceClient {
             .track_batch_requests(&batch_requests[..published_count]);
         self.state.process_responses(&self.aws_client).await?;
 
+        if self.state.sns_publish_error {
+            return Err(ServiceClientError::ResponseError(
+                "SNS publish error".to_string(),
+            ));
+        }
+
         tracing::info!(
             "Batch {} finished. Responses to non-deletion requests have been received",
             batch_idx
