@@ -139,7 +139,7 @@ impl ServiceClient {
         let (batch_requests, batch_shares) = self.prepare_batch_requests(batch_idx, &batch)?;
 
         // Phase 2: Upload shares to S3.
-        self.upload_shares(batch_shares).await?;
+        self.upload_shares(batch_shares).await;
 
         // Phase 3: Wait for S3 propagation.
         sleep(Duration::from_secs(S3_PROPAGATION_DELAY_SECS)).await;
@@ -153,24 +153,10 @@ impl ServiceClient {
         self.state.process_responses(&self.aws_client).await;
 
         // Check all error conditions and return consolidated error
-        if self.state.sns_publish_error {
+        if self.state.error_bits.has_errors() {
             return Err(ServiceClientError::ResponseError(format!(
-                "batch {} failed: SNS publish error occurred",
-                batch_idx
-            )));
-        }
-
-        if self.state.sqs_receive_error {
-            return Err(ServiceClientError::ResponseError(format!(
-                "batch {} failed: SQS receive error occurred",
-                batch_idx
-            )));
-        }
-
-        if self.state.had_validation_errors {
-            return Err(ServiceClientError::ResponseError(format!(
-                "batch {} failed: validation or response errors occurred",
-                batch_idx
+                "batch {} failed: {}",
+                batch_idx, self.state.error_bits
             )));
         }
 
@@ -207,12 +193,13 @@ impl ServiceClient {
                     if let Some(&serial_id) = self.state.uniqueness_labels.get(label.as_str()) {
                         Some(serial_id)
                     } else {
-                        tracing::warn!(
+                        tracing::error!(
                             "batch {}.{}: dropping request — parent label '{}' unresolved",
                             batch_idx,
                             item_idx,
                             label,
                         );
+                        self.state.error_bits.set_request_dropped_error();
                         continue;
                     }
                 }
@@ -228,7 +215,8 @@ impl ServiceClient {
             let request = match opts.make_request(info, parent_serial_id) {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!("batch {}.{}: dropping request — {}", batch_idx, item_idx, e,);
+                    tracing::error!("batch {}.{}: dropping request — {}", batch_idx, item_idx, e,);
+                    self.state.error_bits.set_request_dropped_error();
                     continue;
                 }
             };
@@ -248,25 +236,26 @@ impl ServiceClient {
             batch_requests.push(request);
             batch_shares.push(shares_info);
         }
-
-        Ok((batch_requests, batch_shares))
+        if self.state.error_bits.get_request_dropped_error() {
+            Err(ServiceClientError::RequestPreparationError)
+        } else {
+            Ok((batch_requests, batch_shares))
+        }
     }
 
     async fn upload_shares(
-        &self,
+        &mut self,
         batch_shares: Vec<Option<(Uuid, BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>)>>,
-    ) -> Result<(), ServiceClientError> {
+    ) {
         for shares_info in batch_shares.iter().filter_map(|opt| opt.as_ref()) {
             let (op_uuid, shares) = shares_info;
-            self.aws_client
-                .s3_upload_iris_shares(op_uuid, shares)
-                .await
-                .map_err(|e| {
-                    tracing::error!("S3 shares upload failed: {}", e);
-                    ServiceClientError::AwsServiceError(e)
-                })?;
+            if let Err(e) = self.aws_client.s3_upload_iris_shares(op_uuid, shares).await {
+                self.state.error_bits.set_upload_shares_error();
+                tracing::error!("S3 shares upload failed: {:?}", e);
+                // Stop uploading further shares
+                break;
+            }
         }
-        Ok(())
     }
 
     async fn publish_requests(
@@ -287,7 +276,7 @@ impl ServiceClient {
                     published_count += 1;
                 }
                 Err(e) => {
-                    self.state.sns_publish_error = true;
+                    self.state.error_bits.set_sns_publish_error();
                     tracing::error!(
                         "batch {}: SNS publish failed for request {}: {:?}",
                         batch_idx,
@@ -303,6 +292,76 @@ impl ServiceClient {
     }
 }
 
+/// Bitmask for tracking various error conditions during batch processing.
+struct ErrorBits(u32);
+
+impl ErrorBits {
+    const SNS_PUBLISH: u32 = 1 << 0;
+    const SQS_RECEIVE: u32 = 1 << 1;
+    const VALIDATION: u32 = 1 << 2;
+    const REQUEST_DROPPED: u32 = 1 << 3;
+    const UPLOAD_SHARES: u32 = 1 << 4;
+
+    fn new() -> Self {
+        Self(0)
+    }
+
+    fn set_sns_publish_error(&mut self) {
+        self.0 |= Self::SNS_PUBLISH;
+    }
+
+    fn set_sqs_receive_error(&mut self) {
+        self.0 |= Self::SQS_RECEIVE;
+    }
+
+    fn set_validation_error(&mut self) {
+        self.0 |= Self::VALIDATION;
+    }
+
+    fn set_request_dropped_error(&mut self) {
+        self.0 |= Self::REQUEST_DROPPED;
+    }
+
+    fn set_upload_shares_error(&mut self) {
+        self.0 |= Self::UPLOAD_SHARES;
+    }
+
+    fn get_request_dropped_error(&self) -> bool {
+        self.0 & Self::REQUEST_DROPPED != 0
+    }
+
+    fn has_errors(&self) -> bool {
+        self.0 != 0
+    }
+}
+
+impl std::fmt::Display for ErrorBits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == 0 {
+            return write!(f, "no errors");
+        }
+
+        let mut parts = Vec::new();
+        if self.0 & Self::SNS_PUBLISH != 0 {
+            parts.push("sns_publish_error");
+        }
+        if self.0 & Self::SQS_RECEIVE != 0 {
+            parts.push("sqs_receive_error");
+        }
+        if self.0 & Self::VALIDATION != 0 {
+            parts.push("validation_error");
+        }
+        if self.0 & Self::REQUEST_DROPPED != 0 {
+            parts.push("request_dropped_error");
+        }
+        if self.0 & Self::UPLOAD_SHARES != 0 {
+            parts.push("upload_shares_error");
+        }
+
+        write!(f, "{}", parts.join(" | "))
+    }
+}
+
 // Holds the cross-batch state needed while processing requests and responses.
 struct ExecState {
     uniqueness_labels: HashMap<String, IrisSerialId>,
@@ -310,9 +369,7 @@ struct ExecState {
     outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
     outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo>,
     live_serial_ids: HashSet<IrisSerialId>,
-    had_validation_errors: bool,
-    sns_publish_error: bool,
-    sqs_receive_error: bool,
+    error_bits: ErrorBits,
 }
 
 impl ExecState {
@@ -322,10 +379,8 @@ impl ExecState {
             signup_id_to_labels: HashMap::new(),
             outstanding_requests: HashMap::new(),
             outstanding_deletions: HashMap::new(),
-            had_validation_errors: false,
-            sns_publish_error: false,
-            sqs_receive_error: false,
             live_serial_ids: HashSet::new(),
+            error_bits: ErrorBits::new(),
         }
     }
 
@@ -355,7 +410,7 @@ impl ExecState {
                 let info = map.remove(key);
                 if let Some(ref info) = info {
                     if info.has_error_response() {
-                        self.had_validation_errors = true;
+                        self.error_bits.set_validation_error();
                         let details = info.get_error_msgs();
                         tracing::error!("request {} completed with errors: {}", info, details);
                     }
@@ -364,7 +419,7 @@ impl ExecState {
             }
             Some(false) => None,
             None => {
-                self.had_validation_errors = true;
+                self.error_bits.set_validation_error();
                 // Remove the request from outstanding map since it failed validation
                 if let Some(info) = map.remove(key) {
                     tracing::error!("request {} failed validation", info);
@@ -484,7 +539,7 @@ impl ExecState {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    self.sqs_receive_error = true;
+                    self.error_bits.set_sqs_receive_error();
                     tracing::error!("SQS receive failed: {:?}", e);
                     break 'OUTER;
                 }
@@ -492,7 +547,7 @@ impl ExecState {
 
             for sqs_msg in messages {
                 if let Err(e) = aws_client.sqs_purge_response_queue_message(&sqs_msg).await {
-                    self.sqs_receive_error = true;
+                    self.error_bits.set_sqs_receive_error();
                     tracing::error!("SQS message purge failed: {:?}", e);
                     break 'OUTER;
                 }
