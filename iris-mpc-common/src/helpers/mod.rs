@@ -17,3 +17,4 @@ pub mod smpc_response;
 #[cfg(feature = "helpers")]
 pub mod sqs_s3_helper;
 pub mod sync;
+pub mod sysfs;
