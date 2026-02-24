@@ -28,13 +28,13 @@ pub enum Request {
         // Operation identifier.
         reauth_id: uuid::Uuid,
     },
-    ResetCheck {
+    IdentityMatchCheck {
         // Standard request information.
         info: RequestInfo,
         // Associated Iris pair descriptor ... used to build deterministic graphs.
         iris_pair: Option<IrisPairDescriptor>,
         // Operation identifier.
-        reset_id: uuid::Uuid,
+        request_id: uuid::Uuid,
     },
     ResetUpdate {
         // Standard request information.
@@ -61,7 +61,7 @@ impl Request {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
-            | Self::ResetCheck { info, .. }
+            | Self::IdentityMatchCheck { info, .. }
             | Self::ResetUpdate { info, .. }
             | Self::Uniqueness { info, .. } => info,
         }
@@ -75,11 +75,11 @@ impl Request {
                 iris_pair,
                 ..
             } => Some((*reauth_id, *iris_pair)),
-            Request::ResetCheck {
-                reset_id,
+            Request::IdentityMatchCheck {
+                request_id,
                 iris_pair,
                 ..
-            } => Some((*reset_id, *iris_pair)),
+            } => Some((*request_id, *iris_pair)),
             Request::ResetUpdate {
                 reset_id,
                 iris_pair,
@@ -97,7 +97,7 @@ impl Request {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
-            | Self::ResetCheck { info, .. }
+            | Self::IdentityMatchCheck { info, .. }
             | Self::ResetUpdate { info, .. }
             | Self::Uniqueness { info, .. } => info,
         }
@@ -108,7 +108,7 @@ impl Request {
         match self {
             Self::IdentityDeletion { .. } => vec![],
             Self::Reauthorization { iris_pair, .. }
-            | Self::ResetCheck { iris_pair, .. }
+            | Self::IdentityMatchCheck { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
             | Self::Uniqueness { iris_pair, .. } => match iris_pair {
                 Some(iris_pair) => vec![iris_pair.left().index(), iris_pair.right().index()],
@@ -145,9 +145,10 @@ impl Request {
             (Self::Reauthorization { reauth_id, .. }, ResponsePayload::Reauthorization(result)) => {
                 result.reauth_id == reauth_id.to_string()
             }
-            (Self::ResetCheck { reset_id, .. }, ResponsePayload::ResetCheck(result)) => {
-                result.reset_id == reset_id.to_string()
-            }
+            (
+                Self::IdentityMatchCheck { request_id, .. },
+                ResponsePayload::IdentityMatchCheck(result),
+            ) => result.request_id == request_id.to_string(),
             (Self::ResetUpdate { reset_id, .. }, ResponsePayload::ResetUpdate(result)) => {
                 result.reset_id == reset_id.to_string()
             }
@@ -236,7 +237,7 @@ impl fmt::Display for Request {
         match self {
             Self::IdentityDeletion { .. } => write!(f, "{}.IdentityDeletion", self.info()),
             Self::Reauthorization { .. } => write!(f, "{}.Reauthorization", self.info()),
-            Self::ResetCheck { .. } => write!(f, "{}.ResetCheck", self.info()),
+            Self::IdentityMatchCheck { .. } => write!(f, "{}.IdentityMatchCheck", self.info()),
             Self::ResetUpdate { .. } => write!(f, "{}.ResetUpdate", self.info()),
             Self::Uniqueness { .. } => write!(f, "{}.Uniqueness", self.info()),
         }
@@ -256,8 +257,8 @@ mod tests {
             matches!(self, Self::Reauthorization { .. })
         }
 
-        pub fn is_reset_check(&self) -> bool {
-            matches!(self, Self::ResetCheck { .. })
+        pub fn is_identity_match_check(&self) -> bool {
+            matches!(self, Self::IdentityMatchCheck { .. })
         }
 
         pub fn is_reset_update(&self) -> bool {

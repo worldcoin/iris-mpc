@@ -10,7 +10,7 @@ use super::super::errors::ServiceClientError;
 pub(crate) enum RequestPayload {
     IdentityDeletion(smpc_request::IdentityDeletionRequest),
     Reauthorization(smpc_request::ReAuthRequest),
-    ResetCheck(smpc_request::ResetCheckRequest),
+    IdentityMatchCheck(smpc_request::IdentityMatchCheckRequest),
     ResetUpdate(smpc_request::ResetUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
 }
@@ -20,7 +20,7 @@ pub(crate) enum RequestPayload {
 pub(crate) enum ResponsePayload {
     IdentityDeletion(smpc_response::IdentityDeletionResult),
     Reauthorization(smpc_response::ReAuthResult),
-    ResetCheck(smpc_response::ResetCheckResult),
+    IdentityMatchCheck(smpc_response::IdentityMatchCheckResult),
     ResetUpdate(smpc_response::ResetUpdateAckResult),
     Uniqueness(smpc_response::UniquenessResult),
 }
@@ -30,7 +30,7 @@ impl ResponsePayload {
         match self {
             Self::IdentityDeletion(result) => result.node_id,
             Self::Reauthorization(result) => result.node_id,
-            Self::ResetCheck(result) => result.node_id,
+            Self::IdentityMatchCheck(result) => result.node_id,
             Self::ResetUpdate(result) => result.node_id,
             Self::Uniqueness(result) => result.node_id,
         }
@@ -44,7 +44,7 @@ impl ResponsePayload {
                 result.error.unwrap_or(false),
                 result.error_reason.as_deref(),
             ),
-            Self::ResetCheck(result) => (
+            Self::IdentityMatchCheck(result) => (
                 result.error.unwrap_or(false),
                 result.error_reason.as_deref(),
             ),

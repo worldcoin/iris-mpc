@@ -39,6 +39,7 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
                 BatchMetadata::default(),
                 vec![],
                 false,
+                None,
             );
 
             batch_query

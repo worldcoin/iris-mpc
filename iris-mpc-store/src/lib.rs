@@ -795,7 +795,8 @@ pub mod tests {
     use iris_mpc_common::{
         helpers::{
             smpc_request::{
-                IDENTITY_DELETION_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+                IDENTITY_DELETION_MESSAGE_TYPE, IDENTITY_MATCH_CHECK_MESSAGE_TYPE,
+                UNIQUENESS_MESSAGE_TYPE,
             },
             sync::ModificationStatus,
         },
@@ -1496,7 +1497,7 @@ pub mod tests {
         store
             .insert_modification(
                 Some(105),
-                RESET_CHECK_MESSAGE_TYPE,
+                IDENTITY_MATCH_CHECK_MESSAGE_TYPE,
                 Some("http://example.com/reset_check"),
             )
             .await?;

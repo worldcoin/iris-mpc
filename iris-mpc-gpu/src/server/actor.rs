@@ -42,7 +42,9 @@ use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{
+            IDENTITY_MATCH_CHECK_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        },
     },
     iris_db::get_dummy_shares_for_deletion,
     job::{JobSubmissionHandle, ServerJobResult},
@@ -686,16 +688,16 @@ impl ServerActor {
             .iter()
             .filter(|x| *x == REAUTH_MESSAGE_TYPE)
             .count();
-        let n_reset_checks = batch
+        let n_identity_match_checks = batch
             .request_types
             .iter()
-            .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
+            .filter(|x| *x == IDENTITY_MATCH_CHECK_MESSAGE_TYPE)
             .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} reset_update, {} deletion requests",
-            batch.request_types.len() - n_reauths - n_reset_checks,
+            "Started processing batch: {} uniqueness, {} reauth, {} identity_match_check, {} reset_update, {} deletion requests",
+            batch.request_types.len() - n_reauths - n_identity_match_checks,
             n_reauths,
-            n_reset_checks,
+            n_identity_match_checks,
             batch.reset_update_request_ids.len(),
             batch.deletion_requests_indices.len(),
         );
@@ -763,7 +765,7 @@ impl ServerActor {
                 .enumerate()
                 .filter(|(_, req_type)| {
                     req_type.as_str() == REAUTH_MESSAGE_TYPE
-                        || req_type.as_str() == RESET_CHECK_MESSAGE_TYPE
+                        || req_type.as_str() == IDENTITY_MATCH_CHECK_MESSAGE_TYPE
                 })
                 .map(|(index, _)| index)
                 .collect();
@@ -1751,6 +1753,7 @@ impl ServerActor {
             modifications: batch.modifications,
             actor_data: (),
             full_face_mirror_attack_detected,
+            request_id_to_target: batch.request_id_to_target,
         };
 
         // Reset the results buffers for reuse

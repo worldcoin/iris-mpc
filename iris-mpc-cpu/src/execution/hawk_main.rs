@@ -15,7 +15,7 @@
 //!   Each session encapsulates the necessary cryptographic context for a
 //!   single thread of work.
 //! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of requests of the
-//!   usual types: Uniqueness, ResetCheck, ResetUpdate, Reauth and Deletion.
+//!   usual types: Uniqueness, IdentityMatchCheck, ResetUpdate, Reauth and Deletion.
 //!   . This involves:
 //!     - Searching the HNSW graph for nearest neighbors of a given iris, both for matching and graph insertion purposes.
 //!     - Performing secret-shared distance evaluations and comparisons using the ABY3 protocol.
@@ -109,7 +109,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_common::{
     helpers::smpc_request::{
-        REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        IDENTITY_MATCH_CHECK_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
     },
     vector_id::VectorId,
 };
@@ -1089,7 +1089,7 @@ impl HawkRequest {
                 } else {
                     None
                 }),
-                RESET_CHECK_MESSAGE_TYPE => ResetCheck,
+                IDENTITY_MATCH_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
                 _ => Unsupported,
             })
             .collect_vec()
@@ -1109,8 +1109,8 @@ impl HawkRequest {
             .map(|(or_rule_idx, request_type)| {
                 let mut or_rule_ids = iris_store.from_0_indices(or_rule_idx);
 
-                let lookback =
-                    request_type != REAUTH_MESSAGE_TYPE && request_type != RESET_CHECK_MESSAGE_TYPE;
+                let lookback = request_type != REAUTH_MESSAGE_TYPE
+                    && request_type != IDENTITY_MATCH_CHECK_MESSAGE_TYPE;
                 if lookback {
                     or_rule_ids.extend_from_slice(&luc_lookback_ids);
                 };
@@ -1378,6 +1378,7 @@ impl HawkResult {
             modifications: batch.modifications,
 
             actor_data: self.connect_plans,
+            request_id_to_target: batch.request_id_to_target,
         }
     }
 }
@@ -1942,6 +1943,7 @@ mod tests {
                 BatchMetadata::default(),
                 vec![],
                 false,
+                None,
             );
         }
 

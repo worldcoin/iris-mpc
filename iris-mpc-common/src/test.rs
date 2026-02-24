@@ -4,7 +4,9 @@ use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         inmemory_store::InMemoryStore,
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{
+            IDENTITY_MATCH_CHECK_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        },
     },
     iris_db::{
         db::IrisDB,
@@ -178,11 +180,11 @@ pub enum TestCase {
     /// serial id's iris code (failed reauth)
     ReauthOrRuleNonMatchingTarget,
     /// Send a reset check request with an iris code known to be in the database
-    /// Similar to MatchSkipPersistence, but using RESET_CHECK_MESSAGE_TYPE
-    ResetCheckMatch,
+    /// Similar to MatchSkipPersistence, but using IDENTITY_MATCH_CHECK_MESSAGE_TYPE
+    IdentityMatchCheckMatch,
     /// Send a reset check request with an iris code known not to match any in the database
-    /// Similar to NonMatchSkipPersistence, but using RESET_CHECK_MESSAGE_TYPE
-    ResetCheckNonMatch,
+    /// Similar to NonMatchSkipPersistence, but using IDENTITY_MATCH_CHECK_MESSAGE_TYPE
+    IdentityMatchCheckNonMatch,
     /// Send an enrollment request using the iris codes used during ResetCheckNonMatch and expect it to be inserted without matches. This will make sure that reset_check did not write into the database.
     EnrollmentAfterResetCheckNonMatch,
     /// Send an enrollment request using the iris codes used during ResetUpdate and expect a match result
@@ -215,8 +217,8 @@ impl TestCase {
             TestCase::ReauthMatchingTargetWithSkipPersistence,
             TestCase::ReauthOrRuleNonMatchingTarget,
             TestCase::ReauthOrRuleMatchingTarget,
-            TestCase::ResetCheckMatch,
-            TestCase::ResetCheckNonMatch,
+            TestCase::IdentityMatchCheckMatch,
+            TestCase::IdentityMatchCheckNonMatch,
             TestCase::EnrollmentAfterResetCheckNonMatch,
             TestCase::MatchAfterResetUpdate,
             TestCase::MatchAfterReauthSkipPersistence,
@@ -249,8 +251,8 @@ pub struct ExpectedResult {
     /// Populated only if the request type is REAUTH.
     /// Indicates whether the expected reauth result is successful.
     is_reauth_successful: Option<bool>,
-    /// Whether this is a RESET_CHECK_MESSAGE_TYPE request
-    is_reset_check: bool,
+    /// Whether this is a IDENTITY_MATCH_CHECK_MESSAGE_TYPE request
+    is_identity_match_check: bool,
     /// Whether this is a FULL_FACE_MIRROR_ATTACK request
     is_full_face_mirror_attack: bool,
 }
@@ -269,7 +271,7 @@ pub struct ExpectedResultBuilder {
     is_skip_persistence_request: bool,
     is_batch_match: bool,
     is_reauth_successful: Option<bool>,
-    is_reset_check: bool,
+    is_identity_match_check: bool,
     is_full_face_mirror_attack: bool,
 }
 
@@ -299,8 +301,8 @@ impl ExpectedResultBuilder {
     }
 
     /// Sets is_reset_check
-    pub fn with_reset_check(mut self, is_reset_check: bool) -> Self {
-        self.is_reset_check = is_reset_check;
+    pub fn with_identity_match_check(mut self, is_identity_match_check: bool) -> Self {
+        self.is_identity_match_check = is_identity_match_check;
         self
     }
 
@@ -317,7 +319,7 @@ impl ExpectedResultBuilder {
             is_skip_persistence_request: self.is_skip_persistence_request,
             is_batch_match: self.is_batch_match,
             is_reauth_successful: self.is_reauth_successful,
-            is_reset_check: self.is_reset_check,
+            is_identity_match_check: self.is_identity_match_check,
             is_full_face_mirror_attack: self.is_full_face_mirror_attack,
         }
     }
@@ -626,8 +628,8 @@ impl TestCaseGenerator {
             TestCase::ReauthOrRuleMatchingTarget,
             TestCase::MatchSkipPersistence,
             TestCase::NonMatchSkipPersistence,
-            TestCase::ResetCheckMatch,
-            TestCase::ResetCheckNonMatch,
+            TestCase::IdentityMatchCheckMatch,
+            TestCase::IdentityMatchCheckNonMatch,
             TestCase::FullFaceMirrorAttack,
         ];
 
@@ -979,8 +981,10 @@ impl TestCaseGenerator {
                     );
                     template
                 }
-                TestCase::ResetCheckMatch => {
-                    tracing::info!("Sending reset check request with an existing iris code");
+                TestCase::IdentityMatchCheckMatch => {
+                    tracing::info!(
+                        "Sending identity match check request with an existing iris code"
+                    );
                     let (db_index, [template_left, template_right]) =
                         self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
@@ -988,23 +992,25 @@ impl TestCaseGenerator {
                         request_id.to_string(),
                         ExpectedResult::builder()
                             .with_db_index(db_index as u32)
-                            .with_reset_check(true)
+                            .with_identity_match_check(true)
                             .build(),
                     );
-                    message_type = RESET_CHECK_MESSAGE_TYPE.to_string();
+                    message_type = IDENTITY_MATCH_CHECK_MESSAGE_TYPE.to_string();
                     E2ETemplate {
                         left: template_left,
                         right: template_right,
                     }
                 }
-                TestCase::ResetCheckNonMatch => {
+                TestCase::IdentityMatchCheckNonMatch => {
                     tracing::info!("Sending reset check request with fresh iris code");
                     let template = IrisCode::random_rng(&mut self.rng);
                     self.expected_results.insert(
                         request_id.to_string(),
-                        ExpectedResult::builder().with_reset_check(true).build(),
+                        ExpectedResult::builder()
+                            .with_identity_match_check(true)
+                            .build(),
                     );
-                    message_type = RESET_CHECK_MESSAGE_TYPE.to_string();
+                    message_type = IDENTITY_MATCH_CHECK_MESSAGE_TYPE.to_string();
                     E2ETemplate {
                         left: template.clone(),
                         right: template,
@@ -1222,7 +1228,7 @@ impl TestCaseGenerator {
             is_batch_match,
             is_reauth_successful,
             is_skip_persistence_request,
-            is_reset_check,
+            is_identity_match_check,
             is_full_face_mirror_attack,
         } = self
             .expected_results
@@ -1235,7 +1241,7 @@ impl TestCaseGenerator {
             return;
         }
 
-        if is_reset_check {
+        if is_identity_match_check {
             // assert that the reset_check requests are not reported as unique. match fields are only used for enrollment requests
             assert!(was_match);
             assert!(was_skip_persistence_match);
@@ -1431,6 +1437,7 @@ fn prepare_batch(
         BatchMetadata::default(),
         or_rule_indices,
         skip_persistence,
+        None,
     );
 
     batch

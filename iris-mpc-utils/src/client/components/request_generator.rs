@@ -94,8 +94,8 @@ fn push_new(
         BatchKind::Reauth => {
             batch.push_new_reauthorization(parent.unwrap(), None, None, None);
         }
-        BatchKind::ResetCheck => {
-            batch.push_new_reset_check(None, None);
+        BatchKind::IdentityMatchCheck => {
+            batch.push_new_identity_match_check(None, None);
         }
         BatchKind::ResetUpdate => {
             batch.push_new_reset_update(parent.unwrap(), None, None, None);

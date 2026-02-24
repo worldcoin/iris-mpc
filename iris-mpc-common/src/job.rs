@@ -102,11 +102,14 @@ pub struct BatchQuery {
 
     // Boolean value for mirror attack detection enabled
     pub full_face_mirror_attacks_detection_enabled: bool,
+
+    pub request_id_to_target: HashMap<String, String>,
 }
 
 impl BatchQuery {
     /// Add a Uniqueness, Reauth, or Reset Check request to the batch.
     /// Must be followed by a call to `push_matching_request_shares` to set the shares.
+    #[allow(clippy::too_many_arguments)]
     pub fn push_matching_request(
         &mut self,
         sns_message_id: String,
@@ -115,16 +118,21 @@ impl BatchQuery {
         metadata: BatchMetadata,
         or_rule_indices: Vec<u32>,
         skip_persistence: bool,
+        response_target: Option<String>,
     ) {
         self.sns_message_ids.push(sns_message_id);
         self.requests_order
             .push(RequestIndex::UniqueReauthResetCheck(self.request_ids.len()));
 
-        self.request_ids.push(request_id);
+        self.request_ids.push(request_id.clone());
         self.request_types.push(request_type.to_string());
         self.metadata.push(metadata);
         self.or_rule_indices.push(or_rule_indices);
         self.skip_persistence.push(skip_persistence);
+        if let Some(response_target) = response_target {
+            self.request_id_to_target
+                .insert(request_id, response_target);
+        }
     }
 
     /// Add a Deletion request to the batch.
@@ -407,6 +415,8 @@ pub struct ServerJobResult<A = ()> {
     pub reset_update_shares: Vec<GaloisSharesBothSides>,
     // Boolean array to indicate if the query is a full face mirror attack attempt.
     pub full_face_mirror_attack_detected: Vec<bool>,
+    // As defined in the BatchQuery
+    pub request_id_to_target: HashMap<String, String>,
 }
 
 pub trait JobSubmissionHandle {
@@ -440,6 +450,7 @@ mod tests {
                 BatchMetadata::default(),
                 vec![],
                 false,
+                None,
             );
 
             let code = GaloisRingIrisCodeShare {

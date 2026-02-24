@@ -138,6 +138,7 @@ fn make_batch(batch_size: usize) -> BatchQuery {
             BatchMetadata::default(),
             vec![],
             false,
+            None,
         );
     }
     batch

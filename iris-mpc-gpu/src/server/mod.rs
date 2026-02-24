@@ -137,6 +137,9 @@ pub struct PreprocessedBatchQuery {
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
+
+    // Request id to target mapping
+    pub request_id_to_target: HashMap<String, String>,
 }
 
 impl PreprocessedBatchQuery {
@@ -272,6 +275,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             modifications: value.modifications,
             sns_message_ids: value.sns_message_ids,
             skip_persistence: value.skip_persistence,
+            request_id_to_target: value.request_id_to_target,
         }
     }
 }
