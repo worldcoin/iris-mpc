@@ -309,10 +309,10 @@ struct ExecState {
     signup_id_to_labels: HashMap<Uuid, String>,
     outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
     outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo>,
+    live_serial_ids: HashSet<IrisSerialId>,
     had_validation_errors: bool,
     sns_publish_error: bool,
     sqs_receive_error: bool,
-    live_serial_ids: HashSet<IrisSerialId>,
 }
 
 impl ExecState {
