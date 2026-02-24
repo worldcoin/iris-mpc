@@ -82,10 +82,13 @@ env:
     value: "true"
 
   - name: SMPC__LUC_ENABLED
-    value: "true"
+    value: "false"
+
+  - name: SMPC__HNSW_PARAM_EF_CONSTR
+    value: "5"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
-    value: "5"
+    value: "0"
 
   - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
     value: "false"
