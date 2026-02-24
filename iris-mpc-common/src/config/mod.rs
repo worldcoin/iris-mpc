@@ -287,7 +287,7 @@ pub struct Config {
     pub batch_sync_polling_timeout_secs: u64,
 
     #[serde(default = "default_tokio_threads")]
-    pub tokio_threads: usize,
+    pub tokio_threads: Option<usize>,
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
@@ -458,8 +458,8 @@ fn default_pprof_per_batch_enabled() -> bool {
     false
 }
 
-fn default_tokio_threads() -> usize {
-    num_cpus::get()
+fn default_tokio_threads() -> Option<usize> {
+    None
 }
 
 fn default_sns_retry_max_attempts() -> u32 {
