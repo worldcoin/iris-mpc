@@ -76,11 +76,11 @@ impl From<&Request> for RequestPayload {
                 skip_persistence: None,
                 use_or_rule: false,
             }),
-            Request::ResetCheck { reset_id, .. } => {
-                Self::ResetCheck(smpc_request::ResetCheckRequest {
+            Request::IdentityMatchCheck { request_id, .. } => {
+                Self::IdentityMatchCheck(smpc_request::IdentityMatchCheckRequest {
                     batch_size: Some(1),
-                    reset_id: reset_id.to_string(),
-                    s3_key: reset_id.to_string(),
+                    request_id: request_id.to_string(),
+                    s3_key: request_id.to_string(),
                 })
             }
             Request::ResetUpdate {
@@ -126,7 +126,7 @@ impl From<RequestPayload> for SnsMessageInfo {
                 smpc_request::REAUTH_MESSAGE_TYPE,
                 &body,
             ),
-            RequestPayload::ResetCheck(body) => Self::new(
+            RequestPayload::IdentityMatchCheck(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RESET_CHECK_MESSAGE_TYPE,
                 &body,

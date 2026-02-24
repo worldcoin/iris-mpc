@@ -132,7 +132,7 @@ impl From<&SqsMessageInfo> for ResponsePayload {
         match kind {
             IDENTITY_DELETION_MESSAGE_TYPE => parse_response!(IdentityDeletion),
             REAUTH_MESSAGE_TYPE => parse_response!(Reauthorization),
-            RESET_CHECK_MESSAGE_TYPE => parse_response!(ResetCheck),
+            RESET_CHECK_MESSAGE_TYPE => parse_response!(IdentityMatchCheck),
             RESET_UPDATE_MESSAGE_TYPE => parse_response!(ResetUpdate),
             UNIQUENESS_MESSAGE_TYPE => parse_response!(Uniqueness),
             _ => panic!("Unsupported system response type: {kind}"),

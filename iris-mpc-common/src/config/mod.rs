@@ -291,6 +291,9 @@ pub struct Config {
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
+
+    #[serde(default = "default_enable_recovery")]
+    pub enable_recovery: bool,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -466,6 +469,10 @@ fn default_sns_retry_max_attempts() -> u32 {
     5
 }
 
+fn default_enable_recovery() -> bool {
+    false
+}
+
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
@@ -628,6 +635,7 @@ pub struct CommonConfig {
     match_distances_2d_buffer_size: usize,
     enable_reauth: bool,
     enable_reset: bool,
+    enable_recovery: bool,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
@@ -746,6 +754,7 @@ impl From<Config> for CommonConfig {
             enable_pprof_per_batch: _,
             tokio_threads: _,
             sns_retry_max_attempts: _,
+            enable_recovery,
         } = value;
 
         Self {
@@ -796,6 +805,7 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            enable_recovery,
         }
     }
 }

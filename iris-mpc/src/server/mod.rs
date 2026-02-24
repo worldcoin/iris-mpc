@@ -23,8 +23,8 @@ use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    UNIQUENESS_MESSAGE_TYPE,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
+    RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
@@ -287,6 +287,7 @@ struct SnsAttributesMaps {
     reset_check_result_attributes: HashMap<String, MessageAttributeValue>,
     reset_update_result_attributes: HashMap<String, MessageAttributeValue>,
     identity_deletion_result_attributes: HashMap<String, MessageAttributeValue>,
+    recovery_check_result_attributes: HashMap<String, MessageAttributeValue>,
 }
 
 /// Returns a set of attribute maps used to interact with AWS SNS.
@@ -299,13 +300,15 @@ fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
     );
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
-
+    let recovery_check_result_attributes =
+        create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
     Ok(SnsAttributesMaps {
         uniqueness_result_attributes,
         reauth_result_attributes,
         reset_check_result_attributes,
         reset_update_result_attributes,
         identity_deletion_result_attributes,
+        recovery_check_result_attributes,
     })
 }
 
@@ -567,6 +570,7 @@ async fn start_results_thread(
                 &sns_attributes_maps.identity_deletion_result_attributes,
                 &sns_attributes_maps.reset_check_result_attributes,
                 &sns_attributes_maps.reset_update_result_attributes,
+                &sns_attributes_maps.recovery_check_result_attributes,
                 &shutdown_handler_bg,
             )
             .await
@@ -615,6 +619,8 @@ async fn run_main_server_loop(
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_error_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let recovery_check_error_result_attributes =
+        create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
     let res: Result<()> = async {
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
@@ -630,6 +636,7 @@ async fn run_main_server_loop(
             uniqueness_error_result_attribute.clone(),
             reauth_error_result_attribute.clone(),
             reset_error_result_attributes.clone(),
+            recovery_check_error_result_attributes.clone(),
             current_batch_id_atomic.clone(),
             iris_store.clone(),
             batch_sync_shared_state.clone(),

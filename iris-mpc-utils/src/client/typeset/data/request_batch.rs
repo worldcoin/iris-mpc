@@ -16,7 +16,7 @@ use crate::client::options::{RequestOptions, RequestPayloadOptions};
 pub enum BatchKind {
     IdentityDeletion,
     Reauth,
-    ResetCheck,
+    IdentityMatchCheck,
     ResetUpdate,
     Uniqueness,
 }
@@ -27,7 +27,8 @@ impl BatchKind {
         match s {
             smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => Some(Self::IdentityDeletion),
             smpc_request::REAUTH_MESSAGE_TYPE => Some(Self::Reauth),
-            smpc_request::RESET_CHECK_MESSAGE_TYPE => Some(Self::ResetCheck),
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => Some(Self::IdentityMatchCheck),
+            smpc_request::RECOVERY_CHECK_MESSAGE_TYPE => Some(Self::IdentityMatchCheck),
             smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(Self::ResetUpdate),
             smpc_request::UNIQUENESS_MESSAGE_TYPE => Some(Self::Uniqueness),
             _ => None,
@@ -176,16 +177,16 @@ impl RequestBatch {
         });
     }
 
-    /// Extends requests collection with a new ResetCheck request.
-    pub(crate) fn push_new_reset_check(
+    /// Extends requests collection with a new IdentityMatchCheck request.
+    pub(crate) fn push_new_identity_match_check(
         &mut self,
         iris_pair: Option<IrisPairDescriptor>,
         label: Option<String>,
     ) {
-        self.push_request(Request::ResetCheck {
+        self.push_request(Request::IdentityMatchCheck {
             info: RequestInfo::new(self, label, None),
             iris_pair,
-            reset_id: uuid::Uuid::new_v4(),
+            request_id: uuid::Uuid::new_v4(),
         });
     }
 
@@ -278,8 +279,11 @@ impl RequestBatchSet {
                                 Some(parent.clone()),
                             );
                         }
-                        RequestPayloadOptions::ResetCheck { iris_pair } => {
-                            batch.push_new_reset_check(Some(*iris_pair), opts_request.label());
+                        RequestPayloadOptions::IdentityMatchCheck { iris_pair, .. } => {
+                            batch.push_new_identity_match_check(
+                                Some(*iris_pair),
+                                opts_request.label(),
+                            );
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
                             batch.push_new_reset_update(
