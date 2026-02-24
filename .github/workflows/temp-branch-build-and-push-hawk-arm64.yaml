@@ -4,10 +4,11 @@ on:
   push:
     branches:
       - "dev"
-      - "dk/separate_anon_stats_and_match"
+      - "chore/build-init-db-image"
 
     paths-ignore:
       - "deploy/**"
+
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -56,4 +57,4 @@ jobs:
             ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.arm64.hawk
+          file: Dockerfile.arm64.init-db
