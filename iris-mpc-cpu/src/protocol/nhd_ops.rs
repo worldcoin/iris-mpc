@@ -277,6 +277,15 @@ mod tests {
         reference_nhd(cd, md) < MATCH_THRESHOLD_RATIO
     }
 
+    /// Convert negative values of `cd` represented in u16 to their signed i64 representation
+    fn convert_to_signed(cd: u16) -> i64 {
+        if cd > (1 << 15) {
+            cd as i64 - (1 << 16)
+        } else {
+            cd as i64
+        }
+    }
+
     #[tokio::test]
     async fn test_nhd_greater_than_threshold() {
         let mut rng = AesRng::seed_from_u64(43_u64);
@@ -290,12 +299,12 @@ mod tests {
             (1300, 3000, true), // nhd = 0.34 -> match
             (13, 30, false),    // nhd = 0.37 -> no match
             // Edge cases
-            (0, 0, false),          // nhd = infinity -> no match
-            (0, 100, false),        // nhd = 0.47 -> no match
-            (u16::MAX, 200, false), // (-1, 200) -> nhd = 0.47 -> no match
-            (u16::MAX, 1, false),   // (-1, 1) -> nhd = 0.70 -> no match
+            (0, 0, false),               // nhd = infinity -> no match
+            (0, 100, false),             // nhd = 0.47 -> no match
+            (u16::MAX, 200, false),      // (-1, 200) -> nhd = 0.47 -> no match
+            (u16::MAX, 1, false),        // (-1, 1) -> nhd = 0.70 -> no match
             (u16::MAX - 99, 100, false), // (-100, 100) -> nhd = 0.70 -> no match
-            (1, 1, true),           // nhd = 0.25 -> match
+            (1, 1, true),                // nhd = 0.25 -> match
         ];
 
         let flat_values: Vec<u16> = test_cases
@@ -343,12 +352,7 @@ mod tests {
 
         // Check against plaintext
         for (i, (cd, md, expected)) in test_cases.into_iter().enumerate() {
-            // Convert negative values of `cd` represented in u16 to their signed i64 representation
-            let ref_cd = if cd > (1 << 15) {
-                cd as i64 - (1 << 16)
-            } else {
-                cd as i64
-            };
+            let ref_cd = convert_to_signed(cd);
             let reference = reference_nhd_greater_than_threshold(ref_cd, md as i64);
             assert_eq!(
                 results[0][i], reference,
@@ -367,19 +371,23 @@ mod tests {
     async fn test_nhd_cross_compare() {
         let mut rng = AesRng::seed_from_u64(42_u64);
 
-        // Test with known values: (cd1=100, md1=500) vs (cd2=200, md2=600)
-        // These represent (code_dot, mask_dot) pairs.
-        let test_cases: Vec<(u16, u16, u16, u16)> = vec![
-            (100, 500, 200, 600),
-            (50, 400, 150, 300),
-            (300, 1000, 100, 800),
-            (10, 200, 10, 300),
+        // These represent (code_dot1, mask_dot1, code_dot2, mask_dot2, expected result) pairs.
+        let test_cases: Vec<(u16, u16, u16, u16, bool)> = vec![
+            (100, 500, 200, 600, false),                       // 0.43 > 0.39
+            (400, 500, 200, 600, true),                        // 0.28 < 0.39
+            (u16::MAX - 399, 500, u16::MAX - 199, 600, false), // (-400, 500) vs (-200, 600) -> 0.67 > 0.56
+            // same FHD but different mask dot
+            (1300, 3000, 13, 30, true),                // 0.34 < 0.37
+            (u16::MAX, 1, u16::MAX - 999, 1000, true), // 0.70 < 0.73
+            // Edge cases
+            (0, 0, 0, 0, false),     // nhd = infinity vs infinity -> no match
+            (0, 100, 0, 100, false), // nhd = 0.47 vs 0.47 -> no match
         ];
 
         // Create shares of all values: [cd1, md1, cd2, md2, ...]
         let flat_values: Vec<u16> = test_cases
             .iter()
-            .flat_map(|(cd1, md1, cd2, md2)| [*cd1, *md1, *cd2, *md2])
+            .flat_map(|(cd1, md1, cd2, md2, _)| [*cd1, *md1, *cd2, *md2])
             .collect();
         let (p0, p1, p2) = create_array_sharing(&mut rng, &flat_values);
 
@@ -420,9 +428,15 @@ mod tests {
         assert_eq!(results[1], results[2]);
 
         // Check against plaintext
-        for (i, (cd1, md1, cd2, md2)) in test_cases.iter().enumerate() {
-            let expected =
-                reference_nhd_less_than(*cd1 as i64, *md1 as i64, *cd2 as i64, *md2 as i64);
+        for (i, (cd1, md1, cd2, md2, expected)) in test_cases.into_iter().enumerate() {
+            let ref_cd1 = convert_to_signed(cd1);
+            let ref_cd2 = convert_to_signed(cd2);
+            let reference = reference_nhd_less_than(ref_cd1, md1 as i64, ref_cd2, md2 as i64);
+            assert_eq!(
+                results[0][i], reference,
+                "Reference NHD comparison mismatch for ({}, {}) vs ({}, {}): got {}, expected {}",
+                cd1, md1, cd2, md2, results[0][i], reference
+            );
             assert_eq!(
                 results[0][i], expected,
                 "NHD comparison mismatch for ({}, {}) vs ({}, {}): got {}, expected {}",
