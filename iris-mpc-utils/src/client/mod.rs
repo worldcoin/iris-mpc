@@ -176,6 +176,7 @@ impl ServiceClient {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     fn prepare_batch_requests(
         &mut self,
         batch_idx: usize,
