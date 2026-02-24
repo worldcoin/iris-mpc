@@ -128,8 +128,6 @@ impl ServiceClient {
                 break;
             }
         }
-
-        self.state.report_errors();
     }
 
     async fn handle_batch(
@@ -152,12 +150,19 @@ impl ServiceClient {
         // Phase 5: Track published requests and wait for responses.
         self.state
             .track_batch_requests(&batch_requests[..published_count]);
-        let process_result = self.state.process_responses(&self.aws_client).await;
+        self.state.process_responses(&self.aws_client).await;
 
         // Check all error conditions and return consolidated error
         if self.state.sns_publish_error {
             return Err(ServiceClientError::ResponseError(format!(
                 "batch {} failed: SNS publish error occurred",
+                batch_idx
+            )));
+        }
+
+        if self.state.sqs_receive_error {
+            return Err(ServiceClientError::ResponseError(format!(
+                "batch {} failed: SQS receive error occurred",
                 batch_idx
             )));
         }
@@ -168,9 +173,6 @@ impl ServiceClient {
                 batch_idx
             )));
         }
-
-        // Propagate timeout or SQS errors from process_responses
-        process_result?;
 
         tracing::info!(
             "Batch {} finished. Responses to non-deletion requests have been received",
@@ -307,9 +309,9 @@ struct ExecState {
     signup_id_to_labels: HashMap<Uuid, String>,
     outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
     outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo>,
-    error_log: Vec<typeset::RequestInfo>,
     had_validation_errors: bool,
     sns_publish_error: bool,
+    sqs_receive_error: bool,
     live_serial_ids: HashSet<IrisSerialId>,
 }
 
@@ -320,9 +322,9 @@ impl ExecState {
             signup_id_to_labels: HashMap::new(),
             outstanding_requests: HashMap::new(),
             outstanding_deletions: HashMap::new(),
-            error_log: Vec::new(),
             had_validation_errors: false,
             sns_publish_error: false,
+            sqs_receive_error: false,
             live_serial_ids: HashSet::new(),
         }
     }
@@ -366,7 +368,6 @@ impl ExecState {
                 // Remove the request from outstanding map since it failed validation
                 if let Some(info) = map.remove(key) {
                     tracing::error!("request {} failed validation", info);
-                    self.error_log.push(info);
                 }
                 None
             }
@@ -449,10 +450,7 @@ impl ExecState {
 
     // Drains outstanding_requests and outstanding_deletions by polling SQS until both are empty.
     // Returns an error if the batch times out with outstanding requests remaining.
-    async fn process_responses(
-        &mut self,
-        aws_client: &AwsClient,
-    ) -> Result<(), ServiceClientError> {
+    async fn process_responses(&mut self, aws_client: &AwsClient) {
         use crate::constants::N_PARTIES;
 
         let start = Instant::now();
@@ -486,6 +484,7 @@ impl ExecState {
             {
                 Ok(r) => r,
                 Err(e) => {
+                    self.sqs_receive_error = true;
                     tracing::error!("SQS receive failed: {:?}", e);
                     break 'OUTER;
                 }
@@ -493,6 +492,7 @@ impl ExecState {
 
             for sqs_msg in messages {
                 if let Err(e) = aws_client.sqs_purge_response_queue_message(&sqs_msg).await {
+                    self.sqs_receive_error = true;
                     tracing::error!("SQS message purge failed: {:?}", e);
                     break 'OUTER;
                 }
@@ -514,29 +514,12 @@ impl ExecState {
         }
 
         if !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
-            let msg = format!(
-                "Batch timed out after {}s: {} requests, {} deletions still pending",
-                RESPONSE_TIMEOUT_SECS,
-                self.outstanding_requests.len(),
-                self.outstanding_deletions.len()
-            );
-            tracing::warn!("{}", msg);
-            self.error_log
-                .extend(self.outstanding_requests.drain().map(|(_, info)| info));
-            self.error_log
-                .extend(self.outstanding_deletions.drain().map(|(_, info)| info));
-            return Err(ServiceClientError::ResponseError(msg));
-        }
-
-        Ok(())
-    }
-
-    fn report_errors(&self) {
-        if !self.error_log.is_empty() {
-            tracing::warn!(
-                "=== Summary: {} request(s) failed (details logged above) ===",
-                self.error_log.len()
-            );
+            for (_, info) in self.outstanding_requests.iter() {
+                tracing::warn!("Request still pending: {}", info);
+            }
+            for (_, info) in self.outstanding_deletions.iter() {
+                tracing::warn!("Deletion still pending: {}", info);
+            }
         }
     }
 }
