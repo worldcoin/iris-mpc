@@ -75,6 +75,7 @@ impl ServiceClient {
         Ok(())
     }
 
+    // consumes the service client intentionally
     pub async fn run(mut self) -> Result<(), ServiceClientError> {
         self.init().await?;
 
@@ -94,7 +95,8 @@ impl ServiceClient {
         );
 
         // Send deletion requests for all live serial IDs.
-        for serial_id in self.state.live_serial_ids.into_iter() {
+        let live_serial_ids = std::mem::take(&mut self.state.live_serial_ids);
+        for serial_id in live_serial_ids.into_iter() {
             let payload = RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest {
                 serial_id,
             });

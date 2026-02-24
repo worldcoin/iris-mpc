@@ -50,7 +50,7 @@ pub async fn main() -> Result<()> {
     )
     .await?;
 
-    ServiceClient::run(client).await?;
+    client.run().await?;
 
     Ok(())
 }
