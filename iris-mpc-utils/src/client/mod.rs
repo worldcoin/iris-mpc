@@ -4,6 +4,7 @@ use std::{
 };
 
 use async_from::{self, AsyncFrom};
+use iris_mpc_cpu::execution::hawk_main::BothEyes;
 use rand::rngs::StdRng;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
@@ -13,6 +14,8 @@ use uuid::Uuid;
 use crate::{
     aws::types::SnsMessageInfo,
     client::options::{RequestBatchOptions, SharesGeneratorOptions},
+    constants::N_PARTIES,
+    irises::GaloisRingSharedIrisForUpload,
 };
 
 use super::aws::AwsClient;
@@ -36,8 +39,9 @@ const PROGRESS_LOG_INTERVAL_SECS: u64 = 60;
 
 pub struct ServiceClient {
     aws_client: AwsClient,
-    request_batch: RequestBatchOptions,
+    request_batch: Option<RequestBatchOptions>,
     shares_generator: SharesGenerator<StdRng>,
+    state: ExecState,
 }
 
 impl ServiceClient {
@@ -51,8 +55,9 @@ impl ServiceClient {
 
         Ok(Self {
             aws_client,
-            request_batch,
+            request_batch: Some(request_batch),
             shares_generator,
+            state: ExecState::new(),
         })
     }
 
@@ -70,15 +75,12 @@ impl ServiceClient {
         Ok(())
     }
 
-    pub async fn run(mut sc: Self) -> Result<(), ServiceClientError> {
-        sc.init().await?;
-
-        let aws_client = sc.aws_client.clone();
-        let mut live_serial_ids: HashSet<IrisSerialId> = HashSet::new();
+    pub async fn run(mut self) -> Result<(), ServiceClientError> {
+        self.init().await?;
 
         // Run main batch loop, interruptible by Ctrl+C.
         tokio::select! {
-            _ = sc.exec(&mut live_serial_ids) => {
+            _ = self.exec() => {
                 tracing::info!("service client finished");
             },
             _ = tokio::signal::ctrl_c() => {
@@ -86,15 +88,19 @@ impl ServiceClient {
             }
         };
 
-        tracing::info!("Cleaning up {} serial IDs", live_serial_ids.len());
+        tracing::info!(
+            "Cleaning up {} serial IDs",
+            self.state.live_serial_ids.len()
+        );
 
         // Send deletion requests for all live serial IDs.
-        for serial_id in live_serial_ids.into_iter() {
+        for serial_id in self.state.live_serial_ids.into_iter() {
             let payload = RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest {
                 serial_id,
             });
             let sns_msg_info = SnsMessageInfo::from(payload);
-            if let Err(e) = aws_client
+            if let Err(e) = self
+                .aws_client
                 .sns_publish_json(sns_msg_info)
                 .await
                 .map_err(ServiceClientError::AwsServiceError)
@@ -110,138 +116,168 @@ impl ServiceClient {
         Ok(())
     }
 
-    async fn exec(mut self, live_serial_ids: &mut HashSet<IrisSerialId>) {
-        use crate::aws::types::SnsMessageInfo;
+    async fn exec(&mut self) {
+        let request_batch = self
+            .request_batch
+            .take()
+            .expect("exec() called more than once");
+
+        for (batch_idx, batch) in request_batch.into_iter().enumerate() {
+            if let Err(e) = self.handle_batch(batch_idx, batch).await {
+                tracing::error!("Stopping batch processing: {}", e);
+                break;
+            }
+        }
+
+        self.state.report_errors();
+    }
+
+    async fn handle_batch(
+        &mut self,
+        batch_idx: usize,
+        batch: Vec<options::RequestOptions>,
+    ) -> Result<(), ServiceClientError> {
+        // Phase 1: Prepare requests and generate shares.
+        let (batch_requests, batch_shares) = self.prepare_batch_requests(batch_idx, &batch)?;
+
+        // Phase 2: Upload shares to S3.
+        self.upload_shares(batch_shares).await?;
+
+        // Phase 3: Wait for S3 propagation.
+        sleep(Duration::from_secs(S3_PROPAGATION_DELAY_SECS)).await;
+
+        // Phase 4: Publish requests to SNS.
+        let published_count = self.publish_requests(batch_idx, &batch_requests).await?;
+
+        // Phase 5: Track published requests and wait for responses.
+        self.state
+            .track_batch_requests(&batch_requests[..published_count]);
+        self.state.process_responses(&self.aws_client).await?;
+
+        tracing::info!(
+            "Batch {} finished. Responses to non-deletion requests have been received",
+            batch_idx
+        );
+
+        Ok(())
+    }
+
+    fn prepare_batch_requests(
+        &mut self,
+        batch_idx: usize,
+        batch: &[options::RequestOptions],
+    ) -> Result<
+        (
+            Vec<typeset::Request>,
+            Vec<Option<(Uuid, BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>)>>,
+        ),
+        ServiceClientError,
+    > {
         use crate::client::options::Parent;
 
-        let mut state = ExecState::new();
+        let mut batch_requests: Vec<typeset::Request> = Vec::new();
+        let mut batch_shares = Vec::new();
 
-        'OUTER: for (batch_idx, batch) in self.request_batch.into_iter().enumerate() {
-            // Phase 1: Gather all requests and pre-generate shares.
-            let mut batch_requests: Vec<typeset::Request> = Vec::new();
-            let mut batch_shares = Vec::new();
-
-            for (item_idx, opts) in batch.iter().enumerate() {
-                // Look up the iris serial id for uniquess_labels for anything in the batch that
-                // needs it; if not there, drop the item and emit a warning.
-                let parent_serial_id: Option<IrisSerialId> = match opts.get_parent() {
-                    Some(Parent::Id(id)) => Some(id),
-                    Some(Parent::Label(label)) => {
-                        if let Some(&serial_id) = state.uniqueness_labels.get(label.as_str()) {
-                            Some(serial_id)
-                        } else {
-                            tracing::warn!(
-                                "batch {}.{}: dropping request — parent label '{}' unresolved",
-                                batch_idx,
-                                item_idx,
-                                label,
-                            );
-                            continue;
-                        }
-                    }
-                    _ => None,
-                };
-
-                let info = typeset::RequestInfo::with_indices(
-                    batch_idx,
-                    item_idx,
-                    opts.label(),
-                    opts.expected().cloned(),
-                );
-                let request = match opts.make_request(info, parent_serial_id) {
-                    Ok(r) => r,
-                    Err(e) => {
+        for (item_idx, opts) in batch.iter().enumerate() {
+            // Resolve parent serial ID from labels or use provided ID.
+            let parent_serial_id: Option<IrisSerialId> = match opts.get_parent() {
+                Some(Parent::Id(id)) => Some(id),
+                Some(Parent::Label(label)) => {
+                    if let Some(&serial_id) = self.state.uniqueness_labels.get(label.as_str()) {
+                        Some(serial_id)
+                    } else {
                         tracing::warn!(
-                            "batch {}.{}: dropping request — {}",
+                            "batch {}.{}: dropping request — parent label '{}' unresolved",
                             batch_idx,
                             item_idx,
-                            e,
+                            label,
                         );
                         continue;
                     }
-                };
-
-                // Pre-generate shares for request types that require them.
-                let shares_info = if let Some((op_uuid, iris_pair)) = request.get_shares_info() {
-                    let shares = if opts.is_mirrored() {
-                        self.shares_generator.generate_mirrored(iris_pair.as_ref())
-                    } else {
-                        self.shares_generator.generate(iris_pair.as_ref())
-                    };
-                    Some((op_uuid, shares))
-                } else {
-                    None
-                };
-
-                batch_requests.push(request);
-                batch_shares.push(shares_info);
-            }
-
-            // Phase 2: Upload all shares
-            for r in batch_shares
-                .iter()
-                .filter_map(|opt| opt.as_ref())
-                .map(|(op_uuid, shares)| self.aws_client.s3_upload_iris_shares(op_uuid, shares))
-            {
-                if let Err(e) = r.await {
-                    tracing::error!("S3 shares upload failed: {}", e);
-                    break 'OUTER;
                 }
-            }
-            drop(batch_shares);
+                _ => None,
+            };
 
-            // Phase 3: Wait before publishing to allow shares to propagate.
-            sleep(Duration::from_secs(S3_PROPAGATION_DELAY_SECS)).await;
+            let info = typeset::RequestInfo::with_indices(
+                batch_idx,
+                item_idx,
+                opts.label(),
+                opts.expected().cloned(),
+            );
+            let request = match opts.make_request(info, parent_serial_id) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("batch {}.{}: dropping request — {}", batch_idx, item_idx, e,);
+                    continue;
+                }
+            };
 
-            // Phase 4: Publish requests. On failure, stop publishing and only
-            // track successfully published requests so their responses can be
-            // drained and serial IDs cleaned up. No further batches are processed.
-            let mut published_count = 0;
-            let mut sns_failed = false;
-            for request in batch_requests.iter() {
-                let log_tag = request.log_tag();
-                let sns_msg_info = SnsMessageInfo::from(request);
-                if let Err(e) = self.aws_client.sns_publish_json(sns_msg_info).await {
-                    state.sns_publish_error = true;
+            // Pre-generate shares for request types that require them.
+            let shares_info = if let Some((op_uuid, iris_pair)) = request.get_shares_info() {
+                let shares = if opts.is_mirrored() {
+                    self.shares_generator.generate_mirrored(iris_pair.as_ref())
+                } else {
+                    self.shares_generator.generate(iris_pair.as_ref())
+                };
+                Some((op_uuid, shares))
+            } else {
+                None
+            };
+
+            batch_requests.push(request);
+            batch_shares.push(shares_info);
+        }
+
+        Ok((batch_requests, batch_shares))
+    }
+
+    async fn upload_shares(
+        &self,
+        batch_shares: Vec<Option<(Uuid, BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>)>>,
+    ) -> Result<(), ServiceClientError> {
+        for shares_info in batch_shares.iter().filter_map(|opt| opt.as_ref()) {
+            let (op_uuid, shares) = shares_info;
+            self.aws_client
+                .s3_upload_iris_shares(op_uuid, shares)
+                .await
+                .map_err(|e| {
+                    tracing::error!("S3 shares upload failed: {}", e);
+                    ServiceClientError::AwsServiceError(e)
+                })?;
+        }
+        Ok(())
+    }
+
+    async fn publish_requests(
+        &mut self,
+        batch_idx: usize,
+        batch_requests: &[typeset::Request],
+    ) -> Result<usize, ServiceClientError> {
+        use crate::aws::types::SnsMessageInfo;
+
+        let mut published_count = 0;
+        for request in batch_requests.iter() {
+            let log_tag = request.log_tag();
+            let sns_msg_info = SnsMessageInfo::from(request);
+
+            self.aws_client
+                .sns_publish_json(sns_msg_info)
+                .await
+                .map_err(|e| {
+                    self.state.sns_publish_error = true;
                     tracing::error!(
                         "batch {}: SNS publish failed for request {}: {:?}",
                         batch_idx,
                         log_tag,
                         e,
                     );
-                    sns_failed = true;
-                    break;
-                } else {
-                    tracing::info!("publishing {}", log_tag);
-                    published_count += 1;
-                }
-            }
+                    ServiceClientError::AwsServiceError(e)
+                })?;
 
-            // Phase 5: Track only successfully published requests.
-            state.track_batch_requests(&batch_requests[..published_count]);
-
-            // Wait for all responses for this batch.
-            let responses_ok = state
-                .process_responses(&self.aws_client, live_serial_ids)
-                .await;
-
-            tracing::info!(
-                "Batch {} finished. Responses to non-deletion requests have been received",
-                batch_idx
-            );
-
-            if sns_failed {
-                tracing::error!("Stopping batch processing due to SNS publish failure");
-                break;
-            }
-
-            if let Err(e) = responses_ok {
-                tracing::error!("Stopping batch processing: {}", e);
-                break;
-            }
+            tracing::info!("publishing {}", log_tag);
+            published_count += 1;
         }
-
-        state.report_errors();
+        Ok(published_count)
     }
 }
 
@@ -254,6 +290,7 @@ struct ExecState {
     error_log: Vec<typeset::RequestInfo>,
     had_validation_errors: bool,
     sns_publish_error: bool,
+    live_serial_ids: HashSet<IrisSerialId>,
 }
 
 impl ExecState {
@@ -266,6 +303,7 @@ impl ExecState {
             error_log: Vec::new(),
             had_validation_errors: false,
             sns_publish_error: false,
+            live_serial_ids: HashSet::new(),
         }
     }
 
@@ -305,11 +343,7 @@ impl ExecState {
     }
 
     /// Correlates a single response to its outstanding request/deletion, updating state.
-    fn correlate_response(
-        &mut self,
-        response: &typeset::ResponsePayload,
-        live_serial_ids: &mut HashSet<IrisSerialId>,
-    ) {
+    fn correlate_response(&mut self, response: &typeset::ResponsePayload) {
         // Extract correlation UUID from response (IdentityDeletion has none).
         let corr_uuid: Option<Uuid> = match response {
             typeset::ResponsePayload::Uniqueness(r) => r.signup_id.parse().ok(),
@@ -322,7 +356,7 @@ impl ExecState {
                     if info.has_error_response() {
                         self.error_log.push(info);
                     } else {
-                        live_serial_ids.remove(&r.serial_id);
+                        self.live_serial_ids.remove(&r.serial_id);
                     }
                 }
                 self.outstanding_deletions = deletions;
@@ -351,7 +385,7 @@ impl ExecState {
                             self.uniqueness_labels.insert(label, serial_id);
                         }
                         // track these to clean them up later
-                        live_serial_ids.insert(serial_id);
+                        self.live_serial_ids.insert(serial_id);
                     }
                 }
             }
@@ -391,7 +425,6 @@ impl ExecState {
     async fn process_responses(
         &mut self,
         aws_client: &AwsClient,
-        live_serial_ids: &mut HashSet<IrisSerialId>,
     ) -> Result<(), ServiceClientError> {
         use crate::constants::N_PARTIES;
 
@@ -449,7 +482,7 @@ impl ExecState {
                     }
                 };
                 tracing::info!("received {}", response.log_tag());
-                self.correlate_response(&response, live_serial_ids);
+                self.correlate_response(&response);
             }
         }
 

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 mod types;
 
 pub use types::AwsOptions;
-pub use types::{Parent, RequestBatchOptions, SharesGeneratorOptions};
+pub use types::{Parent, RequestBatchOptions, RequestOptions, SharesGeneratorOptions};
 
 use crate::client::ServiceClientError;
 use iris_mpc_common::helpers::smpc_request;
