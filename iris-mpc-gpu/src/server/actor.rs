@@ -3346,11 +3346,7 @@ impl ServerActor {
         }
     }
 
-    fn persist_two_sided_caches(
-        &self,
-        orientation: Orientation,
-        caches: &[TwoSidedDistanceCache],
-    ) {
+    fn persist_two_sided_caches(&self, orientation: Orientation, caches: &[TwoSidedDistanceCache]) {
         tracing::info!(
             "Persisting two-sided anon stats caches for orientation {:?}",
             orientation
