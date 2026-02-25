@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "dk/separate_anon_stats_and_match"
+      - "elenagryaznova-pop-3507-implement-recoverycheck-message-handling-v2"
 
     paths-ignore:
       - "deploy/**"
