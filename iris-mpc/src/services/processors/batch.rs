@@ -956,14 +956,26 @@ pub async fn get_own_batch_sync_state(
     let fixed = *FIXED_BATCH_SIZE.lock().expect("FIXED_BATCH_SIZE poisoned");
 
     let messages_to_poll = if let Some(fixed_size) = fixed {
-        tracing::info!(
-            "Using fixed batch size {} for batch ID {}",
-            fixed_size,
-            current_batch_id
-        );
-        // Wait until enough messages are available, but cap at max_batch_size
-        let capped = std::cmp::min(fixed_size, config.max_batch_size);
-        std::cmp::min(approximate_visible_messages, capped as u32)
+        // Fixed batch size overrides max_batch_size — that's its purpose.
+        // Wait until SQS reports at least `fixed_size` messages, then poll exactly that many.
+        // Returning 0 makes the caller's retry loop (3s sleep) wait and re-check.
+        if approximate_visible_messages >= fixed_size as u32 {
+            tracing::info!(
+                "Fixed batch size {} satisfied for batch ID {} (approximate_visible_messages={})",
+                fixed_size,
+                current_batch_id,
+                approximate_visible_messages
+            );
+            fixed_size as u32
+        } else {
+            tracing::info!(
+                "Waiting for fixed batch size {} for batch ID {} (approximate_visible_messages={})",
+                fixed_size,
+                current_batch_id,
+                approximate_visible_messages
+            );
+            0
+        }
     } else {
         let index = (current_batch_id - 1) as usize;
         if config.predefined_batch_sizes.len() > index {

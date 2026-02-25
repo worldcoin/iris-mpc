@@ -152,10 +152,15 @@ impl ServiceClient {
                 break;
             }
         }
+
+        // Clear fixed_batch_size on all parties so it doesn't affect subsequent runs.
+        if self.server_config_urls.is_some() {
+            self.clear_fixed_batch_size().await;
+        }
     }
 
     /// Sets the fixed_batch_size on all server parties via their /config endpoint.
-    /// Waits for confirmation from each party before returning.
+    /// Posts to all parties concurrently to minimize the window where parties disagree.
     async fn set_fixed_batch_size(&self, batch_size: usize) -> Result<(), ServiceClientError> {
         let urls = self
             .server_config_urls
@@ -164,58 +169,102 @@ impl ServiceClient {
 
         let body = serde_json::json!({ "fixed_batch_size": batch_size });
 
-        for (party_idx, base_url) in urls.iter().enumerate() {
+        let futs = urls.iter().enumerate().map(|(party_idx, base_url)| {
             let url = format!("{}/config", base_url);
-            let resp = self
-                .http_client
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| {
-                    ServiceClientError::RuntimeConfigError(format!(
-                        "party {}: POST {} failed: {}",
-                        party_idx, url, e
-                    ))
-                })?;
+            let body = body.clone();
+            let client = &self.http_client;
+            async move {
+                let resp = client
+                    .post(&url)
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        ServiceClientError::RuntimeConfigError(format!(
+                            "party {}: POST {} failed: {}",
+                            party_idx, url, e
+                        ))
+                    })?;
 
-            if !resp.status().is_success() {
-                return Err(ServiceClientError::RuntimeConfigError(format!(
-                    "party {}: POST {} returned status {}",
+                if !resp.status().is_success() {
+                    return Err(ServiceClientError::RuntimeConfigError(format!(
+                        "party {}: POST {} returned status {}",
+                        party_idx,
+                        url,
+                        resp.status()
+                    )));
+                }
+
+                let config_resp: serde_json::Value =
+                    resp.json().await.map_err(|e| {
+                        ServiceClientError::RuntimeConfigError(format!(
+                            "party {}: failed to parse /config response: {}",
+                            party_idx, e
+                        ))
+                    })?;
+
+                let confirmed_size = config_resp
+                    .get("fixed_batch_size")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+
+                if confirmed_size != Some(batch_size) {
+                    return Err(ServiceClientError::RuntimeConfigError(format!(
+                        "party {}: batch size not confirmed (expected {}, got {:?})",
+                        party_idx, batch_size, confirmed_size
+                    )));
+                }
+
+                tracing::info!(
+                    "Party {} confirmed fixed_batch_size = {}",
                     party_idx,
-                    url,
-                    resp.status()
-                )));
+                    batch_size
+                );
+                Ok(())
             }
+        });
 
-            let config_resp: serde_json::Value =
-                resp.json().await.map_err(|e| {
-                    ServiceClientError::RuntimeConfigError(format!(
-                        "party {}: failed to parse /config response: {}",
-                        party_idx, e
-                    ))
-                })?;
-
-            let confirmed_size = config_resp
-                .get("fixed_batch_size")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as usize);
-
-            if confirmed_size != Some(batch_size) {
-                return Err(ServiceClientError::RuntimeConfigError(format!(
-                    "party {}: batch size not confirmed (expected {}, got {:?})",
-                    party_idx, batch_size, confirmed_size
-                )));
-            }
-
-            tracing::info!(
-                "Party {} confirmed fixed_batch_size = {}",
-                party_idx,
-                batch_size
-            );
-        }
-
+        futures::future::try_join_all(futs).await?;
         Ok(())
+    }
+
+    /// Clears fixed_batch_size on all parties. Best-effort — logs errors but doesn't fail.
+    async fn clear_fixed_batch_size(&self) {
+        let urls = self
+            .server_config_urls
+            .as_ref()
+            .expect("clear_fixed_batch_size called without server_config_urls");
+
+        let body = serde_json::json!({ "fixed_batch_size": null });
+
+        let futs = urls.iter().enumerate().map(|(party_idx, base_url)| {
+            let url = format!("{}/config", base_url);
+            let body = body.clone();
+            let client = &self.http_client;
+            async move {
+                match client.post(&url).json(&body).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        tracing::info!("Party {}: cleared fixed_batch_size", party_idx);
+                    }
+                    Ok(resp) => {
+                        tracing::error!(
+                            "Party {}: clearing fixed_batch_size returned status {}",
+                            party_idx,
+                            resp.status()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Party {}: failed to clear fixed_batch_size: {}",
+                            party_idx,
+                            e
+                        );
+                    }
+                }
+            }
+        });
+
+        futures::future::join_all(futs).await;
     }
 
     async fn handle_batch(
