@@ -1,6 +1,6 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1048576"
+    value: "1069136"
 
   - name: GENESIS_BATCH_SIZE
     value: "dynamic:cap=96,error_rate=128"
