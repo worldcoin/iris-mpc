@@ -219,10 +219,9 @@ async fn receive_batch(
                     .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
                     .string_value()
-                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
-                    .to_string();
+                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
-                match request_type.as_str() {
+                match request_type {
                     IDENTITY_DELETION_MESSAGE_TYPE => {
                         // If it's a deletion request, we just store the serial_id and continue.
                         // Deletion will take place when batch process starts.
@@ -497,7 +496,77 @@ async fn receive_batch(
                         }
                     }
 
-                    RECOVERY_CHECK_MESSAGE_TYPE | RESET_CHECK_MESSAGE_TYPE => {
+                    RESET_CHECK_MESSAGE_TYPE => {
+                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
+
+                        let reset_check_request: IdentityMatchCheckRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error(
+                                    "Identity match check request",
+                                    e,
+                                )
+                            })?;
+
+                        metrics::counter!("request.received", "type" => "reset_check").increment(1);
+
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::from)?;
+
+                        if config.enable_reset {
+                            msg_counter += 1;
+
+                            // Persist in progress reset_check message.
+                            // Note that reset_check is only a query and does not persist anything into the database.
+                            // We store modification so that the SNS result can be replayed.
+                            let modification = store
+                                .insert_modification(
+                                    None,
+                                    RESET_CHECK_MESSAGE_TYPE,
+                                    Some(reset_check_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            batch_query.modifications.insert(
+                                RequestId(reset_check_request.request_id.clone()),
+                                modification,
+                            );
+
+                            if let Some(batch_size) = reset_check_request.batch_size {
+                                *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                    batch_size.clamp(1, max_batch_size);
+                                tracing::info!("Updating batch size to {}", batch_size);
+                            }
+
+                            batch_query.push_matching_request(
+                                sns_message_id,
+                                reset_check_request.request_id.clone(),
+                                RESET_CHECK_MESSAGE_TYPE,
+                                batch_metadata,
+                                vec![], // use AND rule for reset check requests
+                                false,  // skip_persistence is only used for uniqueness requests
+                            );
+
+                            let semaphore = Arc::clone(&semaphore);
+                            let s3_client_arc = s3_client.clone();
+                            let bucket_name = config.shares_bucket_name.clone();
+                            let s3_key = reset_check_request.s3_key.clone();
+                            let handle = get_iris_shares_parse_task(
+                                party_id,
+                                shares_encryption_key_pairs,
+                                semaphore,
+                                s3_client_arc,
+                                bucket_name,
+                                s3_key,
+                            )?;
+
+                            handles.push(handle);
+                        }
+                    }
+                    RECOVERY_CHECK_MESSAGE_TYPE => {
                         let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
 
                         let identity_match_check_request: IdentityMatchCheckRequest =
@@ -508,7 +577,7 @@ async fn receive_batch(
                                 )
                             })?;
 
-                        metrics::counter!("request.received", "type" => request_type.clone())
+                        metrics::counter!("request.received", "type" => "recovery_check")
                             .increment(1);
 
                         client
@@ -519,11 +588,7 @@ async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::from)?;
 
-                        if !config.enable_reset && request_type == RESET_CHECK_MESSAGE_TYPE {
-                            tracing::warn!("Reset is disabled, skipping reset check request");
-                            continue;
-                        }
-                        if !config.enable_recovery && request_type == RECOVERY_CHECK_MESSAGE_TYPE {
+                        if !config.enable_recovery {
                             tracing::warn!("Recovery is disabled, skipping recovery check request");
                             continue;
                         }
