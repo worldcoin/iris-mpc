@@ -15,7 +15,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "true"
+    value: "false"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
@@ -57,8 +57,14 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
+
   - name: SMPC__MAX_DB_SIZE
-    value: "2000000"
+    value: "2097152"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "96"
