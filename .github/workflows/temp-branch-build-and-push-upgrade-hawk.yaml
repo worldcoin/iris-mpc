@@ -3,7 +3,6 @@ name: Branch - Hawk Upgrade Build and push docker image
 on:
   push:
     branches:
-      - "sw/numa_fix"
       - "POP-2651/implement-and-test-table-coping-for-genesis-rollback"
 
 concurrency:
