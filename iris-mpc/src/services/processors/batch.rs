@@ -412,12 +412,8 @@ impl<'a> BatchProcessor<'a> {
             }
             REAUTH_MESSAGE_TYPE => self.process_reauth_request(&message, batch_metadata).await,
             IDENTITY_MATCH_CHECK_MESSAGE_TYPE => {
-                self.process_identity_match_check_request(
-                    &message,
-                    batch_metadata,
-                    IDENTITY_MATCH_CHECK_MESSAGE_TYPE,
-                )
-                .await
+                self.process_identity_match_check_request(&message, batch_metadata)
+                    .await
             }
             RESET_UPDATE_MESSAGE_TYPE => {
                 self.process_reset_update_request(&message, batch_metadata)
@@ -624,7 +620,6 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
-        request_type: &str,
     ) -> Result<(), ReceiveRequestError> {
         let sns_message_id = message.message_id.clone();
         let identity_match_check_request: IdentityMatchCheckRequest =
@@ -632,10 +627,10 @@ impl<'a> BatchProcessor<'a> {
                 ReceiveRequestError::json_parse_error("Identity match check request", e)
             })?;
 
-        metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
+        metrics::counter!("request.received", "type" => IDENTITY_MATCH_CHECK_MESSAGE_TYPE.to_string()).increment(1);
         tracing::debug!(
             "Received {} request: {:?}",
-            request_type,
+            IDENTITY_MATCH_CHECK_MESSAGE_TYPE,
             identity_match_check_request.clone()
         );
 
@@ -646,7 +641,7 @@ impl<'a> BatchProcessor<'a> {
             self.config.disable_persistence,
             self.iris_store,
             None,
-            request_type,
+            IDENTITY_MATCH_CHECK_MESSAGE_TYPE,
             Some(identity_match_check_request.s3_key.as_str()),
         )
         .await;
@@ -658,7 +653,7 @@ impl<'a> BatchProcessor<'a> {
         self.batch_query.push_matching_request(
             sns_message_id,
             identity_match_check_request.request_id.clone(),
-            request_type,
+            IDENTITY_MATCH_CHECK_MESSAGE_TYPE,
             batch_metadata,
             vec![], // reset checks use the AND rule
             false,  // skip_persistence is only used for uniqueness requests

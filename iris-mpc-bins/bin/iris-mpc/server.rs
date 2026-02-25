@@ -532,7 +532,7 @@ async fn receive_batch(
                         let modification = store
                             .insert_modification(
                                 None,
-                                &request_type,
+                                IDENTITY_MATCH_CHECK_MESSAGE_TYPE,
                                 Some(identity_match_check_request.s3_key.as_str()),
                             )
                             .await?;
