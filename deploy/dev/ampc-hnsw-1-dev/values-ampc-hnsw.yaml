@@ -3,7 +3,7 @@ env:
     value: "1094684"
 
   - name: GENESIS_BATCH_SIZE
-    value: "dynamic:cap=96,error_rate=128"
+    value: "static=96"
 
   - name: RUST_LOG
     value: "info"
@@ -12,7 +12,7 @@ env:
     value: "full"
 
   - name: SMPC__TOKIO_THREADS
-    value: 16
+    value: "16"
     
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
