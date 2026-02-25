@@ -219,9 +219,10 @@ async fn receive_batch(
                     .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
                     .string_value()
-                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
+                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+                    .to_string();
 
-                match request_type {
+                match request_type.as_str() {
                     IDENTITY_DELETION_MESSAGE_TYPE => {
                         // If it's a deletion request, we just store the serial_id and continue.
                         // Deletion will take place when batch process starts.
@@ -507,7 +508,8 @@ async fn receive_batch(
                                 )
                             })?;
 
-                        metrics::counter!("request.received", "type" => request_type).increment(1);
+                        metrics::counter!("request.received", "type" => request_type.clone())
+                            .increment(1);
 
                         client
                             .delete_message()
@@ -533,7 +535,7 @@ async fn receive_batch(
                         let modification = store
                             .insert_modification(
                                 None,
-                                request_type.clone(),
+                                &request_type,
                                 Some(identity_match_check_request.s3_key.as_str()),
                             )
                             .await?;
@@ -551,7 +553,7 @@ async fn receive_batch(
                         batch_query.push_matching_request(
                             sns_message_id,
                             identity_match_check_request.request_id.clone(),
-                            request_type.clone(),
+                            &request_type,
                             batch_metadata,
                             vec![], // use AND rule for reset check requests
                             false,  // skip_persistence is only used for uniqueness requests
