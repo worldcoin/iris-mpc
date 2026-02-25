@@ -692,11 +692,8 @@ async fn receive_batch(
                 // shares
                 let request_id = batch_query.request_ids[index].clone();
                 let request_type = batch_query.request_types[index].as_str();
-                let response_target = batch_query
-                    .request_id_to_target
-                    .get(&request_id)
-                    .cloned()
-                    .unwrap_or_else(|| RESET_CHECK_MESSAGE_TARGET.to_string());
+                let response_target =
+                    get_response_target(&request_id, &batch_query.request_id_to_target);
                 let (result_attributes, message) = match request_type {
                     UNIQUENESS_MESSAGE_TYPE => {
                         let message = UniquenessResult::new_error_result(
@@ -1650,9 +1647,9 @@ async fn server_main(config: Config) -> Result<()> {
                 .filter(|(_, request_type)| matches!(request_type.as_str(), IDENTITY_MATCH_CHECK_MESSAGE_TYPE))
                 .map(|(i, request_type)| {
                     let request_id = request_ids[i].clone();
-                    let response_target = request_id_to_target.get(&request_id).cloned().unwrap_or_else(|| RESET_CHECK_MESSAGE_TARGET.to_string());
+                    let response_target = get_response_target(&request_id, &request_id_to_target);
                     let result_event = IdentityMatchCheckResult::new(
-                        request_ids[i].clone(),
+                        request_id.clone(),
                         party_id,
                         Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                         Some(
@@ -2067,4 +2064,11 @@ async fn server_main(config: Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn get_response_target(request_id: &str, request_id_to_target: &HashMap<String, String>) -> String {
+    request_id_to_target
+        .get(request_id)
+        .cloned()
+        .unwrap_or_else(|| RESET_CHECK_MESSAGE_TARGET.to_string())
 }
