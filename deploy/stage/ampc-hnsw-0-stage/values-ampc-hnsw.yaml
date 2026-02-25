@@ -49,7 +49,7 @@ env:
     value: "_correctness_test"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "64"
+    value: "1"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
