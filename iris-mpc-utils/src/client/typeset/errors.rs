@@ -19,6 +19,9 @@ pub enum ServiceClientError {
     #[error("Request preparation error")]
     RequestPreparationError,
 
+    #[error("Shares upload error")]
+    SharesUploadError,
+
     #[error("Response error: {0}")]
     ResponseError(String),
 }

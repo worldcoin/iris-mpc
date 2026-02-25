@@ -157,6 +157,9 @@ pub enum RequestBatchOptions {
 
         batch_size: usize,
 
+        // these percentages must sum to <= 100.
+        // if percent_uniqueness + percent_reauth < 100 then
+        // the  remaining percentage will be the other request types
         percent_uniqueness: usize,
 
         percent_reauth: usize,

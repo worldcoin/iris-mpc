@@ -149,12 +149,14 @@ impl ServiceClient {
         let (batch_requests, batch_shares) = self.prepare_batch_requests(batch_idx, &batch)?;
 
         // Phase 2: Upload shares to S3.
-        self.upload_shares(batch_shares).await;
+        self.upload_shares(batch_shares).await?;
 
         // Phase 3: Wait for S3 propagation.
         sleep(Duration::from_secs(S3_PROPAGATION_DELAY_SECS)).await;
 
         // Phase 4: Publish requests to SNS.
+        // From this point forward, continue on error in an attempt to clean up requests
+        // which have already been published
         let published_count = self.publish_requests(batch_idx, &batch_requests).await;
 
         // Phase 5: Track published requests and wait for responses.
@@ -259,16 +261,15 @@ impl ServiceClient {
     async fn upload_shares(
         &mut self,
         batch_shares: Vec<Option<(Uuid, BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>)>>,
-    ) {
+    ) -> Result<(), ServiceClientError> {
         for shares_info in batch_shares.iter().filter_map(|opt| opt.as_ref()) {
             let (op_uuid, shares) = shares_info;
             if let Err(e) = self.aws_client.s3_upload_iris_shares(op_uuid, shares).await {
-                self.state.error_bits.set_upload_shares_error();
                 tracing::error!("S3 shares upload failed: {:?}", e);
-                // Stop uploading further shares
-                break;
+                return Err(ServiceClientError::SharesUploadError);
             }
         }
+        Ok(())
     }
 
     async fn publish_requests(
@@ -313,7 +314,6 @@ impl ErrorBits {
     const SQS_RECEIVE: u32 = 1 << 1;
     const VALIDATION: u32 = 1 << 2;
     const REQUEST_DROPPED: u32 = 1 << 3;
-    const UPLOAD_SHARES: u32 = 1 << 4;
 
     fn new() -> Self {
         Self(0)
@@ -333,10 +333,6 @@ impl ErrorBits {
 
     fn set_request_dropped_error(&mut self) {
         self.0 |= Self::REQUEST_DROPPED;
-    }
-
-    fn set_upload_shares_error(&mut self) {
-        self.0 |= Self::UPLOAD_SHARES;
     }
 
     fn get_request_dropped_error(&self) -> bool {
@@ -366,9 +362,6 @@ impl std::fmt::Display for ErrorBits {
         }
         if self.0 & Self::REQUEST_DROPPED != 0 {
             parts.push("request_dropped_error");
-        }
-        if self.0 & Self::UPLOAD_SHARES != 0 {
-            parts.push("upload_shares_error");
         }
 
         write!(f, "{}", parts.join(" | "))
