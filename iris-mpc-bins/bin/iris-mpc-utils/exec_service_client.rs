@@ -47,6 +47,7 @@ pub async fn main() -> Result<()> {
         AwsOptions::from(&options),
         opts.request_batch,
         opts.shares_generator,
+        opts.server_config_urls,
     )
     .await?;
 

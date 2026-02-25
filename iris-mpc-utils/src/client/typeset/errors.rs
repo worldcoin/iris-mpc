@@ -21,4 +21,7 @@ pub enum ServiceClientError {
 
     #[error("Response error: {0}")]
     ResponseError(String),
+
+    #[error("Runtime config error: {0}")]
+    RuntimeConfigError(String),
 }

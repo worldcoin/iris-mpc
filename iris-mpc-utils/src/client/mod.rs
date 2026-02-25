@@ -50,6 +50,8 @@ pub struct ServiceClient {
     request_batch: Option<RequestBatchOptions>,
     shares_generator: SharesGenerator<StdRng>,
     state: ExecState,
+    server_config_urls: Option<Vec<String>>,
+    http_client: reqwest::Client,
 }
 
 impl ServiceClient {
@@ -57,6 +59,7 @@ impl ServiceClient {
         opts_aws: AwsOptions,
         request_batch: RequestBatchOptions,
         shares_generator: SharesGeneratorOptions,
+        server_config_urls: Option<Vec<String>>,
     ) -> Result<Self, ServiceClientError> {
         let aws_client = AwsClient::async_from(opts_aws).await;
         let shares_generator = SharesGenerator::<StdRng>::from_options(shares_generator);
@@ -66,6 +69,8 @@ impl ServiceClient {
             request_batch: Some(request_batch),
             shares_generator,
             state: ExecState::new(),
+            server_config_urls,
+            http_client: reqwest::Client::new(),
         })
     }
 
@@ -133,11 +138,84 @@ impl ServiceClient {
             .expect("exec() called more than once");
 
         for (batch_idx, batch) in request_batch.into_iter().enumerate() {
+            let batch_size = batch.len();
+
+            if self.server_config_urls.is_some() {
+                if let Err(e) = self.set_fixed_batch_size(batch_size).await {
+                    tracing::error!("Failed to set fixed batch size: {}", e);
+                    break;
+                }
+            }
+
             if let Err(e) = self.handle_batch(batch_idx, batch).await {
                 tracing::error!("{}", e);
                 break;
             }
         }
+    }
+
+    /// Sets the fixed_batch_size on all server parties via their /config endpoint.
+    /// Waits for confirmation from each party before returning.
+    async fn set_fixed_batch_size(&self, batch_size: usize) -> Result<(), ServiceClientError> {
+        let urls = self
+            .server_config_urls
+            .as_ref()
+            .expect("set_fixed_batch_size called without server_config_urls");
+
+        let body = serde_json::json!({ "fixed_batch_size": batch_size });
+
+        for (party_idx, base_url) in urls.iter().enumerate() {
+            let url = format!("{}/config", base_url);
+            let resp = self
+                .http_client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| {
+                    ServiceClientError::RuntimeConfigError(format!(
+                        "party {}: POST {} failed: {}",
+                        party_idx, url, e
+                    ))
+                })?;
+
+            if !resp.status().is_success() {
+                return Err(ServiceClientError::RuntimeConfigError(format!(
+                    "party {}: POST {} returned status {}",
+                    party_idx,
+                    url,
+                    resp.status()
+                )));
+            }
+
+            let config_resp: serde_json::Value =
+                resp.json().await.map_err(|e| {
+                    ServiceClientError::RuntimeConfigError(format!(
+                        "party {}: failed to parse /config response: {}",
+                        party_idx, e
+                    ))
+                })?;
+
+            let confirmed_size = config_resp
+                .get("fixed_batch_size")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+
+            if confirmed_size != Some(batch_size) {
+                return Err(ServiceClientError::RuntimeConfigError(format!(
+                    "party {}: batch size not confirmed (expected {}, got {:?})",
+                    party_idx, batch_size, confirmed_size
+                )));
+            }
+
+            tracing::info!(
+                "Party {} confirmed fixed_batch_size = {}",
+                party_idx,
+                batch_size
+            );
+        }
+
+        Ok(())
     }
 
     async fn handle_batch(

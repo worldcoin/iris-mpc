@@ -81,6 +81,7 @@ pub struct Opt {
 
     #[arg(long, env)]
     pub populate_file_data_limit: Option<usize>,
+
 }
 
 /// The core client functionality is moved into an async function so it can be
