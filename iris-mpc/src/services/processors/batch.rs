@@ -33,6 +33,7 @@ use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use iris_mpc_store::Store;
+use ampc_server_utils::FIXED_BATCH_SIZE;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -951,19 +952,32 @@ pub async fn get_own_batch_sync_state(
         approximate_visible_messages
     );
 
-    let index = (current_batch_id - 1) as usize;
+    // Check for a fixed batch size override (set via /config HTTP endpoint)
+    let fixed = *FIXED_BATCH_SIZE.lock().expect("FIXED_BATCH_SIZE poisoned");
 
-    let messages_to_poll = if config.predefined_batch_sizes.len() > index {
-        // predefined_batch_sizes are only used in test environments to reproduce specific scenarios
+    let messages_to_poll = if let Some(fixed_size) = fixed {
         tracing::info!(
-            "Using predefined batch size {} for batch ID {}",
-            config.predefined_batch_sizes[index],
+            "Using fixed batch size {} for batch ID {}",
+            fixed_size,
             current_batch_id
         );
-        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
+        // Wait until enough messages are available, but cap at max_batch_size
+        let capped = std::cmp::min(fixed_size, config.max_batch_size);
+        std::cmp::min(approximate_visible_messages, capped as u32)
     } else {
-        // Use the dynamic batch size calculation based on SQS approximate visible messages
-        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
+        let index = (current_batch_id - 1) as usize;
+        if config.predefined_batch_sizes.len() > index {
+            // predefined_batch_sizes are only used in test environments to reproduce specific scenarios
+            tracing::info!(
+                "Using predefined batch size {} for batch ID {}",
+                config.predefined_batch_sizes[index],
+                current_batch_id
+            );
+            std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
+        } else {
+            // Use the dynamic batch size calculation based on SQS approximate visible messages
+            std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
+        }
     };
 
     let batch_sync_state = BatchSyncState {

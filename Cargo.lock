@@ -113,7 +113,7 @@ source = "git+https://github.com/worldcoin/ampc-common.git?rev=28f5c5573db81b51d
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?rev=28f5c5573db81b51de4cc0efa6bbc9c210c8d6c9)",
  "axum 0.8.7",
  "bincode",
  "chrono",
@@ -145,6 +145,32 @@ dependencies = [
  "rand 0.8.5",
  "rand_distr",
  "serde",
+]
+
+[[package]]
+name = "ampc-server-utils"
+version = "0.1.0"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#a65ad321db6e11fef808691cdf528103a123ccc8"
+dependencies = [
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sqs",
+ "axum 0.7.7",
+ "base64",
+ "chrono",
+ "eyre",
+ "futures",
+ "hex",
+ "itertools 0.13.0",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sodiumoxide",
+ "thiserror 2.0.16",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -2913,7 +2939,7 @@ name = "iris-mpc"
 version = "0.1.0"
 dependencies = [
  "ampc-anon-stats",
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint)",
  "aws-config",
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
@@ -2947,7 +2973,7 @@ version = "0.1.0"
 dependencies = [
  "aes-prng",
  "ampc-anon-stats",
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint)",
  "async_from",
  "aws-config",
  "aws-sdk-kms",
@@ -3009,7 +3035,7 @@ dependencies = [
  "ampc-actor-utils",
  "ampc-anon-stats",
  "ampc-secret-sharing",
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint)",
  "aws-config",
  "aws-credential-types",
  "aws-sdk-kms",
@@ -3062,7 +3088,7 @@ dependencies = [
  "ampc-actor-utils",
  "ampc-anon-stats",
  "ampc-secret-sharing",
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint)",
  "ansiterm",
  "async-channel",
  "async-trait",
@@ -3119,7 +3145,7 @@ name = "iris-mpc-gpu"
 version = "0.1.0"
 dependencies = [
  "ampc-anon-stats",
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint)",
  "axum 0.7.7",
  "bytemuck",
  "criterion",
@@ -3159,7 +3185,7 @@ dependencies = [
 name = "iris-mpc-store"
 version = "0.1.0"
 dependencies = [
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint)",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
@@ -3211,7 +3237,7 @@ dependencies = [
 name = "iris-mpc-upgrade-hawk"
 version = "0.1.0"
 dependencies = [
- "ampc-server-utils",
+ "ampc-server-utils 0.1.0 (git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint)",
  "aws-config",
  "aws-sdk-rds",
  "aws-sdk-s3",
