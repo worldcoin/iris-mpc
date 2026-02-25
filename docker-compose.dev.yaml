@@ -17,7 +17,7 @@ services:
       start_period: 40s
 
   localstack:
-    image: public.ecr.aws/localstack/localstack:4.9
+    image: public.ecr.aws/localstack/localstack:4.13
     depends_on:
       dev_db:
         condition: service_healthy

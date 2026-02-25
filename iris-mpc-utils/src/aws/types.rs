@@ -1,7 +1,12 @@
 use std::fmt;
 
+use iris_mpc_common::helpers::smpc_request;
 use serde::ser::Serialize;
 use serde_json;
+
+use crate::client::{Request, RequestPayload};
+
+const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 // Helper type encapsulating AWS-S3 object information.
 #[derive(Debug)]
@@ -17,19 +22,19 @@ pub struct S3ObjectInfo {
 }
 
 impl S3ObjectInfo {
-    pub fn body(&self) -> &Vec<u8> {
+    pub fn body(&self) -> &[u8] {
         &self.body
     }
 
-    pub fn bucket(&self) -> &String {
+    pub fn bucket(&self) -> &str {
         &self.bucket
     }
 
-    pub fn key(&self) -> &String {
+    pub fn key(&self) -> &str {
         &self.key
     }
 
-    pub fn new<T>(bucket: &String, key: &String, body: &T) -> Self
+    pub fn new<T>(bucket: &str, key: &str, body: &T) -> Self
     where
         T: ?Sized + Serialize,
     {
@@ -47,7 +52,7 @@ impl fmt::Display for S3ObjectInfo {
     }
 }
 
-// Helper type encpasulating an AWS-SQS message.
+// Helper type encapsulating an AWS-SQS message.
 #[derive(Debug)]
 pub struct SnsMessageInfo {
     // SNS message body - a JSON encoded string.
@@ -61,15 +66,15 @@ pub struct SnsMessageInfo {
 }
 
 impl SnsMessageInfo {
-    pub fn body(&self) -> &String {
+    pub fn body(&self) -> &str {
         &self.body
     }
 
-    pub fn group_id(&self) -> &String {
+    pub fn group_id(&self) -> &str {
         &self.group_id
     }
 
-    pub fn kind(&self) -> &String {
+    pub fn kind(&self) -> &str {
         &self.kind
     }
 
@@ -91,7 +96,7 @@ impl fmt::Display for SnsMessageInfo {
     }
 }
 
-// Helper type encpasulating an AWS-SQS message.
+// Helper type encapsulating an AWS-SQS message.
 #[derive(Debug)]
 pub struct SqsMessageInfo {
     // SNS message body - a JSON encoded string.
@@ -99,6 +104,9 @@ pub struct SqsMessageInfo {
 
     // SQS message kind - e.g. "uniqueness".
     kind: String,
+
+    // SQS queue URL from which the message was received.
+    queue_url: String,
 
     // SQS message receipt handle for subsequent purging.
     receipt_handle: String,
@@ -113,14 +121,19 @@ impl SqsMessageInfo {
         &self.kind
     }
 
+    pub fn queue_url(&self) -> &str {
+        &self.queue_url
+    }
+
     pub fn receipt_handle(&self) -> &str {
         &self.receipt_handle
     }
 
-    pub fn new(kind: String, body: String, receipt_handle: String) -> Self {
+    pub fn new(kind: String, body: String, queue_url: String, receipt_handle: String) -> Self {
         Self {
             body,
             kind,
+            queue_url,
             receipt_handle,
         }
     }
@@ -129,5 +142,43 @@ impl SqsMessageInfo {
 impl fmt::Display for SqsMessageInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.kind)
+    }
+}
+
+impl From<&Request> for SnsMessageInfo {
+    fn from(request: &Request) -> Self {
+        Self::from(RequestPayload::from(request))
+    }
+}
+
+impl From<RequestPayload> for SnsMessageInfo {
+    fn from(body: RequestPayload) -> Self {
+        match body {
+            RequestPayload::IdentityDeletion(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::Reauthorization(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::REAUTH_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::ResetCheck(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_CHECK_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::ResetUpdate(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::Uniqueness(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::UNIQUENESS_MESSAGE_TYPE,
+                &body,
+            ),
+        }
     }
 }

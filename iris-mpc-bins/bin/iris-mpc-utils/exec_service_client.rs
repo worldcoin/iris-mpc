@@ -1,29 +1,56 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, path::PathBuf, time::UNIX_EPOCH};
 
-use async_from::{self, AsyncFrom};
 use clap::Parser;
 use eyre::Result;
-use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
 use iris_mpc_utils::{
     client::{AwsOptions, ServiceClient, ServiceClientOptions},
     fsys::reader::read_toml,
 };
 
+struct UtcHms;
+
+impl tracing_subscriber::fmt::time::FormatTime for UtcHms {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> fmt::Result {
+        let secs = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        write!(
+            w,
+            "{:02}:{:02}:{:02}",
+            (secs / 3600) % 24,
+            (secs / 60) % 60,
+            secs % 60
+        )
+    }
+}
+
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_timer(UtcHms)
+        .with_ansi(false)
+        .with_target(false)
+        .init();
 
     let options = CliOptions::parse();
     tracing::info!("{}", options);
 
-    let mut client = ServiceClient::<StdRng>::async_from(options.clone()).await;
-    if let Err(e) = client.init().await {
-        tracing::error!("Initialisation failure: {}", e);
-        return Err(e.into());
+    let mut opts = ServiceClientOptions::from(&options);
+    if let Some(ref iris_path) = options.path_to_iris_shares {
+        opts.set_iris_shares_path(iris_path);
     }
+    opts.validate()?;
 
-    client.exec().await?;
+    let client = ServiceClient::new(
+        AwsOptions::from(&options),
+        opts.request_batch,
+        opts.shares_generator,
+    )
+    .await?;
+
+    client.run().await?;
 
     Ok(())
 }
@@ -45,11 +72,11 @@ struct CliOptions {
 
 impl CliOptions {
     fn path_to_opts(&self) -> PathBuf {
-        PathBuf::from(self.path_to_opts.clone())
+        PathBuf::from(&self.path_to_opts)
     }
 
     fn path_to_opts_aws(&self) -> PathBuf {
-        PathBuf::from(self.path_to_opts_aws.clone())
+        PathBuf::from(&self.path_to_opts_aws)
     }
 }
 
@@ -72,19 +99,6 @@ Iris-MPC Service Client Options:
             self.path_to_opts,
             self.path_to_iris_shares.as_deref().unwrap_or("(none)"),
         )
-    }
-}
-
-#[async_from::async_trait]
-impl<R: Rng + CryptoRng + SeedableRng + Send> AsyncFrom<CliOptions> for ServiceClient<R> {
-    async fn async_from(options: CliOptions) -> Self {
-        let mut opts = ServiceClientOptions::from(&options);
-        if let Some(ref iris_path) = options.path_to_iris_shares {
-            opts.set_iris_shares_path(iris_path);
-        }
-        ServiceClient::<R>::new(opts, AwsOptions::from(&options))
-            .await
-            .unwrap()
     }
 }
 
