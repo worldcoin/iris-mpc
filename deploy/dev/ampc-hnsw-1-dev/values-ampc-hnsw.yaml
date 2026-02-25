@@ -11,6 +11,9 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
+  - name: SMPC__TOKIO_THREADS
+    value: 16
+    
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
