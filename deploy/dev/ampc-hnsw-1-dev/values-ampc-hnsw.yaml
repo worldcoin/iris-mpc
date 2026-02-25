@@ -39,6 +39,15 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_cpu1M"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "_gpu1M"
+
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-1"
 
@@ -47,9 +56,6 @@ env:
       secretKeyRef:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
-
-  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_minfhd"
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
