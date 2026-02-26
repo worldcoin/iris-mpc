@@ -414,6 +414,11 @@ impl<'a> BatchProcessor<'a> {
             }
             REAUTH_MESSAGE_TYPE => self.process_reauth_request(&message, batch_metadata).await,
             RECOVERY_CHECK_MESSAGE_TYPE => {
+                if !self.config.hawk_server_recovery_enabled {
+                    metrics::counter!("request.skipped", "type" => "recovery_check").increment(1);
+                    tracing::warn!("Recovery checks are disabled, skipping recovery check request");
+                    return Ok(());
+                }
                 self.process_identity_match_check_request(
                     &message,
                     batch_metadata,
@@ -422,6 +427,11 @@ impl<'a> BatchProcessor<'a> {
                 .await
             }
             RESET_CHECK_MESSAGE_TYPE => {
+                if !self.config.hawk_server_resets_enabled {
+                    metrics::counter!("request.skipped", "type" => "reset_check").increment(1);
+                    tracing::warn!("Resets are disabled, skipping reset request");
+                    return Ok(());
+                }
                 self.process_identity_match_check_request(
                     &message,
                     batch_metadata,

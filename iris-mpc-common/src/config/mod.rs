@@ -271,6 +271,9 @@ pub struct Config {
     #[serde(default = "default_hawk_server_resets_enabled")]
     pub hawk_server_resets_enabled: bool,
 
+    #[serde(default = "default_hawk_server_recovery_enabled")]
+    pub hawk_server_recovery_enabled: bool,
+
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
@@ -412,6 +415,10 @@ fn default_hawk_server_reauths_enabled() -> bool {
 }
 
 fn default_hawk_server_resets_enabled() -> bool {
+    false
+}
+
+fn default_hawk_server_recovery_enabled() -> bool {
     false
 }
 
@@ -654,6 +661,7 @@ pub struct CommonConfig {
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
     hawk_server_resets_enabled: bool,
+    hawk_server_recovery_enabled: bool,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
     batch_polling_timeout_secs: i32,
@@ -737,6 +745,7 @@ impl From<Config> for CommonConfig {
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
             hawk_server_resets_enabled,
+            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
@@ -800,6 +809,7 @@ impl From<Config> for CommonConfig {
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
             hawk_server_resets_enabled,
+            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
