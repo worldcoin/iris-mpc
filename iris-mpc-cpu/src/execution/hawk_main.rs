@@ -109,7 +109,8 @@ use iris_mpc_common::{
 };
 use iris_mpc_common::{
     helpers::smpc_request::{
-        REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        UNIQUENESS_MESSAGE_TYPE,
     },
     vector_id::VectorId,
 };
@@ -1089,7 +1090,8 @@ impl HawkRequest {
                 } else {
                     None
                 }),
-                RESET_CHECK_MESSAGE_TYPE => ResetCheck,
+                RESET_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
+                RECOVERY_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
                 _ => Unsupported,
             })
             .collect_vec()
