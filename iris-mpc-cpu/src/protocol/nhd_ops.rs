@@ -8,13 +8,12 @@ use ampc_actor_utils::protocol::{
 use ampc_secret_sharing::shares::ring48::Ring48;
 pub use ampc_secret_sharing::shares::{
     bit::Bit,
-    ring_impl::RingElement,
+    ring_impl::{RingElement, RingRandFillable},
     share::{DistanceShare, Share},
     vecshare::VecShare,
 };
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
-use itertools::izip;
 use tracing::instrument;
 
 // ---------------------------------------------------------------------------
@@ -45,64 +44,34 @@ pub async fn nhd_cross_mul(
 
     // ---- Round 1: interactive multiply to get product_i = md_i * linear_i ----
     // For each pair we compute 2 products (one per distance).
-    let (prf_my_r1, prf_prev_r1) = session.prf.gen_rands_batch::<Ring48>(2 * n);
+    let products = reshare_products(session, 2 * n, |k| {
+        let i = k / 2;
+        let d = if k % 2 == 0 {
+            &distances[i].0
+        } else {
+            &distances[i].1
+        };
+        let linear = d.mask_dot - d.code_dot * Ring48(NHD_LINEAR_COEFF);
+        &d.mask_dot * &linear
+    })
+    .await?;
 
-    let round1_a: Vec<RingElement<Ring48>> = distances
-        .iter()
-        .enumerate()
-        .flat_map(|(i, (d1, d2))| {
-            // linear_i = md_i - 10*cd_i
-            let linear1 = d1.mask_dot - d1.code_dot * Ring48(NHD_LINEAR_COEFF);
-            let linear2 = d2.mask_dot - d2.code_dot * Ring48(NHD_LINEAR_COEFF);
-
-            // product_i = md_i * linear_i (local part of replicated multiplication)
-            let prod1_a = prf_my_r1.0[2 * i] - prf_prev_r1.0[2 * i] + &d1.mask_dot * &linear1;
-            let prod2_a =
-                prf_my_r1.0[2 * i + 1] - prf_prev_r1.0[2 * i + 1] + &d2.mask_dot * &linear2;
-            [prod1_a, prod2_a]
-        })
-        .collect();
-
-    let network = &mut session.network_session;
-    network
-        .send_next(Ring48::new_network_vec(round1_a.clone()))
-        .await?;
-    let round1_b: Vec<RingElement<Ring48>> = Ring48::into_vec(network.receive_prev().await?)?;
-
-    // Reconstruct product shares and compute nmr_i = product_i - 73728*cd_i
+    // Reconstruct nmr_i = product_i - 73728*cd_i
     let nmrs: Vec<(Share<Ring48>, Share<Ring48>)> = (0..n)
         .map(|i| {
-            let prod1 = Share::new(round1_a[2 * i], round1_b[2 * i]);
-            let prod2 = Share::new(round1_a[2 * i + 1], round1_b[2 * i + 1]);
-            let nmr1 = prod1 - distances[i].0.code_dot * Ring48(NHD_CORRECTION);
-            let nmr2 = prod2 - distances[i].1.code_dot * Ring48(NHD_CORRECTION);
+            let nmr1 = products[2 * i] - distances[i].0.code_dot * Ring48(NHD_CORRECTION);
+            let nmr2 = products[2 * i + 1] - distances[i].1.code_dot * Ring48(NHD_CORRECTION);
             (nmr1, nmr2)
         })
         .collect();
 
     // ---- Round 2: cross product nmr_1*md_2 - nmr_2*md_1 and reshare ----
-    let (prf_my_r2, prf_prev_r2) = session.prf.gen_rands_batch::<Ring48>(n);
-
-    let round2_a: Vec<RingElement<Ring48>> = izip!(
-        nmrs.iter(),
-        distances.iter(),
-        prf_my_r2.0.into_iter(),
-        prf_prev_r2.0.into_iter()
-    )
-    .map(|((nmr1, nmr2), (d1, d2), my_r, prev_r)| {
-        let zero_share = my_r - prev_r;
-        zero_share + (nmr1 * &d2.mask_dot) - (nmr2 * &d1.mask_dot)
+    reshare_products(session, n, |i| {
+        let (nmr1, nmr2) = &nmrs[i];
+        let (d1, d2) = &distances[i];
+        (nmr1 * &d2.mask_dot) - (nmr2 * &d1.mask_dot)
     })
-    .collect();
-
-    network
-        .send_next(Ring48::new_network_vec(round2_a.clone()))
-        .await?;
-    let round2_b: Vec<RingElement<Ring48>> = Ring48::into_vec(network.receive_prev().await?)?;
-
-    Ok(izip!(round2_a, round2_b)
-        .map(|(a, b)| Share::new(a, b))
-        .collect())
+    .await
 }
 
 /// For every pair of NHD distance shares (d1, d2), computes d1 < d2 and opens it.
@@ -177,32 +146,70 @@ pub async fn nhd_greater_than_threshold(
 
     // We check: [md * (50*cd - 5*md)] - A*md + 368640*cd < 0
     // The bracketed term requires one interactive multiplication round.
+    let products = reshare_products(session, n, |i| {
+        let d = &distances[i];
+        let linear = d.code_dot * Ring48(50) - d.mask_dot * Ring48(5);
+        &d.mask_dot * &linear
+    })
+    .await?;
 
-    let (prf_my, prf_prev) = session.prf.gen_rands_batch::<Ring48>(n);
-
-    let round_a: Vec<RingElement<Ring48>> = distances
-        .iter()
+    let results: Vec<Share<Ring48>> = products
+        .into_iter()
         .enumerate()
-        .map(|(i, d)| {
-            let linear = d.code_dot * Ring48(50) - d.mask_dot * Ring48(5);
-            prf_my.0[i] - prf_prev.0[i] + &d.mask_dot * &linear
-        })
-        .collect();
-
-    let network = &mut session.network_session;
-    network
-        .send_next(Ring48::new_network_vec(round_a.clone()))
-        .await?;
-    let round_b: Vec<RingElement<Ring48>> = Ring48::into_vec(network.receive_prev().await?)?;
-
-    let results: Vec<Share<Ring48>> = (0..n)
-        .map(|i| {
-            let product = Share::new(round_a[i], round_b[i]);
+        .map(|(i, product)| {
             product - distances[i].mask_dot * Ring48(A) + distances[i].code_dot * Ring48(368640)
         })
         .collect();
 
     extract_msb_batch(session, &results).await
+}
+
+// ---------------------------------------------------------------------------
+// Batched replicated multiplication
+// ---------------------------------------------------------------------------
+
+/// Executes one round of the ABY3 replicated multiplication protocol.
+///
+/// The caller provides a closure that computes the local product expression
+/// for each of `n` output shares. The function handles PRF zero-share
+/// generation, network communication (send_next/receive_prev), and share
+/// reconstruction.
+///
+/// The closure receives the batch index `0..n` and returns a `RingElement<T>`
+/// representing the product terms for that slot. Multiple products can be
+/// additively combined by simply returning their sum/difference.
+///
+/// TODO migrate to ampc-common and apply to other instances of ABY3 products
+pub async fn reshare_products<T, F>(
+    session: &mut Session,
+    n: usize,
+    mut expr: F,
+) -> Result<Vec<Share<T>>>
+where
+    T: NetworkInt + RingRandFillable,
+    F: FnMut(usize) -> RingElement<T>,
+{
+    let (prf_my, prf_prev) = session.prf.gen_rands_batch::<T>(n);
+
+    let round_a: Vec<RingElement<T>> = prf_my
+        .0
+        .into_iter()
+        .zip(prf_prev.0)
+        .enumerate()
+        .map(|(i, (my_r, prev_r))| (my_r - prev_r) + expr(i))
+        .collect();
+
+    let network = &mut session.network_session;
+    network
+        .send_next(T::new_network_vec(round_a.clone()))
+        .await?;
+    let round_b: Vec<RingElement<T>> = T::into_vec(network.receive_prev().await?)?;
+
+    Ok(round_a
+        .into_iter()
+        .zip(round_b)
+        .map(|(a, b)| Share::new(a, b))
+        .collect())
 }
 
 #[cfg(test)]
