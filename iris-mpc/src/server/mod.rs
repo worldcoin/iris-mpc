@@ -618,7 +618,8 @@ async fn run_main_server_loop(
     let uniqueness_error_result_attribute =
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
-    let reset_error_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_check_error_result_attributes =
+        create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let recovery_check_error_result_attributes =
         create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
     let res: Result<()> = async {
@@ -635,7 +636,7 @@ async fn run_main_server_loop(
             shutdown_handler.clone(),
             uniqueness_error_result_attribute.clone(),
             reauth_error_result_attribute.clone(),
-            reset_error_result_attributes.clone(),
+            reset_check_error_result_attributes.clone(),
             recovery_check_error_result_attributes.clone(),
             current_batch_id_atomic.clone(),
             iris_store.clone(),

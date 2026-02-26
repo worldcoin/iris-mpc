@@ -117,7 +117,7 @@ pub fn receive_batch_stream(
     shutdown_handler: Arc<ShutdownHandler>,
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
-    reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
     recovery_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
 ) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
@@ -140,7 +140,7 @@ pub fn receive_batch_stream(
                 &shutdown_handler,
                 &uniqueness_error_result_attributes,
                 &reauth_error_result_attributes,
-                &reset_error_result_attributes,
+                &reset_check_error_result_attributes,
                 &recovery_check_error_result_attributes,
             )
             .await;
@@ -170,7 +170,7 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-    reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     recovery_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
@@ -786,7 +786,7 @@ async fn receive_batch(
                             ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
                         );
                         let serialized = serde_json::to_string(&message).unwrap();
-                        (reset_error_result_attributes, serialized)
+                        (reset_check_error_result_attributes, serialized)
                     }
                     RECOVERY_CHECK_MESSAGE_TYPE => {
                         let message = IdentityMatchCheckResult::new_error_result(
