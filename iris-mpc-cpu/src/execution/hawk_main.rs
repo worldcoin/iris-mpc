@@ -1090,8 +1090,8 @@ impl HawkRequest {
                 } else {
                     None
                 }),
-                RESET_CHECK_MESSAGE_TYPE => ResetCheck,
-                RECOVERY_CHECK_MESSAGE_TYPE => RecoveryCheck,
+                RESET_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
+                RECOVERY_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
                 _ => Unsupported,
             })
             .collect_vec()
