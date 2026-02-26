@@ -1645,7 +1645,7 @@ async fn server_main(config: Config) -> Result<()> {
                 .map(|(i, request_type)| {
                     let request_id = request_ids[i].clone();
                     let result_event = IdentityMatchCheckResult::new(
-                        request_ids[i].clone(),
+                        request_id,
                         party_id,
                         Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                         Some(
