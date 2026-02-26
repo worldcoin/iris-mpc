@@ -4,7 +4,7 @@ use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
 };
 use rand::SeedableRng;
@@ -19,7 +19,7 @@ fn main() -> Result<()> {
 
     let (_vector, _graph) = rt.block_on(async move {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let mut vector = PlaintextStore::new();
+        let mut vector = PlaintextStore::<FhdOps>::new();
         let mut graph = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 

@@ -2,6 +2,7 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
+    hawkers::aby3::aby3_store::FhdOps,
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         metrics::ops_counter::{
@@ -87,7 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Run HNSW construction
 
     let mut rng = AesRng::seed_from_u64(42_u64);
-    let mut vector = PlaintextStore::new();
+    let mut vector = PlaintextStore::<FhdOps>::new();
     let mut graph = GraphMem::new();
     let mut searcher = HnswSearcher::new_standard(ef_constr, ef_search, M);
     if let Some(q) = layer_probability {

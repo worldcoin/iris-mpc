@@ -28,7 +28,7 @@ use crate::{
     },
 };
 
-use super::aby3_store::Aby3Store;
+use super::aby3_store::{Aby3Store, FhdOps};
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
@@ -60,7 +60,7 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
 
     shared_irises
         .into_iter()
-        .map(|db| Aby3Store::new_storage(Some(db)).to_arc())
+        .map(|db| Aby3Store::<FhdOps>::new_storage(Some(db)).to_arc())
         .collect()
 }
 
@@ -94,7 +94,7 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .sessions
         .into_iter()
         .map(|session| {
-            let storage = Aby3Store::new_storage(None).to_arc();
+            let storage = Aby3Store::<FhdOps>::new_storage(None).to_arc();
             let workers = iris_worker::init_workers(0, storage.clone(), true);
 
             Ok(Arc::new(Mutex::new(Aby3Store::new(

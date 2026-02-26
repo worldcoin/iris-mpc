@@ -2,17 +2,18 @@ use crate::{
     execution::session::{Session, SessionHandles},
     protocol::shared_iris::ArcIris,
 };
-use ampc_actor_utils::fast_metrics::FastHistogram;
+use ampc_actor_utils::network::value::NetworkInt;
+use ampc_actor_utils::protocol::binary::{
+    and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k_to_32, open_bin,
+    single_extract_msb,
+};
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
     sub_pub,
 };
-use ampc_actor_utils::protocol::{
-    binary::{
-        and_product, bit_inject, extract_msb_batch, lift, mul_lift_2k_to_32, open_bin,
-        single_extract_msb,
-    },
-    ops::{conditionally_select_distance, cross_mul, oblivious_cross_compare},
+use ampc_actor_utils::{
+    fast_metrics::FastHistogram,
+    protocol::ops::{conditionally_select_distance, cross_mul, oblivious_cross_compare},
 };
 pub use ampc_secret_sharing::shares::{
     bit::Bit,
@@ -20,14 +21,19 @@ pub use ampc_secret_sharing::shares::{
     share::{reconstruct_distance_vector, DistanceShare, Share},
     vecshare::VecShare,
 };
+use ampc_secret_sharing::shares::{int_ring::IntRing2k, ring_impl::RingRandFillable};
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{IrisRotation, SHARE_OF_MAX_DISTANCE},
     ROTATIONS as ALL_ROTATIONS,
 };
 use itertools::{izip, Itertools};
+use rand_distr::{Distribution, Standard};
 use std::{cmp::Ordering, ops::Not, time::Instant};
 use tracing::instrument;
+
+pub(crate) type DistancePair<D> = (DistanceShare<D>, DistanceShare<D>);
+pub(crate) type IdDistance<D> = (Share<D>, DistanceShare<D>);
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
@@ -81,13 +87,17 @@ pub async fn lift_and_compare_threshold(
 
 /// Conditionally selects equally-sized slices of input shares based on control bits.
 /// If the control bit is 1, it selects the left value shares; otherwise, it selects the right value share.
-async fn select_shared_slices_by_bits(
+async fn select_shared_slices_by_bits<T>(
     session: &mut Session,
-    left_values: &[Share<u32>],
-    right_values: &[Share<u32>],
-    control_bits: &[Share<u32>],
+    left_values: &[Share<T>],
+    right_values: &[Share<T>],
+    control_bits: &[Share<T>],
     slice_size: usize,
-) -> Result<Vec<Share<u32>>> {
+) -> Result<Vec<Share<T>>>
+where
+    T: IntRing2k + NetworkInt,
+    Standard: Distribution<T>,
+{
     if left_values.len() != right_values.len() {
         bail!("Left and right values must have the same length");
     }
@@ -102,7 +112,7 @@ async fn select_shared_slices_by_bits(
     // If control bit is 1, select left_value, else select right_value.
     // res = c * (left_value - right_value) + right_value
     // Compute c * (left_value - right_value)
-    let res_a: VecRingElement<u32> = izip!(
+    let res_a: VecRingElement<T> = izip!(
         left_values.chunks(slice_size),
         right_values.chunks(slice_size),
         control_bits.iter()
@@ -113,7 +123,7 @@ async fn select_shared_slices_by_bits(
             .zip(right_chunk.iter())
             .map(|(left, right)| {
                 let diff = *left - *right;
-                session.prf.gen_zero_share() + c.a * diff.a + c.b * diff.a + c.a * diff.b
+                session.prf.gen_zero_share::<T>() + c.a * diff.a + c.b * diff.a + c.a * diff.b
             })
             .collect_vec()
     })
@@ -123,7 +133,7 @@ async fn select_shared_slices_by_bits(
 
     network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = network.receive_ring_vec_prev().await?;
+    let res_b: VecRingElement<T> = network.receive_ring_vec_prev().await?;
 
     // Pack networking messages into shares and
     // compute the result by adding the right shares
@@ -135,12 +145,16 @@ async fn select_shared_slices_by_bits(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub(crate) async fn conditionally_select_distances_with_plain_ids(
+pub(crate) async fn conditionally_select_distances_with_plain_ids<T>(
     session: &mut Session,
-    left_distances: Vec<(u32, DistanceShare<u32>)>,
-    right_distances: Vec<(u32, DistanceShare<u32>)>,
-    control_bits: Vec<Share<u32>>,
-) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+    left_distances: Vec<(u32, DistanceShare<T>)>,
+    right_distances: Vec<(u32, DistanceShare<T>)>,
+    control_bits: Vec<Share<T>>,
+) -> Result<Vec<IdDistance<T>>>
+where
+    T: IntRing2k + NetworkInt + From<u32>,
+    Standard: Distribution<T>,
+{
     if left_distances.len() != control_bits.len() {
         eyre::bail!("Number of distances must match number of control bits");
     }
@@ -173,8 +187,8 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
     // Select ids first: c * (left_id - right_id) + right_id
     let ids = izip!(left_ids, right_ids, control_bits).map(|(left_id, right_id, c)| {
         let diff = left_id.wrapping_sub(right_id);
-        let mut res = c * RingElement(diff);
-        res.add_assign_const_role(right_id, session.own_role());
+        let mut res = c * RingElement(T::from(diff));
+        res.add_assign_const_role(T::from(right_id), session.own_role());
         res
     });
 
@@ -184,12 +198,16 @@ pub(crate) async fn conditionally_select_distances_with_plain_ids(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub(crate) async fn conditionally_select_distances_with_shared_ids(
+pub(crate) async fn conditionally_select_distances_with_shared_ids<T>(
     session: &mut Session,
-    left_distances: Vec<(Share<u32>, DistanceShare<u32>)>,
-    right_distances: Vec<(Share<u32>, DistanceShare<u32>)>,
-    control_bits: Vec<Share<u32>>,
-) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+    left_distances: Vec<IdDistance<T>>,
+    right_distances: Vec<IdDistance<T>>,
+    control_bits: Vec<Share<T>>,
+) -> Result<Vec<IdDistance<T>>>
+where
+    T: IntRing2k + NetworkInt,
+    Standard: Distribution<T>,
+{
     if left_distances.len() != control_bits.len() {
         eyre::bail!("Number of distances must match number of control bits");
     }
@@ -221,31 +239,34 @@ pub(crate) async fn conditionally_select_distances_with_shared_ids(
 
 /// Conditionally swaps the distance shares based on control bits.
 /// Given the ith pair of indices (i1, i2), the function does the following.
-/// If the control bit is 0, it swaps tuples (32-bit id, distance share) with index i1 and i2,
+/// If the control bit is 0, it swaps tuples (id, distance share) with index i1 and i2,
 /// otherwise it does nothing.
-/// Assumes that the input shares are originally 16-bit and lifted to u32.
 /// The vector ids are in plaintext and propagated in secret shared form.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn conditionally_swap_distances_plain_ids(
+pub async fn conditionally_swap_distances_plain_ids<T>(
     session: &mut Session,
     swap_bits: Vec<Share<Bit>>,
-    list: &[(u32, DistanceShare<u32>)],
+    list: &[(u32, DistanceShare<T>)],
     indices: &[(usize, usize)],
-) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+) -> Result<Vec<IdDistance<T>>>
+where
+    T: IntRing2k + NetworkInt + RingRandFillable + From<u32>,
+    Standard: Distribution<T>,
+{
     if swap_bits.len() != indices.len() {
         eyre::bail!("swap bits and indices must have the same length");
     }
     let role = session.own_role();
-    // Convert vector ids into trivial shares
+    // Convert vector ids into trivial shares (promoted to ring T)
     let mut encrypted_list = list
         .iter()
         .map(|(id, d)| {
-            let shared_index = Share::from_const(*id, role);
+            let shared_index = Share::from_const(T::from(*id), role);
             (shared_index, *d)
         })
         .collect_vec();
-    // Lift swap bits to u32 shares
-    let swap_bits_u32 = bit_inject(session, VecShare::<Bit>::new_vec(swap_bits))
+    // Lift swap bits to T shares
+    let swap_bits_lifted: Vec<Share<T>> = bit_inject(session, VecShare::<Bit>::new_vec(swap_bits))
         .await?
         .inner();
 
@@ -258,7 +279,7 @@ pub async fn conditionally_swap_distances_plain_ids(
         .collect_vec();
     // Select the first distance in each pair based on the control bits
     let first_distances =
-        conditionally_select_distance(session, &distances_to_swap, &swap_bits_u32).await?;
+        conditionally_select_distance(session, &distances_to_swap, &swap_bits_lifted).await?;
     // Select the second distance in each pair as sum of both distances minus the first selected distance
     let second_distances = distances_to_swap
         .into_iter()
@@ -272,15 +293,15 @@ pub async fn conditionally_swap_distances_plain_ids(
         .collect_vec();
 
     for (bit, (idx1, idx2), first_d, second_d) in izip!(
-        swap_bits_u32.iter(),
+        swap_bits_lifted.iter(),
         indices.iter(),
         first_distances,
         second_distances
     ) {
         let mut not_bit = -bit;
-        not_bit.add_assign_const_role(1, role);
-        let id1 = list[*idx1].0;
-        let id2 = list[*idx2].0;
+        not_bit.add_assign_const_role(T::from(1u32), role);
+        let id1 = T::from(list[*idx1].0);
+        let id2 = T::from(list[*idx2].0);
         // Only propagate index and skip version id.
         // This computation is local as indices are public.
         let first_id = bit * id1 + not_bit * id2;
@@ -295,27 +316,31 @@ pub async fn conditionally_swap_distances_plain_ids(
 /// Given the ith pair of indices (i1, i2), the function does the following.
 /// If the ith control bit is 0, it swaps tuples (0-indexed vector id, distance share) with index i1 and i2,
 /// otherwise it does nothing.
-/// Assumes that the input shares are originally 16-bit and lifted to u32.
+/// Assumes that the input shares are originally 16-bit and lifted to T.
 /// The vector ids are 0-indexed and given in secret shared form.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn conditionally_swap_distances(
+pub async fn conditionally_swap_distances<T>(
     session: &mut Session,
     swap_bits: Vec<Share<Bit>>,
-    list: &[(Share<u32>, DistanceShare<u32>)],
+    list: &[IdDistance<T>],
     indices: &[(usize, usize)],
-) -> Result<Vec<(Share<u32>, DistanceShare<u32>)>> {
+) -> Result<Vec<IdDistance<T>>>
+where
+    T: IntRing2k + NetworkInt + RingRandFillable,
+    Standard: Distribution<T>,
+{
     if swap_bits.len() != indices.len() {
         return Err(eyre!("swap bits and indices must have the same length"));
     }
-    // Lift bits to u32 shares
-    let swap_bits_u32 = bit_inject(session, VecShare::<Bit>::new_vec(swap_bits))
+    // Lift bits to T shares
+    let swap_bits_lifted: Vec<Share<T>> = bit_inject(session, VecShare::<Bit>::new_vec(swap_bits))
         .await?
         .inner();
 
     // A helper closure to compute the difference of two input shares and prepare the a part of the product of this difference and the control bit.
-    let mut mul_share_a = |x: Share<u32>, y: Share<u32>, sb: &Share<u32>| -> RingElement<u32> {
+    let mut mul_share_a = |x: Share<T>, y: Share<T>, sb: &Share<T>| -> RingElement<T> {
         let diff = x - y;
-        session.prf.gen_zero_share() + sb.a * diff.a + sb.b * diff.a + sb.a * diff.b
+        session.prf.gen_zero_share::<T>() + sb.a * diff.a + sb.b * diff.a + sb.a * diff.b
     };
 
     // Conditional swapping:
@@ -325,9 +350,9 @@ pub async fn conditionally_swap_distances(
     // We need to do it for ids, code_dot and mask_dot.
 
     // Compute c * (d1-d2)
-    let res_a: VecRingElement<u32> = indices
+    let res_a: VecRingElement<T> = indices
         .iter()
-        .zip(swap_bits_u32.iter())
+        .zip(swap_bits_lifted.iter())
         .flat_map(|((idx1, idx2), sb)| {
             let (id1, d1) = &list[*idx1];
             let (id2, d2) = &list[*idx2];
@@ -343,7 +368,7 @@ pub async fn conditionally_swap_distances(
 
     network.send_ring_vec_next(&res_a).await?;
 
-    let res_b = network.receive_ring_vec_prev().await?;
+    let res_b: VecRingElement<T> = network.receive_ring_vec_prev().await?;
 
     // Finally compute the swapped tuples.
     let swapped_distances = izip!(res_a, res_b)
@@ -401,7 +426,7 @@ pub async fn conditionally_swap_distances(
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
 pub async fn cross_compare(
     session: &mut Session,
-    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+    distances: &[DistancePair<u32>],
 ) -> Result<Vec<bool>> {
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
@@ -412,73 +437,15 @@ pub async fn cross_compare(
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
-/// Given a flattened array of distance shares arranged in batches,
-/// this function computes the minimum distance share within each batch via the round-robin method.
+/// Builds round-robin comparison pairs from a flattened batch of distance shares.
 ///
-/// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
-/// then the input distance shares are arranged as follows:
-/// `[
-///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
-///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
-///     ...,
-///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
-/// ]`
-///
-/// The round-robin method computes all pairwise "less-than" relations within each batch,
-/// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
-///
-///    | d0 | d1 | d2 | d3 |
-/// ------------------------
-/// d0 | 1  | b01| b02| b03|
-/// d1 | b10| 1  | b12| b13|
-/// d2 | b20| b21| 1  | b23|
-/// d3 | b30| b31| b32| 1  |
-///
-/// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
-/// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
-/// that turns the comparison table into
-///
-///    | d0 | d1 | d2 | d3 |
-/// ------------------------
-/// d0 | 1  | b01| b02| b03|
-/// d1 |!b01| 1  | b12| b13|
-/// d2 |!b02|!b12| 1  | b23|
-/// d3 |!b03|!b13|!b23| 1  |
-///
-/// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
-/// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
-/// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
-/// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
-/// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
-pub(crate) async fn min_round_robin_batch(
-    session: &mut Session,
-    distances: &[DistanceShare<u32>],
+/// Within each batch, compute all the pairs to be compared in a round-robin fashion,
+/// namely, the pairs di, dj for all i < j, where di and dj are distances within the same batch.
+fn build_round_robin_pairs<T: IntRing2k>(
+    distances: &[DistanceShare<T>],
     batch_size: usize,
-) -> Result<Vec<DistanceShare<u32>>> {
-    if distances.is_empty() {
-        eyre::bail!("Expected at least one distance share");
-    }
-    if distances.len() % batch_size != 0 {
-        eyre::bail!("Distances length must be a multiple of batch size");
-    }
-    if batch_size < 2 {
-        return Ok(distances.to_vec());
-    }
-
-    // Within each batch, compute all the pairwise comparisons in a round-robin fashion.
-    // The resulting comparison table looks like
-    //
-    //    | d0 | d1 | d2 | d3 |
-    // ------------------------
-    // d0 | -  | b01| b02| b03|
-    // d1 |    | -  | b12| b13|
-    // d2 |    |    | -  | b23|
-    // d3 |    |    |    | -  |
-    //
-    // where `bij` is the bit corresponding to `di < dj`.
-    // Comparison bits are arranged in a flat vector as
-    // `[b01, b02, b03, b12, b13, b23]`.
-    let num_batches = distances.len() / batch_size;
+    num_batches: usize,
+) -> Vec<DistancePair<T>> {
     let mut pairs = Vec::with_capacity(num_batches * (batch_size * (batch_size - 1) / 2));
     for i_batch in 0..num_batches {
         for i in 0..batch_size {
@@ -489,7 +456,35 @@ pub(crate) async fn min_round_robin_batch(
             }
         }
     }
-    let comparison_bits = oblivious_cross_compare(session, &pairs).await?;
+    pairs
+}
+
+/// Given round-robin comparison bits, selects the minimum distance in each batch.
+///
+/// This is the generic core shared by both FHD and NHD round-robin minimum.
+async fn select_round_robin_min<T>(
+    session: &mut Session,
+    distances: &[DistanceShare<T>],
+    batch_size: usize,
+    num_batches: usize,
+    comparison_bits: Vec<Share<Bit>>,
+) -> Result<Vec<DistanceShare<T>>>
+where
+    T: IntRing2k + NetworkInt + RingRandFillable,
+    Standard: Distribution<T>,
+{
+    // At the start, the comparison table looks like
+    //
+    //    | d0 | d1 | d2 | d3 |
+    // ------------------------
+    // d0 | -  | b01| b02| b03|
+    // d1 |    | -  | b12| b13|
+    // d2 |    |    | -  | b23|
+    // d3 |    |    |    | -  |
+    //
+    // where `bij` is the bit corresponding to the distance comparison `di < dj`.
+    // Comparison bits are arranged in a flat vector as
+    // `[b01, b02, b03, b12, b13, b23]`.
     // Fill in the rest of the comparison table by setting diagonal bits to 1 and negating the bits above the diagonal.
     // In other words, the `[i][j]`-th value of the table is equal to the bit
     // - `di < dj` if `i < j`, or
@@ -531,20 +526,19 @@ pub(crate) async fn min_round_robin_batch(
         }
     }
     // Compute the AND of each row in the `batch_selection_bits` matrix.
-    // This gives us, for each distance in the batch, whether it is the minimum distance in its batch.
     let selection_bits =
         and_product(session, batch_selection_bits, num_batches * batch_size).await?;
-    // The resulting bits are bit injected into u32.
-    let selection_bits: VecShare<u32> = bit_inject(session, selection_bits).await?;
+    // The resulting bits are bit injected into T.
+    let selection_bits: VecShare<T> = bit_inject(session, selection_bits).await?;
     // Multiply distance shares with selection bits to zero out non-minimum distances.
     let selected_distances = {
-        let mut shares_a = VecRingElement::with_capacity(2 * distances.len());
+        let mut shares_a: VecRingElement<T> = VecRingElement::with_capacity(2 * distances.len());
         for i_batch in 0..num_batches {
             for i in 0..batch_size {
                 let distance = &distances[i * num_batches + i_batch];
                 let b = &selection_bits.shares()[i_batch * batch_size + i];
-                let code_a = session.prf.gen_zero_share() + b * &distance.code_dot;
-                let mask_a = session.prf.gen_zero_share() + b * &distance.mask_dot;
+                let code_a = session.prf.gen_zero_share::<T>() + b * &distance.code_dot;
+                let mask_a = session.prf.gen_zero_share::<T>() + b * &distance.mask_dot;
                 shares_a.push(code_a);
                 shares_a.push(mask_a);
             }
@@ -552,8 +546,13 @@ pub(crate) async fn min_round_robin_batch(
 
         let network = &mut session.network_session;
         network.send_ring_vec_next(&shares_a).await?;
-        let shares_b = network.receive_ring_vec_prev().await?;
-        reconstruct_distance_vector(shares_a, shares_b)
+        let shares_b: VecRingElement<T> = network.receive_ring_vec_prev().await?;
+        // Reconstruct distance shares from (a, b) ring elements
+        izip!(shares_a.0, shares_b.0)
+            .map(|(a, b)| Share::new(a, b))
+            .tuples()
+            .map(|(code_dot, mask_dot)| DistanceShare::new(code_dot, mask_dot))
+            .collect_vec()
     };
     // Now sum up the selected distances within each batch.
     // Only one distance per batch is non-zero, so this gives us the minimum distance per batch.
@@ -562,6 +561,100 @@ pub(crate) async fn min_round_robin_batch(
         .map(|chunk| chunk.iter().cloned().reduce(|acc, a| acc + a).unwrap())
         .collect_vec();
     Ok(res)
+}
+
+/// Generalization of cross-compare results for both FHD and NHD, boxed to avoid lifetime issues when passing into other functions.
+pub(crate) type CrossCompareFnResult<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Share<Bit>>>> + Send + 'a>>;
+
+/// Generalization of cross-compare function for both FHD and NHD, which can be passed into other functions.
+pub(crate) type CrossCompareFn<T> =
+    for<'a> fn(&'a mut Session, &'a [DistancePair<T>]) -> CrossCompareFnResult<'a>;
+
+/// Given a flattened array of distance shares arranged in batches,
+/// this function computes the minimum distance share within each batch via the round-robin method.
+///
+/// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
+/// then the input distance shares are arranged as follows:
+/// `[
+///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
+///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
+///     ...,
+///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
+/// ]`
+///
+/// The round-robin method computes all pairwise "less-than" relations within each batch,
+/// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 | b10| 1  | b12| b13|
+/// d2 | b20| b21| 1  | b23|
+/// d3 | b30| b31| b32| 1  |
+///
+/// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
+/// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
+/// that turns the comparison table into
+///
+///    | d0 | d1 | d2 | d3 |
+/// ------------------------
+/// d0 | 1  | b01| b02| b03|
+/// d1 |!b01| 1  | b12| b13|
+/// d2 |!b02|!b12| 1  | b23|
+/// d3 |!b03|!b13|!b23| 1  |
+///
+/// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
+/// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
+/// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
+/// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
+/// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
+pub(crate) async fn min_round_robin_batch_with<T>(
+    session: &mut Session,
+    distances: &[DistanceShare<T>],
+    batch_size: usize,
+    cross_compare_fn: CrossCompareFn<T>,
+) -> Result<Vec<DistanceShare<T>>>
+where
+    T: IntRing2k + NetworkInt + RingRandFillable,
+    Standard: Distribution<T>,
+{
+    if distances.is_empty() {
+        eyre::bail!("Expected at least one distance share");
+    }
+    if distances.len() % batch_size != 0 {
+        eyre::bail!("Distances length must be a multiple of batch size");
+    }
+    if batch_size < 2 {
+        return Ok(distances.to_vec());
+    }
+    let num_batches = distances.len() / batch_size;
+    let pairs = build_round_robin_pairs(distances, batch_size, num_batches);
+    let comparison_bits = cross_compare_fn(session, &pairs).await?;
+    select_round_robin_min(session, distances, batch_size, num_batches, comparison_bits).await
+}
+
+// Box the future returned by the comparison function to make it easier to pass into min_round_robin_batch_with.
+fn fhd_oblivious_cross_compare_boxed<'a>(
+    session: &'a mut Session,
+    pairs: &'a [DistancePair<u32>],
+) -> CrossCompareFnResult<'a> {
+    Box::pin(oblivious_cross_compare(session, pairs))
+}
+
+// Round-robin minimum distance selection for FHD.
+pub(crate) async fn min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<u32>>> {
+    min_round_robin_batch_with(
+        session,
+        distances,
+        batch_size,
+        fhd_oblivious_cross_compare_boxed,
+    )
+    .await
 }
 
 use std::cell::RefCell;

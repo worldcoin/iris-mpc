@@ -1,75 +1,81 @@
-use crate::execution::hawk_main::HAWK_MINFHD_ROTATIONS;
+use crate::execution::hawk_main::HAWK_MIN_ROTATIONS;
 
-use super::{
-    Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, ArcIris, DistanceShare, VectorId,
-};
+use super::{Aby3Query, Aby3Store, ArcIris, DistanceOps, DistanceShare, VectorId};
+use ampc_secret_sharing::shares::int_ring::IntRing2k;
 use clap::ValueEnum;
 use eyre::Result;
-use iris_mpc_common::iris_db::iris::IrisCode;
 use itertools::Itertools;
+use rand_distr::{Distribution, Standard};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
 pub enum DistanceFn {
-    Fhd,
-    MinFhd,
+    Simple,
+    MinRotation,
 }
 
 use serde::{Deserialize, Serialize};
-use DistanceFn::*;
+use DistanceFn::{MinRotation, Simple};
 
 impl DistanceFn {
-    pub fn plaintext_distance(self, a: &IrisCode, b: &IrisCode) -> (u16, u16) {
-        match self {
-            Fhd => a.get_distance_fraction(b),
-            MinFhd => a.get_min_fhd_distance_fraction_rotation_aware::<HAWK_MINFHD_ROTATIONS>(b),
-        }
-    }
-
-    pub async fn eval_pairwise_distances(
+    pub async fn eval_pairwise_distances<D: DistanceOps>(
         self,
-        store: &mut Aby3Store,
+        store: &mut Aby3Store<D>,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         match self {
-            Fhd => DistanceSimple::eval_pairwise_distances(store, pairs).await,
-            MinFhd => DistanceMinimalRotation::eval_pairwise_distances(store, pairs).await,
+            Simple => DistanceSimple::eval_pairwise_distances(store, pairs).await,
+            MinRotation => DistanceMinimalRotation::eval_pairwise_distances(store, pairs).await,
         }
     }
 
-    pub async fn eval_distance_pairs(
+    pub async fn eval_distance_pairs<D: DistanceOps>(
         self,
-        store: &mut Aby3Store,
-        pairs: &[(Aby3Query, Aby3VectorRef)],
-    ) -> Result<Vec<Aby3DistanceRef>> {
+        store: &mut Aby3Store<D>,
+        pairs: &[(Aby3Query, VectorId)],
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         match self {
-            Fhd => DistanceSimple::eval_distance_pairs(store, pairs).await,
-            MinFhd => DistanceMinimalRotation::eval_distance_pairs(store, pairs).await,
+            Simple => DistanceSimple::eval_distance_pairs(store, pairs).await,
+            MinRotation => DistanceMinimalRotation::eval_distance_pairs(store, pairs).await,
         }
     }
 
-    pub async fn eval_distance_batch(
+    pub async fn eval_distance_batch<D: DistanceOps>(
         self,
-        store: &mut Aby3Store,
+        store: &mut Aby3Store<D>,
         query: &Aby3Query,
         vectors: &[VectorId],
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         match self {
-            Fhd => DistanceSimple::eval_distance_batch(store, query, vectors).await,
-            MinFhd => DistanceMinimalRotation::eval_distance_batch(store, query, vectors).await,
+            Simple => DistanceSimple::eval_distance_batch(store, query, vectors).await,
+            MinRotation => {
+                DistanceMinimalRotation::eval_distance_batch(store, query, vectors).await
+            }
         }
     }
 
     /// Evaluates distances for multiple (query, vectors) batches.
     ///
-    /// For MinFhd, this enables prerotation buffer reuse within each batch.
-    pub async fn eval_distance_multibatch(
+    /// For MinRotation, this enables prerotation buffer reuse within each batch.
+    pub async fn eval_distance_multibatch<D: DistanceOps>(
         self,
-        store: &mut Aby3Store,
+        store: &mut Aby3Store<D>,
         batches: Vec<(Aby3Query, Vec<VectorId>)>,
-    ) -> Result<Vec<Vec<Aby3DistanceRef>>> {
+    ) -> Result<Vec<Vec<DistanceShare<D::Ring>>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         match self {
-            Fhd => {
+            Simple => {
                 // Fallback: process batch-by-batch using existing method
                 let mut results = Vec::with_capacity(batches.len());
                 for (query, vectors) in batches {
@@ -79,7 +85,7 @@ impl DistanceFn {
                 }
                 Ok(results)
             }
-            MinFhd => DistanceMinimalRotation::eval_distance_multibatch(store, batches).await,
+            MinRotation => DistanceMinimalRotation::eval_distance_multibatch(store, batches).await,
         }
     }
 }
@@ -87,18 +93,24 @@ impl DistanceFn {
 struct DistanceSimple;
 
 impl DistanceSimple {
-    async fn eval_pairwise_distances(
-        store: &mut Aby3Store,
+    async fn eval_pairwise_distances<D: DistanceOps>(
+        store: &mut Aby3Store<D>,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         let ds_and_ts = store.workers.galois_ring_pairwise_distances(pairs).await?;
         store.gr_to_lifted_distances(ds_and_ts).await
     }
 
-    async fn eval_distance_pairs(
-        store: &mut Aby3Store,
-        pairs: &[(Aby3Query, Aby3VectorRef)],
-    ) -> Result<Vec<Aby3DistanceRef>> {
+    async fn eval_distance_pairs<D: DistanceOps>(
+        store: &mut Aby3Store<D>,
+        pairs: &[(Aby3Query, VectorId)],
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         let pairs = pairs
             .iter()
             .map(|(q, v)| (q.iris_proc.clone(), *v))
@@ -107,11 +119,14 @@ impl DistanceSimple {
         store.gr_to_lifted_distances(ds_and_ts).await
     }
 
-    async fn eval_distance_batch(
-        store: &mut Aby3Store,
+    async fn eval_distance_batch<D: DistanceOps>(
+        store: &mut Aby3Store<D>,
         query: &Aby3Query,
         vectors: &[VectorId],
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         let ds_and_ts = store
             .workers
             .dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
@@ -123,10 +138,13 @@ impl DistanceSimple {
 struct DistanceMinimalRotation;
 
 impl DistanceMinimalRotation {
-    async fn eval_pairwise_distances(
-        store: &mut Aby3Store,
+    async fn eval_pairwise_distances<D: DistanceOps>(
+        store: &mut Aby3Store<D>,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         let ds_and_ts = store
             .workers
             .rotation_aware_pairwise_distances(pairs)
@@ -137,10 +155,13 @@ impl DistanceMinimalRotation {
             .await
     }
 
-    async fn eval_distance_pairs(
-        store: &mut Aby3Store,
-        pairs: &[(Aby3Query, Aby3VectorRef)],
-    ) -> Result<Vec<Aby3DistanceRef>> {
+    async fn eval_distance_pairs<D: DistanceOps>(
+        store: &mut Aby3Store<D>,
+        pairs: &[(Aby3Query, VectorId)],
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         let ds_and_ts = store
             .workers
             .rotation_aware_dot_product_pairs(
@@ -156,11 +177,14 @@ impl DistanceMinimalRotation {
             .await
     }
 
-    async fn eval_distance_batch(
-        store: &mut Aby3Store,
+    async fn eval_distance_batch<D: DistanceOps>(
+        store: &mut Aby3Store<D>,
         query: &Aby3Query,
         vectors: &[VectorId],
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         let dot_start = std::time::Instant::now();
         let ds_and_ts = store
             .workers
@@ -187,10 +211,13 @@ impl DistanceMinimalRotation {
     /// Evaluates distances for multiple (query, vectors) batches efficiently.
     ///
     /// Each query's prerotation is reused across all its target vectors.
-    async fn eval_distance_multibatch(
-        store: &mut Aby3Store,
+    async fn eval_distance_multibatch<D: DistanceOps>(
+        store: &mut Aby3Store<D>,
         batches: Vec<(Aby3Query, Vec<VectorId>)>,
-    ) -> Result<Vec<Vec<DistanceShare<u32>>>> {
+    ) -> Result<Vec<Vec<DistanceShare<D::Ring>>>>
+    where
+        Standard: Distribution<D::Ring>,
+    {
         if batches.is_empty() {
             return Ok(vec![]);
         }
@@ -242,13 +269,13 @@ impl DistanceMinimalRotation {
 ///
 /// With rotation r and batch item i:
 ///     `input[r + i * ROTATIONS] == output[r][i]`
-fn transpose_from_flat(distances: &[Aby3DistanceRef]) -> Vec<Vec<Aby3DistanceRef>> {
-    (0..HAWK_MINFHD_ROTATIONS)
+fn transpose_from_flat<T: IntRing2k>(distances: &[DistanceShare<T>]) -> Vec<Vec<DistanceShare<T>>> {
+    (0..HAWK_MIN_ROTATIONS)
         .map(|i| {
             distances
                 .iter()
                 .skip(i)
-                .step_by(HAWK_MINFHD_ROTATIONS)
+                .step_by(HAWK_MIN_ROTATIONS)
                 .cloned()
                 .collect()
         })

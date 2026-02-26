@@ -1,6 +1,6 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::IrisPoolHandle,
+        hawk_main::{iris_worker::IrisPoolHandle, HAWK_MIN_ROTATIONS},
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -13,16 +13,23 @@ use crate::{
         VectorStore,
     },
     protocol::{
+        nhd_ops::{
+            nhd_compare_nmr, nhd_cross_compare, nhd_lift_distances, nhd_min_of_pair_batch,
+            nhd_min_round_robin_batch, nhd_oblivious_cross_compare,
+            nhd_oblivious_cross_compare_lifted,
+        },
         ops::{
             conditionally_select_distances_with_plain_ids,
             conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
             conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, min_round_robin_batch, open_ring,
+            lte_threshold_and_open, min_round_robin_batch, DistancePair, IdDistance,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
     shares::{
         bit::Bit,
+        int_ring::IntRing2k,
+        ring_impl::RingRandFillable,
         share::{DistanceShare, Share},
         RingElement,
     },
@@ -31,14 +38,19 @@ use ampc_actor_utils::protocol::ops::{
     batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
     oblivious_cross_compare_lifted,
 };
+use ampc_actor_utils::{network::value::NetworkInt, protocol::ops::open_ring};
+use ampc_secret_sharing::shares::ring48::Ring48;
 use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    iris_db::iris::{IrisCode, MATCH_THRESHOLD_RATIO},
     vector_id::VectorId,
 };
 use itertools::{izip, Itertools};
+use rand_distr::{Distribution, Standard};
 use static_assertions::const_assert;
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, HashMap},
     fmt::Debug,
     sync::Arc,
@@ -49,9 +61,289 @@ use tracing::instrument;
 mod distance_fn;
 pub use distance_fn::DistanceFn;
 
-/// The number of rotations at which to switch from binary tree to round-robin minimum algorthims.
+/// The number of rotations at which to switch from binary tree to round-robin minimum algorithms.
 const MIN_ROUND_ROBIN_SIZE: usize = 1;
 const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
+
+/// Trait abstracting distance-type-specific MPC operations.
+///
+/// Parameterized by marker types (not ring types), so multiple protocols
+/// can share the same ring type.
+///
+/// Implementations:
+/// - `FhdOps`: Fractional Hamming Distance (FHD) using 32-bit arithmetic
+/// - `NhdOps`: Normalized Hamming Distance (NHD) using 48-bit arithmetic
+#[allow(async_fn_in_trait)]
+pub trait DistanceOps: Send + Sync + Debug + 'static {
+    type Ring: IntRing2k
+        + NetworkInt
+        + RingRandFillable
+        + From<u32>
+        + Debug
+        + std::hash::Hash
+        + Eq
+        + serde::Serialize
+        + for<'de> serde::Deserialize<'de>
+        + Send
+        + Sync;
+
+    /// Lifts u16 distance shares to Ring-typed distance shares.
+    async fn lift_distances(
+        session: &mut Session,
+        distances: Vec<Share<u16>>,
+    ) -> Result<Vec<DistanceShare<Self::Ring>>>;
+
+    /// Compares pairs of distances and opens the result (d2 < d1 for each pair).
+    async fn cross_compare(
+        session: &mut Session,
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<bool>>;
+
+    /// Compares pairs of distances, returning secret-shared bits.
+    async fn oblivious_cross_compare(
+        session: &mut Session,
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<Share<Bit>>>;
+
+    /// Compares pairs of distances, returning lifted Ring-typed shares.
+    async fn oblivious_cross_compare_lifted(
+        session: &mut Session,
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<Share<Self::Ring>>>;
+
+    /// Computes the minimum of each pair of distances.
+    async fn min_of_pair_batch(
+        session: &mut Session,
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<DistanceShare<Self::Ring>>>;
+
+    /// Computes the minimum distance per batch via round-robin comparison.
+    async fn min_round_robin_batch(
+        session: &mut Session,
+        distances: &[DistanceShare<Self::Ring>],
+        batch_size: usize,
+    ) -> Result<Vec<DistanceShare<Self::Ring>>>;
+
+    /// Checks if distances are less than or equal to a threshold (for match detection).
+    async fn lte_threshold_and_open(
+        session: &mut Session,
+        distances: &[DistanceShare<Self::Ring>],
+    ) -> Result<Vec<bool>>;
+
+    /// Converts an opened ring value to a usize index.
+    fn to_usize(value: Self::Ring) -> usize;
+
+    /// Plaintext comparison: returns true if d1 < d2.
+    fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool;
+
+    /// Plaintext check: returns true if the distance represents a match (below threshold).
+    fn plaintext_is_match(d: &(u16, u16)) -> bool;
+
+    /// Plaintext ordering of two distances.
+    fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering;
+
+    /// Plaintext distance computation between two iris codes via distance computation strategy f,
+    /// returning a fractional Hamming distance pair (dot product of iris codes, dot product of mask codes).
+    fn plaintext_distance(a: &IrisCode, b: &IrisCode, f: DistanceFn) -> (u16, u16);
+
+    /// Shuffles batched (id, distance) pairs using the 3-party shuffle protocol.
+    async fn shuffle_batch(
+        session: &mut Session,
+        distances: Vec<Vec<IdDistance<Self::Ring>>>,
+    ) -> Result<Vec<Vec<IdDistance<Self::Ring>>>>;
+}
+
+/// Fractional Hamming Distance operations using 32-bit arithmetic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FhdOps;
+
+impl DistanceOps for FhdOps {
+    type Ring = u32;
+
+    async fn lift_distances(
+        session: &mut Session,
+        distances: Vec<Share<u16>>,
+    ) -> Result<Vec<DistanceShare<u32>>> {
+        let distances = batch_signed_lift_vec(session, distances).await?;
+        Ok(distances
+            .chunks(2)
+            .map(|dot_products| DistanceShare::new(dot_products[0], dot_products[1]))
+            .collect())
+    }
+
+    async fn cross_compare(
+        session: &mut Session,
+        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+    ) -> Result<Vec<bool>> {
+        cross_compare(session, distances).await
+    }
+
+    async fn oblivious_cross_compare(
+        session: &mut Session,
+        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+    ) -> Result<Vec<Share<Bit>>> {
+        oblivious_cross_compare(session, distances).await
+    }
+
+    async fn oblivious_cross_compare_lifted(
+        session: &mut Session,
+        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+    ) -> Result<Vec<Share<u32>>> {
+        oblivious_cross_compare_lifted(session, distances).await
+    }
+
+    async fn min_of_pair_batch(
+        session: &mut Session,
+        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+    ) -> Result<Vec<DistanceShare<u32>>> {
+        min_of_pair_batch(session, distances).await
+    }
+
+    async fn min_round_robin_batch(
+        session: &mut Session,
+        distances: &[DistanceShare<u32>],
+        batch_size: usize,
+    ) -> Result<Vec<DistanceShare<u32>>> {
+        min_round_robin_batch(session, distances, batch_size).await
+    }
+
+    async fn lte_threshold_and_open(
+        session: &mut Session,
+        distances: &[DistanceShare<u32>],
+    ) -> Result<Vec<bool>> {
+        lte_threshold_and_open(session, distances).await
+    }
+
+    fn to_usize(value: u32) -> usize {
+        value as usize
+    }
+
+    fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool {
+        let (a, b) = *d1; // a/b
+        let (c, d) = *d2; // c/d
+        (a as u32) * (d as u32) < (b as u32) * (c as u32)
+    }
+
+    fn plaintext_is_match(d: &(u16, u16)) -> bool {
+        let (a, b) = *d;
+        (a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO
+    }
+
+    fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
+        let (a, b) = *d1; // a/b
+        let (c, d) = *d2; // c/d
+        ((a as u32) * (d as u32)).cmp(&((b as u32) * (c as u32)))
+    }
+
+    fn plaintext_distance(a: &IrisCode, b: &IrisCode, f: DistanceFn) -> (u16, u16) {
+        match f {
+            DistanceFn::Simple => a.get_distance_fraction(b),
+            DistanceFn::MinRotation => {
+                a.get_min_fhd_distance_fraction_rotation_aware::<HAWK_MIN_ROTATIONS>(b)
+            }
+        }
+    }
+
+    async fn shuffle_batch(
+        session: &mut Session,
+        distances: Vec<Vec<(Share<u32>, DistanceShare<u32>)>>,
+    ) -> Result<Vec<Vec<(Share<u32>, DistanceShare<u32>)>>> {
+        ampc_actor_utils::protocol::shuffle::random_shuffle_batch(session, distances).await
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NhdOps;
+
+impl DistanceOps for NhdOps {
+    type Ring = Ring48;
+
+    async fn lift_distances(
+        session: &mut Session,
+        distances: Vec<Share<u16>>,
+    ) -> Result<Vec<DistanceShare<Ring48>>> {
+        nhd_lift_distances(session, distances).await
+    }
+
+    async fn cross_compare(
+        session: &mut Session,
+        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    ) -> Result<Vec<bool>> {
+        nhd_cross_compare(session, distances).await
+    }
+
+    async fn oblivious_cross_compare(
+        session: &mut Session,
+        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    ) -> Result<Vec<Share<Bit>>> {
+        nhd_oblivious_cross_compare(session, distances).await
+    }
+
+    async fn oblivious_cross_compare_lifted(
+        session: &mut Session,
+        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    ) -> Result<Vec<Share<Ring48>>> {
+        nhd_oblivious_cross_compare_lifted(session, distances).await
+    }
+
+    async fn min_of_pair_batch(
+        session: &mut Session,
+        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    ) -> Result<Vec<DistanceShare<Ring48>>> {
+        nhd_min_of_pair_batch(session, distances).await
+    }
+
+    async fn min_round_robin_batch(
+        session: &mut Session,
+        distances: &[DistanceShare<Ring48>],
+        batch_size: usize,
+    ) -> Result<Vec<DistanceShare<Ring48>>> {
+        nhd_min_round_robin_batch(session, distances, batch_size).await
+    }
+
+    async fn lte_threshold_and_open(
+        _session: &mut Session,
+        _distances: &[DistanceShare<Ring48>],
+    ) -> Result<Vec<bool>> {
+        unimplemented!("NHD threshold comparison not yet supported")
+    }
+
+    fn to_usize(value: Ring48) -> usize {
+        value.0 as usize
+    }
+
+    fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool {
+        let nmr1 = nhd_compare_nmr(d1.0, d1.1);
+        let nmr2 = nhd_compare_nmr(d2.0, d2.1);
+        nmr1 * (d2.1 as i64) < nmr2 * (d1.1 as i64)
+    }
+
+    fn plaintext_is_match(_d: &(u16, u16)) -> bool {
+        unimplemented!("NHD threshold match not yet supported")
+    }
+
+    fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
+        let nmr1 = nhd_compare_nmr(d1.0, d1.1);
+        let nmr2 = nhd_compare_nmr(d2.0, d2.1);
+        (nmr1 * (d2.1 as i64)).cmp(&(nmr2 * (d1.1 as i64)))
+    }
+
+    fn plaintext_distance(a: &IrisCode, b: &IrisCode, f: DistanceFn) -> (u16, u16) {
+        match f {
+            DistanceFn::Simple => a.get_distance_fraction(b),
+            DistanceFn::MinRotation => {
+                a.get_min_nhd_distance_fraction_rotation_aware::<HAWK_MIN_ROTATIONS>(b)
+            }
+        }
+    }
+
+    async fn shuffle_batch(
+        _session: &mut Session,
+        _distances: Vec<Vec<(Share<Ring48>, DistanceShare<Ring48>)>>,
+    ) -> Result<Vec<Vec<(Share<Ring48>, DistanceShare<Ring48>)>>> {
+        unimplemented!("Ring48 shuffle not yet supported")
+    }
+}
 
 /// Iris to be searcher or inserted into the store.
 ///
@@ -103,8 +395,8 @@ impl Aby3Query {
     }
 }
 
-pub type Aby3VectorRef = <Aby3Store as VectorStore>::VectorRef;
-pub type Aby3DistanceRef = <Aby3Store as VectorStore>::DistanceRef;
+pub type Aby3VectorRef = VectorId;
+pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
 pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
@@ -113,7 +405,7 @@ pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 ///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
-pub struct Aby3Store {
+pub struct Aby3Store<D: DistanceOps = FhdOps> {
     /// Reference to the shared irises
     pub storage: Aby3SharedIrisesRef,
 
@@ -124,9 +416,14 @@ pub struct Aby3Store {
     pub workers: IrisPoolHandle,
 
     distance_fn: distance_fn::DistanceFn,
+
+    _phantom: std::marker::PhantomData<D>,
 }
 
-impl Aby3Store {
+impl<D: DistanceOps> Aby3Store<D>
+where
+    Standard: Distribution<D::Ring>,
+{
     pub fn new(
         storage: Aby3SharedIrisesRef,
         session: Session,
@@ -138,30 +435,27 @@ impl Aby3Store {
             session,
             distance_fn,
             workers,
+            _phantom: std::marker::PhantomData,
         }
     }
 
-    /// Converts distances from u16 secret shares to u32 shares.
+    /// Converts distances from u16 secret shares to Ring-typed distance shares.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn lift_distances(
         &mut self,
         distances: Vec<Share<u16>>,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>> {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        let distances = batch_signed_lift_vec(&mut self.session, distances).await?;
-        Ok(distances
-            .chunks(2)
-            .map(|dot_products| DistanceShare::new(dot_products[0], dot_products[1]))
-            .collect::<Vec<_>>())
+        D::lift_distances(&mut self.session, distances).await
     }
 
-    /// Converts u16 additive sharing (from trick_dot output) to u32 replicated sharing.
-    async fn gr_to_lifted_distances(
+    /// Converts u16 additive sharing (from trick_dot output) to Ring-typed replicated sharing.
+    pub(crate) async fn gr_to_lifted_distances(
         &mut self,
         ds_and_ts: Vec<RingElement<u16>>,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>> {
         let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(dist).await
     }
@@ -175,7 +469,7 @@ impl Aby3Store {
     pub async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>> {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
@@ -201,9 +495,9 @@ impl Aby3Store {
     pub async fn oblivious_swap_batch_plain_ids(
         &mut self,
         swap_bits: Vec<Share<Bit>>,
-        list: &[(u32, Aby3DistanceRef)],
+        list: &[(u32, DistanceShare<D::Ring>)],
         indices: &[(usize, usize)],
-    ) -> Result<Vec<(Share<u32>, Aby3DistanceRef)>> {
+    ) -> Result<Vec<(Share<D::Ring>, DistanceShare<D::Ring>)>> {
         if list.is_empty() {
             return Ok(vec![]);
         }
@@ -214,12 +508,12 @@ impl Aby3Store {
     /// Obliviously compares pairs of distances in batch and returns a secret shared bit a < b for each pair.
     pub async fn oblivious_less_than_batch(
         &mut self,
-        distances: &[(Aby3DistanceRef, Aby3DistanceRef)],
+        distances: &[DistancePair<D::Ring>],
     ) -> Result<Vec<Share<Bit>>> {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        oblivious_cross_compare(&mut self.session, distances).await
+        D::oblivious_cross_compare(&mut self.session, distances).await
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
@@ -227,9 +521,9 @@ impl Aby3Store {
     pub async fn oblivious_swap_batch(
         &mut self,
         swap_bits: Vec<Share<Bit>>,
-        list: &[(Share<u32>, Aby3DistanceRef)],
+        list: &[IdDistance<D::Ring>],
         indices: &[(usize, usize)],
-    ) -> Result<Vec<(Share<u32>, Aby3DistanceRef)>> {
+    ) -> Result<Vec<IdDistance<D::Ring>>> {
         if list.is_empty() {
             return Ok(vec![]);
         }
@@ -241,8 +535,8 @@ impl Aby3Store {
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_min_distance(
         &mut self,
-        distances: &[Aby3DistanceRef],
-    ) -> Result<Aby3DistanceRef> {
+        distances: &[DistanceShare<D::Ring>],
+    ) -> Result<DistanceShare<D::Ring>> {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -256,13 +550,13 @@ impl Aby3Store {
             // create pairs from the remaining distances
             let pairs: Vec<(_, _)> = res.into_iter().tuples().collect_vec();
             // compute minimums of pairs
-            res = min_of_pair_batch(&mut self.session, &pairs).await?;
+            res = D::min_of_pair_batch(&mut self.session, &pairs).await?;
             // if we saved a last distance, we need to add it back
             if let Some(last_distance) = maybe_last_distance {
                 res.push(last_distance);
             }
         }
-        min_round_robin_batch(&mut self.session, &res, res.len())
+        D::min_round_robin_batch(&mut self.session, &res, res.len())
             .await?
             .pop()
             .ok_or_eyre("Should not be here: distances are empty")
@@ -272,8 +566,8 @@ impl Aby3Store {
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_argmin_distance(
         &mut self,
-        distances: &[(Aby3VectorRef, Aby3DistanceRef)],
-    ) -> Result<(Aby3VectorRef, Aby3DistanceRef)> {
+        distances: &[(Aby3VectorRef, DistanceShare<D::Ring>)],
+    ) -> Result<(Aby3VectorRef, DistanceShare<D::Ring>)> {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -298,7 +592,7 @@ impl Aby3Store {
             .map(|((_, dist1), (_, dist2))| (*dist1, *dist2))
             .collect_vec();
         let mut control_bits =
-            oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
+            D::oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
         let (left_dist, right_dist) = plain_res.into_iter().tuples().unzip();
         let mut res = conditionally_select_distances_with_plain_ids(
             &mut self.session,
@@ -309,7 +603,7 @@ impl Aby3Store {
         .await?;
         // If we saved a last distance, we need to add it back
         if let Some((id, dist)) = plain_maybe_last_distance {
-            let shared_id = Share::from_const(id, self.session.own_role());
+            let shared_id = Share::from_const(D::Ring::from(id), self.session.own_role());
             res.push((shared_id, dist));
         }
 
@@ -324,7 +618,8 @@ impl Aby3Store {
                 .map(|((_, dist1), (_, dist2))| (*dist1, *dist2))
                 .collect_vec();
             // compute minimums of pairs
-            control_bits = oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
+            control_bits =
+                D::oblivious_cross_compare_lifted(&mut self.session, &dist_pairs).await?;
             let (left_dist, right_dist) = res.into_iter().tuples().unzip();
             res = conditionally_select_distances_with_shared_ids(
                 &mut self.session,
@@ -344,7 +639,7 @@ impl Aby3Store {
             .ok_or_eyre("Shouldn't be here: results are empty")?;
         // open the id
         let id = open_ring(&mut self.session, &[shared_id]).await?[0];
-        let res = (distances[id as usize].0, dist);
+        let res = (distances[D::to_usize(id)].0, dist);
         Ok(res)
     }
 
@@ -352,10 +647,10 @@ impl Aby3Store {
     /// The input `distances` is a 2D matrix with dimensions: (rotations, batch).
     /// `distances[r][i]` corresponds to the rth rotation of the ith item of the batch.
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
-    async fn oblivious_min_distance_batch(
+    pub(crate) async fn oblivious_min_distance_batch(
         &mut self,
-        distances: Vec<Vec<Aby3DistanceRef>>,
-    ) -> Result<Vec<Aby3DistanceRef>> {
+        distances: Vec<Vec<DistanceShare<D::Ring>>>,
+    ) -> Result<Vec<DistanceShare<D::Ring>>> {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -382,7 +677,7 @@ impl Aby3Store {
             }
 
             // compute minimums of pairs
-            let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
+            let flattened_res = D::min_of_pair_batch(&mut self.session, &pairs).await?;
 
             // Rebuild res as Vec<Vec<_>>
             res.clear();
@@ -398,7 +693,7 @@ impl Aby3Store {
         let res_len = res.len();
         let mut flattened_distances = Vec::with_capacity(res_len * len);
         flattened_distances.extend(res.into_iter().flatten());
-        min_round_robin_batch(&mut self.session, &flattened_distances, res_len).await
+        D::min_round_robin_batch(&mut self.session, &flattened_distances, res_len).await
     }
 
     async fn compact_neighborhood_batch(
@@ -482,9 +777,7 @@ impl Aby3Store {
         for (_len, v) in shares_by_length.into_iter() {
             let (idxs, nbhds): (Vec<_>, Vec<_>) = v.into_iter().unzip();
 
-            let shuffled_nbhds =
-                ampc_actor_utils::protocol::shuffle::random_shuffle_batch(&mut self.session, nbhds)
-                    .await?;
+            let shuffled_nbhds = D::shuffle_batch(&mut self.session, nbhds).await?;
 
             for (idx, shuffled_nbhd) in izip!(idxs, shuffled_nbhds) {
                 shuffled_shares_by_idx.insert(idx, shuffled_nbhd);
@@ -525,11 +818,13 @@ impl Aby3Store {
             .map(|(idx, nbhd)| {
                 nbhd.into_iter()
                     .map(|serial_id| {
-                        let version = *id_versions.get(&(idx, serial_id)).ok_or_eyre(format!(
-                            "Unexpected: found no record of reconstructed serial id: {}",
-                            serial_id
-                        ))?;
-                        Ok(VectorId::new(serial_id, version))
+                        let serial_id_u32 = D::to_usize(serial_id) as u32;
+                        let version =
+                            *id_versions.get(&(idx, serial_id_u32)).ok_or_eyre(format!(
+                                "Unexpected: found no record of reconstructed serial id: {}",
+                                serial_id_u32
+                            ))?;
+                        Ok(VectorId::new(serial_id_u32, version))
                     })
                     .collect::<Result<Vec<_>>>()
             })
@@ -540,12 +835,12 @@ impl Aby3Store {
 
     /// Evaluates distances for multiple (query, vectors) batches.
     ///
-    /// Optimized for MinFhd where prerotation buffer is reused per query.
+    /// Optimized for MinRotation where prerotation buffer is reused per query.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn eval_distance_multibatch(
         &mut self,
         batches: Vec<(Aby3Query, Vec<VectorId>)>,
-    ) -> Result<Vec<Vec<Aby3DistanceRef>>> {
+    ) -> Result<Vec<Vec<DistanceShare<D::Ring>>>> {
         if batches.is_empty() {
             return Ok(vec![]);
         }
@@ -555,13 +850,16 @@ impl Aby3Store {
     }
 }
 
-impl VectorStore for Aby3Store {
+impl<D: DistanceOps> VectorStore for Aby3Store<D>
+where
+    Standard: Distribution<D::Ring>,
+{
     /// Arc ref to a query.
     type QueryRef = Aby3Query;
     /// Point ID of an inserted iris.
     type VectorRef = VectorId;
-    /// Distance represented as a pair of u32 shares.
-    type DistanceRef = DistanceShare<u32>;
+    /// Distance represented as a pair of Ring-typed shares.
+    type DistanceRef = DistanceShare<D::Ring>;
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         self.storage
@@ -634,7 +932,7 @@ impl VectorStore for Aby3Store {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(lte_threshold_and_open(&mut self.session, std::slice::from_ref(distance)).await?[0])
+        Ok(D::lte_threshold_and_open(&mut self.session, std::slice::from_ref(distance)).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -643,7 +941,7 @@ impl VectorStore for Aby3Store {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> Result<bool> {
-        Ok(cross_compare(&mut self.session, &[(*distance1, *distance2)]).await?[0])
+        Ok(D::cross_compare(&mut self.session, &[(*distance1, *distance2)]).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
@@ -657,7 +955,7 @@ impl VectorStore for Aby3Store {
         metrics::counter!("comparisons_total").increment(distances.len() as u64);
         metrics::histogram!("comparisons_batch_size").record(distances.len() as f64);
         let start = std::time::Instant::now();
-        let result = cross_compare(&mut self.session, distances).await;
+        let result = D::cross_compare(&mut self.session, distances).await;
         metrics::histogram!("less_than_batch_duration").record(start.elapsed().as_secs_f64());
         result
     }
@@ -667,7 +965,7 @@ impl VectorStore for Aby3Store {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        lte_threshold_and_open(&mut self.session, distances).await
+        D::lte_threshold_and_open(&mut self.session, distances).await
     }
 
     async fn compact_neighborhood(
@@ -696,7 +994,10 @@ impl VectorStore for Aby3Store {
     }
 }
 
-impl VectorStoreMut for Aby3Store {
+impl<D: DistanceOps> VectorStoreMut for Aby3Store<D>
+where
+    Standard: Distribution<D::Ring>,
+{
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(&query.iris).await
     }
@@ -913,7 +1214,7 @@ mod tests {
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::new();
+        let mut plaintext_store = PlaintextStore::<FhdOps>::new();
         let plaintext_preps: Vec<_> = (0..db_dim)
             .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();
@@ -1295,7 +1596,7 @@ mod tests {
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::new();
+        let mut plaintext_store = PlaintextStore::<FhdOps>::new();
         let plaintext_preps: Vec<_> = (0..db_size)
             .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();

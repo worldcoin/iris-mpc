@@ -1,5 +1,5 @@
 use crate::execution::session::Session;
-use crate::protocol::ops::B;
+use crate::protocol::ops::{min_round_robin_batch_with, CrossCompareFnResult, DistancePair, B};
 use ampc_actor_utils::network::value::NetworkInt;
 use ampc_actor_utils::protocol::{
     binary::{bit_inject, extract_msb_batch, open_bin},
@@ -38,7 +38,7 @@ const NHD_CORRECTION: u64 = 73728;
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn nhd_cross_mul(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<Share<Ring48>>> {
     let n = distances.len();
 
@@ -77,7 +77,7 @@ pub async fn nhd_cross_mul(
 /// For every pair of NHD distance shares (d1, d2), computes d1 < d2 and opens it.
 pub async fn nhd_cross_compare(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<bool>> {
     let diff = nhd_cross_mul(session, distances).await?;
     let bits = extract_msb_batch(session, &diff).await?;
@@ -88,7 +88,7 @@ pub async fn nhd_cross_compare(
 /// For every pair of NHD distance shares (d1, d2), computes the secret-shared bit d1 < d2.
 pub async fn nhd_oblivious_cross_compare(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<Share<Bit>>> {
     let diff = nhd_cross_mul(session, distances).await?;
     extract_msb_batch(session, &diff).await
@@ -98,7 +98,7 @@ pub async fn nhd_oblivious_cross_compare(
 /// and lifts it to Ring48 shares.
 pub async fn nhd_oblivious_cross_compare_lifted(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<Share<Ring48>>> {
     let bits = nhd_oblivious_cross_compare(session, distances).await?;
     Ok(bit_inject(session, VecShare { shares: bits })
@@ -109,7 +109,7 @@ pub async fn nhd_oblivious_cross_compare_lifted(
 /// For every pair of NHD distance shares (d1, d2), returns the minimum distance.
 pub async fn nhd_min_of_pair_batch(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<DistanceShare<Ring48>>> {
     let bits = nhd_oblivious_cross_compare_lifted(session, distances).await?;
     conditionally_select_distance(session, distances, bits.as_slice()).await
@@ -162,6 +162,39 @@ pub async fn nhd_greater_than_threshold(
         .collect();
 
     extract_msb_batch(session, &results).await
+}
+
+fn nhd_oblivious_cross_compare_boxed<'a>(
+    session: &'a mut Session,
+    pairs: &'a [DistancePair<Ring48>],
+) -> CrossCompareFnResult<'a> {
+    Box::pin(nhd_oblivious_cross_compare(session, pairs))
+}
+
+// Round-robin minimum distance selection for NHD.
+pub(crate) async fn nhd_min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<Ring48>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<Ring48>>> {
+    min_round_robin_batch_with(
+        session,
+        distances,
+        batch_size,
+        nhd_oblivious_cross_compare_boxed,
+    )
+    .await
+}
+
+/// Normalized Hamming Distance operations using 48-bit arithmetic.
+/// Computes the NHD numerator for plaintext comparison.
+///
+/// `nmr(hd, ml) = ml * (ml - NHD_LINEAR_COEFF*hd) - NHD_CORRECTION * hd`
+///
+/// Uses the same constants as the MPC protocol.
+pub(crate) fn nhd_compare_nmr(hd: u16, ml: u16) -> i64 {
+    let (hd, ml) = (hd as i64, ml as i64);
+    ml * (ml - NHD_LINEAR_COEFF as i64 * hd) - NHD_CORRECTION as i64 * hd
 }
 
 // ---------------------------------------------------------------------------

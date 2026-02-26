@@ -1752,7 +1752,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        hawkers::plaintext_store::PlaintextStore,
+        hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
         hnsw::{GraphMem, SortedNeighborhood},
     };
     use aes_prng::AesRng;
@@ -1762,7 +1762,7 @@ mod tests {
     use tokio;
 
     async fn hnsw_db_helper(db: HnswSearcher, seed: u64) -> Result<()> {
-        let vector_store = &mut PlaintextStore::new();
+        let vector_store = &mut PlaintextStore::<FhdOps>::new();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(seed);
 
@@ -1860,7 +1860,7 @@ mod tests {
 
         // Default mode
         let searcher_default = HnswSearcher::new_with_test_parameters();
-        let vector_store_default = &mut PlaintextStore::new();
+        let vector_store_default = &mut PlaintextStore::<FhdOps>::new();
         let graph_store_default = &mut GraphMem::new();
 
         for (insertion_layer, expected_nb_len, expected_update_ep) in [
@@ -1898,7 +1898,7 @@ mod tests {
         // Linear-scan mode
         let mut searcher_linear = HnswSearcher::new_with_test_parameters();
         searcher_linear.layer_mode = LayerMode::LinearScan { max_graph_layer: 1 };
-        let vector_store_linear = &mut PlaintextStore::new();
+        let vector_store_linear = &mut PlaintextStore::<FhdOps>::new();
         let graph_store_linear = &mut GraphMem::new();
 
         for (insertion_layer, expected_nb_len, expected_update_ep) in [
@@ -1941,7 +1941,7 @@ mod tests {
     async fn test_insert_prepare_batch() -> Result<()> {
         // Default mode
         let searcher = HnswSearcher::new_linear_scan(64, 32, 2, 1);
-        let vector_store = &mut PlaintextStore::new();
+        let vector_store = &mut PlaintextStore::<FhdOps>::new();
         let graph_store = &mut GraphMem::new();
 
         let mut ids = vec![];
