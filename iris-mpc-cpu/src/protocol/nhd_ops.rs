@@ -146,7 +146,7 @@ pub async fn nhd_min_of_pair_batch(
     conditionally_select_distance(session, distances, bits.as_slice()).await
 }
 
-/// Lifts u16 distance shares to Ring48 and chunks them into DistanceShare<Ring48>.
+/// Lifts `u16` distance shares to `Ring48` and chunks them into `DistanceShare<Ring48>`.
 pub async fn nhd_lift_distances(
     session: &mut Session,
     pre_lift: Vec<Share<u16>>,
@@ -380,8 +380,8 @@ mod tests {
             (1300, 3000, 13, 30, true),                // 0.34 < 0.37
             (u16::MAX, 1, u16::MAX - 999, 1000, true), // 0.70 < 0.73
             // Edge cases
-            (0, 0, 0, 0, false),     // nhd = infinity vs infinity -> no match
-            (0, 100, 0, 100, false), // nhd = 0.47 vs 0.47 -> no match
+            (0, 0, 0, 0, false), // nhd = infinity vs infinity -> no greater than
+            (0, 100, 0, 100, false), // nhd = 0.47 vs 0.47 -> no greater than
         ];
 
         // Create shares of all values: [cd1, md1, cd2, md2, ...]
