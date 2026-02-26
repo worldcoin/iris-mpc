@@ -283,6 +283,9 @@ pub enum RequestPayloadOptions {
     ResetCheck {
         iris_pair: IrisPairDescriptor,
     },
+    RecoveryCheck {
+        iris_pair: IrisPairDescriptor,
+    },
     // Options over a reset update request payload.
     ResetUpdate {
         iris_pair: IrisPairDescriptor,
@@ -298,7 +301,9 @@ pub enum RequestPayloadOptions {
 impl RequestPayloadOptions {
     pub fn iris_pair(&self) -> Option<&IrisPairDescriptor> {
         match &self {
-            Self::IdentityDeletion { .. } | Self::ResetCheck { .. } => None,
+            Self::IdentityDeletion { .. }
+            | Self::ResetCheck { .. }
+            | Self::RecoveryCheck { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
             | Self::Uniqueness { iris_pair, .. } => Some(iris_pair),
