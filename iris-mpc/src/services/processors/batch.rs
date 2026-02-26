@@ -637,7 +637,7 @@ impl<'a> BatchProcessor<'a> {
         let sns_message_id = message.message_id.clone();
         let identity_match_check_request: IdentityMatchCheckRequest =
             serde_json::from_str(&message.message)
-                .map_err(|e| ReceiveRequestError::json_parse_error("Reset check request", e))?;
+                .map_err(|e| ReceiveRequestError::json_parse_error("Identity check request", e))?;
 
         metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
         tracing::debug!(
