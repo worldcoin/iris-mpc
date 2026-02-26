@@ -280,7 +280,10 @@ pub enum RequestPayloadOptions {
         parent: String,
     },
     // Options over a reset check request payload.
-    IdentityMatchCheck {
+    ResetCheck {
+        iris_pair: IrisPairDescriptor,
+    },
+    RecoveryCheck {
         iris_pair: IrisPairDescriptor,
     },
     // Options over a reset update request payload.
@@ -298,7 +301,9 @@ pub enum RequestPayloadOptions {
 impl RequestPayloadOptions {
     pub fn iris_pair(&self) -> Option<&IrisPairDescriptor> {
         match &self {
-            Self::IdentityDeletion { .. } | Self::IdentityMatchCheck { .. } => None,
+            Self::IdentityDeletion { .. }
+            | Self::ResetCheck { .. }
+            | Self::RecoveryCheck { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
             | Self::Uniqueness { iris_pair, .. } => Some(iris_pair),
@@ -378,7 +383,7 @@ mod tests {
                 [
                     { label = "Deletion-0", payload = { IdentityDeletion = { parent = "Uniqueness-0" } } },
                     { label = "Reauth-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = "Uniqueness-1" } } },
-                    { label = "Check-0", payload = { IdentityMatchCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
+                    { label = "Check-0", payload = { ResetCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
                     { label = "Update-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = "Uniqueness-0" } } },
                 ],
             ]

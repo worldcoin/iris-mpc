@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use serde_json;
 
 use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
+    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 
 use super::super::typeset::{
@@ -132,7 +132,8 @@ impl From<&SqsMessageInfo> for ResponsePayload {
         match kind {
             IDENTITY_DELETION_MESSAGE_TYPE => parse_response!(IdentityDeletion),
             REAUTH_MESSAGE_TYPE => parse_response!(Reauthorization),
-            RESET_CHECK_MESSAGE_TYPE => parse_response!(IdentityMatchCheck),
+            RESET_CHECK_MESSAGE_TYPE => parse_response!(ResetCheck),
+            RECOVERY_CHECK_MESSAGE_TYPE => parse_response!(RecoveryCheck),
             RESET_UPDATE_MESSAGE_TYPE => parse_response!(ResetUpdate),
             UNIQUENESS_MESSAGE_TYPE => parse_response!(Uniqueness),
             _ => panic!("Unsupported system response type: {kind}"),

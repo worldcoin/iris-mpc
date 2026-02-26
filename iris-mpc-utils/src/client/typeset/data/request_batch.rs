@@ -16,7 +16,8 @@ use crate::client::options::{RequestOptions, RequestPayloadOptions};
 pub enum BatchKind {
     IdentityDeletion,
     Reauth,
-    IdentityMatchCheck,
+    ResetCheck,
+    RecoveryCheck,
     ResetUpdate,
     Uniqueness,
 }
@@ -27,8 +28,8 @@ impl BatchKind {
         match s {
             smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => Some(Self::IdentityDeletion),
             smpc_request::REAUTH_MESSAGE_TYPE => Some(Self::Reauth),
-            smpc_request::RESET_CHECK_MESSAGE_TYPE => Some(Self::IdentityMatchCheck),
-            smpc_request::RECOVERY_CHECK_MESSAGE_TYPE => Some(Self::IdentityMatchCheck),
+            smpc_request::RESET_CHECK_MESSAGE_TYPE => Some(Self::ResetCheck),
+            smpc_request::RECOVERY_CHECK_MESSAGE_TYPE => Some(Self::RecoveryCheck),
             smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(Self::ResetUpdate),
             smpc_request::UNIQUENESS_MESSAGE_TYPE => Some(Self::Uniqueness),
             _ => None,
@@ -177,13 +178,26 @@ impl RequestBatch {
         });
     }
 
-    /// Extends requests collection with a new IdentityMatchCheck request.
-    pub(crate) fn push_new_identity_match_check(
+    /// Extends requests collection with a new ResetCheck request.
+    pub(crate) fn push_new_reset_check(
         &mut self,
         iris_pair: Option<IrisPairDescriptor>,
         label: Option<String>,
     ) {
-        self.push_request(Request::IdentityMatchCheck {
+        self.push_request(Request::ResetCheck {
+            info: RequestInfo::new(self, label, None),
+            iris_pair,
+            request_id: uuid::Uuid::new_v4(),
+        });
+    }
+
+    /// Extends requests collection with a new RecoveryCheck request.
+    pub(crate) fn push_new_recovery_check(
+        &mut self,
+        iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+    ) {
+        self.push_request(Request::RecoveryCheck {
             info: RequestInfo::new(self, label, None),
             iris_pair,
             request_id: uuid::Uuid::new_v4(),
@@ -279,10 +293,16 @@ impl RequestBatchSet {
                                 Some(parent.clone()),
                             );
                         }
-                        RequestPayloadOptions::IdentityMatchCheck { iris_pair, .. } => {
-                            batch.push_new_identity_match_check(
+                        RequestPayloadOptions::ResetCheck { iris_pair, .. } => {
+                            batch.push_new_reset_check(
                                 Some(*iris_pair),
-                                opts_request.label(),
+                                opts_request.label().clone(),
+                            );
+                        }
+                        RequestPayloadOptions::RecoveryCheck { iris_pair, .. } => {
+                            batch.push_new_recovery_check(
+                                Some(*iris_pair),
+                                opts_request.label().clone(),
                             );
                         }
                         RequestPayloadOptions::ResetUpdate { iris_pair, parent } => {
