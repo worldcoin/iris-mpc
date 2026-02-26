@@ -104,12 +104,12 @@ pub async fn process_job_result(
                     true => None,
                 },
                 Some(matched_batch_request_ids[i].clone()),
-                match partial_match_counters_left.is_empty() {
-                    false => Some(partial_match_counters_left[i]),
-                    true => None,
-                },
                 match partial_match_counters_right.is_empty() {
                     false => Some(partial_match_counters_right[i]),
+                    true => None,
+                },
+                match partial_match_counters_left.is_empty() {
+                    false => Some(partial_match_counters_left[i]),
                     true => None,
                 },
                 None, // partial_match_rotation_indices_left - not applicable for CPU

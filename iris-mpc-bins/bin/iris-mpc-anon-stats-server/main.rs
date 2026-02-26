@@ -80,11 +80,18 @@ const HNSW_1D_ORIGINS: [AnonStatsOrigin; 2] = [
     },
 ];
 
-const GPU_2D_ORIGINS: [AnonStatsOrigin; 1] = [AnonStatsOrigin {
-    side: None,
-    orientation: AnonStatsOrientation::Normal,
-    context: AnonStatsContext::GPU,
-}];
+const GPU_2D_ORIGINS: [AnonStatsOrigin; 2] = [
+    AnonStatsOrigin {
+        side: None,
+        orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::GPU,
+    },
+    AnonStatsOrigin {
+        side: None,
+        orientation: AnonStatsOrientation::Mirror,
+        context: AnonStatsContext::GPU,
+    },
+];
 
 #[derive(Clone, Copy, Debug)]
 enum JobKind {
@@ -428,6 +435,7 @@ impl AnonStatsProcessor {
         let mut stats = process_2d_anon_stats_job(
             session,
             job,
+            &origin,
             self.config.as_ref(),
             Some(operation),
             last_report_time,

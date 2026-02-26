@@ -1714,7 +1714,7 @@ impl ServerActor {
                 &mut both_side_match_distances_buffer,
             );
 
-            self.persist_two_sided_caches(&both_side_match_distances_buffer);
+            self.persist_two_sided_caches(orientation, &both_side_match_distances_buffer);
         }
 
         // Instead of sending to return_channel, we'll return this at the end
@@ -3346,16 +3346,23 @@ impl ServerActor {
         }
     }
 
-    fn persist_two_sided_caches(&self, caches: &[TwoSidedDistanceCache]) {
-        tracing::info!("Persisting two-sided anon stats caches");
+    fn persist_two_sided_caches(&self, orientation: Orientation, caches: &[TwoSidedDistanceCache]) {
+        tracing::info!(
+            "Persisting two-sided anon stats caches for orientation {:?}",
+            orientation
+        );
         let writer = match &self.anon_stats_writer {
             Some(writer) => writer,
             None => return,
         };
 
+        let anon_orientation = match orientation {
+            Orientation::Normal => AnonStatsOrientation::Normal,
+            Orientation::Mirror => AnonStatsOrientation::Mirror,
+        };
         let origin = AnonStatsOrigin {
             side: None,
-            orientation: AnonStatsOrientation::Normal,
+            orientation: anon_orientation,
             context: AnonStatsContext::GPU,
         };
 
