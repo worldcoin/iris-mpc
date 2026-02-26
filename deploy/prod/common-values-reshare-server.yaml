@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/reshare-protocol:v0.29.0@sha256:108ef42e058eb37ad325915b2f6ec092f3b11dc93dfdd7faffd3b258af7bc216"
+image: "ghcr.io/worldcoin/reshare-protocol:v0.30.0@sha256:736905b087a8af282d1cec85f2bdfa2685093a91130b2f8582029648af3a3104"
 
 environment: prod
 replicaCount: 1
