@@ -263,7 +263,7 @@ mod tests {
                 [
                     { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
                     { label = "R-0", payload = { Reauthorisation = { iris_pair = [{ index = 5 }, { index = 6 }], parent = "U-1" } } },
-                    { label = "RC-0", payload = { IdentityMatchCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
+                    { label = "RC-0", payload = { ResetCheck = { iris_pair = [{ index = 7 }, { index = 8 }] } } },
                     { label = "RU-0", payload = { ResetUpdate = { iris_pair = [{ index = 9 }, { index = 10 }], parent = "U-0" } } },
                 ],
             ]
