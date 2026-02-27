@@ -26,6 +26,14 @@ pub enum Request {
         // Operation identifier.
         reauth_id: uuid::Uuid,
     },
+    RecoveryCheck {
+        // Standard request information.
+        info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair: Option<IrisPairDescriptor>,
+        // Operation identifier.
+        request_id: uuid::Uuid,
+    },
     ResetCheck {
         // Standard request information.
         info: RequestInfo,
@@ -59,6 +67,7 @@ impl Request {
         match self {
             Self::IdentityDeletion { info, .. }
             | Self::Reauthorization { info, .. }
+            | Self::RecoveryCheck { info, .. }
             | Self::ResetCheck { info, .. }
             | Self::ResetUpdate { info, .. }
             | Self::Uniqueness { info, .. } => info,
@@ -73,6 +82,11 @@ impl Request {
                 iris_pair,
                 ..
             } => Some((*reauth_id, *iris_pair)),
+            Request::RecoveryCheck {
+                request_id,
+                iris_pair,
+                ..
+            } => Some((*request_id, *iris_pair)),
             Request::ResetCheck {
                 reset_id,
                 iris_pair,
@@ -96,6 +110,7 @@ impl Request {
         let kind = match self {
             Self::IdentityDeletion { .. } => "IdentityDeletion",
             Self::Reauthorization { .. } => "Reauthorization",
+            Self::RecoveryCheck { .. } => "RecoveryCheck",
             Self::ResetCheck { .. } => "ResetCheck",
             Self::ResetUpdate { .. } => "ResetUpdate",
             Self::Uniqueness { .. } => "Uniqueness",
@@ -105,11 +120,12 @@ impl Request {
             Self::IdentityDeletion { parent, .. }
             | Self::Reauthorization { parent, .. }
             | Self::ResetUpdate { parent, .. } => Some(*parent),
-            Self::ResetCheck { .. } | Self::Uniqueness { .. } => None,
+            Self::RecoveryCheck { .. } | Self::ResetCheck { .. } | Self::Uniqueness { .. } => None,
         };
         let op_id: Option<(&str, uuid::Uuid)> = match self {
             Self::Uniqueness { signup_id, .. } => Some(("signup_id", *signup_id)),
             Self::Reauthorization { reauth_id, .. } => Some(("reauth_id", *reauth_id)),
+            Self::RecoveryCheck { request_id, .. } => Some(("request_id", *request_id)),
             Self::ResetCheck { reset_id, .. } | Self::ResetUpdate { reset_id, .. } => {
                 Some(("reset_id", *reset_id))
             }
@@ -139,6 +155,7 @@ impl fmt::Display for Request {
         match self {
             Self::IdentityDeletion { .. } => write!(f, "{}.IdentityDeletion", self.info()),
             Self::Reauthorization { .. } => write!(f, "{}.Reauthorization", self.info()),
+            Self::RecoveryCheck { .. } => write!(f, "{}.RecoveryCheck", self.info()),
             Self::ResetCheck { .. } => write!(f, "{}.ResetCheck", self.info()),
             Self::ResetUpdate { .. } => write!(f, "{}.ResetUpdate", self.info()),
             Self::Uniqueness { .. } => write!(f, "{}.Uniqueness", self.info()),
@@ -157,6 +174,10 @@ mod tests {
 
         pub fn is_reauthorization(&self) -> bool {
             matches!(self, Self::Reauthorization { .. })
+        }
+
+        pub fn is_recovery_check(&self) -> bool {
+            matches!(self, Self::RecoveryCheck { .. })
         }
 
         pub fn is_reset_check(&self) -> bool {

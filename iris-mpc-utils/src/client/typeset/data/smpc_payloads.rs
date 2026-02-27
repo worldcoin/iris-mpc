@@ -10,6 +10,7 @@ use crate::{aws::types::SqsMessageInfo, client::typeset::Request};
 pub enum RequestPayload {
     IdentityDeletion(smpc_request::IdentityDeletionRequest),
     Reauthorization(smpc_request::ReAuthRequest),
+    RecoveryCheck(smpc_request::RecoveryCheckRequest),
     ResetCheck(smpc_request::ResetCheckRequest),
     ResetUpdate(smpc_request::ResetUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
@@ -20,6 +21,7 @@ pub enum RequestPayload {
 pub enum ResponsePayload {
     IdentityDeletion(smpc_response::IdentityDeletionResult),
     Reauthorization(smpc_response::ReAuthResult),
+    RecoveryCheck(smpc_response::RecoveryCheckResult),
     ResetCheck(smpc_response::ResetCheckResult),
     ResetUpdate(smpc_response::ResetUpdateAckResult),
     Uniqueness(smpc_response::UniquenessResult),
@@ -30,6 +32,7 @@ impl ResponsePayload {
         match self {
             Self::IdentityDeletion(result) => result.node_id,
             Self::Reauthorization(result) => result.node_id,
+            Self::RecoveryCheck(result) => result.node_id,
             Self::ResetCheck(result) => result.node_id,
             Self::ResetUpdate(result) => result.node_id,
             Self::Uniqueness(result) => result.node_id,
@@ -41,6 +44,7 @@ impl ResponsePayload {
         match self {
             Self::IdentityDeletion(result) => !result.success,
             Self::Reauthorization(result) => result.error.unwrap_or(false),
+            Self::RecoveryCheck(result) => result.error.unwrap_or(false),
             Self::ResetCheck(result) => result.error.unwrap_or(false),
             Self::ResetUpdate(result) => result.error.unwrap_or(false),
             Self::Uniqueness(result) => result.error.unwrap_or(false),
@@ -60,6 +64,12 @@ impl ResponsePayload {
                 format!(
                     "Reauthorization | node={} | serial_id={} | success={} | reauth_id={:.16}",
                     result.node_id, result.serial_id, result.success, result.reauth_id
+                )
+            }
+            Self::RecoveryCheck(result) => {
+                format!(
+                    "RecoveryCheck | node={} | request_id={:.16}",
+                    result.node_id, result.request_id
                 )
             }
             Self::ResetCheck(result) => {
@@ -94,6 +104,7 @@ impl ResponsePayload {
         match self {
             Self::IdentityDeletion(_) => None,
             Self::Reauthorization(result) => result.error_reason.as_deref(),
+            Self::RecoveryCheck(result) => result.error_reason.as_deref(),
             Self::ResetCheck(result) => result.error_reason.as_deref(),
             Self::ResetUpdate(result) => result.error_reason.as_deref(),
             Self::Uniqueness(result) => result.error_reason.as_deref(),
@@ -105,6 +116,7 @@ impl ResponsePayload {
         match self {
             Self::IdentityDeletion(result) => result.matches_expected(expected),
             Self::Reauthorization(result) => result.matches_expected(expected),
+            Self::RecoveryCheck(result) => result.matches_expected(expected),
             Self::ResetCheck(result) => result.matches_expected(expected),
             Self::ResetUpdate(result) => result.matches_expected(expected),
             Self::Uniqueness(result) => result.matches_expected(expected),
@@ -128,6 +140,13 @@ impl From<&Request> for RequestPayload {
                 skip_persistence: None,
                 use_or_rule: false,
             }),
+            Request::RecoveryCheck { request_id, .. } => {
+                Self::RecoveryCheck(smpc_request::RecoveryCheckRequest {
+                    batch_size: None,
+                    request_id: request_id.to_string(),
+                    s3_key: request_id.to_string(),
+                })
+            }
             Request::ResetCheck { reset_id, .. } => {
                 Self::ResetCheck(smpc_request::ResetCheckRequest {
                     batch_size: None,
@@ -175,6 +194,9 @@ impl TryFrom<&SqsMessageInfo> for ResponsePayload {
             }
             iris_mpc_common::helpers::smpc_request::REAUTH_MESSAGE_TYPE => {
                 parse_response!(Reauthorization)
+            }
+            iris_mpc_common::helpers::smpc_request::RECOVERY_CHECK_MESSAGE_TYPE => {
+                parse_response!(RecoveryCheck)
             }
             iris_mpc_common::helpers::smpc_request::RESET_CHECK_MESSAGE_TYPE => {
                 parse_response!(ResetCheck)

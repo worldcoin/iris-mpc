@@ -440,6 +440,7 @@ impl ExecState {
         let corr_uuid: Option<Uuid> = match response {
             typeset::ResponsePayload::Uniqueness(r) => r.signup_id.parse().ok(),
             typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
+            typeset::ResponsePayload::RecoveryCheck(r) => r.request_id.parse().ok(),
             typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
             typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
             typeset::ResponsePayload::IdentityDeletion(r) => {
@@ -498,6 +499,7 @@ impl ExecState {
                     Some(*signup_id)
                 }
                 typeset::Request::Reauthorization { reauth_id, .. } => Some(*reauth_id),
+                typeset::Request::RecoveryCheck { request_id, .. } => Some(*request_id),
                 typeset::Request::ResetCheck { reset_id, .. }
                 | typeset::Request::ResetUpdate { reset_id, .. } => Some(*reset_id),
                 typeset::Request::IdentityDeletion { parent, .. } => {

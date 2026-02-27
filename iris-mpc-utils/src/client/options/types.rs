@@ -387,6 +387,11 @@ impl RequestOptions {
                     reauth_id: corr_uuid,
                 }
             }
+            RequestPayloadOptions::RecoveryCheck { iris_pair } => Request::RecoveryCheck {
+                info,
+                iris_pair: *iris_pair,
+                request_id: corr_uuid,
+            },
             RequestPayloadOptions::ResetCheck { iris_pair } => Request::ResetCheck {
                 info,
                 iris_pair: *iris_pair,
@@ -438,6 +443,11 @@ pub enum RequestPayloadOptions {
         iris_pair: Option<IrisPairDescriptor>,
         parent: Parent,
     },
+    // Options over a recovery check request payload.
+    RecoveryCheck {
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
+    },
     // Options over a reset check request payload.
     ResetCheck {
         #[serde(default)]
@@ -469,6 +479,7 @@ impl RequestPayloadOptions {
         match &self {
             Self::IdentityDeletion { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
+            | Self::RecoveryCheck { iris_pair, .. }
             | Self::ResetCheck { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
             | Self::Uniqueness { iris_pair, .. }

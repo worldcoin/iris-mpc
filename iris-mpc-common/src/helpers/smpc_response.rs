@@ -318,6 +318,66 @@ impl ResetCheckResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RecoveryCheckResult {
+    pub request_id: String,
+    pub node_id: usize,
+    pub matched_serial_ids: Option<Vec<u32>>,
+    pub matched_serial_ids_left: Option<Vec<u32>>,
+    pub matched_serial_ids_right: Option<Vec<u32>>,
+    pub matched_batch_request_ids: Option<Vec<String>>,
+    pub partial_matches_count_right: Option<usize>,
+    pub partial_matches_count_left: Option<usize>,
+    pub error: Option<bool>,
+    pub error_reason: Option<String>,
+}
+
+impl RecoveryCheckResult {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        request_id: String,
+        node_id: usize,
+        matched_serial_ids: Option<Vec<u32>>,
+        matched_serial_ids_left: Option<Vec<u32>>,
+        matched_serial_ids_right: Option<Vec<u32>>,
+        matched_batch_request_ids: Option<Vec<String>>,
+        partial_matches_count_right: Option<usize>,
+        partial_matches_count_left: Option<usize>,
+    ) -> Self {
+        Self {
+            request_id,
+            node_id,
+            matched_serial_ids,
+            matched_serial_ids_left,
+            matched_serial_ids_right,
+            matched_batch_request_ids,
+            partial_matches_count_right,
+            partial_matches_count_left,
+            error: None,
+            error_reason: None,
+        }
+    }
+
+    pub fn new_error_result(request_id: String, node_id: usize, error_reason: &str) -> Self {
+        Self {
+            request_id,
+            node_id,
+            matched_serial_ids: None,
+            matched_serial_ids_left: None,
+            matched_serial_ids_right: None,
+            matched_batch_request_ids: None,
+            partial_matches_count_right: None,
+            partial_matches_count_left: None,
+            error: Some(true),
+            error_reason: Some(error_reason.to_string()),
+        }
+    }
+
+    pub fn matches_expected(&self, expected: &serde_json::Value) -> Result<(), Vec<String>> {
+        validate_expected(self, expected)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResetUpdateAckResult {
     pub reset_id: String,
     pub node_id: usize,

@@ -164,6 +164,11 @@ impl From<RequestPayload> for SnsMessageInfo {
                 smpc_request::REAUTH_MESSAGE_TYPE,
                 &body,
             ),
+            RequestPayload::RecoveryCheck(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RECOVERY_CHECK_MESSAGE_TYPE,
+                &body,
+            ),
             RequestPayload::ResetCheck(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RESET_CHECK_MESSAGE_TYPE,
