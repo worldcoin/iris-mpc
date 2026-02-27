@@ -149,6 +149,44 @@ pub fn generate_iris_shares_for_upload<R: Rng + CryptoRng>(
     ]
 }
 
+/// Returns generated mirrored iris shares for upload (with full-size mask shares).
+/// Use this when generating mirrored shares to be sent to the MPC server.
+pub fn generate_iris_shares_mirrored_for_upload<R: Rng + CryptoRng>(
+    rng: &mut R,
+    iris_code: Option<IrisCode>,
+) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
+    let iris_code = iris_code.unwrap_or_else(|| IrisCode::random_rng(rng));
+    let code_shares =
+        GaloisRingIrisCodeShare::encode_iris_code(&iris_code.code, &iris_code.mask, rng);
+    let mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_code.mask, rng);
+    let code_shares_mirrored = code_shares
+        .iter()
+        .map(|code| code.mirrored_code())
+        .collect::<Vec<_>>();
+    let mask_shares_mirrored = mask_shares
+        .iter()
+        .map(|mask| mask.mirrored_mask())
+        .collect::<Vec<_>>();
+
+    [
+        // Party 1.
+        GaloisRingSharedIrisForUpload {
+            code: code_shares_mirrored[0].to_owned(),
+            mask: mask_shares_mirrored[0].to_owned(),
+        },
+        // Party 2.
+        GaloisRingSharedIrisForUpload {
+            code: code_shares_mirrored[1].to_owned(),
+            mask: mask_shares_mirrored[1].to_owned(),
+        },
+        // Party 3.
+        GaloisRingSharedIrisForUpload {
+            code: code_shares_mirrored[2].to_owned(),
+            mask: mask_shares_mirrored[2].to_owned(),
+        },
+    ]
+}
+
 /// Convenience function that returns 2 sets of Iris shares for upload.
 /// Use this when generating shares to be sent to the MPC server.
 pub fn generate_iris_shares_for_upload_both_eyes<R: Rng + CryptoRng>(

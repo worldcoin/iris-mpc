@@ -14,7 +14,7 @@ use crate::client::AwsOptions;
 /// Default AWS region - typically used in unit tests.
 const AWS_DEFAULT_REGION: &str = "us-east-1";
 
-/// Encpasulates AWS service client configuration.
+/// Encapsulates AWS service client configuration.
 #[derive(Clone, Debug)]
 pub struct AwsClientConfig {
     /// Execution environment.
@@ -35,11 +35,8 @@ pub struct AwsClientConfig {
     /// SQS: long polling interval (seconds).
     sqs_long_poll_wait_time: usize,
 
-    /// SQS: system response eqgress queue URL.
-    sqs_response_queue_url: String,
-
-    /// SQS: wait time (seconds) between receive message polling.
-    sqs_wait_time_seconds: usize,
+    /// SQS: system response egress queue URLs.
+    sqs_response_queue_urls: Vec<String>,
 }
 
 #[async_from::async_trait]
@@ -51,23 +48,22 @@ impl AsyncFrom<AwsOptions> for AwsClientConfig {
             opts.s3_request_bucket_name().to_owned(),
             opts.sns_request_topic_arn().to_owned(),
             opts.sqs_long_poll_wait_time().to_owned(),
-            opts.sqs_response_queue_url().to_owned(),
-            opts.sqs_wait_time_seconds().to_owned(),
+            opts.sqs_response_queue_urls().to_owned(),
         )
         .await
     }
 }
 
 impl AwsClientConfig {
-    pub(crate) fn environment(&self) -> &String {
+    pub(crate) fn environment(&self) -> &str {
         &self.environment
     }
 
-    pub(crate) fn public_key_base_url(&self) -> &String {
+    pub(crate) fn public_key_base_url(&self) -> &str {
         &self.public_key_base_url
     }
 
-    pub(crate) fn s3_request_bucket_name(&self) -> &String {
+    pub(crate) fn s3_request_bucket_name(&self) -> &str {
         &self.s3_request_bucket_name
     }
 
@@ -75,16 +71,16 @@ impl AwsClientConfig {
         &self.sdk
     }
 
-    pub(crate) fn sns_request_topic_arn(&self) -> &String {
+    pub(crate) fn sns_request_topic_arn(&self) -> &str {
         &self.sns_request_topic_arn
     }
 
-    pub(crate) fn sqs_response_queue_url(&self) -> &String {
-        &self.sqs_response_queue_url
+    pub(crate) fn sqs_response_queue_urls(&self) -> &[String] {
+        &self.sqs_response_queue_urls
     }
 
-    pub(crate) fn sqs_wait_time_seconds(&self) -> usize {
-        self.sqs_wait_time_seconds
+    pub(crate) fn sqs_long_poll_wait_time(&self) -> usize {
+        self.sqs_long_poll_wait_time
     }
 
     pub async fn new(
@@ -93,8 +89,7 @@ impl AwsClientConfig {
         s3_request_bucket_name: String,
         sns_request_topic_arn: String,
         sqs_long_poll_wait_time: usize,
-        sqs_response_queue_url: String,
-        sqs_wait_time_seconds: usize,
+        sqs_response_queue_urls: Vec<String>,
     ) -> Self {
         Self {
             environment,
@@ -103,8 +98,7 @@ impl AwsClientConfig {
             sdk: get_sdk_config().await,
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
-            sqs_response_queue_url,
-            sqs_wait_time_seconds,
+            sqs_response_queue_urls,
         }
     }
 }
@@ -194,8 +188,10 @@ impl AwsClientConfig {
         let s3_request_bucket_name = String::from(constants::AWS_S3_REQUEST_BUCKET_NAME);
         let sns_request_topic_arn = String::from(constants::AWS_SNS_REQUEST_TOPIC_ARN);
         let sqs_long_poll_wait_time = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
-        let sqs_response_queue_url = String::from(constants::AWS_SQS_RESPONSE_QUEUE_URL);
-        let sqs_wait_time_seconds = constants::AWS_SQS_LONG_POLL_WAIT_TIME;
+        let sqs_response_queue_urls = constants::AWS_SQS_RESPONSE_QUEUE_URLS
+            .iter()
+            .map(|s| String::from(*s))
+            .collect();
 
         AwsClientConfig::new(
             environment,
@@ -203,8 +199,7 @@ impl AwsClientConfig {
             s3_request_bucket_name,
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
-            sqs_response_queue_url,
-            sqs_wait_time_seconds,
+            sqs_response_queue_urls,
         )
         .await
     }
