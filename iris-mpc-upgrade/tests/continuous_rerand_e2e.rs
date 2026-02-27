@@ -48,7 +48,7 @@ fn phase1_clean_epoch() {
         wait_epoch_done(&env.harness, 0).await?;
         stop_all(t, h).await;
 
-        let ep = assert_consistent_rerand_epoch(&env.harness).await?;
+        let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1, "Expected rerand_epoch >= 1, got {}", ep);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
         println!("[phase 1] PASSED (epoch={})", ep);
@@ -80,7 +80,7 @@ fn phase2_kill_and_resume() {
         wait_epoch_done(&env.harness, 0).await?;
         stop_all(t, h).await;
 
-        let ep = assert_consistent_rerand_epoch(&env.harness).await?;
+        let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
         println!("[phase 2] PASSED (epoch={})", ep);
@@ -108,10 +108,33 @@ fn phase3_concurrent_modifications() {
         // Bump version_id on a few rows (simulates a reauth)
         for &id in &modified_ids {
             for party in &env.harness.parties {
-                sqlx::query("UPDATE irises SET left_code = left_code WHERE id = $1")
-                    .bind(id)
-                    .execute(&party.store.pool)
-                    .await?;
+                let (before,): (i16,) =
+                    sqlx::query_as("SELECT version_id FROM irises WHERE id = $1")
+                        .bind(id)
+                        .fetch_one(&party.store.pool)
+                        .await?;
+
+                // Flip one byte so the `increment_version_id` trigger fires.
+                sqlx::query(
+                    r#"
+                    UPDATE irises
+                    SET left_code = set_byte(left_code, 0, get_byte(left_code, 0) # 1)
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(id)
+                .execute(&party.store.pool)
+                .await?;
+
+                let (after,): (i16,) =
+                    sqlx::query_as("SELECT version_id FROM irises WHERE id = $1")
+                        .bind(id)
+                        .fetch_one(&party.store.pool)
+                        .await?;
+                eyre::ensure!(
+                    after > before,
+                    "Expected version_id to increase for id={id}"
+                );
             }
         }
         println!("[phase 3]   bumped version_id on {:?}", modified_ids);
@@ -119,7 +142,7 @@ fn phase3_concurrent_modifications() {
         wait_epoch_done(&env.harness, 0).await?;
         stop_all(t, h).await;
 
-        let ep = assert_consistent_rerand_epoch(&env.harness).await?;
+        let ep = assert_consistent_rerand_epoch(&env.harness, &modified_ids).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &modified_ids).await?;
         println!("[phase 3] PASSED (epoch={})", ep);
@@ -151,7 +174,7 @@ fn phase4_server_restart_during_rerand() {
         wait_epoch_done(&env.harness, 0).await?;
         stop_all(t, h).await;
 
-        let ep = assert_consistent_rerand_epoch(&env.harness).await?;
+        let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
         println!("[phase 4] PASSED (epoch={})", ep);
@@ -191,7 +214,7 @@ fn phase5_staggered_restart() {
         let _ = h0.await;
         stop_all(t, h).await;
 
-        let ep = assert_consistent_rerand_epoch(&env.harness).await?;
+        let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
         println!("[phase 5] PASSED (epoch={})", ep);
@@ -224,7 +247,7 @@ fn phase6_multiple_epochs() {
 
         stop_all(t, h).await;
 
-        let ep = assert_consistent_rerand_epoch(&env.harness).await?;
+        let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 2, "Expected rerand_epoch >= 2, got {}", ep);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
         println!("[phase 6] PASSED (epoch={})", ep);

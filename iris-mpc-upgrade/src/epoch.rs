@@ -56,7 +56,7 @@ async fn save_private_key_to_sm(
     epoch: u32,
     party_id: u8,
     key: &tripartite_dh::PrivateKey,
-) -> Result<()> {
+) -> Result<bool> {
     let sid = secret_id(env, epoch, party_id);
     let b64 = STANDARD.encode(key.serialize());
 
@@ -67,17 +67,11 @@ async fn save_private_key_to_sm(
         .send()
         .await
     {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(true),
         Err(e) => {
             let svc = e.into_service_error();
             if svc.is_resource_exists_exception() {
-                sm.put_secret_value()
-                    .secret_id(&sid)
-                    .secret_string(&b64)
-                    .send()
-                    .await
-                    .map_err(|e| eyre!("SM PutSecretValue failed for {}: {}", sid, e))?;
-                Ok(())
+                Ok(false)
             } else {
                 Err(eyre!("SM CreateSecret failed for {}: {}", sid, svc))
             }
@@ -134,7 +128,23 @@ pub async fn idempotent_keygen(
     let mut rng = rand::rngs::OsRng;
     let private_key = tripartite_dh::PrivateKey::random(&mut rng);
 
-    save_private_key_to_sm(sm, env, epoch, party_id, &private_key).await?;
+    let saved = save_private_key_to_sm(sm, env, epoch, party_id, &private_key).await?;
+    let private_key = if saved {
+        private_key
+    } else {
+        tracing::warn!(
+            "Epoch {}: private key already exists in SM (likely concurrent start); reloading it",
+            epoch
+        );
+        load_private_key_from_sm(sm, env, epoch, party_id)
+            .await?
+            .ok_or_else(|| {
+                eyre!(
+                    "Secret existed but could not be loaded: {}",
+                    secret_id(env, epoch, party_id)
+                )
+            })?
+    };
 
     let public_key = private_key.public_key();
     let pk_b64 = STANDARD.encode(public_key.serialize());

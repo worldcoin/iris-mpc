@@ -96,7 +96,7 @@ impl TestEnv {
             DB_SIZE, prefix, bucket
         );
         seed_three_party_db(&harness, DB_SIZE).await?;
-        let fingerprints = snapshot_all_fingerprints(&harness).await?;
+        let fingerprints = snapshot_all_fingerprints(&harness, &[]).await?;
 
         Ok(Self {
             harness,
@@ -262,14 +262,21 @@ pub async fn seed_three_party_db(harness: &TestHarness, count: usize) -> Result<
 pub type PlaintextFingerprints = HashMap<i64, [u8; 32]>;
 
 /// Compute a fingerprint for every iris in the DB by reconstructing shares
-/// from all 3 parties.
-pub async fn snapshot_all_fingerprints(harness: &TestHarness) -> Result<PlaintextFingerprints> {
+/// from all 3 parties. IDs in `skip_ids` are excluded (their shares may be
+/// inconsistent across parties due to concurrent modifications).
+pub async fn snapshot_all_fingerprints(
+    harness: &TestHarness,
+    skip_ids: &[i64],
+) -> Result<PlaintextFingerprints> {
     let ids: Vec<(i64,)> = sqlx::query_as("SELECT id FROM irises ORDER BY id")
         .fetch_all(&harness.store(0).pool)
         .await?;
 
     let mut fps = PlaintextFingerprints::new();
     for (id,) in ids {
+        if skip_ids.contains(&id) {
+            continue;
+        }
         let mut shares = Vec::new();
         for party in 0..NUM_PARTIES {
             shares.push(harness.store(party).get_iris_data_by_id(id).await?);
@@ -313,7 +320,7 @@ pub async fn verify_fingerprints(
     expected: &PlaintextFingerprints,
     skip_ids: &[i64],
 ) -> Result<()> {
-    let current = snapshot_all_fingerprints(harness).await?;
+    let current = snapshot_all_fingerprints(harness, skip_ids).await?;
     let mut checked = 0;
     for (id, exp) in expected {
         if skip_ids.contains(id) {
@@ -442,7 +449,10 @@ async fn build_test_sync_result(harness: &TestHarness, party: usize) -> Result<S
     })
 }
 
-pub async fn assert_consistent_rerand_epoch(harness: &TestHarness) -> Result<i32> {
+pub async fn assert_consistent_rerand_epoch(
+    harness: &TestHarness,
+    skip_ids: &[i64],
+) -> Result<i32> {
     let mut all: Vec<Vec<(i64, i32)>> = Vec::new();
     for party in &harness.parties {
         all.push(
@@ -454,6 +464,9 @@ pub async fn assert_consistent_rerand_epoch(harness: &TestHarness) -> Result<i32
     assert_eq!(all[0].len(), all[1].len());
     assert_eq!(all[1].len(), all[2].len());
     for i in 0..all[0].len() {
+        if skip_ids.contains(&all[0][i].0) {
+            continue;
+        }
         assert_eq!(
             all[0][i].1, all[1][i].1,
             "epoch mismatch id {} p0 vs p1",
@@ -465,7 +478,11 @@ pub async fn assert_consistent_rerand_epoch(harness: &TestHarness) -> Result<i32
             all[0][i].0
         );
     }
-    Ok(all[0].first().map(|(_, e)| *e).unwrap_or(0))
+    Ok(all[0]
+        .iter()
+        .find(|(id, _)| !skip_ids.contains(id))
+        .map(|(_, e)| *e)
+        .unwrap_or(0))
 }
 
 async fn cleanup(harness: &TestHarness) -> Result<()> {

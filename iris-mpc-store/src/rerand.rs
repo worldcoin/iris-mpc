@@ -217,16 +217,13 @@ pub async fn get_rerand_progress(
 /// Returns the highest chunk_id where all_confirmed = TRUE for a given epoch,
 /// or None if no chunks are confirmed.
 pub async fn get_max_confirmed_chunk(pool: &PgPool, epoch: i32) -> Result<Option<i32>> {
-    let row: Option<(i32,)> = sqlx::query_as(
+    let row: (Option<i32>,) = sqlx::query_as(
         "SELECT MAX(chunk_id) FROM rerand_progress WHERE epoch = $1 AND all_confirmed = TRUE",
     )
     .bind(epoch)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
-    match row {
-        Some((max,)) => Ok(Some(max)),
-        None => Ok(None),
-    }
+    Ok(row.0)
 }
 
 /// Returns the highest epoch that has any rerand_progress rows.
@@ -324,40 +321,39 @@ pub async fn rerand_catchup_and_lock(
     schema_name: &str,
     sync_result: &SyncResult,
 ) -> Result<Option<sqlx::pool::PoolConnection<sqlx::Postgres>>> {
-    let (epoch, chunk_id) = match compute_rerand_catchup_chunk(sync_result)? {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-
-    let staging_schema = staging_schema_name(schema_name);
-    tracing::info!(
-        "Rerand catch-up: applying epoch {} chunk {}",
-        epoch,
-        chunk_id,
-    );
-
     let mut conn = pool.acquire().await?;
     sqlx::query("SELECT pg_advisory_lock($1)")
         .bind(RERAND_APPLY_LOCK)
         .execute(&mut *conn)
         .await?;
 
-    let rows = match apply_staging_chunk(pool, &staging_schema, epoch, chunk_id).await {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-                .bind(RERAND_APPLY_LOCK)
-                .execute(&mut *conn)
-                .await;
-            return Err(e);
-        }
-    };
-    tracing::info!(
-        "Rerand catch-up: applied epoch {} chunk {} ({} rows)",
-        epoch,
-        chunk_id,
-        rows
-    );
+    if let Some((epoch, chunk_id)) = compute_rerand_catchup_chunk(sync_result)? {
+        let staging_schema = staging_schema_name(schema_name);
+        tracing::info!(
+            "Rerand catch-up: applying epoch {} chunk {}",
+            epoch,
+            chunk_id,
+        );
+
+        let rows = match apply_staging_chunk(pool, &staging_schema, epoch, chunk_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                    .bind(RERAND_APPLY_LOCK)
+                    .execute(&mut *conn)
+                    .await;
+                return Err(e);
+            }
+        };
+        tracing::info!(
+            "Rerand catch-up: applied epoch {} chunk {} ({} rows)",
+            epoch,
+            chunk_id,
+            rows
+        );
+    } else {
+        tracing::info!("Rerand catch-up: no chunk to apply");
+    }
 
     Ok(Some(conn))
 }

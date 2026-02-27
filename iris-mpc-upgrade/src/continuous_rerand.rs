@@ -2,7 +2,7 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use bytemuck::cast_slice;
 use eyre::Result;
-use futures::TryStreamExt;
+use futures::StreamExt;
 use iris_mpc_store::rerand::{
     apply_staging_chunk, ensure_staging_schema, get_rerand_progress, insert_staging_irises,
     set_all_confirmed, set_staging_written, staging_schema_name, upsert_rerand_progress,
@@ -256,34 +256,36 @@ async fn process_chunk_staging(
 ) -> Result<()> {
     let (start, end) = manifest.chunk_range(chunk_id);
 
-    let entries: Vec<_> = store
-        .stream_irises_in_range(start..end)
-        .try_collect()
-        .await?;
-
-    let staging_entries: Vec<StagingIrisEntry> = entries
-        .into_iter()
-        .map(|iris| {
-            let version_id = iris.version_id();
-            let iris_id = iris.id();
-            let (_, lc, lm, rc, rm) = randomize_iris(iris, shared_secret, party_id as usize);
-            StagingIrisEntry {
-                epoch: epoch as i32,
-                id: iris_id,
-                chunk_id: chunk_id as i32,
-                left_code: cast_slice::<u16, u8>(&lc.coefs).to_vec(),
-                left_mask: cast_slice::<u16, u8>(&lm.coefs).to_vec(),
-                right_code: cast_slice::<u16, u8>(&rc.coefs).to_vec(),
-                right_mask: cast_slice::<u16, u8>(&rm.coefs).to_vec(),
-                original_version_id: version_id,
-                rerand_epoch: (epoch + 1) as i32,
-            }
-        })
-        .collect();
-
     const BATCH_SIZE: usize = 500;
-    for batch in staging_entries.chunks(BATCH_SIZE) {
-        insert_staging_irises(pool, staging_schema, batch).await?;
+
+    let mut stream = store.stream_irises_in_range(start..end);
+    let mut batch: Vec<StagingIrisEntry> = Vec::with_capacity(BATCH_SIZE);
+
+    while let Some(iris) = stream.next().await.transpose()? {
+        let version_id = iris.version_id();
+        let iris_id = iris.id();
+        let (_, lc, lm, rc, rm) = randomize_iris(iris, shared_secret, party_id as usize);
+
+        batch.push(StagingIrisEntry {
+            epoch: epoch as i32,
+            id: iris_id,
+            chunk_id: chunk_id as i32,
+            left_code: cast_slice::<u16, u8>(&lc.coefs).to_vec(),
+            left_mask: cast_slice::<u16, u8>(&lm.coefs).to_vec(),
+            right_code: cast_slice::<u16, u8>(&rc.coefs).to_vec(),
+            right_mask: cast_slice::<u16, u8>(&rm.coefs).to_vec(),
+            original_version_id: version_id,
+            rerand_epoch: (epoch + 1) as i32,
+        });
+
+        if batch.len() >= BATCH_SIZE {
+            insert_staging_irises(pool, staging_schema, &batch).await?;
+            batch.clear();
+        }
+    }
+
+    if !batch.is_empty() {
+        insert_staging_irises(pool, staging_schema, &batch).await?;
     }
 
     Ok(())
