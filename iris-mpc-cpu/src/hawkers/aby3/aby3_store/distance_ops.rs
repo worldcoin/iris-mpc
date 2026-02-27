@@ -138,7 +138,7 @@ impl DistanceOps for FhdOps {
     async fn lift_distances(
         session: &mut Session,
         distances: Vec<Share<u16>>,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
         let distances = batch_signed_lift_vec(session, distances).await?;
         Ok(distances
             .chunks(2)
@@ -148,49 +148,49 @@ impl DistanceOps for FhdOps {
 
     async fn cross_compare(
         session: &mut Session,
-        distances: &[DistancePair<u32>],
+        distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<bool>> {
         cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare(
         session: &mut Session,
-        distances: &[DistancePair<u32>],
+        distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<Share<Bit>>> {
         oblivious_cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare_lifted(
         session: &mut Session,
-        distances: &[DistancePair<u32>],
-    ) -> Result<Vec<Share<u32>>> {
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<Share<Self::Ring>>> {
         oblivious_cross_compare_lifted(session, distances).await
     }
 
     async fn min_of_pair_batch(
         session: &mut Session,
-        distances: &[DistancePair<u32>],
-    ) -> Result<Vec<DistanceShare<u32>>> {
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
         min_of_pair_batch(session, distances).await
     }
 
     async fn min_round_robin_batch(
         session: &mut Session,
-        distances: &[DistanceShare<u32>],
+        distances: &[DistanceShare<Self::Ring>],
         batch_size: usize,
-    ) -> Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
         min_round_robin_batch(session, distances, batch_size).await
     }
 
     async fn lte_threshold_and_open(
         session: &mut Session,
-        distances: &[DistanceShare<u32>],
+        distances: &[DistanceShare<Self::Ring>],
     ) -> Result<Vec<bool>> {
         lte_threshold_and_open(session, distances).await
     }
 
-    fn to_usize(value: u32) -> usize {
-        value as usize
+    fn to_usize(value: Self::Ring) -> usize {
+        value.0 as usize
     }
 
     fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool {
@@ -229,54 +229,54 @@ impl DistanceOps for NhdOps {
     async fn lift_distances(
         session: &mut Session,
         distances: Vec<Share<u16>>,
-    ) -> Result<Vec<DistanceShare<Ring48>>> {
+    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
         nhd_lift_distances(session, distances).await
     }
 
     async fn cross_compare(
         session: &mut Session,
-        distances: &[DistancePair<Ring48>],
+        distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<bool>> {
         nhd_cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare(
         session: &mut Session,
-        distances: &[DistancePair<Ring48>],
+        distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<Share<Bit>>> {
         nhd_oblivious_cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare_lifted(
         session: &mut Session,
-        distances: &[DistancePair<Ring48>],
-    ) -> Result<Vec<Share<Ring48>>> {
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<Share<Self::Ring>>> {
         nhd_oblivious_cross_compare_lifted(session, distances).await
     }
 
     async fn min_of_pair_batch(
         session: &mut Session,
-        distances: &[DistancePair<Ring48>],
-    ) -> Result<Vec<DistanceShare<Ring48>>> {
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
         nhd_min_of_pair_batch(session, distances).await
     }
 
     async fn min_round_robin_batch(
         session: &mut Session,
-        distances: &[DistanceShare<Ring48>],
+        distances: &[DistanceShare<Self::Ring>],
         batch_size: usize,
-    ) -> Result<Vec<DistanceShare<Ring48>>> {
+    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
         nhd_min_round_robin_batch(session, distances, batch_size).await
     }
 
     async fn lte_threshold_and_open(
         session: &mut Session,
-        distances: &[DistanceShare<Ring48>],
+        distances: &[DistanceShare<Self::Ring>],
     ) -> Result<Vec<bool>> {
         nhd_lte_threshold_and_open(session, distances).await
     }
 
-    fn to_usize(value: Ring48) -> usize {
+    fn to_usize(value: Self::Ring) -> usize {
         value.0 as usize
     }
 
