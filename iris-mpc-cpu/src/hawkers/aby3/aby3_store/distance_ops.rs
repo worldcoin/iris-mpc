@@ -106,7 +106,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     /// Plaintext comparison: returns true if d1 < d2.
     fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool;
 
-    /// Plaintext check: returns true if the distance represents a match (below threshold).
+    /// Plaintext check: returns true if the distance represents a match (at or below threshold).
     fn plaintext_is_match(d: &(u16, u16)) -> bool;
 
     /// Plaintext ordering of two distances.
