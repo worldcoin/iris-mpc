@@ -42,7 +42,10 @@ use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{
+            REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+            UNIQUENESS_MESSAGE_TYPE,
+        },
     },
     iris_db::get_dummy_shares_for_deletion,
     job::{JobSubmissionHandle, ServerJobResult},
@@ -764,6 +767,7 @@ impl ServerActor {
                 .filter(|(_, req_type)| {
                     req_type.as_str() == REAUTH_MESSAGE_TYPE
                         || req_type.as_str() == RESET_CHECK_MESSAGE_TYPE
+                        || req_type.as_str() == RECOVERY_CHECK_MESSAGE_TYPE
                 })
                 .map(|(index, _)| index)
                 .collect();

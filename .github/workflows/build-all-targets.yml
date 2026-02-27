@@ -42,7 +42,7 @@ jobs:
 
       - name: Install Dependencies
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: sudo apt install protobuf-compiler
+        run: sudo apt-get update && sudo apt install protobuf-compiler
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -96,7 +96,7 @@ jobs:
 
       - name: Install Dependencies
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: sudo apt install protobuf-compiler
+        run: sudo apt-get update && sudo apt install protobuf-compiler
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
