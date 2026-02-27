@@ -93,6 +93,27 @@ const GPU_2D_ORIGINS: [AnonStatsOrigin; 2] = [
     },
 ];
 
+/// Normal-only 1D origins for GPU (Reauth and Recovery don't need Mirror).
+const GPU_1D_NORMAL_ORIGINS: [AnonStatsOrigin; 2] = [
+    AnonStatsOrigin {
+        side: Some(Eye::Left),
+        orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::GPU,
+    },
+    AnonStatsOrigin {
+        side: Some(Eye::Right),
+        orientation: AnonStatsOrientation::Normal,
+        context: AnonStatsContext::GPU,
+    },
+];
+
+/// Normal-only 2D origin for GPU (Reauth and Recovery don't need Mirror).
+const GPU_2D_NORMAL_ORIGINS: [AnonStatsOrigin; 1] = [AnonStatsOrigin {
+    side: None,
+    orientation: AnonStatsOrientation::Normal,
+    context: AnonStatsContext::GPU,
+}];
+
 #[derive(Clone, Copy, Debug)]
 enum JobKind {
     Gpu1D,
@@ -100,6 +121,7 @@ enum JobKind {
     Gpu2D,
     Gpu1DReauth,
     Gpu2DReauth,
+    Hnsw1DReauth,
     Gpu1DRecovery,
     Gpu2DRecovery,
     Hnsw1DRecovery,
@@ -148,6 +170,8 @@ impl AnonStatsProcessor {
     }
 
     async fn run_iteration(&mut self, session: &mut Session) -> Result<()> {
+        // --- GPU 1D ---
+        // Uniqueness: Normal + Mirror
         for origin in GPU_1D_ORIGINS {
             self.run_1d_job(
                 session,
@@ -157,7 +181,8 @@ impl AnonStatsProcessor {
             )
             .await?;
         }
-        for origin in GPU_1D_ORIGINS {
+        // Reauth: Normal only
+        for origin in GPU_1D_NORMAL_ORIGINS {
             self.run_1d_job(
                 session,
                 origin,
@@ -166,7 +191,8 @@ impl AnonStatsProcessor {
             )
             .await?;
         }
-        for origin in GPU_1D_ORIGINS {
+        // Recovery: Normal only
+        for origin in GPU_1D_NORMAL_ORIGINS {
             self.run_1d_job(
                 session,
                 origin,
@@ -175,6 +201,9 @@ impl AnonStatsProcessor {
             )
             .await?;
         }
+
+        // --- HNSW 1D (always Normal only) ---
+        // Uniqueness
         for origin in HNSW_1D_ORIGINS {
             self.run_1d_job(
                 session,
@@ -184,6 +213,17 @@ impl AnonStatsProcessor {
             )
             .await?;
         }
+        // Reauth
+        for origin in HNSW_1D_ORIGINS {
+            self.run_1d_job(
+                session,
+                origin,
+                JobKind::Hnsw1DReauth,
+                AnonStatsOperation::Reauth,
+            )
+            .await?;
+        }
+        // Recovery
         for origin in HNSW_1D_ORIGINS {
             self.run_1d_job(
                 session,
@@ -193,6 +233,9 @@ impl AnonStatsProcessor {
             )
             .await?;
         }
+
+        // --- GPU 2D ---
+        // Uniqueness: Normal + Mirror
         for origin in GPU_2D_ORIGINS {
             self.run_2d_job(
                 session,
@@ -202,7 +245,8 @@ impl AnonStatsProcessor {
             )
             .await?;
         }
-        for origin in GPU_2D_ORIGINS {
+        // Reauth: Normal only
+        for origin in GPU_2D_NORMAL_ORIGINS {
             self.run_2d_job(
                 session,
                 origin,
@@ -211,7 +255,8 @@ impl AnonStatsProcessor {
             )
             .await?;
         }
-        for origin in GPU_2D_ORIGINS {
+        // Recovery: Normal only
+        for origin in GPU_2D_NORMAL_ORIGINS {
             self.run_2d_job(
                 session,
                 origin,
@@ -236,7 +281,7 @@ impl AnonStatsProcessor {
                     .num_available_anon_stats_1d(origin, Some(operation))
                     .await?
             }
-            JobKind::Hnsw1D | JobKind::Hnsw1DRecovery => {
+            JobKind::Hnsw1D | JobKind::Hnsw1DReauth | JobKind::Hnsw1DRecovery => {
                 self.store
                     .num_available_anon_stats_1d_lifted(origin, Some(operation))
                     .await?
@@ -262,7 +307,7 @@ impl AnonStatsProcessor {
 
         let min_job_size = sync_on_job_sizes(session, available_capped).await?;
         let required_min = match kind {
-            JobKind::Gpu1DReauth => self.config.min_1d_job_size_reauth,
+            JobKind::Gpu1DReauth | JobKind::Hnsw1DReauth => self.config.min_1d_job_size_reauth,
             JobKind::Gpu1D | JobKind::Hnsw1D | JobKind::Gpu1DRecovery | JobKind::Hnsw1DRecovery => {
                 self.config.min_1d_job_size
             }
@@ -330,7 +375,7 @@ impl AnonStatsProcessor {
                 self.sync_failures.remove(&(origin, operation));
                 Ok(())
             }
-            JobKind::Hnsw1D | JobKind::Hnsw1DRecovery => {
+            JobKind::Hnsw1D | JobKind::Hnsw1DReauth | JobKind::Hnsw1DRecovery => {
                 let (ids, bundles) = self
                     .store
                     .get_available_anon_stats_1d_lifted(origin, Some(operation), min_job_size)
@@ -578,7 +623,7 @@ impl AnonStatsProcessor {
                     .clear_unprocessed_anon_stats_1d(origin, Some(operation))
                     .await?
             }
-            JobKind::Hnsw1D | JobKind::Hnsw1DRecovery => {
+            JobKind::Hnsw1D | JobKind::Hnsw1DReauth | JobKind::Hnsw1DRecovery => {
                 self.store
                     .clear_unprocessed_anon_stats_1d_lifted(origin, Some(operation))
                     .await?
