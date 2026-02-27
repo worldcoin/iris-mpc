@@ -36,7 +36,7 @@ pub type PlaintextSharedIrisesRef = SharedIrisesRef<PlaintextStoredIris>;
 /// This variant is only suitable for single-threaded operation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(bound(serialize = "", deserialize = ""))]
-pub struct PlaintextStore<D: DistanceOps = FhdOps> {
+pub struct PlaintextStore<D = FhdOps> {
     pub storage: PlaintextSharedIrises,
     pub distance_fn: DistanceFn,
     #[serde(skip)]
@@ -223,7 +223,7 @@ impl<D: DistanceOps> VectorStoreMut for PlaintextStore<D> {
 
 /// PlaintextStore with synchronization primitives for multithreaded use.
 #[derive(Debug, Clone)]
-pub struct SharedPlaintextStore<D: DistanceOps = FhdOps> {
+pub struct SharedPlaintextStore<D = FhdOps> {
     pub storage: PlaintextSharedIrisesRef,
     pub distance_fn: DistanceFn,
     _phantom: PhantomData<D>,
@@ -473,7 +473,7 @@ mod tests {
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
 
-        let mut shared_vector = SharedPlaintextStore::from(ptxt_vector);
+        let mut shared_vector = SharedPlaintextStore::<FhdOps>::from(ptxt_vector);
         let shared_graph = Arc::new(ptxt_graph);
 
         for ids in (0..database_size)

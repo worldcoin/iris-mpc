@@ -112,7 +112,7 @@ pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 ///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
-pub struct Aby3Store<D: DistanceOps = FhdOps> {
+pub struct Aby3Store<D = FhdOps> {
     /// Reference to the shared irises
     pub storage: Aby3SharedIrisesRef,
 
