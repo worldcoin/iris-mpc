@@ -42,7 +42,10 @@ use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{
+            REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+            UNIQUENESS_MESSAGE_TYPE,
+        },
     },
     iris_db::get_dummy_shares_for_deletion,
     job::{JobSubmissionHandle, ServerJobResult},
@@ -764,6 +767,7 @@ impl ServerActor {
                 .filter(|(_, req_type)| {
                     req_type.as_str() == REAUTH_MESSAGE_TYPE
                         || req_type.as_str() == RESET_CHECK_MESSAGE_TYPE
+                        || req_type.as_str() == RECOVERY_CHECK_MESSAGE_TYPE
                 })
                 .map(|(index, _)| index)
                 .collect();
@@ -1714,7 +1718,7 @@ impl ServerActor {
                 &mut both_side_match_distances_buffer,
             );
 
-            self.persist_two_sided_caches(&both_side_match_distances_buffer);
+            self.persist_two_sided_caches(orientation, &both_side_match_distances_buffer);
         }
 
         // Instead of sending to return_channel, we'll return this at the end
@@ -3346,16 +3350,23 @@ impl ServerActor {
         }
     }
 
-    fn persist_two_sided_caches(&self, caches: &[TwoSidedDistanceCache]) {
-        tracing::info!("Persisting two-sided anon stats caches");
+    fn persist_two_sided_caches(&self, orientation: Orientation, caches: &[TwoSidedDistanceCache]) {
+        tracing::info!(
+            "Persisting two-sided anon stats caches for orientation {:?}",
+            orientation
+        );
         let writer = match &self.anon_stats_writer {
             Some(writer) => writer,
             None => return,
         };
 
+        let anon_orientation = match orientation {
+            Orientation::Normal => AnonStatsOrientation::Normal,
+            Orientation::Mirror => AnonStatsOrientation::Mirror,
+        };
         let origin = AnonStatsOrigin {
             side: None,
-            orientation: AnonStatsOrientation::Normal,
+            orientation: anon_orientation,
             context: AnonStatsContext::GPU,
         };
 

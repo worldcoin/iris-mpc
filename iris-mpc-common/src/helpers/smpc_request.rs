@@ -108,6 +108,7 @@ pub const CIRCUIT_BREAKER_MESSAGE_TYPE: &str = "circuit_breaker";
 pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
 pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
 pub const RESET_CHECK_MESSAGE_TYPE: &str = "reset_check";
+pub const RECOVERY_CHECK_MESSAGE_TYPE: &str = "recovery_check";
 pub const RESET_UPDATE_MESSAGE_TYPE: &str = "reset_update";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -143,8 +144,8 @@ pub struct ReAuthRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ResetCheckRequest {
-    pub reset_id: String,
+pub struct IdentityMatchCheckRequest {
+    pub request_id: String,
     pub batch_size: Option<usize>,
     pub s3_key: String,
 }

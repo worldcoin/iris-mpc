@@ -109,6 +109,9 @@ pub struct Config {
     pub disable_persistence: bool,
 
     #[serde(default)]
+    pub hnsw_disable_memory_persistence: bool,
+
+    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(
@@ -271,6 +274,9 @@ pub struct Config {
     #[serde(default = "default_hawk_server_resets_enabled")]
     pub hawk_server_resets_enabled: bool,
 
+    #[serde(default = "default_hawk_server_recovery_enabled")]
+    pub hawk_server_recovery_enabled: bool,
+
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
@@ -291,6 +297,9 @@ pub struct Config {
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
+
+    #[serde(default = "default_enable_recovery")]
+    pub enable_recovery: bool,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -412,6 +421,10 @@ fn default_hawk_server_resets_enabled() -> bool {
     false
 }
 
+fn default_hawk_server_recovery_enabled() -> bool {
+    false
+}
+
 fn default_hawk_server_deletions_enabled() -> bool {
     false
 }
@@ -464,6 +477,10 @@ fn default_tokio_threads() -> usize {
 
 fn default_sns_retry_max_attempts() -> u32 {
     5
+}
+
+fn default_enable_recovery() -> bool {
+    false
 }
 
 impl Config {
@@ -617,6 +634,7 @@ pub struct CommonConfig {
     fake_db_size: usize,
     return_partial_results: bool,
     disable_persistence: bool,
+    hnsw_disable_memory_persistence: bool,
     shutdown_last_results_sync_timeout_secs: u64,
     db_chunks_bucket_region: String,
     fixed_shared_secrets: bool,
@@ -628,6 +646,7 @@ pub struct CommonConfig {
     match_distances_2d_buffer_size: usize,
     enable_reauth: bool,
     enable_reset: bool,
+    enable_recovery: bool,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
@@ -646,6 +665,7 @@ pub struct CommonConfig {
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
     hawk_server_resets_enabled: bool,
+    hawk_server_recovery_enabled: bool,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
     batch_polling_timeout_secs: i32,
@@ -688,6 +708,7 @@ impl From<Config> for CommonConfig {
             fake_db_size,
             return_partial_results,
             disable_persistence,
+            hnsw_disable_memory_persistence,
             enable_debug_timing: _,
             service_ports: _,          // Could be different for each server
             service_outbound_ports: _, // Could be different for each server
@@ -729,6 +750,7 @@ impl From<Config> for CommonConfig {
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
             hawk_server_resets_enabled,
+            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
@@ -746,7 +768,13 @@ impl From<Config> for CommonConfig {
             enable_pprof_per_batch: _,
             tokio_threads: _,
             sns_retry_max_attempts: _,
+            enable_recovery,
         } = value;
+
+        assert!(
+            !hnsw_disable_memory_persistence || disable_persistence,
+            "hnsw_disable_memory_persistence requires disable_persistence to also be true"
+        );
 
         Self {
             environment,
@@ -762,6 +790,7 @@ impl From<Config> for CommonConfig {
             fake_db_size,
             return_partial_results,
             disable_persistence,
+            hnsw_disable_memory_persistence,
             shutdown_last_results_sync_timeout_secs,
             db_chunks_bucket_region,
             fixed_shared_secrets,
@@ -791,11 +820,13 @@ impl From<Config> for CommonConfig {
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
             hawk_server_resets_enabled,
+            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            enable_recovery,
         }
     }
 }
