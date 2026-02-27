@@ -3,6 +3,7 @@ use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
+    hawkers::aby3::aby3_store::FhdOps,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
@@ -309,7 +310,10 @@ async fn main() -> Result<()> {
 
     // TODO: use reader function to read NDJSON file.
     tracing::info!("Initializing in-memory vectors from NDJSON file");
-    let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
+    let mut vectors = [
+        PlaintextStore::<FhdOps>::new(),
+        PlaintextStore::<FhdOps>::new(),
+    ];
     if n_existing_irises > 0 {
         let stream = irises_from_ndjson_iter(
             Path::new(args.path_to_iris_codes.as_path()),

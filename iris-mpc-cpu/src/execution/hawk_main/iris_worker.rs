@@ -1,5 +1,5 @@
 use crate::{
-    execution::hawk_main::HAWK_MINFHD_ROTATIONS,
+    execution::hawk_main::HAWK_MIN_ROTATIONS,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
         ops::{
@@ -100,9 +100,9 @@ pub struct IrisPoolHandle {
     workers: Arc<[Sender<IrisTask>]>,
     /// A counter used for round-robin task distribution.
     next_counter: Arc<AtomicU64>,
-    /// Latency metric for dot_product_batch (used with Fhd distance).
+    /// Latency metric for dot_product_batch (used with Simple distance).
     metric_dot_product_batch_latency: FastHistogram,
-    /// Latency metric for rotation_aware_dot_product_batch (used with MinFhd distance).
+    /// Latency metric for rotation_aware_dot_product_batch (used with MinRotation distance).
     metric_rotation_aware_dot_product_latency: FastHistogram,
 }
 
@@ -253,7 +253,7 @@ impl IrisPoolHandle {
         // Preallocate vectors for results
         let mut results = batches
             .iter()
-            .map(|(_, vids)| Vec::with_capacity(2 * HAWK_MINFHD_ROTATIONS * vids.len()))
+            .map(|(_, vids)| Vec::with_capacity(2 * HAWK_MIN_ROTATIONS * vids.len()))
             .collect_vec();
 
         // Dispatch dot product batches
@@ -455,7 +455,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MINFHD_ROTATIONS, _>(
+                let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_ROTATIONS, _>(
                     &query, targets,
                 );
                 let _ = rsp.send(result);
@@ -467,7 +467,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::RotationAwarePairwiseDistance { pair, rsp } => {
-                let r = rotation_aware_pairwise_distance::<HAWK_MINFHD_ROTATIONS, _>(
+                let r = rotation_aware_pairwise_distance::<HAWK_MIN_ROTATIONS, _>(
                     &pair.0,
                     iter::once(Some(&pair.1)),
                 );

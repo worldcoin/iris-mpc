@@ -698,7 +698,7 @@ mod tests {
 
     use super::{test_utils::TestGraphPg, *};
     use crate::{
-        hawkers::plaintext_store::PlaintextStore,
+        hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
         hnsw::{
             graph::{layered_graph::EntryPoint, neighborhood::Neighborhood},
             vector_store::VectorStoreMut,
@@ -726,7 +726,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_largest_inserted_id_nonempty() -> Result<()> {
         let graph = TestGraphPg::<PlaintextStore>::new().await?;
-        let mut vector_store = PlaintextStore::new();
+        let mut vector_store = PlaintextStore::<FhdOps>::new();
         let rng = &mut AesRng::seed_from_u64(42_u64);
 
         let vectors = {
@@ -781,7 +781,7 @@ mod tests {
     #[tokio::test]
     async fn test_db() -> Result<()> {
         let graph = TestGraphPg::<PlaintextStore>::new().await?;
-        let mut vector_store = PlaintextStore::new();
+        let mut vector_store = PlaintextStore::<FhdOps>::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
 
         let vectors = {
@@ -853,7 +853,7 @@ mod tests {
     async fn test_hnsw_db() -> Result<()> {
         let graph_pg = TestGraphPg::<PlaintextStore>::new().await?;
         let graph_mem = &mut GraphMem::new();
-        let vector_store = &mut PlaintextStore::new();
+        let vector_store = &mut PlaintextStore::<FhdOps>::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let searcher = HnswSearcher::new_with_test_parameters();
 

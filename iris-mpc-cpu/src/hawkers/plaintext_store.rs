@@ -1,6 +1,6 @@
 use crate::{
     hawkers::{
-        aby3::aby3_store::DistanceFn,
+        aby3::aby3_store::{DistanceFn, DistanceOps, FhdOps},
         shared_irises::{SharedIrises, SharedIrisesRef},
         TEST_DISTANCE_FN,
     },
@@ -12,18 +12,15 @@ use crate::{
 };
 use aes_prng::AesRng;
 use iris_mpc_common::{
-    iris_db::{
-        db::IrisDB,
-        iris::{IrisCode, MATCH_THRESHOLD_RATIO},
-    },
+    iris_db::{db::IrisDB, iris::IrisCode},
     vector_id::VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
+use std::{cmp::Ordering, collections::HashMap, marker::PhantomData, sync::Arc};
 use tracing::debug;
 
 use eyre::{bail, Result};
-use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 pub type PlaintextVectorRef = <PlaintextStore as VectorStore>::VectorRef;
 pub type PlaintextStoredIris = Arc<IrisCode>;
@@ -33,20 +30,26 @@ pub type PlaintextSharedIrisesRef = SharedIrisesRef<PlaintextStoredIris>;
 
 /// Vector store which works over plaintext iris codes and distance computations.
 ///
+/// Generic over `D: DistanceOps` which determines the comparison protocol
+/// (FHD cross-multiply vs NHD polynomial). Defaults to `FhdOps`.
+///
 /// This variant is only suitable for single-threaded operation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PlaintextStore {
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct PlaintextStore<D: DistanceOps = FhdOps> {
     pub storage: PlaintextSharedIrises,
     pub distance_fn: DistanceFn,
+    #[serde(skip)]
+    _phantom: PhantomData<D>,
 }
 
-impl Default for PlaintextStore {
+impl<D: DistanceOps> Default for PlaintextStore<D> {
     fn default() -> Self {
         Self::with_storage(PlaintextSharedIrises::default())
     }
 }
 
-impl PlaintextStore {
+impl<D: DistanceOps> PlaintextStore<D> {
     /// Generate a new empty `PlaintextStore`.
     pub fn new() -> Self {
         Default::default()
@@ -56,11 +59,12 @@ impl PlaintextStore {
         Self {
             storage,
             distance_fn: TEST_DISTANCE_FN,
+            _phantom: PhantomData,
         }
     }
 
     pub fn from_irises_iter(iter: impl Iterator<Item = IrisCode>) -> Self {
-        let mut vector = PlaintextStore::new();
+        let mut vector = Self::new();
         for (idx, iris) in iter.enumerate() {
             let id = VectorId::from_0_index(idx as u32);
             vector.insert_with_id(id, Arc::new(iris));
@@ -136,24 +140,11 @@ impl PlaintextStore {
     }
 }
 
-fn fraction_is_match(dist: &(u16, u16)) -> bool {
-    let (a, b) = *dist;
-    (a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO
-}
-
-fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
-    let (a, b) = *dist_1; // a/b
-    let (c, d) = *dist_2; // c/d
-    (a as u32) * (d as u32) < (b as u32) * (c as u32)
-}
-
 pub fn fraction_ordering(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> Ordering {
-    let (a, b) = *dist_1; // a/b
-    let (c, d) = *dist_2; // c/d
-    ((a as u32) * (d as u32)).cmp(&((b as u32) * (c as u32)))
+    FhdOps::plaintext_ordering(dist_1, dist_2)
 }
 
-impl VectorStore for PlaintextStore {
+impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
     type QueryRef = Arc<IrisCode>;
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
@@ -177,12 +168,12 @@ impl VectorStore for PlaintextStore {
                 vector.serial_id()
             )
         })?;
-        let distance = self.distance_fn.plaintext_distance(vector_code, query);
+        let distance = D::plaintext_distance(vector_code, query, self.distance_fn);
         Ok(distance)
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(fraction_is_match(distance))
+        Ok(D::plaintext_is_match(distance))
     }
 
     async fn less_than(
@@ -191,7 +182,7 @@ impl VectorStore for PlaintextStore {
         distance2: &Self::DistanceRef,
     ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
-        Ok(fraction_less_than(distance1, distance2))
+        Ok(D::plaintext_less_than(distance1, distance2))
     }
 
     // Note: default implementation + metrics
@@ -216,7 +207,7 @@ impl VectorStore for PlaintextStore {
     }
 }
 
-impl VectorStoreMut for PlaintextStore {
+impl<D: DistanceOps> VectorStoreMut for PlaintextStore<D> {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(query.clone())
     }
@@ -232,21 +223,23 @@ impl VectorStoreMut for PlaintextStore {
 
 /// PlaintextStore with synchronization primitives for multithreaded use.
 #[derive(Debug, Clone)]
-pub struct SharedPlaintextStore {
+pub struct SharedPlaintextStore<D: DistanceOps = FhdOps> {
     pub storage: PlaintextSharedIrisesRef,
     pub distance_fn: DistanceFn,
+    _phantom: PhantomData<D>,
 }
 
-impl Default for SharedPlaintextStore {
+impl<D: DistanceOps> Default for SharedPlaintextStore<D> {
     fn default() -> Self {
         Self {
             storage: SharedIrises::default().to_arc(),
             distance_fn: TEST_DISTANCE_FN,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl SharedPlaintextStore {
+impl<D: DistanceOps> SharedPlaintextStore<D> {
     pub fn new() -> Self {
         Default::default()
     }
@@ -260,16 +253,17 @@ impl SharedPlaintextStore {
     }
 }
 
-impl From<PlaintextStore> for SharedPlaintextStore {
-    fn from(value: PlaintextStore) -> Self {
+impl<D: DistanceOps> From<PlaintextStore<D>> for SharedPlaintextStore<D> {
+    fn from(value: PlaintextStore<D>) -> Self {
         Self {
             storage: value.storage.to_arc(),
             distance_fn: value.distance_fn,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl VectorStore for SharedPlaintextStore {
+impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     type QueryRef = Arc<IrisCode>;
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
@@ -309,12 +303,12 @@ impl VectorStore for SharedPlaintextStore {
             .collect::<Result<Vec<_>>>()?;
         Ok(vector_codes
             .into_iter()
-            .map(|v| self.distance_fn.plaintext_distance(v, query))
+            .map(|v| D::plaintext_distance(v, query, self.distance_fn))
             .collect())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(fraction_is_match(distance))
+        Ok(D::plaintext_is_match(distance))
     }
 
     async fn less_than(
@@ -323,7 +317,7 @@ impl VectorStore for SharedPlaintextStore {
         distance2: &Self::DistanceRef,
     ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
-        Ok(fraction_less_than(distance1, distance2))
+        Ok(D::plaintext_less_than(distance1, distance2))
     }
 
     // Note: default implementation + metrics
@@ -349,7 +343,7 @@ impl VectorStore for SharedPlaintextStore {
     }
 }
 
-impl VectorStoreMut for SharedPlaintextStore {
+impl<D: DistanceOps> VectorStoreMut for SharedPlaintextStore<D> {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(query).await
     }
@@ -366,6 +360,7 @@ impl VectorStoreMut for SharedPlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hawkers::aby3::aby3_store::FhdOps;
     use crate::hnsw::HnswSearcher;
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -378,7 +373,7 @@ mod tests {
     #[traced_test]
     async fn test_basic_ops() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let mut store = PlaintextStore::new();
+        let mut store = PlaintextStore::<FhdOps>::new();
 
         let db = IrisDB::new_random_rng(10, &mut rng)
             .db
@@ -400,7 +395,7 @@ mod tests {
         let d23 = store.eval_distance(&db[2], &ids[3]).await?;
         let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
-        let distance = |a, b| TEST_DISTANCE_FN.plaintext_distance(a, b);
+        let distance = |a, b| FhdOps::plaintext_distance(a, b, TEST_DISTANCE_FN);
 
         assert_eq!(
             store.less_than(&d01, &d23).await?,
@@ -446,7 +441,7 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HnswSearcher::new_with_test_parameters();
-        let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size);
+        let mut ptxt_vector = PlaintextStore::<FhdOps>::new_random(&mut rng, database_size);
         let ptxt_graph = ptxt_vector
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
@@ -473,7 +468,7 @@ mod tests {
         let database_size = 16;
 
         let searcher = HnswSearcher::new_with_test_parameters();
-        let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size);
+        let mut ptxt_vector = PlaintextStore::<FhdOps>::new_random(&mut rng, database_size);
         let ptxt_graph = ptxt_vector
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;

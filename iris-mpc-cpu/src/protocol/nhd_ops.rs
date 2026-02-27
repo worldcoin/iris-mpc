@@ -1,5 +1,8 @@
+// TODO: consider moving this to ampc-common
+use std::ops::Not;
+
 use crate::execution::session::Session;
-use crate::protocol::ops::B;
+use crate::protocol::ops::{min_round_robin_batch_with, CrossCompareFnResult, DistancePair, B};
 use ampc_actor_utils::network::value::NetworkInt;
 use ampc_actor_utils::protocol::{
     binary::{bit_inject, extract_msb_batch, open_bin},
@@ -38,7 +41,7 @@ const NHD_CORRECTION: u64 = 73728;
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn nhd_cross_mul(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<Share<Ring48>>> {
     let n = distances.len();
 
@@ -77,7 +80,7 @@ pub async fn nhd_cross_mul(
 /// For every pair of NHD distance shares (d1, d2), computes d1 < d2 and opens it.
 pub async fn nhd_cross_compare(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<bool>> {
     let diff = nhd_cross_mul(session, distances).await?;
     let bits = extract_msb_batch(session, &diff).await?;
@@ -88,7 +91,7 @@ pub async fn nhd_cross_compare(
 /// For every pair of NHD distance shares (d1, d2), computes the secret-shared bit d1 < d2.
 pub async fn nhd_oblivious_cross_compare(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<Share<Bit>>> {
     let diff = nhd_cross_mul(session, distances).await?;
     extract_msb_batch(session, &diff).await
@@ -98,7 +101,7 @@ pub async fn nhd_oblivious_cross_compare(
 /// and lifts it to Ring48 shares.
 pub async fn nhd_oblivious_cross_compare_lifted(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<Share<Ring48>>> {
     let bits = nhd_oblivious_cross_compare(session, distances).await?;
     Ok(bit_inject(session, VecShare { shares: bits })
@@ -109,7 +112,7 @@ pub async fn nhd_oblivious_cross_compare_lifted(
 /// For every pair of NHD distance shares (d1, d2), returns the minimum distance.
 pub async fn nhd_min_of_pair_batch(
     session: &mut Session,
-    distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+    distances: &[DistancePair<Ring48>],
 ) -> Result<Vec<DistanceShare<Ring48>>> {
     let bits = nhd_oblivious_cross_compare_lifted(session, distances).await?;
     conditionally_select_distance(session, distances, bits.as_slice()).await
@@ -162,6 +165,65 @@ pub async fn nhd_greater_than_threshold(
         .collect();
 
     extract_msb_batch(session, &results).await
+}
+
+/// Checks if distances are less than or equal to the NHD threshold (i.e., is_match).
+///
+/// This is the negation of `nhd_greater_than_threshold`: returns `true` when
+/// the distance is at or below threshold (match), `false` otherwise.
+pub async fn nhd_lte_threshold_and_open(
+    session: &mut Session,
+    distances: &[DistanceShare<Ring48>],
+) -> Result<Vec<bool>> {
+    let bits = nhd_greater_than_threshold(session, distances).await?;
+    open_bin(session, &bits)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+}
+
+const A_PLAIN: i64 = 405_504_i64 - (25.0 * B as f64 * MATCH_THRESHOLD_RATIO) as i64;
+/// Plaintext NHD threshold check: returns `true` if the distance represents a match
+/// (at or below threshold).
+///
+/// Given the masked Hamming distance `hd` and mask dot product `md`, we compute the bit
+///
+/// `md * (100 * hd - 45 * md) + A_plain * md + 737_280 * hd < 0`
+pub(crate) fn nhd_plaintext_is_match(hd: u16, md: u16) -> bool {
+    let (hd, md) = (hd as i64, md as i64);
+    md * (100 * hd - 45 * md) + A_PLAIN * md + 737_280 * hd < 0
+}
+
+fn nhd_oblivious_cross_compare_boxed<'a>(
+    session: &'a mut Session,
+    pairs: &'a [DistancePair<Ring48>],
+) -> CrossCompareFnResult<'a> {
+    Box::pin(nhd_oblivious_cross_compare(session, pairs))
+}
+
+// Round-robin minimum distance selection for NHD.
+pub(crate) async fn nhd_min_round_robin_batch(
+    session: &mut Session,
+    distances: &[DistanceShare<Ring48>],
+    batch_size: usize,
+) -> Result<Vec<DistanceShare<Ring48>>> {
+    min_round_robin_batch_with(
+        session,
+        distances,
+        batch_size,
+        nhd_oblivious_cross_compare_boxed,
+    )
+    .await
+}
+
+/// Normalized Hamming Distance operations using 48-bit arithmetic.
+/// Computes the NHD numerator for plaintext comparison.
+///
+/// `nmr(hd, ml) = ml * (ml - NHD_LINEAR_COEFF*hd) - NHD_CORRECTION * hd`
+///
+/// Uses the same constants as the MPC protocol.
+pub(crate) fn nhd_compare_nmr(hd: u16, ml: u16) -> i64 {
+    let (hd, ml) = (hd as i64, ml as i64);
+    ml * (ml - NHD_LINEAR_COEFF as i64 * hd) - NHD_CORRECTION as i64 * hd
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +352,44 @@ mod tests {
             cd as i64 - (1 << 16)
         } else {
             cd as i64
+        }
+    }
+
+    #[test]
+    fn test_nhd_plaintext_is_match() {
+        // Test cases matching the MPC threshold test
+        // nhd_plaintext_is_match should return the same as !reference_nhd_greater_than_threshold
+        let test_cases: Vec<(u16, u16, bool)> = vec![
+            (100, 500, true),  // nhd = 0.33 -> match
+            (400, 500, false), // nhd = 0.62 -> no match
+            // same FHD but different mask dot
+            (800, 3000, true), // nhd = 0.33 -> match
+            (8, 30, false),    // nhd = 0.37 -> no match
+            // Edge cases
+            (0, 0, false),  // nhd = infinity -> no match
+            (0, 100, true), // nhd = 0.24 -> match
+            (1, 1, false),  // nhd = 0.70 -> no match
+        ];
+
+        for (hd, md, expected) in &test_cases {
+            let result = nhd_plaintext_is_match(*hd, *md);
+            assert_eq!(
+                result, *expected,
+                "nhd_plaintext_is_match({}, {}): got {}, expected {}",
+                hd, md, result, expected
+            );
+        }
+
+        // Cross-check consistency with reference_nhd_greater_than_threshold
+        for (hd, md, _) in test_cases.into_iter() {
+            let ref_cd = md as i64 - 2 * hd as i64; // Derive a code dot that would yield the Hamming distance
+            let greater = reference_nhd_greater_than_threshold(ref_cd, md as i64);
+            let plaintext_match = nhd_plaintext_is_match(hd, md);
+            assert_eq!(
+                plaintext_match, !greater,
+                "Inconsistency for (hd={}, md={}): plaintext_is_match={}, !greater_than_threshold={}",
+                hd, md, plaintext_match, !greater
+            );
         }
     }
 

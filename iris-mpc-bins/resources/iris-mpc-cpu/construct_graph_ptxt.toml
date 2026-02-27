@@ -1,4 +1,4 @@
-distance_fn = "MinFhd"
+distance_fn = "MinRotation"         # Must be "Simple" or "MinRotation"
 hnsw_prf_seed = 42
 
 [irises]

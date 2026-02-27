@@ -1,11 +1,12 @@
 use crate::{
-    hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Store},
+    hawkers::aby3::aby3_store::{Aby3Store, DistanceOps},
     hnsw::VectorStore,
-    shares::Share,
+    shares::{share::DistanceShare, Share},
 };
 use ampc_secret_sharing::shares::bit::Bit;
 use eyre::{eyre, Result};
 use itertools::{EitherOrBoth, Itertools};
+use rand_distr::{Distribution, Standard};
 
 /// Type of a single layer in a non-adaptive comparator network represented by
 /// the `SwapNetwork` struct.
@@ -176,11 +177,14 @@ pub async fn apply_swap_network<V: VectorStore>(
 /// which might introduce an additional throughput overhead.
 /// For example, for a swap network implementing the tournament method to find the minimum of a list of length N,
 /// this throughput overhead is O(1).
-pub async fn apply_oblivious_swap_network(
-    store: &mut Aby3Store,
-    list: &[(u32, Aby3DistanceRef)],
+pub async fn apply_oblivious_swap_network<D: DistanceOps>(
+    store: &mut Aby3Store<D>,
+    list: &[(u32, DistanceShare<D::Ring>)],
     network: &SwapNetwork,
-) -> Result<Vec<(Share<u32>, Aby3DistanceRef)>> {
+) -> Result<Vec<(Share<D::Ring>, DistanceShare<D::Ring>)>>
+where
+    Standard: Distribution<D::Ring>,
+{
     let mut encrypted_list = Vec::new();
 
     for (layer_id, layer) in network.layers.iter().enumerate() {

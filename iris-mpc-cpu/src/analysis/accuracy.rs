@@ -37,7 +37,7 @@ pub struct AnalysisConfig {
     pub sample_size: usize,
     /// Optional seed for reproducible sampling and mutation.
     pub seed: Option<u64>,
-    /// Distance function: "fhd" (Fractional Hamming) or "min_fhd" (Min-FHD).
+    /// Distance function: "simple" (Fractional Hamming distance per rotation) or "min_rotation" (Min-Rotation).
     pub distance_fn: String,
     /// Number of neighbors to retrieve in search (k).
     pub k_neighbors: usize,
@@ -60,8 +60,8 @@ pub struct AnalysisConfig {
 impl AnalysisConfig {
     pub fn get_distance_fn(&self) -> Result<DistanceFn> {
         match self.distance_fn.as_str() {
-            "fhd" => Ok(DistanceFn::Fhd),
-            "min_fhd" => Ok(DistanceFn::MinFhd),
+            "simple" => Ok(DistanceFn::Simple),
+            "min_rotation" => Ok(DistanceFn::MinRotation),
             _ => bail!("Unknown distance_fn: {}", self.distance_fn),
         }
     }

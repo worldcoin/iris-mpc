@@ -46,16 +46,16 @@
 //!
 //! There are two choices of distance function:
 //!
-//! - **`FHD` (Fractional Hamming Distance)**: Computes the standard fractional Hamming distance.
-//! - **`MinFHDX` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
-//!   FHD distance across rotation amounts `-X, -(X-1).. 0 .. (X - 1), X`.
+//! - **`Simple`**: Computes the standard distance (single orientation).
+//! - **`MinRotation`**: Obliviously finds the minimum distance across rotation
+//!   amounts `-X, -(X-1).. 0 .. (X - 1), X`.
 //!
 //! The choice of distance function is set by the constant `HAWK_DISTANCE_FN`.
-//! One must also set the `HAWK_MINFHD_ROTATIONS` constant, which refers to the total rotations considered by MinFHD.
-//! Note that one should set it to `2 * X + 1` to work with `MinFHDX`.
+//! One must also set the `HAWK_MIN_ROTATIONS` constant, which refers to the total rotations considered by MinRotation.
+//! Note that one should set it to `2 * X + 1` to work with `MinRotationX`.
 //! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
 //! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
-//! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinFhd5 encodes the set `{-10, 0, 10}`.
+//! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinRotation5 encodes the set `{-10, 0, 10}`.
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
@@ -78,7 +78,7 @@ use crate::{
     hawkers::{
         aby3::aby3_store::{
             Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
-            Aby3VectorRef, DistanceFn,
+            Aby3VectorRef, DistanceFn, FhdOps,
         },
         shared_irises::SharedIrises,
     },
@@ -162,26 +162,26 @@ use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
 /// Distance function used by the HawkActor
-pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
-/// Number of rotations considered by the MinFhd distance.
-/// Not used for non-MinFhd distance, but should be set to `1`.
-pub const HAWK_MINFHD_ROTATIONS: usize = 11;
+pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinRotation;
+/// Number of rotations considered by the MinRotation distance.
+/// Not used for non-MinRotation distance, but should be set to `1`.
+pub const HAWK_MIN_ROTATIONS: usize = 11;
 /// Bitmask of base rotations, i.e rotations of the query for which
 /// the HawkActor will launch independent HNSW searches.
 pub const HAWK_BASE_ROTATIONS_MASK: u32 = CENTER_AND_10_MASK;
 
-// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MINFHD_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
+// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MIN_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
 const _: () = {
     match HAWK_DISTANCE_FN {
-        DistanceFn::Fhd => {
-            // For Fhd the base rotations should consist of all 31 rotations.
-            // HAWK_MINFHD_ROTATIONS is not actually used in this case, but it must be set to 1.
-            if HAWK_MINFHD_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
+        DistanceFn::Simple => {
+            // For Simple the base rotations should consist of all 31 rotations.
+            // HAWK_MIN_ROTATIONS is not actually used in this case, but it must be set to 1.
+            if HAWK_MIN_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
                 panic!();
             }
         }
-        _ => match HAWK_MINFHD_ROTATIONS {
-            // Variants correspond to "full" minfhd, minfhd5 and minfhd6.
+        _ => match HAWK_MIN_ROTATIONS {
+            // Variants correspond to "full" min-rotation, min-rotation-5 and min-rotation-6.
             // The former requires center-only as base, while the latter two
             // require -10, 0, 10 as base rotations for searches.
             31 => {
@@ -424,7 +424,7 @@ impl HawkActor {
             args,
             shutdown_ct,
             [(); 2].map(|_| GraphMem::new()),
-            [(); 2].map(|_| Aby3Store::new_storage(None)),
+            [(); 2].map(|_| Aby3Store::<FhdOps>::new_storage(None)),
         )
         .await
     }
