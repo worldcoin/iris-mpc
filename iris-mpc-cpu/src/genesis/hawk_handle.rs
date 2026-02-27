@@ -263,6 +263,7 @@ impl Handle {
 
                             match modification.request_type.as_str() {
                                 smpc_request::RESET_UPDATE_MESSAGE_TYPE
+                                | smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE
                                 | smpc_request::REAUTH_MESSAGE_TYPE => {
                                     let vector_id = vector_id_.ok_or_eyre(
                                         "Expected vector serial id of update is missing from store",

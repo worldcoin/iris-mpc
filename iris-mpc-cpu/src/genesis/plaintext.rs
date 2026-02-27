@@ -17,7 +17,8 @@ use std::{collections::HashMap, sync::Arc};
 use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
     helpers::smpc_request::{
-        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE,
     },
     iris_db::iris::IrisCode,
     IrisSerialId, IrisVectorId, IrisVersionId,
@@ -194,7 +195,8 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     && *persisted
                     && (request_type == IDENTITY_DELETION_MESSAGE_TYPE
                         || request_type == REAUTH_MESSAGE_TYPE
-                        || request_type == RESET_UPDATE_MESSAGE_TYPE)
+                        || request_type == RESET_UPDATE_MESSAGE_TYPE
+                        || request_type == RECOVERY_UPDATE_MESSAGE_TYPE)
             },
         )
         .map(|(mod_id, (serial_id, request_type, _status, _persisted))| {
@@ -206,7 +208,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     // Process applicable modifications entries
     for (mod_id, serial_id, request_type) in applicable_modifications {
         match request_type.as_str() {
-            RESET_UPDATE_MESSAGE_TYPE | REAUTH_MESSAGE_TYPE => {
+            RESET_UPDATE_MESSAGE_TYPE | RECOVERY_UPDATE_MESSAGE_TYPE | REAUTH_MESSAGE_TYPE => {
                 let (vector_id, left_iris, right_iris) = state
                     .src_db
                     .irises
