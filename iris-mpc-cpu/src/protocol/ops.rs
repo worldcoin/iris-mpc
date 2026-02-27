@@ -483,8 +483,8 @@ pub(crate) async fn min_round_robin_batch(
     for i_batch in 0..num_batches {
         for i in 0..batch_size {
             for j in (i + 1)..batch_size {
-                let distance_i = distances[i * num_batches + i_batch];
-                let distance_j = distances[j * num_batches + i_batch];
+                let distance_i = distances[i_batch * batch_size + i];
+                let distance_j = distances[i_batch * batch_size + j];
                 pairs.push((distance_i, distance_j));
             }
         }

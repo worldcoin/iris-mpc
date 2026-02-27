@@ -1040,9 +1040,13 @@ impl HnswSearcher {
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
-            let mut nbhd = graph.get_links(&init_nodes[open_idx], lc).await;
-            nbhd.retain(|x| !init_nodes.contains(x));
-            nbhd = store.only_valid_vectors(nbhd).await;
+            let nbhd_ref = graph.get_links(&init_nodes[open_idx], lc).await;
+            let nbhd: Vec<_> = nbhd_ref
+                .iter()
+                .filter(|x| !init_nodes.contains(x))
+                .cloned()
+                .collect();
+            let nbhd = store.only_valid_vectors(nbhd).await;
 
             // extend `init_nodes` with these neighbors, and progress
             init_nodes.extend(nbhd);
@@ -1305,8 +1309,9 @@ impl HnswSearcher {
         let neighbors = graph.get_links(node, lc).await;
 
         let unvisited_neighbors: Vec<_> = neighbors
-            .into_iter()
-            .filter(|e| visited.insert(e.clone()))
+            .iter()
+            .filter(|e| visited.insert((*e).clone()))
+            .cloned()
             .collect();
 
         let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
@@ -1343,8 +1348,9 @@ impl HnswSearcher {
             let neighbors = graph.get_links(node, lc).await;
 
             let unvisited_neighbors: Vec<_> = neighbors
-                .into_iter()
-                .filter(|e| visited.insert(e.clone()))
+                .iter()
+                .filter(|e| visited.insert((*e).clone()))
+                .cloned()
                 .collect();
 
             valid_neighbors.extend(store.only_valid_vectors(unvisited_neighbors).await);
@@ -1620,7 +1626,7 @@ impl HnswSearcher {
                 nbhd.clone()
             } else {
                 let links = graph.get_links(&nb, layer).await;
-                store.only_valid_vectors(links).await
+                store.only_valid_vectors(links.to_vec()).await
             };
 
             // For each individual update, in order, extend the neighborhood and
