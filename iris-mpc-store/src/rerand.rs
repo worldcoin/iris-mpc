@@ -3,6 +3,7 @@ use iris_mpc_common::helpers::sync::{RerandSyncState, SyncResult};
 use sqlx::PgPool;
 
 pub const RERAND_APPLY_LOCK: i64 = 0x5245_5241_4E44;
+pub const RERAND_MODIFY_LOCK: i64 = 0x5245_4D4F_4446;
 
 pub struct StagingIrisEntry {
     pub epoch: i32,
@@ -40,6 +41,97 @@ fn validate_identifier(name: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Delete any partial staging data for a chunk before (re-)staging.
+/// Ensures all rows come from one read pass, preventing mixed-snapshot
+/// version_ids after a crash-and-retry.
+pub async fn delete_staging_chunk(
+    pool: &PgPool,
+    staging_schema: &str,
+    epoch: i32,
+    chunk_id: i32,
+) -> Result<u64> {
+    validate_identifier(staging_schema)?;
+    let sql = format!(
+        r#"DELETE FROM "{}".irises WHERE epoch = $1 AND chunk_id = $2"#,
+        staging_schema,
+    );
+    let result = sqlx::query(&sql)
+        .bind(epoch)
+        .bind(chunk_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+/// Return the (id, original_version_id) pairs from staging for a chunk.
+pub async fn get_staging_version_map(
+    pool: &PgPool,
+    staging_schema: &str,
+    epoch: i32,
+    chunk_id: i32,
+) -> Result<Vec<(i64, i16)>> {
+    validate_identifier(staging_schema)?;
+    let sql = format!(
+        r#"SELECT id, original_version_id FROM "{}".irises WHERE epoch = $1 AND chunk_id = $2 ORDER BY id"#,
+        staging_schema,
+    );
+    let rows: Vec<(i64, i16)> = sqlx::query_as(&sql)
+        .bind(epoch)
+        .bind(chunk_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+/// Return IDs where the staging original_version_id no longer matches the
+/// live version_id (modifications landed after staging).
+pub async fn get_locally_divergent_ids(
+    pool: &PgPool,
+    staging_schema: &str,
+    epoch: i32,
+    chunk_id: i32,
+) -> Result<Vec<i64>> {
+    validate_identifier(staging_schema)?;
+    let sql = format!(
+        r#"
+        SELECT s.id FROM "{}".irises s
+        JOIN irises ON irises.id = s.id
+        WHERE s.epoch = $1 AND s.chunk_id = $2
+          AND irises.version_id != s.original_version_id
+        "#,
+        staging_schema,
+    );
+    let rows: Vec<(i64,)> = sqlx::query_as(&sql)
+        .bind(epoch)
+        .bind(chunk_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Delete specific IDs from a staging chunk.
+pub async fn delete_staging_ids(
+    pool: &PgPool,
+    staging_schema: &str,
+    epoch: i32,
+    ids: &[i64],
+) -> Result<u64> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    validate_identifier(staging_schema)?;
+    let sql = format!(
+        r#"DELETE FROM "{}".irises WHERE epoch = $1 AND id = ANY($2)"#,
+        staging_schema,
+    );
+    let result = sqlx::query(&sql)
+        .bind(epoch)
+        .bind(ids)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn insert_staging_irises(
@@ -234,13 +326,35 @@ pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
 // ---------------------------------------------------------------------------
 
 /// Build the rerand sync state from the local `rerand_progress` table.
-pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<RerandSyncState> {
-    let epoch = get_current_epoch(pool).await?.unwrap_or(0);
+///
+/// Returns `Ok(None)` when the `rerand_progress` table does not exist yet
+/// (rolling deploy before migration). Returns `Err` for real DB failures
+/// so callers can distinguish "not migrated" from "broken".
+pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<Option<RerandSyncState>> {
+    let epoch = match get_current_epoch(pool).await {
+        Ok(e) => e.unwrap_or(0),
+        Err(e) => {
+            if is_undefined_table(&e) {
+                return Ok(None);
+            }
+            return Err(e);
+        }
+    };
     let max_confirmed = get_max_confirmed_chunk(pool, epoch).await?.unwrap_or(-1);
-    Ok(RerandSyncState {
+    Ok(Some(RerandSyncState {
         epoch,
         max_confirmed_chunk: max_confirmed,
-    })
+    }))
+}
+
+fn is_undefined_table(err: &eyre::Report) -> bool {
+    if let Some(db_err) = err.root_cause().downcast_ref::<sqlx::error::Error>() {
+        if let sqlx::error::Error::Database(ref pg) = db_err {
+            return pg.code().as_deref() == Some("42P01");
+        }
+    }
+    // Also check the direct error (not just root cause).
+    format!("{:?}", err).contains("42P01")
 }
 
 /// Compute the single chunk (if any) that needs to be applied during startup catch-up.
@@ -344,10 +458,11 @@ async fn rerand_catchup_inner(
     staging_schema: &str,
     sync_result: &SyncResult,
 ) -> Result<()> {
-    // If the rerand tables haven't been migrated yet, the sync state will
-    // be None and there is nothing to catch up.  Skip unconditionally so
-    // a rolling deploy doesn't crash before migrations run.
+    // If the rerand tables haven't been migrated yet, rerand_state is None
+    // (build_rerand_sync_state returns Ok(None) for missing table). Real DB
+    // errors propagate as Err before we get here. Safe to skip catch-up.
     if sync_result.my_state.rerand_state.is_none() {
+        tracing::info!("Rerand catch-up: skipped (rerand not yet migrated)");
         return Ok(());
     }
 
@@ -371,14 +486,9 @@ async fn rerand_catchup_inner(
     }
 
     // Step 2: if a peer is one chunk ahead, apply that chunk too.
-    // Skip if already handled in step 1, or if no progress row exists
-    // (ghost chunk at epoch boundary — the chunk doesn't actually exist).
+    // If there's no staging data for the chunk, apply is a safe no-op.
     if let Some((epoch, chunk_id)) = compute_rerand_catchup_chunk(sync_result)? {
-        let dominated_by_step1 = pending.contains(&(epoch, chunk_id));
-        let has_progress = get_rerand_progress(pool, epoch, chunk_id)
-            .await?
-            .is_some();
-        if !dominated_by_step1 && has_progress {
+        if !pending.contains(&(epoch, chunk_id)) {
             tracing::info!(
                 "Rerand catch-up: applying peer-ahead epoch {} chunk {}",
                 epoch,

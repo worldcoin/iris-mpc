@@ -260,6 +260,126 @@ pub async fn poll_chunk_staged_all(
     poll_until_all_parties_marker(s3, bucket, epoch, &suffix, poll_interval).await
 }
 
+// ---- Chunk version map (modification fence) ----
+
+fn version_map_hash(version_map: &[(i64, i16)]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    for (id, ver) in version_map {
+        hasher.update(&id.to_le_bytes());
+        hasher.update(&ver.to_le_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// Upload the version map and its blake3 hash for a chunk.
+pub async fn upload_chunk_version_map(
+    s3: &S3Client,
+    bucket: &str,
+    epoch: u32,
+    party: u8,
+    chunk_id: u32,
+    version_map: &[(i64, i16)],
+) -> Result<()> {
+    let prefix = format!("{}/chunk-{}", epoch_party_prefix(epoch, party), chunk_id);
+
+    let hash = version_map_hash(version_map);
+    upload_marker(s3, bucket, &format!("{prefix}/version-hash"), hash.to_vec()).await?;
+
+    let body = serde_json::to_vec(version_map)?;
+    upload_marker(s3, bucket, &format!("{prefix}/version-map"), body).await
+}
+
+async fn download_chunk_version_hash(
+    s3: &S3Client,
+    bucket: &str,
+    epoch: u32,
+    party: u8,
+    chunk_id: u32,
+    poll_interval: Duration,
+) -> Result<[u8; 32]> {
+    let key = format!(
+        "{}/chunk-{}/version-hash",
+        epoch_party_prefix(epoch, party),
+        chunk_id
+    );
+    poll_until_marker_exists(s3, bucket, &key, poll_interval).await?;
+    let bytes = download_marker(s3, bucket, &key).await?;
+    let hash: [u8; 32] = bytes
+        .try_into()
+        .map_err(|b: Vec<u8>| eyre!("version-hash has wrong length: {}", b.len()))?;
+    Ok(hash)
+}
+
+async fn download_chunk_version_map(
+    s3: &S3Client,
+    bucket: &str,
+    epoch: u32,
+    party: u8,
+    chunk_id: u32,
+    poll_interval: Duration,
+) -> Result<Vec<(i64, i16)>> {
+    let key = format!(
+        "{}/chunk-{}/version-map",
+        epoch_party_prefix(epoch, party),
+        chunk_id
+    );
+    poll_until_marker_exists(s3, bucket, &key, poll_interval).await?;
+    let bytes = download_marker(s3, bucket, &key).await?;
+    let map: Vec<(i64, i16)> = serde_json::from_slice(&bytes)?;
+    Ok(map)
+}
+
+/// Compare version maps across all 3 parties and return IDs where any
+/// party disagrees on the `original_version_id`.
+///
+/// Fast path: download only the 32-byte blake3 hashes. If all match,
+/// return empty (no disagreements). Slow path (hash mismatch): download
+/// the full maps and compute the exact disagreement set.
+pub async fn compute_cross_party_divergent_ids(
+    s3: &S3Client,
+    bucket: &str,
+    epoch: u32,
+    chunk_id: u32,
+    poll_interval: Duration,
+) -> Result<Vec<i64>> {
+    let mut hashes = Vec::new();
+    for party in 0..NUM_PARTIES {
+        hashes.push(
+            download_chunk_version_hash(s3, bucket, epoch, party, chunk_id, poll_interval).await?,
+        );
+    }
+    if hashes[0] == hashes[1] && hashes[1] == hashes[2] {
+        return Ok(Vec::new());
+    }
+
+    tracing::info!(
+        "Epoch {} chunk {}: version-map hashes differ, downloading full maps",
+        epoch,
+        chunk_id,
+    );
+
+    use std::collections::HashMap;
+    let mut all_maps: Vec<HashMap<i64, i16>> = Vec::new();
+    for party in 0..NUM_PARTIES {
+        let map =
+            download_chunk_version_map(s3, bucket, epoch, party, chunk_id, poll_interval).await?;
+        all_maps.push(map.into_iter().collect());
+    }
+
+    let mut divergent = Vec::new();
+    let all_ids: std::collections::BTreeSet<i64> =
+        all_maps.iter().flat_map(|m| m.keys().copied()).collect();
+
+    for id in all_ids {
+        let versions: Vec<Option<&i16>> = all_maps.iter().map(|m| m.get(&id)).collect();
+        let first = versions[0];
+        if !versions.iter().all(|v| *v == first) {
+            divergent.push(id);
+        }
+    }
+    Ok(divergent)
+}
+
 // ---- Epoch completion ----
 
 pub async fn upload_epoch_complete(

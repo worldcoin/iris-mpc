@@ -4,9 +4,10 @@ use bytemuck::cast_slice;
 use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_store::rerand::{
-    apply_staging_chunk, get_current_epoch, get_rerand_progress, insert_staging_irises,
+    apply_staging_chunk, delete_staging_chunk, delete_staging_ids, get_current_epoch,
+    get_locally_divergent_ids, get_rerand_progress, get_staging_version_map, insert_staging_irises,
     set_all_confirmed, set_staging_written, staging_schema_name, upsert_rerand_progress,
-    StagingIrisEntry,
+    StagingIrisEntry, RERAND_MODIFY_LOCK,
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
@@ -42,8 +43,7 @@ pub async fn run_continuous_rerand(
         }
 
         let epoch_hint = get_current_epoch(pool).await?.map(|e| e as u32);
-        let active_epoch =
-            epoch::determine_active_epoch(s3, &config.s3_bucket, epoch_hint).await?;
+        let active_epoch = epoch::determine_active_epoch(s3, &config.s3_bucket, epoch_hint).await?;
         tracing::info!("Active epoch: {}", active_epoch);
 
         let shared_secret = epoch::derive_shared_secret(
@@ -101,10 +101,24 @@ pub async fn run_continuous_rerand(
                 set_staging_written(pool, active_epoch as i32, chunk_id as i32).await?;
             }
 
-            // Always (re-)upload the S3 staged marker. This is idempotent
-            // and covers the crash window between set_staging_written and
-            // the previous upload attempt.
+            // Upload version map + staged marker (both idempotent).
             if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
+                let version_map = get_staging_version_map(
+                    pool,
+                    &staging_schema,
+                    active_epoch as i32,
+                    chunk_id as i32,
+                )
+                .await?;
+                s3_coordination::upload_chunk_version_map(
+                    s3,
+                    &config.s3_bucket,
+                    active_epoch,
+                    config.party_id,
+                    chunk_id,
+                    &version_map,
+                )
+                .await?;
                 s3_coordination::upload_chunk_staged(
                     s3,
                     &config.s3_bucket,
@@ -114,7 +128,7 @@ pub async fn run_continuous_rerand(
                 )
                 .await?;
                 tracing::info!(
-                    "Epoch {} chunk {}: S3 staged marker uploaded",
+                    "Epoch {} chunk {}: version map + staged marker uploaded",
                     active_epoch,
                     chunk_id
                 );
@@ -146,14 +160,68 @@ pub async fn run_continuous_rerand(
                 return Ok(());
             }
 
+            // --- Modification fence ---
+            // 1. Compute cross-party version_id disagreements
+            let cross_party_divergent = s3_coordination::compute_cross_party_divergent_ids(
+                s3,
+                &config.s3_bucket,
+                active_epoch,
+                chunk_id,
+                poll_interval,
+            )
+            .await?;
+
+            // 2. Lock to prevent new modifications during apply
+            let mut modify_lock_conn = pool.acquire().await?;
+            sqlx::query("SELECT pg_advisory_lock($1)")
+                .bind(RERAND_MODIFY_LOCK)
+                .execute(&mut *modify_lock_conn)
+                .await?;
+
+            // 3. Check local staging vs live for post-staging modifications
+            let local_divergent = get_locally_divergent_ids(
+                pool,
+                &staging_schema,
+                active_epoch as i32,
+                chunk_id as i32,
+            )
+            .await?;
+
+            // 4. Union of both divergence sources
+            let mut skip_ids: Vec<i64> = cross_party_divergent;
+            skip_ids.extend(&local_divergent);
+            skip_ids.sort_unstable();
+            skip_ids.dedup();
+
+            if !skip_ids.is_empty() {
+                tracing::info!(
+                    "Epoch {} chunk {}: skipping {} IDs due to concurrent modifications: {:?}",
+                    active_epoch,
+                    chunk_id,
+                    skip_ids.len(),
+                    &skip_ids[..std::cmp::min(skip_ids.len(), 10)],
+                );
+                delete_staging_ids(pool, &staging_schema, active_epoch as i32, &skip_ids).await?;
+            }
+
+            // 5. Apply (now consistent across all parties)
             let rows =
                 apply_staging_chunk(pool, &staging_schema, active_epoch as i32, chunk_id as i32)
                     .await?;
+
+            // 6. Release modification lock
+            sqlx::query("SELECT pg_advisory_unlock($1)")
+                .bind(RERAND_MODIFY_LOCK)
+                .execute(&mut *modify_lock_conn)
+                .await?;
+            drop(modify_lock_conn);
+
             tracing::info!(
-                "Epoch {} chunk {}: applied to live DB ({} rows updated)",
+                "Epoch {} chunk {}: applied to live DB ({} rows updated, {} skipped)",
                 active_epoch,
                 chunk_id,
-                rows
+                rows,
+                skip_ids.len(),
             );
 
             chunk_id += 1;
@@ -244,6 +312,10 @@ async fn process_chunk_staging(
     chunk_id: u32,
     manifest: &Manifest,
 ) -> Result<()> {
+    // Delete any leftover rows from a previous partial run so all rows in
+    // staging come from one read pass (prevents mixed-snapshot version_ids).
+    delete_staging_chunk(pool, staging_schema, epoch as i32, chunk_id as i32).await?;
+
     let (start, end) = manifest.chunk_range(chunk_id);
 
     const BATCH_SIZE: usize = 500;

@@ -274,14 +274,14 @@ fn phase7_epoch_boundary_desync() {
             let pool = &env.harness.parties[p].store.pool;
             // Everyone completes Epoch 0
             sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (0, 0, TRUE, TRUE, TRUE)")
-                .execute(pool).await.unwrap();
+            .execute(pool).await.unwrap();
         }
 
         // P0 and P2 move to Epoch 1
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (1, 0, TRUE, TRUE, FALSE)")
-            .execute(&env.harness.parties[0].store.pool).await.unwrap();
+    .execute(&env.harness.parties[0].store.pool).await.unwrap();
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (1, 0, TRUE, TRUE, FALSE)")
-            .execute(&env.harness.parties[2].store.pool).await.unwrap();
+.execute(&env.harness.parties[2].store.pool).await.unwrap();
 
         // Now simulate P1 main server startup (P1 is behind on Epoch 0)
         // Should catch up using safe_up_to = i32::MAX
@@ -317,13 +317,13 @@ fn phase8_reject_desync() {
         for p in 0..NUM_PARTIES {
             let pool = &env.harness.parties[p].store.pool;
             sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (0, 0, TRUE, TRUE, TRUE)")
-                .execute(pool).await.unwrap();
+            .execute(pool).await.unwrap();
         }
 
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (2, 0, TRUE, TRUE, FALSE)")
-            .execute(&env.harness.parties[0].store.pool).await.unwrap();
+    .execute(&env.harness.parties[0].store.pool).await.unwrap();
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (2, 0, TRUE, TRUE, FALSE)")
-            .execute(&env.harness.parties[2].store.pool).await.unwrap();
+.execute(&env.harness.parties[2].store.pool).await.unwrap();
 
         let r1 = simulate_server_startup(&env.harness, 1).await;
         assert!(
@@ -342,10 +342,10 @@ fn phase8_reject_desync() {
         }
 
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (3, 0, TRUE, TRUE, TRUE)")
-            .execute(&env.harness.parties[1].store.pool).await.unwrap();
+.execute(&env.harness.parties[1].store.pool).await.unwrap();
 
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (3, 2, TRUE, TRUE, FALSE)")
-            .execute(&env.harness.parties[0].store.pool).await.unwrap();
+.execute(&env.harness.parties[0].store.pool).await.unwrap();
 
         let r1_chunk_desync = simulate_server_startup(&env.harness, 1).await;
         assert!(
@@ -354,6 +354,70 @@ fn phase8_reject_desync() {
         );
 
         println!("[phase 8] PASSED");
+
+        env.teardown().await
+    });
+}
+
+// ============================================================================
+// Phase 9: Asymmetric modification — a modification landing on only one
+//          party's DB must NOT cause cross-party share divergence.
+//          The modification fence (version-map exchange + skip-set union)
+//          detects the asymmetry and excludes the affected row.
+// ============================================================================
+
+#[test]
+fn phase9_asymmetric_modification_consistency() {
+    run_async(async {
+        let _ = tracing_subscriber::fmt::try_init();
+        let env = TestEnv::setup().await?;
+        let target_id: i64 = 20;
+        println!("[phase 9] Asymmetric modification consistency...");
+
+        // Modify iris on P0 ONLY — simulates a reauth that propagated to
+        // P0 via SQS but hasn't reached P1/P2 yet.
+        sqlx::query(
+            r#"
+            UPDATE irises
+            SET left_code = set_byte(left_code, 0, get_byte(left_code, 0) # 1)
+            WHERE id = $1
+            "#,
+        )
+        .bind(target_id)
+        .execute(&env.harness.parties[0].store.pool)
+        .await?;
+        println!("[phase 9]   modified id={} on P0 only", target_id);
+
+        // Run a full epoch across all 3 parties.
+        let (h, t) = env.spawn_all();
+        wait_epoch_done(&env.harness, 0).await?;
+        stop_all(t, h).await;
+
+        // The modification fence should have detected the asymmetric
+        // version_id and excluded id=20 from the apply on all parties.
+        // Non-modified rows should still be rerandomized consistently.
+        let ep = assert_consistent_rerand_epoch(&env.harness, &[target_id]).await?;
+        assert!(ep >= 1);
+
+        // The modified ID should have been skipped (rerand_epoch stays 0)
+        // on ALL parties, OR applied consistently. Either way shares must
+        // reconstruct.
+        let epochs = get_rerand_epochs_for_id(&env.harness, target_id).await?;
+        let epochs_consistent = epochs[0] == epochs[1] && epochs[1] == epochs[2];
+        println!(
+            "[phase 9]   rerand_epochs for id={}: {:?} (consistent={})",
+            target_id, epochs, epochs_consistent
+        );
+        assert!(
+            epochs_consistent,
+            "rerand_epoch diverged for id={}: {:?}",
+            target_id, epochs
+        );
+
+        // Verify non-modified rows reconstruct correctly.
+        verify_fingerprints(&env.harness, &env.fingerprints, &[target_id]).await?;
+
+        println!("[phase 9] PASSED (epoch={})", ep);
 
         env.teardown().await
     });

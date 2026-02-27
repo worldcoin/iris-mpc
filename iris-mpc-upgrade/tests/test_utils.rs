@@ -426,9 +426,7 @@ pub async fn simulate_server_startup(harness: &TestHarness, party: usize) -> Res
 async fn build_test_sync_result(harness: &TestHarness, party: usize) -> Result<SyncResult> {
     let mut all_states = Vec::new();
     for p in &harness.parties {
-        let rerand_state = rerand_store::build_rerand_sync_state(&p.store.pool)
-            .await
-            .ok();
+        let rerand_state = rerand_store::build_rerand_sync_state(&p.store.pool).await?;
         all_states.push(SyncState {
             db_len: p.store.count_irises().await? as u64,
             modifications: vec![],
@@ -478,6 +476,87 @@ pub async fn assert_consistent_rerand_epoch(
         .find(|(id, _)| !skip_ids.contains(id))
         .map(|(_, e)| *e)
         .unwrap_or(0))
+}
+
+/// Check whether shares for a specific iris ID reconstruct consistently
+/// across all 3 party-pair combinations. Returns false if the shares are
+/// divergent (reconstruction from different pairs disagrees).
+pub async fn shares_are_consistent(harness: &TestHarness, id: i64) -> Result<bool> {
+    let mut shares = Vec::new();
+    for party in 0..NUM_PARTIES {
+        shares.push(harness.store(party).get_iris_data_by_id(id).await?);
+    }
+
+    let pairs: Vec<[&[u16]; 3]> = vec![
+        [
+            shares[0].left_code(),
+            shares[1].left_code(),
+            shares[2].left_code(),
+        ],
+        [
+            shares[0].left_mask(),
+            shares[1].left_mask(),
+            shares[2].left_mask(),
+        ],
+        [
+            shares[0].right_code(),
+            shares[1].right_code(),
+            shares[2].right_code(),
+        ],
+        [
+            shares[0].right_mask(),
+            shares[1].right_mask(),
+            shares[2].right_mask(),
+        ],
+    ];
+
+    use iris_mpc_common::galois::degree4::ShamirGaloisRingShare;
+    use iris_mpc_common::galois::degree4::{basis::Monomial, GaloisRingElement};
+    use iris_mpc_common::id::PartyID;
+    use itertools::Itertools;
+
+    let lag_01 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID1);
+    let lag_10 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID0);
+    let lag_12 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID2);
+    let lag_21 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID1);
+
+    for [s0, s1, s2] in &pairs {
+        let recon01: Vec<u16> = s0
+            .chunks_exact(4)
+            .zip_eq(s1.chunks_exact(4))
+            .flat_map(|(a, b)| {
+                let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
+                let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
+                (a * lag_01 + b * lag_10).coefs
+            })
+            .collect();
+        let recon12: Vec<u16> = s1
+            .chunks_exact(4)
+            .zip_eq(s2.chunks_exact(4))
+            .flat_map(|(a, b)| {
+                let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
+                let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
+                (a * lag_12 + b * lag_21).coefs
+            })
+            .collect();
+        if recon01 != recon12 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Get the rerand_epoch for a specific iris ID across all parties.
+pub async fn get_rerand_epochs_for_id(harness: &TestHarness, id: i64) -> Result<[i32; 3]> {
+    let mut epochs = [0i32; 3];
+    for (i, party) in harness.parties.iter().enumerate() {
+        let (ep,): (i32,) = sqlx::query_as("SELECT rerand_epoch FROM irises WHERE id = $1")
+            .bind(id)
+            .fetch_one(&party.store.pool)
+            .await?;
+        epochs[i] = ep;
+    }
+    Ok(epochs)
 }
 
 async fn cleanup(harness: &TestHarness) -> Result<()> {

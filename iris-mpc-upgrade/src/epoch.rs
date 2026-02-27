@@ -113,11 +113,7 @@ pub async fn idempotent_keygen(
 ) -> Result<tripartite_dh::PrivateKey> {
     if epoch > 0 {
         if let Err(e) = delete_private_key_from_sm(sm, env, epoch - 1, party_id).await {
-            tracing::debug!(
-                "Cleanup of epoch {} key (best-effort): {}",
-                epoch - 1,
-                e
-            );
+            tracing::debug!("Cleanup of epoch {} key (best-effort): {}", epoch - 1, e);
         }
     }
 

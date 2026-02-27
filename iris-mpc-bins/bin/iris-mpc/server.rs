@@ -982,9 +982,7 @@ async fn server_main(config: Config) -> Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
-    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool)
-        .await
-        .ok();
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await?;
     let my_state = SyncState {
         db_len: store_len as u64,
         modifications: store.last_modifications(max_modification_lookback).await?,

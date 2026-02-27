@@ -52,6 +52,13 @@ pub async fn sync_modifications(
 
     let mut iris_tx = store.tx().await?;
 
+    // Acquire the modification lock to serialize with rerand apply.
+    // Uses xact lock so it auto-releases on commit/rollback.
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(iris_mpc_store::rerand::RERAND_MODIFY_LOCK)
+        .execute(&mut *iris_tx)
+        .await?;
+
     // Persist changes into modifications table
     store
         .update_modifications(&mut iris_tx, &to_update_refs)
