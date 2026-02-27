@@ -148,28 +148,28 @@ impl DistanceOps for FhdOps {
 
     async fn cross_compare(
         session: &mut Session,
-        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+        distances: &[DistancePair<u32>],
     ) -> Result<Vec<bool>> {
         cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare(
         session: &mut Session,
-        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+        distances: &[DistancePair<u32>],
     ) -> Result<Vec<Share<Bit>>> {
         oblivious_cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare_lifted(
         session: &mut Session,
-        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+        distances: &[DistancePair<u32>],
     ) -> Result<Vec<Share<u32>>> {
         oblivious_cross_compare_lifted(session, distances).await
     }
 
     async fn min_of_pair_batch(
         session: &mut Session,
-        distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+        distances: &[DistancePair<u32>],
     ) -> Result<Vec<DistanceShare<u32>>> {
         min_of_pair_batch(session, distances).await
     }
@@ -235,28 +235,28 @@ impl DistanceOps for NhdOps {
 
     async fn cross_compare(
         session: &mut Session,
-        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+        distances: &[DistancePair<Ring48>],
     ) -> Result<Vec<bool>> {
         nhd_cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare(
         session: &mut Session,
-        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+        distances: &[DistancePair<Ring48>],
     ) -> Result<Vec<Share<Bit>>> {
         nhd_oblivious_cross_compare(session, distances).await
     }
 
     async fn oblivious_cross_compare_lifted(
         session: &mut Session,
-        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+        distances: &[DistancePair<Ring48>],
     ) -> Result<Vec<Share<Ring48>>> {
         nhd_oblivious_cross_compare_lifted(session, distances).await
     }
 
     async fn min_of_pair_batch(
         session: &mut Session,
-        distances: &[(DistanceShare<Ring48>, DistanceShare<Ring48>)],
+        distances: &[DistancePair<Ring48>],
     ) -> Result<Vec<DistanceShare<Ring48>>> {
         nhd_min_of_pair_batch(session, distances).await
     }
