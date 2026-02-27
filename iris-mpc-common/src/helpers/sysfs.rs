@@ -5,7 +5,7 @@ use std::sync::{LazyLock, RwLock};
 // Static Variables
 // =============================================================================
 
-/// The number of cores reserved for the tokio runtime.
+/// The number of cores reserved for the tokio runtime per NUMA node.
 /// Set via `init()` before using other functions in this module.
 /// If None, no cores are reserved and overlapping is allowed.
 static TOKIO_THREAD_COUNT: LazyLock<RwLock<Option<usize>>> = LazyLock::new(|| RwLock::new(None));
@@ -32,8 +32,9 @@ pub static SHARD_COUNT: LazyLock<usize> = LazyLock::new(|| {
 // Public API
 // =============================================================================
 
-/// Initialize the sysfs module with the number of tokio runtime threads.
-/// If Some(n), reserves the first n cores for tokio and skips them in worker allocation.
+/// Initialize the sysfs module with the number of tokio runtime threads per NUMA node.
+/// If Some(n), reserves the first n cores on EACH node for tokio and skips them in worker allocation.
+/// Total tokio threads will be n * number_of_numa_nodes.
 /// If None, allows core overlap (no reservation) and restrict_tokio_runtime() becomes a no-op.
 pub fn init(tokio_threads: Option<usize>) {
     if let Ok(mut count) = TOKIO_THREAD_COUNT.write() {
@@ -42,8 +43,9 @@ pub fn init(tokio_threads: Option<usize>) {
 }
 
 /// Returns the CPU IDs belonging to the specified NUMA node, skipping
-/// the first X cores reserved for the tokio runtime (where X is set via `init()`).
+/// the first X cores reserved for the tokio runtime on this node (where X is set via `init()`).
 /// If init was called with None, no cores are skipped (overlapping allowed).
+/// Each NUMA node independently reserves its first X cores for tokio threads.
 /// This ensures balanced core allocation across NUMA nodes for worker threads.
 /// On non-Linux or if detection fails, returns available CPU IDs for node 0
 /// (minus reserved cores), or an empty vec for other nodes.
@@ -57,11 +59,12 @@ pub fn get_cores_for_node(node: usize) -> Vec<usize> {
     cpus.into_iter().skip(skip_count).collect()
 }
 
-/// Returns the number of tokio worker threads.
+/// Returns the total number of tokio worker threads across all NUMA nodes.
+/// If set via init(Some(n)), returns n * number_of_numa_nodes.
 /// If not set via init(), defaults to the number of available CPU cores.
 pub fn get_tokio_worker_threads() -> usize {
     let r = TOKIO_THREAD_COUNT.read().ok().and_then(|g| *g);
-    r.unwrap_or_else(|| {
+    r.map(|count| count * *SHARD_COUNT).unwrap_or_else(|| {
         core_affinity::get_core_ids()
             .map(|ids| ids.len())
             .unwrap_or(1)
@@ -97,8 +100,8 @@ pub fn get_numa_nodes() -> Vec<usize> {
     vec![0]
 }
 
-/// Restricts the current process to run only on the first X CPUs of NUMA node 0,
-/// where X is the tokio thread count set via `init()`.
+/// Restricts the current process to run only on the first X CPUs of EACH NUMA node,
+/// where X is the per-node tokio thread count set via `init()`.
 /// If init was called with None, this function does nothing (no restriction).
 /// On non-Linux systems, this is a no-op.
 #[cfg(target_os = "linux")]
@@ -106,24 +109,28 @@ pub fn restrict_tokio_runtime() {
     use nix::sched::{sched_setaffinity, CpuSet};
     use nix::unistd::Pid;
 
-    let tokio_count = match TOKIO_THREAD_COUNT.read().ok().and_then(|guard| *guard) {
+    let tokio_count_per_node = match TOKIO_THREAD_COUNT.read().ok().and_then(|guard| *guard) {
         None | Some(0) => return,
         Some(x) => x,
     };
 
-    let all_cpus = _get_cores_for_node(0);
-    let cpus: Vec<_> = all_cpus.into_iter().take(tokio_count).collect();
-
-    if cpus.is_empty() {
-        eprintln!("Warning: No CPUs found for tokio runtime on node 0");
-        return;
-    }
-
     let mut cpuset = CpuSet::new();
-    for &cpu in cpus.iter() {
-        if let Err(e) = cpuset.set(cpu) {
-            eprintln!("Warning: Failed to set CPU {} in cpuset: {}", cpu, e);
+    let numa_nodes = get_numa_nodes();
+
+    for node in numa_nodes {
+        let all_cpus = _get_cores_for_node(node);
+        let cpus: Vec<_> = all_cpus.into_iter().take(tokio_count_per_node).collect();
+
+        if cpus.is_empty() {
+            eprintln!("Warning: No CPUs found for tokio runtime on node {}", node);
             continue;
+        }
+
+        for &cpu in cpus.iter() {
+            if let Err(e) = cpuset.set(cpu) {
+                eprintln!("Warning: Failed to set CPU {} in cpuset: {}", cpu, e);
+                continue;
+            }
         }
     }
 
