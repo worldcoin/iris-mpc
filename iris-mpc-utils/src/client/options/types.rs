@@ -250,29 +250,25 @@ impl RequestBatchOptions {
     }
 
     /// Returns an error if any iris index appears in multiple different pairs.
-    /// Duplicate pairs (same or swapped eyes) are allowed.
+    /// Exact duplicate pairs are allowed, but swapped pairs are not.
     ///
     /// # Panics
     /// Panics if called on `RequestBatchOptions::Simple`.
     pub(crate) fn validate_iris_pairs(&self) -> Result<(), String> {
         let mut index_to_pair: std::collections::HashMap<usize, (usize, usize)> =
             std::collections::HashMap::new();
+        // each pair is a pair of indices into the input file (ndjson format)
         for pair in self.iris_code_pairs() {
-            let normalized = if pair.0 <= pair.1 {
-                pair
-            } else {
-                (pair.1, pair.0)
-            };
-            for idx in [normalized.0, normalized.1] {
+            for idx in [pair.0, pair.1] {
                 if let Some(existing) = index_to_pair.get(&idx) {
-                    if *existing != normalized {
+                    if *existing != pair {
                         return Err(format!(
-                            "iris index {} appears in multiple different pairs",
-                            idx
+                            "iris index {} appears in multiple different pairs: {:?} and {:?}",
+                            idx, existing, pair
                         ));
                     }
                 } else {
-                    index_to_pair.insert(idx, normalized);
+                    index_to_pair.insert(idx, pair);
                 }
             }
         }

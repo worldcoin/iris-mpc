@@ -31,11 +31,8 @@ mod typeset;
 /// Delay (seconds) after S3 uploads to allow share propagation before publishing SNS messages.
 const S3_PROPAGATION_DELAY_SECS: u64 = 1;
 
-/// Maximum time (seconds) to wait for all responses before declaring a batch timed out.
-const RESPONSE_TIMEOUT_SECS: u64 = 360;
-
-/// Interval (seconds) between progress log messages while waiting for responses.
-const PROGRESS_LOG_INTERVAL_SECS: u64 = 60;
+/// Maximum time (seconds) without receiving a response before declaring a batch timed out.
+const RESPONSE_TIMEOUT_SECS: u64 = 60;
 
 /// Given a RequestBatchOptions, do the following:
 /// - turn them into requests
@@ -314,6 +311,7 @@ impl ErrorBits {
     const SQS_RECEIVE: u32 = 1 << 1;
     const VALIDATION: u32 = 1 << 2;
     const REQUEST_DROPPED: u32 = 1 << 3;
+    const RESPONSE_TIMEOUT: u32 = 1 << 4;
 
     fn new() -> Self {
         Self(0)
@@ -335,6 +333,10 @@ impl ErrorBits {
         self.0 |= Self::REQUEST_DROPPED;
     }
 
+    fn set_response_timeout_error(&mut self) {
+        self.0 |= Self::RESPONSE_TIMEOUT;
+    }
+
     fn get_request_dropped_error(&self) -> bool {
         self.0 & Self::REQUEST_DROPPED != 0
     }
@@ -352,16 +354,19 @@ impl std::fmt::Display for ErrorBits {
 
         let mut parts = Vec::new();
         if self.0 & Self::SNS_PUBLISH != 0 {
-            parts.push("sns_publish_error");
+            parts.push("sns_publish");
         }
         if self.0 & Self::SQS_RECEIVE != 0 {
-            parts.push("sqs_receive_error");
+            parts.push("sqs_receive");
         }
         if self.0 & Self::VALIDATION != 0 {
-            parts.push("validation_error");
+            parts.push("validation");
         }
         if self.0 & Self::REQUEST_DROPPED != 0 {
-            parts.push("request_dropped_error");
+            parts.push("request_dropped");
+        }
+        if self.0 & Self::RESPONSE_TIMEOUT != 0 {
+            parts.push("response_timeout");
         }
 
         write!(f, "{}", parts.join(" | "))
@@ -379,45 +384,39 @@ struct ExecState {
 }
 
 /// Records a response result against its tracked request info and handles completion.
-/// Returns the completed `RequestInfo` if all parties have responded successfully.
-/// Validation errors are logged and removed, returning `None`.
+/// Returns the completed `RequestInfo` if all parties have responded.
+/// Validation errors are logged but requests are still completed normally.
 fn handle_completion<K: std::fmt::Display + std::hash::Hash + Eq>(
     key: &K,
     response: &typeset::ResponsePayload,
     map: &mut HashMap<K, typeset::RequestInfo>,
     error_bits: &mut ErrorBits,
 ) -> Option<typeset::RequestInfo> {
-    let opt = map.get_mut(key).map(|info| info.record_response(response));
-    let is_complete = match opt {
-        None => {
-            tracing::warn!(
-                "Received response not tracked in outstanding requests: {}",
-                key
-            );
-            None
-        }
-        Some(x) => x,
-    };
-
+    let is_complete = map.get_mut(key).map(|info| info.record_response(response));
     match is_complete {
         Some(true) => {
             let info = map.remove(key);
             if let Some(ref info) = info {
+                // Check for error responses from servers
                 if info.has_error_response() {
                     error_bits.set_validation_error();
                     let details = info.get_error_msgs();
                     tracing::error!("request {} completed with errors: {}", info, details);
+                }
+                // Check if responses match expected values
+                if let Err(err_msg) = info.validate_expected() {
+                    error_bits.set_validation_error();
+                    tracing::error!("request {} failed expected validation: {}", info, err_msg);
                 }
             }
             info
         }
         Some(false) => None,
         None => {
-            error_bits.set_validation_error();
-            // Remove the request from outstanding map since it failed validation
-            if let Some(info) = map.remove(key) {
-                tracing::error!("request {} failed validation", info);
-            }
+            tracing::warn!(
+                "Received response not tracked in outstanding requests: {}",
+                key
+            );
             None
         }
     }
@@ -515,37 +514,29 @@ impl ExecState {
     }
 
     // Drains outstanding_requests and outstanding_deletions by polling SQS until both are empty.
-    // Returns an error if the batch times out with outstanding requests remaining.
+    // Times out if no response is received within RESPONSE_TIMEOUT_SECS.
     async fn process_responses(&mut self, aws_client: &AwsClient) {
         use crate::constants::N_PARTIES;
-
-        let start = Instant::now();
-        let deadline = start + Duration::from_secs(RESPONSE_TIMEOUT_SECS);
-        let mut next_progress = start + Duration::from_secs(PROGRESS_LOG_INTERVAL_SECS);
+        let mut last_response_time = Instant::now();
 
         'OUTER: while !self.outstanding_requests.is_empty()
             || !self.outstanding_deletions.is_empty()
         {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+            let deadline =
+                RESPONSE_TIMEOUT_SECS.saturating_sub(last_response_time.elapsed().as_secs());
+            if deadline == 0 {
+                self.error_bits.set_response_timeout_error();
+                tracing::error!(
+                    "Response timeout: no response received for {} seconds",
+                    RESPONSE_TIMEOUT_SECS
+                );
                 break;
             }
 
-            if Instant::now() >= next_progress {
-                let elapsed = start.elapsed().as_secs();
-                tracing::info!(
-                    "Waiting for responses... {}s elapsed, {} requests and {} deletions still pending",
-                    elapsed,
-                    self.outstanding_requests.len(),
-                    self.outstanding_deletions.len()
-                );
-                next_progress += Duration::from_secs(PROGRESS_LOG_INTERVAL_SECS);
-            }
-
-            // SQS long polling: cap at 20s (SQS maximum) and the remaining deadline.
-            let long_poll_secs = remaining.as_secs().min(1) as i32;
+            // note that the max sqs long polling time is 20s
+            let long_poll_time = std::cmp::min(deadline, 20) as i32;
             let messages = match aws_client
-                .sqs_receive_messages(Some(N_PARTIES), Some(long_poll_secs))
+                .sqs_receive_messages(Some(N_PARTIES), Some(long_poll_time))
                 .await
             {
                 Ok(r) => r,
@@ -555,6 +546,10 @@ impl ExecState {
                     break 'OUTER;
                 }
             };
+
+            if !messages.is_empty() {
+                last_response_time = Instant::now();
+            }
 
             for sqs_msg in messages {
                 if let Err(e) = aws_client.sqs_purge_response_queue_message(&sqs_msg).await {

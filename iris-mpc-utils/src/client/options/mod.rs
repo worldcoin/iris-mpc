@@ -353,24 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn complex_allows_swapped_iris_pair() {
-        let o = opts(
-            r#"
-            [shares_generator.FromFile]
-            path_to_ndjson_file = "/tmp/test.ndjson"
-            [request_batch.Complex]
-            batches = [
-                [
-                    { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
-                    { label = "U-1", payload = { Uniqueness = { iris_pair = [{ index = 2 }, { index = 1 }] } } },
-                ],
-            ]
-        "#,
-        );
-        o.validate().expect("swapped pair should be allowed");
-    }
-
-    #[test]
     fn complex_valid_multi_batch_passes() {
         let o = opts(
             r#"

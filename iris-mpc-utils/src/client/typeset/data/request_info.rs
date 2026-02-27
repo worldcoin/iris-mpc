@@ -57,8 +57,8 @@ impl RequestInfo {
     }
 
     /// Records a response from a node. Returns true if all parties have now responded.
-    /// Returns Err if validation failed (error is still logged).
-    pub fn record_response(&mut self, response: &ResponsePayload) -> Option<bool> {
+    /// Logs errors for out-of-range or duplicate responses but continues tracking.
+    pub fn record_response(&mut self, response: &ResponsePayload) -> bool {
         let node_id = response.node_id();
         if node_id >= N_PARTIES {
             tracing::error!(
@@ -66,26 +66,15 @@ impl RequestInfo {
                 node_id,
                 N_PARTIES - 1
             );
-            return None;
+            return false;
         }
         if self.responses[node_id].is_some() {
             tracing::error!("Duplicate response for node_id {}", node_id);
-            return None;
+            return false;
         }
 
         self.responses[node_id] = Some(response.clone());
-
-        if let Err(err_msg) = self
-            .expected
-            .as_ref()
-            .map(|expected| response.matches_expected(expected))
-            .unwrap_or(Ok(()))
-        {
-            tracing::error!("validation failed for response: {:#?}", err_msg);
-            None
-        } else {
-            Some(self.is_complete())
-        }
+        self.is_complete()
     }
 
     pub fn responses(&self) -> &[Option<ResponsePayload>; N_PARTIES] {
@@ -110,6 +99,19 @@ impl RequestInfo {
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Validates all responses against expected values, if provided.
+    /// Should only be called after all responses are complete.
+    pub fn validate_expected(&self) -> Result<(), String> {
+        if let Some(ref expected) = self.expected {
+            for response in self.responses.iter().flatten() {
+                response
+                    .matches_expected(expected)
+                    .map_err(|v| v.join("\n"))?;
+            }
+        }
+        Ok(())
     }
 }
 
