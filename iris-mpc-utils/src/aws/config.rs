@@ -79,6 +79,10 @@ impl AwsClientConfig {
         &self.sqs_response_queue_urls
     }
 
+    pub(crate) fn sqs_long_poll_wait_time(&self) -> usize {
+        self.sqs_long_poll_wait_time
+    }
+
     pub async fn new(
         environment: String,
         public_key_base_url: String,

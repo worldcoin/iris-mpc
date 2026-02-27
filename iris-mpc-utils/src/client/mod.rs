@@ -536,7 +536,8 @@ impl ExecState {
             }
 
             // note that the max sqs long polling time is 20s
-            let long_poll_time = std::cmp::min(deadline, 20) as i32;
+            let configured_max = aws_client.config().sqs_long_poll_wait_time();
+            let long_poll_time = std::cmp::min(deadline, configured_max as u64) as i32;
             let messages = match aws_client
                 .sqs_receive_messages(Some(N_PARTIES), Some(long_poll_time))
                 .await
