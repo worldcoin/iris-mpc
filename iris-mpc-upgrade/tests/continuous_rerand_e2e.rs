@@ -213,7 +213,7 @@ fn phase6_multiple_epochs() {
         println!("[phase 6] Multiple epochs...");
 
         let (h, t) = env.spawn_all();
-        
+
         // Wait for epoch 0 to finish
         wait_epoch_done(&env.harness, 0).await?;
         println!("[phase 6]   epoch 0 completed");
@@ -303,23 +303,32 @@ fn phase8_reject_desync() {
             .execute(&env.harness.parties[2].store.pool).await.unwrap();
 
         let r1 = simulate_server_startup(&env.harness, 1).await;
-        assert!(r1.is_err(), "P1 startup should have failed due to large epoch gap");
+        assert!(
+            r1.is_err(),
+            "P1 startup should have failed due to large epoch gap"
+        );
 
         // Now test the new chunk gap logic
         // P1 has chunk 0 confirmed, P0 has chunk 2 confirmed (gap > 1) in the same epoch
         for p in 0..NUM_PARTIES {
             let pool = &env.harness.parties[p].store.pool;
-            sqlx::query("DELETE FROM rerand_progress").execute(pool).await.unwrap();
+            sqlx::query("DELETE FROM rerand_progress")
+                .execute(pool)
+                .await
+                .unwrap();
         }
-        
+
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (3, 0, TRUE, TRUE, TRUE)")
             .execute(&env.harness.parties[1].store.pool).await.unwrap();
-            
+
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (3, 2, TRUE, TRUE, FALSE)")
             .execute(&env.harness.parties[0].store.pool).await.unwrap();
-            
+
         let r1_chunk_desync = simulate_server_startup(&env.harness, 1).await;
-        assert!(r1_chunk_desync.is_err(), "P1 startup should have failed due to large chunk gap");
+        assert!(
+            r1_chunk_desync.is_err(),
+            "P1 startup should have failed due to large chunk gap"
+        );
 
         println!("[phase 8] PASSED");
 

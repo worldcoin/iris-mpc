@@ -39,12 +39,7 @@ fn epoch_party_prefix(epoch: u32, party: u8) -> String {
     format!("rerand/epoch-{}/party-{}", epoch, party)
 }
 
-pub async fn upload_marker(
-    s3: &S3Client,
-    bucket: &str,
-    key: &str,
-    body: Vec<u8>,
-) -> Result<()> {
+pub async fn upload_marker(s3: &S3Client, bucket: &str, key: &str, body: Vec<u8>) -> Result<()> {
     s3.put_object()
         .bucket(bucket)
         .key(key)

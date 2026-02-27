@@ -93,18 +93,12 @@ fn randomize_galois_ring_coefs(coefs: &mut [u16], xof: &mut blake3::OutputReader
 /// Verifies consistency by reconstructing from all 3 pairs (0-1, 1-2, 0-2) and
 /// asserting they agree.
 pub fn reconstruct_shares(share0: &[u16], share1: &[u16], share2: &[u16]) -> Vec<u16> {
-    let lag_01 =
-        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID1);
-    let lag_10 =
-        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID0);
-    let lag_02 =
-        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID2);
-    let lag_20 =
-        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID0);
-    let lag_12 =
-        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID2);
-    let lag_21 =
-        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID1);
+    let lag_01 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID1);
+    let lag_10 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID0);
+    let lag_02 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID2);
+    let lag_20 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID0);
+    let lag_12 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID2);
+    let lag_21 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID1);
 
     assert!(share0.len() == share1.len() && share1.len() == share2.len());
 

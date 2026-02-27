@@ -982,7 +982,9 @@ async fn server_main(config: Config) -> Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
-    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await.ok();
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool)
+        .await
+        .ok();
     let my_state = SyncState {
         db_len: store_len as u64,
         modifications: store.last_modifications(max_modification_lookback).await?,
@@ -1318,12 +1320,9 @@ async fn server_main(config: Config) -> Result<()> {
         }
     }
 
-    let rerand_lock_conn = rerand_store::rerand_catchup_and_lock(
-        &store.pool,
-        &store.schema_name,
-        &sync_result,
-    )
-    .await?;
+    let rerand_lock_conn =
+        rerand_store::rerand_catchup_and_lock(&store.pool, &store.schema_name, &sync_result)
+            .await?;
 
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");

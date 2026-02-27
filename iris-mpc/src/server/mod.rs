@@ -397,7 +397,9 @@ async fn build_sync_state(
 
     tracing::info!("Database store length is: {}", db_len);
 
-    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await.ok();
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool)
+        .await
+        .ok();
 
     Ok(SyncState {
         db_len,

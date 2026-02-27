@@ -77,8 +77,7 @@ pub async fn run_continuous_rerand(
                 break;
             }
 
-            let progress =
-                get_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
+            let progress = get_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
 
             if progress.as_ref().is_some_and(|p| p.live_applied) {
                 chunk_id += 1;
@@ -149,7 +148,9 @@ pub async fn run_continuous_rerand(
                 .execute(&mut *lock_conn)
                 .await?;
 
-            let apply_res = apply_staging_chunk(pool, &staging_schema, active_epoch as i32, chunk_id as i32).await;
+            let apply_res =
+                apply_staging_chunk(pool, &staging_schema, active_epoch as i32, chunk_id as i32)
+                    .await;
 
             sqlx::query("SELECT pg_advisory_unlock($1)")
                 .bind(RERAND_APPLY_LOCK)
@@ -235,14 +236,8 @@ async fn get_or_create_manifest(
         Ok(manifest)
     } else {
         let local_max = store.get_max_serial_id().await? as u64;
-        s3_coordination::upload_max_id(
-            s3,
-            &config.s3_bucket,
-            epoch,
-            config.party_id,
-            local_max,
-        )
-        .await?;
+        s3_coordination::upload_max_id(s3, &config.s3_bucket, epoch, config.party_id, local_max)
+            .await?;
 
         s3_coordination::download_manifest(s3, &config.s3_bucket, epoch, poll_interval).await
     }

@@ -1,6 +1,6 @@
 use eyre::Result;
 use iris_mpc_common::helpers::sync::{RerandSyncState, SyncResult};
-use sqlx::{PgPool};
+use sqlx::PgPool;
 
 pub const RERAND_APPLY_LOCK: i64 = 0x5245_5241_4E44;
 
@@ -29,7 +29,21 @@ pub fn staging_schema_name(live_schema: &str) -> String {
     format!("{}_rerand_staging", live_schema)
 }
 
+fn validate_identifier(name: &str) -> Result<()> {
+    if name.is_empty() {
+        eyre::bail!("SQL identifier must not be empty");
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        eyre::bail!(
+            "SQL identifier contains invalid characters (only ASCII alphanumeric and _ allowed): {:?}",
+            name
+        );
+    }
+    Ok(())
+}
+
 pub async fn ensure_staging_schema(pool: &PgPool, staging_schema: &str) -> Result<()> {
+    validate_identifier(staging_schema)?;
     let create_schema = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, staging_schema);
     sqlx::query(&create_schema).execute(pool).await?;
 
@@ -62,6 +76,7 @@ pub async fn insert_staging_irises(
     if entries.is_empty() {
         return Ok(());
     }
+    validate_identifier(staging_schema)?;
 
     let table = format!("\"{}\".irises", staging_schema);
     let header = format!(
@@ -99,6 +114,7 @@ pub async fn apply_staging_chunk(
     epoch: i32,
     chunk_id: i32,
 ) -> Result<u64> {
+    validate_identifier(staging_schema)?;
     let mut tx = pool.begin().await?;
 
     let update_sql = format!(
@@ -215,10 +231,9 @@ pub async fn get_max_confirmed_chunk(pool: &PgPool, epoch: i32) -> Result<Option
 
 /// Returns the highest epoch that has any rerand_progress rows.
 pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
-    let row: (Option<i32>,) =
-        sqlx::query_as("SELECT MAX(epoch) FROM rerand_progress")
-            .fetch_one(pool)
-            .await?;
+    let row: (Option<i32>,) = sqlx::query_as("SELECT MAX(epoch) FROM rerand_progress")
+        .fetch_one(pool)
+        .await?;
     Ok(row.0)
 }
 
@@ -229,9 +244,7 @@ pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
 /// Build the rerand sync state from the local `rerand_progress` table.
 pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<RerandSyncState> {
     let epoch = get_current_epoch(pool).await?.unwrap_or(0);
-    let max_confirmed = get_max_confirmed_chunk(pool, epoch)
-        .await?
-        .unwrap_or(-1);
+    let max_confirmed = get_max_confirmed_chunk(pool, epoch).await?.unwrap_or(-1);
     Ok(RerandSyncState {
         epoch,
         max_confirmed_chunk: max_confirmed,
@@ -256,7 +269,11 @@ pub fn compute_rerand_catchup_chunk(sync_result: &SyncResult) -> Result<Option<(
 
     let mut any_peer_ahead = false;
 
-    for s in sync_result.all_states.iter().filter_map(|s| s.rerand_state.as_ref()) {
+    for s in sync_result
+        .all_states
+        .iter()
+        .filter_map(|s| s.rerand_state.as_ref())
+    {
         let epoch_diff = s.epoch - my_epoch;
         match epoch_diff {
             0 => {

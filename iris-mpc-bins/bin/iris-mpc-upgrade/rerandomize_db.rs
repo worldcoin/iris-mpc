@@ -533,12 +533,15 @@ async fn rerandomize_check_main(config: ReRandomizeCheckConfig) -> Result<()> {
 }
 
 async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Result<()> {
-    tracing::info!("Starting continuous rerandomization for party {}", config.party_id);
+    tracing::info!(
+        "Starting continuous rerandomization for party {}",
+        config.party_id
+    );
 
     let mut background_tasks = TaskMonitor::new();
     let healthcheck_port = config.healthcheck_port;
-    let _health_check_abort = background_tasks
-        .spawn(async move { spawn_healthcheck_server(healthcheck_port).await });
+    let _health_check_abort =
+        background_tasks.spawn(async move { spawn_healthcheck_server(healthcheck_port).await });
     background_tasks.check_tasks();
 
     let sdk_config = aws_config::from_env().load().await;
@@ -547,12 +550,8 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
     let s3_client = S3Client::from_conf(s3_config.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config.build());
 
-    let postgres_client = PostgresClient::new(
-        &config.db_url,
-        &config.schema_name,
-        AccessMode::ReadWrite,
-    )
-    .await?;
+    let postgres_client =
+        PostgresClient::new(&config.db_url, &config.schema_name, AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
 
     continuous_rerand::run_continuous_rerand(&config, &s3_client, &sm_client, &store, None).await?;

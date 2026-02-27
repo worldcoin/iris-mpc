@@ -161,14 +161,26 @@ pub async fn derive_shared_secret(
     let pk_next_b64 =
         s3_coordination::download_public_key_for_party(s3, bucket, epoch, next_id, poll_interval)
             .await?;
-    let pk_next = tripartite_dh::PublicKeys::deserialize(&STANDARD.decode(&pk_next_b64)?)
-        .map_err(|e| eyre!("Failed to deserialize public key for party {}: {:?}", next_id, e))?;
+    let pk_next =
+        tripartite_dh::PublicKeys::deserialize(&STANDARD.decode(&pk_next_b64)?).map_err(|e| {
+            eyre!(
+                "Failed to deserialize public key for party {}: {:?}",
+                next_id,
+                e
+            )
+        })?;
 
     let pk_prev_b64 =
         s3_coordination::download_public_key_for_party(s3, bucket, epoch, prev_id, poll_interval)
             .await?;
-    let pk_prev = tripartite_dh::PublicKeys::deserialize(&STANDARD.decode(&pk_prev_b64)?)
-        .map_err(|e| eyre!("Failed to deserialize public key for party {}: {:?}", prev_id, e))?;
+    let pk_prev =
+        tripartite_dh::PublicKeys::deserialize(&STANDARD.decode(&pk_prev_b64)?).map_err(|e| {
+            eyre!(
+                "Failed to deserialize public key for party {}: {:?}",
+                prev_id,
+                e
+            )
+        })?;
 
     let shared_secret = private_key.derive_shared_secret(&pk_next, &pk_prev);
     let hash = blake3::hash(&shared_secret);
