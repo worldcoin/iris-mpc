@@ -1,6 +1,6 @@
 # Request-Level Test Cases
 
-Test configurations for `iris-mpc-utils/assets/service-client/rq_tc_*.toml`. All use `SharesGeneratorOptions::FromFile` with an iris shares NDJSON file containing at least 4 entries.
+Test configurations for `iris-mpc-utils/assets/service-client/smoke_test_*.toml`. All use `SharesGeneratorOptions::FromFile` with an iris shares NDJSON file containing at least 4 entries.
 
 ## Conventions
 
@@ -12,7 +12,7 @@ Test configurations for `iris-mpc-utils/assets/service-client/rq_tc_*.toml`. All
 
 ---
 
-## rq_tc_uniqueness: Enrollment Lifecycle
+## smoke_test_uniqueness: Enrollment Lifecycle
 
 **Goal:** Verify the full uniqueness enrollment lifecycle: first enrollment (no match), duplicate detection, deletion, double-deletion failure, and re-enrollment after deletion.
 
@@ -55,7 +55,7 @@ Test configurations for `iris-mpc-utils/assets/service-client/rq_tc_*.toml`. All
 
 ---
 
-## rq_tc_reset_update: Reset Update Lifecycle
+## smoke_test_reset_update: Reset Update Lifecycle
 
 **Goal:** Verify that reset_update replaces an identity's iris code, so the original iris code no longer matches.
 
@@ -91,7 +91,7 @@ Test configurations for `iris-mpc-utils/assets/service-client/rq_tc_*.toml`. All
 
 ---
 
-## rq_tc_reauth: Reauthorisation Lifecycle
+## smoke_test_reauth: Reauthorisation Lifecycle
 
 **Goal:** Verify that reauth fails against a deleted identity and succeeds against a live one.
 
@@ -132,7 +132,7 @@ Test configurations for `iris-mpc-utils/assets/service-client/rq_tc_*.toml`. All
 
 ---
 
-## rq_tc_reset_check: Reset Check Lifecycle
+## smoke_test_reset_check: Reset Check Lifecycle
 
 **Goal:** Same flow as reauth — verify that reset_check fails against a deleted identity and succeeds against a live one.
 
