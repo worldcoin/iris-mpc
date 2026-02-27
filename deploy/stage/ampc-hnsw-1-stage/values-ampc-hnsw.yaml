@@ -45,8 +45,14 @@ env:
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
 
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_correctness_test"
+
   - name: SMPC__MAX_BATCH_SIZE
     value: "1"
+
+  - name: SMPC__HNSW_DISABLE_MEMORY_PERSISTENCE
+    value: "true"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -67,7 +73,7 @@ env:
     value: "false"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "false"
+    value: "true"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
@@ -82,10 +88,13 @@ env:
     value: "true"
 
   - name: SMPC__LUC_ENABLED
-    value: "true"
+    value: "false"
+
+  - name: SMPC__HNSW_PARAM_EF_CONSTR
+    value: "5"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
-    value: "5"
+    value: "0"
 
   - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
     value: "false"
@@ -109,7 +118,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "true"
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "ampc-hnsw-db-exporter-store-node-1-stage--eun1-az3--x-s3"
