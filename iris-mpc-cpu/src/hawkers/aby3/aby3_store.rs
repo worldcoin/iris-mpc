@@ -564,9 +564,9 @@ where
     /// Arc ref to a query.
     type QueryRef = Aby3Query;
     /// Point ID of an inserted iris.
-    type VectorRef = VectorId;
+    type VectorRef = Aby3VectorRef;
     /// Distance represented as a pair of Ring-typed shares.
-    type DistanceRef = DistanceShare<D::Ring>;
+    type DistanceRef = Aby3DistanceRef<D::Ring>;
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         self.storage
