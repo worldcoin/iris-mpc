@@ -24,7 +24,7 @@ use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
     protocol::{
         nhd_ops::{
-            nhd_compare_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
+            nhd_comparison_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
             nhd_min_of_pair_batch, nhd_min_round_robin_batch, nhd_oblivious_cross_compare,
             nhd_oblivious_cross_compare_lifted, nhd_plaintext_is_match,
         },
@@ -281,8 +281,8 @@ impl DistanceOps for NhdOps {
     }
 
     fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool {
-        let nmr1 = nhd_compare_nmr(d1.0, d1.1);
-        let nmr2 = nhd_compare_nmr(d2.0, d2.1);
+        let nmr1 = nhd_comparison_nmr(d1.0, d1.1);
+        let nmr2 = nhd_comparison_nmr(d2.0, d2.1);
         nmr1 * (d2.1 as i64) < nmr2 * (d1.1 as i64)
     }
 
@@ -291,8 +291,8 @@ impl DistanceOps for NhdOps {
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
-        let nmr1 = nhd_compare_nmr(d1.0, d1.1);
-        let nmr2 = nhd_compare_nmr(d2.0, d2.1);
+        let nmr1 = nhd_comparison_nmr(d1.0, d1.1);
+        let nmr2 = nhd_comparison_nmr(d2.0, d2.1);
         (nmr1 * (d2.1 as i64)).cmp(&(nmr2 * (d1.1 as i64)))
     }
 
