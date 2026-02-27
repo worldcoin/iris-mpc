@@ -10,8 +10,8 @@ use crate::{aws::types::SqsMessageInfo, client::typeset::Request};
 pub enum RequestPayload {
     IdentityDeletion(smpc_request::IdentityDeletionRequest),
     Reauthorization(smpc_request::ReAuthRequest),
-    RecoveryCheck(smpc_request::RecoveryCheckRequest),
-    ResetCheck(smpc_request::ResetCheckRequest),
+    RecoveryCheck(smpc_request::IdentityMatchCheckRequest),
+    ResetCheck(smpc_request::IdentityMatchCheckRequest),
     ResetUpdate(smpc_request::ResetUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
 }
@@ -21,8 +21,8 @@ pub enum RequestPayload {
 pub enum ResponsePayload {
     IdentityDeletion(smpc_response::IdentityDeletionResult),
     Reauthorization(smpc_response::ReAuthResult),
-    RecoveryCheck(smpc_response::RecoveryCheckResult),
-    ResetCheck(smpc_response::ResetCheckResult),
+    RecoveryCheck(smpc_response::IdentityMatchCheckResult),
+    ResetCheck(smpc_response::IdentityMatchCheckResult),
     ResetUpdate(smpc_response::ResetUpdateAckResult),
     Uniqueness(smpc_response::UniquenessResult),
 }
@@ -74,8 +74,8 @@ impl ResponsePayload {
             }
             Self::ResetCheck(result) => {
                 format!(
-                    "ResetCheck | node={} | reset_id={:.16}",
-                    result.node_id, result.reset_id
+                    "ResetCheck | node={} | request_id={:.16}",
+                    result.node_id, result.request_id
                 )
             }
             Self::ResetUpdate(result) => {
@@ -141,16 +141,16 @@ impl From<&Request> for RequestPayload {
                 use_or_rule: false,
             }),
             Request::RecoveryCheck { request_id, .. } => {
-                Self::RecoveryCheck(smpc_request::RecoveryCheckRequest {
+                Self::RecoveryCheck(smpc_request::IdentityMatchCheckRequest {
                     batch_size: None,
                     request_id: request_id.to_string(),
                     s3_key: request_id.to_string(),
                 })
             }
             Request::ResetCheck { reset_id, .. } => {
-                Self::ResetCheck(smpc_request::ResetCheckRequest {
+                Self::ResetCheck(smpc_request::IdentityMatchCheckRequest {
                     batch_size: None,
-                    reset_id: reset_id.to_string(),
+                    request_id: reset_id.to_string(),
                     s3_key: reset_id.to_string(),
                 })
             }

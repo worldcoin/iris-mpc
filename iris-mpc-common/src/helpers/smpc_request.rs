@@ -151,13 +151,6 @@ pub struct IdentityMatchCheckRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RecoveryCheckRequest {
-    pub request_id: String,
-    pub batch_size: Option<usize>,
-    pub s3_key: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResetUpdateRequest {
     pub reset_id: String,
     pub serial_id: u32,
