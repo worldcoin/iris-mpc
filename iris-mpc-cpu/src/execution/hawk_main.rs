@@ -628,19 +628,42 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        if self.args.hnsw_disable_memory_persistence {
-            tracing::debug!("In-memory persistence disabled, skipping HNSW insert");
-            return Ok(vec![None; plans.len()]);
-        }
-
-        // Map insertion plans to inner InsertionPlanV
-        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
-
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
             .map(|id_option| id_option.map(|original_id| original_id.next_version()))
             .collect_vec();
+
+        if self.args.hnsw_disable_memory_persistence {
+            tracing::debug!("In-memory persistence disabled, skipping HNSW insert");
+            // Compute would-be VectorIds without mutating the store or graph,
+            // so that downstream result derivation (merged_results / inserted_id)
+            // still sees the correct serial IDs.
+            let mut next_serial_id = self.iris_store[LEFT].read().await.next_id;
+            return Ok(plans
+                .into_iter()
+                .zip(insertion_ids.iter())
+                .map(|(plan, id)| {
+                    plan.map(|_| {
+                        let inserted_vector = if let Some(id) = id {
+                            *id
+                        } else {
+                            let vid = VectorId::from_serial_id(next_serial_id);
+                            next_serial_id += 1;
+                            vid
+                        };
+                        crate::hnsw::searcher::ConnectPlan {
+                            inserted_vector,
+                            updates: BTreeMap::new(),
+                            update_ep: UpdateEntryPoint::False,
+                        }
+                    })
+                })
+                .collect_vec());
+        }
+
+        // Map insertion plans to inner InsertionPlanV
+        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
 
         // Parallel insertions are not supported, so only one session is needed.
         let session = &sessions[0];
