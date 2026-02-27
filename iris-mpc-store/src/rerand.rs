@@ -42,32 +42,6 @@ fn validate_identifier(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn ensure_staging_schema(pool: &PgPool, staging_schema: &str) -> Result<()> {
-    validate_identifier(staging_schema)?;
-    let create_schema = format!(r#"CREATE SCHEMA IF NOT EXISTS "{}""#, staging_schema);
-    sqlx::query(&create_schema).execute(pool).await?;
-
-    let create_table = format!(
-        r#"
-        CREATE TABLE IF NOT EXISTS "{}".irises (
-            epoch               INTEGER NOT NULL,
-            id                  BIGINT NOT NULL,
-            chunk_id            INTEGER NOT NULL,
-            left_code           BYTEA,
-            left_mask           BYTEA,
-            right_code          BYTEA,
-            right_mask          BYTEA,
-            original_version_id SMALLINT,
-            rerand_epoch        INTEGER,
-            PRIMARY KEY (epoch, id)
-        )
-        "#,
-        staging_schema,
-    );
-    sqlx::query(&create_table).execute(pool).await?;
-    Ok(())
-}
-
 pub async fn insert_staging_irises(
     pool: &PgPool,
     staging_schema: &str,

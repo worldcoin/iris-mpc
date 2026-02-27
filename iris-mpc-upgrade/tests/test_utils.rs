@@ -8,7 +8,7 @@ use iris_mpc_common::{
     iris_db::iris::IrisCode,
     postgres::{AccessMode, PostgresClient},
 };
-use iris_mpc_store::rerand::{self as rerand_store};
+use iris_mpc_store::rerand as rerand_store;
 use iris_mpc_store::{Store, StoredIrisRef};
 use iris_mpc_upgrade::config::RerandomizeContinuousConfig;
 use iris_mpc_upgrade::continuous_rerand::run_continuous_rerand;
@@ -44,11 +44,6 @@ impl TestHarness {
             let schema = format!("{}_{}", schema_prefix, i);
             let pg = PostgresClient::new(url, &schema, AccessMode::ReadWrite).await?;
             let store = Store::new(&pg).await?;
-            rerand_store::ensure_staging_schema(
-                &store.pool,
-                &rerand_store::staging_schema_name(&schema),
-            )
-            .await?;
             parties.push(PartyDb {
                 store,
                 schema_name: schema,

@@ -4,9 +4,9 @@ use bytemuck::cast_slice;
 use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_store::rerand::{
-    apply_staging_chunk, ensure_staging_schema, get_rerand_progress, insert_staging_irises,
-    set_all_confirmed, set_staging_written, staging_schema_name, upsert_rerand_progress,
-    StagingIrisEntry, RERAND_APPLY_LOCK,
+    apply_staging_chunk, get_rerand_progress, insert_staging_irises, set_all_confirmed,
+    set_staging_written, staging_schema_name, upsert_rerand_progress, StagingIrisEntry,
+    RERAND_APPLY_LOCK,
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
@@ -35,9 +35,6 @@ pub async fn run_continuous_rerand(
     let staging_schema = staging_schema_name(&store.schema_name);
     let poll_interval = Duration::from_millis(config.s3_poll_interval_ms);
     let chunk_delay = Duration::from_secs(config.chunk_delay_secs);
-
-    ensure_staging_schema(pool, &staging_schema).await?;
-    tracing::info!("Staging schema ensured: {}", staging_schema);
 
     loop {
         if is_cancelled(cancel) {
