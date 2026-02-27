@@ -149,21 +149,21 @@ pub async fn run_continuous_rerand(
                 .execute(&mut *lock_conn)
                 .await?;
 
-            let rows =
-                apply_staging_chunk(pool, &staging_schema, active_epoch as i32, chunk_id as i32)
-                    .await?;
-            tracing::info!(
-                "Epoch {} chunk {}: applied to live DB ({} rows updated)",
-                active_epoch,
-                chunk_id,
-                rows
-            );
+            let apply_res = apply_staging_chunk(pool, &staging_schema, active_epoch as i32, chunk_id as i32).await;
 
             sqlx::query("SELECT pg_advisory_unlock($1)")
                 .bind(RERAND_APPLY_LOCK)
                 .execute(&mut *lock_conn)
                 .await?;
             drop(lock_conn);
+
+            let rows = apply_res?;
+            tracing::info!(
+                "Epoch {} chunk {}: applied to live DB ({} rows updated)",
+                active_epoch,
+                chunk_id,
+                rows
+            );
 
             chunk_id += 1;
 

@@ -1,6 +1,6 @@
 use eyre::Result;
 use iris_mpc_common::helpers::sync::{RerandSyncState, SyncResult};
-use sqlx::{pool::PoolConnection, PgPool, Postgres};
+use sqlx::{PgPool};
 
 pub const RERAND_APPLY_LOCK: i64 = 0x5245_5241_4E44;
 
@@ -222,27 +222,6 @@ pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
     Ok(row.0)
 }
 
-/// Returns chunk_ids for a given epoch where live_applied = FALSE and
-/// chunk_id <= up_to_chunk, ordered ascending.
-pub async fn get_unapplied_chunks(
-    pool: &PgPool,
-    epoch: i32,
-    up_to_chunk: i32,
-) -> Result<Vec<i32>> {
-    let rows: Vec<(i32,)> = sqlx::query_as(
-        r#"
-        SELECT chunk_id FROM rerand_progress
-        WHERE epoch = $1 AND chunk_id <= $2 AND live_applied = FALSE
-        ORDER BY chunk_id ASC
-        "#,
-    )
-    .bind(epoch)
-    .bind(up_to_chunk)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.into_iter().map(|(id,)| id).collect())
-}
-
 // ---------------------------------------------------------------------------
 // Shared startup helpers (used by both HNSW and GPU servers)
 // ---------------------------------------------------------------------------
@@ -259,76 +238,85 @@ pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<RerandSyncState> {
     })
 }
 
-/// Compute the safe-to-apply watermark from all parties' rerand sync states.
-/// Returns `Some((epoch, max_chunk_id))` if there are chunks to catch up,
+/// Compute the single chunk (if any) that needs to be applied during startup catch-up.
+///
+/// Because the rerand loop has a strict per-chunk synchronization barrier (all 3 parties
+/// must confirm chunk K before any party can stage chunk K+1), peers can be at most
+/// 1 confirmed chunk ahead. Therefore, catch-up is always 0 or 1 chunks.
+///
+/// Returns `Some((epoch, chunk_id))` if there is exactly one chunk to catch up,
 /// `None` otherwise.
-pub fn compute_rerand_safe_up_to(sync_result: &SyncResult) -> Result<Option<(i32, i32)>> {
+pub fn compute_rerand_catchup_chunk(sync_result: &SyncResult) -> Result<Option<(i32, i32)>> {
     let my_state = match sync_result.my_state.rerand_state.as_ref() {
         Some(s) => s,
         None => return Ok(None),
     };
     let my_epoch = my_state.epoch;
+    let my_chunk = my_state.max_confirmed_chunk;
 
-    let rerand_states: Vec<&RerandSyncState> = sync_result
-        .all_states
-        .iter()
-        .filter_map(|s| s.rerand_state.as_ref())
-        .collect();
+    let mut any_peer_ahead = false;
 
-    if rerand_states.is_empty() {
-        return Ok(None);
-    }
-
-    let mut safe_up_to = -1;
-    for s in rerand_states {
-        let diff = s.epoch - my_epoch;
-        match diff {
+    for s in sync_result.all_states.iter().filter_map(|s| s.rerand_state.as_ref()) {
+        let epoch_diff = s.epoch - my_epoch;
+        match epoch_diff {
             0 => {
-                safe_up_to = safe_up_to.max(s.max_confirmed_chunk);
+                let chunk_diff = s.max_confirmed_chunk - my_chunk;
+                if chunk_diff > 1 {
+                    eyre::bail!(
+                        "Fatal chunk desync: peer confirmed chunk {} but local is at {} \
+                         (max possible difference is 1)",
+                        s.max_confirmed_chunk,
+                        my_chunk
+                    );
+                }
+                if chunk_diff == 1 {
+                    any_peer_ahead = true;
+                }
             }
             1 => {
-                safe_up_to = i32::MAX;
+                any_peer_ahead = true;
             }
-            -1 => {
-                // They are behind, they contribute -1
-            }
+            -1 => {}
             _ => {
-                eyre::bail!("Fatal epoch desync: local epoch is {}, but peer is on epoch {}", my_epoch, s.epoch);
+                eyre::bail!(
+                    "Fatal epoch desync: local epoch is {}, but peer is on epoch {}",
+                    my_epoch,
+                    s.epoch
+                );
             }
         }
     }
 
-    if safe_up_to < 0 {
+    if !any_peer_ahead {
         return Ok(None);
     }
 
-    Ok(Some((my_epoch, safe_up_to)))
+    let catchup_chunk = my_chunk + 1;
+    Ok(Some((my_epoch, catchup_chunk)))
 }
 
 /// Perform rerand catch-up and acquire the advisory lock.
 ///
-/// 1. Computes the safe-to-apply watermark from `sync_result`.
-/// 2. If there are unapplied chunks, acquires `pg_advisory_lock(RERAND_APPLY_LOCK)`
-///    on a dedicated connection, then applies all unapplied chunks.
-/// 3. Returns the lock-holding connection (if the lock was acquired).
-///
-/// The caller **must** keep the returned connection alive until `load_iris_db`
-/// finishes, then call [`release_rerand_lock`] to release it.
+/// 1. Determines whether this node is 1 chunk behind a peer.
+/// 2. If so, acquires `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated
+///    connection and applies the single missing chunk.
+/// 3. Returns the lock-holding connection (caller keeps it alive through
+///    `load_iris_db`, then calls [`release_rerand_lock`]).
 pub async fn rerand_catchup_and_lock(
     pool: &PgPool,
     schema_name: &str,
     sync_result: &SyncResult,
-) -> Result<Option<PoolConnection<Postgres>>> {
-    let safe_up_to = match compute_rerand_safe_up_to(sync_result)? {
+) -> Result<Option<sqlx::pool::PoolConnection<sqlx::Postgres>>> {
+    let (epoch, chunk_id) = match compute_rerand_catchup_chunk(sync_result)? {
         Some(v) => v,
         None => return Ok(None),
     };
 
     let staging_schema = staging_schema_name(schema_name);
     tracing::info!(
-        "Rerand catch-up: applying chunks up to {} for epoch {}",
-        safe_up_to.1,
-        safe_up_to.0
+        "Rerand catch-up: applying epoch {} chunk {}",
+        epoch,
+        chunk_id,
     );
 
     let mut conn = pool.acquire().await?;
@@ -337,24 +325,29 @@ pub async fn rerand_catchup_and_lock(
         .execute(&mut *conn)
         .await?;
 
-    let unapplied = get_unapplied_chunks(pool, safe_up_to.0, safe_up_to.1).await?;
-    for chunk_id in unapplied {
-        let rows =
-            apply_staging_chunk(pool, &staging_schema, safe_up_to.0, chunk_id).await?;
-        tracing::info!(
-            "Rerand catch-up: applied epoch {} chunk {} ({} rows)",
-            safe_up_to.0,
-            chunk_id,
-            rows
-        );
-    }
+    let rows = match apply_staging_chunk(pool, &staging_schema, epoch, chunk_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                .bind(RERAND_APPLY_LOCK)
+                .execute(&mut *conn)
+                .await;
+            return Err(e);
+        }
+    };
+    tracing::info!(
+        "Rerand catch-up: applied epoch {} chunk {} ({} rows)",
+        epoch,
+        chunk_id,
+        rows
+    );
 
     Ok(Some(conn))
 }
 
 /// Release the advisory lock acquired by [`rerand_catchup_and_lock`].
 pub async fn release_rerand_lock(
-    lock_conn: Option<PoolConnection<Postgres>>,
+    lock_conn: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
 ) -> Result<()> {
     if let Some(mut conn) = lock_conn {
         sqlx::query("SELECT pg_advisory_unlock($1)")
@@ -387,55 +380,80 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_rerand_safe_up_to_same_epoch() {
-        let p0 = dummy_sync_state(1, 5);
+    fn test_catchup_peer_one_chunk_ahead() {
+        let p0 = dummy_sync_state(1, 4);
         let p1 = dummy_sync_state(1, 4);
-        let p2 = dummy_sync_state(1, 6);
+        let p2 = dummy_sync_state(1, 5);
         let sync_result = SyncResult {
             my_state: p0.clone(),
             all_states: vec![p0, p1, p2],
         };
-        assert_eq!(compute_rerand_safe_up_to(&sync_result).unwrap(), Some((1, 6)));
+        assert_eq!(
+            compute_rerand_catchup_chunk(&sync_result).unwrap(),
+            Some((1, 5))
+        );
     }
 
     #[test]
-    fn test_compute_rerand_safe_up_to_peer_ahead() {
-        // I am on epoch 0, but peer is on epoch 1.
-        // This implies the peer has confirmed all my chunks for epoch 0.
+    fn test_catchup_all_same() {
+        let p0 = dummy_sync_state(1, 5);
+        let p1 = dummy_sync_state(1, 5);
+        let p2 = dummy_sync_state(1, 5);
+        let sync_result = SyncResult {
+            my_state: p0.clone(),
+            all_states: vec![p0, p1, p2],
+        };
+        assert_eq!(compute_rerand_catchup_chunk(&sync_result).unwrap(), None);
+    }
+
+    #[test]
+    fn test_catchup_peer_epoch_ahead() {
         let p0 = dummy_sync_state(0, 5);
-        let p1 = dummy_sync_state(1, 0); // ahead
+        let p1 = dummy_sync_state(1, 0);
         let p2 = dummy_sync_state(0, 5);
         let sync_result = SyncResult {
             my_state: p0.clone(),
             all_states: vec![p0, p1, p2],
         };
-        assert_eq!(compute_rerand_safe_up_to(&sync_result).unwrap(), Some((0, i32::MAX)));
+        assert_eq!(
+            compute_rerand_catchup_chunk(&sync_result).unwrap(),
+            Some((0, 6))
+        );
     }
 
     #[test]
-    fn test_compute_rerand_safe_up_to_peer_behind() {
-        // I am on epoch 1, but peer is on epoch 0.
-        // This implies the peer has not confirmed any chunks for epoch 1.
+    fn test_catchup_peer_epoch_behind() {
         let p0 = dummy_sync_state(1, 2);
-        let p1 = dummy_sync_state(0, 10); // behind
+        let p1 = dummy_sync_state(0, 10);
         let p2 = dummy_sync_state(1, 2);
         let sync_result = SyncResult {
             my_state: p0.clone(),
             all_states: vec![p0, p1, p2],
         };
-        assert_eq!(compute_rerand_safe_up_to(&sync_result).unwrap(), Some((1, 2)));
+        assert_eq!(compute_rerand_catchup_chunk(&sync_result).unwrap(), None);
     }
-    
+
     #[test]
-    fn test_compute_rerand_safe_up_to_fatal_desync() {
-        // I am on epoch 1, but peer is on epoch 3 (difference > 1).
+    fn test_catchup_fatal_chunk_desync() {
         let p0 = dummy_sync_state(1, 2);
-        let p1 = dummy_sync_state(3, 10); // way ahead
+        let p1 = dummy_sync_state(1, 4);
         let p2 = dummy_sync_state(1, 2);
         let sync_result = SyncResult {
             my_state: p0.clone(),
             all_states: vec![p0, p1, p2],
         };
-        assert!(compute_rerand_safe_up_to(&sync_result).is_err());
+        assert!(compute_rerand_catchup_chunk(&sync_result).is_err());
+    }
+
+    #[test]
+    fn test_catchup_fatal_epoch_desync() {
+        let p0 = dummy_sync_state(1, 2);
+        let p1 = dummy_sync_state(3, 10);
+        let p2 = dummy_sync_state(1, 2);
+        let sync_result = SyncResult {
+            my_state: p0.clone(),
+            all_states: vec![p0, p1, p2],
+        };
+        assert!(compute_rerand_catchup_chunk(&sync_result).is_err());
     }
 }

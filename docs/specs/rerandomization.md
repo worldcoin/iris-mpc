@@ -175,14 +175,24 @@ At startup, before `load_iris_db`:
 
 1. **Existing**: modification sync (`sync_modifications`) — all parties catch up on modifications, producing identical `version_id` values
 2. **New**: rerand sync — parties exchange a compact rerand watermark during the existing startup sync (`SyncState` exchange):
-   - Each party computes `(epoch, max_confirmed_chunk)` from its local `rerand_progress` table: the active epoch E and the highest `chunk_id` where `all_confirmed = TRUE`. Since chunks are processed in strictly increasing order, all chunks `0..max_confirmed_chunk` are implicitly confirmed.
+   - Each party computes `(epoch, max_confirmed_chunk)` from its local `rerand_progress` table: the active epoch E and the highest `chunk_id` where `all_confirmed = TRUE`.
    - Each party sends this single `(epoch, max_confirmed_chunk)` pair as part of `SyncState`.
-   - Each party computes `safe_up_to = max(max_confirmed_chunk_party_0, max_confirmed_chunk_party_1, max_confirmed_chunk_party_2)` for the agreed epoch E, then locally applies all chunks `0..safe_up_to` where `live_applied = FALSE`.
-   - This is safe because `all_confirmed = TRUE` at any party means that party observed all three S3 `staged` markers, which means all three parties successfully committed the chunk to their staging schemas. A slower party may not have polled S3 yet, but its staging data is already there. Using `max` ensures all parties converge to the same applied set, preventing cross-party desync where one party loads rerandomized shares and another loads stale shares.
-   - Edge case: if no chunks have been confirmed yet (fresh epoch or very start), `max_confirmed_chunk` is -1 / None. `safe_up_to` becomes -1 / None and the catch-up step is skipped entirely.
-3. **New (DB-only catch-up)**: acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated connection. Then for every chunk K in `0..safe_up_to` where locally `live_applied = FALSE` (in increasing order): run the same apply transaction as Step 1.11. **Keep the lock held** through step 4.
+   - Each party checks whether any peer is exactly 1 confirmed chunk ahead (within the same epoch, or has moved to the next epoch). If so, it applies that single chunk (`my_max_confirmed + 1`) from staging to the live DB.
+   - **Why at most 1 chunk**: the rerand loop has a strict per-chunk synchronization barrier — a node cannot stage chunk K+1 until all three parties have confirmed chunk K via S3 markers. Therefore it is impossible for any peer to be more than 1 confirmed chunk ahead. The implementation enforces this with a fatal bail if the gap exceeds 1 (indicates DB corruption).
+   - **Why `max` across peers**: `all_confirmed = TRUE` at any party means that party observed all three S3 `staged` markers, which means all three parties successfully committed the chunk to their staging schemas. A slower party may not have polled S3 yet, but its staging data is already there.
+   - Edge case: if all parties report the same `max_confirmed_chunk`, there is nothing to catch up and the step is skipped.
+3. **New (DB-only catch-up)**: acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated connection. If step 2 identified a chunk to apply, run the same apply transaction as Step 1.11. **Keep the lock held** through step 4.
 4. **Existing**: `load_iris_db` — loads from live DB into GPU memory. The advisory lock is still held, so the rerand server cannot apply new chunks while the DB is being read into memory.
 5. Release the advisory lock: `SELECT pg_advisory_unlock(RERAND_APPLY_LOCK)` on the dedicated connection, then drop the connection.
+
+### Epoch and chunk desync safety checks
+
+The startup sync validates two invariants derived from the protocol's synchronization barriers:
+
+- **Epoch gap ≤ 1**: epochs transition via a 3-party S3 barrier (`complete` markers), so no peer can be more than 1 epoch ahead. A gap > 1 is fatal.
+- **Chunk gap ≤ 1** (within the same epoch): the per-chunk S3 barrier (`staged` markers) prevents any peer from confirming more than 1 chunk ahead. A gap > 1 is fatal.
+
+If either check fails, the main server refuses to start. This catches DB corruption, manual interference, or bugs in the rerand server early, before any data is loaded into memory.
 
 ### Advisory lock: startup vs rerand server concurrency
 
@@ -200,8 +210,10 @@ sqlx::query("SELECT pg_advisory_lock($1)")
     .bind(RERAND_APPLY_LOCK)
     .execute(&mut *lock_conn).await?;
 
-apply_catchup_chunks(&pool).await?;  // uses pool
-load_iris_db(&pool).await?;          // uses pool
+if let Some((epoch, chunk_id)) = catchup_chunk {
+    apply_staging_chunk(&pool, epoch, chunk_id).await?;
+}
+load_iris_db(&pool).await?;
 
 sqlx::query("SELECT pg_advisory_unlock($1)")
     .bind(RERAND_APPLY_LOCK)
