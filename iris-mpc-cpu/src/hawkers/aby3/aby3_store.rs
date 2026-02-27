@@ -14,9 +14,9 @@ use crate::{
     },
     protocol::{
         nhd_ops::{
-            nhd_compare_nmr, nhd_cross_compare, nhd_lift_distances, nhd_min_of_pair_batch,
-            nhd_min_round_robin_batch, nhd_oblivious_cross_compare,
-            nhd_oblivious_cross_compare_lifted,
+            nhd_compare_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
+            nhd_min_of_pair_batch, nhd_min_round_robin_batch, nhd_oblivious_cross_compare,
+            nhd_oblivious_cross_compare_lifted, nhd_plaintext_is_match,
         },
         ops::{
             conditionally_select_distances_with_plain_ids,
@@ -34,9 +34,12 @@ use crate::{
         RingElement,
     },
 };
-use ampc_actor_utils::protocol::ops::{
-    batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
-    oblivious_cross_compare_lifted,
+use ampc_actor_utils::protocol::{
+    ops::{
+        batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
+        oblivious_cross_compare_lifted,
+    },
+    shuffle::random_shuffle_batch,
 };
 use ampc_actor_utils::{network::value::NetworkInt, protocol::ops::open_ring};
 use ampc_secret_sharing::shares::ring48::Ring48;
@@ -302,10 +305,10 @@ impl DistanceOps for NhdOps {
     }
 
     async fn lte_threshold_and_open(
-        _session: &mut Session,
-        _distances: &[DistanceShare<Ring48>],
+        session: &mut Session,
+        distances: &[DistanceShare<Ring48>],
     ) -> Result<Vec<bool>> {
-        unimplemented!("NHD threshold comparison not yet supported")
+        nhd_lte_threshold_and_open(session, distances).await
     }
 
     fn to_usize(value: Ring48) -> usize {
@@ -318,8 +321,8 @@ impl DistanceOps for NhdOps {
         nmr1 * (d2.1 as i64) < nmr2 * (d1.1 as i64)
     }
 
-    fn plaintext_is_match(_d: &(u16, u16)) -> bool {
-        unimplemented!("NHD threshold match not yet supported")
+    fn plaintext_is_match(d: &(u16, u16)) -> bool {
+        nhd_plaintext_is_match(d.0, d.1)
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
@@ -338,10 +341,10 @@ impl DistanceOps for NhdOps {
     }
 
     async fn shuffle_batch(
-        _session: &mut Session,
-        _distances: Vec<Vec<(Share<Ring48>, DistanceShare<Ring48>)>>,
+        session: &mut Session,
+        distances: Vec<Vec<(Share<Ring48>, DistanceShare<Ring48>)>>,
     ) -> Result<Vec<Vec<(Share<Ring48>, DistanceShare<Ring48>)>>> {
-        unimplemented!("Ring48 shuffle not yet supported")
+        random_shuffle_batch(session, distances).await
     }
 }
 

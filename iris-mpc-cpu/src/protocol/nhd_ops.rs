@@ -1,3 +1,5 @@
+use std::ops::Not;
+
 use crate::execution::session::Session;
 use crate::protocol::ops::{min_round_robin_batch_with, CrossCompareFnResult, DistancePair, B};
 use ampc_actor_utils::network::value::NetworkInt;
@@ -164,6 +166,32 @@ pub async fn nhd_greater_than_threshold(
     extract_msb_batch(session, &results).await
 }
 
+/// Checks if distances are less than or equal to the NHD threshold (i.e., is_match).
+///
+/// This is the negation of `nhd_greater_than_threshold`: returns `true` when
+/// the distance is at or below threshold (match), `false` otherwise.
+pub async fn nhd_lte_threshold_and_open(
+    session: &mut Session,
+    distances: &[DistanceShare<Ring48>],
+) -> Result<Vec<bool>> {
+    let bits = nhd_greater_than_threshold(session, distances).await?;
+    open_bin(session, &bits)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+}
+
+const A_PLAIN: i64 = 405_504_i64 - (25.0 * B as f64 * MATCH_THRESHOLD_RATIO) as i64;
+/// Plaintext NHD threshold check: returns `true` if the distance represents a match
+/// (at or below threshold).
+///
+/// Given the masked Hamming distance `hd` and mask dot product `md`, we compute the bit
+///
+/// `md * (100 * hd - 45 * md) + A_plain * md + 737_280 * hd < 0`
+pub(crate) fn nhd_plaintext_is_match(hd: u16, md: u16) -> bool {
+    let (hd, md) = (hd as i64, md as i64);
+    md * (100 * hd - 45 * md) + A_PLAIN * md + 737_280 * hd < 0
+}
+
 fn nhd_oblivious_cross_compare_boxed<'a>(
     session: &'a mut Session,
     pairs: &'a [DistancePair<Ring48>],
@@ -323,6 +351,44 @@ mod tests {
             cd as i64 - (1 << 16)
         } else {
             cd as i64
+        }
+    }
+
+    #[test]
+    fn test_nhd_plaintext_is_match() {
+        // Test cases matching the MPC threshold test
+        // nhd_plaintext_is_match should return the same as !reference_nhd_greater_than_threshold
+        let test_cases: Vec<(u16, u16, bool)> = vec![
+            (100, 500, true),  // nhd = 0.33 -> match
+            (400, 500, false), // nhd = 0.62 -> no match
+            // same FHD but different mask dot
+            (800, 3000, true), // nhd = 0.33 -> match
+            (8, 30, false),    // nhd = 0.37 -> no match
+            // Edge cases
+            (0, 0, false),  // nhd = infinity -> no match
+            (0, 100, true), // nhd = 0.24 -> match
+            (1, 1, false),  // nhd = 0.70 -> no match
+        ];
+
+        for (hd, md, expected) in &test_cases {
+            let result = nhd_plaintext_is_match(*hd, *md);
+            assert_eq!(
+                result, *expected,
+                "nhd_plaintext_is_match({}, {}): got {}, expected {}",
+                hd, md, result, expected
+            );
+        }
+
+        // Cross-check consistency with reference_nhd_greater_than_threshold
+        for (hd, md, _) in test_cases.into_iter() {
+            let ref_cd = md as i64 - 2 * hd as i64; // Derive a code dot that would yield the Hamming distance
+            let greater = reference_nhd_greater_than_threshold(ref_cd, md as i64);
+            let plaintext_match = nhd_plaintext_is_match(hd, md);
+            assert_eq!(
+                plaintext_match, !greater,
+                "Inconsistency for (hd={}, md={}): plaintext_is_match={}, !greater_than_threshold={}",
+                hd, md, plaintext_match, !greater
+            );
         }
     }
 
