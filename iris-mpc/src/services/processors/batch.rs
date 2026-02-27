@@ -20,9 +20,9 @@ use iris_mpc_common::helpers::aws::{
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
-    IdentityDeletionRequest, IdentityMatchCheckRequest, ReAuthRequest, ResetUpdateRequest,
+    IdentityDeletionRequest, IdentityMatchCheckRequest, IdentityUpdateRequest, ReAuthRequest,
     SQSMessage, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_request::{
     ReceiveRequestError, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
@@ -439,9 +439,33 @@ impl<'a> BatchProcessor<'a> {
                 )
                 .await
             }
+            RECOVERY_UPDATE_MESSAGE_TYPE => {
+                if !self.config.hawk_server_recovery_enabled {
+                    metrics::counter!("request.skipped", "type" => "recovery_update").increment(1);
+                    tracing::warn!(
+                        "Recovery updates are disabled, skipping recovery update request"
+                    );
+                    return Ok(());
+                }
+                self.process_identity_update_request(
+                    &message,
+                    batch_metadata,
+                    RECOVERY_UPDATE_MESSAGE_TYPE,
+                )
+                .await
+            }
             RESET_UPDATE_MESSAGE_TYPE => {
-                self.process_reset_update_request(&message, batch_metadata)
-                    .await
+                if !self.config.hawk_server_resets_enabled {
+                    metrics::counter!("request.skipped", "type" => "reset_update").increment(1);
+                    tracing::warn!("Resets are disabled, skipping reset update request");
+                    return Ok(());
+                }
+                self.process_identity_update_request(
+                    &message,
+                    batch_metadata,
+                    RESET_UPDATE_MESSAGE_TYPE,
+                )
+                .await
             }
             _ => {
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
@@ -686,34 +710,34 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
-    async fn process_reset_update_request(
+    async fn process_identity_update_request(
         &mut self,
         message: &SQSMessage,
         _batch_metadata: BatchMetadata,
+        request_type: &str,
     ) -> Result<(), ReceiveRequestError> {
         let sns_message_id = message.message_id.clone();
-        let reset_update_request: ResetUpdateRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Reset update request", e))?;
+        let identity_update_request: IdentityUpdateRequest = serde_json::from_str(&message.message)
+            .map_err(|e| ReceiveRequestError::json_parse_error("Identity update request", e))?;
 
-        metrics::counter!("request.received", "type" => "reset_update").increment(1);
-        tracing::debug!("Received reset update request: {:?}", reset_update_request);
-
-        if !self.config.hawk_server_resets_enabled {
-            tracing::warn!("Reset is disabled, skipping reset request");
-            return Ok(());
-        }
+        metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
+        tracing::debug!(
+            "Received {} request: {:?}",
+            request_type,
+            identity_update_request
+        );
 
         // Check for duplicate serial_id before downloading S3 shares to avoid wasted work
         if self
             .batch_query
             .modifications
-            .contains_key(&RequestSerialId(reset_update_request.serial_id))
+            .contains_key(&RequestSerialId(identity_update_request.serial_id))
         {
             tracing::warn!(
-                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                reset_update_request.serial_id,
-                                reset_update_request,
-                            );
+                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                identity_update_request.serial_id,
+                identity_update_request,
+            );
             return Ok(());
         }
 
@@ -728,18 +752,22 @@ impl<'a> BatchProcessor<'a> {
             semaphore,
             s3_client,
             bucket_name,
-            reset_update_request.s3_key.clone(),
+            identity_update_request.s3_key.clone(),
         )?;
         let (left_shares, right_shares) = match task_handle.await {
             Ok(result) => match result {
                 Ok(shares) => shares,
                 Err(e) => {
-                    tracing::error!("Failed to process iris shares for reset update: {:?}", e);
+                    tracing::error!(
+                        "Failed to process iris shares for {}: {:?}",
+                        request_type,
+                        e
+                    );
                     return Err(ReceiveRequestError::FailedToProcessIrisShares(e));
                 }
             },
             Err(e) => {
-                tracing::error!("Failed to join task handle for reset update: {:?}", e);
+                tracing::error!("Failed to join task handle for {}: {:?}", request_type, e);
                 return Err(ReceiveRequestError::FailedToJoinHandle(e));
             }
         };
@@ -747,21 +775,22 @@ impl<'a> BatchProcessor<'a> {
         let modification = persist_modification(
             self.config.disable_persistence,
             self.iris_store,
-            Some(reset_update_request.serial_id as i64),
-            RESET_UPDATE_MESSAGE_TYPE,
-            Some(reset_update_request.s3_key.as_ref()),
+            Some(identity_update_request.serial_id as i64),
+            request_type,
+            Some(identity_update_request.s3_key.as_ref()),
         )
         .await;
 
         self.batch_query.modifications.insert(
-            RequestSerialId(reset_update_request.serial_id),
+            RequestSerialId(identity_update_request.serial_id),
             modification,
         );
 
-        self.batch_query.push_reset_update_request(
+        self.batch_query.push_identity_update_request(
             sns_message_id,
-            reset_update_request.reset_id,
-            reset_update_request.serial_id - 1,
+            identity_update_request.request_id,
+            request_type,
+            identity_update_request.serial_id - 1,
             GaloisSharesBothSides {
                 code_left: left_shares.code,
                 mask_left: left_shares.mask,

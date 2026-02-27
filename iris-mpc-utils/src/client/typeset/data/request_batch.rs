@@ -216,7 +216,7 @@ impl RequestBatch {
             info: RequestInfo::new(self, label, label_of_parent),
             iris_pair,
             parent,
-            reset_id: uuid::Uuid::new_v4(),
+            request_id: uuid::Uuid::new_v4(),
         });
     }
 
