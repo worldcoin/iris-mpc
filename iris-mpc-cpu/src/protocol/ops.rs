@@ -32,8 +32,8 @@ use rand_distr::{Distribution, Standard};
 use std::{cmp::Ordering, ops::Not, time::Instant};
 use tracing::instrument;
 
-pub(crate) type DistancePair<D> = (DistanceShare<D>, DistanceShare<D>);
-pub(crate) type IdDistance<D> = (Share<D>, DistanceShare<D>);
+pub(crate) type DistancePair<T> = (DistanceShare<T>, DistanceShare<T>);
+pub(crate) type IdDistance<T> = (Share<T>, DistanceShare<T>);
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
