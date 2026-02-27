@@ -652,6 +652,7 @@ impl HawkActor {
     async fn update_anon_stats(
         &mut self,
         search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
+        request_types: &[String],
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             let sided_search_results = &search_results[side];
@@ -661,7 +662,7 @@ impl HawkActor {
                 sided_search_results.len(),
             );
 
-            let partial_distances = self.get_partial_distances(sided_search_results);
+            let partial_distances = self.get_partial_distances(sided_search_results, request_types);
             self.persist_cached_distances(side, partial_distances)
                 .await?;
         }
@@ -671,10 +672,25 @@ impl HawkActor {
     fn get_partial_distances(
         &mut self,
         search_results: &[VecRotations<HawkInsertPlan>],
-    ) -> BTreeMap<i64, Vec<DistanceShare<u32>>> {
-        // maps query_id and db_id to a vector of distances.
-        let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
+        request_types: &[String],
+    ) -> BTreeMap<i64, (AnonStatsOperation, Vec<DistanceShare<u32>>)> {
+        // maps query_id and db_id to an operation and a vector of distances.
+        let mut distances_with_ids: BTreeMap<i64, (AnonStatsOperation, Vec<DistanceShare<u32>>)> =
+            BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
+            let operation = request_types
+                .get(query_idx)
+                .map(|rt| {
+                    if rt.as_str() == REAUTH_MESSAGE_TYPE {
+                        AnonStatsOperation::Reauth
+                    } else if rt.as_str() == RECOVERY_CHECK_MESSAGE_TYPE {
+                        AnonStatsOperation::Recovery
+                    } else {
+                        AnonStatsOperation::Uniqueness
+                    }
+                })
+                .unwrap_or(AnonStatsOperation::Uniqueness);
+
             for insert_plan in vec_rots.iter() {
                 let matches = insert_plan.matches.clone();
 
@@ -683,7 +699,8 @@ impl HawkActor {
                     let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
                         .entry(match_id)
-                        .or_default()
+                        .or_insert_with(|| (operation, Vec::new()))
+                        .1
                         .push(distance_share);
                 }
             }
@@ -694,26 +711,11 @@ impl HawkActor {
     async fn persist_cached_distances(
         &self,
         side: usize,
-        partial_distances: BTreeMap<i64, Vec<DistanceShare<u32>>>,
+        partial_distances: BTreeMap<i64, (AnonStatsOperation, Vec<DistanceShare<u32>>)>,
     ) -> Result<()> {
         let Some(store) = &self.anon_stats_store else {
             return Ok(());
         };
-
-        let bundles = partial_distances
-            .iter()
-            .filter_map(|(match_id, shares)| {
-                if shares.is_empty() {
-                    None
-                } else {
-                    Some((*match_id, shares.clone()))
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if bundles.is_empty() {
-            return Ok(());
-        }
 
         let eye = match side {
             LEFT => Eye::Left,
@@ -727,9 +729,49 @@ impl HawkActor {
             context: AnonStatsContext::HNSW,
         };
 
-        store
-            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::Uniqueness)
-            .await?;
+        let mut uniqueness_bundles = Vec::new();
+        let mut reauth_bundles = Vec::new();
+        let mut recovery_bundles = Vec::new();
+
+        for (match_id, (operation, shares)) in &partial_distances {
+            if shares.is_empty() {
+                continue;
+            }
+            let bundle = (*match_id, shares.clone());
+            match operation {
+                AnonStatsOperation::Reauth => reauth_bundles.push(bundle),
+                AnonStatsOperation::Recovery => recovery_bundles.push(bundle),
+                AnonStatsOperation::Uniqueness => uniqueness_bundles.push(bundle),
+            }
+        }
+
+        if !uniqueness_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &uniqueness_bundles,
+                    origin,
+                    AnonStatsOperation::Uniqueness,
+                )
+                .await?;
+        }
+        if !reauth_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &reauth_bundles,
+                    origin,
+                    AnonStatsOperation::Reauth,
+                )
+                .await?;
+        }
+        if !recovery_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &recovery_bundles,
+                    origin,
+                    AnonStatsOperation::Recovery,
+                )
+                .await?;
+        }
 
         Ok(())
     }
@@ -1638,7 +1680,9 @@ impl HawkHandle {
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
-        hawk_actor.update_anon_stats(&search_results).await?;
+        hawk_actor
+            .update_anon_stats(&search_results, &request.batch.request_types)
+            .await?;
         tracing::info!("Updated anonymized statistics.");
 
         // Reset Updates. Find how to insert the new irises into the graph.

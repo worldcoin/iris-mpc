@@ -93,3 +93,9 @@ debug = 1
 
 [profile.dev]
 panic = 'abort'
+
+[patch."https://github.com/worldcoin/ampc-common.git"]
+ampc-anon-stats = { path = "../ampc-common/ampc-anon-stats" }
+ampc-actor-utils = { path = "../ampc-common/ampc-actor-utils" }
+ampc-secret-sharing = { path = "../ampc-common/ampc-secret-sharing" }
+ampc-server-utils = { path = "../ampc-common/ampc-server-utils" }
