@@ -32,7 +32,7 @@ mod typeset;
 const S3_PROPAGATION_DELAY_SECS: u64 = 1;
 
 /// Maximum time (seconds) without receiving a response before declaring a batch timed out.
-const RESPONSE_TIMEOUT_SECS: u64 = 60;
+const RESPONSE_TIMEOUT_SECS: u64 = 180;
 
 /// Given a RequestBatchOptions, do the following:
 /// - turn them into requests
