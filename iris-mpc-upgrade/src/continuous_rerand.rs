@@ -6,7 +6,6 @@ use futures::StreamExt;
 use iris_mpc_store::rerand::{
     apply_staging_chunk, get_rerand_progress, insert_staging_irises, set_all_confirmed,
     set_staging_written, staging_schema_name, upsert_rerand_progress, StagingIrisEntry,
-    RERAND_APPLY_LOCK,
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
@@ -139,23 +138,9 @@ pub async fn run_continuous_rerand(
                 return Ok(());
             }
 
-            let mut lock_conn = pool.acquire().await?;
-            sqlx::query("SELECT pg_advisory_lock($1)")
-                .bind(RERAND_APPLY_LOCK)
-                .execute(&mut *lock_conn)
-                .await?;
-
-            let apply_res =
+            let rows =
                 apply_staging_chunk(pool, &staging_schema, active_epoch as i32, chunk_id as i32)
-                    .await;
-
-            sqlx::query("SELECT pg_advisory_unlock($1)")
-                .bind(RERAND_APPLY_LOCK)
-                .execute(&mut *lock_conn)
-                .await?;
-            drop(lock_conn);
-
-            let rows = apply_res?;
+                    .await?;
             tracing::info!(
                 "Epoch {} chunk {}: applied to live DB ({} rows updated)",
                 active_epoch,

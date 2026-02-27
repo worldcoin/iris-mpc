@@ -79,9 +79,11 @@ pub async fn insert_staging_irises(
 /// Apply a confirmed staging chunk to the live DB.
 ///
 /// Within a single transaction:
-///   1. UPDATE live irises from staging (optimistic lock on version_id)
-///   2. DELETE staging rows for this chunk
-///   3. Mark live_applied in rerand_progress
+///   1. Acquire `pg_advisory_xact_lock(RERAND_APPLY_LOCK)` (released
+///      automatically on commit/rollback/connection-drop).
+///   2. UPDATE live irises from staging (optimistic lock on version_id)
+///   3. DELETE staging rows for this chunk
+///   4. Mark live_applied in rerand_progress
 pub async fn apply_staging_chunk(
     pool: &PgPool,
     staging_schema: &str,
@@ -90,6 +92,11 @@ pub async fn apply_staging_chunk(
 ) -> Result<u64> {
     validate_identifier(staging_schema)?;
     let mut tx = pool.begin().await?;
+
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(RERAND_APPLY_LOCK)
+        .execute(&mut *tx)
+        .await?;
 
     let update_sql = format!(
         r#"
@@ -200,6 +207,20 @@ pub async fn get_max_confirmed_chunk(pool: &PgPool, epoch: i32) -> Result<Option
     Ok(row.0)
 }
 
+/// Returns chunks that are confirmed but not yet applied to the live DB.
+/// In normal operation there is at most 1 such chunk (the crash window
+/// between `set_all_confirmed` and `apply_staging_chunk`).
+pub async fn get_confirmed_unapplied_chunks(pool: &PgPool) -> Result<Vec<(i32, i32)>> {
+    let rows: Vec<(i32, i32)> = sqlx::query_as(
+        "SELECT epoch, chunk_id FROM rerand_progress \
+         WHERE all_confirmed = TRUE AND live_applied = FALSE \
+         ORDER BY epoch, chunk_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Returns the highest epoch that has any rerand_progress rows.
 pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
     let row: (Option<i32>,) = sqlx::query_as("SELECT MAX(epoch) FROM rerand_progress")
@@ -285,51 +306,91 @@ pub fn compute_rerand_catchup_chunk(sync_result: &SyncResult) -> Result<Option<(
 
 /// Perform rerand catch-up and acquire the advisory lock.
 ///
-/// 1. Determines whether this node is 1 chunk behind a peer.
-/// 2. If so, acquires `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated
-///    connection and applies the single missing chunk.
-/// 3. Returns the lock-holding connection (caller keeps it alive through
-///    `load_iris_db`, then calls [`release_rerand_lock`]).
+/// 1. Applies any locally confirmed-but-unapplied chunks (covers the crash
+///    window between `set_all_confirmed` and `apply_staging_chunk`).
+///    Each apply is self-protected by `pg_advisory_xact_lock` inside its
+///    transaction.
+/// 2. If a peer advertises a strictly higher watermark, applies that one
+///    additional chunk (same xact-lock protection).
+/// 3. Acquires a session-level `pg_advisory_lock(RERAND_APPLY_LOCK)` that
+///    the caller holds through `load_iris_db`, preventing the rerand loop
+///    from applying new chunks while the DB snapshot is being read.
+/// 4. Returns the lock-holding connection (caller calls
+///    [`release_rerand_lock`] when done).
 pub async fn rerand_catchup_and_lock(
     pool: &PgPool,
     schema_name: &str,
     sync_result: &SyncResult,
 ) -> Result<Option<sqlx::pool::PoolConnection<sqlx::Postgres>>> {
+    let staging_schema = staging_schema_name(schema_name);
+
+    // Steps 1+2: apply pending chunks. Each `apply_staging_chunk` acquires
+    // pg_advisory_xact_lock inside its own transaction; we must not hold
+    // the session-level lock yet (it would deadlock across connections).
+    rerand_catchup_inner(pool, &staging_schema, sync_result).await?;
+
+    // Step 3: hold the session-level lock through load_iris_db.
     let mut conn = pool.acquire().await?;
     sqlx::query("SELECT pg_advisory_lock($1)")
         .bind(RERAND_APPLY_LOCK)
         .execute(&mut *conn)
         .await?;
 
-    if let Some((epoch, chunk_id)) = compute_rerand_catchup_chunk(sync_result)? {
-        let staging_schema = staging_schema_name(schema_name);
-        tracing::info!(
-            "Rerand catch-up: applying epoch {} chunk {}",
-            epoch,
-            chunk_id,
-        );
+    Ok(Some(conn))
+}
 
-        let rows = match apply_staging_chunk(pool, &staging_schema, epoch, chunk_id).await {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-                    .bind(RERAND_APPLY_LOCK)
-                    .execute(&mut *conn)
-                    .await;
-                return Err(e);
-            }
-        };
-        tracing::info!(
-            "Rerand catch-up: applied epoch {} chunk {} ({} rows)",
-            epoch,
-            chunk_id,
-            rows
-        );
-    } else {
-        tracing::info!("Rerand catch-up: no chunk to apply");
+async fn rerand_catchup_inner(
+    pool: &PgPool,
+    staging_schema: &str,
+    sync_result: &SyncResult,
+) -> Result<()> {
+    // If the rerand tables haven't been migrated yet, the sync state will
+    // be None and there is nothing to catch up.  Skip unconditionally so
+    // a rolling deploy doesn't crash before migrations run.
+    if sync_result.my_state.rerand_state.is_none() {
+        return Ok(());
     }
 
-    Ok(Some(conn))
+    // Step 1: apply any locally confirmed-but-unapplied chunks.
+    // This closes the crash window where all_confirmed was persisted but
+    // apply_staging_chunk had not yet run.
+    let pending = get_confirmed_unapplied_chunks(pool).await?;
+    for (epoch, chunk_id) in &pending {
+        tracing::info!(
+            "Rerand catch-up: applying locally pending epoch {} chunk {}",
+            epoch,
+            chunk_id,
+        );
+        let rows = apply_staging_chunk(pool, staging_schema, *epoch, *chunk_id).await?;
+        tracing::info!(
+            "Rerand catch-up: applied locally pending epoch {} chunk {} ({} rows)",
+            epoch,
+            chunk_id,
+            rows,
+        );
+    }
+
+    // Step 2: if a peer is one chunk ahead, apply that chunk too.
+    if let Some((epoch, chunk_id)) = compute_rerand_catchup_chunk(sync_result)? {
+        if !pending.contains(&(epoch, chunk_id)) {
+            tracing::info!(
+                "Rerand catch-up: applying peer-ahead epoch {} chunk {}",
+                epoch,
+                chunk_id,
+            );
+            let rows = apply_staging_chunk(pool, staging_schema, epoch, chunk_id).await?;
+            tracing::info!(
+                "Rerand catch-up: applied peer-ahead epoch {} chunk {} ({} rows)",
+                epoch,
+                chunk_id,
+                rows,
+            );
+        }
+    } else if pending.is_empty() {
+        tracing::info!("Rerand catch-up: no chunks to apply");
+    }
+
+    Ok(())
 }
 
 /// Release the advisory lock acquired by [`rerand_catchup_and_lock`].

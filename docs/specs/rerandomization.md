@@ -95,7 +95,7 @@ When `rerand_epoch` changes (rerandomization), share data changes but `version_i
 
 ### Staging schema
 
-Each party has a staging schema (e.g. `SMPC_rerand_staging`) with:
+Each party has a staging schema (`{live_schema}_rerand_staging`), created automatically by a migration that derives the name from `current_schema()`:
 
 ```sql
 CREATE TABLE irises (
@@ -147,10 +147,10 @@ Runs continuously:
 8. Upload S3 marker after staging commit: `s3://bucket/rerand/epoch-{E}/party-{P}/chunk-{K}/staged`
 9. Poll S3 until all 3 party markers exist for chunk K
 10. Set `all_confirmed = TRUE` in local `rerand_progress` for `(epoch = E, chunk_id = K)`
-11. Acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated connection, then copy from staging to live DB, delete staging, and mark applied — all in one transaction (scoped to epoch and chunk):
+11. Copy from staging to live DB, delete staging, and mark applied — all in one transaction that holds `pg_advisory_xact_lock(RERAND_APPLY_LOCK)` (automatically released on commit, rollback, or connection drop):
     ```sql
-    SELECT pg_advisory_lock(RERAND_APPLY_LOCK);   -- on dedicated connection
     BEGIN;
+    SELECT pg_advisory_xact_lock(RERAND_APPLY_LOCK);
     UPDATE irises SET
       left_code = staging.left_code,
       left_mask = staging.left_mask,
@@ -164,8 +164,7 @@ Runs continuously:
       AND irises.version_id = staging.original_version_id;
     DELETE FROM staging_schema.irises WHERE epoch = E AND chunk_id = K;
     UPDATE rerand_progress SET live_applied = TRUE WHERE epoch = E AND chunk_id = K;
-    COMMIT;
-    SELECT pg_advisory_unlock(RERAND_APPLY_LOCK);  -- release after commit
+    COMMIT;  -- xact lock released here
     ```
 12. Proceed to next chunk (or start epoch transition if all chunks done)
 
@@ -181,7 +180,10 @@ At startup, before `load_iris_db`:
    - **Why at most 1 chunk**: the rerand loop has a strict per-chunk synchronization barrier — a node cannot stage chunk K+1 until all three parties have confirmed chunk K via S3 markers. Therefore it is impossible for any peer to be more than 1 confirmed chunk ahead. The implementation enforces this with a fatal bail if the gap exceeds 1 (indicates DB corruption).
    - **Why `max` across peers**: `all_confirmed = TRUE` at any party means that party observed all three S3 `staged` markers, which means all three parties successfully committed the chunk to their staging schemas. A slower party may not have polled S3 yet, but its staging data is already there.
    - Edge case: if all parties report the same `max_confirmed_chunk`, there is nothing to catch up and the step is skipped.
-3. **New (DB-only catch-up)**: acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated connection. If step 2 identified a chunk to apply, run the same apply transaction as Step 1.11. **Keep the lock held** through step 4.
+3. **New (DB-only catch-up)**: two phases, in order:
+   - **Phase A — apply locally pending chunks**: query `rerand_progress` for any chunks where `all_confirmed = TRUE AND live_applied = FALSE`. Apply each one via the same apply transaction as Step 1.11 (each acquires its own `pg_advisory_xact_lock`). This handles the crash window where the rerand server set `all_confirmed` but crashed before applying to live — without this, the node would advertise itself as caught up (watermark based on `all_confirmed`) while its live DB is stale.
+   - **Phase B — apply peer-ahead chunk**: if step 2 identified a chunk where a peer is strictly ahead, apply it (skipped if already handled in Phase A).
+   - **Phase C — hold session lock**: acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated connection. **Keep the lock held** through step 4. This prevents the rerand loop from applying new chunks while the DB snapshot is being read.
 4. **Existing**: `load_iris_db` — loads from live DB into GPU memory. The advisory lock is still held, so the rerand server cannot apply new chunks while the DB is being read into memory.
 5. Release the advisory lock: `SELECT pg_advisory_unlock(RERAND_APPLY_LOCK)` on the dedicated connection, then drop the connection.
 
@@ -196,23 +198,29 @@ If either check fails, the main server refuses to start. This catches DB corrupt
 
 ### Advisory lock: startup vs rerand server concurrency
 
-Both the rerand server (Step 1.11) and the main server startup (Steps 2.3–2.4) acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` before applying chunks. This ensures:
+Two lock scopes are used, both keyed on `RERAND_APPLY_LOCK`:
 
-- Only one process applies chunks at a time (no interleaving).
-- The main server holds the lock from catch-up through `load_iris_db`, so the rerand server cannot sneak in applies between catch-up and memory load.
-- If either process crashes, the connection drops and Postgres automatically releases the session-level lock. No stale locks.
+- **Transaction-level (`pg_advisory_xact_lock`)** — acquired inside `apply_staging_chunk`'s transaction. Automatically released on commit, rollback, or connection drop (including task abort). Used by both the rerand server loop (Step 1.11) and startup catch-up (Step 2.3 Phases A/B).
+- **Session-level (`pg_advisory_lock`)** — acquired on a dedicated connection during startup (Step 2.3 Phase C) and held through `load_iris_db` (Step 2.4). Prevents the rerand loop from applying new chunks while the DB snapshot is being read. Released explicitly after load.
 
-**Implementation with connection pools (sqlx)**: session-level advisory locks are tied to a specific Postgres connection. When using a connection pool, acquire a **dedicated connection** (`pool.acquire()`) and hold it (do not drop/return it) for the entire lock window. The catch-up queries and `load_iris_db` can use the pool normally — the dedicated connection just sits idle holding the lock. Release with `pg_advisory_unlock(...)` on the same connection after `load_iris_db` completes, then drop the connection.
+These two scopes serialize correctly: `pg_advisory_xact_lock` and `pg_advisory_lock` on the same key conflict across sessions, so the rerand loop's apply transaction blocks while the main server holds the session lock, and vice versa.
+
+**Why `pg_advisory_xact_lock` for applies**: session-level locks are tied to a connection. If a process is killed while holding a session-level lock on a pooled connection, the connection may be returned to the pool with the lock still held, blocking future acquirers indefinitely. Transaction-level locks avoid this: when the connection is dropped, the transaction rolls back and the lock is released automatically.
+
+**Implementation with connection pools (sqlx)**:
 
 ```rust
+// Catch-up applies (each self-protected by xact lock inside apply_staging_chunk):
+for (epoch, chunk_id) in pending_chunks {
+    apply_staging_chunk(&pool, epoch, chunk_id).await?;
+}
+
+// Session lock for load_iris_db window:
 let mut lock_conn = pool.acquire().await?;
 sqlx::query("SELECT pg_advisory_lock($1)")
     .bind(RERAND_APPLY_LOCK)
     .execute(&mut *lock_conn).await?;
 
-if let Some((epoch, chunk_id)) = catchup_chunk {
-    apply_staging_chunk(&pool, epoch, chunk_id).await?;
-}
 load_iris_db(&pool).await?;
 
 sqlx::query("SELECT pg_advisory_unlock($1)")
