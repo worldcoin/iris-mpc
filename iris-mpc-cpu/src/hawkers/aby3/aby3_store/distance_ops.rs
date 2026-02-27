@@ -190,7 +190,7 @@ impl DistanceOps for FhdOps {
     }
 
     fn to_usize(value: Self::Ring) -> usize {
-        value.0 as usize
+        value as usize
     }
 
     fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool {
