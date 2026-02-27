@@ -247,6 +247,9 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
 
+    #[clap(long, default_value_t = false)]
+    pub hnsw_disable_memory_persistence: bool,
+
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
 
@@ -274,7 +277,7 @@ pub struct HawkArgs {
 ///   statistics about match distributions.
 pub struct HawkActor {
     /// Command-line arguments and configuration for the actor.
-    args: HawkArgs,
+    pub(crate) args: HawkArgs,
     // ---- Shared MPC & HNSW setup ----
     /// The HNSW searcher, containing parameters and logic for graph traversal.
     searcher: Arc<HnswSearcher>,
@@ -625,6 +628,11 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
+        if self.args.hnsw_disable_memory_persistence {
+            tracing::debug!("In-memory persistence disabled, skipping HNSW insert");
+            return Ok(vec![None; plans.len()]);
+        }
+
         // Map insertion plans to inner InsertionPlanV
         let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
 
@@ -2227,6 +2235,7 @@ mod tests_db {
             hnsw_prf_key: None,
             numa: true,
             disable_persistence: false,
+            hnsw_disable_memory_persistence: false,
             tls: None,
         };
         let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
