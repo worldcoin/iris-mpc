@@ -27,3 +27,7 @@ I played with sw/service_client_6. Two things:
 - Batch processing had further bugs w.r.t msg_counter; it didn't get incremented when skipping modifications for the same serial id; this made some batches stuck
 - Claude noted there are separate SQS response queues for each request type so I had it change the client to check all these queues for replies.
 - There was an issue with localstack SQS ordering about a year ago, but it should be fixed in the version we're using. Worth checking for a stale image. Details on Slack
+
+
+# SW
+addressing the review. i deployed main to the dev cluster so we can test the service client against it some. and regarding the tokio thread pool, the genesis testing is half done. i tested it with tokio workers restricted to one numa node and it was a little slower. i will try restricting it to cores on both nodes next. 
