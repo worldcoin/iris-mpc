@@ -60,6 +60,11 @@ pub async fn search_to_reset(
 }
 
 pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) -> Result<()> {
+    if hawk_actor.args.hnsw_disable_memory_persistence {
+        tracing::debug!("In-memory persistence disabled, skipping deletions");
+        return Ok(());
+    }
+
     let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(hawk_actor.party_id));
 
     let mut stores = [

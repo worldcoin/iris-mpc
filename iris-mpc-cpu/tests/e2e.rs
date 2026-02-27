@@ -190,6 +190,7 @@ async fn e2e_test_async() -> Result<()> {
         hnsw_layer_density: None,
         hnsw_prf_key: None,
         disable_persistence: false,
+        hnsw_disable_memory_persistence: false,
         tls: None,
         numa: true,
     };
