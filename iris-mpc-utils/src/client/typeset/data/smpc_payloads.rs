@@ -10,8 +10,8 @@ use crate::{aws::types::SqsMessageInfo, client::typeset::Request};
 pub enum RequestPayload {
     IdentityDeletion(smpc_request::IdentityDeletionRequest),
     Reauthorization(smpc_request::ReAuthRequest),
-    RecoveryCheck(smpc_request::IdentityMatchCheckRequest),
     ResetCheck(smpc_request::IdentityMatchCheckRequest),
+    RecoveryCheck(smpc_request::IdentityMatchCheckRequest),
     ResetUpdate(smpc_request::ResetUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
 }
@@ -21,19 +21,19 @@ pub enum RequestPayload {
 pub enum ResponsePayload {
     IdentityDeletion(smpc_response::IdentityDeletionResult),
     Reauthorization(smpc_response::ReAuthResult),
-    RecoveryCheck(smpc_response::IdentityMatchCheckResult),
     ResetCheck(smpc_response::IdentityMatchCheckResult),
+    RecoveryCheck(smpc_response::IdentityMatchCheckResult),
     ResetUpdate(smpc_response::ResetUpdateAckResult),
     Uniqueness(smpc_response::UniquenessResult),
 }
 
 impl ResponsePayload {
-    pub fn node_id(&self) -> usize {
+    pub(super) fn node_id(&self) -> usize {
         match self {
             Self::IdentityDeletion(result) => result.node_id,
             Self::Reauthorization(result) => result.node_id,
-            Self::RecoveryCheck(result) => result.node_id,
             Self::ResetCheck(result) => result.node_id,
+            Self::RecoveryCheck(result) => result.node_id,
             Self::ResetUpdate(result) => result.node_id,
             Self::Uniqueness(result) => result.node_id,
         }

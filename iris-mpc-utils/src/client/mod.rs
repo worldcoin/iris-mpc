@@ -441,7 +441,7 @@ impl ExecState {
             typeset::ResponsePayload::Uniqueness(r) => r.signup_id.parse().ok(),
             typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
             typeset::ResponsePayload::RecoveryCheck(r) => r.request_id.parse().ok(),
-            typeset::ResponsePayload::ResetCheck(r) => r.reset_id.parse().ok(),
+            typeset::ResponsePayload::ResetCheck(r) => r.request_id.parse().ok(),
             typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
             typeset::ResponsePayload::IdentityDeletion(r) => {
                 if handle_completion(
