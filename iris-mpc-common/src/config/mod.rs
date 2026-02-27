@@ -109,6 +109,9 @@ pub struct Config {
     pub disable_persistence: bool,
 
     #[serde(default)]
+    pub hnsw_disable_memory_persistence: bool,
+
+    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(
@@ -631,6 +634,7 @@ pub struct CommonConfig {
     fake_db_size: usize,
     return_partial_results: bool,
     disable_persistence: bool,
+    hnsw_disable_memory_persistence: bool,
     shutdown_last_results_sync_timeout_secs: u64,
     db_chunks_bucket_region: String,
     fixed_shared_secrets: bool,
@@ -704,6 +708,7 @@ impl From<Config> for CommonConfig {
             fake_db_size,
             return_partial_results,
             disable_persistence,
+            hnsw_disable_memory_persistence,
             enable_debug_timing: _,
             service_ports: _,          // Could be different for each server
             service_outbound_ports: _, // Could be different for each server
@@ -766,6 +771,11 @@ impl From<Config> for CommonConfig {
             enable_recovery,
         } = value;
 
+        assert!(
+            !hnsw_disable_memory_persistence || disable_persistence,
+            "hnsw_disable_memory_persistence requires disable_persistence to also be true"
+        );
+
         Self {
             environment,
             results_topic_arn,
@@ -780,6 +790,7 @@ impl From<Config> for CommonConfig {
             fake_db_size,
             return_partial_results,
             disable_persistence,
+            hnsw_disable_memory_persistence,
             shutdown_last_results_sync_timeout_secs,
             db_chunks_bucket_region,
             fixed_shared_secrets,
