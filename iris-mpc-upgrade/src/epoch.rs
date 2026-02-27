@@ -98,9 +98,11 @@ async fn delete_private_key_from_sm(
 
 /// Idempotent key generation for an epoch.
 ///
-/// 1. Check SM for existing private key
-/// 2. If found: load it, derive public key, re-upload to S3 (covers crash between SM write and S3 upload)
-/// 3. If not found: generate new keypair, write to SM first, then upload public key to S3
+/// 1. Best-effort cleanup of previous epoch's key (covers crash between
+///    `poll_epoch_complete_all` and `delete_private_key_from_sm`)
+/// 2. Check SM for existing private key
+/// 3. If found: load it, derive public key, re-upload to S3 (covers crash between SM write and S3 upload)
+/// 4. If not found: generate new keypair, write to SM first, then upload public key to S3
 pub async fn idempotent_keygen(
     sm: &SecretsManagerClient,
     s3: &S3Client,
@@ -109,6 +111,16 @@ pub async fn idempotent_keygen(
     epoch: u32,
     party_id: u8,
 ) -> Result<tripartite_dh::PrivateKey> {
+    if epoch > 0 {
+        if let Err(e) = delete_private_key_from_sm(sm, env, epoch - 1, party_id).await {
+            tracing::debug!(
+                "Cleanup of epoch {} key (best-effort): {}",
+                epoch - 1,
+                e
+            );
+        }
+    }
+
     if let Some(existing) = load_private_key_from_sm(sm, env, epoch, party_id).await? {
         tracing::info!(
             "Epoch {}: private key found in SM, re-uploading public key to S3",
@@ -203,10 +215,16 @@ pub async fn derive_shared_secret(
 }
 
 /// Determine the active epoch by scanning S3 for the highest epoch with a
-/// manifest but without all three `complete` markers. Falls back to 0 if
-/// no epochs exist.
-pub async fn determine_active_epoch(s3: &S3Client, bucket: &str) -> Result<u32> {
-    let mut epoch: u32 = 0;
+/// manifest but without all three `complete` markers.
+///
+/// `start_hint` allows callers to skip already-completed epochs (e.g. from
+/// `get_current_epoch`). Falls back to 0 if no hint is available.
+pub async fn determine_active_epoch(
+    s3: &S3Client,
+    bucket: &str,
+    start_hint: Option<u32>,
+) -> Result<u32> {
+    let mut epoch: u32 = start_hint.unwrap_or(0);
     loop {
         if !s3_coordination::manifest_exists(s3, bucket, epoch).await? {
             break;

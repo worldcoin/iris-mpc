@@ -2,9 +2,10 @@ use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 
 const NUM_PARTIES: u8 = 3;
+const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
@@ -86,9 +87,17 @@ pub async fn poll_until_marker_exists(
     key: &str,
     poll_interval: Duration,
 ) -> Result<()> {
+    let deadline = Instant::now() + DEFAULT_POLL_TIMEOUT;
     loop {
         if marker_exists(s3, bucket, key).await? {
             return Ok(());
+        }
+        if Instant::now() > deadline {
+            eyre::bail!(
+                "Timeout after {:?} waiting for S3 marker: {}",
+                DEFAULT_POLL_TIMEOUT,
+                key
+            );
         }
         tracing::debug!("Waiting for S3 marker: {}", key);
         sleep(poll_interval).await;
@@ -103,6 +112,7 @@ pub async fn poll_until_all_parties_marker(
     marker_suffix: &str,
     poll_interval: Duration,
 ) -> Result<()> {
+    let deadline = Instant::now() + DEFAULT_POLL_TIMEOUT;
     loop {
         let mut all_present = true;
         for party in 0..NUM_PARTIES {
@@ -114,6 +124,14 @@ pub async fn poll_until_all_parties_marker(
         }
         if all_present {
             return Ok(());
+        }
+        if Instant::now() > deadline {
+            eyre::bail!(
+                "Timeout after {:?} waiting for all parties' {} markers for epoch {}",
+                DEFAULT_POLL_TIMEOUT,
+                marker_suffix,
+                epoch
+            );
         }
         tracing::debug!(
             "Waiting for all parties' {} markers for epoch {}",

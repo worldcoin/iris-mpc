@@ -16,4 +16,8 @@ BEGIN
         rerand_epoch        INTEGER,
         PRIMARY KEY (epoch, id)
     )', staging_schema);
+    EXECUTE format(
+        'CREATE INDEX IF NOT EXISTS idx_staging_irises_epoch_chunk ON %I.irises (epoch, chunk_id)',
+        staging_schema
+    );
 END $$;

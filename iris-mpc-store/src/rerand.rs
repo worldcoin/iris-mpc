@@ -371,8 +371,14 @@ async fn rerand_catchup_inner(
     }
 
     // Step 2: if a peer is one chunk ahead, apply that chunk too.
+    // Skip if already handled in step 1, or if no progress row exists
+    // (ghost chunk at epoch boundary — the chunk doesn't actually exist).
     if let Some((epoch, chunk_id)) = compute_rerand_catchup_chunk(sync_result)? {
-        if !pending.contains(&(epoch, chunk_id)) {
+        let dominated_by_step1 = pending.contains(&(epoch, chunk_id));
+        let has_progress = get_rerand_progress(pool, epoch, chunk_id)
+            .await?
+            .is_some();
+        if !dominated_by_step1 && has_progress {
             tracing::info!(
                 "Rerand catch-up: applying peer-ahead epoch {} chunk {}",
                 epoch,

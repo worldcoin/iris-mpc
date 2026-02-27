@@ -4,8 +4,9 @@ use bytemuck::cast_slice;
 use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_store::rerand::{
-    apply_staging_chunk, get_rerand_progress, insert_staging_irises, set_all_confirmed,
-    set_staging_written, staging_schema_name, upsert_rerand_progress, StagingIrisEntry,
+    apply_staging_chunk, get_current_epoch, get_rerand_progress, insert_staging_irises,
+    set_all_confirmed, set_staging_written, staging_schema_name, upsert_rerand_progress,
+    StagingIrisEntry,
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
@@ -40,7 +41,9 @@ pub async fn run_continuous_rerand(
             return Ok(());
         }
 
-        let active_epoch = epoch::determine_active_epoch(s3, &config.s3_bucket).await?;
+        let epoch_hint = get_current_epoch(pool).await?.map(|e| e as u32);
+        let active_epoch =
+            epoch::determine_active_epoch(s3, &config.s3_bucket, epoch_hint).await?;
         tracing::info!("Active epoch: {}", active_epoch);
 
         let shared_secret = epoch::derive_shared_secret(
@@ -96,7 +99,12 @@ pub async fn run_continuous_rerand(
                 .await?;
 
                 set_staging_written(pool, active_epoch as i32, chunk_id as i32).await?;
+            }
 
+            // Always (re-)upload the S3 staged marker. This is idempotent
+            // and covers the crash window between set_staging_written and
+            // the previous upload attempt.
+            if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
                 s3_coordination::upload_chunk_staged(
                     s3,
                     &config.s3_bucket,
@@ -106,7 +114,7 @@ pub async fn run_continuous_rerand(
                 )
                 .await?;
                 tracing::info!(
-                    "Epoch {} chunk {}: staging written, S3 marker uploaded",
+                    "Epoch {} chunk {}: S3 staged marker uploaded",
                     active_epoch,
                     chunk_id
                 );
