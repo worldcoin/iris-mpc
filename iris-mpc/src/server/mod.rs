@@ -37,6 +37,7 @@ use iris_mpc_cpu::execution::hawk_main::{
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::rerand::{self as rerand_store};
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
@@ -138,6 +139,13 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
 
+    let rerand_lock_conn = rerand_store::rerand_catchup_and_lock(
+        &iris_store.pool,
+        &iris_store.schema_name,
+        &sync_result,
+    )
+    .await?;
+
     if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
         return Ok(());
@@ -165,6 +173,8 @@ pub async fn server_main(config: Config) -> Result<()> {
         &mut hawk_actor,
     )
     .await?;
+
+    rerand_store::release_rerand_lock(rerand_lock_conn).await?;
 
     background_tasks.check_tasks();
 
@@ -387,11 +397,14 @@ async fn build_sync_state(
 
     tracing::info!("Database store length is: {}", db_len);
 
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await.ok();
+
     Ok(SyncState {
         db_len,
         modifications,
         next_sns_sequence_num,
         common_config,
+        rerand_state,
     })
 }
 

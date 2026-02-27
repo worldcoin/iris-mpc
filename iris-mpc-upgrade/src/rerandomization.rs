@@ -1,10 +1,12 @@
 use std::io::Read;
 
 use iris_mpc_common::{
-    galois::degree4::{basis::Monomial, GaloisRingElement},
+    galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    id::PartyID,
 };
 use iris_mpc_store::DbStoredIris;
+use itertools::Itertools;
 
 pub fn randomize_iris(
     iris: DbStoredIris,
@@ -85,6 +87,61 @@ fn randomize_galois_ring_coefs(coefs: &mut [u16], xof: &mut blake3::OutputReader
         gr = gr + r;
         coefs.copy_from_slice(&gr.coefs[..]);
     }
+}
+
+/// Reconstruct the plaintext from 3 Shamir shares using Lagrange interpolation.
+/// Verifies consistency by reconstructing from all 3 pairs (0-1, 1-2, 0-2) and
+/// asserting they agree.
+pub fn reconstruct_shares(share0: &[u16], share1: &[u16], share2: &[u16]) -> Vec<u16> {
+    let lag_01 =
+        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID1);
+    let lag_10 =
+        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID0);
+    let lag_02 =
+        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID2);
+    let lag_20 =
+        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID0);
+    let lag_12 =
+        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID2);
+    let lag_21 =
+        ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID1);
+
+    assert!(share0.len() == share1.len() && share1.len() == share2.len());
+
+    let recon01 = share0
+        .chunks_exact(4)
+        .zip_eq(share1.chunks_exact(4))
+        .flat_map(|(a, b)| {
+            let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
+            let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
+            let c = a * lag_01 + b * lag_10;
+            c.coefs
+        })
+        .collect_vec();
+    let recon12 = share1
+        .chunks_exact(4)
+        .zip_eq(share2.chunks_exact(4))
+        .flat_map(|(a, b)| {
+            let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
+            let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
+            let c = a * lag_12 + b * lag_21;
+            c.coefs
+        })
+        .collect_vec();
+    let recon02 = share0
+        .chunks_exact(4)
+        .zip_eq(share2.chunks_exact(4))
+        .flat_map(|(a, b)| {
+            let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
+            let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
+            let c = a * lag_02 + b * lag_20;
+            c.coefs
+        })
+        .collect_vec();
+
+    assert_eq!(recon01, recon12);
+    assert_eq!(recon01, recon02);
+    recon01
 }
 
 #[cfg(test)]

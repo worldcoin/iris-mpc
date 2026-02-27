@@ -58,6 +58,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_gpu::server::ServerActor;
 use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::rerand as rerand_store;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -981,11 +982,13 @@ async fn server_main(config: Config) -> Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await.ok();
     let my_state = SyncState {
         db_len: store_len as u64,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
+        rerand_state,
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1296,7 +1299,7 @@ async fn server_main(config: Config) -> Result<()> {
             None,
             &aws_clients,
             &shares_encryption_key_pair,
-            sync_result,
+            sync_result.clone(),
         )
         .await?;
     }
@@ -1314,6 +1317,13 @@ async fn server_main(config: Config) -> Result<()> {
             tracing::error!("Failed to replay last modifications: {:?}", e);
         }
     }
+
+    let rerand_lock_conn = rerand_store::rerand_catchup_and_lock(
+        &store.pool,
+        &store.schema_name,
+        &sync_result,
+    )
+    .await?;
 
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
@@ -1407,6 +1417,8 @@ async fn server_main(config: Config) -> Result<()> {
     });
 
     let (mut handle, store) = rx.await??;
+
+    rerand_store::release_rerand_lock(rerand_lock_conn).await?;
 
     background_tasks.check_tasks();
 

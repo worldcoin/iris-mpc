@@ -10,6 +10,15 @@ pub struct SyncState {
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
     pub common_config: CommonConfig,
+    #[serde(default)]
+    pub rerand_state: Option<RerandSyncState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RerandSyncState {
+    pub epoch: i32,
+    /// Highest chunk_id where all_confirmed = TRUE. -1 if none confirmed.
+    pub max_confirmed_chunk: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,6 +414,7 @@ mod tests {
             modifications,
             next_sns_sequence_num: None,
             common_config: CommonConfig::from(config),
+            rerand_state: None,
         }
     }
 
@@ -846,18 +856,21 @@ mod tests {
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::default(),
+                rerand_state: None,
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(200),
                 common_config: CommonConfig::default(),
+                rerand_state: None,
             },
             SyncState {
                 db_len: 30,
                 modifications: vec![],
                 next_sns_sequence_num: Some(150),
                 common_config: CommonConfig::default(),
+                rerand_state: None,
             },
         ];
 
@@ -870,6 +883,7 @@ mod tests {
             modifications: vec![],
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
+            rerand_state: None,
         };
         let all_states = vec![
             state_with_none_sequence_num.clone(),
@@ -892,18 +906,21 @@ mod tests {
                 modifications: vec![],
                 next_sns_sequence_num: None, // NodeX - advanced but empty queue
                 common_config: CommonConfig::default(),
+                rerand_state: None,
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(123), // Other nodes still have messages
                 common_config: CommonConfig::default(),
+                rerand_state: None,
             },
             SyncState {
                 db_len: 30,
                 modifications: vec![],
                 next_sns_sequence_num: Some(123),
                 common_config: CommonConfig::default(),
+                rerand_state: None,
             },
         ];
 
@@ -1023,18 +1040,21 @@ mod tests {
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config1),
+                rerand_state: None,
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config2),
+                rerand_state: None,
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config3),
+                rerand_state: None,
             },
         ];
 

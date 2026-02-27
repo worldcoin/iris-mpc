@@ -240,6 +240,7 @@ pub enum ReRandomizeDbSubCommand {
     KeyGen(KeyGenConfig),
     RerandomizeDb(ReRandomizeConfig),
     RerandomizeCheck(ReRandomizeCheckConfig),
+    RerandomizeContinuous(RerandomizeContinuousConfig),
 }
 
 #[derive(Args)]
@@ -340,4 +341,37 @@ pub struct ReRandomizeCheckConfig {
 
     #[clap(long, env = "NEW_SCHEMA_NAME_PARTY_2")]
     pub new_schema_name_party_2: String,
+}
+
+#[derive(Args, Debug)]
+pub struct RerandomizeContinuousConfig {
+    #[clap(long, env = "PARTY_ID")]
+    pub party_id: u8,
+
+    #[clap(long, env = "DB_URL")]
+    pub db_url: String,
+
+    #[clap(long, env = "ENVIRONMENT")]
+    pub env: String,
+
+    #[clap(long, env = "RERAND_S3_BUCKET")]
+    pub s3_bucket: String,
+
+    #[clap(long, env = "SCHEMA_NAME")]
+    pub schema_name: String,
+
+    #[clap(long, default_value = "10000", env = "CHUNK_SIZE")]
+    pub chunk_size: u64,
+
+    #[clap(long, default_value = "5", env = "CHUNK_DELAY_SECS")]
+    pub chunk_delay_secs: u64,
+
+    #[clap(long, default_value = "0", env = "SAFETY_BUFFER_IDS")]
+    pub safety_buffer_ids: u64,
+
+    #[clap(long, default_value = "5000", env = "S3_POLL_INTERVAL_MS")]
+    pub s3_poll_interval_ms: u64,
+
+    #[clap(long, default_value = "3000", env = "HEALTHCHECK_PORT")]
+    pub healthcheck_port: usize,
 }
