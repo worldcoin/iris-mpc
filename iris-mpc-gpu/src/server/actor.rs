@@ -813,6 +813,8 @@ impl ServerActor {
             .map(|request_type| {
                 if request_type.as_str() == REAUTH_MESSAGE_TYPE {
                     AnonStatsOperation::Reauth
+                } else if request_type.as_str() == RECOVERY_CHECK_MESSAGE_TYPE {
+                    AnonStatsOperation::Recovery
                 } else {
                     AnonStatsOperation::Uniqueness
                 }
@@ -3282,6 +3284,7 @@ impl ServerActor {
 
         let mut uniqueness_bundles = Vec::new();
         let mut reauth_bundles = Vec::new();
+        let mut recovery_bundles = Vec::new();
         for cache in caches {
             for (key, values) in cache.iter() {
                 if values.is_empty() {
@@ -3321,7 +3324,12 @@ impl ServerActor {
                     .collect::<DistanceBundle1D>();
                 match operation {
                     AnonStatsOperation::Reauth => reauth_bundles.push((match_id, distance_bundle)),
-                    _ => uniqueness_bundles.push((match_id, distance_bundle)),
+                    AnonStatsOperation::Recovery => {
+                        recovery_bundles.push((match_id, distance_bundle))
+                    }
+                    AnonStatsOperation::Uniqueness => {
+                        uniqueness_bundles.push((match_id, distance_bundle))
+                    }
                 }
             }
         }
@@ -3337,15 +3345,30 @@ impl ServerActor {
                 uniqueness_bundles.clone(),
             );
         }
-        if !reauth_bundles.is_empty() {
-            tracing::info!(
-                "Inserting {} reauth anon stats bundles",
-                reauth_bundles.len()
-            );
-            writer.insert_1d(origin, AnonStatsOperation::Reauth, reauth_bundles.clone());
+        // Reauth and Recovery stats are only meaningful for Normal orientation.
+        if matches!(orientation, Orientation::Normal) {
+            if !reauth_bundles.is_empty() {
+                tracing::info!(
+                    "Inserting {} reauth anon stats bundles",
+                    reauth_bundles.len()
+                );
+                writer.insert_1d(origin, AnonStatsOperation::Reauth, reauth_bundles.clone());
+            }
+            if !recovery_bundles.is_empty() {
+                tracing::info!(
+                    "Inserting {} recovery anon stats bundles",
+                    recovery_bundles.len()
+                );
+                writer.insert_1d(
+                    origin,
+                    AnonStatsOperation::Recovery,
+                    recovery_bundles.clone(),
+                );
+            }
         }
 
-        if uniqueness_bundles.is_empty() && reauth_bundles.is_empty() {
+        if uniqueness_bundles.is_empty() && reauth_bundles.is_empty() && recovery_bundles.is_empty()
+        {
             tracing::info!("No anon stats bundles to insert");
         }
     }
@@ -3372,6 +3395,7 @@ impl ServerActor {
 
         let mut uniqueness_bundles = Vec::new();
         let mut reauth_bundles = Vec::new();
+        let mut recovery_bundles = Vec::new();
         for cache in caches {
             for (key, (left_values, right_values)) in cache.iter() {
                 if left_values.is_empty() || right_values.is_empty() {
@@ -3430,7 +3454,12 @@ impl ServerActor {
                     AnonStatsOperation::Reauth => {
                         reauth_bundles.push((match_id, (left_bundle, right_bundle)))
                     }
-                    _ => uniqueness_bundles.push((match_id, (left_bundle, right_bundle))),
+                    AnonStatsOperation::Recovery => {
+                        recovery_bundles.push((match_id, (left_bundle, right_bundle)))
+                    }
+                    AnonStatsOperation::Uniqueness => {
+                        uniqueness_bundles.push((match_id, (left_bundle, right_bundle)))
+                    }
                 }
             }
         }
@@ -3438,8 +3467,14 @@ impl ServerActor {
         if !uniqueness_bundles.is_empty() {
             writer.insert_2d(origin, AnonStatsOperation::Uniqueness, uniqueness_bundles);
         }
-        if !reauth_bundles.is_empty() {
-            writer.insert_2d(origin, AnonStatsOperation::Reauth, reauth_bundles);
+        // Reauth and Recovery stats are only meaningful for Normal orientation.
+        if matches!(orientation, Orientation::Normal) {
+            if !reauth_bundles.is_empty() {
+                writer.insert_2d(origin, AnonStatsOperation::Reauth, reauth_bundles);
+            }
+            if !recovery_bundles.is_empty() {
+                writer.insert_2d(origin, AnonStatsOperation::Recovery, recovery_bundles);
+            }
         }
     }
 }
