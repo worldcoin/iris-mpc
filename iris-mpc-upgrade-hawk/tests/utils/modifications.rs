@@ -84,7 +84,9 @@ impl ModificationType {
     pub fn is_updating(&self) -> bool {
         matches!(
             self,
-            ModificationType::ResetUpdate | ModificationType::RecoveryUpdate | ModificationType::Reauth
+            ModificationType::ResetUpdate
+                | ModificationType::RecoveryUpdate
+                | ModificationType::Reauth
         )
     }
 }
