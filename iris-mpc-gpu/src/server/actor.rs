@@ -3345,23 +3345,26 @@ impl ServerActor {
                 uniqueness_bundles.clone(),
             );
         }
-        if !reauth_bundles.is_empty() {
-            tracing::info!(
-                "Inserting {} reauth anon stats bundles",
-                reauth_bundles.len()
-            );
-            writer.insert_1d(origin, AnonStatsOperation::Reauth, reauth_bundles.clone());
-        }
-        if !recovery_bundles.is_empty() {
-            tracing::info!(
-                "Inserting {} recovery anon stats bundles",
-                recovery_bundles.len()
-            );
-            writer.insert_1d(
-                origin,
-                AnonStatsOperation::Recovery,
-                recovery_bundles.clone(),
-            );
+        // Reauth and Recovery stats are only meaningful for Normal orientation.
+        if matches!(orientation, Orientation::Normal) {
+            if !reauth_bundles.is_empty() {
+                tracing::info!(
+                    "Inserting {} reauth anon stats bundles",
+                    reauth_bundles.len()
+                );
+                writer.insert_1d(origin, AnonStatsOperation::Reauth, reauth_bundles.clone());
+            }
+            if !recovery_bundles.is_empty() {
+                tracing::info!(
+                    "Inserting {} recovery anon stats bundles",
+                    recovery_bundles.len()
+                );
+                writer.insert_1d(
+                    origin,
+                    AnonStatsOperation::Recovery,
+                    recovery_bundles.clone(),
+                );
+            }
         }
 
         if uniqueness_bundles.is_empty() && reauth_bundles.is_empty() && recovery_bundles.is_empty()
@@ -3464,11 +3467,14 @@ impl ServerActor {
         if !uniqueness_bundles.is_empty() {
             writer.insert_2d(origin, AnonStatsOperation::Uniqueness, uniqueness_bundles);
         }
-        if !reauth_bundles.is_empty() {
-            writer.insert_2d(origin, AnonStatsOperation::Reauth, reauth_bundles);
-        }
-        if !recovery_bundles.is_empty() {
-            writer.insert_2d(origin, AnonStatsOperation::Recovery, recovery_bundles);
+        // Reauth and Recovery stats are only meaningful for Normal orientation.
+        if matches!(orientation, Orientation::Normal) {
+            if !reauth_bundles.is_empty() {
+                writer.insert_2d(origin, AnonStatsOperation::Reauth, reauth_bundles);
+            }
+            if !recovery_bundles.is_empty() {
+                writer.insert_2d(origin, AnonStatsOperation::Recovery, recovery_bundles);
+            }
         }
     }
 }
