@@ -46,7 +46,7 @@ use tracing::instrument;
 mod distance_fn;
 mod distance_ops;
 pub use distance_fn::DistanceFn;
-pub use distance_ops::{DistanceOps, FhdOps};
+pub use distance_ops::{DistanceOps, FhdOps, NhdOps};
 
 /// The number of rotations at which to switch from binary tree to round-robin minimum algorithms.
 const MIN_ROUND_ROBIN_SIZE: usize = 1;
