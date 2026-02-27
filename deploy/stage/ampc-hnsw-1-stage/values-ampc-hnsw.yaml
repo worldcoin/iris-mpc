@@ -51,6 +51,9 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "1"
 
+  - name: SMPC__HNSW_DISABLE_MEMORY_PERSISTENCE
+    value: "true"
+
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
 
