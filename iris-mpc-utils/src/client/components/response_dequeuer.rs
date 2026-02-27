@@ -3,7 +3,8 @@ use serde_json;
 
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
 };
 
 use super::super::typeset::{
@@ -99,7 +100,8 @@ impl ResponseDequeuer {
         match request {
             Request::IdentityDeletion { parent, .. }
             | Request::Reauthorization { parent, .. }
-            | Request::ResetUpdate { parent, .. } => {
+            | Request::ResetUpdate { parent, .. }
+            | Request::RecoveryUpdate { parent, .. } => {
                 if let ResponsePayload::Uniqueness(result) = response {
                     let serial_id = result
                         .serial_id
@@ -135,6 +137,7 @@ impl From<&SqsMessageInfo> for ResponsePayload {
             RESET_CHECK_MESSAGE_TYPE => parse_response!(ResetCheck),
             RECOVERY_CHECK_MESSAGE_TYPE => parse_response!(RecoveryCheck),
             RESET_UPDATE_MESSAGE_TYPE => parse_response!(ResetUpdate),
+            RECOVERY_UPDATE_MESSAGE_TYPE => parse_response!(RecoveryUpdate),
             UNIQUENESS_MESSAGE_TYPE => parse_response!(Uniqueness),
             _ => panic!("Unsupported system response type: {kind}"),
         }
