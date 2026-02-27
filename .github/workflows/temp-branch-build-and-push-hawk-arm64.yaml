@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "dk/separate_anon_stats_and_match"
+      - "sw/test_sysfs_util"
 
     paths-ignore:
       - "deploy/**"
