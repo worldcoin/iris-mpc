@@ -695,11 +695,11 @@ impl ServerActor {
             .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
             .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} reset_update, {} deletion requests",
+            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} identity_update, {} deletion requests",
             batch.request_types.len() - n_reauths - n_reset_checks,
             n_reauths,
             n_reset_checks,
-            batch.reset_update_request_ids.len(),
+            batch.identity_update_request_ids.len(),
             batch.deletion_requests_indices.len(),
         );
 
@@ -747,11 +747,11 @@ impl ServerActor {
             "Query batch sizes mismatch"
         );
 
-        let n_reset_updates = batch.reset_update_request_ids.len();
+        let n_identity_updates = batch.identity_update_request_ids.len();
         assert!(
-            n_reset_updates == batch.reset_update_shares.len()
-                && n_reset_updates == batch.reset_update_indices.len(),
-            "Reset update batch sizes mismatch"
+            n_identity_updates == batch.identity_update_shares.len()
+                && n_identity_updates == batch.identity_update_indices.len(),
+            "Identity update batch sizes mismatch"
         );
 
         if (!batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0)
@@ -886,27 +886,27 @@ impl ServerActor {
         }
 
         ///////////////////////////////////////////////////////////////////
-        // PERFORM RESET UPDATES (IF ANY)
+        // PERFORM IDENTITY UPDATES (RESET/RECOVERY) (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        if !batch.reset_update_request_ids.is_empty() && is_first_query {
-            tracing::info!("Performing reset updates");
+        if !batch.identity_update_request_ids.is_empty() && is_first_query {
+            tracing::info!("Performing identity updates");
 
             // Overwrite the in-memory db
-            for (reset_index, shares) in izip!(
-                batch.reset_update_indices.clone(),
-                batch.reset_update_shares.clone()
+            for (update_index, shares) in izip!(
+                batch.identity_update_indices.clone(),
+                batch.identity_update_shares.clone()
             ) {
                 let (queries_left, sums_left) =
                     self.prepare_device_query_for_shares(&shares.code_left, &shares.mask_left)?;
                 let (queries_right, sums_right) =
                     self.prepare_device_query_for_shares(&shares.code_right, &shares.mask_right)?;
 
-                let device_index = reset_index % self.device_manager.device_count() as u32;
-                let device_db_index = reset_index / self.device_manager.device_count() as u32;
+                let device_index = update_index % self.device_manager.device_count() as u32;
+                let device_db_index = update_index / self.device_manager.device_count() as u32;
                 if device_db_index as usize >= self.current_db_sizes[device_index as usize] {
                     tracing::warn!(
-                        "Reset index {} is out of bounds for device {}",
-                        reset_index,
+                        "Identity update index {} is out of bounds for device {}",
+                        update_index,
                         device_index
                     );
                     continue;
@@ -1749,9 +1749,10 @@ impl ServerActor {
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,
             reauth_or_rule_used: batch.reauth_use_or_rule,
-            reset_update_indices: batch.reset_update_indices,
-            reset_update_request_ids: batch.reset_update_request_ids,
-            reset_update_shares: batch.reset_update_shares,
+            identity_update_indices: batch.identity_update_indices,
+            identity_update_request_ids: batch.identity_update_request_ids,
+            identity_update_request_types: batch.identity_update_request_types,
+            identity_update_shares: batch.identity_update_shares,
             modifications: batch.modifications,
             actor_data: (),
             full_face_mirror_attack_detected,

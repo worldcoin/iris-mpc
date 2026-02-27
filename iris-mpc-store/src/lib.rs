@@ -13,7 +13,8 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         smpc_request::{
-            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
+            RESET_UPDATE_MESSAGE_TYPE,
         },
         sync::Modification,
     },
@@ -545,6 +546,7 @@ WHERE id = $1;
     ) -> Result<(Vec<Modification>, Option<i64>)> {
         let message_types = &[
             RESET_UPDATE_MESSAGE_TYPE,
+            RECOVERY_UPDATE_MESSAGE_TYPE,
             REAUTH_MESSAGE_TYPE,
             IDENTITY_DELETION_MESSAGE_TYPE,
         ];

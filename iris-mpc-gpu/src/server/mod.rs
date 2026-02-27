@@ -119,10 +119,11 @@ pub struct PreprocessedBatchQuery {
     // this one is not needed for the GPU actor
     // pub deletion_requests_metadata: Vec<BatchMetadata>,
 
-    // Reset Update specific fields
-    pub reset_update_indices: Vec<u32>,
-    pub reset_update_request_ids: Vec<String>,
-    pub reset_update_shares: Vec<GaloisSharesBothSides>,
+    // Identity Update specific fields (reset_update and recovery_update)
+    pub identity_update_indices: Vec<u32>,
+    pub identity_update_request_ids: Vec<String>,
+    pub identity_update_request_types: Vec<String>,
+    pub identity_update_shares: Vec<GaloisSharesBothSides>,
 
     // additional fields which are GPU specific
     pub left_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
@@ -252,9 +253,10 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             valid_entries: value.valid_entries,
             reauth_target_indices: value.reauth_target_indices,
             reauth_use_or_rule: value.reauth_use_or_rule,
-            reset_update_indices: value.reset_update_indices,
-            reset_update_request_ids: value.reset_update_request_ids,
-            reset_update_shares: value.reset_update_shares,
+            identity_update_indices: value.identity_update_indices,
+            identity_update_request_ids: value.identity_update_request_ids,
+            identity_update_request_types: value.identity_update_request_types,
+            identity_update_shares: value.identity_update_shares,
             deletion_requests_indices: value.deletion_requests_indices,
             // deletion_requests_metadata: value.deletion_requests_metadata,
             left_iris_interpolated_requests_preprocessed:

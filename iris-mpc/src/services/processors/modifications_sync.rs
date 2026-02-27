@@ -9,7 +9,8 @@ use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sync::{Modification, SyncResult};
@@ -81,7 +82,10 @@ pub async fn sync_modifications(
                 dummy_shares_for_deletions.clone().0,
                 dummy_shares_for_deletions.clone().1,
             ),
-            REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE | UNIQUENESS_MESSAGE_TYPE => {
+            REAUTH_MESSAGE_TYPE
+            | RESET_UPDATE_MESSAGE_TYPE
+            | RECOVERY_UPDATE_MESSAGE_TYPE
+            | UNIQUENESS_MESSAGE_TYPE => {
                 let (left_shares, right_shares) = get_iris_shares_parse_task(
                     config.party_id,
                     shares_encryption_key_pair.clone(),
@@ -154,6 +158,8 @@ pub async fn send_last_modifications_to_sns(
     let reauth_message_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_update_message_attributes =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
+    let recovery_update_message_attributes =
+        create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
     let deletion_message_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     let reset_check_message_attributes =
@@ -177,6 +183,7 @@ pub async fn send_last_modifications_to_sns(
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
     let mut reset_update_messages = Vec::new();
+    let mut recovery_update_messages = Vec::new();
     let mut reset_check_messages = Vec::new();
     let mut uniqueness_messages = Vec::new();
     let mut recovery_check_messages = Vec::new();
@@ -202,6 +209,9 @@ pub async fn send_last_modifications_to_sns(
             RESET_UPDATE_MESSAGE_TYPE => {
                 reset_update_messages.push(body);
             }
+            RECOVERY_UPDATE_MESSAGE_TYPE => {
+                recovery_update_messages.push(body);
+            }
             RESET_CHECK_MESSAGE_TYPE => {
                 reset_check_messages.push(body);
             }
@@ -218,12 +228,13 @@ pub async fn send_last_modifications_to_sns(
     }
 
     tracing::info!(
-        "Sending {} last modifications to SNS. {} uniqueness, {} deletion, {} reauth, {} reset update, {} reset check, {} recovery check",
+        "Sending {} last modifications to SNS. {} uniqueness, {} deletion, {} reauth, {} reset update, {} recovery update, {} reset check, {} recovery check",
         last_modifications.len(),
         uniqueness_messages.len(),
         deletion_messages.len(),
         reauth_messages.len(),
         reset_update_messages.len(),
+        recovery_update_messages.len(),
         reset_check_messages.len(),
         recovery_check_messages.len(),
     );
@@ -295,6 +306,18 @@ pub async fn send_last_modifications_to_sns(
             config,
             &recovery_check_message_attributes,
             RECOVERY_CHECK_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    if !recovery_update_messages.is_empty() {
+        send_results_to_sns(
+            recovery_update_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            &recovery_update_message_attributes,
+            RECOVERY_UPDATE_MESSAGE_TYPE,
         )
         .await?;
     }

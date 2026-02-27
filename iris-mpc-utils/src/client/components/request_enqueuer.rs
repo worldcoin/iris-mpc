@@ -91,10 +91,19 @@ impl From<&Request> for RequestPayload {
                 })
             }
             Request::ResetUpdate {
-                reset_id, parent, ..
-            } => Self::ResetUpdate(smpc_request::ResetUpdateRequest {
-                reset_id: reset_id.to_string(),
-                s3_key: reset_id.to_string(),
+                request_id, parent, ..
+            } => Self::ResetUpdate(smpc_request::IdentityUpdateRequest {
+                request_id: request_id.to_string(),
+                s3_key: request_id.to_string(),
+                serial_id: parent
+                    .get_serial_id()
+                    .expect("response not received for parent request"),
+            }),
+            Request::RecoveryUpdate {
+                request_id, parent, ..
+            } => Self::RecoveryUpdate(smpc_request::IdentityUpdateRequest {
+                request_id: request_id.to_string(),
+                s3_key: request_id.to_string(),
                 serial_id: parent
                     .get_serial_id()
                     .expect("response not received for parent request"),
@@ -146,6 +155,11 @@ impl From<RequestPayload> for SnsMessageInfo {
             RequestPayload::ResetUpdate(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+                &body,
+            ),
+            RequestPayload::RecoveryUpdate(body) => Self::new(
+                ENROLLMENT_REQUEST_TYPE,
+                smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE,
                 &body,
             ),
             RequestPayload::Uniqueness(body) => Self::new(

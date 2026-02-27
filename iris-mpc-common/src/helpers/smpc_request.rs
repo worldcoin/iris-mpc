@@ -110,6 +110,7 @@ pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
 pub const RESET_CHECK_MESSAGE_TYPE: &str = "reset_check";
 pub const RECOVERY_CHECK_MESSAGE_TYPE: &str = "recovery_check";
 pub const RESET_UPDATE_MESSAGE_TYPE: &str = "reset_update";
+pub const RECOVERY_UPDATE_MESSAGE_TYPE: &str = "recovery_update";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
@@ -151,8 +152,8 @@ pub struct IdentityMatchCheckRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ResetUpdateRequest {
-    pub reset_id: String,
+pub struct IdentityUpdateRequest {
+    pub request_id: String,
     pub serial_id: u32,
     pub s3_key: String,
 }

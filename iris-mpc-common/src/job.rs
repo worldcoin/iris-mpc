@@ -95,10 +95,11 @@ pub struct BatchQuery {
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
 
-    // Reset Update specific fields
-    pub reset_update_indices: Vec<u32>,
-    pub reset_update_request_ids: Vec<String>,
-    pub reset_update_shares: Vec<GaloisSharesBothSides>,
+    // Identity Update specific fields (reset_update and recovery_update)
+    pub identity_update_indices: Vec<u32>,
+    pub identity_update_request_ids: Vec<String>,
+    pub identity_update_request_types: Vec<String>,
+    pub identity_update_shares: Vec<GaloisSharesBothSides>,
 
     // Boolean value for mirror attack detection enabled
     pub full_face_mirror_attacks_detection_enabled: bool,
@@ -142,22 +143,25 @@ impl BatchQuery {
         self.deletion_requests_metadata.push(metadata);
     }
 
-    /// Add a Reset Update request to the batch.
-    pub fn push_reset_update_request(
+    /// Add an Identity Update (reset_update or recovery_update) request to the batch.
+    pub fn push_identity_update_request(
         &mut self,
         sns_message_id: String,
         request_id: String,
-        reset_update_0_index: u32,
+        request_type: &str,
+        identity_update_0_index: u32,
         shares: GaloisSharesBothSides,
     ) {
         self.sns_message_ids.push(sns_message_id);
-        self.requests_order.push(RequestIndex::ResetUpdate(
-            self.reset_update_request_ids.len(),
+        self.requests_order.push(RequestIndex::IdentityUpdate(
+            self.identity_update_request_ids.len(),
         ));
 
-        self.reset_update_request_ids.push(request_id);
-        self.reset_update_indices.push(reset_update_0_index);
-        self.reset_update_shares.push(shares);
+        self.identity_update_request_ids.push(request_id);
+        self.identity_update_request_types
+            .push(request_type.to_string());
+        self.identity_update_indices.push(identity_update_0_index);
+        self.identity_update_shares.push(shares);
     }
 
     pub fn push_matching_request_shares(
@@ -337,9 +341,9 @@ pub enum RequestIndex {
     /// Request type: Deletion.
     /// Fields: deletion_requests_*
     Deletion(usize),
-    /// Request type: Reset Update.
-    /// Fields: reset_update_*
-    ResetUpdate(usize),
+    /// Request type: Identity Update (reset_update or recovery_update).
+    /// Fields: identity_update_*
+    IdentityUpdate(usize),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -401,10 +405,11 @@ pub struct ServerJobResult<A = ()> {
     pub modifications: HashMap<ModificationKey, Modification>,
     // Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
-    // Reset Update specific fields
-    pub reset_update_indices: Vec<u32>,
-    pub reset_update_request_ids: Vec<String>,
-    pub reset_update_shares: Vec<GaloisSharesBothSides>,
+    // Identity Update specific fields (reset_update and recovery_update)
+    pub identity_update_indices: Vec<u32>,
+    pub identity_update_request_ids: Vec<String>,
+    pub identity_update_request_types: Vec<String>,
+    pub identity_update_shares: Vec<GaloisSharesBothSides>,
     // Boolean array to indicate if the query is a full face mirror attack attempt.
     pub full_face_mirror_attack_detected: Vec<bool>,
 }
