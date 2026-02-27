@@ -144,8 +144,8 @@ pub struct ReAuthRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ResetCheckRequest {
-    pub reset_id: String,
+pub struct IdentityMatchCheckRequest {
+    pub request_id: String,
     pub batch_size: Option<usize>,
     pub s3_key: String,
 }

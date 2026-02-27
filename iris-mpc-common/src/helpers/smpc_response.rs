@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use super::aws::{
     NODE_ID_MESSAGE_ATTRIBUTE_NAME, SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
-
 pub const SMPC_MESSAGE_TYPE_ATTRIBUTE: &str = "message_type";
 /// Placeholder value used for SNS message attributes in test/dev contexts.
 pub const SNS_TEST_ATTRIBUTE_VALUE: &str = "TEST";
@@ -258,8 +257,8 @@ impl ReAuthResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ResetCheckResult {
-    pub reset_id: String,
+pub struct IdentityMatchCheckResult {
+    pub request_id: String,
     pub node_id: usize,
     pub matched_serial_ids: Option<Vec<u32>>,
     pub matched_serial_ids_left: Option<Vec<u32>>,
@@ -271,10 +270,10 @@ pub struct ResetCheckResult {
     pub error_reason: Option<String>,
 }
 
-impl ResetCheckResult {
+impl IdentityMatchCheckResult {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        reset_id: String,
+        request_id: String,
         node_id: usize,
         matched_serial_ids: Option<Vec<u32>>,
         matched_serial_ids_left: Option<Vec<u32>>,
@@ -284,7 +283,7 @@ impl ResetCheckResult {
         partial_matches_count_left: Option<usize>,
     ) -> Self {
         Self {
-            reset_id,
+            request_id,
             node_id,
             matched_serial_ids,
             matched_serial_ids_left,
@@ -297,9 +296,9 @@ impl ResetCheckResult {
         }
     }
 
-    pub fn new_error_result(reset_id: String, node_id: usize, error_reason: &str) -> Self {
+    pub fn new_error_result(request_id: String, node_id: usize, error_reason: &str) -> Self {
         Self {
-            reset_id,
+            request_id,
             node_id,
             matched_serial_ids: None,
             matched_serial_ids_left: None,
