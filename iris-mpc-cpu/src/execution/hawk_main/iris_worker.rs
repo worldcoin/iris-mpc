@@ -1,5 +1,5 @@
 use crate::{
-    execution::hawk_main::HAWK_MIN_ROTATIONS,
+    execution::hawk_main::HAWK_MIN_DIST_ROTATIONS,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
         ops::{
@@ -253,7 +253,7 @@ impl IrisPoolHandle {
         // Preallocate vectors for results
         let mut results = batches
             .iter()
-            .map(|(_, vids)| Vec::with_capacity(2 * HAWK_MIN_ROTATIONS * vids.len()))
+            .map(|(_, vids)| Vec::with_capacity(2 * HAWK_MIN_DIST_ROTATIONS * vids.len()))
             .collect_vec();
 
         // Dispatch dot product batches
@@ -455,7 +455,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
                 let targets = vector_ids.iter().map(|v| store.get_vector(v));
-                let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_ROTATIONS, _>(
+                let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_DIST_ROTATIONS, _>(
                     &query, targets,
                 );
                 let _ = rsp.send(result);
@@ -467,7 +467,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::RotationAwarePairwiseDistance { pair, rsp } => {
-                let r = rotation_aware_pairwise_distance::<HAWK_MIN_ROTATIONS, _>(
+                let r = rotation_aware_pairwise_distance::<HAWK_MIN_DIST_ROTATIONS, _>(
                     &pair.0,
                     iter::once(Some(&pair.1)),
                 );

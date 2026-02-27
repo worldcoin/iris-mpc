@@ -51,7 +51,7 @@
 //!   amounts `-X, -(X-1).. 0 .. (X - 1), X`.
 //!
 //! The choice of distance function is set by the constant `HAWK_DISTANCE_FN`.
-//! One must also set the `HAWK_MIN_ROTATIONS` constant, which refers to the total rotations considered by MinRotation.
+//! One must also set the `HAWK_MIN_DIST_ROTATIONS` constant, which refers to the total rotations considered by MinRotation.
 //! Note that one should set it to `2 * X + 1` to work with `MinRotationX`.
 //! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
 //! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
@@ -164,23 +164,23 @@ use is_match_batch::is_match_batch;
 /// Distance function used by the HawkActor
 pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinRotation;
 /// Number of rotations considered by the MinRotation distance.
-/// Not used for non-MinRotation distance, but should be set to `1`.
-pub const HAWK_MIN_ROTATIONS: usize = 11;
+/// Not used for non-MinRotation distance, but must be set to `1`.
+pub const HAWK_MIN_DIST_ROTATIONS: usize = 11;
 /// Bitmask of base rotations, i.e rotations of the query for which
 /// the HawkActor will launch independent HNSW searches.
 pub const HAWK_BASE_ROTATIONS_MASK: u32 = CENTER_AND_10_MASK;
 
-// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MIN_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
+// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MIN_DIST_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
 const _: () = {
     match HAWK_DISTANCE_FN {
         DistanceFn::Simple => {
             // For Simple the base rotations should consist of all 31 rotations.
-            // HAWK_MIN_ROTATIONS is not actually used in this case, but it must be set to 1.
-            if HAWK_MIN_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
+            // HAWK_MIN_DIST_ROTATIONS is not actually used in this case, but it must be set to 1.
+            if HAWK_MIN_DIST_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
                 panic!();
             }
         }
-        _ => match HAWK_MIN_ROTATIONS {
+        DistanceFn::MinRotation => match HAWK_MIN_DIST_ROTATIONS {
             // Variants correspond to "full" min-rotation, min-rotation-5 and min-rotation-6.
             // The former requires center-only as base, while the latter two
             // require -10, 0, 10 as base rotations for searches.

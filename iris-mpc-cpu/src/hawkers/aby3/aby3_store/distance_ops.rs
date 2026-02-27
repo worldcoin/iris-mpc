@@ -34,7 +34,7 @@ use crate::{
     },
 };
 
-use crate::execution::hawk_main::HAWK_MIN_ROTATIONS;
+use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
 /// Trait abstracting distance-type-specific MPC operations.
 ///
 /// Parameterized by marker types (not ring types), so multiple protocols
@@ -214,7 +214,7 @@ impl DistanceOps for FhdOps {
         match f {
             DistanceFn::Simple => a.get_distance_fraction(b),
             DistanceFn::MinRotation => {
-                a.get_min_fhd_distance_fraction_rotation_aware::<HAWK_MIN_ROTATIONS>(b)
+                a.get_min_fhd_distance_fraction_rotation_aware::<HAWK_MIN_DIST_ROTATIONS>(b)
             }
         }
     }
@@ -300,7 +300,7 @@ impl DistanceOps for NhdOps {
         match f {
             DistanceFn::Simple => a.get_distance_fraction(b),
             DistanceFn::MinRotation => {
-                a.get_min_nhd_distance_fraction_rotation_aware::<HAWK_MIN_ROTATIONS>(b)
+                a.get_min_nhd_distance_fraction_rotation_aware::<HAWK_MIN_DIST_ROTATIONS>(b)
             }
         }
     }

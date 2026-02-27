@@ -1,4 +1,4 @@
-use crate::execution::hawk_main::HAWK_MIN_ROTATIONS;
+use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
 
 use super::{Aby3Query, Aby3Store, ArcIris, DistanceOps, DistanceShare, VectorId};
 use ampc_secret_sharing::shares::int_ring::IntRing2k;
@@ -270,12 +270,12 @@ impl DistanceMinimalRotation {
 /// With rotation r and batch item i:
 ///     `input[r + i * ROTATIONS] == output[r][i]`
 fn transpose_from_flat<T: IntRing2k>(distances: &[DistanceShare<T>]) -> Vec<Vec<DistanceShare<T>>> {
-    (0..HAWK_MIN_ROTATIONS)
+    (0..HAWK_MIN_DIST_ROTATIONS)
         .map(|i| {
             distances
                 .iter()
                 .skip(i)
-                .step_by(HAWK_MIN_ROTATIONS)
+                .step_by(HAWK_MIN_DIST_ROTATIONS)
                 .cloned()
                 .collect()
         })
