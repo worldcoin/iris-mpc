@@ -4,8 +4,8 @@ use bytemuck::cast_slice;
 use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_store::rerand::{
-    apply_confirmed_chunk, check_and_handle_freeze, delete_staging_chunk,
-    delete_staging_for_old_epochs, delete_rerand_progress_for_old_epochs, get_current_epoch,
+    apply_confirmed_chunk, check_and_handle_freeze, delete_rerand_progress_for_old_epochs,
+    delete_staging_chunk, delete_staging_for_old_epochs, get_current_epoch,
     get_max_applied_chunk_for_epoch, get_rerand_progress, get_staging_version_map,
     insert_staging_irises, set_all_confirmed, set_staging_written, staging_schema_name,
     upsert_rerand_progress, StagingIrisEntry,

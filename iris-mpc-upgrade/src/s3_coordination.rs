@@ -20,7 +20,10 @@ impl Manifest {
     /// IDs are 1-based.
     pub fn chunk_range(&self, chunk_id: u32) -> (u64, u64) {
         let start = 1 + (chunk_id as u64) * self.chunk_size;
-        let end = std::cmp::min(start + self.chunk_size, self.max_id_inclusive.saturating_add(1));
+        let end = std::cmp::min(
+            start + self.chunk_size,
+            self.max_id_inclusive.saturating_add(1),
+        );
         (start, end)
     }
 
@@ -359,14 +362,13 @@ pub async fn compute_cross_party_divergent_ids(
     );
 
     use std::collections::HashMap;
-    let all_maps: Vec<HashMap<i64, i16>> =
-        try_join_all((0..NUM_PARTIES).map(|party| {
-            download_chunk_version_map(s3, bucket, epoch, party, chunk_id, poll_interval)
-        }))
-        .await?
-        .into_iter()
-        .map(|v| v.into_iter().collect::<HashMap<_, _>>())
-        .collect();
+    let all_maps: Vec<HashMap<i64, i16>> = try_join_all((0..NUM_PARTIES).map(|party| {
+        download_chunk_version_map(s3, bucket, epoch, party, chunk_id, poll_interval)
+    }))
+    .await?
+    .into_iter()
+    .map(|v| v.into_iter().collect::<HashMap<_, _>>())
+    .collect();
 
     let mut divergent = Vec::new();
     let all_ids: std::collections::BTreeSet<i64> =

@@ -3,12 +3,12 @@
 mod test_utils;
 
 use eyre::Result;
-use std::sync::Mutex;
 use iris_mpc_store::rerand as rerand_store;
 use serde_json::json;
+use std::sync::Mutex;
+use test_utils::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use test_utils::*;
 
 const STACK_SIZE: usize = 16 * 1024 * 1024;
 
@@ -53,12 +53,7 @@ async fn set_live_applied_chunk(pool: &sqlx::PgPool, epoch: i32, max_chunk: i32)
 
 fn spawn_checking_worker(pool: sqlx::PgPool) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        loop {
-            match rerand_store::check_and_handle_freeze(&pool, None).await {
-                Ok(true) => {}
-                Ok(false) | Err(_) => break,
-            }
-        }
+        while let Ok(true) = rerand_store::check_and_handle_freeze(&pool, None).await {}
     })
 }
 
@@ -573,7 +568,10 @@ fn phase10_startup_freeze_local_catchup() {
         assert!(startup.is_ok(), "startup freeze converge timed out");
         startup.unwrap()?;
 
-        assert_eq!(rerand_store::get_applied_watermark_from_pool(p0_pool).await?, Some((0, 4)));
+        assert_eq!(
+            rerand_store::get_applied_watermark_from_pool(p0_pool).await?,
+            Some((0, 4))
+        );
         rerand_store::release_rerand_freeze(p0_pool).await?;
         catchup.await?.unwrap();
 
@@ -582,8 +580,14 @@ fn phase10_startup_freeze_local_catchup() {
         )
         .fetch_one(p0_pool)
         .await?;
-        assert!(!control.0, "freeze should be released after startup converge");
-        assert!(control.1.is_none(), "stale freeze generation should be cleared");
+        assert!(
+            !control.0,
+            "freeze should be released after startup converge"
+        );
+        assert!(
+            control.1.is_none(),
+            "stale freeze generation should be cleared"
+        );
 
         worker.abort();
         p1_server.abort();
@@ -638,7 +642,10 @@ fn phase11_startup_freeze_waits_for_peers() {
         assert!(startup.is_ok(), "startup freeze converge timed out");
         startup.unwrap()?;
 
-        assert_eq!(rerand_store::get_applied_watermark_from_pool(p0_pool).await?, Some((0, 4)));
+        assert_eq!(
+            rerand_store::get_applied_watermark_from_pool(p0_pool).await?,
+            Some((0, 4))
+        );
         rerand_store::release_rerand_freeze(p0_pool).await?;
         advance_peers.await??;
 
@@ -647,8 +654,14 @@ fn phase11_startup_freeze_waits_for_peers() {
         )
         .fetch_one(p0_pool)
         .await?;
-        assert!(!control.0, "freeze should be released after startup converge");
-        assert!(control.1.is_none(), "stale freeze generation should be cleared");
+        assert!(
+            !control.0,
+            "freeze should be released after startup converge"
+        );
+        assert!(
+            control.1.is_none(),
+            "stale freeze generation should be cleared"
+        );
 
         worker.abort();
         p1_server.abort();

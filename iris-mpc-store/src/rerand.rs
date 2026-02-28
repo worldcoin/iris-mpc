@@ -9,9 +9,7 @@ pub const RERAND_MODIFY_LOCK: i64 = 0x5245_4D4F_4446;
 
 /// Acquire `RERAND_MODIFY_LOCK` as a transaction-level advisory lock.
 /// Auto-released on commit/rollback.
-pub async fn acquire_modify_lock(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-) -> Result<()> {
+pub async fn acquire_modify_lock(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(RERAND_MODIFY_LOCK)
         .execute(&mut **tx)
@@ -297,10 +295,7 @@ pub async fn get_rerand_progress(
 
 /// Returns the highest `chunk_id` where `live_applied = TRUE` for a given
 /// epoch, or `None` if no chunks have been applied in that epoch yet.
-pub async fn get_max_applied_chunk_for_epoch(
-    pool: &PgPool,
-    epoch: i32,
-) -> Result<Option<i32>> {
+pub async fn get_max_applied_chunk_for_epoch(pool: &PgPool, epoch: i32) -> Result<Option<i32>> {
     let row: (Option<i32>,) = sqlx::query_as(
         "SELECT MAX(chunk_id) FROM rerand_progress WHERE epoch = $1 AND live_applied = TRUE",
     )
@@ -321,15 +316,15 @@ pub async fn delete_staging_for_old_epochs(
         r#"DELETE FROM "{}".irises WHERE epoch < $1"#,
         staging_schema
     );
-    let result = sqlx::query(&sql)
-        .bind(current_epoch)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(&sql).bind(current_epoch).execute(pool).await?;
     Ok(result.rows_affected())
 }
 
 /// Delete rerand progress rows for epochs older than `current_epoch`.
-pub async fn delete_rerand_progress_for_old_epochs(pool: &PgPool, current_epoch: i32) -> Result<u64> {
+pub async fn delete_rerand_progress_for_old_epochs(
+    pool: &PgPool,
+    current_epoch: i32,
+) -> Result<u64> {
     let result = sqlx::query("DELETE FROM rerand_progress WHERE epoch < $1")
         .bind(current_epoch)
         .execute(pool)
@@ -363,7 +358,9 @@ pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<Option<RerandSyncS
             return Err(e);
         }
     };
-    let max_applied = get_max_applied_chunk_for_epoch(pool, epoch).await?.unwrap_or(-1);
+    let max_applied = get_max_applied_chunk_for_epoch(pool, epoch)
+        .await?
+        .unwrap_or(-1);
     Ok(Some(RerandSyncState {
         epoch,
         max_applied_chunk: max_applied,
@@ -383,7 +380,6 @@ fn is_undefined_table_sqlx(err: &sqlx::Error) -> bool {
     }
     false
 }
-
 
 // ---------------------------------------------------------------------------
 // Freeze protocol: coordinated pause of the rerand worker during startup
@@ -421,11 +417,10 @@ pub async fn request_rerand_freeze(pool: &PgPool) -> Result<Option<String>> {
 pub async fn wait_for_rerand_frozen(pool: &PgPool, generation: &str) -> Result<()> {
     let deadline = tokio::time::Instant::now() + FREEZE_TIMEOUT;
     loop {
-        let row: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT frozen_generation FROM rerand_control WHERE id = 1",
-        )
-        .fetch_optional(pool)
-        .await?;
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT frozen_generation FROM rerand_control WHERE id = 1")
+                .fetch_optional(pool)
+                .await?;
 
         if let Some((Some(frozen_gen),)) = row {
             if frozen_gen == generation {
@@ -468,7 +463,10 @@ pub async fn check_and_handle_freeze(
         return Ok(true);
     };
 
-    tracing::info!("Rerand freeze requested (generation={}), pausing...", generation);
+    tracing::info!(
+        "Rerand freeze requested (generation={}), pausing...",
+        generation
+    );
 
     // Acknowledge the freeze.
     sqlx::query("UPDATE rerand_control SET frozen_generation = $1 WHERE id = 1")
@@ -554,11 +552,9 @@ pub async fn acquire_apply_lock(pool: &PgPool) -> Result<Option<sqlx::PgConnecti
     let mut conn = pool.acquire().await?;
 
     // If rerand tables don't exist yet, skip.
-    match sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM rerand_progress LIMIT 1",
-    )
-    .fetch_one(&mut *conn)
-    .await
+    match sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM rerand_progress LIMIT 1")
+        .fetch_one(&mut *conn)
+        .await
     {
         Err(e) if is_undefined_table_sqlx(&e) => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -617,11 +613,7 @@ async fn fetch_peer_watermark(host: &str, port: usize) -> Result<Option<(i32, i3
         .await
         .map_err(|e| eyre::eyre!("Failed to reach {} for watermark: {}", url, e))?;
     if !resp.status().is_success() {
-        eyre::bail!(
-            "Peer {} returned HTTP {} for watermark",
-            url,
-            resp.status()
-        );
+        eyre::bail!("Peer {} returned HTTP {} for watermark", url, resp.status());
     }
     let body = resp
         .text()
@@ -636,8 +628,7 @@ async fn fetch_peer_watermark(host: &str, port: usize) -> Result<Option<(i32, i3
     Ok(Some((
         v["epoch"]
             .as_i64()
-            .ok_or_else(|| eyre::eyre!("Missing epoch in watermark from {}", url))?
-            as i32,
+            .ok_or_else(|| eyre::eyre!("Missing epoch in watermark from {}", url))? as i32,
         v["max_applied_chunk"]
             .as_i64()
             .ok_or_else(|| eyre::eyre!("Missing max_applied_chunk in watermark from {}", url))?
@@ -653,10 +644,7 @@ async fn fetch_peer_watermark(host: &str, port: usize) -> Result<Option<(i32, i3
 /// Guarantees: when this returns `Ok(())`, the local worker is frozen and
 /// all parties have the same `(epoch, max_applied_chunk)`.
 /// On any error, the freeze is released before the error propagates.
-pub async fn freeze_and_verify_watermarks(
-    pool: &PgPool,
-    peers: &[(&str, usize)],
-) -> Result<()> {
+pub async fn freeze_and_verify_watermarks(pool: &PgPool, peers: &[(&str, usize)]) -> Result<()> {
     if peers.is_empty() {
         eyre::bail!("freeze_and_verify_watermarks called with no peers");
     }
@@ -674,10 +662,7 @@ pub async fn freeze_and_verify_watermarks(
     result
 }
 
-async fn freeze_and_verify_inner(
-    pool: &PgPool,
-    peers: &[(&str, usize)],
-) -> Result<()> {
+async fn freeze_and_verify_inner(pool: &PgPool, peers: &[(&str, usize)]) -> Result<()> {
     let deadline = tokio::time::Instant::now() + FREEZE_TIMEOUT;
 
     loop {

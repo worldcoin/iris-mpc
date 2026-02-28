@@ -254,11 +254,7 @@ impl SyncResult {
                     "Modification ID difference across nodes ({}) exceeds lookback ({}): {:?}. \
                      Min: {:?}, Max: {:?}. Cannot safely reconcile. \
                      Bump max_modifications_lookback or investigate drift.",
-                    mod_id_diff,
-                    lookback,
-                    completed_max_mod_ids,
-                    min_id,
-                    max_id
+                    mod_id_diff, lookback, completed_max_mod_ids, min_id, max_id
                 );
             }
         }

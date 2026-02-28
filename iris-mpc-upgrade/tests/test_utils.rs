@@ -433,19 +433,17 @@ async fn validate_rerand_startup_safety(harness: &TestHarness) -> Result<()> {
     let mut confirmed_chunks = Vec::with_capacity(harness.parties.len());
 
     for party in &harness.parties {
-        let (epoch,): (Option<i32>,) =
-            sqlx::query_as("SELECT MAX(epoch) FROM rerand_progress")
-                .fetch_one(&party.store.pool)
-                .await?;
-        let epoch = epoch.unwrap_or(0);
-
-        let (max_confirmed_chunk,): (Option<i32>,) =
-            sqlx::query_as(
-                "SELECT MAX(chunk_id) FROM rerand_progress WHERE epoch = $1 AND all_confirmed = TRUE",
-            )
-            .bind(epoch)
+        let (epoch,): (Option<i32>,) = sqlx::query_as("SELECT MAX(epoch) FROM rerand_progress")
             .fetch_one(&party.store.pool)
             .await?;
+        let epoch = epoch.unwrap_or(0);
+
+        let (max_confirmed_chunk,): (Option<i32>,) = sqlx::query_as(
+            "SELECT MAX(chunk_id) FROM rerand_progress WHERE epoch = $1 AND all_confirmed = TRUE",
+        )
+        .bind(epoch)
+        .fetch_one(&party.store.pool)
+        .await?;
 
         epochs.push(epoch);
         confirmed_chunks.push(max_confirmed_chunk.unwrap_or(-1));

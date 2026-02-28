@@ -187,9 +187,7 @@ pub async fn server_main(config: Config) -> Result<()> {
             .zip(sc.healthcheck_ports.iter())
             .enumerate()
             .filter(|(i, _)| *i != config.party_id)
-            .map(|(_, (h, p))| -> eyre::Result<_> {
-                Ok((h.as_str(), p.parse::<usize>()?))
-            })
+            .map(|(_, (h, p))| -> eyre::Result<_> { Ok((h.as_str(), p.parse::<usize>()?)) })
             .collect::<eyre::Result<Vec<_>>>()?;
         rerand_store::freeze_and_verify_watermarks(&iris_store.pool, &peer_addrs).await?;
     }

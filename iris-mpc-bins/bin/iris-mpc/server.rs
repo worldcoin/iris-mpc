@@ -159,6 +159,24 @@ pub fn receive_batch_stream(
     rx
 }
 
+async fn delete_message_from_sqs(
+    client: &Client,
+    queue_url: &str,
+    sqs_message: &aws_sdk_sqs::types::Message,
+) -> Result<(), ReceiveRequestError> {
+    let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+        ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre!("Missing receipt handle"))
+    })?;
+    client
+        .delete_message()
+        .queue_url(queue_url)
+        .receipt_handle(receipt_handle)
+        .send()
+        .await
+        .map_err(ReceiveRequestError::from)?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn receive_batch(
     party_id: usize,
@@ -242,7 +260,7 @@ async fn receive_batch(
                                 identity_deletion_request.serial_id,
                                 identity_deletion_request,
                             );
-                            client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             continue;
                         }
                         let modification = store
@@ -252,7 +270,7 @@ async fn receive_batch(
                                 None,
                             )
                             .await?;
-                        client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         batch_query.modifications.insert(
                             RequestSerialId(identity_deletion_request.serial_id),
                             modification,
@@ -296,7 +314,7 @@ async fn receive_batch(
                                 Some(uniqueness_request.s3_key.as_str()),
                             )
                             .await?;
-                        client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         batch_query.modifications.insert(
                             RequestId(uniqueness_request.signup_id.clone()),
                             modification,
@@ -392,7 +410,7 @@ async fn receive_batch(
                                 "Received a reauth request with use_or_rule set to true, but LUC \
                                  is not enabled. Skipping request."
                             );
-                                client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                                 continue;
                             }
 
@@ -405,7 +423,7 @@ async fn receive_batch(
                                 reauth_request.serial_id,
                                 reauth_request,
                             );
-                                client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                                 continue;
                             }
 
@@ -418,7 +436,7 @@ async fn receive_batch(
                                     Some(reauth_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             batch_query
                                 .modifications
                                 .insert(RequestSerialId(reauth_request.serial_id), modification);
@@ -476,7 +494,7 @@ async fn receive_batch(
                             handles.push(handle);
                         } else {
                             tracing::warn!("Reauth is disabled, skipping reauth request");
-                            client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         }
                     }
 
@@ -491,10 +509,10 @@ async fn receive_batch(
                                 )
                             })?;
 
-                        if !is_enabled(&request_type, &config) {
+                        if !is_enabled(request_type, config) {
                             metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
                             tracing::warn!("{} is disabled, skipping request", request_type);
-                            client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             continue;
                         }
                         metrics::counter!("request.received", "type" => request_type.to_string())
@@ -505,11 +523,11 @@ async fn receive_batch(
                         let modification = store
                             .insert_modification(
                                 None,
-                                &request_type,
+                                request_type,
                                 Some(identity_match_check_request.s3_key.as_str()),
                             )
                             .await?;
-                        client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         batch_query.modifications.insert(
                             RequestId(identity_match_check_request.request_id.clone()),
                             modification,
@@ -524,7 +542,7 @@ async fn receive_batch(
                         batch_query.push_matching_request(
                             sns_message_id,
                             identity_match_check_request.request_id.clone(),
-                            &request_type,
+                            request_type,
                             batch_metadata,
                             vec![], // use AND rule for identity match check requests
                             false,  // skip_persistence is only used for uniqueness requests
@@ -600,7 +618,7 @@ async fn receive_batch(
                                 reset_update_request.serial_id,
                                 reset_update_request,
                             );
-                                client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                                 continue;
                             }
 
@@ -611,7 +629,7 @@ async fn receive_batch(
                                     Some(reset_update_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             batch_query.modifications.insert(
                                 RequestSerialId(reset_update_request.serial_id),
                                 modification,
@@ -630,18 +648,12 @@ async fn receive_batch(
                             );
                         } else {
                             tracing::warn!("Reset is disabled, skipping reset update request");
-                            client.delete_message().queue_url(queue_url).receipt_handle(sqs_message.receipt_handle.unwrap()).send().await.map_err(ReceiveRequestError::from)?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         }
                     }
 
                     _ => {
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                     }
                 }
@@ -1357,9 +1369,7 @@ async fn server_main(config: Config) -> Result<()> {
             .zip(server_coord_config.healthcheck_ports.iter())
             .enumerate()
             .filter(|(i, _)| *i != config.party_id)
-            .map(|(_, (h, p))| -> eyre::Result<_> {
-                Ok((h.as_str(), p.parse::<usize>()?))
-            })
+            .map(|(_, (h, p))| -> eyre::Result<_> { Ok((h.as_str(), p.parse::<usize>()?)) })
             .collect::<eyre::Result<Vec<_>>>()?;
         rerand_store::freeze_and_verify_watermarks(&store.pool, &peer_addrs).await?;
     }
@@ -1425,8 +1435,7 @@ async fn server_main(config: Config) -> Result<()> {
                                 "Initialize iris db: Loading from DB (parallelism: {})",
                                 parallelism
                             );
-                            let download_shutdown_handler =
-                                Arc::clone(&download_shutdown_handler);
+                            let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
 
                             tokio::runtime::Handle::current().block_on(async {
                                 load_iris_db(
