@@ -4,10 +4,9 @@ use bytemuck::cast_slice;
 use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_store::rerand::{
-    apply_staging_chunk, delete_staging_chunk, delete_staging_ids, get_current_epoch,
-    get_locally_divergent_ids, get_rerand_progress, get_staging_version_map, insert_staging_irises,
-    set_all_confirmed, set_staging_written, staging_schema_name, upsert_rerand_progress,
-    StagingIrisEntry, RERAND_MODIFY_LOCK,
+    delete_staging_chunk, fenced_apply_chunk, get_current_epoch, get_rerand_progress,
+    get_staging_version_map, insert_staging_irises, set_all_confirmed, set_staging_written,
+    staging_schema_name, upsert_rerand_progress, StagingIrisEntry,
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
@@ -161,7 +160,7 @@ pub async fn run_continuous_rerand(
             }
 
             // --- Modification fence ---
-            // 1. Compute cross-party version_id disagreements
+            // 1. Compute cross-party version_id disagreements (before lock)
             let cross_party_divergent = s3_coordination::compute_cross_party_divergent_ids(
                 s3,
                 &config.s3_bucket,
@@ -171,57 +170,23 @@ pub async fn run_continuous_rerand(
             )
             .await?;
 
-            // 2. Lock to prevent new modifications during apply
-            let mut modify_lock_conn = pool.acquire().await?;
-            sqlx::query("SELECT pg_advisory_lock($1)")
-                .bind(RERAND_MODIFY_LOCK)
-                .execute(&mut *modify_lock_conn)
-                .await?;
-
-            // 3. Check local staging vs live for post-staging modifications
-            let local_divergent = get_locally_divergent_ids(
+            // 2-6. Lock, check, prune, apply, unlock — helper guarantees
+            //      unlock on all error paths.
+            let (rows, skip_count) = fenced_apply_chunk(
                 pool,
                 &staging_schema,
                 active_epoch as i32,
                 chunk_id as i32,
+                cross_party_divergent,
             )
             .await?;
-
-            // 4. Union of both divergence sources
-            let mut skip_ids: Vec<i64> = cross_party_divergent;
-            skip_ids.extend(&local_divergent);
-            skip_ids.sort_unstable();
-            skip_ids.dedup();
-
-            if !skip_ids.is_empty() {
-                tracing::info!(
-                    "Epoch {} chunk {}: skipping {} IDs due to concurrent modifications: {:?}",
-                    active_epoch,
-                    chunk_id,
-                    skip_ids.len(),
-                    &skip_ids[..std::cmp::min(skip_ids.len(), 10)],
-                );
-                delete_staging_ids(pool, &staging_schema, active_epoch as i32, &skip_ids).await?;
-            }
-
-            // 5. Apply (now consistent across all parties)
-            let rows =
-                apply_staging_chunk(pool, &staging_schema, active_epoch as i32, chunk_id as i32)
-                    .await?;
-
-            // 6. Release modification lock
-            sqlx::query("SELECT pg_advisory_unlock($1)")
-                .bind(RERAND_MODIFY_LOCK)
-                .execute(&mut *modify_lock_conn)
-                .await?;
-            drop(modify_lock_conn);
 
             tracing::info!(
                 "Epoch {} chunk {}: applied to live DB ({} rows updated, {} skipped)",
                 active_epoch,
                 chunk_id,
                 rows,
-                skip_ids.len(),
+                skip_count,
             );
 
             chunk_id += 1;

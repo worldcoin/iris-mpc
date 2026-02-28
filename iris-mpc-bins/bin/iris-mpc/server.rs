@@ -1319,103 +1319,109 @@ async fn server_main(config: Config) -> Result<()> {
     }
 
     let rerand_lock_conn =
-        rerand_store::rerand_catchup_and_lock(&store.pool, &store.schema_name, &sync_result)
-            .await?;
+        rerand_store::rerand_validate_and_lock(&store.pool, &sync_result).await?;
 
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
+        rerand_store::release_rerand_lock(rerand_lock_conn).await?;
         return Ok(());
     }
 
-    // refetch store_len in case we rolled back
-    let store_len = store.count_irises().await?;
-    tracing::info!("Database store length after sync: {}", store_len);
+    let startup_result = async {
+        // refetch store_len in case we rolled back
+        let store_len = store.count_irises().await?;
+        tracing::info!("Database store length after sync: {}", store_len);
 
-    let runtime_handle = tokio::runtime::Handle::current();
-    let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
-        let schema = config.get_anon_stats_db_schema();
-        let anon_client =
-            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client).await?;
-        Some((anon_store, runtime_handle.clone()))
-    } else {
-        tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
-        None
-    };
-    let anon_stats_writer_for_actor = anon_stats_writer.clone();
-
-    let (tx, rx) = oneshot::channel();
-    let config_clone = config.clone();
-    background_tasks.spawn_blocking(move || {
-        let config = config_clone;
-        // --------------------------------------------------------------------------
-        // ANCHOR: Load the database
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting server actor");
-        match ServerActor::new(
-            config.party_id,
-            chacha_seeds,
-            8,
-            config.max_db_size,
-            config.max_batch_size,
-            config.match_distances_buffer_size,
-            config.match_distances_buffer_size_extra_percent,
-            config.return_partial_results,
-            config.disable_persistence,
-            config.enable_debug_timing,
-            config.full_scan_side,
-            config.full_scan_side_switching_enabled,
-            anon_stats_writer_for_actor,
-        ) {
-            Ok((mut actor, handle)) => {
-                tracing::info!("⚓️ ANCHOR: Load the database");
-                let res = if config.fake_db_size > 0 {
-                    // TODO: does this even still work, since we do not page-lock the memory here?
-                    actor.fake_db(config.fake_db_size);
-                    Ok(())
-                } else {
-                    tracing::info!(
-                        "Initialize iris db: Loading from DB (parallelism: {})",
-                        parallelism
-                    );
-                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-
-                    tokio::runtime::Handle::current().block_on(async {
-                        load_iris_db(
-                            &mut actor,
-                            &store,
-                            store_len,
-                            parallelism,
-                            &config,
-                            download_shutdown_handler,
-                        )
-                        .await
-                    })
-                };
-
-                match res {
-                    Ok(_) => {
-                        tx.send(Ok((handle, store))).unwrap();
-                    }
-                    Err(e) => {
-                        tx.send(Err(e)).unwrap();
-                        return Ok(());
-                    }
-                }
-
-                actor.run(); // forever
-            }
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
+        let runtime_handle = tokio::runtime::Handle::current();
+        let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
+            let schema = config.get_anon_stats_db_schema();
+            let anon_client =
+                AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+            let anon_store = AnonStatsStore::new(&anon_client).await?;
+            Some((anon_store, runtime_handle.clone()))
+        } else {
+            tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
+            None
         };
-        Ok(())
-    });
+        let anon_stats_writer_for_actor = anon_stats_writer.clone();
 
-    let (mut handle, store) = rx.await??;
+        let (tx, rx) = oneshot::channel();
+        let config_clone = config.clone();
+        background_tasks.spawn_blocking(move || {
+            let config = config_clone;
+            // --------------------------------------------------------------------------
+            // ANCHOR: Load the database
+            // --------------------------------------------------------------------------
+            tracing::info!("⚓️ ANCHOR: Starting server actor");
+            match ServerActor::new(
+                config.party_id,
+                chacha_seeds,
+                8,
+                config.max_db_size,
+                config.max_batch_size,
+                config.match_distances_buffer_size,
+                config.match_distances_buffer_size_extra_percent,
+                config.return_partial_results,
+                config.disable_persistence,
+                config.enable_debug_timing,
+                config.full_scan_side,
+                config.full_scan_side_switching_enabled,
+                anon_stats_writer_for_actor,
+            ) {
+                Ok((mut actor, handle)) => {
+                    tracing::info!("⚓️ ANCHOR: Load the database");
+                    let res = if config.fake_db_size > 0 {
+                        // TODO: does this even still work, since we do not page-lock the memory here?
+                        actor.fake_db(config.fake_db_size);
+                        Ok(())
+                    } else {
+                        tracing::info!(
+                            "Initialize iris db: Loading from DB (parallelism: {})",
+                            parallelism
+                        );
+                        let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+
+                        tokio::runtime::Handle::current().block_on(async {
+                            load_iris_db(
+                                &mut actor,
+                                &store,
+                                store_len,
+                                parallelism,
+                                &config,
+                                download_shutdown_handler,
+                            )
+                            .await
+                        })
+                    };
+
+                    match res {
+                        Ok(_) => {
+                            tx.send(Ok((handle, store))).unwrap();
+                        }
+                        Err(e) => {
+                            tx.send(Err(e)).unwrap();
+                            return Ok(());
+                        }
+                    }
+
+                    actor.run(); // forever
+                }
+                Err(e) => {
+                    tx.send(Err(e)).unwrap();
+                    return Ok(());
+                }
+            };
+            Ok(())
+        });
+
+        let startup_result = rx.await;
+        let (handle, store) = startup_result??;
+        Ok::<_, eyre::Report>((handle, store))
+    }
+    .await;
 
     rerand_store::release_rerand_lock(rerand_lock_conn).await?;
+    let (mut handle, store) = startup_result?;
 
     background_tasks.check_tasks();
 

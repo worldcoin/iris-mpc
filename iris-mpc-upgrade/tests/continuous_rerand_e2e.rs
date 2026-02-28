@@ -257,41 +257,41 @@ fn phase6_multiple_epochs() {
 }
 
 // ============================================================================
-// Phase 7: Epoch boundary desync -- simulate epoch mismatch
+// Phase 7: Startup validation rejects fatal desync and accepts in-sync state.
 // ============================================================================
 
 #[test]
-fn phase7_epoch_boundary_desync() {
+fn phase7_startup_validation() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
         let env = TestEnv::setup().await?;
-        println!("[phase 7] Epoch boundary desync...");
+        println!("[phase 7] Startup validation...");
 
-        // Setup the exact boundary desync state in DB manually to test catch-up logic
-        // P1 is on Epoch 0 (has max epoch 0)
-        // P0 and P2 are on Epoch 1 (have max epoch 1)
+        // Fatal desync (gap > 1) → immediate bail
         for p in 0..NUM_PARTIES {
             let pool = &env.harness.parties[p].store.pool;
-            // Everyone completes Epoch 0
             sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (0, 0, TRUE, TRUE, TRUE)")
-            .execute(pool).await.unwrap();
+                .execute(pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (2, 0, TRUE, TRUE, TRUE)")
+            .execute(&env.harness.parties[0].store.pool).await.unwrap();
+
+        let r_fatal = simulate_server_startup(&env.harness, 1).await;
+        assert!(r_fatal.is_err(), "Fatal epoch gap should bail immediately");
+
+        // In-sync → startup succeeds immediately
+        for p in 0..NUM_PARTIES {
+            let pool = &env.harness.parties[p].store.pool;
+            sqlx::query("DELETE FROM rerand_progress")
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (0, 0, TRUE, TRUE, TRUE)")
+                .execute(pool).await.unwrap();
         }
 
-        // P0 and P2 move to Epoch 1
-        sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (1, 0, TRUE, TRUE, FALSE)")
-    .execute(&env.harness.parties[0].store.pool).await.unwrap();
-        sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (1, 0, TRUE, TRUE, FALSE)")
-.execute(&env.harness.parties[2].store.pool).await.unwrap();
-
-        // Now simulate P1 main server startup (P1 is behind on Epoch 0)
-        // Should catch up using safe_up_to = i32::MAX
-        let r1 = simulate_server_startup(&env.harness, 1).await;
-        assert!(r1.is_ok(), "P1 startup failed during epoch mismatch");
-
-        // Now simulate P0 main server startup (P0 is ahead on Epoch 1)
-        // Should catch up using safe_up_to = -1 (nobody confirmed Epoch 1 yet since P1 hasn't started it)
-        let r0 = simulate_server_startup(&env.harness, 0).await;
-        assert!(r0.is_ok(), "P0 startup failed during epoch mismatch");
+        let r_ok = simulate_server_startup(&env.harness, 0).await;
+        assert!(r_ok.is_ok(), "In-sync startup should succeed");
 
         println!("[phase 7] PASSED");
 

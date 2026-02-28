@@ -150,33 +150,38 @@ Runs continuously:
 7. Upload S3 staged marker: `s3://bucket/rerand/epoch-{E}/party-{P}/chunk-{K}/staged`
 8. Poll S3 until all 3 party staged markers exist for chunk K
 9. Set `all_confirmed = TRUE` in local `rerand_progress` for `(epoch = E, chunk_id = K)`
-10. **Modification fence** (see "Conflict Resolution" section below):
+10. **Modification fence and Apply**:
     a. Download all 3 parties' version maps for chunk K. Compute cross-party disagreement set: IDs where any party captured a different `original_version_id`.
-    b. Acquire `pg_advisory_lock(RERAND_MODIFY_LOCK)` — blocks the main server from writing modifications to the `irises` table.
-    c. Query local divergences: IDs where `staging.original_version_id ≠ irises.version_id` (modifications that landed after staging).
-    d. Compute skip set = cross-party disagreements ∪ local divergences.
-    e. Delete skip set from staging.
-11. **Apply**: copy from staging to live DB, delete staging, and mark applied — all in one transaction that holds `pg_advisory_xact_lock(RERAND_APPLY_LOCK)`:
-    ```sql
-    BEGIN;
-    SELECT pg_advisory_xact_lock(RERAND_APPLY_LOCK);
-    UPDATE irises SET
-      left_code = staging.left_code,
-      left_mask = staging.left_mask,
-      right_code = staging.right_code,
-      right_mask = staging.right_mask,
-      rerand_epoch = staging.rerand_epoch
-    FROM staging_schema.irises AS staging
-    WHERE irises.id = staging.id
-      AND staging.epoch = E
-      AND staging.chunk_id = K
-      AND irises.version_id = staging.original_version_id;
-    DELETE FROM staging_schema.irises WHERE epoch = E AND chunk_id = K;
-    UPDATE rerand_progress SET live_applied = TRUE WHERE epoch = E AND chunk_id = K;
-    COMMIT;  -- xact lock released here
-    ```
-12. Release `pg_advisory_unlock(RERAND_MODIFY_LOCK)`.
-13. Proceed to next chunk (or start epoch transition if all chunks done).
+    b. **Fenced Apply Transaction**: open a single transaction to check local divergence and apply safely:
+       ```sql
+       BEGIN;
+       -- Block the main server from writing modifications
+       SELECT pg_advisory_xact_lock(RERAND_MODIFY_LOCK);
+
+       -- Query local divergences (modifications that landed after staging)
+       -- ... compute skip set = cross-party disagreements ∪ local divergences ...
+       -- Delete skip set from staging schema
+
+       -- Proceed to apply
+       SELECT pg_advisory_xact_lock(RERAND_APPLY_LOCK);
+       
+       UPDATE irises SET
+         left_code = staging.left_code,
+         left_mask = staging.left_mask,
+         right_code = staging.right_code,
+         right_mask = staging.right_mask,
+         rerand_epoch = staging.rerand_epoch
+       FROM staging_schema.irises AS staging
+       WHERE irises.id = staging.id
+         AND staging.epoch = E
+         AND staging.chunk_id = K
+         AND irises.version_id = staging.original_version_id;
+         
+       DELETE FROM staging_schema.irises WHERE epoch = E AND chunk_id = K;
+       UPDATE rerand_progress SET live_applied = TRUE WHERE epoch = E AND chunk_id = K;
+       COMMIT;  -- Both RERAND_MODIFY_LOCK and RERAND_APPLY_LOCK released here
+       ```
+11. Proceed to next chunk (or start epoch transition if all chunks done).
 
 **Crash recovery for staging**: if the process crashes mid-staging, `staging_written` is still `FALSE`. On restart, the code re-enters the staging block and deletes any partial rows before re-reading. This ensures all staging rows come from one read pass (no mixed-snapshot version_ids). Inserts use `ON CONFLICT (epoch, id) DO NOTHING` as a safety net.
 
@@ -187,21 +192,24 @@ Runs continuously:
 At startup, before `load_iris_db`:
 
 1. **Existing**: modification sync (`sync_modifications`) — all parties catch up on modifications, producing identical `version_id` values. This transaction acquires `pg_advisory_xact_lock(RERAND_MODIFY_LOCK)` to serialize with rerand applies.
-2. **New**: rerand sync — parties exchange a compact rerand watermark during the existing startup sync (`SyncState` exchange):
+2. **New**: rerand sync validation — parties exchange a compact rerand watermark during the existing startup sync (`SyncState` exchange):
    - Each party computes `(epoch, max_confirmed_chunk)` from its local `rerand_progress` table: the active epoch E and the highest `chunk_id` where `all_confirmed = TRUE`. Returns `None` if the `rerand_progress` table doesn't exist yet (rolling deploy before migration); real DB errors propagate as `Err`.
    - Each party sends this single `(epoch, max_confirmed_chunk)` pair as part of `SyncState`.
-   - Each party checks whether any peer is exactly 1 confirmed chunk ahead (within the same epoch, or has moved to the next epoch). If so, it applies that single chunk (`my_max_confirmed + 1`) from staging to the live DB.
-   - **Why at most 1 chunk**: the rerand loop has a strict per-chunk synchronization barrier — a node cannot stage chunk K+1 until all three parties have confirmed chunk K via S3 markers. Therefore it is impossible for any peer to be more than 1 confirmed chunk ahead. The implementation enforces this with a fatal bail if the gap exceeds 1 (indicates DB corruption).
-   - **Why `max` across peers**: `all_confirmed = TRUE` at any party means that party observed all three S3 `staged` markers, which means all three parties successfully committed the chunk to their staging schemas. A slower party may not have polled S3 yet, but its staging data is already there.
-   - Edge case: if all parties report the same `max_confirmed_chunk`, there is nothing to catch up and the step is skipped.
-3. **New (DB-only catch-up)**: two phases, in order:
-   - **Phase A — apply locally pending chunks**: query `rerand_progress` for any chunks where `all_confirmed = TRUE AND live_applied = FALSE`. Apply each one via the same apply transaction as Step 1.11 (each acquires its own `pg_advisory_xact_lock`). This handles the crash window where the rerand server set `all_confirmed` but crashed before applying to live — without this, the node would advertise itself as caught up (watermark based on `all_confirmed`) while its live DB is stale.
-   - **Phase B — apply peer-ahead chunk**: if step 2 identified a chunk where a peer is strictly ahead, apply it (skipped if already handled in Phase A). If no staging data exists for the chunk (ghost chunk at epoch boundary), the apply is a safe no-op.
-   - **Phase C — hold session lock**: acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated connection. **Keep the lock held** through step 4. This prevents the rerand loop from applying new chunks while the DB snapshot is being read.
+   - The startup validator checks two invariants: epoch gap ≤ 1 and chunk gap ≤ 1 (within the same epoch). If either is violated, startup fails (indicates DB corruption).
+   - If a peer is at most 1 chunk or 1 epoch ahead, this is within protocol tolerance. **Startup does NOT apply any chunks.** The rerand worker is responsible for catch-up through the full modification-fence path. If the node is behind, the rerand worker must run and complete the pending chunk before the next startup succeeds.
+3. **New**: lock-first startup readiness loop:
+   - Acquire `pg_advisory_lock(RERAND_APPLY_LOCK)` on a dedicated connection.
+   - While the lock is held (applies frozen), verify local DB readiness: no `all_confirmed=TRUE AND live_applied=FALSE` rows remain, and local applied watermark has reached the startup target from step 2.
+   - Special case: if startup target is `(epoch = E, max_confirmed_chunk = -1)`, no chunk is confirmed in epoch E yet, so startup does not wait for an apply in epoch E.
+   - If behind, release the lock and retry after a short sleep (lets rerand worker apply the pending chunk).
+   - If local watermark has already advanced past the startup target, fail startup (snapshot stale; restart and resync).
+   - Once ready, keep the lock held through step 4. This prevents the rerand loop from applying new chunks while the DB snapshot is being read.
 4. **Existing**: `load_iris_db` — loads from live DB into GPU memory. The advisory lock is still held, so the rerand server cannot apply new chunks while the DB is being read into memory.
 5. Release the advisory lock: `SELECT pg_advisory_unlock(RERAND_APPLY_LOCK)` on the dedicated connection, then drop the connection.
 
-**Rollout note**: if the rerand tables haven't been migrated yet, `build_rerand_sync_state` returns `Ok(None)` for missing table. The catch-up logic is gated on `rerand_state.is_some()`, so startup proceeds without error.
+**Why startup does not apply chunks**: every chunk apply must go through the modification fence (cross-party version-map exchange + local divergence check under `RERAND_MODIFY_LOCK`). The startup path has no access to the S3 coordination bus and cannot perform the fence. Applying unfenced chunks at startup would create the same cross-party share divergence the fence was designed to prevent.
+
+**Rollout note**: if the rerand tables haven't been migrated yet, `build_rerand_sync_state` returns `Ok(None)` for missing table. The validation is skipped and startup proceeds without error.
 
 ### Epoch and chunk desync safety checks
 
@@ -217,9 +225,9 @@ If either check fails, the main server refuses to start. This catches DB corrupt
 Three advisory lock keys are used:
 
 - **`RERAND_APPLY_LOCK`** — serializes chunk applies with `load_iris_db`. Used as `pg_advisory_xact_lock` inside `apply_staging_chunk`'s transaction (auto-released on commit/rollback/drop), and as session-level `pg_advisory_lock` during startup to hold through `load_iris_db`.
-- **`RERAND_MODIFY_LOCK`** — serializes modification writes with the rerand modification fence. The rerand server holds it (session-level) during the fence check + apply window (Steps 1.10–1.12). The main server acquires it (`pg_advisory_xact_lock`) inside its modification transaction to prevent writes during the fence window.
+- **`RERAND_MODIFY_LOCK`** — serializes modification writes with the rerand modification fence. The rerand server acquires it (`pg_advisory_xact_lock`) at the start of its unified fence+apply transaction (Step 1.10) to hold through the fence check and apply window. The main server acquires it (`pg_advisory_xact_lock`) inside its modification transaction to prevent writes during the fence window.
 
-**Why `pg_advisory_xact_lock` for applies and modifications**: session-level locks are tied to a connection. If a process is killed while holding a session-level lock on a pooled connection, the connection may be returned to the pool with the lock still held, blocking future acquirers indefinitely. Transaction-level locks avoid this: when the connection is dropped, the transaction rolls back and the lock is released automatically.
+**Why `pg_advisory_xact_lock` for applies and modifications**: session-level locks are tied to a connection. If a process is killed while holding a session-level lock on a pooled connection, the connection may be returned to the pool with the lock still held, blocking future acquirers indefinitely. Transaction-level locks avoid this: when the connection is dropped, the transaction rolls back and the lock is released automatically. This is why the entire modification fence and apply step was combined into a single transaction.
 
 ## Conflict Resolution: Rerandomization vs Modifications
 
@@ -233,7 +241,7 @@ The modification fence ensures all parties agree on which rows to skip before ap
 
 1. **Cross-party version-map exchange** (Steps 1.6–1.8): after staging, each party uploads its `[(id, original_version_id)]` map for the chunk to S3, along with a 32-byte blake3 hash of the map. After the S3 barrier, each party first downloads only the 3 hashes (96 bytes total). If all hashes match, the maps are identical and the cross-party disagreement set is empty (fast path — no full map download needed). If any hash differs, the full maps are downloaded and diffed to compute the exact set of IDs where any party captured a different `original_version_id` (slow path). This catches modifications that arrived on some parties before staging but not others. In practice, disagreements are rare (only when a modification races with the staging window), so the fast path runs ~100% of the time.
 
-2. **Local divergence check under lock** (Steps 1.10b–1.10c): the rerand server acquires `RERAND_MODIFY_LOCK` (blocking the main server from writing modifications), then queries for IDs where `staging.original_version_id ≠ irises.version_id`. This catches modifications that arrived after staging but before apply. The lock ensures no new modifications can land during the check + apply window.
+2. **Local divergence check under lock**: as part of the single apply transaction, the rerand server acquires `pg_advisory_xact_lock(RERAND_MODIFY_LOCK)` (blocking the main server from writing modifications), then queries for IDs where `staging.original_version_id ≠ irises.version_id`. This catches modifications that arrived after staging but before apply. The lock ensures no new modifications can land during the check + apply window.
 
 The union of both sets is deleted from staging before apply. All parties compute the same skip set (the cross-party exchange is deterministic, and the local check is under lock), so the apply produces consistent results across all parties.
 

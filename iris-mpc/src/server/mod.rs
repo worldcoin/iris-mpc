@@ -139,42 +139,44 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
 
-    let rerand_lock_conn = rerand_store::rerand_catchup_and_lock(
-        &iris_store.pool,
-        &iris_store.schema_name,
-        &sync_result,
-    )
-    .await?;
+    let rerand_lock_conn =
+        rerand_store::rerand_validate_and_lock(&iris_store.pool, &sync_result).await?;
 
     if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
+        rerand_store::release_rerand_lock(rerand_lock_conn).await?;
         return Ok(());
     }
 
-    let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
+    let startup_result = async {
+        let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
 
-    if let Some(url) = config.get_anon_stats_db_url() {
-        let schema = config.get_anon_stats_db_schema();
-        let anon_client =
-            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client).await?;
-        hawk_actor.set_anon_stats_store(Some(anon_store));
-    } else {
-        tracing::warn!(
-                "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
-            );
+        if let Some(url) = config.get_anon_stats_db_url() {
+            let schema = config.get_anon_stats_db_schema();
+            let anon_client =
+                AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+            let anon_store = AnonStatsStore::new(&anon_client).await?;
+            hawk_actor.set_anon_stats_store(Some(anon_store));
+        } else {
+            tracing::warn!(
+                    "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
+                );
+        }
+
+        load_database(
+            &config,
+            &iris_store,
+            &graph_store,
+            &shutdown_handler,
+            &mut hawk_actor,
+        )
+        .await?;
+        Ok::<_, eyre::Report>(hawk_actor)
     }
-
-    load_database(
-        &config,
-        &iris_store,
-        &graph_store,
-        &shutdown_handler,
-        &mut hawk_actor,
-    )
-    .await?;
+    .await;
 
     rerand_store::release_rerand_lock(rerand_lock_conn).await?;
+    let hawk_actor = startup_result?;
 
     background_tasks.check_tasks();
 

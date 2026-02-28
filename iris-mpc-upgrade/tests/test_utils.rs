@@ -414,12 +414,12 @@ pub async fn wait_chunks_staged(harness: &TestHarness, epoch: i32, n: i32) -> Re
 pub async fn simulate_server_startup(harness: &TestHarness, party: usize) -> Result<()> {
     let sync_result = build_test_sync_result(harness, party).await?;
     let pool = &harness.parties[party].store.pool;
-    let schema = &harness.parties[party].schema_name;
-    let lock_conn = rerand_store::rerand_catchup_and_lock(pool, schema, &sync_result).await?;
-    let _count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises")
+    let lock_conn = rerand_store::rerand_validate_and_lock(pool, &sync_result).await?;
+    let query_result: Result<(i64,), sqlx::Error> = sqlx::query_as("SELECT COUNT(*) FROM irises")
         .fetch_one(pool)
-        .await?;
+        .await;
     rerand_store::release_rerand_lock(lock_conn).await?;
+    let _count = query_result?;
     Ok(())
 }
 
