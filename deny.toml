@@ -73,3 +73,13 @@ expression = "LicenseRef-ring"
 license-files = [
     { path = "LICENSE", hash = 0xbd0eed23 },
 ]
+
+# The nix crate is MIT licensed. The GPL-2.0 file detected in the source tree
+# is a test fixture (test/test_kmod/hello_mod/hello.c) that is not part of the
+# compiled library and does not affect the license of code linking against nix.
+[[licenses.clarify]]
+name = "nix"
+expression = "MIT"
+license-files = [
+    { path = "LICENSE", hash = 0x6ec9b2e5 },
+]

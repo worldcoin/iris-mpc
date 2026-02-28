@@ -3023,6 +3023,7 @@ dependencies = [
  "chrono",
  "clap",
  "config",
+ "core_affinity",
  "eyre",
  "float_eq",
  "hex",
@@ -3031,6 +3032,7 @@ dependencies = [
  "itertools 0.13.0",
  "metrics",
  "metrics-exporter-statsd",
+ "nix 0.29.0",
  "num_cpus",
  "percent-encoding",
  "rand 0.8.5",
@@ -3727,6 +3729,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.6.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4240,7 +4254,7 @@ dependencies = [
  "inferno",
  "libc",
  "log",
- "nix",
+ "nix 0.26.4",
  "once_cell",
  "prost 0.12.6",
  "prost-build 0.12.6",
