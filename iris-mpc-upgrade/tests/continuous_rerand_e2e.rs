@@ -4,6 +4,10 @@ mod test_utils;
 
 use eyre::Result;
 use std::sync::Mutex;
+use iris_mpc_store::rerand as rerand_store;
+use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use test_utils::*;
 
 const STACK_SIZE: usize = 16 * 1024 * 1024;
@@ -31,6 +35,97 @@ fn run_async(f: impl std::future::Future<Output = Result<()>> + Send + 'static) 
         .join()
         .unwrap();
     result.unwrap();
+}
+
+async fn set_live_applied_chunk(pool: &sqlx::PgPool, epoch: i32, max_chunk: i32) -> Result<()> {
+    for chunk in 0..=max_chunk {
+        rerand_store::upsert_rerand_progress(pool, epoch, chunk).await?;
+        sqlx::query(
+            "UPDATE rerand_progress SET live_applied = TRUE WHERE epoch = $1 AND chunk_id = $2",
+        )
+        .bind(epoch)
+        .bind(chunk)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+fn spawn_checking_worker(pool: sqlx::PgPool) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match rerand_store::check_and_handle_freeze(&pool, None).await {
+                Ok(true) => {}
+                Ok(false) | Err(_) => break,
+            }
+        }
+    })
+}
+
+async fn simulate_server_startup_with_freeze(
+    pool: &sqlx::PgPool,
+    peer_addrs: &[(&str, usize)],
+) -> Result<()> {
+    rerand_store::freeze_and_verify_watermarks(pool, peer_addrs).await?;
+
+    // Mimic startup DB load behind apply lock.
+    let startup_lock = rerand_store::acquire_apply_lock(pool).await?;
+    let _: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises")
+        .fetch_one(pool)
+        .await?;
+    rerand_store::release_apply_lock(startup_lock).await?;
+
+    Ok(())
+}
+
+async fn start_peer_watermark_server(
+    pool: &sqlx::PgPool,
+) -> Result<(usize, tokio::task::JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port() as usize;
+    let pool = pool.clone();
+    let handle = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 2048];
+                let _ = socket.read(&mut buf).await;
+
+                let wm = match rerand_store::get_applied_watermark_from_pool(&pool).await {
+                    Ok(Some((epoch, chunk_id))) => json!({
+                        "epoch": epoch,
+                        "max_applied_chunk": chunk_id,
+                    })
+                    .to_string(),
+                    Ok(None) => "null".to_string(),
+                    Err(e) => {
+                        let body = format!("{{\"error\":\"{}\"}}", e);
+                        let response = format!(
+                            "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        return;
+                    }
+                };
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    wm.len(),
+                    wm
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+
+    Ok((port, handle))
 }
 
 // ============================================================================
@@ -276,7 +371,7 @@ fn phase7_startup_validation() {
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (2, 0, TRUE, TRUE, TRUE)")
             .execute(&env.harness.parties[0].store.pool).await.unwrap();
 
-        let r_fatal = simulate_server_startup(&env.harness, 1).await;
+        let r_fatal = simulate_server_startup_with_rerand_validation(&env.harness, 1).await;
         assert!(r_fatal.is_err(), "Fatal epoch gap should bail immediately");
 
         // In-sync → startup succeeds immediately
@@ -290,7 +385,7 @@ fn phase7_startup_validation() {
                 .execute(pool).await.unwrap();
         }
 
-        let r_ok = simulate_server_startup(&env.harness, 0).await;
+        let r_ok = simulate_server_startup_with_rerand_validation(&env.harness, 0).await;
         assert!(r_ok.is_ok(), "In-sync startup should succeed");
 
         println!("[phase 7] PASSED");
@@ -325,7 +420,7 @@ fn phase8_reject_desync() {
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (2, 0, TRUE, TRUE, FALSE)")
 .execute(&env.harness.parties[2].store.pool).await.unwrap();
 
-        let r1 = simulate_server_startup(&env.harness, 1).await;
+        let r1 = simulate_server_startup_with_rerand_validation(&env.harness, 1).await;
         assert!(
             r1.is_err(),
             "P1 startup should have failed due to large epoch gap"
@@ -347,7 +442,7 @@ fn phase8_reject_desync() {
         sqlx::query("INSERT INTO rerand_progress (epoch, chunk_id, staging_written, all_confirmed, live_applied) VALUES (3, 2, TRUE, TRUE, FALSE)")
 .execute(&env.harness.parties[0].store.pool).await.unwrap();
 
-        let r1_chunk_desync = simulate_server_startup(&env.harness, 1).await;
+        let r1_chunk_desync = simulate_server_startup_with_rerand_validation(&env.harness, 1).await;
         assert!(
             r1_chunk_desync.is_err(),
             "P1 startup should have failed due to large chunk gap"
@@ -419,6 +514,145 @@ fn phase9_asymmetric_modification_consistency() {
 
         println!("[phase 9] PASSED (epoch={})", ep);
 
+        env.teardown().await
+    });
+}
+
+// ============================================================================
+// Phase 10: Startup freeze catchup path — local party is behind peers and
+// advances while freeze is released and re-acquired.
+// ============================================================================
+
+#[test]
+fn phase10_startup_freeze_local_catchup() {
+    run_async(async {
+        let _ = tracing_subscriber::fmt::try_init();
+        let env = TestEnv::setup().await?;
+        println!("[phase 10] Startup freeze catchup...");
+
+        let p0_pool = &env.harness.parties[0].store.pool;
+        let p1_pool = &env.harness.parties[1].store.pool;
+        let p2_pool = &env.harness.parties[2].store.pool;
+
+        // Local is behind peers in this epoch.
+        set_live_applied_chunk(p0_pool, 0, 0).await?;
+        set_live_applied_chunk(p1_pool, 0, 4).await?;
+        set_live_applied_chunk(p2_pool, 0, 4).await?;
+
+        let (p1_port, p1_server) = start_peer_watermark_server(p1_pool).await?;
+        let (p2_port, p2_server) = start_peer_watermark_server(p2_pool).await?;
+        let worker = spawn_checking_worker(p0_pool.clone());
+
+        // Simulate a main-server startup sequence where this party releases freeze
+        // so catchup can happen, then re-enters freeze logic.
+        let catchup = tokio::spawn({
+            let p0_pool = p0_pool.clone();
+            async move {
+                loop {
+                    let (freeze_requested,): (bool,) =
+                        sqlx::query_as("SELECT freeze_requested FROM rerand_control WHERE id = 1")
+                            .fetch_one(&p0_pool)
+                            .await?;
+                    if freeze_requested {
+                        set_live_applied_chunk(&p0_pool, 0, 4).await?;
+                        return Ok::<_, eyre::Report>(());
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+            }
+        });
+
+        let startup = tokio::time::timeout(
+            std::time::Duration::from_secs(25),
+            simulate_server_startup_with_freeze(
+                p0_pool,
+                &[("127.0.0.1", p1_port), ("127.0.0.1", p2_port)],
+            ),
+        )
+        .await;
+        assert!(startup.is_ok(), "startup freeze converge timed out");
+        startup.unwrap()?;
+
+        assert_eq!(rerand_store::get_applied_watermark_from_pool(p0_pool).await?, Some((0, 4)));
+        rerand_store::release_rerand_freeze(p0_pool).await?;
+        catchup.await?.unwrap();
+
+        let control = sqlx::query_as::<_, (bool, Option<String>)>(
+            "SELECT freeze_requested, freeze_generation FROM rerand_control WHERE id = 1",
+        )
+        .fetch_one(p0_pool)
+        .await?;
+        assert!(!control.0, "freeze should be released after startup converge");
+        assert!(control.1.is_none(), "stale freeze generation should be cleared");
+
+        worker.abort();
+        p1_server.abort();
+        p2_server.abort();
+        env.teardown().await
+    });
+}
+
+// ============================================================================
+// Phase 11: Startup freeze wait path — local party is at max and peers catch up.
+// ============================================================================
+
+#[test]
+fn phase11_startup_freeze_waits_for_peers() {
+    run_async(async {
+        let _ = tracing_subscriber::fmt::try_init();
+        let env = TestEnv::setup().await?;
+        println!("[phase 11] Startup freeze peer catchup...");
+
+        let p0_pool = &env.harness.parties[0].store.pool;
+        let p1_pool = &env.harness.parties[1].store.pool;
+        let p2_pool = &env.harness.parties[2].store.pool;
+
+        // Local is fully caught up initially; peers lag at chunk 0.
+        set_live_applied_chunk(p0_pool, 0, 4).await?;
+        set_live_applied_chunk(p1_pool, 0, 0).await?;
+        set_live_applied_chunk(p2_pool, 0, 0).await?;
+
+        let (p1_port, p1_server) = start_peer_watermark_server(p1_pool).await?;
+        let (p2_port, p2_server) = start_peer_watermark_server(p2_pool).await?;
+        let worker = spawn_checking_worker(p0_pool.clone());
+
+        let advance_peers = tokio::spawn({
+            let p1_pool = p1_pool.clone();
+            let p2_pool = p2_pool.clone();
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                set_live_applied_chunk(&p1_pool, 0, 4).await?;
+                set_live_applied_chunk(&p2_pool, 0, 4).await?;
+                Result::<(), eyre::Report>::Ok(())
+            }
+        });
+
+        let startup = tokio::time::timeout(
+            std::time::Duration::from_secs(25),
+            simulate_server_startup_with_freeze(
+                p0_pool,
+                &[("127.0.0.1", p1_port), ("127.0.0.1", p2_port)],
+            ),
+        )
+        .await;
+        assert!(startup.is_ok(), "startup freeze converge timed out");
+        startup.unwrap()?;
+
+        assert_eq!(rerand_store::get_applied_watermark_from_pool(p0_pool).await?, Some((0, 4)));
+        rerand_store::release_rerand_freeze(p0_pool).await?;
+        advance_peers.await??;
+
+        let control = sqlx::query_as::<_, (bool, Option<String>)>(
+            "SELECT freeze_requested, freeze_generation FROM rerand_control WHERE id = 1",
+        )
+        .fetch_one(p0_pool)
+        .await?;
+        assert!(!control.0, "freeze should be released after startup converge");
+        assert!(control.1.is_none(), "stale freeze generation should be cleared");
+
+        worker.abort();
+        p1_server.abort();
+        p2_server.abort();
         env.teardown().await
     });
 }

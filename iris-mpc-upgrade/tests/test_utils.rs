@@ -420,6 +420,78 @@ pub async fn simulate_server_startup(harness: &TestHarness, party: usize) -> Res
     Ok(())
 }
 
+pub async fn simulate_server_startup_with_rerand_validation(
+    harness: &TestHarness,
+    party: usize,
+) -> Result<()> {
+    simulate_server_startup(harness, party).await?;
+    validate_rerand_startup_safety(harness).await
+}
+
+async fn validate_rerand_startup_safety(harness: &TestHarness) -> Result<()> {
+    let mut epochs = Vec::with_capacity(harness.parties.len());
+    let mut confirmed_chunks = Vec::with_capacity(harness.parties.len());
+
+    for party in &harness.parties {
+        let (epoch,): (Option<i32>,) =
+            sqlx::query_as("SELECT MAX(epoch) FROM rerand_progress")
+                .fetch_one(&party.store.pool)
+                .await?;
+        let epoch = epoch.unwrap_or(0);
+
+        let (max_confirmed_chunk,): (Option<i32>,) =
+            sqlx::query_as(
+                "SELECT MAX(chunk_id) FROM rerand_progress WHERE epoch = $1 AND all_confirmed = TRUE",
+            )
+            .bind(epoch)
+            .fetch_one(&party.store.pool)
+            .await?;
+
+        epochs.push(epoch);
+        confirmed_chunks.push(max_confirmed_chunk.unwrap_or(-1));
+    }
+
+    let min_epoch = *epochs
+        .iter()
+        .min()
+        .ok_or_else(|| eyre::eyre!("No parties found for rerand startup validation"))?;
+    let max_epoch = *epochs
+        .iter()
+        .max()
+        .ok_or_else(|| eyre::eyre!("No parties found for rerand startup validation"))?;
+
+    if max_epoch - min_epoch > 1 {
+        eyre::bail!(
+            "Startup cannot proceed: rerand epoch gap is too large (min={}, max={}).",
+            min_epoch,
+            max_epoch
+        );
+    }
+
+    let max_epoch_parties: Vec<_> = epochs
+        .iter()
+        .zip(confirmed_chunks.iter())
+        .filter(|(e, _)| **e == max_epoch)
+        .map(|(_, c)| *c)
+        .collect();
+
+    if let (Some(min_chunk), Some(max_chunk)) = (
+        max_epoch_parties.iter().min().cloned(),
+        max_epoch_parties.iter().max().cloned(),
+    ) {
+        if max_chunk - min_chunk > 1 {
+            eyre::bail!(
+                "Startup cannot proceed: rerand confirmed-chunk gap is too large at epoch {} (min={}, max={}).",
+                max_epoch,
+                min_chunk,
+                max_chunk
+            );
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn assert_consistent_rerand_epoch(
     harness: &TestHarness,
     skip_ids: &[i64],
