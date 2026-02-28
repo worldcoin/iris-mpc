@@ -168,10 +168,7 @@ pub async fn sync_modifications(
 
         // Now acquire the modification lock and write this batch atomically.
         let mut iris_tx = store.tx().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(iris_mpc_store::rerand::RERAND_MODIFY_LOCK)
-            .execute(&mut *iris_tx)
-            .await?;
+        iris_mpc_store::rerand::acquire_modify_lock(&mut iris_tx).await?;
 
         let batch_refs: Vec<&Modification> = batch.iter().collect();
         store.update_modifications(&mut iris_tx, &batch_refs).await?;

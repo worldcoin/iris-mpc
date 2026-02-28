@@ -16,13 +16,6 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    pub fn num_chunks(&self) -> u32 {
-        if self.max_id_inclusive == 0 {
-            return 0;
-        }
-        self.max_id_inclusive.div_ceil(self.chunk_size) as u32
-    }
-
     /// Returns (start_id_inclusive, end_id_exclusive) for a given chunk_id.
     /// IDs are 1-based.
     pub fn chunk_range(&self, chunk_id: u32) -> (u64, u64) {

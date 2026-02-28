@@ -7,6 +7,18 @@ use sqlx::PgPool;
 pub const RERAND_APPLY_LOCK: i64 = 0x5245_5241_4E44;
 pub const RERAND_MODIFY_LOCK: i64 = 0x5245_4D4F_4446;
 
+/// Acquire `RERAND_MODIFY_LOCK` as a transaction-level advisory lock.
+/// Auto-released on commit/rollback.
+pub async fn acquire_modify_lock(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(RERAND_MODIFY_LOCK)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 pub struct StagingIrisEntry {
     pub epoch: i32,
     pub id: i64,
@@ -168,10 +180,7 @@ pub async fn apply_confirmed_chunk(
     validate_identifier(staging_schema)?;
     let mut tx = pool.begin().await?;
 
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(RERAND_MODIFY_LOCK)
-        .execute(&mut *tx)
-        .await?;
+    acquire_modify_lock(&mut tx).await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(RERAND_APPLY_LOCK)
         .execute(&mut *tx)
@@ -284,18 +293,6 @@ pub async fn get_rerand_progress(
     .fetch_optional(pool)
     .await?;
     Ok(row)
-}
-
-/// Returns the highest chunk_id where all_confirmed = TRUE for a given epoch,
-/// or None if no chunks are confirmed.
-pub async fn get_max_confirmed_chunk(pool: &PgPool, epoch: i32) -> Result<Option<i32>> {
-    let row: (Option<i32>,) = sqlx::query_as(
-        "SELECT MAX(chunk_id) FROM rerand_progress WHERE epoch = $1 AND all_confirmed = TRUE",
-    )
-    .bind(epoch)
-    .fetch_one(pool)
-    .await?;
-    Ok(row.0)
 }
 
 /// Returns the highest `chunk_id` where `live_applied = TRUE` for a given

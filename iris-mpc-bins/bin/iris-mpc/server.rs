@@ -1774,10 +1774,7 @@ async fn server_main(config: Config) -> Result<()> {
             let mut tx = store_bg.tx().await?;
 
             if !config_bg.disable_persistence {
-                sqlx::query("SELECT pg_advisory_xact_lock($1)")
-                    .bind(iris_mpc_store::rerand::RERAND_MODIFY_LOCK)
-                    .execute(&mut *tx)
-                    .await?;
+                iris_mpc_store::rerand::acquire_modify_lock(&mut tx).await?;
             }
 
             store_bg
