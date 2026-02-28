@@ -1,6 +1,8 @@
 use clap::Parser;
 use eyre::{bail, Result};
-use iris_mpc_common::{config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId};
+use iris_mpc_common::{
+    config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
+};
 use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
