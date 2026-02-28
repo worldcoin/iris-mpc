@@ -8,15 +8,15 @@ Key design decision: in-memory shares are less likely to be exfiltrated, so only
 
 ## Critical assumption: reliable modification delivery
 
-The correctness of this protocol depends on **every modification (reauth, deletion, reset) eventually arriving at every party via SQS**. This is a pre-existing system invariant — without it, the MPC shares diverge regardless of rerandomization. Rerandomization does not weaken this guarantee, but it does create a new transient inconsistency window (see [Post-staging modifications](#post-staging-modifications-transient-inconsistency)) that relies on modification delivery to self-correct.
+The correctness of this protocol depends on **every modification (reauth, deletion, reset) eventually arriving at every party via SQS**. This is a pre-existing system invariant — without it, the MPC shares diverge regardless of rerandomization. The prior system already depended on this assumption; this design makes the dependency explicit and continues to enforce the same safety boundary. Rerandomization does not weaken this guarantee, but it does create a new transient inconsistency window (see [Post-staging modifications](#post-staging-modifications-transient-inconsistency)) that relies on modification delivery to self-correct.
 
-Three mechanisms enforce this invariant:
+The protocol enforces this in two active mechanisms, with one residual coverage gap:
 
-1. **SQS delete after persist** — the SQS message is only deleted *after* the modification row is durably written to the DB. If the process crashes between receiving and persisting, SQS redelivers the message. This eliminates the window where a message could be lost between delete and persist.
+1. **SQS delete after persist** — the SQS message is only deleted *after* the modification row is durably written to the DB. If the process crashes between receiving and persisting, SQS redelivers the message. This eliminates the window where a message could be lost between delete and persist. This behavior is implemented in this branch; it is safer than main’s previous delete-before-process behavior.
 
-2. **Startup reconciliation recovers missing modifications** — `sync_modifications` compares modification state across all three parties. If a modification is completed on peers but missing locally (e.g., from a historical race before the delete-after-persist fix), it is now recovered from the peer's copy and applied locally. Large modification-ID drift across nodes is logged as an error but does not crash the process, allowing best-effort reconciliation.
+2. **Startup reconciliation recovers missing modifications** — `sync_modifications` compares modification state across all three parties. In this branch, `compare_modifications` was strengthened to emit missing completed rows, and `sync_modifications` now stages them with `upsert_recovered_modification` so they are fully replayed locally. This closes local startup drift paths that were only partially handled before and is linked with lock ordering around rerand apply/state freeze. It still fails closed on lookback overrun.
 
-3. **Remaining gap**: `sync_modifications` is a startup procedure, not a continuous background loop. A running node that permanently lost a modification (and never restarts) will stay inconsistent for the affected row until the next epoch re-randomizes it. Periodic rolling restarts or a future continuous reconciliation loop would close this gap entirely.
+3. **Residual gap**: `sync_modifications` is a startup procedure, not a continuous background loop. A running node that permanently lost a modification (and never restarts) will stay inconsistent for the affected row until the next epoch re-randomizes it. Periodic rolling restarts or a future continuous reconciliation loop would close this gap entirely.
 
 ## Architecture
 
@@ -231,7 +231,7 @@ At startup, before `load_iris_db`:
       - **All equal** → proceed to DB load.
       - **Local is behind max(peers)** → release the local freeze so the worker can catch up (apply the pending chunk), sleep briefly, then re-freeze and re-check from step (a).
       - **Local is at or ahead of max(peers)** → stay frozen and re-poll peers after a short sleep. The behind parties' startups will release their own freezes, letting their workers catch up.
-   e. This loop converges because: only behind parties release their freeze, leading parties stay frozen (can't advance), and the S3 barrier limits the gap to at most 1 chunk. Timeout after 2 minutes if convergence doesn't happen (indicates a stuck worker).
+   e. This loop converges by repeatedly releasing/re-freezing until all parties report matching `(epoch, max_applied_chunk)` watermarks. Timeout after 2 minutes if convergence doesn't happen (indicates a stuck worker). Only behind parties release their freeze, while at-max parties stay frozen and wait for peers.
 3. **New**: acquire `RERAND_APPLY_LOCK` on a dedicated connection (belt-and-suspenders with the freeze).
 4. **Existing**: `load_iris_db` — loads from live DB into GPU/HNSW memory. Both the freeze and the advisory lock are held, so the rerand server cannot apply new chunks.
 5. Release `RERAND_APPLY_LOCK`.
@@ -387,17 +387,22 @@ sequenceDiagram
     MS->>Peer2: GET /rerand-watermark
     Peer2-->>MS: {epoch: 3, max_applied_chunk: 7}
 
-    alt All watermarks equal
-        MS->>DB: pg_advisory_lock(APPLY_LOCK)
-        MS->>DB: load_iris_db (full DB snapshot into memory)
-        MS->>DB: pg_advisory_unlock(APPLY_LOCK)
-        MS->>DB: SET freeze_requested=FALSE
-        Note over RW: Poll sees freeze_requested=FALSE
-        RW->>RW: Resume chunk processing
-    else Watermark mismatch
-        MS->>DB: SET freeze_requested=FALSE
-        Note over RW: Resume chunk processing
-        Note over MS: ABORT startup (fail closed)
+    loop Convergence
+        alt All watermarks equal
+            MS->>DB: pg_advisory_lock(APPLY_LOCK)
+            MS->>DB: load_iris_db (full DB snapshot into memory)
+            MS->>DB: pg_advisory_unlock(APPLY_LOCK)
+            MS->>DB: SET freeze_requested=FALSE
+            Note over RW: Poll sees freeze_requested=FALSE
+            RW->>RW: Resume chunk processing
+            break
+        else Local behind max
+            MS->>DB: SET freeze_requested=FALSE
+            Note over RW: Resume to catch up
+            MS->>MS: sleep + re-freeze with new request
+        else Local at max, peers behind
+            MS->>MS: sleep briefly
+        end
     end
 ```
 
