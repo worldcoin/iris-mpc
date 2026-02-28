@@ -1,4 +1,5 @@
 pub mod loader;
+pub mod rerand;
 mod s3_importer;
 
 use bytemuck::cast_slice;
@@ -657,6 +658,39 @@ WHERE id = $1;
         .execute(tx.deref_mut())
         .await?;
 
+        Ok(())
+    }
+
+    /// Insert a modification recovered from a peer. Uses the peer's `id` to
+    /// keep modification IDs consistent across parties. If the `id` already
+    /// exists, updates the row to match the peer's state.
+    pub async fn upsert_recovered_modification(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        m: &Modification,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted, result_message_body, graph_mutation)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (id) DO UPDATE SET
+                status = EXCLUDED.status,
+                persisted = EXCLUDED.persisted,
+                result_message_body = EXCLUDED.result_message_body,
+                serial_id = EXCLUDED.serial_id,
+                graph_mutation = EXCLUDED.graph_mutation
+            "#,
+        )
+        .bind(m.id)
+        .bind(m.serial_id)
+        .bind(&m.request_type)
+        .bind(&m.s3_url)
+        .bind(&m.status)
+        .bind(m.persisted)
+        .bind(&m.result_message_body)
+        .bind(&m.graph_mutation)
+        .execute(tx.deref_mut())
+        .await?;
         Ok(())
     }
 

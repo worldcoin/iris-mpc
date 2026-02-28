@@ -39,20 +39,31 @@ pub async fn sync_modifications(
     // Sort modifications in id order
     to_update.sort_by_key(|m| m.id);
 
-    // Update node_id for each modification and collect &refs
-    let to_update_refs: Vec<&Modification> = to_update
-        .iter_mut()
-        .map(|modification| {
-            if let Err(e) = modification.update_result_message_node_id(config.party_id) {
-                tracing::error!("Failed to update modification node_id: {:?}", e);
-            }
-            &*modification
-        })
-        .collect();
+    // Update node_id for each modification (mutable pass)
+    for modification in &mut to_update {
+        if let Err(e) = modification.update_result_message_node_id(config.party_id) {
+            tracing::error!("Failed to update modification node_id: {:?}", e);
+        }
+    }
 
     let mut iris_tx = store.tx().await?;
 
+    // Acquire the modification lock to serialize with rerand apply.
+    iris_mpc_store::rerand::acquire_modify_lock(&mut iris_tx).await?;
+
+    // Ensure recovered modification rows exist locally (completed on peers
+    // but missing here). Inserted with persisted=false so the loop below
+    // fetches shares and writes iris data before marking persisted=true.
+    for m in &to_update {
+        let mut staging = m.clone();
+        staging.persisted = false;
+        store
+            .upsert_recovered_modification(&mut iris_tx, &staging)
+            .await?;
+    }
+
     // Persist changes into modifications table
+    let to_update_refs: Vec<&Modification> = to_update.iter().collect();
     store
         .update_modifications(&mut iris_tx, &to_update_refs)
         .await?;
@@ -82,16 +93,18 @@ pub async fn sync_modifications(
                 dummy_shares_for_deletions.clone().1,
             ),
             REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE | UNIQUENESS_MESSAGE_TYPE => {
+                let s3_url = modification.s3_url.clone().ok_or_else(|| {
+                    eyre!("Persisted modification missing s3_url: {:?}", modification)
+                })?;
                 let (left_shares, right_shares) = get_iris_shares_parse_task(
                     config.party_id,
                     shares_encryption_key_pair.clone(),
                     Arc::clone(&semaphore),
                     aws_clients.s3_client.clone(),
                     config.shares_bucket_name.clone(),
-                    modification.clone().s3_url.unwrap(),
+                    s3_url,
                 )?
-                .await?
-                .unwrap();
+                .await??;
                 (
                     left_shares.code,
                     left_shares.mask,
@@ -100,7 +113,7 @@ pub async fn sync_modifications(
                 )
             }
             _ => {
-                panic!("Unknown modification type: {:?}", modification);
+                return Err(eyre!("Unknown modification type: {:?}", modification));
             }
         };
 
@@ -121,7 +134,7 @@ pub async fn sync_modifications(
         if let Some(serialized) = &modification.graph_mutation {
             let single_mutation: SingleHawkMutation =
                 bincode::deserialize::<SingleHawkMutation>(serialized)
-                    .expect("Failed to deserialize SingleHawkMutation");
+                    .map_err(|e| eyre!("Failed to deserialize SingleHawkMutation: {}", e))?;
             graph_mutations.push(single_mutation.clone());
         }
     }
@@ -161,7 +174,6 @@ pub async fn send_last_modifications_to_sns(
     let recovery_check_message_attributes =
         create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
 
-    // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
     tracing::info!(
         "Replaying last {} modification results to SNS",
@@ -173,7 +185,6 @@ pub async fn send_last_modifications_to_sns(
         return Ok(());
     }
 
-    // Collect messages by type
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
     let mut reset_update_messages = Vec::new();

@@ -401,8 +401,6 @@ impl<'a> BatchProcessor<'a> {
             .string_value()
             .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
-        self.delete_message(&sqs_message).await?;
-
         let res = match request_type {
             IDENTITY_DELETION_MESSAGE_TYPE => {
                 self.process_identity_deletion(&message, batch_metadata)
@@ -417,6 +415,8 @@ impl<'a> BatchProcessor<'a> {
                 if !self.config.hawk_server_recovery_enabled {
                     metrics::counter!("request.skipped", "type" => "recovery_check").increment(1);
                     tracing::warn!("Recovery checks are disabled, skipping recovery check request");
+                    self.delete_message(&sqs_message).await?;
+                    self.msg_counter += 1;
                     return Ok(());
                 }
                 self.process_identity_match_check_request(
@@ -430,6 +430,8 @@ impl<'a> BatchProcessor<'a> {
                 if !self.config.hawk_server_resets_enabled {
                     metrics::counter!("request.skipped", "type" => "reset_check").increment(1);
                     tracing::warn!("Resets are disabled, skipping reset request");
+                    self.delete_message(&sqs_message).await?;
+                    self.msg_counter += 1;
                     return Ok(());
                 }
                 self.process_identity_match_check_request(
@@ -445,12 +447,19 @@ impl<'a> BatchProcessor<'a> {
             }
             _ => {
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
-                Ok(())
+                self.delete_message(&sqs_message).await?;
+                self.msg_counter += 1;
+                return Ok(());
             }
         };
 
+        // Only delete from SQS after the message has been successfully
+        // processed and the modification row is durably persisted. If we
+        // crash before this point, SQS will redeliver the message.
+        res?;
+        self.delete_message(&sqs_message).await?;
         self.msg_counter += 1;
-        res
+        Ok(())
     }
 
     async fn process_identity_deletion(

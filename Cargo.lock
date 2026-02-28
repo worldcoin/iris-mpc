@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a44f978cc0c39942ef360a447f91e76769e800bb#a44f978cc0c39942ef360a447f91e76769e800bb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=9e19ea57b1f7db11843d39ada2599557ce028a7b#9e19ea57b1f7db11843d39ada2599557ce028a7b"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a44f978cc0c39942ef360a447f91e76769e800bb#a44f978cc0c39942ef360a447f91e76769e800bb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=9e19ea57b1f7db11843d39ada2599557ce028a7b#9e19ea57b1f7db11843d39ada2599557ce028a7b"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -135,7 +135,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a44f978cc0c39942ef360a447f91e76769e800bb#a44f978cc0c39942ef360a447f91e76769e800bb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=9e19ea57b1f7db11843d39ada2599557ce028a7b#9e19ea57b1f7db11843d39ada2599557ce028a7b"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a44f978cc0c39942ef360a447f91e76769e800bb#a44f978cc0c39942ef360a447f91e76769e800bb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=9e19ea57b1f7db11843d39ada2599557ce028a7b#9e19ea57b1f7db11843d39ada2599557ce028a7b"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -1237,7 +1237,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2919,6 +2919,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "axum 0.7.7",
  "base64",
  "bincode",
  "bytemuck",
@@ -3170,9 +3171,13 @@ dependencies = [
  "iris-mpc-common",
  "itertools 0.13.0",
  "rand 0.8.5",
+ "reqwest",
+ "serde_json",
  "sqlx",
  "tokio",
+ "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3183,12 +3188,18 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-serialize",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
  "axum 0.7.7",
+ "base64",
  "blake3",
  "bytemuck",
  "clap",
  "criterion",
+ "dotenvy",
  "eyre",
+ "futures",
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
@@ -3198,9 +3209,12 @@ dependencies = [
  "rayon",
  "serde",
  "serde-big-array",
+ "serde_json",
  "sha2",
+ "sqlx",
  "thiserror 1.0.65",
  "tokio",
+ "tokio-util",
  "tonic",
  "tonic-build",
  "tracing",
@@ -3373,7 +3387,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -4339,7 +4353,7 @@ checksum = "0c1318b19085f08681016926435853bbf7858f9c082d0999b80550ff5d9abe15"
 dependencies = [
  "bytes",
  "heck",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -4372,7 +4386,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9552f850d5f0964a4e4d0bf306459ac29323ddfbae05e35a7c0d35cb0803cc5"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn",
@@ -4496,7 +4510,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.35",
- "socket2 0.6.0",
+ "socket2 0.5.7",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -4533,7 +4547,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.7",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -6564,7 +6578,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

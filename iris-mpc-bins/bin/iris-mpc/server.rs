@@ -58,6 +58,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_gpu::server::ServerActor;
 use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::rerand as rerand_store;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -158,6 +159,24 @@ pub fn receive_batch_stream(
     rx
 }
 
+async fn delete_message_from_sqs(
+    client: &Client,
+    queue_url: &str,
+    sqs_message: &aws_sdk_sqs::types::Message,
+) -> Result<(), ReceiveRequestError> {
+    let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+        ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre!("Missing receipt handle"))
+    })?;
+    client
+        .delete_message()
+        .queue_url(queue_url)
+        .receipt_handle(receipt_handle)
+        .send()
+        .await
+        .map_err(ReceiveRequestError::from)?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn receive_batch(
     party_id: usize,
@@ -223,8 +242,6 @@ async fn receive_batch(
 
                 match request_type {
                     IDENTITY_DELETION_MESSAGE_TYPE => {
-                        // If it's a deletion request, we just store the serial_id and continue.
-                        // Deletion will take place when batch process starts.
                         let identity_deletion_request: IdentityDeletionRequest =
                             serde_json::from_str(&message.message).map_err(|e| {
                                 ReceiveRequestError::json_parse_error(
@@ -232,13 +249,6 @@ async fn receive_batch(
                                     e,
                                 )
                             })?;
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
                         if batch_query
@@ -250,6 +260,7 @@ async fn receive_batch(
                                 identity_deletion_request.serial_id,
                                 identity_deletion_request,
                             );
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             continue;
                         }
                         let modification = store
@@ -259,6 +270,7 @@ async fn receive_batch(
                                 None,
                             )
                             .await?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         batch_query.modifications.insert(
                             RequestSerialId(identity_deletion_request.serial_id),
                             modification,
@@ -283,14 +295,6 @@ async fn receive_batch(
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
 
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
-
                         if let Some(batch_size) = uniqueness_request.batch_size {
                             // Updating the batch size instantly makes it a bit unpredictable, since
                             // if we're already above the new limit, we'll still process the current
@@ -310,6 +314,7 @@ async fn receive_batch(
                                 Some(uniqueness_request.s3_key.as_str()),
                             )
                             .await?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         batch_query.modifications.insert(
                             RequestId(uniqueness_request.signup_id.clone()),
                             modification,
@@ -392,13 +397,6 @@ async fn receive_batch(
                             .map_err(|e| {
                                 ReceiveRequestError::json_parse_error("Reauth request", e)
                             })?;
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
 
                         metrics::counter!("request.received", "type" => "reauth").increment(1);
 
@@ -412,6 +410,7 @@ async fn receive_batch(
                                 "Received a reauth request with use_or_rule set to true, but LUC \
                                  is not enabled. Skipping request."
                             );
+                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                                 continue;
                             }
 
@@ -424,6 +423,7 @@ async fn receive_batch(
                                 reauth_request.serial_id,
                                 reauth_request,
                             );
+                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                                 continue;
                             }
 
@@ -436,6 +436,7 @@ async fn receive_batch(
                                     Some(reauth_request.s3_key.as_str()),
                                 )
                                 .await?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             batch_query
                                 .modifications
                                 .insert(RequestSerialId(reauth_request.serial_id), modification);
@@ -493,6 +494,7 @@ async fn receive_batch(
                             handles.push(handle);
                         } else {
                             tracing::warn!("Reauth is disabled, skipping reauth request");
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         }
                     }
 
@@ -507,17 +509,10 @@ async fn receive_batch(
                                 )
                             })?;
 
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
-
-                        if !is_enabled(&request_type, &config) {
+                        if !is_enabled(request_type, config) {
                             metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
                             tracing::warn!("{} is disabled, skipping request", request_type);
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             continue;
                         }
                         metrics::counter!("request.received", "type" => request_type.to_string())
@@ -525,16 +520,14 @@ async fn receive_batch(
 
                         msg_counter += 1;
 
-                        // Persist in progress identity match check message.
-                        // Note that identity match check is only a query and does not persist anything into the database.
-                        // We store modification so that the SNS result can be replayed.
                         let modification = store
                             .insert_modification(
                                 None,
-                                &request_type,
+                                request_type,
                                 Some(identity_match_check_request.s3_key.as_str()),
                             )
                             .await?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         batch_query.modifications.insert(
                             RequestId(identity_match_check_request.request_id.clone()),
                             modification,
@@ -549,7 +542,7 @@ async fn receive_batch(
                         batch_query.push_matching_request(
                             sns_message_id,
                             identity_match_check_request.request_id.clone(),
-                            &request_type,
+                            request_type,
                             batch_metadata,
                             vec![], // use AND rule for identity match check requests
                             false,  // skip_persistence is only used for uniqueness requests
@@ -580,14 +573,6 @@ async fn receive_batch(
                             })?;
                         metrics::counter!("request.received", "type" => "reset_update")
                             .increment(1);
-
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
 
                         if config.enable_reset {
                             // Fetch new iris shares from S3
@@ -633,6 +618,7 @@ async fn receive_batch(
                                 reset_update_request.serial_id,
                                 reset_update_request,
                             );
+                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                                 continue;
                             }
 
@@ -643,6 +629,7 @@ async fn receive_batch(
                                     Some(reset_update_request.s3_key.as_str()),
                                 )
                                 .await?;
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                             batch_query.modifications.insert(
                                 RequestSerialId(reset_update_request.serial_id),
                                 modification,
@@ -659,17 +646,14 @@ async fn receive_batch(
                                     mask_right: right_shares.mask,
                                 },
                             );
+                        } else {
+                            tracing::warn!("Reset is disabled, skipping reset update request");
+                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         }
                     }
 
                     _ => {
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
                         tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                     }
                 }
@@ -981,11 +965,13 @@ async fn server_main(config: Config) -> Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await?;
     let my_state = SyncState {
         db_len: store_len as u64,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
+        rerand_state,
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1003,7 +989,6 @@ async fn server_main(config: Config) -> Result<()> {
         let verified_peers = Arc::clone(&verified_peers);
         let image_name = server_coord_config.image_name.to_string();
 
-        // Pre-calculate parts of the response that don't change
         let base_response = ReadyProbeResponse {
             image_name: image_name.clone(),
             shutting_down: false,
@@ -1012,11 +997,14 @@ async fn server_main(config: Config) -> Result<()> {
             is_ready: false,
         };
 
-        let my_state = my_state.clone();
+        // Capture a base state for fields that don't change, but re-fetch
+        // rerand_state from the DB on each /startup-sync request so peers
+        // always see the live watermark (not a stale boot-time snapshot).
+        let base_sync_state = my_state.clone();
+        let sync_pool = store.pool.clone();
         async move {
             let is_ready_flag_health = Arc::clone(&is_ready_flag);
             let is_ready_flag_ready = Arc::clone(&is_ready_flag);
-            // Generate a random UUID for each run.
             let app = Router::new()
                 .route(
                     "/health",
@@ -1049,7 +1037,59 @@ async fn server_main(config: Config) -> Result<()> {
                 )
                 .route(
                     "/startup-sync",
-                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+                    get({
+                        let base = base_sync_state;
+                        let pool = sync_pool.clone();
+                        move || {
+                            let mut state = base.clone();
+                            let pool = pool.clone();
+                            async move {
+                                match rerand_store::build_rerand_sync_state(&pool).await {
+                                    Ok(live_rerand) => {
+                                        state.rerand_state = live_rerand;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to fetch live rerand_state for /startup-sync, \
+                                             serving stale snapshot: {:?}",
+                                            e
+                                        );
+                                    }
+                                }
+                                serde_json::to_string(&state).unwrap()
+                            }
+                        }
+                    }),
+                )
+                .route(
+                    "/rerand-watermark",
+                    get({
+                        let pool = sync_pool.clone();
+                        move || {
+                            let pool = pool.clone();
+                            async move {
+                                let wm = rerand_store::get_applied_watermark_from_pool(&pool).await;
+                                match wm {
+                                    Ok(Some((epoch, chunk))) => (
+                                        StatusCode::OK,
+                                        serde_json::to_string(&serde_json::json!({
+                                            "epoch": epoch,
+                                            "max_applied_chunk": chunk,
+                                        }))
+                                        .unwrap(),
+                                    ),
+                                    Ok(None) => (StatusCode::OK, "null".to_string()),
+                                    Err(e) => {
+                                        tracing::warn!("rerand-watermark query failed: {:?}", e);
+                                        (
+                                            StatusCode::INTERNAL_SERVER_ERROR,
+                                            format!("DB error: {}", e),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
                 .await
@@ -1296,7 +1336,7 @@ async fn server_main(config: Config) -> Result<()> {
             None,
             &aws_clients,
             &shares_encryption_key_pair,
-            sync_result,
+            sync_result.clone(),
         )
         .await?;
     }
@@ -1315,98 +1355,139 @@ async fn server_main(config: Config) -> Result<()> {
         }
     }
 
-    if download_shutdown_handler.is_shutting_down() {
-        tracing::warn!("Shutting down has been triggered");
-        return Ok(());
+    // --- Coordinated rerand freeze with watermark convergence ---
+    {
+        eyre::ensure!(
+            server_coord_config.node_hostnames.len() == server_coord_config.healthcheck_ports.len(),
+            "node_hostnames ({}) and healthcheck_ports ({}) must have the same length",
+            server_coord_config.node_hostnames.len(),
+            server_coord_config.healthcheck_ports.len(),
+        );
+        let peer_addrs: Vec<(&str, usize)> = server_coord_config
+            .node_hostnames
+            .iter()
+            .zip(server_coord_config.healthcheck_ports.iter())
+            .enumerate()
+            .filter(|(i, _)| *i != config.party_id)
+            .map(|(_, (h, p))| -> eyre::Result<_> { Ok((h.as_str(), p.parse::<usize>()?)) })
+            .collect::<eyre::Result<Vec<_>>>()?;
+        rerand_store::freeze_and_verify_watermarks(&store.pool, &peer_addrs).await?;
     }
+    // Worker is now frozen with verified equal watermarks.
+    // Everything from here until freeze release must be wrapped so that
+    // errors always release the freeze.
+    let freeze_pool = store.pool.clone();
 
-    // refetch store_len in case we rolled back
-    let store_len = store.count_irises().await?;
-    tracing::info!("Database store length after sync: {}", store_len);
+    let frozen_result = async {
+        let rerand_lock_conn = rerand_store::acquire_apply_lock(&store.pool).await?;
 
-    let runtime_handle = tokio::runtime::Handle::current();
-    let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
-        let schema = config.get_anon_stats_db_schema();
-        let anon_client =
-            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client).await?;
-        Some((anon_store, runtime_handle.clone()))
-    } else {
-        tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
-        None
-    };
-    let anon_stats_writer_for_actor = anon_stats_writer.clone();
+        if download_shutdown_handler.is_shutting_down() {
+            rerand_store::release_apply_lock(rerand_lock_conn).await?;
+            return Ok::<_, eyre::Report>(None);
+        }
 
-    let (tx, rx) = oneshot::channel();
-    let config_clone = config.clone();
-    background_tasks.spawn_blocking(move || {
-        let config = config_clone;
-        // --------------------------------------------------------------------------
-        // ANCHOR: Load the database
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting server actor");
-        match ServerActor::new(
-            config.party_id,
-            chacha_seeds,
-            8,
-            config.max_db_size,
-            config.max_batch_size,
-            config.match_distances_buffer_size,
-            config.match_distances_buffer_size_extra_percent,
-            config.return_partial_results,
-            config.disable_persistence,
-            config.enable_debug_timing,
-            config.full_scan_side,
-            config.full_scan_side_switching_enabled,
-            anon_stats_writer_for_actor,
-        ) {
-            Ok((mut actor, handle)) => {
-                tracing::info!("⚓️ ANCHOR: Load the database");
-                let res = if config.fake_db_size > 0 {
-                    // TODO: does this even still work, since we do not page-lock the memory here?
-                    actor.fake_db(config.fake_db_size);
-                    Ok(())
-                } else {
-                    tracing::info!(
-                        "Initialize iris db: Loading from DB (parallelism: {})",
-                        parallelism
-                    );
-                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+        let startup_result = async {
+            let store_len = store.count_irises().await?;
+            tracing::info!("Database store length after sync: {}", store_len);
 
-                    tokio::runtime::Handle::current().block_on(async {
-                        load_iris_db(
-                            &mut actor,
-                            &store,
-                            store_len,
-                            parallelism,
-                            &config,
-                            download_shutdown_handler,
-                        )
-                        .await
-                    })
-                };
+            let runtime_handle = tokio::runtime::Handle::current();
+            let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
+                let schema = config.get_anon_stats_db_schema();
+                let anon_client =
+                    AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+                let anon_store = AnonStatsStore::new(&anon_client).await?;
+                Some((anon_store, runtime_handle.clone()))
+            } else {
+                tracing::warn!(
+                    "No database URL configured for anon stats; skipping DB persistence"
+                );
+                None
+            };
+            let anon_stats_writer_for_actor = anon_stats_writer.clone();
 
-                match res {
-                    Ok(_) => {
-                        tx.send(Ok((handle, store))).unwrap();
+            let (tx, rx) = oneshot::channel();
+            let config_clone = config.clone();
+            background_tasks.spawn_blocking(move || {
+                let config = config_clone;
+                tracing::info!("⚓️ ANCHOR: Starting server actor");
+                match ServerActor::new(
+                    config.party_id,
+                    chacha_seeds,
+                    8,
+                    config.max_db_size,
+                    config.max_batch_size,
+                    config.match_distances_buffer_size,
+                    config.match_distances_buffer_size_extra_percent,
+                    config.return_partial_results,
+                    config.disable_persistence,
+                    config.enable_debug_timing,
+                    config.full_scan_side,
+                    config.full_scan_side_switching_enabled,
+                    anon_stats_writer_for_actor,
+                ) {
+                    Ok((mut actor, handle)) => {
+                        tracing::info!("⚓️ ANCHOR: Load the database");
+                        let res = if config.fake_db_size > 0 {
+                            actor.fake_db(config.fake_db_size);
+                            Ok(())
+                        } else {
+                            tracing::info!(
+                                "Initialize iris db: Loading from DB (parallelism: {})",
+                                parallelism
+                            );
+                            let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+
+                            tokio::runtime::Handle::current().block_on(async {
+                                load_iris_db(
+                                    &mut actor,
+                                    &store,
+                                    store_len,
+                                    parallelism,
+                                    &config,
+                                    download_shutdown_handler,
+                                )
+                                .await
+                            })
+                        };
+
+                        match res {
+                            Ok(_) => {
+                                tx.send(Ok((handle, store))).unwrap();
+                            }
+                            Err(e) => {
+                                tx.send(Err(e)).unwrap();
+                                return Ok(());
+                            }
+                        }
+
+                        actor.run(); // forever
                     }
                     Err(e) => {
                         tx.send(Err(e)).unwrap();
                         return Ok(());
                     }
-                }
+                };
+                Ok(())
+            });
 
-                actor.run(); // forever
-            }
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        Ok(())
-    });
+            let startup_result = rx.await;
+            let (handle, store) = startup_result??;
+            Ok::<_, eyre::Report>((handle, store))
+        }
+        .await;
 
-    let (mut handle, store) = rx.await??;
+        rerand_store::release_apply_lock(rerand_lock_conn).await?;
+        Ok(Some(startup_result))
+    }
+    .await;
+
+    // Always release freeze, even on error.
+    rerand_store::release_rerand_freeze(&freeze_pool).await?;
+
+    let (mut handle, store) = match frozen_result? {
+        None => return Ok(()),
+        Some(r) => r?,
+    };
 
     background_tasks.check_tasks();
 
@@ -1700,6 +1781,10 @@ async fn server_main(config: Config) -> Result<()> {
                 .collect::<Vec<String>>();
 
             let mut tx = store_bg.tx().await?;
+
+            if !config_bg.disable_persistence {
+                iris_mpc_store::rerand::acquire_modify_lock(&mut tx).await?;
+            }
 
             store_bg
                 .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())

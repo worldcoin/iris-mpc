@@ -13,8 +13,8 @@ use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRI
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, set_node_ready, start_coordination_server, wait_for_others_ready,
-    wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
+    init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes,
+    wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
@@ -37,6 +37,7 @@ use iris_mpc_cpu::execution::hawk_main::{
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::rerand::{self as rerand_store};
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
@@ -92,13 +93,46 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
-    // Start coordination server
-    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+    // Build a /rerand-watermark route that queries the DB live on each request.
+    let rerand_watermark_route = {
+        let pool = iris_store.pool.clone();
+        axum::Router::new().route(
+            "/rerand-watermark",
+            axum::routing::get(move || {
+                let pool = pool.clone();
+                async move {
+                    let wm = rerand_store::get_applied_watermark_from_pool(&pool).await;
+                    match wm {
+                        Ok(Some((epoch, chunk))) => (
+                            axum::http::StatusCode::OK,
+                            serde_json::to_string(&serde_json::json!({
+                                "epoch": epoch,
+                                "max_applied_chunk": chunk,
+                            }))
+                            .unwrap(),
+                        ),
+                        Ok(None) => (axum::http::StatusCode::OK, "null".to_string()),
+                        Err(e) => {
+                            tracing::warn!("rerand-watermark query failed: {:?}", e);
+                            (
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("DB error: {}", e),
+                            )
+                        }
+                    }
+                }
+            }),
+        )
+    };
+
+    // Start coordination server with the live watermark route injected.
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
+        Some(rerand_watermark_route),
     )
     .await;
     tracing::info!("Coordination server started");
@@ -138,33 +172,75 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
 
-    if shutdown_handler.is_shutting_down() {
-        tracing::warn!("Shutting down has been triggered");
-        return Ok(());
+    // --- Coordinated rerand freeze with watermark convergence ---
+    {
+        let sc = config.server_coordination.as_ref().unwrap();
+        eyre::ensure!(
+            sc.node_hostnames.len() == sc.healthcheck_ports.len(),
+            "node_hostnames ({}) and healthcheck_ports ({}) must have the same length",
+            sc.node_hostnames.len(),
+            sc.healthcheck_ports.len(),
+        );
+        let peer_addrs: Vec<(&str, usize)> = sc
+            .node_hostnames
+            .iter()
+            .zip(sc.healthcheck_ports.iter())
+            .enumerate()
+            .filter(|(i, _)| *i != config.party_id)
+            .map(|(_, (h, p))| -> eyre::Result<_> { Ok((h.as_str(), p.parse::<usize>()?)) })
+            .collect::<eyre::Result<Vec<_>>>()?;
+        rerand_store::freeze_and_verify_watermarks(&iris_store.pool, &peer_addrs).await?;
     }
+    // Worker is now frozen with verified equal watermarks.
+    // Everything from here until freeze release must be wrapped so that
+    // errors always release the freeze.
+    let frozen_result = async {
+        let rerand_lock_conn = rerand_store::acquire_apply_lock(&iris_store.pool).await?;
 
-    let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
+        if shutdown_handler.is_shutting_down() {
+            rerand_store::release_apply_lock(rerand_lock_conn).await?;
+            return Ok::<_, eyre::Report>(None);
+        }
 
-    if let Some(url) = config.get_anon_stats_db_url() {
-        let schema = config.get_anon_stats_db_schema();
-        let anon_client =
-            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client).await?;
-        hawk_actor.set_anon_stats_store(Some(anon_store));
-    } else {
-        tracing::warn!(
-                "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
-            );
+        let startup_result = async {
+            let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
+
+            if let Some(url) = config.get_anon_stats_db_url() {
+                let schema = config.get_anon_stats_db_schema();
+                let anon_client =
+                    AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+                let anon_store = AnonStatsStore::new(&anon_client).await?;
+                hawk_actor.set_anon_stats_store(Some(anon_store));
+            } else {
+                tracing::warn!(
+                    "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
+                );
+            }
+
+            load_database(
+                &config,
+                &iris_store,
+                &graph_store,
+                &shutdown_handler,
+                &mut hawk_actor,
+            )
+            .await?;
+            Ok::<_, eyre::Report>(hawk_actor)
+        }
+        .await;
+
+        rerand_store::release_apply_lock(rerand_lock_conn).await?;
+        Ok(Some(startup_result))
     }
+    .await;
 
-    load_database(
-        &config,
-        &iris_store,
-        &graph_store,
-        &shutdown_handler,
-        &mut hawk_actor,
-    )
-    .await?;
+    // Always release freeze, even on error.
+    rerand_store::release_rerand_freeze(&iris_store.pool).await?;
+
+    let hawk_actor = match frozen_result? {
+        None => return Ok(()),
+        Some(r) => r?,
+    };
 
     background_tasks.check_tasks();
 
@@ -387,11 +463,14 @@ async fn build_sync_state(
 
     tracing::info!("Database store length is: {}", db_len);
 
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await?;
+
     Ok(SyncState {
         db_len,
         modifications,
         next_sns_sequence_num,
         common_config,
+        rerand_state,
     })
 }
 

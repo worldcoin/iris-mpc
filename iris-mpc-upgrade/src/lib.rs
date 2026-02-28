@@ -8,10 +8,13 @@ use std::{
 };
 
 pub mod config;
+pub mod continuous_rerand;
+pub mod epoch;
 pub mod packets;
 pub mod proto;
 pub mod rerandomization;
 pub mod reshare;
+pub mod s3_coordination;
 pub mod tripartite_dh;
 pub mod utils;
 

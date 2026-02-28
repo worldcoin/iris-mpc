@@ -11,19 +11,17 @@ use base64::Engine;
 use clap::Parser;
 use eyre::Result;
 use futures::TryStreamExt;
-use iris_mpc_common::galois;
-use iris_mpc_common::galois::degree4::basis::Monomial;
-use iris_mpc_common::galois::degree4::GaloisRingElement;
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
-use iris_mpc_common::id::PartyID;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::{DbStoredIris, Store, StoredIrisRef};
 use iris_mpc_upgrade::config::{
     KeyGenConfig, ReRandomizeCheckConfig, ReRandomizeConfig, ReRandomizeDbSubCommand,
+    RerandomizeContinuousConfig,
 };
-use iris_mpc_upgrade::rerandomization::randomize_iris;
+use iris_mpc_upgrade::continuous_rerand;
+use iris_mpc_upgrade::rerandomization::{randomize_iris, reconstruct_shares};
 use iris_mpc_upgrade::tripartite_dh;
 use iris_mpc_upgrade::{
     config::ReRandomizeDbConfig,
@@ -42,6 +40,9 @@ async fn main() -> Result<()> {
         ReRandomizeDbSubCommand::RerandomizeDb(config) => rerandomize_db_main(config).await,
         ReRandomizeDbSubCommand::KeyGen(config) => keygen_main(config).await,
         ReRandomizeDbSubCommand::RerandomizeCheck(config) => rerandomize_check_main(config).await,
+        ReRandomizeDbSubCommand::RerandomizeContinuous(config) => {
+            rerandomize_continuous_main(config).await
+        }
     }
 }
 
@@ -531,6 +532,34 @@ async fn rerandomize_check_main(config: ReRandomizeCheckConfig) -> Result<()> {
     Ok(())
 }
 
+async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Result<()> {
+    tracing::info!(
+        "Starting continuous rerandomization for party {}",
+        config.party_id
+    );
+
+    let mut background_tasks = TaskMonitor::new();
+    let healthcheck_port = config.healthcheck_port;
+    let _health_check_abort =
+        background_tasks.spawn(async move { spawn_healthcheck_server(healthcheck_port).await });
+    background_tasks.check_tasks();
+
+    let sdk_config = aws_config::from_env().load().await;
+    let s3_config = aws_sdk_s3::config::Builder::from(&sdk_config);
+    let sm_config = aws_sdk_secretsmanager::config::Builder::from(&sdk_config);
+    let s3_client = S3Client::from_conf(s3_config.build());
+    let sm_client = SecretsManagerClient::from_conf(sm_config.build());
+
+    let postgres_client =
+        PostgresClient::new(&config.db_url, &config.schema_name, AccessMode::ReadWrite).await?;
+    let store = Store::new(&postgres_client).await?;
+
+    continuous_rerand::run_continuous_rerand(&config, &s3_client, &sm_client, &store, None).await?;
+
+    background_tasks.abort_and_wait_for_finish().await;
+    Ok(())
+}
+
 async fn download_public_key(config: &ReRandomizeConfig, party_id: u8) -> Result<String> {
     if config.env == "testing" {
         let bucket = config.public_key_bucket_name.as_ref().ok_or_else(|| {
@@ -568,70 +597,6 @@ async fn download_public_key_from_http(base_url: &str, party_id: u8) -> Result<S
 async fn build_read_only_store(db_url: &str, schema_name: &str) -> Result<Store> {
     let postgres_client = PostgresClient::new(db_url, schema_name, AccessMode::ReadOnly).await?;
     Store::new(&postgres_client).await
-}
-
-fn reconstruct_shares(share0: &[u16], share1: &[u16], share2: &[u16]) -> Vec<u16> {
-    let lag_01 = galois::degree4::ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(
-        PartyID::ID0,
-        PartyID::ID1,
-    );
-    let lag_10 = galois::degree4::ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(
-        PartyID::ID1,
-        PartyID::ID0,
-    );
-    let lag_02 = galois::degree4::ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(
-        PartyID::ID0,
-        PartyID::ID2,
-    );
-    let lag_20 = galois::degree4::ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(
-        PartyID::ID2,
-        PartyID::ID0,
-    );
-    let lag_12 = galois::degree4::ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(
-        PartyID::ID1,
-        PartyID::ID2,
-    );
-    let lag_21 = galois::degree4::ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(
-        PartyID::ID2,
-        PartyID::ID1,
-    );
-
-    assert!(share0.len() == share1.len() && share1.len() == share2.len());
-
-    let recon01 = share0
-        .chunks_exact(4)
-        .zip_eq(share1.chunks_exact(4))
-        .flat_map(|(a, b)| {
-            let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
-            let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
-            let c = a * lag_01 + b * lag_10;
-            c.coefs
-        })
-        .collect_vec();
-    let recon12 = share1
-        .chunks_exact(4)
-        .zip_eq(share2.chunks_exact(4))
-        .flat_map(|(a, b)| {
-            let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
-            let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
-            let c = a * lag_12 + b * lag_21;
-            c.coefs
-        })
-        .collect_vec();
-    let recon02 = share0
-        .chunks_exact(4)
-        .zip_eq(share2.chunks_exact(4))
-        .flat_map(|(a, b)| {
-            let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
-            let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
-            let c = a * lag_02 + b * lag_20;
-            c.coefs
-        })
-        .collect_vec();
-
-    assert_eq!(recon01, recon12);
-    assert_eq!(recon01, recon02);
-    recon01
 }
 
 async fn download_public_key_from_localstack(bucket: &str, party_id: u8) -> Result<String> {

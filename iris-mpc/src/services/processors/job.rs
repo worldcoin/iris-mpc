@@ -290,6 +290,10 @@ pub async fn process_job_result(
     let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
 
+    if !config.disable_persistence {
+        iris_mpc_store::rerand::acquire_modify_lock(&mut iris_tx).await?;
+    }
+
     if !codes_and_masks.is_empty() && !config.disable_persistence {
         let step_start = Instant::now();
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
