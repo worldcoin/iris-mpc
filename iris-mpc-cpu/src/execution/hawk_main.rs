@@ -109,7 +109,8 @@ use iris_mpc_common::{
 };
 use iris_mpc_common::{
     helpers::smpc_request::{
-        REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        UNIQUENESS_MESSAGE_TYPE,
     },
     vector_id::VectorId,
 };
@@ -246,6 +247,9 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
 
+    #[clap(long, default_value_t = false)]
+    pub hnsw_disable_memory_persistence: bool,
+
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
 
@@ -273,7 +277,7 @@ pub struct HawkArgs {
 ///   statistics about match distributions.
 pub struct HawkActor {
     /// Command-line arguments and configuration for the actor.
-    args: HawkArgs,
+    pub(crate) args: HawkArgs,
     // ---- Shared MPC & HNSW setup ----
     /// The HNSW searcher, containing parameters and logic for graph traversal.
     searcher: Arc<HnswSearcher>,
@@ -624,14 +628,42 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        // Map insertion plans to inner InsertionPlanV
-        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
-
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
             .map(|id_option| id_option.map(|original_id| original_id.next_version()))
             .collect_vec();
+
+        if self.args.hnsw_disable_memory_persistence {
+            tracing::debug!("In-memory persistence disabled, skipping HNSW insert");
+            // Compute would-be VectorIds without mutating the store or graph,
+            // so that downstream result derivation (merged_results / inserted_id)
+            // still sees the correct serial IDs.
+            let mut next_serial_id = self.iris_store[LEFT].read().await.next_id;
+            return Ok(plans
+                .into_iter()
+                .zip(insertion_ids.iter())
+                .map(|(plan, id)| {
+                    plan.map(|_| {
+                        let inserted_vector = if let Some(id) = id {
+                            *id
+                        } else {
+                            let vid = VectorId::from_serial_id(next_serial_id);
+                            next_serial_id += 1;
+                            vid
+                        };
+                        crate::hnsw::searcher::ConnectPlan {
+                            inserted_vector,
+                            updates: BTreeMap::new(),
+                            update_ep: UpdateEntryPoint::False,
+                        }
+                    })
+                })
+                .collect_vec());
+        }
+
+        // Map insertion plans to inner InsertionPlanV
+        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
 
         // Parallel insertions are not supported, so only one session is needed.
         let session = &sessions[0];
@@ -1089,7 +1121,8 @@ impl HawkRequest {
                 } else {
                     None
                 }),
-                RESET_CHECK_MESSAGE_TYPE => ResetCheck,
+                RESET_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
+                RECOVERY_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
                 _ => Unsupported,
             })
             .collect_vec()
@@ -2225,6 +2258,7 @@ mod tests_db {
             hnsw_prf_key: None,
             numa: true,
             disable_persistence: false,
+            hnsw_disable_memory_persistence: false,
             tls: None,
         };
         let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;

@@ -79,10 +79,10 @@ tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
-ampc-anon-stats =  { git = "https://github.com/worldcoin/ampc-common.git", rev = "28f5c5573db81b51de4cc0efa6bbc9c210c8d6c9" }
-ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "28f5c5573db81b51de4cc0efa6bbc9c210c8d6c9" }
-ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "28f5c5573db81b51de4cc0efa6bbc9c210c8d6c9" }
-ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "28f5c5573db81b51de4cc0efa6bbc9c210c8d6c9" }
+ampc-anon-stats =  { git = "https://github.com/worldcoin/ampc-common.git", rev = "a44f978cc0c39942ef360a447f91e76769e800bb" }
+ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "a44f978cc0c39942ef360a447f91e76769e800bb" }
+ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "a44f978cc0c39942ef360a447f91e76769e800bb" }
+ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "a44f978cc0c39942ef360a447f91e76769e800bb" }
 nix = { version = "0.29", features = ["sched"] }
 core_affinity = "0.8"
 
