@@ -2926,7 +2926,6 @@ dependencies = [
  "chrono",
  "clap",
  "eyre",
- "futures",
  "iris-mpc-common",
  "iris-mpc-cpu",
  "iris-mpc-store",

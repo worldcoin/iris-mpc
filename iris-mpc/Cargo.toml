@@ -27,7 +27,6 @@ iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 metrics.workspace = true
-futures.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
 chrono.workspace = true

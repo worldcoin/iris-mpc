@@ -46,160 +46,112 @@ pub async fn sync_modifications(
         }
     }
 
-    // Prefetch shares in bounded batches before taking the modification lock.
-    // This avoids holding `RERAND_MODIFY_LOCK` across remote I/O while also
-    // preventing unbounded memory growth if `to_update` is large.
-    const PREFETCH_BATCH_SIZE: usize = 128;
+    let mut iris_tx = store.tx().await?;
+
+    // Acquire the modification lock to serialize with rerand apply.
+    iris_mpc_store::rerand::acquire_modify_lock(&mut iris_tx).await?;
+
+    // Ensure recovered modification rows exist locally (completed on peers
+    // but missing here). Inserted with persisted=false so the loop below
+    // fetches shares and writes iris data before marking persisted=true.
+    for m in &to_update {
+        let mut staging = m.clone();
+        staging.persisted = false;
+        store
+            .upsert_recovered_modification(&mut iris_tx, &staging)
+            .await?;
+    }
+
+    // Persist changes into modifications table
+    let to_update_refs: Vec<&Modification> = to_update.iter().collect();
+    store
+        .update_modifications(&mut iris_tx, &to_update_refs)
+        .await?;
+    store.delete_modifications(&mut iris_tx, &to_delete).await?;
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let mut graph_mutations = Vec::new();
 
-    // Apply deletions even if there are no updates.
-    if !to_delete.is_empty() {
-        let mut iris_tx = store.tx().await?;
-        store.delete_modifications(&mut iris_tx, &to_delete).await?;
-        iris_tx.commit().await?;
-    }
-
-    if to_update.is_empty() {
-        return Ok(());
-    }
-
-    // Ensure all modification rows exist locally before the update loop.
-    // Recovered modifications (completed on peers but missing locally) need
-    // to be inserted. We set persisted=false so the batch loop below fetches
-    // shares from S3 and writes them to iris; only then does
-    // update_modifications mark persisted=true after the iris write succeeds.
-    {
-        let mut tx = store.tx().await?;
-        for m in &to_update {
-            let mut staging = m.clone();
-            staging.persisted = false;
-            store
-                .upsert_recovered_modification(&mut tx, &staging)
-                .await?;
-        }
-        tx.commit().await?;
-    }
-
-    for batch in to_update.chunks(PREFETCH_BATCH_SIZE) {
-        struct PrefetchedShareData {
-            serial_id: i64,
-            left_code: Vec<u16>,
-            left_mask: Vec<u16>,
-            right_code: Vec<u16>,
-            right_mask: Vec<u16>,
+    // Persist changes into iris and graph tables
+    for modification in &to_update {
+        if !modification.persisted {
+            tracing::debug!(
+                "Skip writing non-persisted modification to iris table: {:?}",
+                modification
+            );
+            continue;
         }
 
-        // Kick off S3 fetches concurrently for this batch.
-        let fetched: Vec<Option<PrefetchedShareData>> = futures::future::try_join_all(
-            batch.iter().map(|modification| {
-                let semaphore = Arc::clone(&semaphore);
-                let s3_client = aws_clients.s3_client.clone();
-                let bucket_name = config.shares_bucket_name.clone();
-                let party_id = config.party_id;
-                let shares_encryption_key_pair = shares_encryption_key_pair.clone();
-                let dummy_shares_for_deletions = dummy_shares_for_deletions.clone();
-                async move {
-                    if !modification.persisted {
-                        return Ok::<_, Report>(None);
-                    }
+        tracing::warn!("Applying modification to local node: {:?}", modification);
+        metrics::counter!("db.modifications.rollforward").increment(1);
 
-                    tracing::warn!("Applying modification to local node: {:?}", modification);
-                    metrics::counter!("db.modifications.rollforward").increment(1);
+        let (lc, lm, rc, rm) = match modification.request_type.as_str() {
+            IDENTITY_DELETION_MESSAGE_TYPE => (
+                dummy_shares_for_deletions.clone().0,
+                dummy_shares_for_deletions.clone().1,
+                dummy_shares_for_deletions.clone().0,
+                dummy_shares_for_deletions.clone().1,
+            ),
+            REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE | UNIQUENESS_MESSAGE_TYPE => {
+                let s3_url = modification.s3_url.clone().ok_or_else(|| {
+                    eyre!("Persisted modification missing s3_url: {:?}", modification)
+                })?;
+                let (left_shares, right_shares) = get_iris_shares_parse_task(
+                    config.party_id,
+                    shares_encryption_key_pair.clone(),
+                    Arc::clone(&semaphore),
+                    aws_clients.s3_client.clone(),
+                    config.shares_bucket_name.clone(),
+                    s3_url,
+                )?
+                .await??;
+                (
+                    left_shares.code,
+                    left_shares.mask,
+                    right_shares.code,
+                    right_shares.mask,
+                )
+            }
+            _ => {
+                return Err(eyre!("Unknown modification type: {:?}", modification));
+            }
+        };
 
-                    let serial_id = modification.serial_id.ok_or_else(|| {
-                        eyre!("Modification has no serial_id: {:?}", modification)
-                    })?;
+        let iris_ref = StoredIrisRef {
+            id: modification
+                .serial_id
+                .ok_or_else(|| eyre!("Modification has no serial_id: {:?}", modification))?,
+            left_code: &lc.coefs,
+            left_mask: &lm.coefs,
+            right_code: &rc.coefs,
+            right_mask: &rm.coefs,
+        };
 
-                    let (left_code, left_mask, right_code, right_mask) =
-                        match modification.request_type.as_str() {
-                            IDENTITY_DELETION_MESSAGE_TYPE => (
-                                dummy_shares_for_deletions.0.coefs.to_vec(),
-                                dummy_shares_for_deletions.1.coefs.to_vec(),
-                                dummy_shares_for_deletions.0.coefs.to_vec(),
-                                dummy_shares_for_deletions.1.coefs.to_vec(),
-                            ),
-                        REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE | UNIQUENESS_MESSAGE_TYPE => {
-                            let s3_url = modification.s3_url.clone().ok_or_else(|| {
-                                eyre!("Persisted modification missing s3_url: {:?}", modification)
-                            })?;
-                                let (left_shares, right_shares) = get_iris_shares_parse_task(
-                                    party_id,
-                                    shares_encryption_key_pair.clone(),
-                                    Arc::clone(&semaphore),
-                                    s3_client.clone(),
-                                    bucket_name.clone(),
-                                    s3_url,
-                                )?
-                                .await??;
-                                (
-                                    left_shares.code.coefs.to_vec(),
-                                    left_shares.mask.coefs.to_vec(),
-                                    right_shares.code.coefs.to_vec(),
-                                    right_shares.mask.coefs.to_vec(),
-                                )
-                            }
-                            _ => {
-                            return Err(eyre!("Unknown modification type: {:?}", modification));
-                            }
-                        };
+        store
+            .insert_irises_overriding(&mut iris_tx, &[iris_ref])
+            .await?;
 
-                    Ok(Some(PrefetchedShareData {
-                        serial_id,
-                        left_code,
-                        left_mask,
-                        right_code,
-                        right_mask,
-                    }))
-                }
-            }),
-        )
-        .await?;
-
-        // Decode graph mutations (small) outside the DB lock window.
-        let mut batch_graph_mutations = Vec::new();
-        for modification in batch.iter().filter(|m| m.persisted) {
-            if let Some(serialized) = &modification.graph_mutation {
-                let single_mutation: SingleHawkMutation = bincode::deserialize::<SingleHawkMutation>(serialized)
+        if let Some(serialized) = &modification.graph_mutation {
+            let single_mutation: SingleHawkMutation =
+                bincode::deserialize::<SingleHawkMutation>(serialized)
                     .map_err(|e| eyre!("Failed to deserialize SingleHawkMutation: {}", e))?;
-                batch_graph_mutations.push(single_mutation.clone());
-            }
+            graph_mutations.push(single_mutation.clone());
         }
+    }
 
-        // Now acquire the modification lock and write this batch atomically.
-        let mut iris_tx = store.tx().await?;
-        iris_mpc_store::rerand::acquire_modify_lock(&mut iris_tx).await?;
-
-        let batch_refs: Vec<&Modification> = batch.iter().collect();
-        store.update_modifications(&mut iris_tx, &batch_refs).await?;
-
-        let prefetched_rows: Vec<PrefetchedShareData> = fetched.into_iter().flatten().collect();
-        if !prefetched_rows.is_empty() {
-            let iris_refs: Vec<StoredIrisRef<'_>> = prefetched_rows
-                .iter()
-                .map(|row| StoredIrisRef {
-                    id: row.serial_id,
-                    left_code: &row.left_code,
-                    left_mask: &row.left_mask,
-                    right_code: &row.right_code,
-                    right_mask: &row.right_mask,
-                })
-                .collect();
-            store
-                .insert_irises_overriding(&mut iris_tx, &iris_refs)
-                .await?;
-        }
-
-        if let Some(graph_store) = graph_store {
-            let mut graph_tx = graph_store.tx_wrap(iris_tx);
-            if !batch_graph_mutations.is_empty() {
-                let hawk_mutation = HawkMutation(batch_graph_mutations);
-                hawk_mutation.persist(&mut graph_tx).await?;
-            }
-            graph_tx.tx.commit().await?;
+    if let Some(graph_store) = graph_store {
+        let mut graph_tx = graph_store.tx_wrap(iris_tx);
+        if !graph_mutations.is_empty() {
+            tracing::info!("Applying {} graph mutations", graph_mutations.len());
+            let hawk_mutation = HawkMutation(graph_mutations);
+            hawk_mutation.persist(&mut graph_tx).await?;
         } else {
-            iris_tx.commit().await?;
+            tracing::info!("No graph mutations to apply");
         }
+        graph_tx.tx.commit().await?;
+    } else {
+        tracing::warn!("Graph store is not available, skipping graph mutations");
+        iris_tx.commit().await?;
     }
 
     Ok(())
@@ -222,7 +174,6 @@ pub async fn send_last_modifications_to_sns(
     let recovery_check_message_attributes =
         create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
 
-    // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
     tracing::info!(
         "Replaying last {} modification results to SNS",
@@ -234,7 +185,6 @@ pub async fn send_last_modifications_to_sns(
         return Ok(());
     }
 
-    // Collect messages by type
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
     let mut reset_update_messages = Vec::new();
