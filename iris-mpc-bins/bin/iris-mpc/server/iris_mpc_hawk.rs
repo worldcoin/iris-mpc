@@ -4,7 +4,7 @@ use clap::Parser;
 use eyre::Result;
 use iris_mpc::server::server_main;
 use iris_mpc_common::config::{Config, Opt};
-use iris_mpc_common::helpers::sysfs;
+use iris_mpc_common::helpers::numactl;
 use iris_mpc_common::tracing::initialize_tracing;
 use std::process::exit;
 
@@ -15,14 +15,14 @@ fn main() -> Result<()> {
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
-    sysfs::init(config.tokio_threads);
-    sysfs::restrict_tokio_runtime();
+    numactl::init(config.tokio_threads);
+    numactl::restrict_tokio_runtime();
 
     // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(sysfs::get_tokio_worker_threads())
+        .worker_threads(numactl::get_tokio_worker_threads())
         .on_thread_start(move || {
-            sysfs::restrict_tokio_runtime();
+            numactl::restrict_tokio_runtime();
         })
         .enable_all()
         .build()

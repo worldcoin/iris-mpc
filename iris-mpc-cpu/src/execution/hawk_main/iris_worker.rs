@@ -478,12 +478,12 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
 }
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    use iris_mpc_common::helpers::sysfs;
+    use iris_mpc_common::helpers::numactl;
 
-    let numa_nodes = sysfs::get_numa_nodes();
+    let numa_nodes = numactl::get_numa_nodes();
     let node = numa_nodes[shard_index % numa_nodes.len()];
 
-    let cpu_ids = sysfs::get_cores_for_node(node);
+    let cpu_ids = numactl::get_cores_for_node(node);
 
     assert!(
         !cpu_ids.is_empty(),
