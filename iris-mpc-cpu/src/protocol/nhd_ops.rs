@@ -2,7 +2,8 @@
 use std::ops::Not;
 
 use crate::execution::session::Session;
-use crate::protocol::ops::{min_round_robin_batch_with, CrossCompareFnResult, DistancePair, B};
+use crate::protocol::min_round_robin::{min_round_robin_batch_with, CrossCompareFnResult};
+use crate::protocol::ops::{DistancePair, B};
 use ampc_actor_utils::network::value::NetworkInt;
 use ampc_actor_utils::protocol::{
     binary::{bit_inject, extract_msb_batch, open_bin},
@@ -277,51 +278,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{execution::local::LocalRuntime, shares::int_ring::IntRing2k};
+    use crate::execution::local::LocalRuntime;
     use aes_prng::AesRng;
-    use ampc_actor_utils::protocol::ops::batch_signed_lift_vec_ring48;
-    use rand::{Rng, RngCore, SeedableRng};
-    use rand_distr::{Distribution, Standard};
+    use ampc_actor_utils::protocol::{
+        ops::batch_signed_lift_vec_ring48, test_utils::create_array_sharing,
+    };
+    use rand::SeedableRng;
     use tokio::task::JoinSet;
-
-    fn create_single_sharing<R: RngCore, T: IntRing2k>(
-        rng: &mut R,
-        input: T,
-    ) -> (Share<T>, Share<T>, Share<T>)
-    where
-        Standard: Distribution<T>,
-    {
-        let a = RingElement(rng.gen::<T>());
-        let b = RingElement(rng.gen::<T>());
-        let c = RingElement(input) - a - b;
-
-        let share1 = Share::new(a, c);
-        let share2 = Share::new(b, a);
-        let share3 = Share::new(c, b);
-        (share1, share2, share3)
-    }
-
-    type ThreePartyShares<T> = (Vec<Share<T>>, Vec<Share<T>>, Vec<Share<T>>);
-
-    fn create_array_sharing<R: RngCore, T: IntRing2k>(
-        rng: &mut R,
-        input: &[T],
-    ) -> ThreePartyShares<T>
-    where
-        Standard: Distribution<T>,
-    {
-        let mut player0 = Vec::new();
-        let mut player1 = Vec::new();
-        let mut player2 = Vec::new();
-
-        for entry in input {
-            let (a, b, c) = create_single_sharing(rng, *entry);
-            player0.push(a);
-            player1.push(b);
-            player2.push(c);
-        }
-        (player0, player1, player2)
-    }
 
     fn reference_nhd(cd: i64, md: i64) -> f64 {
         if md == 0 {
@@ -418,7 +381,7 @@ mod tests {
             .iter()
             .flat_map(|(cd, md, _)| [*cd, *md])
             .collect();
-        let (p0, p1, p2) = create_array_sharing(&mut rng, &flat_values);
+        let flat_shares = create_array_sharing(&mut rng, &flat_values);
 
         let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
         let mut jobs = JoinSet::new();
@@ -426,9 +389,9 @@ mod tests {
         for (i, session) in sessions.into_iter().enumerate() {
             let session = session.clone();
             let shares_i = match i {
-                0 => p0.clone(),
-                1 => p1.clone(),
-                2 => p2.clone(),
+                0 => flat_shares.p0.clone(),
+                1 => flat_shares.p1.clone(),
+                2 => flat_shares.p2.clone(),
                 _ => unreachable!(),
             };
             let n = test_cases.len();
@@ -496,7 +459,7 @@ mod tests {
             .iter()
             .flat_map(|(cd1, md1, cd2, md2, _)| [*cd1, *md1, *cd2, *md2])
             .collect();
-        let (p0, p1, p2) = create_array_sharing(&mut rng, &flat_values);
+        let flat_shares = create_array_sharing(&mut rng, &flat_values);
 
         let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
         let mut jobs = JoinSet::new();
@@ -504,9 +467,9 @@ mod tests {
         for (i, session) in sessions.into_iter().enumerate() {
             let session = session.clone();
             let shares_i = match i {
-                0 => p0.clone(),
-                1 => p1.clone(),
-                2 => p2.clone(),
+                0 => flat_shares.p0.clone(),
+                1 => flat_shares.p1.clone(),
+                2 => flat_shares.p2.clone(),
                 _ => unreachable!(),
             };
             let n = test_cases.len();

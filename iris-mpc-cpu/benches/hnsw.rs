@@ -13,7 +13,8 @@ use iris_mpc_cpu::{
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
     protocol::{
-        ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
+        fhd_ops::cross_compare,
+        ops::{galois_ring_pairwise_distance, galois_ring_to_rep3},
         shared_iris::GaloisRingSharedIris,
     },
     shares::share::DistanceShare,

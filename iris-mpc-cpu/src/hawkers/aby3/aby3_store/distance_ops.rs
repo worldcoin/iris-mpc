@@ -23,14 +23,13 @@ use rand_distr::{Distribution, Standard};
 use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
     protocol::{
+        fhd_ops::{cross_compare, lte_threshold_and_open, min_round_robin_batch},
         nhd_ops::{
             nhd_comparison_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
             nhd_min_of_pair_batch, nhd_min_round_robin_batch, nhd_oblivious_cross_compare,
             nhd_oblivious_cross_compare_lifted, nhd_plaintext_is_match,
         },
-        ops::{
-            cross_compare, lte_threshold_and_open, min_round_robin_batch, DistancePair, IdDistance,
-        },
+        ops::{DistancePair, IdDistance},
     },
 };
 
