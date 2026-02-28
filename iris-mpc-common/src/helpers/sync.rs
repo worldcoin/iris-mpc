@@ -17,8 +17,8 @@ pub struct SyncState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RerandSyncState {
     pub epoch: i32,
-    /// Highest chunk_id where all_confirmed = TRUE. -1 if none confirmed.
-    pub max_confirmed_chunk: i32,
+    /// Highest chunk_id where live_applied = TRUE. -1 if none applied.
+    pub max_applied_chunk: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,11 +248,17 @@ impl SyncResult {
         let max_id = completed_max_mod_ids.iter().flatten().copied().max();
         if let (Some(min_id), Some(max_id)) = (min_id, max_id) {
             let mod_id_diff = max_id.saturating_sub(min_id) as usize;
-            if mod_id_diff > self.my_state.common_config.get_max_modifications_lookback() {
+            let lookback = self.my_state.common_config.get_max_modifications_lookback();
+            if mod_id_diff > lookback {
                 panic!(
-                    "Modification ID difference across nodes is too large: {:?}. Min: {:?}, Max: {:?}. \
-             Can not safely handle this case, consider bumping lookback. Crashing!",
-                    completed_max_mod_ids, min_id, max_id
+                    "Modification ID difference across nodes ({}) exceeds lookback ({}): {:?}. \
+                     Min: {:?}, Max: {:?}. Cannot safely reconcile. \
+                     Bump max_modifications_lookback or investigate drift.",
+                    mod_id_diff,
+                    lookback,
+                    completed_max_mod_ids,
+                    min_id,
+                    max_id
                 );
             }
         }
@@ -290,16 +296,17 @@ impl SyncResult {
                     .expect("At least one completed modification");
                 match local_copy {
                     None => {
-                        // If an item is completed for a party, it should at least exist in the
-                        // local state because it should have been added during receive_batch.
-                        // This can only happen when other party misses an in_progress mod.
-                        // Local party will fetch until modification id X while the other party will
-                        // fetch until mod id X-1. In this case, local party won't find X-1.
-                        // We log and skip updating to avoid rolling back to an older share in local.
-                        tracing::info!(
-                            "Skip missing completed modification: {:?}",
-                            first_completed
+                        // The local node never received this modification (e.g., SQS
+                        // message was lost). Roll it forward from a peer's completed
+                        // copy so the local DB converges with the other parties.
+                        let mut roll_forward = first_completed.clone();
+                        roll_forward.status = ModificationStatus::Completed.to_string();
+                        roll_forward.persisted = any_persisted;
+                        tracing::warn!(
+                            "Recovering missing completed modification from peer: {:?}",
+                            roll_forward
                         );
+                        to_update.push(roll_forward);
                     }
                     Some(local_m) => {
                         if local_m.status != ModificationStatus::Completed.to_string()
@@ -773,10 +780,13 @@ mod tests {
         // Compare modifications across nodes.
         let (to_update, to_delete) = sync_result.compare_modifications();
 
-        assert_eq!(to_update.len(), 0, "Expected no modification to update");
+        assert_eq!(
+            to_update.len(),
+            1,
+            "Expected mod1 to be recovered from peer"
+        );
+        assert_eq!(to_update[0].id, mod1_other.id);
         assert_eq!(to_delete.len(), 1, "Expected one modification to delete");
-
-        // Expectation: Local party should delete mod3.
         assert_eq!(to_delete[0], mod3_local);
     }
 
@@ -1063,13 +1073,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Modification ID difference across nodes is too large")]
+    #[should_panic(expected = "Modification ID difference across nodes")]
     fn test_compare_modifications_large_id_difference_panic() {
-        // Create a scenario where nodes have completed modifications with IDs
-        // that differ by more than the max_modifications_lookback limit.
-        // Test lookback is (100 + 64) * 2 = 328, so we'll create a difference of 350.
-
-        // Node 1: has completed modification with ID 1
         let mod1_node1 = create_modification(
             1,
             Some(100),
@@ -1081,7 +1086,6 @@ mod tests {
         );
         let my_state = create_sync_state_with_lookback(vec![mod1_node1], 10);
 
-        // Node 2: has completed modification with ID 15 (difference = 14 > 10)
         let mod15_node2 = create_modification(
             15,
             Some(1500),
@@ -1093,7 +1097,6 @@ mod tests {
         );
         let other_state1 = create_sync_state_with_lookback(vec![mod15_node2], 10);
 
-        // Node 3: has completed modification with ID 20 (even larger)
         let mod20_node3 = create_modification(
             20,
             Some(2000),
@@ -1112,7 +1115,6 @@ mod tests {
             all_states,
         };
 
-        // This should panic because max_id (20) - min_id (1) = 19 > 10 (test lookback)
         sync_result.compare_modifications();
     }
 }

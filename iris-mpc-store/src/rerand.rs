@@ -1,8 +1,7 @@
-use std::cmp::Ordering;
 use std::time::Duration;
 
 use eyre::Result;
-use iris_mpc_common::helpers::sync::{RerandSyncState, SyncResult};
+use iris_mpc_common::helpers::sync::RerandSyncState;
 use sqlx::PgPool;
 
 pub const RERAND_APPLY_LOCK: i64 = 0x5245_5241_4E44;
@@ -88,83 +87,11 @@ pub async fn get_staging_version_map(
     Ok(rows)
 }
 
-/// Return IDs where the staging original_version_id no longer matches the
-/// live version_id (modifications landed after staging).
-pub async fn get_locally_divergent_ids(
-    pool: &PgPool,
-    staging_schema: &str,
-    epoch: i32,
-    chunk_id: i32,
-) -> Result<Vec<i64>> {
-    validate_identifier(staging_schema)?;
-    let sql = format!(
-        r#"
-        SELECT s.id FROM "{}".irises s
-        JOIN irises ON irises.id = s.id
-        WHERE s.epoch = $1 AND s.chunk_id = $2
-          AND irises.version_id != s.original_version_id
-        "#,
-        staging_schema,
-    );
-    let rows: Vec<(i64,)> = sqlx::query_as(&sql)
-        .bind(epoch)
-        .bind(chunk_id)
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().map(|(id,)| id).collect())
-}
-
-async fn get_locally_divergent_ids_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    staging_schema: &str,
-    epoch: i32,
-    chunk_id: i32,
-) -> Result<Vec<i64>> {
-    validate_identifier(staging_schema)?;
-    let sql = format!(
-        r#"
-        SELECT s.id FROM "{}".irises s
-        JOIN irises ON irises.id = s.id
-        WHERE s.epoch = $1 AND s.chunk_id = $2
-          AND irises.version_id != s.original_version_id
-        "#,
-        staging_schema,
-    );
-    let rows: Vec<(i64,)> = sqlx::query_as(&sql)
-        .bind(epoch)
-        .bind(chunk_id)
-        .fetch_all(&mut **tx)
-        .await?;
-    Ok(rows.into_iter().map(|(id,)| id).collect())
-}
-
-/// Delete specific IDs from a staging chunk.
-pub async fn delete_staging_ids(
-    pool: &PgPool,
-    staging_schema: &str,
-    epoch: i32,
-    ids: &[i64],
-) -> Result<u64> {
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    validate_identifier(staging_schema)?;
-    let sql = format!(
-        r#"DELETE FROM "{}".irises WHERE epoch = $1 AND id = ANY($2)"#,
-        staging_schema,
-    );
-    let result = sqlx::query(&sql)
-        .bind(epoch)
-        .bind(ids)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
-}
-
 async fn delete_staging_ids_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     staging_schema: &str,
     epoch: i32,
+    chunk_id: i32,
     ids: &[i64],
 ) -> Result<u64> {
     if ids.is_empty() {
@@ -172,11 +99,12 @@ async fn delete_staging_ids_tx(
     }
     validate_identifier(staging_schema)?;
     let sql = format!(
-        r#"DELETE FROM "{}".irises WHERE epoch = $1 AND id = ANY($2)"#,
+        r#"DELETE FROM "{}".irises WHERE epoch = $1 AND chunk_id = $2 AND id = ANY($3)"#,
         staging_schema,
     );
     let result = sqlx::query(&sql)
         .bind(epoch)
+        .bind(chunk_id)
         .bind(ids)
         .execute(&mut **tx)
         .await?;
@@ -217,38 +145,49 @@ pub async fn insert_staging_irises(
     Ok(())
 }
 
-/// Apply a confirmed staging chunk to the live DB.
+/// Apply a confirmed staging chunk to the live `irises` table.
 ///
-/// Within a single transaction:
-///   1. Acquire `pg_advisory_xact_lock(RERAND_APPLY_LOCK)` (released
-///      automatically on commit/rollback/connection-drop).
-///   2. UPDATE live irises from staging (optimistic lock on version_id)
-///   3. DELETE staging rows for this chunk
-///   4. Mark live_applied in rerand_progress
-pub async fn apply_staging_chunk(
+/// Opens a single transaction that:
+/// 1. Acquires `RERAND_MODIFY_LOCK` (blocks modification writes)
+/// 2. Acquires `RERAND_APPLY_LOCK` (blocks startup DB load)
+/// 3. Deletes `staging_divergent` IDs from staging (cross-party disagreements)
+/// 4. Applies remaining staging rows via `version_id` CAS
+/// 5. Cleans up staging and marks progress
+///
+/// The `version_id` CAS (`WHERE irises.version_id = staging.original_version_id`)
+/// silently skips any rows that were modified between staging and apply. This is
+/// safe: the modification will propagate to all parties and overwrite whatever
+/// was there, restoring consistency. See the spec's "Conflict Resolution" section.
+pub async fn apply_confirmed_chunk(
     pool: &PgPool,
     staging_schema: &str,
     epoch: i32,
     chunk_id: i32,
+    staging_divergent: &[i64],
 ) -> Result<u64> {
     validate_identifier(staging_schema)?;
     let mut tx = pool.begin().await?;
-    let rows_updated = apply_staging_chunk_in_tx(&mut tx, staging_schema, epoch, chunk_id).await?;
-    tx.commit().await?;
-    Ok(rows_updated)
-}
 
-async fn apply_staging_chunk_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    staging_schema: &str,
-    epoch: i32,
-    chunk_id: i32,
-) -> Result<u64> {
-    validate_identifier(staging_schema)?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(RERAND_MODIFY_LOCK)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(RERAND_APPLY_LOCK)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
+
+    if !staging_divergent.is_empty() {
+        let deleted =
+            delete_staging_ids_tx(&mut tx, staging_schema, epoch, chunk_id, staging_divergent)
+                .await?;
+        tracing::info!(
+            "Rerand apply: removed {} staging-divergent rows (epoch={}, chunk={})",
+            deleted,
+            epoch,
+            chunk_id,
+        );
+    }
 
     let update_sql = format!(
         r#"
@@ -269,7 +208,7 @@ async fn apply_staging_chunk_in_tx(
     let result = sqlx::query(&update_sql)
         .bind(epoch)
         .bind(chunk_id)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
     let rows_updated = result.rows_affected();
 
@@ -280,7 +219,7 @@ async fn apply_staging_chunk_in_tx(
     sqlx::query(&delete_sql)
         .bind(epoch)
         .bind(chunk_id)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query(
@@ -288,50 +227,11 @@ async fn apply_staging_chunk_in_tx(
     )
     .bind(epoch)
     .bind(chunk_id)
-    .execute(&mut **tx)
+    .execute(&mut *tx)
     .await?;
 
-    Ok(rows_updated)
-}
-
-/// Apply a chunk under the modification fence in one transaction.
-///
-/// Transaction scope:
-///   1. Acquire `pg_advisory_xact_lock(RERAND_MODIFY_LOCK)`
-///   2. Compute local diverged IDs
-///   3. Prune union(cross_party_diverged, local_diverged) from staging
-///   4. Apply staging chunk to live (`RERAND_APPLY_LOCK` is acquired inside)
-///   5. Commit (releasing both transaction locks)
-pub async fn fenced_apply_chunk(
-    pool: &PgPool,
-    staging_schema: &str,
-    epoch: i32,
-    chunk_id: i32,
-    cross_party_divergent: Vec<i64>,
-) -> Result<(u64, usize)> {
-    validate_identifier(staging_schema)?;
-    let mut tx = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(RERAND_MODIFY_LOCK)
-        .execute(&mut *tx)
-        .await?;
-
-    let local_divergent =
-        get_locally_divergent_ids_tx(&mut tx, staging_schema, epoch, chunk_id).await?;
-
-    let mut skip_ids = cross_party_divergent;
-    skip_ids.extend(&local_divergent);
-    skip_ids.sort_unstable();
-    skip_ids.dedup();
-    let skip_count = skip_ids.len();
-
-    if !skip_ids.is_empty() {
-        delete_staging_ids_tx(&mut tx, staging_schema, epoch, &skip_ids).await?;
-    }
-
-    let rows = apply_staging_chunk_in_tx(&mut tx, staging_schema, epoch, chunk_id).await?;
     tx.commit().await?;
-    Ok((rows, skip_count))
+    Ok(rows_updated)
 }
 
 pub async fn upsert_rerand_progress(pool: &PgPool, epoch: i32, chunk_id: i32) -> Result<()> {
@@ -398,6 +298,48 @@ pub async fn get_max_confirmed_chunk(pool: &PgPool, epoch: i32) -> Result<Option
     Ok(row.0)
 }
 
+/// Returns the highest `chunk_id` where `live_applied = TRUE` for a given
+/// epoch, or `None` if no chunks have been applied in that epoch yet.
+pub async fn get_max_applied_chunk_for_epoch(
+    pool: &PgPool,
+    epoch: i32,
+) -> Result<Option<i32>> {
+    let row: (Option<i32>,) = sqlx::query_as(
+        "SELECT MAX(chunk_id) FROM rerand_progress WHERE epoch = $1 AND live_applied = TRUE",
+    )
+    .bind(epoch)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Delete all staging rows for epochs older than `current_epoch`.
+pub async fn delete_staging_for_old_epochs(
+    pool: &PgPool,
+    staging_schema: &str,
+    current_epoch: i32,
+) -> Result<u64> {
+    validate_identifier(staging_schema)?;
+    let sql = format!(
+        r#"DELETE FROM "{}".irises WHERE epoch < $1"#,
+        staging_schema
+    );
+    let result = sqlx::query(&sql)
+        .bind(current_epoch)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+/// Delete rerand progress rows for epochs older than `current_epoch`.
+pub async fn delete_rerand_progress_for_old_epochs(pool: &PgPool, current_epoch: i32) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM rerand_progress WHERE epoch < $1")
+        .bind(current_epoch)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
 /// Returns the highest epoch that has any rerand_progress rows.
 pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
     let row: (Option<i32>,) = sqlx::query_as("SELECT MAX(epoch) FROM rerand_progress")
@@ -413,8 +355,7 @@ pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
 /// Build the rerand sync state from the local `rerand_progress` table.
 ///
 /// Returns `Ok(None)` when the `rerand_progress` table does not exist yet
-/// (rolling deploy before migration). Returns `Err` for real DB failures
-/// so callers can distinguish "not migrated" from "broken".
+/// (rolling deploy before migration). Returns `Err` for real DB failures.
 pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<Option<RerandSyncState>> {
     let epoch = match get_current_epoch(pool).await {
         Ok(e) => e.unwrap_or(0),
@@ -425,10 +366,10 @@ pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<Option<RerandSyncS
             return Err(e);
         }
     };
-    let max_confirmed = get_max_confirmed_chunk(pool, epoch).await?.unwrap_or(-1);
+    let max_applied = get_max_applied_chunk_for_epoch(pool, epoch).await?.unwrap_or(-1);
     Ok(Some(RerandSyncState {
         epoch,
-        max_confirmed_chunk: max_confirmed,
+        max_applied_chunk: max_applied,
     }))
 }
 
@@ -436,8 +377,7 @@ fn is_undefined_table(err: &eyre::Report) -> bool {
     if let Some(db_err) = err.root_cause().downcast_ref::<sqlx::Error>() {
         return is_undefined_table_sqlx(db_err);
     }
-    // Also check the direct error (not just root cause).
-    format!("{:?}", err).contains("42P01")
+    false
 }
 
 fn is_undefined_table_sqlx(err: &sqlx::Error) -> bool {
@@ -447,36 +387,219 @@ fn is_undefined_table_sqlx(err: &sqlx::Error) -> bool {
     false
 }
 
-/// Check whether all locally confirmed chunks have been applied to live.
-///
-/// Returns `Ok(true)` when no confirmed-but-unapplied chunks remain,
-/// `Ok(true)` when the `rerand_progress` table doesn't exist yet
-/// (rolling deploy), and `Err` on real DB failures.
-async fn check_pending_chunks_applied(conn: &mut sqlx::PgConnection) -> Result<bool> {
-    let pending: (i64,) = match sqlx::query_as(
-        "SELECT COUNT(*) FROM rerand_progress \
-         WHERE all_confirmed = TRUE AND live_applied = FALSE",
+
+// ---------------------------------------------------------------------------
+// Freeze protocol: coordinated pause of the rerand worker during startup
+// ---------------------------------------------------------------------------
+
+const FREEZE_TIMEOUT: Duration = Duration::from_secs(120);
+const FREEZE_POLL: Duration = Duration::from_secs(2);
+
+fn rerand_control_exists(err: &sqlx::Error) -> bool {
+    !is_undefined_table_sqlx(err)
+}
+
+/// Request the rerand worker to freeze. Writes a unique `freeze_generation`
+/// to `rerand_control`. Returns the generation token.
+pub async fn request_rerand_freeze(pool: &PgPool) -> Result<Option<String>> {
+    let generation = uuid::Uuid::new_v4().to_string();
+    match sqlx::query(
+        "UPDATE rerand_control SET freeze_requested = TRUE, freeze_generation = $1, frozen_generation = NULL WHERE id = 1",
+    )
+    .bind(&generation)
+    .execute(pool)
+    .await
+    {
+        Ok(_) => Ok(Some(generation)),
+        Err(e) if !rerand_control_exists(&e) => {
+            tracing::info!("rerand_control table missing; skipping freeze (pre-migration)");
+            Ok(None)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Wait until the rerand worker acknowledges the freeze by writing
+/// `frozen_generation = generation`. Fails closed on timeout.
+pub async fn wait_for_rerand_frozen(pool: &PgPool, generation: &str) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + FREEZE_TIMEOUT;
+    loop {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT frozen_generation FROM rerand_control WHERE id = 1",
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some((Some(frozen_gen),)) = row {
+            if frozen_gen == generation {
+                tracing::info!("Rerand worker confirmed freeze (generation={})", generation);
+                return Ok(());
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            eyre::bail!(
+                "Rerand worker did not acknowledge freeze after {:?} (generation={}). \
+                 Ensure the rerand worker is running and healthy.",
+                FREEZE_TIMEOUT,
+                generation,
+            );
+        }
+        tokio::time::sleep(FREEZE_POLL).await;
+    }
+}
+
+/// Called by the rerand worker between chunks. If a freeze is requested,
+/// acknowledge it and block until the freeze is lifted. Returns `true` if
+/// the worker should continue, `false` if cancelled while frozen.
+pub async fn check_and_handle_freeze(
+    pool: &PgPool,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<bool> {
+    let row: Option<(bool, Option<String>)> = match sqlx::query_as(
+        "SELECT freeze_requested, freeze_generation FROM rerand_control WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) if !rerand_control_exists(&e) => return Ok(true),
+        Err(e) => return Err(e.into()),
+    };
+
+    let Some((true, Some(generation))) = row else {
+        return Ok(true);
+    };
+
+    tracing::info!("Rerand freeze requested (generation={}), pausing...", generation);
+
+    // Acknowledge the freeze.
+    sqlx::query("UPDATE rerand_control SET frozen_generation = $1 WHERE id = 1")
+        .bind(&generation)
+        .execute(pool)
+        .await?;
+
+    let mut current_gen = generation.to_string();
+
+    // Block until freeze is lifted. Re-read freeze_generation each iteration
+    // so that if the requesting server crashes and restarts with a new
+    // generation, we re-acknowledge instead of deadlocking.
+    loop {
+        if cancel.is_some_and(|c| c.is_cancelled()) {
+            return Ok(false);
+        }
+
+        let row: Option<(bool, Option<String>)> = sqlx::query_as(
+            "SELECT freeze_requested, freeze_generation FROM rerand_control WHERE id = 1",
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some((false, _)) | None => {
+                tracing::info!("Rerand freeze lifted, resuming");
+                return Ok(true);
+            }
+            Some((true, Some(ref new_gen))) if *new_gen != current_gen => {
+                tracing::info!(
+                    "Rerand freeze generation changed ({} -> {}), re-acknowledging",
+                    current_gen,
+                    new_gen
+                );
+                sqlx::query("UPDATE rerand_control SET frozen_generation = $1 WHERE id = 1")
+                    .bind(new_gen)
+                    .execute(pool)
+                    .await?;
+                current_gen = new_gen.clone();
+            }
+            _ => {}
+        }
+
+        tokio::time::sleep(FREEZE_POLL).await;
+    }
+}
+
+/// Lift the freeze and clear the generation. Called after `load_iris_db`.
+/// Retries on transient DB errors to avoid leaving the worker permanently frozen.
+/// Silently succeeds if the `rerand_control` table doesn't exist (pre-migration).
+pub async fn release_rerand_freeze(pool: &PgPool) -> Result<()> {
+    for attempt in 0..5 {
+        match sqlx::query(
+            "UPDATE rerand_control SET freeze_requested = FALSE, freeze_generation = NULL, frozen_generation = NULL WHERE id = 1",
+        )
+        .execute(pool)
+        .await
+        {
+            Ok(_) => {
+                tracing::info!("Rerand freeze released");
+                return Ok(());
+            }
+            Err(e) if !rerand_control_exists(&e) => {
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to release rerand freeze (attempt {}): {:?}",
+                    attempt + 1,
+                    e
+                );
+                tokio::time::sleep(FREEZE_POLL).await;
+            }
+        }
+    }
+    eyre::bail!("Failed to release rerand freeze after 5 attempts — worker may be stuck frozen");
+}
+
+/// Acquire `RERAND_APPLY_LOCK` on a detached connection. The lock is held
+/// through `load_iris_db` to prevent any concurrent rerand applies (belt
+/// and suspenders — the freeze should already have paused the worker).
+pub async fn acquire_apply_lock(pool: &PgPool) -> Result<Option<sqlx::PgConnection>> {
+    let mut conn = pool.acquire().await?;
+
+    // If rerand tables don't exist yet, skip.
+    match sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM rerand_progress LIMIT 1",
     )
     .fetch_one(&mut *conn)
     .await
     {
-        Ok(row) => row,
-        Err(e) if is_undefined_table_sqlx(&e) => return Ok(true),
+        Err(e) if is_undefined_table_sqlx(&e) => return Ok(None),
         Err(e) => return Err(e.into()),
-    };
-    Ok(pending.0 == 0)
+        Ok(_) => {}
+    }
+
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(RERAND_APPLY_LOCK)
+        .execute(&mut *conn)
+        .await?;
+
+    Ok(Some(conn.detach()))
 }
 
-/// Highest `(epoch, chunk_id)` where `live_applied = TRUE`.
-/// Returns `None` when no chunks have been applied yet.
-async fn get_applied_watermark(conn: &mut sqlx::PgConnection) -> Result<Option<(i32, i32)>> {
+/// Release the advisory lock and close the connection.
+pub async fn release_apply_lock(lock_conn: Option<sqlx::PgConnection>) -> Result<()> {
+    if let Some(mut conn) = lock_conn {
+        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(RERAND_APPLY_LOCK)
+            .execute(&mut conn)
+            .await;
+        drop(conn);
+        tracing::info!("RERAND_APPLY_LOCK released after DB load");
+    }
+    Ok(())
+}
+
+/// Get the local applied watermark: `(epoch, max_chunk_id)` where
+/// `live_applied = TRUE`. Returns `None` pre-migration or if no chunks
+/// have been applied.
+pub async fn get_applied_watermark_from_pool(pool: &PgPool) -> Result<Option<(i32, i32)>> {
     let row: Option<(i32, i32)> = match sqlx::query_as(
         "SELECT epoch, chunk_id FROM rerand_progress \
          WHERE live_applied = TRUE \
          ORDER BY epoch DESC, chunk_id DESC \
          LIMIT 1",
     )
-    .fetch_optional(&mut *conn)
+    .fetch_optional(pool)
     .await
     {
         Ok(row) => row,
@@ -486,359 +609,155 @@ async fn get_applied_watermark(conn: &mut sqlx::PgConnection) -> Result<Option<(
     Ok(row)
 }
 
-/// Highest (epoch, max_confirmed_chunk) reported by any peer in the
-/// startup snapshot. Returns `None` when no peer has rerand state
-/// (pre-migration rolling deploy).
-fn peer_rerand_target(sync_result: &SyncResult) -> Option<(i32, i32)> {
-    sync_result
-        .all_states
-        .iter()
-        .filter_map(|s| s.rerand_state.as_ref())
-        .map(|s| (s.epoch, s.max_confirmed_chunk))
-        .max() // lexicographic: epoch first, then chunk
-}
-
-/// Returns `Ok(())` if the peer snapshot is within protocol tolerance
-/// and `Err` if fatally desynchronized (gap > 1).
-fn validate_rerand_sync_inner(sync_result: &SyncResult) -> Result<()> {
-    let my_state = match sync_result.my_state.rerand_state.as_ref() {
-        Some(s) => s,
-        None => return Ok(()),
-    };
-    let my_epoch = my_state.epoch;
-    let my_chunk = my_state.max_confirmed_chunk;
-
-    for s in sync_result
-        .all_states
-        .iter()
-        .filter_map(|s| s.rerand_state.as_ref())
-    {
-        let epoch_diff = s.epoch - my_epoch;
-        match epoch_diff {
-            0 => {
-                let chunk_diff = s.max_confirmed_chunk - my_chunk;
-                if chunk_diff > 1 {
-                    eyre::bail!(
-                        "Fatal chunk desync: peer confirmed chunk {} but local is at {} \
-                         (max possible difference is 1)",
-                        s.max_confirmed_chunk,
-                        my_chunk
-                    );
-                }
-            }
-            1 => {}
-            -1 => {}
-            _ => {
-                eyre::bail!(
-                    "Fatal epoch desync: local epoch is {}, but peer is on epoch {}",
-                    my_epoch,
-                    s.epoch
-                );
-            }
-        }
+async fn fetch_peer_watermark(host: &str, port: usize) -> Result<Option<(i32, i32)>> {
+    let url = format!("http://{}:{}/rerand-watermark", host, port);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| eyre::eyre!("Failed to reach {} for watermark: {}", url, e))?;
+    if !resp.status().is_success() {
+        eyre::bail!(
+            "Peer {} returned HTTP {} for watermark",
+            url,
+            resp.status()
+        );
     }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| eyre::eyre!("Failed to read watermark from {}: {}", url, e))?;
 
-    Ok(())
-}
-
-const RERAND_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const RERAND_READY_POLL: Duration = Duration::from_secs(2);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum StartupReadiness {
-    Ready,
-    Behind,
-    Ahead {
-        local_applied: (i32, i32),
-        target: (i32, i32),
-    },
-}
-
-fn classify_startup_readiness_for_target(
-    local_applied: (i32, i32),
-    target: (i32, i32),
-) -> StartupReadiness {
-    if local_applied.cmp(&target) == Ordering::Greater {
-        return StartupReadiness::Ahead {
-            local_applied,
-            target,
-        };
-    }
-
-    if target.1 < 0 {
-        // No confirmed chunks exist in target_epoch yet.
-        return StartupReadiness::Ready;
-    }
-
-    if local_applied == target {
-        StartupReadiness::Ready
-    } else {
-        StartupReadiness::Behind
-    }
-}
-
-async fn get_startup_readiness(
-    conn: &mut sqlx::PgConnection,
-    target: Option<(i32, i32)>,
-) -> Result<StartupReadiness> {
-    if !check_pending_chunks_applied(conn).await? {
-        return Ok(StartupReadiness::Behind);
-    }
-
-    let Some(target) = target else {
-        return Ok(StartupReadiness::Ready);
-    };
-
-    let local_applied = get_applied_watermark(conn).await?.unwrap_or((-1, -1));
-    Ok(classify_startup_readiness_for_target(local_applied, target))
-}
-
-/// Wait for local rerand progress to reach the startup snapshot target,
-/// then hold `RERAND_APPLY_LOCK` through DB load.
-///
-/// The loop is lock-first:
-/// 1. acquire `pg_advisory_lock(RERAND_APPLY_LOCK)`,
-/// 2. check readiness while applies are frozen,
-/// 3. if behind, unlock and retry after a short sleep.
-///
-/// This avoids startup/apply races without a separate startup-cap table.
-pub async fn rerand_validate_and_lock(
-    pool: &PgPool,
-    sync_result: &SyncResult,
-) -> Result<Option<sqlx::pool::PoolConnection<sqlx::Postgres>>> {
-    if sync_result.my_state.rerand_state.is_none() {
-        tracing::info!("Rerand startup lock: skipped (rerand tables not yet migrated)");
+    if body.trim() == "null" {
         return Ok(None);
     }
-
-    // One-shot fatal desync check (gap > 1 -> bail).
-    validate_rerand_sync_inner(sync_result)?;
-
-    let target = peer_rerand_target(sync_result);
-    let deadline = tokio::time::Instant::now() + RERAND_READY_TIMEOUT;
-
-    loop {
-        let mut conn = pool.acquire().await?;
-        let got_lock: (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock($1)")
-            .bind(RERAND_APPLY_LOCK)
-            .fetch_one(&mut *conn)
-            .await?;
-        if !got_lock.0 {
-            drop(conn);
-            if tokio::time::Instant::now() >= deadline {
-                eyre::bail!(
-                    "Rerand lock not available after {:?} (target={:?}); \
-                     ensure the rerand worker is healthy.",
-                    RERAND_READY_TIMEOUT,
-                    target
-                );
-            }
-            tokio::time::sleep(RERAND_READY_POLL).await;
-            continue;
-        }
-
-        let readiness = match get_startup_readiness(&mut conn, target).await {
-            Ok(readiness) => readiness,
-            Err(e) => {
-                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-                    .bind(RERAND_APPLY_LOCK)
-                    .execute(&mut *conn)
-                    .await;
-                drop(conn);
-                return Err(e);
-            }
-        };
-
-        match readiness {
-            StartupReadiness::Ready => return Ok(Some(conn)),
-            StartupReadiness::Ahead {
-                local_applied,
-                target,
-            } => {
-                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-                    .bind(RERAND_APPLY_LOCK)
-                    .execute(&mut *conn)
-                    .await;
-                drop(conn);
-                eyre::bail!(
-                    "Rerand advanced past startup snapshot target: local_applied={:?}, target={:?}. \
-                     Restart and retry startup.",
-                    local_applied,
-                    target,
-                );
-            }
-            StartupReadiness::Behind => {
-                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-                    .bind(RERAND_APPLY_LOCK)
-                    .execute(&mut *conn)
-                    .await;
-                drop(conn);
-            }
-        }
-
-        if tokio::time::Instant::now() >= deadline {
-            eyre::bail!(
-                "Rerand not caught up after {:?} (target={:?}); \
-                 ensure the rerand worker is running.",
-                RERAND_READY_TIMEOUT,
-                target
-            );
-        }
-
-        tracing::info!(
-            "Waiting for rerand worker catch-up (target={:?}, {:.0}s left)...",
-            target,
-            deadline
-                .saturating_duration_since(tokio::time::Instant::now())
-                .as_secs_f64(),
-        );
-        tokio::time::sleep(RERAND_READY_POLL).await;
-    }
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| eyre::eyre!("Failed to parse watermark from {}: {}", url, e))?;
+    Ok(Some((
+        v["epoch"]
+            .as_i64()
+            .ok_or_else(|| eyre::eyre!("Missing epoch in watermark from {}", url))?
+            as i32,
+        v["max_applied_chunk"]
+            .as_i64()
+            .ok_or_else(|| eyre::eyre!("Missing max_applied_chunk in watermark from {}", url))?
+            as i32,
+    )))
 }
 
-/// Release the advisory lock and close the connection.
+/// Freeze the local rerand worker, then verify all peers report the exact
+/// same applied watermark. If this party is behind, release the freeze
+/// briefly so the worker can catch up, then re-freeze and re-check.
+/// If this party is at the max, stay frozen and wait for peers to catch up.
 ///
-/// Explicit release keeps the lock lifecycle clear in logs and avoids
-/// returning a locked connection to the pool.
-pub async fn release_rerand_lock(
-    lock_conn: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+/// Guarantees: when this returns `Ok(())`, the local worker is frozen and
+/// all parties have the same `(epoch, max_applied_chunk)`.
+/// On any error, the freeze is released before the error propagates.
+pub async fn freeze_and_verify_watermarks(
+    pool: &PgPool,
+    peers: &[(&str, usize)],
 ) -> Result<()> {
-    if let Some(mut conn) = lock_conn {
-        let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
-            .bind(RERAND_APPLY_LOCK)
-            .execute(&mut *conn)
-            .await;
-        drop(conn);
-        tracing::info!("Rerand advisory lock released after DB load");
+    if peers.is_empty() {
+        eyre::bail!("freeze_and_verify_watermarks called with no peers");
     }
-    Ok(())
+
+    let result = freeze_and_verify_inner(pool, peers).await;
+    if result.is_err() {
+        if let Err(release_err) = release_rerand_freeze(pool).await {
+            tracing::error!(
+                "Failed to release rerand freeze during error cleanup: {:?}. \
+                 Worker may be stuck frozen until next successful startup.",
+                release_err
+            );
+        }
+    }
+    result
+}
+
+async fn freeze_and_verify_inner(
+    pool: &PgPool,
+    peers: &[(&str, usize)],
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + FREEZE_TIMEOUT;
+
+    loop {
+        let gen = match request_rerand_freeze(pool).await? {
+            Some(g) => g,
+            None => return Ok(()), // pre-migration, no rerand tables
+        };
+        wait_for_rerand_frozen(pool, &gen).await?;
+
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                release_rerand_freeze(pool).await?;
+                eyre::bail!(
+                    "Rerand watermark convergence timeout after {:?}. \
+                     Ensure all rerand workers and main servers are healthy.",
+                    FREEZE_TIMEOUT,
+                );
+            }
+
+            let local = get_applied_watermark_from_pool(pool).await?;
+            let mut all_equal = true;
+            let mut max_wm = local;
+
+            for (host, port) in peers {
+                let peer = fetch_peer_watermark(host, *port).await?;
+                if peer != local {
+                    all_equal = false;
+                }
+                if peer > max_wm {
+                    max_wm = peer;
+                }
+            }
+
+            if all_equal {
+                tracing::info!(
+                    "Rerand watermark equality confirmed across all parties: {:?}",
+                    local
+                );
+                return Ok(());
+            }
+
+            if local < max_wm {
+                tracing::info!(
+                    "Local watermark {:?} behind max {:?}, releasing freeze to catch up",
+                    local,
+                    max_wm
+                );
+                release_rerand_freeze(pool).await?;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                break; // outer loop will re-freeze and re-check
+            }
+
+            tracing::info!(
+                "Local watermark {:?} at max, waiting for peers to catch up...",
+                local
+            );
+            tokio::time::sleep(FREEZE_POLL).await;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iris_mpc_common::config::CommonConfig;
-    use iris_mpc_common::helpers::sync::SyncState;
 
-    fn dummy_sync_state(epoch: i32, max_confirmed_chunk: i32) -> SyncState {
-        SyncState {
-            db_len: 100,
-            modifications: vec![],
-            next_sns_sequence_num: None,
-            common_config: CommonConfig::default(),
-            rerand_state: Some(RerandSyncState {
-                epoch,
-                max_confirmed_chunk,
-            }),
-        }
+    #[test]
+    fn test_staging_schema_name() {
+        assert_eq!(staging_schema_name("public"), "public_rerand_staging");
     }
 
     #[test]
-    fn test_validate_peer_one_chunk_ahead_ok() {
-        let p0 = dummy_sync_state(1, 4);
-        let p1 = dummy_sync_state(1, 4);
-        let p2 = dummy_sync_state(1, 5);
-        let sync_result = SyncResult {
-            my_state: p0.clone(),
-            all_states: vec![p0, p1, p2],
-        };
-        assert!(validate_rerand_sync_inner(&sync_result).is_ok());
+    fn test_validate_identifier_ok() {
+        assert!(validate_identifier("public_rerand_staging").is_ok());
     }
 
     #[test]
-    fn test_validate_all_same_ok() {
-        let p0 = dummy_sync_state(1, 5);
-        let p1 = dummy_sync_state(1, 5);
-        let p2 = dummy_sync_state(1, 5);
-        let sync_result = SyncResult {
-            my_state: p0.clone(),
-            all_states: vec![p0, p1, p2],
-        };
-        assert!(validate_rerand_sync_inner(&sync_result).is_ok());
-    }
-
-    #[test]
-    fn test_validate_peer_epoch_ahead_ok() {
-        let p0 = dummy_sync_state(0, 5);
-        let p1 = dummy_sync_state(1, 0);
-        let p2 = dummy_sync_state(0, 5);
-        let sync_result = SyncResult {
-            my_state: p0.clone(),
-            all_states: vec![p0, p1, p2],
-        };
-        assert!(validate_rerand_sync_inner(&sync_result).is_ok());
-    }
-
-    #[test]
-    fn test_validate_peer_epoch_behind_ok() {
-        let p0 = dummy_sync_state(1, 2);
-        let p1 = dummy_sync_state(0, 10);
-        let p2 = dummy_sync_state(1, 2);
-        let sync_result = SyncResult {
-            my_state: p0.clone(),
-            all_states: vec![p0, p1, p2],
-        };
-        assert!(validate_rerand_sync_inner(&sync_result).is_ok());
-    }
-
-    #[test]
-    fn test_validate_fatal_chunk_desync() {
-        let p0 = dummy_sync_state(1, 2);
-        let p1 = dummy_sync_state(1, 4);
-        let p2 = dummy_sync_state(1, 2);
-        let sync_result = SyncResult {
-            my_state: p0.clone(),
-            all_states: vec![p0, p1, p2],
-        };
-        assert!(validate_rerand_sync_inner(&sync_result).is_err());
-    }
-
-    #[test]
-    fn test_validate_fatal_epoch_desync() {
-        let p0 = dummy_sync_state(1, 2);
-        let p1 = dummy_sync_state(3, 10);
-        let p2 = dummy_sync_state(1, 2);
-        let sync_result = SyncResult {
-            my_state: p0.clone(),
-            all_states: vec![p0, p1, p2],
-        };
-        assert!(validate_rerand_sync_inner(&sync_result).is_err());
-    }
-
-    #[test]
-    fn test_classify_target_chunk_minus_one_previous_epoch_applied_is_ready() {
-        let readiness = classify_startup_readiness_for_target((0, 42), (1, -1));
-        assert_eq!(readiness, StartupReadiness::Ready);
-    }
-
-    #[test]
-    fn test_classify_target_chunk_minus_one_same_epoch_applied_is_ahead() {
-        let readiness = classify_startup_readiness_for_target((1, 0), (1, -1));
-        assert_eq!(
-            readiness,
-            StartupReadiness::Ahead {
-                local_applied: (1, 0),
-                target: (1, -1)
-            }
-        );
-    }
-
-    #[test]
-    fn test_classify_target_positive_behind_ready_ahead() {
-        assert_eq!(
-            classify_startup_readiness_for_target((1, 2), (1, 3)),
-            StartupReadiness::Behind
-        );
-        assert_eq!(
-            classify_startup_readiness_for_target((1, 3), (1, 3)),
-            StartupReadiness::Ready
-        );
-        assert_eq!(
-            classify_startup_readiness_for_target((1, 4), (1, 3)),
-            StartupReadiness::Ahead {
-                local_applied: (1, 4),
-                target: (1, 3)
-            }
-        );
+    fn test_validate_identifier_rejects_injection() {
+        assert!(validate_identifier("public; DROP TABLE irises").is_err());
     }
 }

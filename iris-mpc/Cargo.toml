@@ -27,12 +27,14 @@ iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 metrics.workspace = true
+futures.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
 bincode.workspace = true
 pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
+axum.workspace = true
 ampc-anon-stats.workspace = true
 ampc-server-utils.workspace = true
 

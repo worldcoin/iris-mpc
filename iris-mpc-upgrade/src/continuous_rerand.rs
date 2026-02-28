@@ -4,9 +4,11 @@ use bytemuck::cast_slice;
 use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_store::rerand::{
-    delete_staging_chunk, fenced_apply_chunk, get_current_epoch, get_rerand_progress,
-    get_staging_version_map, insert_staging_irises, set_all_confirmed, set_staging_written,
-    staging_schema_name, upsert_rerand_progress, StagingIrisEntry,
+    apply_confirmed_chunk, check_and_handle_freeze, delete_staging_chunk,
+    delete_staging_for_old_epochs, delete_rerand_progress_for_old_epochs, get_current_epoch,
+    get_max_applied_chunk_for_epoch, get_rerand_progress, get_staging_version_map,
+    insert_staging_irises, set_all_confirmed, set_staging_written, staging_schema_name,
+    upsert_rerand_progress, StagingIrisEntry,
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
@@ -31,6 +33,13 @@ pub async fn run_continuous_rerand(
     store: &Store,
     cancel: Option<&CancellationToken>,
 ) -> Result<()> {
+    if config.chunk_size == 0 {
+        eyre::bail!("chunk_size must be > 0");
+    }
+    if config.s3_poll_interval_ms == 0 {
+        eyre::bail!("s3_poll_interval_ms must be > 0");
+    }
+
     let pool = &store.pool;
     let staging_schema = staging_schema_name(&store.schema_name);
     let poll_interval = Duration::from_millis(config.s3_poll_interval_ms);
@@ -38,6 +47,10 @@ pub async fn run_continuous_rerand(
 
     loop {
         if is_cancelled(cancel) {
+            return Ok(());
+        }
+
+        if !check_and_handle_freeze(pool, cancel).await? {
             return Ok(());
         }
 
@@ -65,9 +78,38 @@ pub async fn run_continuous_rerand(
             manifest.max_id_inclusive
         );
 
-        let mut chunk_id: u32 = 0;
+        let cleaned =
+            delete_staging_for_old_epochs(pool, &staging_schema, active_epoch as i32).await?;
+        if cleaned > 0 {
+            tracing::info!(
+                "Epoch {}: cleaned {} orphaned staging rows from prior epochs",
+                active_epoch,
+                cleaned
+            );
+        }
+        let cleaned_progress =
+            delete_rerand_progress_for_old_epochs(pool, active_epoch as i32).await?;
+        if cleaned_progress > 0 {
+            tracing::info!(
+                "Epoch {}: cleaned {} rerand_progress rows from prior epochs",
+                active_epoch,
+                cleaned_progress
+            );
+        }
+
+        let start_chunk_id = get_max_applied_chunk_for_epoch(pool, active_epoch as i32)
+            .await?
+            .map(|max_chunk| (max_chunk + 1) as u32)
+            .unwrap_or(0);
+
+        let mut chunk_id: u32 = start_chunk_id;
         loop {
             if is_cancelled(cancel) {
+                return Ok(());
+            }
+
+            // Honor startup freeze requests between chunks.
+            if !check_and_handle_freeze(pool, cancel).await? {
                 return Ok(());
             }
 
@@ -76,14 +118,9 @@ pub async fn run_continuous_rerand(
             }
 
             let progress = get_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
-
-            if progress.as_ref().is_some_and(|p| p.live_applied) {
-                chunk_id += 1;
-                continue;
-            }
-
             upsert_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
 
+            // --- Stage ---
             if !progress.as_ref().is_some_and(|p| p.staging_written) {
                 process_chunk_staging(
                     pool,
@@ -96,11 +133,10 @@ pub async fn run_continuous_rerand(
                     &manifest,
                 )
                 .await?;
-
                 set_staging_written(pool, active_epoch as i32, chunk_id as i32).await?;
             }
 
-            // Upload version map + staged marker (both idempotent).
+            // --- Upload version map + staged marker (both idempotent) ---
             if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
                 let version_map = get_staging_version_map(
                     pool,
@@ -137,6 +173,7 @@ pub async fn run_continuous_rerand(
                 return Ok(());
             }
 
+            // --- Wait for all parties to confirm staging ---
             if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
                 s3_coordination::poll_chunk_staged_all(
                     s3,
@@ -146,7 +183,6 @@ pub async fn run_continuous_rerand(
                     poll_interval,
                 )
                 .await?;
-
                 set_all_confirmed(pool, active_epoch as i32, chunk_id as i32).await?;
                 tracing::info!(
                     "Epoch {} chunk {}: all parties confirmed",
@@ -159,9 +195,10 @@ pub async fn run_continuous_rerand(
                 return Ok(());
             }
 
-            // --- Modification fence ---
-            // 1. Compute cross-party version_id disagreements (before lock)
-            let cross_party_divergent = s3_coordination::compute_cross_party_divergent_ids(
+            // --- Apply ---
+            // 1. Compute staging-time cross-party disagreements from version maps.
+            //    This is pure S3 reads — no DB lock held.
+            let staging_divergent = s3_coordination::compute_cross_party_divergent_ids(
                 s3,
                 &config.s3_bucket,
                 active_epoch,
@@ -170,23 +207,25 @@ pub async fn run_continuous_rerand(
             )
             .await?;
 
-            // 2-6. Lock, check, prune, apply, unlock — helper guarantees
-            //      unlock on all error paths.
-            let (rows, skip_count) = fenced_apply_chunk(
+            // 2. Apply under lock. The function acquires RERAND_MODIFY_LOCK +
+            //    RERAND_APPLY_LOCK, deletes staging_divergent, applies via
+            //    version_id CAS, cleans up staging, and commits.
+            //    No S3 I/O happens while the lock is held.
+            let rows = apply_confirmed_chunk(
                 pool,
                 &staging_schema,
                 active_epoch as i32,
                 chunk_id as i32,
-                cross_party_divergent,
+                &staging_divergent,
             )
             .await?;
 
             tracing::info!(
-                "Epoch {} chunk {}: applied to live DB ({} rows updated, {} skipped)",
+                "Epoch {} chunk {}: applied to live DB ({} rows updated, {} staging-divergent skipped)",
                 active_epoch,
                 chunk_id,
                 rows,
-                skip_count,
+                staging_divergent.len(),
             );
 
             chunk_id += 1;
@@ -196,12 +235,15 @@ pub async fn run_continuous_rerand(
             }
         }
 
-        if chunk_id == 0 && chunk_delay > Duration::ZERO {
+        if chunk_id == 0 {
+            let empty_epoch_sleep = chunk_delay.max(Duration::from_secs(30));
             tracing::info!(
-                "Epoch {} is empty, sleeping to avoid spinning",
-                active_epoch
+                "Epoch {} is empty (max_id_inclusive={}), sleeping {:.0}s to avoid spinning",
+                active_epoch,
+                manifest.max_id_inclusive,
+                empty_epoch_sleep.as_secs_f64(),
             );
-            sleep(chunk_delay).await;
+            sleep(empty_epoch_sleep).await;
         }
 
         epoch::complete_epoch(
@@ -234,15 +276,25 @@ async fn get_or_create_manifest(
             .await;
     }
 
-    if config.party_id == 0 {
-        let local_max = store.get_max_serial_id().await? as u64;
-        s3_coordination::upload_max_id(s3, &config.s3_bucket, epoch, 0, local_max).await?;
+    let local_max = store.get_max_serial_id().await? as u64;
+    s3_coordination::upload_max_id(s3, &config.s3_bucket, epoch, config.party_id, local_max)
+        .await?;
 
+    if config.party_id == 0 {
         let all_max_ids =
             s3_coordination::download_all_max_ids(s3, &config.s3_bucket, epoch, poll_interval)
                 .await?;
         let min_max = *all_max_ids.iter().min().unwrap();
         let max_id_inclusive = min_max.saturating_sub(config.safety_buffer_ids);
+        if max_id_inclusive == 0 {
+            tracing::warn!(
+                "Epoch {}: max_id_inclusive is 0 (min_max={}, safety_buffer_ids={}). \
+                 Epoch will be empty.",
+                epoch,
+                min_max,
+                config.safety_buffer_ids
+            );
+        }
 
         let manifest = Manifest {
             epoch,
@@ -258,10 +310,6 @@ async fn get_or_create_manifest(
         );
         Ok(manifest)
     } else {
-        let local_max = store.get_max_serial_id().await? as u64;
-        s3_coordination::upload_max_id(s3, &config.s3_bucket, epoch, config.party_id, local_max)
-            .await?;
-
         s3_coordination::download_manifest(s3, &config.s3_bucket, epoch, poll_interval).await
     }
 }
@@ -277,8 +325,6 @@ async fn process_chunk_staging(
     chunk_id: u32,
     manifest: &Manifest,
 ) -> Result<()> {
-    // Delete any leftover rows from a previous partial run so all rows in
-    // staging come from one read pass (prevents mixed-snapshot version_ids).
     delete_staging_chunk(pool, staging_schema, epoch as i32, chunk_id as i32).await?;
 
     let (start, end) = manifest.chunk_range(chunk_id);

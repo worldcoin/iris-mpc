@@ -1,5 +1,6 @@
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
+use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::time::{sleep, Instant};
@@ -26,7 +27,7 @@ impl Manifest {
     /// IDs are 1-based.
     pub fn chunk_range(&self, chunk_id: u32) -> (u64, u64) {
         let start = 1 + (chunk_id as u64) * self.chunk_size;
-        let end = std::cmp::min(start + self.chunk_size, self.max_id_inclusive + 1);
+        let end = std::cmp::min(start + self.chunk_size, self.max_id_inclusive.saturating_add(1));
         (start, end)
     }
 
@@ -187,13 +188,20 @@ pub async fn download_all_max_ids(
     epoch: u32,
     poll_interval: Duration,
 ) -> Result<[u64; 3]> {
+    let keys: Vec<String> = (0..NUM_PARTIES)
+        .map(|party| format!("{}/max-id", epoch_party_prefix(epoch, party)))
+        .collect();
+
+    for key in &keys {
+        poll_until_marker_exists(s3, bucket, key, poll_interval).await?;
+    }
+
+    let all_bytes: Vec<Vec<u8>> =
+        try_join_all(keys.iter().map(|key| download_marker(s3, bucket, key))).await?;
     let mut ids = [0u64; 3];
-    for party in 0..NUM_PARTIES {
-        let key = format!("{}/max-id", epoch_party_prefix(epoch, party));
-        poll_until_marker_exists(s3, bucket, &key, poll_interval).await?;
-        let bytes = download_marker(s3, bucket, &key).await?;
+    for (party, bytes) in all_bytes.into_iter().enumerate() {
         let s = String::from_utf8(bytes)?;
-        ids[party as usize] = s
+        ids[party] = s
             .trim()
             .parse()
             .map_err(|e| eyre!("Failed to parse max-id from party {}: {}", party, e))?;
@@ -332,9 +340,9 @@ async fn download_chunk_version_map(
 /// Compare version maps across all 3 parties and return IDs where any
 /// party disagrees on the `original_version_id`.
 ///
-/// Fast path: download only the 32-byte blake3 hashes. If all match,
-/// return empty (no disagreements). Slow path (hash mismatch): download
-/// the full maps and compute the exact disagreement set.
+/// Fast path: download only the 32-byte blake3 hashes concurrently. If all
+/// match, return empty (no disagreements). Slow path (hash mismatch):
+/// download the full maps concurrently and compute the exact disagreement set.
 pub async fn compute_cross_party_divergent_ids(
     s3: &S3Client,
     bucket: &str,
@@ -342,12 +350,11 @@ pub async fn compute_cross_party_divergent_ids(
     chunk_id: u32,
     poll_interval: Duration,
 ) -> Result<Vec<i64>> {
-    let mut hashes = Vec::new();
-    for party in 0..NUM_PARTIES {
-        hashes.push(
-            download_chunk_version_hash(s3, bucket, epoch, party, chunk_id, poll_interval).await?,
-        );
-    }
+    let hashes: Vec<[u8; 32]> = try_join_all((0..NUM_PARTIES).map(|party| {
+        download_chunk_version_hash(s3, bucket, epoch, party, chunk_id, poll_interval)
+    }))
+    .await?;
+
     if hashes[0] == hashes[1] && hashes[1] == hashes[2] {
         return Ok(Vec::new());
     }
@@ -359,12 +366,14 @@ pub async fn compute_cross_party_divergent_ids(
     );
 
     use std::collections::HashMap;
-    let mut all_maps: Vec<HashMap<i64, i16>> = Vec::new();
-    for party in 0..NUM_PARTIES {
-        let map =
-            download_chunk_version_map(s3, bucket, epoch, party, chunk_id, poll_interval).await?;
-        all_maps.push(map.into_iter().collect());
-    }
+    let all_maps: Vec<HashMap<i64, i16>> =
+        try_join_all((0..NUM_PARTIES).map(|party| {
+            download_chunk_version_map(s3, bucket, epoch, party, chunk_id, poll_interval)
+        }))
+        .await?
+        .into_iter()
+        .map(|v| v.into_iter().collect::<HashMap<_, _>>())
+        .collect();
 
     let mut divergent = Vec::new();
     let all_ids: std::collections::BTreeSet<i64> =

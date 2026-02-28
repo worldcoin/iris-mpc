@@ -2,9 +2,7 @@
 
 use eyre::Result;
 use iris_mpc_common::{
-    config::CommonConfig,
     galois_engine::degree4::FullGaloisRingIrisCodeShare,
-    helpers::sync::{SyncResult, SyncState},
     iris_db::iris::IrisCode,
     postgres::{AccessMode, PostgresClient},
 };
@@ -412,34 +410,14 @@ pub async fn wait_chunks_staged(harness: &TestHarness, epoch: i32, n: i32) -> Re
 // ---- Server simulation ----
 
 pub async fn simulate_server_startup(harness: &TestHarness, party: usize) -> Result<()> {
-    let sync_result = build_test_sync_result(harness, party).await?;
     let pool = &harness.parties[party].store.pool;
-    let lock_conn = rerand_store::rerand_validate_and_lock(pool, &sync_result).await?;
+    let lock_conn = rerand_store::acquire_apply_lock(pool).await?;
     let query_result: Result<(i64,), sqlx::Error> = sqlx::query_as("SELECT COUNT(*) FROM irises")
         .fetch_one(pool)
         .await;
-    rerand_store::release_rerand_lock(lock_conn).await?;
+    rerand_store::release_apply_lock(lock_conn).await?;
     let _count = query_result?;
     Ok(())
-}
-
-async fn build_test_sync_result(harness: &TestHarness, party: usize) -> Result<SyncResult> {
-    let mut all_states = Vec::new();
-    for p in &harness.parties {
-        let rerand_state = rerand_store::build_rerand_sync_state(&p.store.pool).await?;
-        all_states.push(SyncState {
-            db_len: p.store.count_irises().await? as u64,
-            modifications: vec![],
-            next_sns_sequence_num: None,
-            common_config: CommonConfig::default(),
-            rerand_state,
-        });
-    }
-    let my_state = all_states[party].clone();
-    Ok(SyncResult {
-        my_state,
-        all_states,
-    })
 }
 
 pub async fn assert_consistent_rerand_epoch(

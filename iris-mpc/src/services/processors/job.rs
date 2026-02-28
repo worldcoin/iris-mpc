@@ -290,6 +290,13 @@ pub async fn process_job_result(
     let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
 
+    if !config.disable_persistence {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(iris_mpc_store::rerand::RERAND_MODIFY_LOCK)
+            .execute(&mut *iris_tx)
+            .await?;
+    }
+
     if !codes_and_masks.is_empty() && !config.disable_persistence {
         let step_start = Instant::now();
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
