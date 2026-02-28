@@ -43,10 +43,10 @@ env:
     value: "dev"
 
   - name: SMPC__SCHEMA_NAME
-    value: "genesis"
+    value: "SMPC" #"genesis"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_cpu1M"
+    value: "_minfhd" #"cpu1M"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
     value: "_gpu1M"
