@@ -395,7 +395,7 @@ sequenceDiagram
             MS->>DB: SET freeze_requested=FALSE
             Note over RW: Poll sees freeze_requested=FALSE
             RW->>RW: Resume chunk processing
-            break
+            Note over MS: Convergence reached; startup continues
         else Local behind max
             MS->>DB: SET freeze_requested=FALSE
             Note over RW: Resume to catch up
@@ -421,7 +421,7 @@ sequenceDiagram
     RW->>DB: SET frozen_generation=G1
     Note over RW: Blocked in freeze loop
 
-    MS1-xMS1: CRASH (freeze_requested still TRUE)
+    MS1->>MS1: CRASH (freeze_requested still TRUE)
 
     Note over MS2: Restart
 
