@@ -22,6 +22,12 @@ else
     exit 1
 fi
 
+if ! command -v protoc >/dev/null 2>&1; then
+    echo "protoc not found. Install protobuf compiler (protobuf-compiler) before running these tests."
+    echo "In GitHub Actions this workflow installs it automatically."
+    exit 1
+fi
+
 cleanup() {
     echo "=== Tearing down containers ==="
     "${COMPOSE[@]}" -f "$COMPOSE_FILE" down --remove-orphans -v 2>/dev/null || true

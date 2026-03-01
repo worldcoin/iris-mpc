@@ -54,6 +54,16 @@ jobs:
           restore-keys: |
             rust-build-${{ runner.os }}-
 
+      - name: Install protobuf compiler
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          if command -v protoc > /dev/null; then
+            echo "protoc already installed: $(command -v protoc)"
+          else
+            sudo apt-get update
+            sudo apt-get install -y protobuf-compiler
+          fi
+
       - name: Run rerandomization e2e tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
