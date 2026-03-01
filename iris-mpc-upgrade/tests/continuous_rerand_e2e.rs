@@ -128,6 +128,7 @@ async fn start_peer_watermark_server(
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase1_clean_epoch() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -152,6 +153,7 @@ fn phase1_clean_epoch() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase2_kill_and_resume() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -185,6 +187,7 @@ fn phase2_kill_and_resume() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase3_concurrent_modifications() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -247,6 +250,7 @@ fn phase3_concurrent_modifications() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase4_server_restart_during_rerand() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -279,6 +283,7 @@ fn phase4_server_restart_during_rerand() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase5_staggered_restart() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -319,6 +324,7 @@ fn phase5_staggered_restart() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase6_multiple_epochs() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -351,6 +357,7 @@ fn phase6_multiple_epochs() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase7_startup_validation() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -394,6 +401,7 @@ fn phase7_startup_validation() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase8_reject_desync() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -457,6 +465,7 @@ fn phase8_reject_desync() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase9_asymmetric_modification_consistency() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -519,6 +528,7 @@ fn phase9_asymmetric_modification_consistency() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase10_startup_freeze_local_catchup() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
@@ -601,6 +611,7 @@ fn phase10_startup_freeze_local_catchup() {
 // ============================================================================
 
 #[test]
+#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
 fn phase11_startup_freeze_waits_for_peers() {
     run_async(async {
         let _ = tracing_subscriber::fmt::try_init();
