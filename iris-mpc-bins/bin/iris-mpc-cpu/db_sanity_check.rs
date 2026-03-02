@@ -217,299 +217,28 @@ async fn run_graph_checks(
     degree_hist: &mut Vec<DegreeHistEntry>,
     stats: &mut Stats,
 ) -> Result<()> {
-    // ef values are irrelevant
-    let params = HnswParams::new(1, 1, m);
-
-    println!("  Loading graphs...");
-    let graphs = [
-        ("left", load_graph(graph_pg, StoreId::Left).await?),
-        ("right", load_graph(graph_pg, StoreId::Right).await?),
-    ];
-
-    for (eye, graph) in &graphs {
-        // -- Stats --
-        stats.add(
-            format!("{eye} graph checksum"),
-            graph.checksum().to_string(),
+    // Load one graph at a time to halve peak memory (~80 GB per eye at 16M/M=320).
+    let mut l0_id_sets: Vec<(&str, HashSet<u32>)> = Vec::new();
+    for (eye, store_id) in [("left", StoreId::Left), ("right", StoreId::Right)] {
+        println!("  Loading {eye} graph...");
+        let graph = load_graph(graph_pg, store_id).await?;
+        let l0_ids = check_single_graph(
+            eye,
+            &graph,
+            iris_ids,
+            exclusions,
+            m,
+            layer_probability,
+            checks,
+            degree_hist,
+            stats,
         );
-        stats.add(
-            format!("{eye} graph num_layers"),
-            graph.num_layers().to_string(),
-        );
-        let ep_desc = graph
-            .entry_points
-            .iter()
-            .map(|ep| format!("{}@L{}", ep.point, ep.layer))
-            .collect::<Vec<_>>()
-            .join(", ");
-        stats.add(format!("{eye} entry points"), ep_desc);
-
-        for (lc, layer) in graph.layers.iter().enumerate() {
-            stats.add(
-                format!("{eye} layer {lc} node count"),
-                layer.links.len().to_string(),
-            );
-            let mut deg_counts: BTreeMap<usize, usize> = BTreeMap::new();
-            for neighbors in layer.links.values() {
-                *deg_counts.entry(neighbors.len()).or_insert(0) += 1;
-            }
-            for (&degree, &count) in &deg_counts {
-                degree_hist.push(DegreeHistEntry {
-                    eye: eye.to_string(),
-                    layer: lc,
-                    degree,
-                    node_count: count,
-                });
-            }
-            if !layer.links.is_empty() {
-                let mut degrees: Vec<usize> = layer.links.values().map(|n| n.len()).collect();
-                degrees.sort();
-                let (min, max) = (degrees[0], degrees[degrees.len() - 1]);
-                let avg = degrees.iter().sum::<usize>() as f64 / degrees.len() as f64;
-                let median = degrees[degrees.len() / 2];
-                stats.add(
-                    format!("{eye} layer {lc} degree min/avg/median/max"),
-                    format!("{min}/{avg:.1}/{median}/{max}"),
-                );
-            }
-        }
-
-        // -- 1a: No orphan graph nodes --
-        let orphan_count = graph
-            .layers
-            .iter()
-            .flat_map(|l| l.links.keys())
-            .filter(|n| !iris_ids.contains(&(n.serial_id() as i64)))
-            .count();
-        checks.push(CheckResult::new(
-            "1a",
-            &format!("No orphan graph nodes ({eye})"),
-            orphan_count == 0,
-            if orphan_count == 0 {
-                "All graph nodes exist in irises table".into()
-            } else {
-                format!("{orphan_count} graph nodes not found in irises table")
-            },
-        ));
-
-        // -- 1b: Node coverage --
-        let layer0_ids: HashSet<u32> = graph
-            .layers
-            .first()
-            .map(|l| l.links.keys().map(|v| v.serial_id()).collect())
-            .unwrap_or_default();
-        let uncovered: HashSet<u32> = iris_ids
-            .iter()
-            .map(|&id| id as u32)
-            .filter(|id| !layer0_ids.contains(id))
-            .collect();
-        checks.push(match exclusions {
-            Some(excl) if uncovered == *excl => CheckResult::new(
-                "1b",
-                &format!("Node coverage ({eye})"),
-                true,
-                format!(
-                    "{} uncovered IDs match exclusions list exactly",
-                    uncovered.len()
-                ),
-            ),
-            Some(excl) => {
-                let only_uncov: Vec<_> = uncovered.difference(excl).copied().collect();
-                let only_excl: Vec<_> = excl.difference(&uncovered).copied().collect();
-                let mut d = format!(
-                    "Mismatch: {} uncovered, {} excluded",
-                    uncovered.len(),
-                    excl.len()
-                );
-                if !only_uncov.is_empty() {
-                    let _ = write!(
-                        d,
-                        "; {} in DB not in exclusions: {:?}",
-                        only_uncov.len(),
-                        &only_uncov[..only_uncov.len().min(10)]
-                    );
-                }
-                if !only_excl.is_empty() {
-                    let _ = write!(
-                        d,
-                        "; {} in exclusions not uncovered: {:?}",
-                        only_excl.len(),
-                        &only_excl[..only_excl.len().min(10)]
-                    );
-                }
-                CheckResult::new("1b", &format!("Node coverage ({eye})"), false, d)
-            }
-            None => CheckResult::new(
-                "1b",
-                &format!("Node coverage ({eye})"),
-                true,
-                format!(
-                    "{} iris IDs not in graph layer 0 (no exclusions file)",
-                    uncovered.len()
-                ),
-            ),
-        });
-
-        // -- 1c: Layer hierarchy --
-        let hierarchy_viol: u64 = graph
-            .layers
-            .iter()
-            .enumerate()
-            .skip(1)
-            .flat_map(|(lc, layer)| {
-                layer.links.keys().flat_map(move |node| {
-                    (0..lc).filter(move |&lower| !graph.layers[lower].links.contains_key(node))
-                })
-            })
-            .count() as u64;
-        checks.push(CheckResult::new(
-            "1c",
-            &format!("Layer hierarchy ({eye})"),
-            hierarchy_viol == 0,
-            if hierarchy_viol == 0 {
-                "All higher-layer nodes present in lower layers".into()
-            } else {
-                format!("{hierarchy_viol} hierarchy violations")
-            },
-        ));
-
-        // -- 1d: Neighbor validity --
-        let invalid_nb: u64 = graph
-            .layers
-            .iter()
-            .map(|layer| {
-                let nodes: HashSet<&VectorId> = layer.links.keys().collect();
-                layer
-                    .links
-                    .values()
-                    .flat_map(|nbs| nbs.iter())
-                    .filter(|nb| !nodes.contains(nb))
-                    .count() as u64
-            })
-            .sum();
-        checks.push(CheckResult::new(
-            "1d",
-            &format!("Neighbor validity ({eye})"),
-            invalid_nb == 0,
-            if invalid_nb == 0 {
-                "All neighbors reference valid nodes at the same layer".into()
-            } else {
-                format!("{invalid_nb} invalid neighbor references")
-            },
-        ));
-
-        // -- 1e: No self-loops --
-        let self_loops: u64 = graph
-            .layers
-            .iter()
-            .flat_map(|l| l.links.iter())
-            .filter(|(node, nbs)| nbs.contains(node))
-            .count() as u64;
-        checks.push(CheckResult::new(
-            "1e",
-            &format!("No self-loops ({eye})"),
-            self_loops == 0,
-            if self_loops == 0 {
-                "No node lists itself as neighbor".into()
-            } else {
-                format!("{self_loops} self-loops found")
-            },
-        ));
-
-        // -- 1f: No duplicate neighbors --
-        let dup_count: u64 = graph
-            .layers
-            .iter()
-            .flat_map(|l| l.links.values())
-            .map(|nbs| {
-                let unique: HashSet<&VectorId> = nbs.iter().collect();
-                (nbs.len() - unique.len()) as u64
-            })
-            .sum();
-        checks.push(CheckResult::new(
-            "1f",
-            &format!("No duplicate neighbors ({eye})"),
-            dup_count == 0,
-            if dup_count == 0 {
-                "No duplicate neighbors found".into()
-            } else {
-                format!("{dup_count} duplicate neighbor entries")
-            },
-        ));
-
-        // -- 1g: Degree bounds --
-        let mut degree_viol = 0u64;
-        for (lc, layer) in graph.layers.iter().enumerate() {
-            let m_limit = params.M_limit[lc.min(N_PARAM_LAYERS - 1)];
-            for (node, nbs) in layer.links.iter() {
-                if nbs.len() > m_limit {
-                    degree_viol += 1;
-                    if degree_viol <= 5 {
-                        println!(
-                            "  [1g] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
-                            nbs.len()
-                        );
-                    }
-                }
-            }
-        }
-        checks.push(CheckResult::new(
-            "1g",
-            &format!("Degree bounds ({eye})"),
-            degree_viol == 0,
-            if degree_viol == 0 {
-                format!(
-                    "L0 M_limit={}, L1+ M_limit={}",
-                    params.M_limit[0],
-                    params.M_limit[1.min(N_PARAM_LAYERS - 1)]
-                )
-            } else {
-                format!("{degree_viol} nodes exceed M_limit")
-            },
-        ));
-
-        // -- 1h: Entry point validity --
-        let mut ep_valid = true;
-        let mut ep_detail = String::new();
-        for ep in &graph.entry_points {
-            if ep.layer >= graph.layers.len() {
-                ep_valid = false;
-                let _ = write!(
-                    ep_detail,
-                    "EP {} at layer {} but only {} layers; ",
-                    ep.point,
-                    ep.layer,
-                    graph.layers.len()
-                );
-            } else if !graph.layers[ep.layer].links.contains_key(&ep.point) {
-                ep_valid = false;
-                let _ = write!(
-                    ep_detail,
-                    "EP {} not found in layer {}; ",
-                    ep.point, ep.layer
-                );
-            }
-        }
-        checks.push(CheckResult::new(
-            "1h",
-            &format!("Entry point validity ({eye})"),
-            ep_valid,
-            if ep_valid {
-                format!("{} entry points valid", graph.entry_points.len())
-            } else {
-                ep_detail
-            },
-        ));
+        drop(graph);
+        l0_id_sets.push((eye, l0_ids));
     }
 
     // -- 1i: Left/Right graph sync --
-    let l0_ids = |g: &GraphMem<VectorId>| -> HashSet<u32> {
-        g.layers
-            .first()
-            .map(|l| l.links.keys().map(|v| v.serial_id()).collect())
-            .unwrap_or_default()
-    };
-    let (left_ids, right_ids) = (l0_ids(&graphs[0].1), l0_ids(&graphs[1].1));
+    let (left_ids, right_ids) = (&l0_id_sets[0].1, &l0_id_sets[1].1);
     checks.push(CheckResult::new(
         "1i",
         "Left/Right graph sync",
@@ -519,9 +248,301 @@ async fn run_graph_checks(
         } else {
             format!(
                 "Mismatch: {} only in left, {} only in right",
-                left_ids.difference(&right_ids).count(),
-                right_ids.difference(&left_ids).count()
+                left_ids.difference(right_ids).count(),
+                right_ids.difference(left_ids).count()
             )
+        },
+    ));
+
+    Ok(())
+}
+
+/// Run per-eye checks (1a–1h, 1j) and return the layer-0 serial ID set.
+fn check_single_graph(
+    eye: &str,
+    graph: &GraphMem<VectorId>,
+    iris_ids: &HashSet<i64>,
+    exclusions: &Option<HashSet<u32>>,
+    m: usize,
+    layer_probability: f64,
+    checks: &mut Vec<CheckResult>,
+    degree_hist: &mut Vec<DegreeHistEntry>,
+    stats: &mut Stats,
+) -> HashSet<u32> {
+    // ef values are irrelevant
+    let params = HnswParams::new(1, 1, m);
+
+    // -- Stats --
+    stats.add(
+        format!("{eye} graph checksum"),
+        graph.checksum().to_string(),
+    );
+    stats.add(
+        format!("{eye} graph num_layers"),
+        graph.num_layers().to_string(),
+    );
+    let ep_desc = graph
+        .entry_points
+        .iter()
+        .map(|ep| format!("{}@L{}", ep.point, ep.layer))
+        .collect::<Vec<_>>()
+        .join(", ");
+    stats.add(format!("{eye} entry points"), ep_desc);
+
+    for (lc, layer) in graph.layers.iter().enumerate() {
+        stats.add(
+            format!("{eye} layer {lc} node count"),
+            layer.links.len().to_string(),
+        );
+        let mut deg_counts: BTreeMap<usize, usize> = BTreeMap::new();
+        for neighbors in layer.links.values() {
+            *deg_counts.entry(neighbors.len()).or_insert(0) += 1;
+        }
+        for (&degree, &count) in &deg_counts {
+            degree_hist.push(DegreeHistEntry {
+                eye: eye.to_string(),
+                layer: lc,
+                degree,
+                node_count: count,
+            });
+        }
+        if !layer.links.is_empty() {
+            let mut degrees: Vec<usize> = layer.links.values().map(|n| n.len()).collect();
+            degrees.sort();
+            let (min, max) = (degrees[0], degrees[degrees.len() - 1]);
+            let avg = degrees.iter().sum::<usize>() as f64 / degrees.len() as f64;
+            let median = degrees[degrees.len() / 2];
+            stats.add(
+                format!("{eye} layer {lc} degree min/avg/median/max"),
+                format!("{min}/{avg:.1}/{median}/{max}"),
+            );
+        }
+    }
+
+    // -- 1a: No orphan graph nodes --
+    let orphan_count = graph
+        .layers
+        .iter()
+        .flat_map(|l| l.links.keys())
+        .filter(|n| !iris_ids.contains(&(n.serial_id() as i64)))
+        .count();
+    checks.push(CheckResult::new(
+        "1a",
+        &format!("No orphan graph nodes ({eye})"),
+        orphan_count == 0,
+        if orphan_count == 0 {
+            "All graph nodes exist in irises table".into()
+        } else {
+            format!("{orphan_count} graph nodes not found in irises table")
+        },
+    ));
+
+    // -- 1b: Node coverage --
+    let layer0_ids: HashSet<u32> = graph
+        .layers
+        .first()
+        .map(|l| l.links.keys().map(|v| v.serial_id()).collect())
+        .unwrap_or_default();
+    let uncovered: HashSet<u32> = iris_ids
+        .iter()
+        .map(|&id| id as u32)
+        .filter(|id| !layer0_ids.contains(id))
+        .collect();
+    checks.push(match exclusions {
+        Some(excl) if uncovered == *excl => CheckResult::new(
+            "1b",
+            &format!("Node coverage ({eye})"),
+            true,
+            format!(
+                "{} uncovered IDs match exclusions list exactly",
+                uncovered.len()
+            ),
+        ),
+        Some(excl) => {
+            let only_uncov: Vec<_> = uncovered.difference(excl).copied().collect();
+            let only_excl: Vec<_> = excl.difference(&uncovered).copied().collect();
+            let mut d = format!(
+                "Mismatch: {} uncovered, {} excluded",
+                uncovered.len(),
+                excl.len()
+            );
+            if !only_uncov.is_empty() {
+                let _ = write!(
+                    d,
+                    "; {} in DB not in exclusions: {:?}",
+                    only_uncov.len(),
+                    &only_uncov[..only_uncov.len().min(10)]
+                );
+            }
+            if !only_excl.is_empty() {
+                let _ = write!(
+                    d,
+                    "; {} in exclusions not uncovered: {:?}",
+                    only_excl.len(),
+                    &only_excl[..only_excl.len().min(10)]
+                );
+            }
+            CheckResult::new("1b", &format!("Node coverage ({eye})"), false, d)
+        }
+        None => CheckResult::new(
+            "1b",
+            &format!("Node coverage ({eye})"),
+            true,
+            format!(
+                "{} iris IDs not in graph layer 0 (no exclusions file)",
+                uncovered.len()
+            ),
+        ),
+    });
+
+    // -- 1c: Layer hierarchy --
+    let hierarchy_viol: u64 = graph
+        .layers
+        .iter()
+        .enumerate()
+        .skip(1)
+        .flat_map(|(lc, layer)| {
+            layer.links.keys().flat_map(move |node| {
+                (0..lc).filter(move |&lower| !graph.layers[lower].links.contains_key(node))
+            })
+        })
+        .count() as u64;
+    checks.push(CheckResult::new(
+        "1c",
+        &format!("Layer hierarchy ({eye})"),
+        hierarchy_viol == 0,
+        if hierarchy_viol == 0 {
+            "All higher-layer nodes present in lower layers".into()
+        } else {
+            format!("{hierarchy_viol} hierarchy violations")
+        },
+    ));
+
+    // -- 1d: Neighbor validity --
+    let invalid_nb: u64 = graph
+        .layers
+        .iter()
+        .map(|layer| {
+            let nodes: HashSet<&VectorId> = layer.links.keys().collect();
+            layer
+                .links
+                .values()
+                .flat_map(|nbs| nbs.iter())
+                .filter(|nb| !nodes.contains(nb))
+                .count() as u64
+        })
+        .sum();
+    checks.push(CheckResult::new(
+        "1d",
+        &format!("Neighbor validity ({eye})"),
+        invalid_nb == 0,
+        if invalid_nb == 0 {
+            "All neighbors reference valid nodes at the same layer".into()
+        } else {
+            format!("{invalid_nb} invalid neighbor references")
+        },
+    ));
+
+    // -- 1e: No self-loops --
+    let self_loops: u64 = graph
+        .layers
+        .iter()
+        .flat_map(|l| l.links.iter())
+        .filter(|(node, nbs)| nbs.contains(node))
+        .count() as u64;
+    checks.push(CheckResult::new(
+        "1e",
+        &format!("No self-loops ({eye})"),
+        self_loops == 0,
+        if self_loops == 0 {
+            "No node lists itself as neighbor".into()
+        } else {
+            format!("{self_loops} self-loops found")
+        },
+    ));
+
+    // -- 1f: No duplicate neighbors --
+    let dup_count: u64 = graph
+        .layers
+        .iter()
+        .flat_map(|l| l.links.values())
+        .map(|nbs| {
+            let unique: HashSet<&VectorId> = nbs.iter().collect();
+            (nbs.len() - unique.len()) as u64
+        })
+        .sum();
+    checks.push(CheckResult::new(
+        "1f",
+        &format!("No duplicate neighbors ({eye})"),
+        dup_count == 0,
+        if dup_count == 0 {
+            "No duplicate neighbors found".into()
+        } else {
+            format!("{dup_count} duplicate neighbor entries")
+        },
+    ));
+
+    // -- 1g: Degree bounds --
+    let mut degree_viol = 0u64;
+    for (lc, layer) in graph.layers.iter().enumerate() {
+        let m_limit = params.M_limit[lc.min(N_PARAM_LAYERS - 1)];
+        for (node, nbs) in layer.links.iter() {
+            if nbs.len() > m_limit {
+                degree_viol += 1;
+                if degree_viol <= 5 {
+                    println!(
+                        "  [1g] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
+                        nbs.len()
+                    );
+                }
+            }
+        }
+    }
+    checks.push(CheckResult::new(
+        "1g",
+        &format!("Degree bounds ({eye})"),
+        degree_viol == 0,
+        if degree_viol == 0 {
+            format!(
+                "L0 M_limit={}, L1+ M_limit={}",
+                params.M_limit[0],
+                params.M_limit[1.min(N_PARAM_LAYERS - 1)]
+            )
+        } else {
+            format!("{degree_viol} nodes exceed M_limit")
+        },
+    ));
+
+    // -- 1h: Entry point validity --
+    let mut ep_valid = true;
+    let mut ep_detail = String::new();
+    for ep in &graph.entry_points {
+        if ep.layer >= graph.layers.len() {
+            ep_valid = false;
+            let _ = write!(
+                ep_detail,
+                "EP {} at layer {} but only {} layers; ",
+                ep.point,
+                ep.layer,
+                graph.layers.len()
+            );
+        } else if !graph.layers[ep.layer].links.contains_key(&ep.point) {
+            ep_valid = false;
+            let _ = write!(
+                ep_detail,
+                "EP {} not found in layer {}; ",
+                ep.point, ep.layer
+            );
+        }
+    }
+    checks.push(CheckResult::new(
+        "1h",
+        &format!("Entry point validity ({eye})"),
+        ep_valid,
+        if ep_valid {
+            format!("{} entry points valid", graph.entry_points.len())
+        } else {
+            ep_detail
         },
     ));
 
@@ -529,21 +550,18 @@ async fn run_graph_checks(
     // Each node independently lands at layer >= L with probability q^L, so
     // count at layer L ~ Binomial(N, q^L).  Flag if actual count is more than
     // 3 standard deviations from the expected value.
-    let q = layer_probability;
-    for (eye, graph) in &graphs {
-        let n = graph.layers.first().map(|l| l.links.len()).unwrap_or(0) as f64;
-        if graph.layers.len() < 2 || n == 0.0 {
-            checks.push(CheckResult::new(
-                "1j",
-                &format!("Layer density geometric ({eye})"),
-                true,
-                "Fewer than 2 layers, skipped",
-            ));
-            continue;
-        }
+    let n = graph.layers.first().map(|l| l.links.len()).unwrap_or(0) as f64;
+    if graph.layers.len() < 2 || n == 0.0 {
+        checks.push(CheckResult::new(
+            "1j",
+            &format!("Layer density geometric ({eye})"),
+            true,
+            "Fewer than 2 layers, skipped",
+        ));
+    } else {
         let mut violations = Vec::new();
         for lc in 1..graph.layers.len() {
-            let p = q.powi(lc as i32);
+            let p = layer_probability.powi(lc as i32);
             let expected = n * p;
             let std_dev = (n * p * (1.0 - p)).sqrt();
             let actual = graph.layers[lc].links.len() as f64;
@@ -564,7 +582,7 @@ async fn run_graph_checks(
             violations.is_empty(),
             if violations.is_empty() {
                 format!(
-                    "All layers within 3σ of Binomial(N={n:.0}, q={q:.4}) ({} layers)",
+                    "All layers within 3σ of Binomial(N={n:.0}, q={layer_probability:.4}) ({} layers)",
                     graph.layers.len()
                 )
             } else {
@@ -573,7 +591,7 @@ async fn run_graph_checks(
         ));
     }
 
-    Ok(())
+    layer0_ids
 }
 
 async fn load_graph(
