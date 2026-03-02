@@ -317,8 +317,8 @@ impl IdentityMatchCheckResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ResetUpdateAckResult {
-    pub reset_id: String,
+pub struct IdentityUpdateAckResult {
+    pub request_id: String,
     pub node_id: usize,
     pub serial_id: u32,
     #[serde(default)]
@@ -327,10 +327,10 @@ pub struct ResetUpdateAckResult {
     pub error_reason: Option<String>,
 }
 
-impl ResetUpdateAckResult {
-    pub fn new(reset_id: String, node_id: usize, serial_id: u32) -> Self {
+impl IdentityUpdateAckResult {
+    pub fn new(request_id: String, node_id: usize, serial_id: u32) -> Self {
         Self {
-            reset_id,
+            request_id,
             node_id,
             serial_id,
             error: None,
@@ -339,13 +339,13 @@ impl ResetUpdateAckResult {
     }
 
     pub fn new_error_result(
-        reset_id: String,
+        request_id: String,
         node_id: usize,
         serial_id: u32,
         error_reason: &str,
     ) -> Self {
         Self {
-            reset_id,
+            request_id,
             node_id,
             serial_id,
             error: Some(true),
