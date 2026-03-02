@@ -15,7 +15,7 @@ use iris_mpc_cpu::{
     },
 };
 use iris_mpc_store::Store;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
@@ -52,7 +52,7 @@ struct Args {
     #[arg(long)]
     exclusions_file: Option<PathBuf>,
 
-    /// Directory for CSV output files
+    /// Directory for JSON output files
     #[arg(long, default_value = ".")]
     output_dir: PathBuf,
 }
@@ -62,10 +62,11 @@ struct ExclusionsFile {
     deleted_serial_ids: Vec<u32>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct CheckResult {
     id: String,
     name: String,
+    #[serde(rename = "status")]
     passed: bool,
     detail: String,
 }
@@ -106,6 +107,7 @@ impl Stats {
     }
 }
 
+#[derive(Serialize)]
 struct DegreeHistEntry {
     eye: String,
     layer: usize,
@@ -230,8 +232,8 @@ async fn main() -> Result<()> {
         pass_count, total_count, fail_count
     );
 
-    // --- Write CSV reports ---
-    write_csv_reports(&args.output_dir, &all_checks, &stats, &degree_hist)?;
+    // --- Write JSON reports ---
+    write_json_reports(&args.output_dir, &all_checks, &stats, &degree_hist)?;
 
     if fail_count > 0 {
         process::exit(1);
@@ -1067,8 +1069,8 @@ async fn run_modification_checks(store: &Store, stats: &mut Stats) -> Result<Vec
     Ok(checks)
 }
 
-/// Write CSV reports
-fn write_csv_reports(
+/// Write JSON reports
+fn write_json_reports(
     output_dir: &Path,
     checks: &[CheckResult],
     stats: &Stats,
@@ -1076,40 +1078,38 @@ fn write_csv_reports(
 ) -> Result<()> {
     fs::create_dir_all(output_dir)?;
 
-    // checks.csv
-    let checks_path = output_dir.join("checks.csv");
-    let mut wtr = csv::Writer::from_path(&checks_path)?;
-    wtr.write_record(["id", "name", "status", "detail"])?;
-    for c in checks {
-        let status = if c.passed { "PASS" } else { "FAIL" };
-        wtr.write_record([&c.id, &c.name, status, &c.detail])?;
-    }
-    wtr.flush()?;
+    // checks.json
+    let checks_path = output_dir.join("checks.json");
+    let checks_json: Vec<serde_json::Value> = checks
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "name": c.name,
+                "status": if c.passed { "PASS" } else { "FAIL" },
+                "detail": c.detail,
+            })
+        })
+        .collect();
+    fs::write(&checks_path, serde_json::to_string_pretty(&checks_json)?)?;
     println!("Wrote {}", checks_path.display());
 
-    // stats.csv
-    let stats_path = output_dir.join("stats.csv");
-    let mut wtr = csv::Writer::from_path(&stats_path)?;
-    wtr.write_record(["key", "value"])?;
-    for (k, v) in &stats.entries {
-        wtr.write_record([k, v])?;
-    }
-    wtr.flush()?;
+    // stats.json
+    let stats_path = output_dir.join("stats.json");
+    let stats_map: serde_json::Map<String, serde_json::Value> = stats
+        .entries
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    fs::write(
+        &stats_path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(stats_map))?,
+    )?;
     println!("Wrote {}", stats_path.display());
 
-    // degree_histogram.csv
-    let hist_path = output_dir.join("degree_histogram.csv");
-    let mut wtr = csv::Writer::from_path(&hist_path)?;
-    wtr.write_record(["eye", "layer", "degree", "node_count"])?;
-    for entry in degree_hist {
-        wtr.write_record([
-            &entry.eye,
-            &entry.layer.to_string(),
-            &entry.degree.to_string(),
-            &entry.node_count.to_string(),
-        ])?;
-    }
-    wtr.flush()?;
+    // degree_histogram.json
+    let hist_path = output_dir.join("degree_histogram.json");
+    fs::write(&hist_path, serde_json::to_string_pretty(degree_hist)?)?;
     println!("Wrote {}", hist_path.display());
 
     Ok(())
