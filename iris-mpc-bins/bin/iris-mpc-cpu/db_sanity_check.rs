@@ -716,8 +716,10 @@ async fn run_cross_schema_checks(
              (SELECT COUNT(*) FROM "{}".irises WHERE id <= $1) AS gpu_count"#,
         hnsw_schema, gpu_schema
     );
-    let (hnsw_count, gpu_count): (i64, i64) =
-        sqlx::query_as(&count_query).bind(lid).fetch_one(pool).await?;
+    let (hnsw_count, gpu_count): (i64, i64) = sqlx::query_as(&count_query)
+        .bind(lid)
+        .fetch_one(pool)
+        .await?;
     checks.push(CheckResult::new(
         "3a",
         "Same row count",
@@ -736,8 +738,10 @@ async fn run_cross_schema_checks(
              (SELECT COALESCE(MAX(id), 0) FROM "{}".irises WHERE id <= $1) AS gpu_max"#,
         hnsw_schema, gpu_schema
     );
-    let (hnsw_max, gpu_max): (i64, i64) =
-        sqlx::query_as(&max_id_query).bind(lid).fetch_one(pool).await?;
+    let (hnsw_max, gpu_max): (i64, i64) = sqlx::query_as(&max_id_query)
+        .bind(lid)
+        .fetch_one(pool)
+        .await?;
     checks.push(CheckResult::new(
         "3b",
         "Same max serial ID",
