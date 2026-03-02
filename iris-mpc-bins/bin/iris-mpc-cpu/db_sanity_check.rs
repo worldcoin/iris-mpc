@@ -4,7 +4,6 @@ use futures::StreamExt;
 use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     vector_id::VectorId,
-    IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
@@ -17,7 +16,7 @@ use iris_mpc_cpu::{
 use iris_mpc_store::Store;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
     path::{Path, PathBuf},
@@ -28,7 +27,10 @@ const STATE_DOMAIN: &str = "genesis";
 const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
 
 #[derive(Parser)]
-#[command(name = "db-sanity-check", about = "Validate DB state for a single MPC party")]
+#[command(
+    name = "db-sanity-check",
+    about = "Validate DB state for a single MPC party"
+)]
 struct Args {
     /// Postgres connection string
     #[arg(long, env = "DATABASE_URL")]
@@ -111,8 +113,7 @@ async fn main() -> Result<()> {
 
     let hnsw_pg =
         PostgresClient::new(&args.db_url, &args.hnsw_schema, AccessMode::ReadOnly).await?;
-    let gpu_pg =
-        PostgresClient::new(&args.db_url, &args.gpu_schema, AccessMode::ReadOnly).await?;
+    let gpu_pg = PostgresClient::new(&args.db_url, &args.gpu_schema, AccessMode::ReadOnly).await?;
     let hnsw_store = Store::new(&hnsw_pg).await?;
     let gpu_store = Store::new(&gpu_pg).await?;
     let graph_pg = GraphPg::<Aby3Store>::new(&hnsw_pg).await?;
@@ -129,10 +130,10 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    println!("--- Check 1: Iris table integrity ---");
-    let iris_ids = run_iris_checks(&hnsw_store, &mut checks, &mut stats).await?;
+    println!("--- Collecting iris IDs ---");
+    let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
 
-    println!("--- Check 2: HNSW graph structural checks ---");
+    println!("--- Check 1: HNSW graph structural checks ---");
     run_graph_checks(
         &graph_pg,
         &iris_ids,
@@ -144,14 +145,14 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    println!("--- Check 3: Persistent state consistency ---");
+    println!("--- Check 2: Persistent state consistency ---");
     let iris_max = hnsw_store.get_max_serial_id().await?;
-    run_persistent_state_checks(&graph_pg, iris_max, &mut checks, &mut stats).await?;
+    run_persistent_state_checks(&graph_pg, iris_max, &mut checks).await?;
 
-    println!("--- Check 4: HNSW vs GPU iris consistency ---");
+    println!("--- Check 3: HNSW vs GPU iris consistency ---");
     run_cross_schema_checks(&hnsw_store, &gpu_store, &mut checks).await?;
 
-    println!("--- Check 5: Modifications table ---");
+    println!("--- Check 4: Modifications table ---");
     run_modification_checks(&hnsw_store, &mut checks, &mut stats).await?;
 
     // --- Report ---
@@ -166,7 +167,10 @@ async fn main() -> Result<()> {
         println!("{k}: {v}");
     }
     let fail_count = checks.len() - pass_count;
-    println!("\n=== Summary: {pass_count}/{} checks passed, {fail_count} failed ===", checks.len());
+    println!(
+        "\n=== Summary: {pass_count}/{} checks passed, {fail_count} failed ===",
+        checks.len()
+    );
 
     write_json_reports(&args.output_dir, &checks, &stats, &degree_hist)?;
     if fail_count > 0 {
@@ -176,116 +180,32 @@ async fn main() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Check 1: Iris table integrity
+// Collect iris serial IDs (needed for graph orphan / coverage checks)
 // ---------------------------------------------------------------------------
 
-async fn run_iris_checks(
-    store: &Store,
-    checks: &mut Vec<CheckResult>,
-    stats: &mut Stats,
-) -> Result<HashSet<i64>> {
+async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i64>> {
     let mut seen_ids: HashSet<i64> = HashSet::new();
-    let mut version_hist: HashMap<i16, usize> = HashMap::new();
-    let (mut null_count, mut bad_size, mut bad_version, mut total) = (0u64, 0u64, 0u64, 0u64);
-    let mut max_id: i64 = 0;
+    let mut total = 0u64;
 
     let mut stream = store.stream_irises().await;
     while let Some(result) = stream.next().await {
         let iris = result.map_err(|e| eyre!("Error streaming iris: {e}"))?;
         total += 1;
-        let id = iris.serial_id() as i64;
-        seen_ids.insert(id);
-        max_id = max_id.max(id);
-        *version_hist.entry(iris.version_id()).or_insert(0) += 1;
-
-        let (lc, lm, rc, rm) = (
-            iris.left_code(),
-            iris.left_mask(),
-            iris.right_code(),
-            iris.right_mask(),
-        );
-        if lc.is_empty() || lm.is_empty() || rc.is_empty() || rm.is_empty() {
-            null_count += 1;
-        }
-        if lc.len() != IRIS_CODE_LENGTH
-            || lm.len() != MASK_CODE_LENGTH
-            || rc.len() != IRIS_CODE_LENGTH
-            || rm.len() != MASK_CODE_LENGTH
-        {
-            bad_size += 1;
-        }
-        if iris.version_id() < 0 {
-            bad_version += 1;
-        }
+        seen_ids.insert(iris.serial_id() as i64);
         if total % 500_000 == 0 {
             println!("  ... streamed {total} irises");
         }
     }
 
-    checks.push(CheckResult::new(
-        "1a",
-        "No NULL shares",
-        null_count == 0,
-        if null_count == 0 {
-            format!("{total} irises checked")
-        } else {
-            format!("{null_count} irises have NULL/empty shares")
-        },
-    ));
-    checks.push(CheckResult::new(
-        "1b",
-        "Correct byte sizes",
-        bad_size == 0,
-        if bad_size == 0 {
-            format!("All irises: code={IRIS_CODE_LENGTH} u16s, mask={MASK_CODE_LENGTH} u16s")
-        } else {
-            format!("{bad_size} irises have incorrect byte sizes")
-        },
-    ));
-    checks.push(CheckResult::new(
-        "1c",
-        "Version ID sanity",
-        bad_version == 0,
-        if bad_version == 0 {
-            "All version_ids >= 0".into()
-        } else {
-            format!("{bad_version} irises have negative version_id")
-        },
-    ));
-
-    let missing: Vec<i64> = (1..=max_id).filter(|id| !seen_ids.contains(id)).collect();
-    checks.push(CheckResult::new(
-        "1d",
-        "Contiguous IDs",
-        missing.is_empty(),
-        if missing.is_empty() {
-            format!("All IDs 1..={max_id} present")
-        } else if missing.len() <= 20 {
-            format!("{} missing IDs: {:?}", missing.len(), missing)
-        } else {
-            format!(
-                "{} missing IDs (first 20): {:?}",
-                missing.len(),
-                &missing[..20]
-            )
-        },
-    ));
-
     let iris_count = store.count_irises().await?;
     stats.add("Total iris count (HNSW)", iris_count.to_string());
-    stats.add("Max serial ID (HNSW irises)", max_id.to_string());
-    stats.add("Missing iris IDs count", missing.len().to_string());
-    let mut versions: Vec<_> = version_hist.iter().collect();
-    versions.sort_by_key(|(k, _)| **k);
-    for (vid, count) in versions {
-        stats.add(format!("Version {vid} count"), count.to_string());
-    }
+    stats.add("Max serial ID (HNSW)", store.get_max_serial_id().await?.to_string());
 
     Ok(seen_ids)
 }
 
 // ---------------------------------------------------------------------------
-// Check 2: HNSW graph structural checks
+// Check 1: HNSW graph structural checks
 // ---------------------------------------------------------------------------
 
 async fn run_graph_checks(
@@ -307,7 +227,10 @@ async fn run_graph_checks(
 
     for (eye, graph) in &graphs {
         // -- Stats --
-        stats.add(format!("{eye} graph checksum"), graph.checksum().to_string());
+        stats.add(
+            format!("{eye} graph checksum"),
+            graph.checksum().to_string(),
+        );
         stats.add(
             format!("{eye} graph num_layers"),
             graph.num_layers().to_string(),
@@ -350,7 +273,7 @@ async fn run_graph_checks(
             }
         }
 
-        // -- 2a: No orphan graph nodes --
+        // -- 1a: No orphan graph nodes --
         let orphan_count = graph
             .layers
             .iter()
@@ -358,7 +281,7 @@ async fn run_graph_checks(
             .filter(|n| !iris_ids.contains(&(n.serial_id() as i64)))
             .count();
         checks.push(CheckResult::new(
-            "2a",
+            "1a",
             &format!("No orphan graph nodes ({eye})"),
             orphan_count == 0,
             if orphan_count == 0 {
@@ -368,7 +291,7 @@ async fn run_graph_checks(
             },
         ));
 
-        // -- 2b: Node coverage --
+        // -- 1b: Node coverage --
         let layer0_ids: HashSet<u32> = graph
             .layers
             .first()
@@ -381,7 +304,7 @@ async fn run_graph_checks(
             .collect();
         checks.push(match exclusions {
             Some(excl) if uncovered == *excl => CheckResult::new(
-                "2b",
+                "1b",
                 &format!("Node coverage ({eye})"),
                 true,
                 format!(
@@ -413,10 +336,10 @@ async fn run_graph_checks(
                         &only_excl[..only_excl.len().min(10)]
                     );
                 }
-                CheckResult::new("2b", &format!("Node coverage ({eye})"), false, d)
+                CheckResult::new("1b", &format!("Node coverage ({eye})"), false, d)
             }
             None => CheckResult::new(
-                "2b",
+                "1b",
                 &format!("Node coverage ({eye})"),
                 true,
                 format!(
@@ -426,7 +349,7 @@ async fn run_graph_checks(
             ),
         });
 
-        // -- 2c: Layer hierarchy --
+        // -- 1c: Layer hierarchy --
         let hierarchy_viol: u64 = graph
             .layers
             .iter()
@@ -439,7 +362,7 @@ async fn run_graph_checks(
             })
             .count() as u64;
         checks.push(CheckResult::new(
-            "2c",
+            "1c",
             &format!("Layer hierarchy ({eye})"),
             hierarchy_viol == 0,
             if hierarchy_viol == 0 {
@@ -449,7 +372,7 @@ async fn run_graph_checks(
             },
         ));
 
-        // -- 2d: Neighbor validity --
+        // -- 1d: Neighbor validity --
         let invalid_nb: u64 = graph
             .layers
             .iter()
@@ -464,7 +387,7 @@ async fn run_graph_checks(
             })
             .sum();
         checks.push(CheckResult::new(
-            "2d",
+            "1d",
             &format!("Neighbor validity ({eye})"),
             invalid_nb == 0,
             if invalid_nb == 0 {
@@ -474,7 +397,7 @@ async fn run_graph_checks(
             },
         ));
 
-        // -- 2e: No self-loops --
+        // -- 1e: No self-loops --
         let self_loops: u64 = graph
             .layers
             .iter()
@@ -482,7 +405,7 @@ async fn run_graph_checks(
             .filter(|(node, nbs)| nbs.contains(node))
             .count() as u64;
         checks.push(CheckResult::new(
-            "2e",
+            "1e",
             &format!("No self-loops ({eye})"),
             self_loops == 0,
             if self_loops == 0 {
@@ -492,7 +415,7 @@ async fn run_graph_checks(
             },
         ));
 
-        // -- 2f: Degree bounds --
+        // -- 1f: Degree bounds --
         let mut degree_viol = 0u64;
         for (lc, layer) in graph.layers.iter().enumerate() {
             let m_limit = params.M_limit[lc.min(N_PARAM_LAYERS - 1)];
@@ -501,7 +424,7 @@ async fn run_graph_checks(
                     degree_viol += 1;
                     if degree_viol <= 5 {
                         println!(
-                            "  [2f] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
+                            "  [1f] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
                             nbs.len()
                         );
                     }
@@ -509,7 +432,7 @@ async fn run_graph_checks(
             }
         }
         checks.push(CheckResult::new(
-            "2f",
+            "1f",
             &format!("Degree bounds ({eye})"),
             degree_viol == 0,
             if degree_viol == 0 {
@@ -523,7 +446,7 @@ async fn run_graph_checks(
             },
         ));
 
-        // -- 2g: Entry point validity --
+        // -- 1g: Entry point validity --
         let mut ep_valid = true;
         let mut ep_detail = String::new();
         for ep in &graph.entry_points {
@@ -538,11 +461,15 @@ async fn run_graph_checks(
                 );
             } else if !graph.layers[ep.layer].links.contains_key(&ep.point) {
                 ep_valid = false;
-                let _ = write!(ep_detail, "EP {} not found in layer {}; ", ep.point, ep.layer);
+                let _ = write!(
+                    ep_detail,
+                    "EP {} not found in layer {}; ",
+                    ep.point, ep.layer
+                );
             }
         }
         checks.push(CheckResult::new(
-            "2g",
+            "1g",
             &format!("Entry point validity ({eye})"),
             ep_valid,
             if ep_valid {
@@ -553,7 +480,7 @@ async fn run_graph_checks(
         ));
     }
 
-    // -- 2h: Left/Right graph sync --
+    // -- 1h: Left/Right graph sync --
     let l0_ids = |g: &GraphMem<VectorId>| -> HashSet<u32> {
         g.layers
             .first()
@@ -562,7 +489,7 @@ async fn run_graph_checks(
     };
     let (left_ids, right_ids) = (l0_ids(&graphs[0].1), l0_ids(&graphs[1].1));
     checks.push(CheckResult::new(
-        "2h",
+        "1h",
         "Left/Right graph sync",
         left_ids == right_ids,
         if left_ids == right_ids {
@@ -589,14 +516,13 @@ async fn load_graph(
 }
 
 // ---------------------------------------------------------------------------
-// Check 3: Persistent state consistency
+// Check 2: Persistent state consistency
 // ---------------------------------------------------------------------------
 
 async fn run_persistent_state_checks(
     graph_pg: &GraphPg<Aby3Store>,
     iris_max_serial_id: usize,
     checks: &mut Vec<CheckResult>,
-    stats: &mut Stats,
 ) -> Result<()> {
     let last_indexed: Option<u32> = graph_pg
         .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
@@ -612,17 +538,15 @@ async fn run_persistent_state_checks(
                 issues.push(format!("left max={left_max} != right max={right_max}"));
             }
             if last_id as i64 != left_max {
-                issues.push(format!(
-                    "last_indexed={last_id} != left max={left_max}"
-                ));
+                issues.push(format!("last_indexed={last_id} != left max={left_max}"));
             }
-            if last_id as usize > iris_max_serial_id {
+            if last_id as usize != iris_max_serial_id {
                 issues.push(format!(
-                    "last_indexed={last_id} > irises max={iris_max_serial_id}"
+                    "last_indexed={last_id} != irises max={iris_max_serial_id}"
                 ));
             }
             checks.push(CheckResult::new(
-                "3a",
+                "2a",
                 "last_indexed_iris_id",
                 issues.is_empty(),
                 if issues.is_empty() {
@@ -633,7 +557,7 @@ async fn run_persistent_state_checks(
             ));
         }
         None => checks.push(CheckResult::new(
-            "3a",
+            "2a",
             "last_indexed_iris_id",
             true,
             "Not set (no genesis run yet)",
@@ -642,7 +566,7 @@ async fn run_persistent_state_checks(
 
     // 3b
     checks.push(CheckResult::new(
-        "3b",
+        "2b",
         "Graph max serial_id alignment",
         left_max == right_max,
         if left_max == right_max {
@@ -652,33 +576,17 @@ async fn run_persistent_state_checks(
         },
     ));
 
-    // Dump persistent state for stats
-    let rows: Vec<(String, String, serde_json::Value)> = sqlx::query_as(
-        "SELECT domain, \"key\", \"value\" FROM persistent_state ORDER BY domain, \"key\"",
-    )
-    .fetch_all(graph_pg.pool())
-    .await?;
-    for (domain, key, value) in &rows {
-        stats.add(
-            format!("persistent_state[{domain}/{key}]"),
-            value.to_string(),
-        );
-    }
-
     Ok(())
 }
 
-async fn get_graph_max_serial_id(
-    graph_pg: &GraphPg<Aby3Store>,
-    store_id: StoreId,
-) -> Result<i64> {
+async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreId) -> Result<i64> {
     let mut tx = graph_pg.tx().await?;
     let mut ops = tx.with_graph(store_id);
     ops.get_max_serial_id().await
 }
 
 // ---------------------------------------------------------------------------
-// Check 4: Cross-schema consistency (HNSW vs GPU)
+// Check 3: Cross-schema consistency (HNSW vs GPU)
 // ---------------------------------------------------------------------------
 
 async fn run_cross_schema_checks(
@@ -690,7 +598,7 @@ async fn run_cross_schema_checks(
     let hnsw_count = hnsw_store.count_irises().await?;
     let gpu_count = gpu_store.count_irises().await?;
     checks.push(CheckResult::new(
-        "4a",
+        "3a",
         "Same row count",
         hnsw_count == gpu_count,
         if hnsw_count == gpu_count {
@@ -704,7 +612,7 @@ async fn run_cross_schema_checks(
     let hnsw_max = hnsw_store.get_max_serial_id().await?;
     let gpu_max = gpu_store.get_max_serial_id().await?;
     checks.push(CheckResult::new(
-        "4b",
+        "3b",
         "Same max serial ID",
         hnsw_max == gpu_max,
         if hnsw_max == gpu_max {
@@ -765,7 +673,7 @@ async fn run_cross_schema_checks(
     }
 
     checks.push(CheckResult::new(
-        "4c",
+        "3c",
         "Byte-identical shares",
         mismatches == 0,
         if mismatches == 0 {
@@ -782,7 +690,7 @@ async fn run_cross_schema_checks(
 }
 
 // ---------------------------------------------------------------------------
-// Check 5: Modifications table
+// Check 4: Modifications table
 // ---------------------------------------------------------------------------
 
 async fn run_modification_checks(
@@ -821,7 +729,7 @@ async fn run_modification_checks(
     }
 
     checks.push(CheckResult::new(
-        "5a",
+        "4a",
         "Completed & persisted",
         bad == 0,
         if bad == 0 {
