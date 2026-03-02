@@ -52,6 +52,16 @@ pub enum Request {
         // Operation identifier.
         reset_id: uuid::Uuid,
     },
+    RecoveryUpdate {
+        // Standard request information.
+        info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair: Option<IrisPairDescriptor>,
+        // Serial ID of associated uniqueness request (always known at creation).
+        parent: IrisSerialId,
+        // Operation identifier.
+        recovery_id: uuid::Uuid,
+    },
     Uniqueness {
         // Standard request information.
         info: RequestInfo,
@@ -70,6 +80,7 @@ impl Request {
             | Self::RecoveryCheck { info, .. }
             | Self::ResetCheck { info, .. }
             | Self::ResetUpdate { info, .. }
+            | Self::RecoveryUpdate { info, .. }
             | Self::Uniqueness { info, .. } => info,
         }
     }
@@ -97,6 +108,11 @@ impl Request {
                 iris_pair,
                 ..
             } => Some((*reset_id, *iris_pair)),
+            Request::RecoveryUpdate {
+                recovery_id,
+                iris_pair,
+                ..
+            } => Some((*recovery_id, *iris_pair)),
             Request::Uniqueness {
                 signup_id,
                 iris_pair,
@@ -113,13 +129,15 @@ impl Request {
             Self::RecoveryCheck { .. } => "RecoveryCheck",
             Self::ResetCheck { .. } => "ResetCheck",
             Self::ResetUpdate { .. } => "ResetUpdate",
+            Self::RecoveryUpdate { .. } => "RecoveryUpdate",
             Self::Uniqueness { .. } => "Uniqueness",
         };
         let label = self.info().label();
         let serial_id: Option<IrisSerialId> = match self {
             Self::IdentityDeletion { parent, .. }
             | Self::Reauthorization { parent, .. }
-            | Self::ResetUpdate { parent, .. } => Some(*parent),
+            | Self::ResetUpdate { parent, .. }
+            | Self::RecoveryUpdate { parent, .. } => Some(*parent),
             Self::RecoveryCheck { .. } | Self::ResetCheck { .. } | Self::Uniqueness { .. } => None,
         };
         let op_id: Option<(&str, uuid::Uuid)> = match self {
@@ -129,6 +147,7 @@ impl Request {
             Self::ResetCheck { reset_id, .. } | Self::ResetUpdate { reset_id, .. } => {
                 Some(("reset_id", *reset_id))
             }
+            Self::RecoveryUpdate { recovery_id, .. } => Some(("recovery_id", *recovery_id)),
             Self::IdentityDeletion { .. } => None,
         };
 
@@ -158,6 +177,7 @@ impl fmt::Display for Request {
             Self::RecoveryCheck { .. } => write!(f, "{}.RecoveryCheck", self.info()),
             Self::ResetCheck { .. } => write!(f, "{}.ResetCheck", self.info()),
             Self::ResetUpdate { .. } => write!(f, "{}.ResetUpdate", self.info()),
+            Self::RecoveryUpdate { .. } => write!(f, "{}.RecoveryUpdate", self.info()),
             Self::Uniqueness { .. } => write!(f, "{}.Uniqueness", self.info()),
         }
     }
@@ -186,6 +206,10 @@ mod tests {
 
         pub fn is_reset_update(&self) -> bool {
             matches!(self, Self::ResetUpdate { .. })
+        }
+
+        pub fn is_recovery_update(&self) -> bool {
+            matches!(self, Self::RecoveryUpdate { .. })
         }
 
         pub fn is_uniqueness(&self) -> bool {

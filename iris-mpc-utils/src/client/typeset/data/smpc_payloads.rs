@@ -12,7 +12,8 @@ pub enum RequestPayload {
     Reauthorization(smpc_request::ReAuthRequest),
     ResetCheck(smpc_request::IdentityMatchCheckRequest),
     RecoveryCheck(smpc_request::IdentityMatchCheckRequest),
-    ResetUpdate(smpc_request::ResetUpdateRequest),
+    ResetUpdate(smpc_request::IdentityUpdateRequest),
+    RecoveryUpdate(smpc_request::IdentityUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
 }
 
@@ -23,7 +24,8 @@ pub enum ResponsePayload {
     Reauthorization(smpc_response::ReAuthResult),
     ResetCheck(smpc_response::IdentityMatchCheckResult),
     RecoveryCheck(smpc_response::IdentityMatchCheckResult),
-    ResetUpdate(smpc_response::ResetUpdateAckResult),
+    ResetUpdate(smpc_response::IdentityUpdateAckResult),
+    RecoveryUpdate(smpc_response::IdentityUpdateAckResult),
     Uniqueness(smpc_response::UniquenessResult),
 }
 
@@ -35,6 +37,7 @@ impl ResponsePayload {
             Self::ResetCheck(result) => result.node_id,
             Self::RecoveryCheck(result) => result.node_id,
             Self::ResetUpdate(result) => result.node_id,
+            Self::RecoveryUpdate(result) => result.node_id,
             Self::Uniqueness(result) => result.node_id,
         }
     }
@@ -47,6 +50,7 @@ impl ResponsePayload {
             Self::RecoveryCheck(result) => result.error.unwrap_or(false),
             Self::ResetCheck(result) => result.error.unwrap_or(false),
             Self::ResetUpdate(result) => result.error.unwrap_or(false),
+            Self::RecoveryUpdate(result) => result.error.unwrap_or(false),
             Self::Uniqueness(result) => result.error.unwrap_or(false),
         }
     }
@@ -81,7 +85,13 @@ impl ResponsePayload {
             Self::ResetUpdate(result) => {
                 format!(
                     "ResetUpdate | node={} | serial_id={} | reset_id={:.16}",
-                    result.node_id, result.serial_id, result.reset_id
+                    result.node_id, result.serial_id, result.request_id
+                )
+            }
+            Self::RecoveryUpdate(result) => {
+                format!(
+                    "RecoveryUpdate | node={} | serial_id={} | recovery_id={:.16}",
+                    result.node_id, result.serial_id, result.request_id
                 )
             }
             Self::Uniqueness(result) => {
@@ -107,6 +117,7 @@ impl ResponsePayload {
             Self::RecoveryCheck(result) => result.error_reason.as_deref(),
             Self::ResetCheck(result) => result.error_reason.as_deref(),
             Self::ResetUpdate(result) => result.error_reason.as_deref(),
+            Self::RecoveryUpdate(result) => result.error_reason.as_deref(),
             Self::Uniqueness(result) => result.error_reason.as_deref(),
         }
     }
@@ -119,6 +130,7 @@ impl ResponsePayload {
             Self::RecoveryCheck(result) => result.matches_expected(expected),
             Self::ResetCheck(result) => result.matches_expected(expected),
             Self::ResetUpdate(result) => result.matches_expected(expected),
+            Self::RecoveryUpdate(result) => result.matches_expected(expected),
             Self::Uniqueness(result) => result.matches_expected(expected),
         }
     }
@@ -156,9 +168,16 @@ impl From<&Request> for RequestPayload {
             }
             Request::ResetUpdate {
                 reset_id, parent, ..
-            } => Self::ResetUpdate(smpc_request::ResetUpdateRequest {
-                reset_id: reset_id.to_string(),
+            } => Self::ResetUpdate(smpc_request::IdentityUpdateRequest {
+                request_id: reset_id.to_string(),
                 s3_key: reset_id.to_string(),
+                serial_id: *parent,
+            }),
+            Request::RecoveryUpdate {
+                recovery_id, parent, ..
+            } => Self::RecoveryUpdate(smpc_request::IdentityUpdateRequest {
+                request_id: recovery_id.to_string(),
+                s3_key: recovery_id.to_string(),
                 serial_id: *parent,
             }),
             Request::Uniqueness { signup_id, .. } => {
@@ -203,6 +222,9 @@ impl TryFrom<&SqsMessageInfo> for ResponsePayload {
             }
             iris_mpc_common::helpers::smpc_request::RESET_UPDATE_MESSAGE_TYPE => {
                 parse_response!(ResetUpdate)
+            }
+            iris_mpc_common::helpers::smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE => {
+                parse_response!(RecoveryUpdate)
             }
             iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE => {
                 parse_response!(Uniqueness)

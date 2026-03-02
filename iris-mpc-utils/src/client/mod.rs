@@ -442,7 +442,8 @@ impl ExecState {
             typeset::ResponsePayload::Reauthorization(r) => r.reauth_id.parse().ok(),
             typeset::ResponsePayload::RecoveryCheck(r) => r.request_id.parse().ok(),
             typeset::ResponsePayload::ResetCheck(r) => r.request_id.parse().ok(),
-            typeset::ResponsePayload::ResetUpdate(r) => r.reset_id.parse().ok(),
+            typeset::ResponsePayload::ResetUpdate(r) => r.request_id.parse().ok(),
+            typeset::ResponsePayload::RecoveryUpdate(r) => r.request_id.parse().ok(),
             typeset::ResponsePayload::IdentityDeletion(r) => {
                 if handle_completion(
                     &r.serial_id,
