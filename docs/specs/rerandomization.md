@@ -396,11 +396,13 @@ sequenceDiagram
             Note over RW: Poll sees freeze_requested=FALSE
             RW->>RW: Resume chunk processing
             Note over MS: Convergence reached; startup continues
-        else Local behind max
+        else
+            Note over MS: Local behind max
             MS->>DB: SET freeze_requested=FALSE
             Note over RW: Resume to catch up
             MS->>MS: sleep + re-freeze with new request
-        else Local at max, peers behind
+        else
+            Note over MS: Local at max, peers behind
             MS->>MS: sleep briefly
         end
     end
@@ -530,7 +532,7 @@ sequenceDiagram
     Note over MSA,MSC: All parties proceed with DB load
 ```
 
-### Post-staging modification: transient DB inconsistency
+### Post-staging modification: transient DB inconsistency (same as before)
 
 When a modification arrives at one party between staging and apply, but hasn't yet propagated to the others, the version_id CAS causes asymmetric application. The DB shares are temporarily inconsistent but self-correct when the modification propagates. In-memory shares (used for live queries) are unaffected.
 
