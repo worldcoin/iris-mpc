@@ -341,7 +341,8 @@ sequenceDiagram
     P0->>S3: Download 3 version-map hashes
     alt All hashes match (fast path)
         Note over P0: staging_divergent = empty
-    else Hash mismatch (slow path)
+    else
+        Note over P0: Hash mismatch (slow path)
         P0->>S3: Download 3 full version maps
         Note over P0: staging_divergent = differing IDs
     end
@@ -393,17 +394,18 @@ sequenceDiagram
             MS->>DB: load_iris_db (full DB snapshot into memory)
             MS->>DB: pg_advisory_unlock(APPLY_LOCK)
             MS->>DB: SET freeze_requested=FALSE
-            Note over RW: Poll sees freeze_requested=FALSE
-            RW->>RW: Resume chunk processing
-            Note over MS: Convergence reached; startup continues
+            MS->>RW: Poll sees freeze_requested=FALSE
+            RW->>RW: Resume chunk processing (startup continues)
         else
-            Note over MS: Local behind max
-            MS->>DB: SET freeze_requested=FALSE
-            Note over RW: Resume to catch up
-            MS->>MS: sleep + re-freeze with new request
-        else
-            Note over MS: Local at max, peers behind
-            MS->>MS: sleep briefly
+            alt Local behind max
+                MS->>MS: Local behind max
+                MS->>DB: SET freeze_requested=FALSE
+                MS->>RW: Resume to catch up
+                MS->>MS: sleep + re-freeze with new request
+            else
+                Note over MS: Local at max, peers behind
+                MS->>MS: sleep briefly
+            end
         end
     end
 ```
