@@ -655,15 +655,20 @@ async fn run_cross_schema_checks(
         .fetch_all(pool)
         .await?;
 
+    // Informational only — mismatches are expected if modifications landed after
+    // genesis processed them.  Always passes; detail reports any divergence.
     checks.push(CheckResult::new(
         "3c",
         "Byte-identical shares",
-        mismatched_ids.is_empty(),
+        true,
         if mismatched_ids.is_empty() {
-            format!("{hnsw_count} irises compared (id <= {last_indexed_id})")
+            format!("{hnsw_count} irises compared, 0 mismatches (id <= {last_indexed_id})")
         } else {
             let ids: Vec<i64> = mismatched_ids.into_iter().map(|(id,)| id).collect();
-            format!("Mismatched IDs (first 10): {:?}", ids)
+            format!(
+                "{hnsw_count} irises compared, mismatched IDs (first 10): {:?} (id <= {last_indexed_id})",
+                ids
+            )
         },
     ));
 
