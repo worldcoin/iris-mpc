@@ -217,7 +217,7 @@ async fn run_graph_checks(
     degree_hist: &mut Vec<DegreeHistEntry>,
     stats: &mut Stats,
 ) -> Result<()> {
-    // Load one graph at a time to halve peak memory (~80 GB per eye at 16M/M=320).
+    // Load one graph at a time to halve peak memory.
     let mut l0_id_sets: Vec<(&str, HashSet<u32>)> = Vec::new();
     for (eye, store_id) in [("left", StoreId::Left), ("right", StoreId::Right)] {
         println!("  Loading {eye} graph...");
@@ -754,7 +754,7 @@ async fn run_cross_schema_checks(
     ));
 
     // 3c: Byte-identical shares (up to last_indexed_id)
-    // TODO: For large databases (16M+ rows), consider replacing this full JOIN
+    // TODO: For large databases, consider replacing this full JOIN
     // with random sampling to avoid scanning all BYTEA data.
     println!("  Comparing iris shares between schemas (SQL JOIN, id <= {last_indexed_id})...");
     let mismatch_query = format!(

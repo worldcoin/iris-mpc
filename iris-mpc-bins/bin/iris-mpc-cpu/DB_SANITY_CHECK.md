@@ -84,12 +84,16 @@ db-sanity-check \
 | 1g | Degree bounds (M_limit per layer) | HNSW graph |
 | 1h | Entry point validity | HNSW graph |
 | 1i | Left/Right graph sync (same layer-0 serial IDs) | HNSW graph |
-| 1j | Layer density near geometric (ratio within 3x of q) | HNSW graph |
+| 1j | Layer density near geometric (within 3σ of Binomial(N, q^L)) | HNSW graph |
 | 2a | last_indexed_iris_id consistency | Persistent state |
 | 2b | Graph max serial_id alignment (left == right) | Persistent state |
 | 3a | Same row count (HNSW vs GPU, id ≤ last_indexed) | Cross-schema |
 | 3b | Same max serial ID (id ≤ last_indexed) | Cross-schema |
 | 3c | Byte-identical shares (SQL JOIN, id ≤ last_indexed) | Cross-schema |
+
+## Scaling notes
+
+The tool currently loads the full HNSW graph into memory (one eye at a time). For production-scale databases, consider delegating checks to Postgres directly: checks on `hawk_graph_links` metadata (1a, 1b, 1c, 1h, 1i, 1j) can be pure SQL queries needing no application memory, and checks that inspect the serialized `links` blob (1d, 1e, 1f, 1g) can stream rows instead of loading the full graph.
 
 ## Output files
 
