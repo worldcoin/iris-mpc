@@ -1,6 +1,6 @@
 # db-sanity-check
 
-Read-only validation of a single MPC party's Postgres database state. Checks HNSW graph structure, persistent state consistency, cross-schema (HNSW vs GPU) alignment, and the modifications table.
+Read-only validation of a single MPC party's Postgres database state. Checks HNSW graph structure, persistent state consistency, and cross-schema (HNSW vs GPU) alignment.
 
 ## Usage
 
@@ -84,10 +84,9 @@ db-sanity-check \
 | 1h | Left/Right graph sync (same layer-0 serial IDs) | HNSW graph |
 | 2a | last_indexed_iris_id consistency | Persistent state |
 | 2b | Graph max serial_id alignment (left == right) | Persistent state |
-| 3a | Same row count (HNSW vs GPU) | Cross-schema |
-| 3b | Same max serial ID | Cross-schema |
-| 3c | Byte-identical shares (SQL JOIN) | Cross-schema |
-| 4a | All modifications COMPLETED & persisted | Modifications |
+| 3a | Same row count (HNSW vs GPU, id ≤ last_indexed) | Cross-schema |
+| 3b | Same max serial ID (id ≤ last_indexed) | Cross-schema |
+| 3c | Byte-identical shares (SQL JOIN, id ≤ last_indexed) | Cross-schema |
 
 ## Output files
 

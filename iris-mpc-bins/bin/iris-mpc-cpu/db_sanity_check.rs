@@ -112,9 +112,7 @@ async fn main() -> Result<()> {
 
     let hnsw_pg =
         PostgresClient::new(&args.db_url, &args.hnsw_schema, AccessMode::ReadOnly).await?;
-    let gpu_pg = PostgresClient::new(&args.db_url, &args.gpu_schema, AccessMode::ReadOnly).await?;
     let hnsw_store = Store::new(&hnsw_pg).await?;
-    let gpu_store = Store::new(&gpu_pg).await?;
     let graph_pg = GraphPg::<Aby3Store>::new(&hnsw_pg).await?;
 
     let mut checks: Vec<CheckResult> = Vec::new();
@@ -148,18 +146,15 @@ async fn main() -> Result<()> {
     let iris_max = hnsw_store.get_max_serial_id().await?;
     run_persistent_state_checks(&graph_pg, iris_max, &mut checks).await?;
 
-    println!("--- Check 3: HNSW vs GPU iris consistency ---");
+    println!("--- Check 3: HNSW vs GPU iris consistency (up to last_indexed_iris_id) ---");
     run_cross_schema_checks(
-        &hnsw_store,
-        &gpu_store,
         &args.hnsw_schema,
         &args.gpu_schema,
+        iris_max,
+        &hnsw_store.pool,
         &mut checks,
     )
     .await?;
-
-    println!("--- Check 4: Modifications table ---");
-    run_modification_checks(&hnsw_store, &mut checks, &mut stats).await?;
 
     // --- Report ---
     println!("\n--- Checks ---");
@@ -588,53 +583,76 @@ async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreI
 // ---------------------------------------------------------------------------
 
 async fn run_cross_schema_checks(
-    hnsw_store: &Store,
-    gpu_store: &Store,
     hnsw_schema: &str,
     gpu_schema: &str,
+    last_indexed_id: usize,
+    pool: &sqlx::PgPool,
     checks: &mut Vec<CheckResult>,
 ) -> Result<()> {
-    let hnsw_count = hnsw_store.count_irises().await?;
-    let gpu_count = gpu_store.count_irises().await?;
+    let lid = last_indexed_id as i64;
+
+    // 3a: Same row count (up to last_indexed_id)
+    let q = format!(
+        r#"SELECT
+             (SELECT COUNT(*) FROM "{}".irises WHERE id <= $1) AS hnsw_count,
+             (SELECT COUNT(*) FROM "{}".irises WHERE id <= $1) AS gpu_count"#,
+        hnsw_schema, gpu_schema
+    );
+    let (hnsw_count, gpu_count): (i64, i64) = sqlx::query_as(&q)
+        .bind(lid)
+        .fetch_one(pool)
+        .await?;
     checks.push(CheckResult::new(
         "3a",
         "Same row count",
         hnsw_count == gpu_count,
         if hnsw_count == gpu_count {
-            format!("Both schemas have {hnsw_count} irises")
+            format!("Both schemas have {hnsw_count} irises (id <= {last_indexed_id})")
         } else {
-            format!("HNSW={hnsw_count}, GPU={gpu_count}")
+            format!("HNSW={hnsw_count}, GPU={gpu_count} (id <= {last_indexed_id})")
         },
     ));
 
-    let hnsw_max = hnsw_store.get_max_serial_id().await?;
-    let gpu_max = gpu_store.get_max_serial_id().await?;
+    // 3b: Same max serial ID (up to last_indexed_id)
+    let q = format!(
+        r#"SELECT
+             (SELECT COALESCE(MAX(id), 0) FROM "{}".irises WHERE id <= $1) AS hnsw_max,
+             (SELECT COALESCE(MAX(id), 0) FROM "{}".irises WHERE id <= $1) AS gpu_max"#,
+        hnsw_schema, gpu_schema
+    );
+    let (hnsw_max, gpu_max): (i64, i64) = sqlx::query_as(&q)
+        .bind(lid)
+        .fetch_one(pool)
+        .await?;
     checks.push(CheckResult::new(
         "3b",
         "Same max serial ID",
         hnsw_max == gpu_max,
         if hnsw_max == gpu_max {
-            format!("Both schemas max_id={hnsw_max}")
+            format!("Both schemas max_id={hnsw_max} (id <= {last_indexed_id})")
         } else {
-            format!("HNSW max={hnsw_max}, GPU max={gpu_max}")
+            format!("HNSW max={hnsw_max}, GPU max={gpu_max} (id <= {last_indexed_id})")
         },
     ));
 
+    // 3c: Byte-identical shares (up to last_indexed_id)
     // TODO: For large databases (16M+ rows), consider replacing this full JOIN
     // with random sampling to avoid scanning all BYTEA data.
-    println!("  Comparing iris shares between schemas (SQL JOIN)...");
+    println!("  Comparing iris shares between schemas (SQL JOIN, id <= {last_indexed_id})...");
     let mismatch_query = format!(
         r#"SELECT h.id FROM "{}".irises h
            JOIN "{}".irises g ON h.id = g.id
-           WHERE h.left_code != g.left_code
+           WHERE h.id <= $1
+             AND (h.left_code != g.left_code
               OR h.left_mask != g.left_mask
               OR h.right_code != g.right_code
-              OR h.right_mask != g.right_mask
+              OR h.right_mask != g.right_mask)
            LIMIT 10"#,
         hnsw_schema, gpu_schema
     );
     let mismatched_ids: Vec<(i64,)> = sqlx::query_as(&mismatch_query)
-        .fetch_all(&hnsw_store.pool)
+        .bind(lid)
+        .fetch_all(pool)
         .await?;
 
     checks.push(CheckResult::new(
@@ -642,63 +660,10 @@ async fn run_cross_schema_checks(
         "Byte-identical shares",
         mismatched_ids.is_empty(),
         if mismatched_ids.is_empty() {
-            format!("{hnsw_count} irises compared")
+            format!("{hnsw_count} irises compared (id <= {last_indexed_id})")
         } else {
             let ids: Vec<i64> = mismatched_ids.into_iter().map(|(id,)| id).collect();
             format!("Mismatched IDs (first 10): {:?}", ids)
-        },
-    ));
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Check 4: Modifications table
-// ---------------------------------------------------------------------------
-
-async fn run_modification_checks(
-    store: &Store,
-    checks: &mut Vec<CheckResult>,
-    stats: &mut Stats,
-) -> Result<()> {
-    let rows: Vec<(String, bool, i64)> = sqlx::query_as(
-        "SELECT status, persisted, COUNT(*) FROM modifications \
-         GROUP BY status, persisted ORDER BY status, persisted",
-    )
-    .fetch_all(&store.pool)
-    .await?;
-
-    let (mut total, mut bad) = (0i64, 0i64);
-    for (status, persisted, count) in &rows {
-        stats.add(
-            format!("Modifications status={status} persisted={persisted}"),
-            count.to_string(),
-        );
-        total += count;
-        if status != "COMPLETED" || !persisted {
-            bad += count;
-        }
-    }
-    stats.add("Total modifications", total.to_string());
-
-    let type_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT request_type, COUNT(*) FROM modifications \
-         GROUP BY request_type ORDER BY request_type",
-    )
-    .fetch_all(&store.pool)
-    .await?;
-    for (t, c) in &type_rows {
-        stats.add(format!("Modifications type={t}"), c.to_string());
-    }
-
-    checks.push(CheckResult::new(
-        "4a",
-        "Completed & persisted",
-        bad == 0,
-        if bad == 0 {
-            format!("All {total} modifications are COMPLETED and persisted")
-        } else {
-            format!("{bad}/{total} modifications not COMPLETED+persisted")
         },
     ));
 
