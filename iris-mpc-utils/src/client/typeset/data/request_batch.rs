@@ -19,6 +19,7 @@ pub enum BatchKind {
     ResetCheck,
     RecoveryCheck,
     ResetUpdate,
+    RecoveryUpdate,
     Uniqueness,
 }
 
@@ -31,6 +32,7 @@ impl BatchKind {
             smpc_request::RESET_CHECK_MESSAGE_TYPE => Some(Self::ResetCheck),
             smpc_request::RECOVERY_CHECK_MESSAGE_TYPE => Some(Self::RecoveryCheck),
             smpc_request::RESET_UPDATE_MESSAGE_TYPE => Some(Self::ResetUpdate),
+            smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE => Some(Self::RecoveryUpdate),
             smpc_request::UNIQUENESS_MESSAGE_TYPE => Some(Self::Uniqueness),
             _ => None,
         }
@@ -40,7 +42,7 @@ impl BatchKind {
     pub fn requires_parent(&self) -> bool {
         matches!(
             self,
-            Self::IdentityDeletion | Self::Reauth | Self::ResetUpdate
+            Self::IdentityDeletion | Self::Reauth | Self::ResetUpdate | Self::RecoveryUpdate
         )
     }
 }
@@ -216,7 +218,23 @@ impl RequestBatch {
             info: RequestInfo::new(self, label, label_of_parent),
             iris_pair,
             parent,
-            reset_id: uuid::Uuid::new_v4(),
+            request_id: uuid::Uuid::new_v4(),
+        });
+    }
+
+    /// Extends requests collection with a new RecoveryUpdate request.
+    pub(crate) fn push_new_recovery_update(
+        &mut self,
+        parent: UniquenessRequestDescriptor,
+        iris_pair: Option<IrisPairDescriptor>,
+        label: Option<String>,
+        label_of_parent: Option<String>,
+    ) {
+        self.push_request(Request::RecoveryUpdate {
+            info: RequestInfo::new(self, label, label_of_parent),
+            iris_pair,
+            parent,
+            request_id: uuid::Uuid::new_v4(),
         });
     }
 

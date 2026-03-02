@@ -52,7 +52,17 @@ pub enum Request {
         // Weak reference to associated uniqueness request.
         parent: UniquenessRequestDescriptor,
         // Operation identifier.
-        reset_id: uuid::Uuid,
+        request_id: uuid::Uuid,
+    },
+    RecoveryUpdate {
+        // Standard request information.
+        info: RequestInfo,
+        // Associated Iris pair descriptor ... used to build deterministic graphs.
+        iris_pair: Option<IrisPairDescriptor>,
+        // Weak reference to associated uniqueness request.
+        parent: UniquenessRequestDescriptor,
+        // Operation identifier.
+        request_id: uuid::Uuid,
     },
     Uniqueness {
         // Standard request information.
@@ -72,6 +82,7 @@ impl Request {
             | Self::ResetCheck { info, .. }
             | Self::RecoveryCheck { info, .. }
             | Self::ResetUpdate { info, .. }
+            | Self::RecoveryUpdate { info, .. }
             | Self::Uniqueness { info, .. } => info,
         }
     }
@@ -95,10 +106,15 @@ impl Request {
                 ..
             } => Some((*request_id, *iris_pair)),
             Request::ResetUpdate {
-                reset_id,
+                request_id,
                 iris_pair,
                 ..
-            } => Some((*reset_id, *iris_pair)),
+            } => Some((*request_id, *iris_pair)),
+            Request::RecoveryUpdate {
+                request_id,
+                iris_pair,
+                ..
+            } => Some((*request_id, *iris_pair)),
             Request::Uniqueness {
                 signup_id,
                 iris_pair,
@@ -114,6 +130,7 @@ impl Request {
             | Self::ResetCheck { info, .. }
             | Self::RecoveryCheck { info, .. }
             | Self::ResetUpdate { info, .. }
+            | Self::RecoveryUpdate { info, .. }
             | Self::Uniqueness { info, .. } => info,
         }
     }
@@ -126,6 +143,7 @@ impl Request {
             | Self::ResetCheck { iris_pair, .. }
             | Self::RecoveryCheck { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
+            | Self::RecoveryUpdate { iris_pair, .. }
             | Self::Uniqueness { iris_pair, .. } => match iris_pair {
                 Some(iris_pair) => vec![iris_pair.left().index(), iris_pair.right().index()],
                 None => vec![],
@@ -139,7 +157,8 @@ impl Request {
         let parent_ref = match self {
             Self::IdentityDeletion { parent, .. }
             | Self::Reauthorization { parent, .. }
-            | Self::ResetUpdate { parent, .. } => parent,
+            | Self::ResetUpdate { parent, .. }
+            | Self::RecoveryUpdate { parent, .. } => parent,
             _ => return false,
         };
         matches!(
@@ -167,8 +186,11 @@ impl Request {
             (Self::RecoveryCheck { request_id, .. }, ResponsePayload::RecoveryCheck(result)) => {
                 result.request_id == request_id.to_string()
             }
-            (Self::ResetUpdate { reset_id, .. }, ResponsePayload::ResetUpdate(result)) => {
-                result.reset_id == reset_id.to_string()
+            (Self::ResetUpdate { request_id, .. }, ResponsePayload::ResetUpdate(result)) => {
+                result.request_id == request_id.to_string()
+            }
+            (Self::RecoveryUpdate { request_id, .. }, ResponsePayload::RecoveryUpdate(result)) => {
+                result.request_id == request_id.to_string()
             }
             (Self::Uniqueness { signup_id, .. }, ResponsePayload::Uniqueness(result)) => {
                 result.signup_id == signup_id.to_string()
@@ -193,6 +215,9 @@ impl Request {
                     matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
                 Self::ResetUpdate { parent, .. } => {
+                    matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
+                }
+                Self::RecoveryUpdate { parent, .. } => {
                     matches!(parent, UniquenessRequestDescriptor::IrisSerialId(_))
                 }
                 _ => true,
@@ -229,7 +254,8 @@ impl Request {
         match self {
             Self::IdentityDeletion { parent, .. }
             | Self::Reauthorization { parent, .. }
-            | Self::ResetUpdate { parent, .. } => Some(parent),
+            | Self::ResetUpdate { parent, .. }
+            | Self::RecoveryUpdate { parent, .. } => Some(parent),
             _ => None,
         }
     }
@@ -258,6 +284,7 @@ impl fmt::Display for Request {
             Self::ResetCheck { .. } => write!(f, "{}.ResetCheck", self.info()),
             Self::RecoveryCheck { .. } => write!(f, "{}.RecoveryCheck", self.info()),
             Self::ResetUpdate { .. } => write!(f, "{}.ResetUpdate", self.info()),
+            Self::RecoveryUpdate { .. } => write!(f, "{}.RecoveryUpdate", self.info()),
             Self::Uniqueness { .. } => write!(f, "{}.Uniqueness", self.info()),
         }
     }
@@ -286,6 +313,10 @@ mod tests {
 
         pub fn is_reset_update(&self) -> bool {
             matches!(self, Self::ResetUpdate { .. })
+        }
+
+        pub fn is_recovery_update(&self) -> bool {
+            matches!(self, Self::RecoveryUpdate { .. })
         }
 
         pub fn is_uniqueness(&self) -> bool {

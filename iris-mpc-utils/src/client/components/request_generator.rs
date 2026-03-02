@@ -103,6 +103,9 @@ fn push_new(
         BatchKind::ResetUpdate => {
             batch.push_new_reset_update(parent.unwrap(), None, None, None);
         }
+        BatchKind::RecoveryUpdate => {
+            batch.push_new_recovery_update(parent.unwrap(), None, None, None);
+        }
         BatchKind::Uniqueness => {
             batch.push_new_uniqueness(None, None);
         }
