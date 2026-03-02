@@ -12,7 +12,8 @@ pub(crate) enum RequestPayload {
     Reauthorization(smpc_request::ReAuthRequest),
     ResetCheck(smpc_request::IdentityMatchCheckRequest),
     RecoveryCheck(smpc_request::IdentityMatchCheckRequest),
-    ResetUpdate(smpc_request::ResetUpdateRequest),
+    ResetUpdate(smpc_request::IdentityUpdateRequest),
+    RecoveryUpdate(smpc_request::IdentityUpdateRequest),
     Uniqueness(smpc_request::UniquenessRequest),
 }
 
@@ -23,7 +24,8 @@ pub(crate) enum ResponsePayload {
     Reauthorization(smpc_response::ReAuthResult),
     ResetCheck(smpc_response::IdentityMatchCheckResult),
     RecoveryCheck(smpc_response::IdentityMatchCheckResult),
-    ResetUpdate(smpc_response::ResetUpdateAckResult),
+    ResetUpdate(smpc_response::IdentityUpdateAckResult),
+    RecoveryUpdate(smpc_response::IdentityUpdateAckResult),
     Uniqueness(smpc_response::UniquenessResult),
 }
 
@@ -35,6 +37,7 @@ impl ResponsePayload {
             Self::ResetCheck(result) => result.node_id,
             Self::RecoveryCheck(result) => result.node_id,
             Self::ResetUpdate(result) => result.node_id,
+            Self::RecoveryUpdate(result) => result.node_id,
             Self::Uniqueness(result) => result.node_id,
         }
     }
@@ -56,6 +59,7 @@ impl ResponsePayload {
                 result.error_reason.as_deref(),
             ),
             Self::ResetUpdate(_) => (false, None),
+            Self::RecoveryUpdate(_) => (false, None),
             Self::Uniqueness(result) => (
                 result.error.unwrap_or(false),
                 result.error_reason.as_deref(),

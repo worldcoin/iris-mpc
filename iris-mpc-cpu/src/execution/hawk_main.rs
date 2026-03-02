@@ -15,7 +15,7 @@
 //!   Each session encapsulates the necessary cryptographic context for a
 //!   single thread of work.
 //! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of requests of the
-//!   usual types: Uniqueness, ResetCheck, ResetUpdate, Reauth and Deletion.
+//!   usual types: Uniqueness, ResetCheck, RecoveryCheck, ResetUpdate, RecoveryUpdate, Reauth and Deletion.
 //!   . This involves:
 //!     - Searching the HNSW graph for nearest neighbors of a given iris, both for matching and graph insertion purposes.
 //!     - Performing secret-shared distance evaluations and comparisons using the ABY3 protocol.
@@ -101,6 +101,9 @@ use ampc_anon_stats::{
 use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::{future::try_join_all, try_join};
+use identity_update::{
+    apply_deletions, search_to_identity_update, IdentityUpdatePlan, IdentityUpdateRequests,
+};
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
@@ -123,7 +126,6 @@ use matching::{
 };
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
 use serde::{Deserialize, Serialize};
@@ -147,12 +149,12 @@ use tokio_util::sync::CancellationToken;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+mod identity_update;
 pub mod insert;
 mod intra_batch;
 pub mod iris_worker;
 mod is_match_batch;
 mod matching;
-mod reset;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
@@ -1153,10 +1155,10 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn reset_updates(&self, iris_store: &Aby3SharedIrises) -> ResetRequests {
+    fn identity_updates(&self, iris_store: &Aby3SharedIrises) -> IdentityUpdateRequests {
         let queries = [LEFT, RIGHT].map(|side| {
             self.batch
-                .reset_update_shares
+                .identity_update_shares
                 .iter()
                 .map(|iris| {
                     let iris = if side == LEFT {
@@ -1175,9 +1177,9 @@ impl HawkRequest {
                 })
                 .collect_vec()
         });
-        ResetRequests {
-            vector_ids: iris_store.from_0_indices(&self.batch.reset_update_indices),
-            request_ids: Arc::new(self.batch.reset_update_request_ids.clone()),
+        IdentityUpdateRequests {
+            vector_ids: iris_store.from_0_indices(&self.batch.identity_update_indices),
+            request_ids: Arc::new(self.batch.identity_update_request_ids.clone()),
             queries: Arc::new(queries),
         }
     }
@@ -1404,9 +1406,10 @@ impl HawkResult {
             reauth_target_indices: batch.reauth_target_indices,
             reauth_or_rule_used: batch.reauth_use_or_rule,
 
-            reset_update_indices: batch.reset_update_indices,
-            reset_update_request_ids: batch.reset_update_request_ids,
-            reset_update_shares: batch.reset_update_shares,
+            identity_update_indices: batch.identity_update_indices,
+            identity_update_request_ids: batch.identity_update_request_ids,
+            identity_update_request_types: batch.identity_update_request_types,
+            identity_update_shares: batch.identity_update_shares,
 
             modifications: batch.modifications,
 
@@ -1672,9 +1675,10 @@ impl HawkHandle {
         hawk_actor.update_anon_stats(&search_results).await?;
         tracing::info!("Updated anonymized statistics.");
 
-        // Reset Updates. Find how to insert the new irises into the graph.
+        // Identity Updates. Find how to insert the new irises into the graph.
         // TODO: Parallelize with the other searches
-        let resets = search_to_reset(hawk_actor, sessions_mutations, &request).await?;
+        let identity_updates =
+            search_to_identity_update(hawk_actor, sessions_mutations, &request).await?;
 
         // Insert into the in memory stores.
         let mutations = Self::handle_mutations(
@@ -1682,7 +1686,7 @@ impl HawkHandle {
             sessions_mutations,
             search_results,
             &match_result,
-            resets,
+            identity_updates,
             &request,
         )
         .await?;
@@ -1702,7 +1706,7 @@ impl HawkHandle {
         sessions: &BothEyes<Vec<HawkSession>>,
         search_results: BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
         match_result: &matching::BatchStep3,
-        resets: ResetPlan,
+        identity_updates: IdentityUpdatePlan,
         request: &HawkRequest,
     ) -> Result<HawkMutation> {
         use Decision::*;
@@ -1710,7 +1714,7 @@ impl HawkHandle {
         let decisions = match_result.decisions();
         let requests_order = &request.batch.requests_order;
 
-        // Fetch targeted vector IDs of reauths and resets (None for uniqueness insertions).
+        // Fetch targeted vector IDs of reauths and identity updates (None for uniqueness insertions).
         let update_ids = requests_order
             .iter()
             .map(|req_index| match req_index {
@@ -1730,7 +1734,7 @@ impl HawkHandle {
                     }
                     _ => None,
                 },
-                RequestIndex::ResetUpdate(i) => Some(resets.vector_ids[*i]),
+                RequestIndex::IdentityUpdate(i) => Some(identity_updates.vector_ids[*i]),
                 RequestIndex::Deletion(_) => None,
             })
             .collect_vec();
@@ -1742,9 +1746,12 @@ impl HawkHandle {
             vec![[None, None]; requests_order.len()];
 
         // For both eyes.
-        for (side, sessions, search_results, reset_results) in
-            izip!(&STORE_IDS, sessions, search_results, resets.search_results)
-        {
+        for (side, sessions, search_results, reset_results) in izip!(
+            &STORE_IDS,
+            sessions,
+            search_results,
+            identity_updates.search_results
+        ) {
             let unique_insertions_persistence_skipped = decisions
                 .iter()
                 .map(|decision| matches!(decision, UniqueInsertSkipped))
@@ -1755,7 +1762,7 @@ impl HawkHandle {
                 .map(|decision| matches!(decision, UniqueInsert))
                 .collect_vec();
 
-            // The accepted insertions for uniqueness, reauth, and resets.
+            // The accepted insertions for uniqueness, reauth, and identity updates.
             // Focus on the insertions and keep only the centered irises.
             tracing::info!(
                 "Inserting {} new irises for eye {}",
@@ -1788,7 +1795,7 @@ impl HawkHandle {
                             .is_mutation()
                             .then(|| search_results[*i].center().clone()),
                     },
-                    RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
+                    RequestIndex::IdentityUpdate(i) => Some(reset_results[*i].center().clone()),
                     // Deletions were handled earlier in handle_job
                     RequestIndex::Deletion(_) => None,
                 })
@@ -1823,9 +1830,9 @@ impl HawkHandle {
                         UniqueInsertSkipped | NoMutation => None,
                     }
                 }
-                RequestIndex::ResetUpdate(i) => {
+                RequestIndex::IdentityUpdate(i) => {
                     // This is a reset update mutation.
-                    if let Some(&vector_id) = resets.vector_ids.get(i) {
+                    if let Some(&vector_id) = identity_updates.vector_ids.get(i) {
                         Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                     } else {
                         None
@@ -2133,11 +2140,11 @@ mod tests {
             all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
 
             assert_eq!(
-                all_results[i].reset_update_shares.len(),
-                all_results[0].reset_update_shares.len(),
-                "All parties must agree on the reset update shares"
+                all_results[i].identity_update_shares.len(),
+                all_results[0].identity_update_shares.len(),
+                "All parties must agree on the identity update shares"
             );
-            all_results[i].reset_update_shares = all_results[0].reset_update_shares.clone();
+            all_results[i].identity_update_shares = all_results[0].identity_update_shares.clone();
         }
 
         assert!(
@@ -2346,8 +2353,8 @@ mod hawk_mutation_tests {
 
         let index1 = RequestIndex::UniqueReauthResetCheck(0);
         let index2 = RequestIndex::UniqueReauthResetCheck(1);
-        let index3 = RequestIndex::ResetUpdate(0);
-        let index_wrong = RequestIndex::ResetUpdate(1);
+        let index3 = RequestIndex::IdentityUpdate(0);
+        let index_wrong = RequestIndex::IdentityUpdate(1);
 
         let mutation1 = SingleHawkMutation {
             plans: [
