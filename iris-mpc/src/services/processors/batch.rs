@@ -414,56 +414,38 @@ impl<'a> BatchProcessor<'a> {
             }
             REAUTH_MESSAGE_TYPE => self.process_reauth_request(&message, batch_metadata).await,
             RECOVERY_CHECK_MESSAGE_TYPE => {
-                if !self.config.hawk_server_recovery_enabled {
-                    metrics::counter!("request.skipped", "type" => "recovery_check").increment(1);
-                    tracing::warn!("Recovery checks are disabled, skipping recovery check request");
-                    return Ok(());
-                }
                 self.process_identity_match_check_request(
                     &message,
                     batch_metadata,
                     RECOVERY_CHECK_MESSAGE_TYPE,
+                    self.config.hawk_server_recovery_enabled,
                 )
                 .await
             }
             RESET_CHECK_MESSAGE_TYPE => {
-                if !self.config.hawk_server_resets_enabled {
-                    metrics::counter!("request.skipped", "type" => "reset_check").increment(1);
-                    tracing::warn!("Resets are disabled, skipping reset request");
-                    return Ok(());
-                }
                 self.process_identity_match_check_request(
                     &message,
                     batch_metadata,
                     RESET_CHECK_MESSAGE_TYPE,
+                    self.config.hawk_server_resets_enabled,
                 )
                 .await
             }
             RECOVERY_UPDATE_MESSAGE_TYPE => {
-                if !self.config.hawk_server_recovery_enabled {
-                    metrics::counter!("request.skipped", "type" => "recovery_update").increment(1);
-                    tracing::warn!(
-                        "Recovery updates are disabled, skipping recovery update request"
-                    );
-                    return Ok(());
-                }
                 self.process_identity_update_request(
                     &message,
                     batch_metadata,
                     RECOVERY_UPDATE_MESSAGE_TYPE,
+                    self.config.hawk_server_recovery_enabled,
                 )
                 .await
             }
             RESET_UPDATE_MESSAGE_TYPE => {
-                if !self.config.hawk_server_resets_enabled {
-                    metrics::counter!("request.skipped", "type" => "reset_update").increment(1);
-                    tracing::warn!("Resets are disabled, skipping reset update request");
-                    return Ok(());
-                }
                 self.process_identity_update_request(
                     &message,
                     batch_metadata,
                     RESET_UPDATE_MESSAGE_TYPE,
+                    self.config.hawk_server_resets_enabled,
                 )
                 .await
             }
@@ -667,7 +649,14 @@ impl<'a> BatchProcessor<'a> {
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
         request_type: &str,
+        is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
+        if !is_request_type_enabled {
+            metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
+            tracing::warn!("{} is disabled, skipping request", request_type);
+            return Ok(());
+        }
+
         let sns_message_id = message.message_id.clone();
         let identity_match_check_request: IdentityMatchCheckRequest =
             serde_json::from_str(&message.message)
@@ -715,7 +704,14 @@ impl<'a> BatchProcessor<'a> {
         message: &SQSMessage,
         _batch_metadata: BatchMetadata,
         request_type: &str,
+        is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
+        if !is_request_type_enabled {
+            metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
+            tracing::warn!("{} is disabled, skipping request", request_type);
+            return Ok(());
+        }
+
         let sns_message_id = message.message_id.clone();
         let identity_update_request: IdentityUpdateRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Identity update request", e))?;
