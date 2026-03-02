@@ -526,11 +526,13 @@ async fn run_graph_checks(
     ));
 
     // -- 1j: Layer density near geometric --
-    // With parameter q (layer_probability), each layer L should contain
-    // approximately q * |layer L-1| nodes. We allow a 3x tolerance factor
-    // (ratio within [q/3, q*3]) for small layers / statistical variance.
+    // Each node independently lands at layer >= L with probability q^L, so
+    // count at layer L ~ Binomial(N, q^L).  Flag if actual count is more than
+    // 3 standard deviations from the expected value.
+    let q = layer_probability;
     for (eye, graph) in &graphs {
-        if graph.layers.len() < 2 {
+        let n = graph.layers.first().map(|l| l.links.len()).unwrap_or(0) as f64;
+        if graph.layers.len() < 2 || n == 0.0 {
             checks.push(CheckResult::new(
                 "1j",
                 &format!("Layer density geometric ({eye})"),
@@ -541,21 +543,18 @@ async fn run_graph_checks(
         }
         let mut violations = Vec::new();
         for lc in 1..graph.layers.len() {
-            let lower = graph.layers[lc - 1].links.len() as f64;
-            let upper = graph.layers[lc].links.len() as f64;
-            if lower == 0.0 {
-                continue;
-            }
-            let actual_ratio = upper / lower;
-            let expected = layer_probability;
-            // Allow 3x tolerance in either direction
-            if actual_ratio > expected * 3.0 || actual_ratio < expected / 3.0 {
+            let p = q.powi(lc as i32);
+            let expected = n * p;
+            let std_dev = (n * p * (1.0 - p)).sqrt();
+            let actual = graph.layers[lc].links.len() as f64;
+            let z = if std_dev > 0.0 {
+                (actual - expected).abs() / std_dev
+            } else {
+                0.0
+            };
+            if z > 3.0 {
                 violations.push(format!(
-                    "L{}/L{}: {:.4} (expected ~{:.4})",
-                    lc,
-                    lc - 1,
-                    actual_ratio,
-                    expected
+                    "L{lc}: {actual:.0} nodes, expected {expected:.1} +/- {std_dev:.1} ({z:.1}σ)"
                 ));
             }
         }
@@ -565,11 +564,11 @@ async fn run_graph_checks(
             violations.is_empty(),
             if violations.is_empty() {
                 format!(
-                    "All layer ratios within 3x of q={layer_probability:.4} ({} layers)",
+                    "All layers within 3σ of Binomial(N={n:.0}, q={q:.4}) ({} layers)",
                     graph.layers.len()
                 )
             } else {
-                format!("Ratio violations: {}", violations.join(", "))
+                format!("Outliers: {}", violations.join(", "))
             },
         ));
     }
