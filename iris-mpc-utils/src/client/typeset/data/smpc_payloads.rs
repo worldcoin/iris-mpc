@@ -174,7 +174,9 @@ impl From<&Request> for RequestPayload {
                 serial_id: *parent,
             }),
             Request::RecoveryUpdate {
-                recovery_id, parent, ..
+                recovery_id,
+                parent,
+                ..
             } => Self::RecoveryUpdate(smpc_request::IdentityUpdateRequest {
                 request_id: recovery_id.to_string(),
                 s3_key: recovery_id.to_string(),

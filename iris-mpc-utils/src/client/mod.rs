@@ -503,6 +503,7 @@ impl ExecState {
                 typeset::Request::RecoveryCheck { request_id, .. } => Some(*request_id),
                 typeset::Request::ResetCheck { reset_id, .. }
                 | typeset::Request::ResetUpdate { reset_id, .. } => Some(*reset_id),
+                typeset::Request::RecoveryUpdate { recovery_id, .. } => Some(*recovery_id),
                 typeset::Request::IdentityDeletion { parent, .. } => {
                     self.outstanding_deletions
                         .insert(*parent, request.info().clone());
