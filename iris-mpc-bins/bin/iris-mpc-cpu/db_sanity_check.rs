@@ -601,7 +601,7 @@ async fn run_persistent_state_checks(
     let left_max = get_graph_max_serial_id(graph_pg, StoreId::Left).await?;
     let right_max = get_graph_max_serial_id(graph_pg, StoreId::Right).await?;
 
-    // 3a
+    // 2a
     match last_indexed {
         Some(last_id) => {
             let mut issues = Vec::new();
@@ -672,6 +672,14 @@ async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreI
 // Check 3: Cross-schema consistency (HNSW vs GPU)
 // ---------------------------------------------------------------------------
 
+fn validate_schema_name(name: &str) -> Result<()> {
+    eyre::ensure!(
+        !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'),
+        "invalid schema name: {name}"
+    );
+    Ok(())
+}
+
 async fn run_cross_schema_checks(
     hnsw_schema: &str,
     gpu_schema: &str,
@@ -679,16 +687,19 @@ async fn run_cross_schema_checks(
     pool: &sqlx::PgPool,
     checks: &mut Vec<CheckResult>,
 ) -> Result<()> {
+    validate_schema_name(hnsw_schema)?;
+    validate_schema_name(gpu_schema)?;
     let lid = last_indexed_id as i64;
 
     // 3a: Same row count (up to last_indexed_id)
-    let q = format!(
+    let count_query = format!(
         r#"SELECT
              (SELECT COUNT(*) FROM "{}".irises WHERE id <= $1) AS hnsw_count,
              (SELECT COUNT(*) FROM "{}".irises WHERE id <= $1) AS gpu_count"#,
         hnsw_schema, gpu_schema
     );
-    let (hnsw_count, gpu_count): (i64, i64) = sqlx::query_as(&q).bind(lid).fetch_one(pool).await?;
+    let (hnsw_count, gpu_count): (i64, i64) =
+        sqlx::query_as(&count_query).bind(lid).fetch_one(pool).await?;
     checks.push(CheckResult::new(
         "3a",
         "Same row count",
@@ -701,13 +712,14 @@ async fn run_cross_schema_checks(
     ));
 
     // 3b: Same max serial ID (up to last_indexed_id)
-    let q = format!(
+    let max_id_query = format!(
         r#"SELECT
              (SELECT COALESCE(MAX(id), 0) FROM "{}".irises WHERE id <= $1) AS hnsw_max,
              (SELECT COALESCE(MAX(id), 0) FROM "{}".irises WHERE id <= $1) AS gpu_max"#,
         hnsw_schema, gpu_schema
     );
-    let (hnsw_max, gpu_max): (i64, i64) = sqlx::query_as(&q).bind(lid).fetch_one(pool).await?;
+    let (hnsw_max, gpu_max): (i64, i64) =
+        sqlx::query_as(&max_id_query).bind(lid).fetch_one(pool).await?;
     checks.push(CheckResult::new(
         "3b",
         "Same max serial ID",
