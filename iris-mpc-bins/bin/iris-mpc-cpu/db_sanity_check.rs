@@ -24,6 +24,7 @@ use std::{
 
 const STATE_DOMAIN: &str = "genesis";
 const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
+const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
 
 #[derive(Parser)]
 #[command(
@@ -43,6 +44,10 @@ struct Args {
     /// HNSW M parameter for degree bound checks
     #[arg(long, default_value_t = 256)]
     m: usize,
+    /// Layer probability q for geometric distribution check (default: 1/M).
+    /// Each layer should have ~q fraction of the nodes in the layer below.
+    #[arg(long)]
+    layer_probability: Option<f64>,
     /// Path to JSON exclusions file with {"deleted_serial_ids": [...]}
     #[arg(long)]
     exclusions_file: Option<PathBuf>,
@@ -131,11 +136,13 @@ async fn main() -> Result<()> {
     let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
 
     println!("--- Check 1: HNSW graph structural checks ---");
+    let layer_probability = args.layer_probability.unwrap_or((args.m as f64).recip());
     run_graph_checks(
         &graph_pg,
         &iris_ids,
         &exclusions,
         args.m,
+        layer_probability,
         &mut checks,
         &mut degree_hist,
         &mut stats,
@@ -144,7 +151,7 @@ async fn main() -> Result<()> {
 
     println!("--- Check 2: Persistent state consistency ---");
     let iris_max = hnsw_store.get_max_serial_id().await?;
-    run_persistent_state_checks(&graph_pg, iris_max, &mut checks).await?;
+    run_persistent_state_checks(&graph_pg, iris_max, &mut checks, &mut stats).await?;
 
     println!("--- Check 3: HNSW vs GPU iris consistency (up to last_indexed_iris_id) ---");
     run_cross_schema_checks(
@@ -205,6 +212,7 @@ async fn run_graph_checks(
     iris_ids: &HashSet<i64>,
     exclusions: &Option<HashSet<u32>>,
     m: usize,
+    layer_probability: f64,
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
     stats: &mut Stats,
@@ -408,7 +416,28 @@ async fn run_graph_checks(
             },
         ));
 
-        // -- 1f: Degree bounds --
+        // -- 1f: No duplicate neighbors --
+        let dup_count: u64 = graph
+            .layers
+            .iter()
+            .flat_map(|l| l.links.values())
+            .map(|nbs| {
+                let unique: HashSet<&VectorId> = nbs.iter().collect();
+                (nbs.len() - unique.len()) as u64
+            })
+            .sum();
+        checks.push(CheckResult::new(
+            "1f",
+            &format!("No duplicate neighbors ({eye})"),
+            dup_count == 0,
+            if dup_count == 0 {
+                "No duplicate neighbors found".into()
+            } else {
+                format!("{dup_count} duplicate neighbor entries")
+            },
+        ));
+
+        // -- 1g: Degree bounds --
         let mut degree_viol = 0u64;
         for (lc, layer) in graph.layers.iter().enumerate() {
             let m_limit = params.M_limit[lc.min(N_PARAM_LAYERS - 1)];
@@ -417,7 +446,7 @@ async fn run_graph_checks(
                     degree_viol += 1;
                     if degree_viol <= 5 {
                         println!(
-                            "  [1f] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
+                            "  [1g] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
                             nbs.len()
                         );
                     }
@@ -425,7 +454,7 @@ async fn run_graph_checks(
             }
         }
         checks.push(CheckResult::new(
-            "1f",
+            "1g",
             &format!("Degree bounds ({eye})"),
             degree_viol == 0,
             if degree_viol == 0 {
@@ -439,7 +468,7 @@ async fn run_graph_checks(
             },
         ));
 
-        // -- 1g: Entry point validity --
+        // -- 1h: Entry point validity --
         let mut ep_valid = true;
         let mut ep_detail = String::new();
         for ep in &graph.entry_points {
@@ -462,7 +491,7 @@ async fn run_graph_checks(
             }
         }
         checks.push(CheckResult::new(
-            "1g",
+            "1h",
             &format!("Entry point validity ({eye})"),
             ep_valid,
             if ep_valid {
@@ -473,7 +502,7 @@ async fn run_graph_checks(
         ));
     }
 
-    // -- 1h: Left/Right graph sync --
+    // -- 1i: Left/Right graph sync --
     let l0_ids = |g: &GraphMem<VectorId>| -> HashSet<u32> {
         g.layers
             .first()
@@ -482,7 +511,7 @@ async fn run_graph_checks(
     };
     let (left_ids, right_ids) = (l0_ids(&graphs[0].1), l0_ids(&graphs[1].1));
     checks.push(CheckResult::new(
-        "1h",
+        "1i",
         "Left/Right graph sync",
         left_ids == right_ids,
         if left_ids == right_ids {
@@ -495,6 +524,55 @@ async fn run_graph_checks(
             )
         },
     ));
+
+    // -- 1j: Layer density near geometric --
+    // With parameter q (layer_probability), each layer L should contain
+    // approximately q * |layer L-1| nodes. We allow a 3x tolerance factor
+    // (ratio within [q/3, q*3]) for small layers / statistical variance.
+    for (eye, graph) in &graphs {
+        if graph.layers.len() < 2 {
+            checks.push(CheckResult::new(
+                "1j",
+                &format!("Layer density geometric ({eye})"),
+                true,
+                "Fewer than 2 layers, skipped",
+            ));
+            continue;
+        }
+        let mut violations = Vec::new();
+        for lc in 1..graph.layers.len() {
+            let lower = graph.layers[lc - 1].links.len() as f64;
+            let upper = graph.layers[lc].links.len() as f64;
+            if lower == 0.0 {
+                continue;
+            }
+            let actual_ratio = upper / lower;
+            let expected = layer_probability;
+            // Allow 3x tolerance in either direction
+            if actual_ratio > expected * 3.0 || actual_ratio < expected / 3.0 {
+                violations.push(format!(
+                    "L{}/L{}: {:.4} (expected ~{:.4})",
+                    lc,
+                    lc - 1,
+                    actual_ratio,
+                    expected
+                ));
+            }
+        }
+        checks.push(CheckResult::new(
+            "1j",
+            &format!("Layer density geometric ({eye})"),
+            violations.is_empty(),
+            if violations.is_empty() {
+                format!(
+                    "All layer ratios within 3x of q={layer_probability:.4} ({} layers)",
+                    graph.layers.len()
+                )
+            } else {
+                format!("Ratio violations: {}", violations.join(", "))
+            },
+        ));
+    }
 
     Ok(())
 }
@@ -516,6 +594,7 @@ async fn run_persistent_state_checks(
     graph_pg: &GraphPg<Aby3Store>,
     iris_max_serial_id: usize,
     checks: &mut Vec<CheckResult>,
+    stats: &mut Stats,
 ) -> Result<()> {
     let last_indexed: Option<u32> = graph_pg
         .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
@@ -557,7 +636,7 @@ async fn run_persistent_state_checks(
         )),
     }
 
-    // 3b
+    // 2b
     checks.push(CheckResult::new(
         "2b",
         "Graph max serial_id alignment",
@@ -568,6 +647,18 @@ async fn run_persistent_state_checks(
             format!("Left max={left_max}, Right max={right_max}")
         },
     ));
+
+    // Stat: last_indexed_modification_id
+    let last_mod_id: Option<i64> = graph_pg
+        .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
+        .await?;
+    stats.add(
+        "last_indexed_modification_id",
+        match last_mod_id {
+            Some(id) => id.to_string(),
+            None => "not set".into(),
+        },
+    );
 
     Ok(())
 }

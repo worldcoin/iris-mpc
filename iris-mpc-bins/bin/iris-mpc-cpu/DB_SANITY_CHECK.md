@@ -22,6 +22,7 @@ db-sanity-check \
 | `--hnsw-schema` | | yes | | HNSW (CPU) schema name (e.g. `SMPC_hnsw_dev_0`) |
 | `--gpu-schema` | | yes | | GPU schema name (e.g. `SMPC_gpu_dev_0`) |
 | `--m` | | no | `256` | HNSW M parameter for degree bound checks |
+| `--layer-probability` | | no | `1/M` | Layer probability q for geometric distribution check |
 | `--exclusions-file` | | no | | Path to JSON file with `{"deleted_serial_ids": [...]}` |
 | `--output-dir` | | no | `.` | Directory for JSON output files |
 
@@ -79,9 +80,11 @@ db-sanity-check \
 | 1c | Layer hierarchy (higher-layer nodes in all lower layers) | HNSW graph |
 | 1d | Neighbor validity (all neighbors exist at same layer) | HNSW graph |
 | 1e | No self-loops | HNSW graph |
-| 1f | Degree bounds (M_limit per layer) | HNSW graph |
-| 1g | Entry point validity | HNSW graph |
-| 1h | Left/Right graph sync (same layer-0 serial IDs) | HNSW graph |
+| 1f | No duplicate neighbors | HNSW graph |
+| 1g | Degree bounds (M_limit per layer) | HNSW graph |
+| 1h | Entry point validity | HNSW graph |
+| 1i | Left/Right graph sync (same layer-0 serial IDs) | HNSW graph |
+| 1j | Layer density near geometric (ratio within 3x of q) | HNSW graph |
 | 2a | last_indexed_iris_id consistency | Persistent state |
 | 2b | Graph max serial_id alignment (left == right) | Persistent state |
 | 3a | Same row count (HNSW vs GPU, id ≤ last_indexed) | Cross-schema |
