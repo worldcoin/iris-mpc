@@ -232,16 +232,16 @@ impl IdentityMatchCheckResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ResetUpdateAckResult {
-    pub reset_id: String,
+pub struct IdentityUpdateAckResult {
+    pub request_id: String,
     pub node_id: usize,
     pub serial_id: u32,
 }
 
-impl ResetUpdateAckResult {
-    pub fn new(reset_id: String, node_id: usize, serial_id: u32) -> Self {
+impl IdentityUpdateAckResult {
+    pub fn new(request_id: String, node_id: usize, serial_id: u32) -> Self {
         Self {
-            reset_id,
+            request_id,
             node_id,
             serial_id,
         }

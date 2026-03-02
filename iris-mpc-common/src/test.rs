@@ -4,7 +4,10 @@ use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         inmemory_store::InMemoryStore,
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{
+            REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+            UNIQUENESS_MESSAGE_TYPE,
+        },
     },
     iris_db::{
         db::IrisDB,
@@ -558,9 +561,27 @@ impl TestCaseGenerator {
                 );
                 let sns_id = || "sns_id".to_string();
 
-                batch0.push_reset_update_request(sns_id(), req_id.clone(), idx as u32, shares0);
-                batch1.push_reset_update_request(sns_id(), req_id.clone(), idx as u32, shares1);
-                batch2.push_reset_update_request(sns_id(), req_id, idx as u32, shares2);
+                batch0.push_identity_update_request(
+                    sns_id(),
+                    req_id.clone(),
+                    RESET_UPDATE_MESSAGE_TYPE,
+                    idx as u32,
+                    shares0,
+                );
+                batch1.push_identity_update_request(
+                    sns_id(),
+                    req_id.clone(),
+                    RESET_UPDATE_MESSAGE_TYPE,
+                    idx as u32,
+                    shares1,
+                );
+                batch2.push_identity_update_request(
+                    sns_id(),
+                    req_id,
+                    RESET_UPDATE_MESSAGE_TYPE,
+                    idx as u32,
+                    shares2,
+                );
             }
         }
 
@@ -1345,8 +1366,8 @@ impl TestCaseGenerator {
                     merged_results,
                     matched_batch_request_ids,
                     successful_reauths,
-                    reset_update_indices,
-                    reset_update_request_ids,
+                    identity_update_indices,
+                    identity_update_request_ids,
                     full_face_mirror_attack_detected,
                     ..
                 } = res;
@@ -1384,7 +1405,7 @@ impl TestCaseGenerator {
                     );
                 }
 
-                for (req_id, idx) in izip!(reset_update_request_ids, reset_update_indices) {
+                for (req_id, idx) in izip!(identity_update_request_ids, identity_update_indices) {
                     assert!(requests.contains_key(req_id));
                     assert!(self.reset_update_templates.contains_key(idx));
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
