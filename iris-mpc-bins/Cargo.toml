@@ -175,6 +175,10 @@ path = "bin/iris-mpc-cpu/generate_ideal_graph.rs"
 name = "graph-utils"
 path = "bin/iris-mpc-cpu/graph_utils.rs"
 
+[[bin]]
+name = "db-sanity-check"
+path = "bin/iris-mpc-cpu/db_sanity_check.rs"
+
 # ---------------------
 # binaries for iris-mpc-gpu
 # ---------------------
