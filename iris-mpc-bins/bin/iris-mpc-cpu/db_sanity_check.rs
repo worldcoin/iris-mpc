@@ -1,6 +1,5 @@
 use clap::Parser;
-use eyre::{eyre, Result};
-use futures::StreamExt;
+use eyre::Result;
 use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     vector_id::VectorId,
@@ -150,7 +149,14 @@ async fn main() -> Result<()> {
     run_persistent_state_checks(&graph_pg, iris_max, &mut checks).await?;
 
     println!("--- Check 3: HNSW vs GPU iris consistency ---");
-    run_cross_schema_checks(&hnsw_store, &gpu_store, &mut checks).await?;
+    run_cross_schema_checks(
+        &hnsw_store,
+        &gpu_store,
+        &args.hnsw_schema,
+        &args.gpu_schema,
+        &mut checks,
+    )
+    .await?;
 
     println!("--- Check 4: Modifications table ---");
     run_modification_checks(&hnsw_store, &mut checks, &mut stats).await?;
@@ -184,24 +190,15 @@ async fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i64>> {
-    let mut seen_ids: HashSet<i64> = HashSet::new();
-    let mut total = 0u64;
+    let ids: Vec<(i64,)> = sqlx::query_as("SELECT id FROM irises ORDER BY id")
+        .fetch_all(&store.pool)
+        .await?;
 
-    let mut stream = store.stream_irises().await;
-    while let Some(result) = stream.next().await {
-        let iris = result.map_err(|e| eyre!("Error streaming iris: {e}"))?;
-        total += 1;
-        seen_ids.insert(iris.serial_id() as i64);
-        if total % 500_000 == 0 {
-            println!("  ... streamed {total} irises");
-        }
-    }
+    let max_id = ids.last().map(|(id,)| *id).unwrap_or(0);
+    stats.add("Total iris count (HNSW)", ids.len().to_string());
+    stats.add("Max serial ID (HNSW)", max_id.to_string());
 
-    let iris_count = store.count_irises().await?;
-    stats.add("Total iris count (HNSW)", iris_count.to_string());
-    stats.add("Max serial ID (HNSW)", store.get_max_serial_id().await?.to_string());
-
-    Ok(seen_ids)
+    Ok(ids.into_iter().map(|(id,)| id).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +214,7 @@ async fn run_graph_checks(
     degree_hist: &mut Vec<DegreeHistEntry>,
     stats: &mut Stats,
 ) -> Result<()> {
+    // ef values are irrelevant
     let params = HnswParams::new(1, 1, m);
 
     println!("  Loading graphs...");
@@ -592,9 +590,10 @@ async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreI
 async fn run_cross_schema_checks(
     hnsw_store: &Store,
     gpu_store: &Store,
+    hnsw_schema: &str,
+    gpu_schema: &str,
     checks: &mut Vec<CheckResult>,
 ) -> Result<()> {
-    // 4a
     let hnsw_count = hnsw_store.count_irises().await?;
     let gpu_count = gpu_store.count_irises().await?;
     checks.push(CheckResult::new(
@@ -608,7 +607,6 @@ async fn run_cross_schema_checks(
         },
     ));
 
-    // 4b
     let hnsw_max = hnsw_store.get_max_serial_id().await?;
     let gpu_max = gpu_store.get_max_serial_id().await?;
     checks.push(CheckResult::new(
@@ -622,67 +620,32 @@ async fn run_cross_schema_checks(
         },
     ));
 
-    // 4c: Byte-identical shares
-    println!("  Comparing iris shares between schemas...");
-    let mut hnsw_stream = hnsw_store.stream_irises().await;
-    let mut gpu_stream = gpu_store.stream_irises().await;
-    let (mut mismatches, mut compared) = (0u64, 0u64);
-    let mut mismatch_details: Vec<String> = Vec::new();
-
-    loop {
-        match (hnsw_stream.next().await, gpu_stream.next().await) {
-            (Some(Ok(h)), Some(Ok(g))) => {
-                compared += 1;
-                let (h_id, g_id) = (h.serial_id() as i64, g.serial_id() as i64);
-                if h_id != g_id {
-                    mismatches += 1;
-                    if mismatch_details.len() < 10 {
-                        mismatch_details.push(format!("ID mismatch: HNSW={h_id}, GPU={g_id}"));
-                    }
-                    break;
-                }
-                if h.left_code() != g.left_code()
-                    || h.left_mask() != g.left_mask()
-                    || h.right_code() != g.right_code()
-                    || h.right_mask() != g.right_mask()
-                {
-                    mismatches += 1;
-                    if mismatch_details.len() < 10 {
-                        mismatch_details.push(format!("Serial ID {h_id}: share data differs"));
-                    }
-                }
-                if compared % 500_000 == 0 {
-                    println!("  ... compared {compared} irises");
-                }
-            }
-            (None, None) => break,
-            (Some(_), None) => {
-                mismatches += 1;
-                mismatch_details.push("HNSW has more rows than GPU".into());
-                break;
-            }
-            (None, Some(_)) => {
-                mismatches += 1;
-                mismatch_details.push("GPU has more rows than HNSW".into());
-                break;
-            }
-            (Some(Err(e)), _) | (_, Some(Err(e))) => {
-                return Err(eyre!("Error in cross-schema compare: {e}"));
-            }
-        }
-    }
+    // TODO: For large databases (16M+ rows), consider replacing this full JOIN
+    // with random sampling to avoid scanning all BYTEA data.
+    println!("  Comparing iris shares between schemas (SQL JOIN)...");
+    let mismatch_query = format!(
+        r#"SELECT h.id FROM "{}".irises h
+           JOIN "{}".irises g ON h.id = g.id
+           WHERE h.left_code != g.left_code
+              OR h.left_mask != g.left_mask
+              OR h.right_code != g.right_code
+              OR h.right_mask != g.right_mask
+           LIMIT 10"#,
+        hnsw_schema, gpu_schema
+    );
+    let mismatched_ids: Vec<(i64,)> = sqlx::query_as(&mismatch_query)
+        .fetch_all(&hnsw_store.pool)
+        .await?;
 
     checks.push(CheckResult::new(
         "3c",
         "Byte-identical shares",
-        mismatches == 0,
-        if mismatches == 0 {
-            format!("{compared} irises compared")
+        mismatched_ids.is_empty(),
+        if mismatched_ids.is_empty() {
+            format!("{hnsw_count} irises compared")
         } else {
-            format!(
-                "{mismatches} mismatches (compared {compared}): {}",
-                mismatch_details.join("; ")
-            )
+            let ids: Vec<i64> = mismatched_ids.into_iter().map(|(id,)| id).collect();
+            format!("Mismatched IDs (first 10): {:?}", ids)
         },
     ));
 

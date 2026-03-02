@@ -1,6 +1,6 @@
 # db-sanity-check
 
-Read-only validation of a single MPC party's Postgres database state. Checks iris table integrity, HNSW graph structure, persistent state consistency, cross-schema (HNSW vs GPU) alignment, and the modifications table.
+Read-only validation of a single MPC party's Postgres database state. Checks HNSW graph structure, persistent state consistency, cross-schema (HNSW vs GPU) alignment, and the modifications table.
 
 ## Usage
 
@@ -74,24 +74,20 @@ db-sanity-check \
 
 | ID | Check | Category |
 |----|-------|----------|
-| 1a | No NULL/empty shares | Iris table |
-| 1b | Correct byte sizes (code=12800 u16s, mask=6400 u16s) | Iris table |
-| 1c | Version ID >= 0 | Iris table |
-| 1d | Contiguous IDs (1..max, reports missing) | Iris table |
-| 2a | No orphan graph nodes (per eye) | HNSW graph |
-| 2b | Node coverage vs exclusions list (per eye) | HNSW graph |
-| 2c | Layer hierarchy (higher-layer nodes in all lower layers) | HNSW graph |
-| 2d | Neighbor validity (all neighbors exist at same layer) | HNSW graph |
-| 2e | No self-loops | HNSW graph |
-| 2f | Degree bounds (M_limit per layer) | HNSW graph |
-| 2g | Entry point validity | HNSW graph |
-| 2h | Left/Right graph sync (same layer-0 serial IDs) | HNSW graph |
-| 3a | last_indexed_iris_id consistency | Persistent state |
-| 3b | Graph max serial_id alignment (left == right) | Persistent state |
-| 4a | Same row count (HNSW vs GPU) | Cross-schema |
-| 4b | Same max serial ID | Cross-schema |
-| 4c | Byte-identical shares | Cross-schema |
-| 5a | All modifications COMPLETED & persisted | Modifications |
+| 1a | No orphan graph nodes (per eye) | HNSW graph |
+| 1b | Node coverage vs exclusions list (per eye) | HNSW graph |
+| 1c | Layer hierarchy (higher-layer nodes in all lower layers) | HNSW graph |
+| 1d | Neighbor validity (all neighbors exist at same layer) | HNSW graph |
+| 1e | No self-loops | HNSW graph |
+| 1f | Degree bounds (M_limit per layer) | HNSW graph |
+| 1g | Entry point validity | HNSW graph |
+| 1h | Left/Right graph sync (same layer-0 serial IDs) | HNSW graph |
+| 2a | last_indexed_iris_id consistency | Persistent state |
+| 2b | Graph max serial_id alignment (left == right) | Persistent state |
+| 3a | Same row count (HNSW vs GPU) | Cross-schema |
+| 3b | Same max serial ID | Cross-schema |
+| 3c | Byte-identical shares (SQL JOIN) | Cross-schema |
+| 4a | All modifications COMPLETED & persisted | Modifications |
 
 ## Output files
 
