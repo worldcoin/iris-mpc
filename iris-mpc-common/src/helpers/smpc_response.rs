@@ -12,68 +12,6 @@ pub const SNS_TEST_ATTRIBUTE_VALUE: &str = "TEST";
 pub const ERROR_FAILED_TO_PROCESS_IRIS_SHARES: &str = "failed_to_process_iris_shares";
 pub const ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH: &str = "skipped_request_previous_node_batch";
 
-/// Validates that every field in `expected` is present and equal in the
-/// serialized form of `actual`. Nested objects are checked recursively.
-/// Returns `Ok(())` on full match, or `Err` with a list of mismatch descriptions.
-pub fn validate_expected<T: Serialize>(
-    actual: &T,
-    expected: &serde_json::Value,
-) -> Result<(), Vec<String>> {
-    let actual_value =
-        serde_json::to_value(actual).map_err(|e| vec![format!("serialization error: {e}")])?;
-    let mut mismatches = Vec::new();
-    collect_mismatches("", &actual_value, expected, &mut mismatches);
-    if mismatches.is_empty() {
-        Ok(())
-    } else {
-        Err(mismatches)
-    }
-}
-
-fn collect_mismatches(
-    path: &str,
-    actual: &serde_json::Value,
-    expected: &serde_json::Value,
-    out: &mut Vec<String>,
-) {
-    match expected {
-        serde_json::Value::Object(expected_map) => match actual {
-            serde_json::Value::Object(actual_map) => {
-                for (key, expected_val) in expected_map {
-                    let field_path = if path.is_empty() {
-                        key.clone()
-                    } else {
-                        format!("{path}.{key}")
-                    };
-                    match actual_map.get(key) {
-                        Some(actual_val) => {
-                            collect_mismatches(&field_path, actual_val, expected_val, out);
-                        }
-                        None => {
-                            out.push(format!("{field_path}: field not present in actual"));
-                        }
-                    }
-                }
-            }
-            _ => {
-                out.push(format!(
-                    "{}: expected object but got {}",
-                    if path.is_empty() { "<root>" } else { path },
-                    actual
-                ));
-            }
-        },
-        _ => {
-            if actual != expected {
-                out.push(format!(
-                    "{}: expected {expected}, got {actual}",
-                    if path.is_empty() { "<root>" } else { path },
-                ));
-            }
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UniquenessResult {
     pub node_id: usize,
@@ -393,4 +331,66 @@ pub fn create_sns_message_attributes(message_type: &str) -> HashMap<String, Mess
     );
 
     attrs
+}
+
+/// Validates that every field in `expected` is present and equal in the
+/// serialized form of `actual`. Nested objects are checked recursively.
+/// Returns `Ok(())` on full match, or `Err` with a list of mismatch descriptions.
+pub fn validate_expected<T: Serialize>(
+    actual: &T,
+    expected: &serde_json::Value,
+) -> Result<(), Vec<String>> {
+    let actual_value =
+        serde_json::to_value(actual).map_err(|e| vec![format!("serialization error: {e}")])?;
+    let mut mismatches = Vec::new();
+    collect_mismatches("", &actual_value, expected, &mut mismatches);
+    if mismatches.is_empty() {
+        Ok(())
+    } else {
+        Err(mismatches)
+    }
+}
+
+fn collect_mismatches(
+    path: &str,
+    actual: &serde_json::Value,
+    expected: &serde_json::Value,
+    out: &mut Vec<String>,
+) {
+    match expected {
+        serde_json::Value::Object(expected_map) => match actual {
+            serde_json::Value::Object(actual_map) => {
+                for (key, expected_val) in expected_map {
+                    let field_path = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    match actual_map.get(key) {
+                        Some(actual_val) => {
+                            collect_mismatches(&field_path, actual_val, expected_val, out);
+                        }
+                        None => {
+                            out.push(format!("{field_path}: field not present in actual"));
+                        }
+                    }
+                }
+            }
+            _ => {
+                out.push(format!(
+                    "{}: expected object but got {}",
+                    if path.is_empty() { "<root>" } else { path },
+                    actual
+                ));
+            }
+        },
+        _ => {
+            if actual != expected {
+                out.push(format!(
+                    "{}: expected {expected}, got {actual}",
+                    if path.is_empty() { "<root>" } else { path },
+                ));
+            }
+        }
+    }
 }
