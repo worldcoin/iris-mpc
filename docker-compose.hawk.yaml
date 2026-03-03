@@ -1,46 +1,60 @@
-services:
-  dev_db:
-    image: public.ecr.aws/docker/library/postgres:16.10-alpine3.22
-    ports:
-      - "5432:5432"
-    user: "postgres"
-    environment:
-      POSTGRES_USER: "postgres"
-      POSTGRES_PASSWORD: "postgres"
-    volumes:
-      - hawk_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
-      interval: 10s
-      timeout: 30s
-      retries: 5
-      start_period: 40s
+include:
+  - docker-compose.dev.yaml
 
-  localstack:
-    image: public.ecr.aws/localstack/localstack:4.9
+services:
+  hawk_participant_0:
+    image: hawk-server-local-build:latest
+    env_file:
+      - .test.env
+      - .test.hawk0.env
     depends_on:
+      localstack:
+        condition: service_healthy
       dev_db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:4566:4566"
-      - "127.0.0.1:4571:4571"
-    environment:
-      - SERVICES=kms,s3,secretsmanager,sqs,sns
-      - DEFAULT_REGION=us-east-1
-      - AWS_ACCESS_KEY_ID=test
-      - AWS_SECRET_ACCESS_KEY=test
+      - "127.0.0.1:4000:4000"
+      - "3000:3000"
     healthcheck:
-      test: >-
-        sleep 10 &&
-        awslocal sqs list-queues &&
-        awslocal s3 ls &&
-        awslocal kms list-keys
-      interval: 5s
-      timeout: 25s
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
       retries: 10
+    entrypoint: ./run-server-docker.sh 0 standard
 
-    volumes:
-      - ./scripts/tools/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
+  hawk_participant_1:
+    image: hawk-server-local-build:latest
+    env_file:
+      - .test.env
+      - .test.hawk1.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4001:4001"
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 1 standard
 
-volumes:
-  hawk_db_data:
+  hawk_participant_2:
+    image: hawk-server-local-build:latest
+    env_file:
+      - .test.env
+      - .test.hawk2.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4002:4002"
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 2 standard

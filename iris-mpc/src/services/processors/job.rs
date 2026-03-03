@@ -5,10 +5,11 @@ use eyre::{bail, Result, WrapErr};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::{
-    IdentityDeletionResult, IdentityMatchCheckResult, ReAuthResult, ResetUpdateAckResult,
+    IdentityDeletionResult, IdentityMatchCheckResult, IdentityUpdateAckResult, ReAuthResult,
     UniquenessResult,
 };
 
@@ -37,6 +38,7 @@ pub async fn process_job_result(
     reset_check_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_update_result_attributes: &HashMap<String, MessageAttributeValue>,
     recovery_check_result_attributes: &HashMap<String, MessageAttributeValue>,
+    recovery_update_result_attributes: &HashMap<String, MessageAttributeValue>,
     shutdown_handler: &ShutdownHandler,
 ) -> Result<()> {
     let ServerJobResult {
@@ -62,9 +64,10 @@ pub async fn process_job_result(
         mut modifications,
         actor_data: hawk_mutation,
         full_face_mirror_attack_detected,
-        reset_update_request_ids,
-        reset_update_indices,
-        reset_update_shares,
+        identity_update_request_ids,
+        identity_update_request_types,
+        identity_update_indices,
+        identity_update_shares,
         ..
     } = job_result;
     let now = Instant::now();
@@ -269,23 +272,27 @@ pub async fn process_job_result(
         .into_iter()
         .into_group_map();
 
-    // handling reset update results
-    let reset_update_results = reset_update_request_ids
+    // handling identity update results (reset_update and recovery_update)
+    let identity_update_results_by_type = identity_update_request_ids
         .iter()
         .enumerate()
         .map(|(i, _)| {
-            let reset_id = reset_update_request_ids[i].clone();
-            let serial_id = reset_update_indices[i] + 1;
-            let result_event = ResetUpdateAckResult::new(reset_id.clone(), party_id, serial_id);
+            let request_id = identity_update_request_ids[i].clone();
+            let request_type = identity_update_request_types[i].clone();
+            let serial_id = identity_update_indices[i] + 1;
+            let result_event =
+                IdentityUpdateAckResult::new(request_id.clone(), party_id, serial_id);
             let result_string = serde_json::to_string(&result_event)
-                .wrap_err("failed to serialize reset update result")?;
+                .wrap_err("failed to serialize identity update result")?;
             modifications
                 .get_mut(&RequestSerialId(serial_id))
                 .unwrap()
                 .mark_completed(true, &result_string, None, None);
-            Ok(result_string)
+            Ok((request_type, result_string))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<(String, String)>>>()?
+        .into_iter()
+        .into_group_map();
 
     let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
@@ -352,13 +359,13 @@ pub async fn process_job_result(
                 .await?;
         }
 
-        // persist reset_update results into db
-        for (idx, shares) in izip!(reset_update_indices, reset_update_shares) {
-            // overwrite postgres db with reset update shares.
+        // persist identity update (reset_update/recovery_update) results into db
+        for (idx, shares) in izip!(identity_update_indices, identity_update_shares) {
+            // overwrite postgres db with identity update shares.
             // note that both serial_id and postgres db are 1-indexed.
             let serial_id = idx + 1;
             tracing::info!(
-                "Persisting reset update into postgres on serial id {}",
+                "Persisting identity update into postgres on serial id {}",
                 serial_id
             );
             store
@@ -416,7 +423,14 @@ pub async fn process_job_result(
         .get(RECOVERY_CHECK_MESSAGE_TYPE)
         .unwrap_or(&Vec::new())
         .len();
-    let n_reset_update = reset_update_results.len();
+    let n_reset_update = identity_update_results_by_type
+        .get(RESET_UPDATE_MESSAGE_TYPE)
+        .unwrap_or(&Vec::new())
+        .len();
+    let n_recovery_update = identity_update_results_by_type
+        .get(RECOVERY_UPDATE_MESSAGE_TYPE)
+        .unwrap_or(&Vec::new())
+        .len();
     let n_deletion = identity_deletion_results.len();
 
     send_results_to_sns(
@@ -463,7 +477,10 @@ pub async fn process_job_result(
     .await?;
 
     send_results_to_sns(
-        reset_update_results,
+        identity_update_results_by_type
+            .get(RESET_UPDATE_MESSAGE_TYPE)
+            .unwrap_or(&Vec::new())
+            .clone(),
         &metadata,
         sns_client,
         config,
@@ -485,15 +502,29 @@ pub async fn process_job_result(
     )
     .await?;
 
+    send_results_to_sns(
+        identity_update_results_by_type
+            .get(RECOVERY_UPDATE_MESSAGE_TYPE)
+            .unwrap_or(&Vec::new())
+            .clone(),
+        &metadata,
+        sns_client,
+        config,
+        recovery_update_result_attributes,
+        RECOVERY_UPDATE_MESSAGE_TYPE,
+    )
+    .await?;
+
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
     tracing::info!(
-        "RESULT_SUMMARY party={} uniqueness={} reauth={} reset_check={} reset_update={} deletion={} recovery_check={} persist_ms={} total_ms={}",
+        "RESULT_SUMMARY party={} uniqueness={} reauth={} reset_check={} reset_update={} recovery_update={} deletion={} recovery_check={} persist_ms={} total_ms={}",
         party_id,
         n_uniqueness,
         n_reauth,
         n_reset_check,
         n_reset_update,
+        n_recovery_update,
         n_deletion,
         n_recovery_check,
         persist_total_start.elapsed().as_millis(),
