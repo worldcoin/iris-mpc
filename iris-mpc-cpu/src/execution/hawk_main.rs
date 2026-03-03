@@ -65,6 +65,8 @@
 //!
 //! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
 
+#[allow(unused_imports)]
+use crate::hawkers::aby3::aby3_store::NhdOps;
 use crate::{
     execution::{
         hawk_main::{
@@ -78,7 +80,7 @@ use crate::{
     hawkers::{
         aby3::aby3_store::{
             Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
-            Aby3VectorRef, DistanceFn, FhdOps,
+            Aby3VectorRef, DistanceFn, DistanceOps, FhdOps,
         },
         shared_irises::SharedIrises,
     },
@@ -146,8 +148,11 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub type GraphStore = graph_store::GraphPg<Aby3Store>;
-pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
+/// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
+pub type HawkOps = FhdOps;
+
+pub type GraphStore = graph_store::GraphPg<Aby3Store<HawkOps>>;
+pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store<HawkOps>>;
 
 mod identity_update;
 pub mod insert;
@@ -160,7 +165,6 @@ pub(crate) mod scheduler;
 pub(crate) mod search;
 mod session_groups;
 pub mod state_check;
-use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
 /// Distance function used by the HawkActor
@@ -375,7 +379,7 @@ type MapEdges<T> = HashMap<VectorId, T>;
 /// If true, a match is `left OR right`, otherwise `left AND right`.
 type UseOrRule = bool;
 
-type Aby3Ref = Arc<RwLock<Aby3Store>>;
+type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
@@ -396,7 +400,10 @@ pub struct HawkSession {
     pub hnsw_prf_key: Arc<[u8; 16]>,
 }
 
-pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef);
+pub type SearchResult = (
+    Aby3VectorRef,
+    <Aby3Store<HawkOps> as VectorStore>::DistanceRef,
+);
 
 /// A high-level plan for inserting a query into the HNSW graph after a search.
 ///
@@ -407,8 +414,11 @@ pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef)
 /// to be inserted.
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
-    pub plan: InsertPlanV<Aby3Store>,
-    pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    pub plan: InsertPlanV<Aby3Store<HawkOps>>,
+    pub matches: Vec<(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )>,
 }
 
 /// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
@@ -418,7 +428,7 @@ pub struct HawkInsertPlan {
 /// represents the full set of atomic graph updates required. This includes not only the new
 /// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
-pub type ConnectPlan = ConnectPlanV<Aby3Store>;
+pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -426,7 +436,7 @@ impl HawkActor {
             args,
             shutdown_ct,
             [(); 2].map(|_| GraphMem::new()),
-            [(); 2].map(|_| Aby3Store::<FhdOps>::new_storage(None)),
+            [(); 2].map(|_| Aby3Store::<HawkOps>::new_storage(None)),
         )
         .await
     }
@@ -704,9 +714,12 @@ impl HawkActor {
     fn get_partial_distances(
         &mut self,
         search_results: &[VecRotations<HawkInsertPlan>],
-    ) -> BTreeMap<i64, Vec<DistanceShare<u32>>> {
+    ) -> BTreeMap<i64, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>> {
         // maps query_id and db_id to a vector of distances.
-        let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
+        let mut distances_with_ids: BTreeMap<
+            i64,
+            Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>,
+        > = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
                 let matches = insert_plan.matches.clone();
@@ -727,8 +740,12 @@ impl HawkActor {
     async fn persist_cached_distances(
         &self,
         side: usize,
-        partial_distances: BTreeMap<i64, Vec<DistanceShare<u32>>>,
+        partial_distances: BTreeMap<i64, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>>,
     ) -> Result<()> {
+        if !HawkOps::SUPPORTS_ANON_STATS {
+            return Ok(());
+        }
+
         let Some(store) = &self.anon_stats_store else {
             return Ok(());
         };
@@ -2225,7 +2242,7 @@ mod tests_db {
         };
 
         // Populate the SQL store with test data.
-        let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
+        let graph_store = TestGraphPg::<Aby3Store<HawkOps>>::new().await.unwrap();
         {
             let plans_left = make_plans(StoreId::Left);
             let plans_right = make_plans(StoreId::Right);

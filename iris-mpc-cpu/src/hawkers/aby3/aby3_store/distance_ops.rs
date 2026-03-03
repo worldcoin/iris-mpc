@@ -56,6 +56,10 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
         + Send
         + Sync;
 
+    /// Whether this distance type supports anonymized statistics persistence.
+    /// Currently only FHD supports this; NHD anon stats are deferred.
+    const SUPPORTS_ANON_STATS: bool;
+
     /// Lifts u16 distance shares to Ring-typed distance shares.
     async fn lift_distances(
         session: &mut Session,
@@ -133,6 +137,7 @@ pub struct FhdOps;
 
 impl DistanceOps for FhdOps {
     type Ring = u32;
+    const SUPPORTS_ANON_STATS: bool = true;
 
     async fn lift_distances(
         session: &mut Session,
@@ -224,6 +229,7 @@ pub struct NhdOps;
 
 impl DistanceOps for NhdOps {
     type Ring = Ring48;
+    const SUPPORTS_ANON_STATS: bool = false;
 
     async fn lift_distances(
         session: &mut Session,
