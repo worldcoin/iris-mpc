@@ -16,6 +16,12 @@ pub enum ServiceClientError {
     #[error("Options error: {0}")]
     InvalidOptions(String),
 
+    #[error("Request preparation error")]
+    RequestPreparationError,
+
+    #[error("Shares upload error")]
+    SharesUploadError,
+
     #[error("Response error: {0}")]
     ResponseError(String),
 }
