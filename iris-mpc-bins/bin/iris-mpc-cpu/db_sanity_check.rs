@@ -1,9 +1,14 @@
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
+    helpers::smpc_request::{
+        REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    },
     postgres::{AccessMode, PostgresClient},
     vector_id::VectorId,
 };
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
     hawkers::aby3::aby3_store::Aby3Store,
@@ -25,6 +30,14 @@ use std::{
 const STATE_DOMAIN: &str = "genesis";
 const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
 const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
+
+/// Number of random serial IDs to sample for the cross-schema iris comparison.
+const SAMPLE_COUNT: usize = 1_000;
+/// Number of recent processed modifications whose serial IDs to include in the sample.
+const RECENT_MOD_COUNT: i64 = 100;
+/// Modification request types that update (overwrite) existing iris code data.
+const IRIS_UPDATE_TYPES: &[&str] =
+    &[RESET_UPDATE_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE];
 
 #[derive(Parser)]
 #[command(
@@ -54,6 +67,9 @@ struct Args {
     /// Directory for JSON output files
     #[arg(long, default_value = ".")]
     output_dir: PathBuf,
+    /// RNG seed for reproducible cross-schema sampling
+    #[arg(long)]
+    seed: u64,
 }
 
 #[derive(Deserialize)]
@@ -151,13 +167,16 @@ async fn main() -> Result<()> {
 
     println!("--- Check 2: Persistent state consistency ---");
     let iris_max = hnsw_store.get_max_serial_id().await?;
-    run_persistent_state_checks(&graph_pg, iris_max, &mut checks, &mut stats).await?;
+    let last_mod_id =
+        run_persistent_state_checks(&graph_pg, iris_max, &mut checks, &mut stats).await?;
 
-    println!("--- Check 3: HNSW vs GPU iris consistency (up to last_indexed_iris_id) ---");
+    println!("--- Check 3: HNSW vs GPU iris consistency (sampled, modification-aware) ---");
     run_cross_schema_checks(
         &args.hnsw_schema,
         &args.gpu_schema,
         iris_max,
+        last_mod_id,
+        args.seed,
         &hnsw_store.pool,
         &mut checks,
     )
@@ -612,7 +631,7 @@ async fn run_persistent_state_checks(
     iris_max_serial_id: usize,
     checks: &mut Vec<CheckResult>,
     stats: &mut Stats,
-) -> Result<()> {
+) -> Result<Option<i64>> {
     let last_indexed: Option<u32> = graph_pg
         .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
         .await?;
@@ -677,7 +696,7 @@ async fn run_persistent_state_checks(
         },
     );
 
-    Ok(())
+    Ok(last_mod_id)
 }
 
 async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreId) -> Result<i64> {
@@ -702,6 +721,8 @@ async fn run_cross_schema_checks(
     hnsw_schema: &str,
     gpu_schema: &str,
     last_indexed_id: usize,
+    last_indexed_mod_id: Option<i64>,
+    seed: u64,
     pool: &sqlx::PgPool,
     checks: &mut Vec<CheckResult>,
 ) -> Result<()> {
@@ -753,39 +774,119 @@ async fn run_cross_schema_checks(
         },
     ));
 
-    // 3c: Byte-identical shares (up to last_indexed_id)
-    // TODO: For large databases, consider replacing this full JOIN
-    // with random sampling to avoid scanning all BYTEA data.
-    println!("  Comparing iris shares between schemas (SQL JOIN, id <= {last_indexed_id})...");
+    // 3c: Sampled byte-identical shares, with modification-aware exclusions.
+    //
+    // Rather than scanning all BYTEA data, we:
+    //   1. Sample ~SAMPLE_COUNT random serial IDs from [1, last_indexed_id].
+    //   2. Augment with up to RECENT_MOD_COUNT serial IDs from the most-recent
+    //      processed modifications (id <= last_indexed_mod_id), so recently
+    //      modified irises are always exercised.
+    //   3. Fetch mismatches for those IDs using a targeted JOIN.
+    //   4. Load any modifications that arrived *after* last_indexed_mod_id and
+    //      that update iris code data; exclude their serial IDs from the check
+    //      because GPU may reflect the new code while HNSW still has the old one.
+    if last_indexed_id == 0 {
+        checks.push(CheckResult::new(
+            "3c",
+            "Byte-identical shares (sampled)",
+            true,
+            "No irises indexed yet, skipped",
+        ));
+        return Ok(());
+    }
+
+    // Step 1: Sample random serial IDs.
+    let mut sample_set: HashSet<i64> = {
+        let mut rng = StdRng::seed_from_u64(seed);
+        if last_indexed_id <= SAMPLE_COUNT {
+            (1..=lid).collect()
+        } else {
+            let mut ids: HashSet<i64> = HashSet::with_capacity(SAMPLE_COUNT);
+            while ids.len() < SAMPLE_COUNT {
+                ids.insert(rng.gen_range(1..=lid));
+            }
+            ids
+        }
+    };
+
+    // Step 2: Augment with serial IDs from recently processed modifications.
+    let after_mod_id = last_indexed_mod_id.unwrap_or(0);
+    if last_indexed_mod_id.is_some() {
+        let recent: Vec<(i64,)> = sqlx::query_as(
+            "SELECT serial_id FROM modifications \
+             WHERE id <= $1 AND serial_id IS NOT NULL \
+             ORDER BY id DESC LIMIT $2",
+        )
+        .bind(after_mod_id)
+        .bind(RECENT_MOD_COUNT)
+        .fetch_all(pool)
+        .await?;
+        for (sid,) in recent {
+            if (1..=lid).contains(&sid) {
+                sample_set.insert(sid);
+            }
+        }
+    }
+
+    let sample_vec: Vec<i64> = sample_set.into_iter().collect();
+    println!(
+        "  Comparing {} sampled serial IDs between schemas (seed={seed})...",
+        sample_vec.len(),
+    );
+
+    // Step 3: Find mismatches within the sample.
     let mismatch_query = format!(
         r#"SELECT h.id FROM "{}".irises h
            JOIN "{}".irises g ON h.id = g.id
-           WHERE h.id <= $1
+           WHERE h.id = ANY($1)
              AND (h.left_code != g.left_code
               OR h.left_mask != g.left_mask
               OR h.right_code != g.right_code
-              OR h.right_mask != g.right_mask)
-           LIMIT 10"#,
+              OR h.right_mask != g.right_mask)"#,
         hnsw_schema, gpu_schema
     );
-    let mismatched_ids: Vec<(i64,)> = sqlx::query_as(&mismatch_query)
-        .bind(lid)
+    let mismatched_raw: Vec<(i64,)> = sqlx::query_as(&mismatch_query)
+        .bind(&sample_vec)
         .fetch_all(pool)
         .await?;
 
-    // Informational only — mismatches are expected if modifications landed after
-    // genesis processed them.  Always passes; detail reports any divergence.
+    // Step 4: Load serial IDs of pending iris-code-updating modifications
+    // (id > last_indexed_mod_id).  These may diverge between schemas legitimately.
+    let update_types: Vec<String> = IRIS_UPDATE_TYPES.iter().map(|s| s.to_string()).collect();
+    let pending: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT serial_id FROM modifications \
+         WHERE id > $1 AND request_type = ANY($2) AND serial_id IS NOT NULL",
+    )
+    .bind(after_mod_id)
+    .bind(&update_types)
+    .fetch_all(pool)
+    .await?;
+    let pending_set: HashSet<i64> = pending.into_iter().map(|(sid,)| sid).collect();
+
+    // Step 5: Filter out legitimately-diverging IDs.
+    let mismatched_ids: Vec<i64> = mismatched_raw
+        .into_iter()
+        .map(|(id,)| id)
+        .filter(|id| !pending_set.contains(id))
+        .collect();
+
     checks.push(CheckResult::new(
         "3c",
-        "Byte-identical shares",
-        true,
+        "Byte-identical shares (sampled)",
+        mismatched_ids.is_empty(),
         if mismatched_ids.is_empty() {
-            format!("{hnsw_count} irises compared, 0 mismatches (id <= {last_indexed_id})")
-        } else {
-            let ids: Vec<i64> = mismatched_ids.into_iter().map(|(id,)| id).collect();
             format!(
-                "{hnsw_count} irises compared, mismatched IDs (first 10): {:?} (id <= {last_indexed_id})",
-                ids
+                "{} IDs sampled, {} pending-update IDs excluded, 0 mismatches",
+                sample_vec.len(),
+                pending_set.len(),
+            )
+        } else {
+            format!(
+                "{} IDs sampled, {} pending-update IDs excluded, {} mismatches (first 10): {:?}",
+                sample_vec.len(),
+                pending_set.len(),
+                mismatched_ids.len(),
+                &mismatched_ids[..mismatched_ids.len().min(10)],
             )
         },
     ));
