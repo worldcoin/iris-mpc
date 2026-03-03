@@ -272,8 +272,7 @@ impl AwsClient {
         queue_url: String,
         long_poll_secs: i32,
     ) -> std::pin::Pin<Box<dyn Stream<Item = Result<SqsMessageInfo, AwsClientError>> + Send>> {
-        // the max is 10 but since there are 3 parties, 3 divides 9 not 10
-        const MAX_SQS_BATCH: i32 = 9;
+        const MAX_SQS_BATCH: i32 = 10;
 
         Box::pin(futures::stream::unfold(
             (sqs, queue_url, long_poll_secs, Vec::new()),
@@ -303,12 +302,8 @@ impl AwsClient {
                                 .and_then(|count| count.parse::<i32>().ok())
                                 .unwrap_or(0);
 
-                            let completed = message_count / constants::N_PARTIES as i32;
-                            // poll for at least 3, not exceeding 9
-                            cmp::max(
-                                cmp::min(completed, MAX_SQS_BATCH),
-                                constants::N_PARTIES as i32,
-                            )
+                            let message_count = cmp::min(MAX_BATCH_COUNT, message_count);
+                            cmp::max(message_count, 1)
                         }
                         Err(e) => {
                             tracing::debug!(
@@ -316,7 +311,7 @@ impl AwsClient {
                                 queue_url,
                                 e
                             );
-                            constants::N_PARTIES as i32
+                            1
                         }
                     };
 
