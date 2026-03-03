@@ -200,7 +200,7 @@ impl AwsClient {
 
     /// Purges all SQS response queues.
     pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
-        tracing::debug!("AWS-SQS: purging system response queues");
+        tracing::info!("AWS-SQS: purging system response queues");
         for queue_url in self.config().sqs_response_queue_urls() {
             // Check if queue has any messages before purging
             let attributes = self
@@ -241,6 +241,7 @@ impl AwsClient {
                     AwsClientError::SqsPurgeQueueError(e.to_string())
                 })?;
         }
+        tracing::info!("AWS-SQS: purge finished");
         Ok(())
     }
 
