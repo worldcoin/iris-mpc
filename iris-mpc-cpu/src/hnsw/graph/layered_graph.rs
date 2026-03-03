@@ -485,7 +485,10 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use crate::{
-        hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        hawkers::{
+            aby3::aby3_store::FhdOps,
+            plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        },
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             SortedNeighborhood, VectorStore,
@@ -569,7 +572,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_another_naive() -> Result<()> {
-        let mut vector_store = PlaintextStore::new();
+        let mut vector_store = PlaintextStore::<FhdOps>::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
@@ -609,7 +612,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_another() -> Result<()> {
-        let mut vector_store = PlaintextStore::new();
+        let mut vector_store = PlaintextStore::<FhdOps>::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
