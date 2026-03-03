@@ -13,7 +13,7 @@ use tokio::time::{sleep, timeout, Instant};
 use uuid::Uuid;
 
 use crate::{
-    aws::types::SnsMessageInfo,
+    aws::{types::SnsMessageInfo, AwsClientError},
     client::options::{RequestBatchOptions, SharesGeneratorOptions},
     constants::N_PARTIES,
     irises::GaloisRingSharedIrisForUpload,
@@ -295,6 +295,22 @@ impl ServiceClient {
 
         match self.aws_client.sns_publish_json_batch(&messages).await {
             Ok(published_count) => {
+                for request in batch_requests.iter().take(published_count) {
+                    tracing::info!("publishing {}", request.log_tag());
+                }
+                published_count
+            }
+            Err(AwsClientError::SnsPublishBatchPartialError {
+                message,
+                published_count,
+            }) => {
+                self.state.error_bits.set_sns_publish_error();
+                tracing::error!(
+                    "batch {}: SNS batch publish partial failure: {} ({} messages published)",
+                    batch_idx,
+                    message,
+                    published_count
+                );
                 for request in batch_requests.iter().take(published_count) {
                     tracing::info!("publishing {}", request.log_tag());
                 }

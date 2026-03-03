@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashSet};
+use std::collections::{HashSet, VecDeque};
 
 use async_from::AsyncFrom;
 use aws_sdk_s3::{
@@ -196,14 +196,17 @@ impl AwsClient {
                 }
             }
 
-            // If any messages in this chunk failed, return error with context
+            // If any messages in this chunk failed, return error with published count
             if successful < chunk.len() {
-                return Err(AwsClientError::SnsPublishBatchError(format!(
-                    "Partial failure: {}/{} total messages published before failure in chunk {}",
-                    total_published,
-                    messages.len(),
-                    chunk_idx
-                )));
+                return Err(AwsClientError::SnsPublishBatchPartialError {
+                    message: format!(
+                        "Partial failure in chunk {}: {}/{} messages in chunk published",
+                        chunk_idx,
+                        successful,
+                        chunk.len()
+                    ),
+                    published_count: total_published,
+                });
             }
         }
 
@@ -273,9 +276,9 @@ impl AwsClient {
             })
     }
 
-    /// Creates a stream for a single SQS queue with dynamic batch sizing.
-    /// Checks queue depth before each receive and adjusts batch size accordingly.
+    /// Creates a stream for a single SQS queue.
     ///
+    /// Uses long polling with a fixed max batch size to efficiently receive messages.
     /// Messages are deleted from the queue immediately upon successful receipt and parsing.
     /// Only successfully deleted messages are yielded from the stream.
     fn sqs_stream(
@@ -286,50 +289,20 @@ impl AwsClient {
         const MAX_SQS_BATCH: i32 = 10;
 
         Box::pin(futures::stream::unfold(
-            (sqs, queue_url, long_poll_secs, Vec::new()),
+            (sqs, queue_url, long_poll_secs, VecDeque::new()),
             move |(sqs, queue_url, long_poll_secs, mut buffer)| async move {
                 loop {
                     // Yield buffered messages first
-                    if let Some(msg) = buffer.pop() {
+                    if let Some(msg) = buffer.pop_front() {
                         return Some((Ok(msg), (sqs, queue_url, long_poll_secs, buffer)));
                     }
 
-                    // Check queue depth to calculate optimal batch size
-                    let max_messages = match sqs
-                        .get_queue_attributes()
-                        .queue_url(&queue_url)
-                        .attribute_names(QueueAttributeName::ApproximateNumberOfMessages)
-                        .send()
-                        .await
-                    {
-                        Ok(attributes) => {
-                            let message_count = attributes
-                                .attributes()
-                                .and_then(|attrs| {
-                                    attrs.get(&QueueAttributeName::ApproximateNumberOfMessages)
-                                })
-                                .and_then(|count| count.parse::<i32>().ok())
-                                .unwrap_or(0);
-
-                            let message_count = cmp::min(MAX_SQS_BATCH, message_count);
-                            cmp::max(message_count, 1)
-                        }
-                        Err(e) => {
-                            tracing::debug!(
-                                "Failed to get queue attributes for {}: {}, using default",
-                                queue_url,
-                                e
-                            );
-                            1
-                        }
-                    };
-
-                    // Poll the queue
+                    // Poll the queue with fixed max batch size
                     let response = match sqs
                         .receive_message()
                         .queue_url(&queue_url)
                         .wait_time_seconds(long_poll_secs)
-                        .max_number_of_messages(max_messages)
+                        .max_number_of_messages(MAX_SQS_BATCH)
                         .send()
                         .await
                     {
@@ -345,14 +318,38 @@ impl AwsClient {
 
                     let messages = response.messages.unwrap_or_default();
 
-                    // Parse all messages first
+                    if messages.is_empty() {
+                        continue;
+                    }
+
+                    // Parse all messages and collect receipt handles for deletion
+                    // ALL messages must be deleted to prevent poison message redelivery
+                    let mut all_receipt_handles = Vec::new();
                     let mut parsed_messages = Vec::new();
+
                     for (idx, msg) in messages.iter().enumerate() {
-                        // Parse message
+                        let receipt_handle = match msg.receipt_handle() {
+                            Some(h) => h.to_string(),
+                            None => {
+                                tracing::warn!(
+                                    "SQS message {} missing receipt_handle, cannot delete",
+                                    idx
+                                );
+                                continue;
+                            }
+                        };
+
+                        // Always collect receipt handle for deletion
+                        all_receipt_handles.push((idx, receipt_handle.clone()));
+
+                        // Try to parse message
                         let body_str = match msg.body() {
                             Some(b) => b,
                             None => {
-                                tracing::warn!("SQS message has no body, skipping");
+                                tracing::warn!(
+                                    "SQS message {} has no body, will delete without processing",
+                                    idx
+                                );
                                 continue;
                             }
                         };
@@ -360,7 +357,7 @@ impl AwsClient {
                         let decoded: serde_json::Value = match serde_json::from_str(body_str) {
                             Ok(v) => v,
                             Err(e) => {
-                                tracing::warn!("SQS message has invalid JSON body: {}", e);
+                                tracing::warn!("SQS message {} has invalid JSON body: {}, will delete without processing", idx, e);
                                 continue;
                             }
                         };
@@ -373,7 +370,7 @@ impl AwsClient {
                         {
                             Some(k) => k.to_string(),
                             None => {
-                                tracing::warn!("SQS message missing message_type attribute");
+                                tracing::warn!("SQS message {} missing message_type attribute, will delete without processing", idx);
                                 continue;
                             }
                         };
@@ -381,30 +378,23 @@ impl AwsClient {
                         let msg_body = match decoded.get("Message").and_then(|v| v.as_str()) {
                             Some(b) => b.to_string(),
                             None => {
-                                tracing::warn!("SQS message missing Message field");
+                                tracing::warn!("SQS message {} missing Message field, will delete without processing", idx);
                                 continue;
                             }
                         };
 
-                        let msg_receipt_handle = match msg.receipt_handle() {
-                            Some(h) => h.to_string(),
-                            None => {
-                                tracing::warn!("SQS message missing receipt_handle");
-                                continue;
-                            }
-                        };
-
-                        parsed_messages.push((idx, msg_kind, msg_body, msg_receipt_handle));
+                        // Successfully parsed - add to parsed messages
+                        parsed_messages.push((idx, msg_kind, msg_body, receipt_handle));
                     }
 
-                    // Batch delete all messages
-                    if !parsed_messages.is_empty() {
+                    // Batch delete ALL messages (including unparseable ones)
+                    if !all_receipt_handles.is_empty() {
                         use aws_sdk_sqs::types::DeleteMessageBatchRequestEntry;
 
                         let to_delete: Result<Vec<DeleteMessageBatchRequestEntry>, AwsClientError> =
-                            parsed_messages
+                            all_receipt_handles
                                 .iter()
-                                .map(|(idx, _, _, receipt_handle)| {
+                                .map(|(idx, receipt_handle)| {
                                     DeleteMessageBatchRequestEntry::builder()
                                         .id(format!("msg-{}", idx))
                                         .receipt_handle(receipt_handle)
@@ -450,7 +440,7 @@ impl AwsClient {
                                     })
                                     .collect();
 
-                                // Only add successfully deleted messages to buffer (exclude failures)
+                                // Only yield successfully parsed AND successfully deleted messages
                                 for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages
                                 {
                                     let msg_id = format!("msg-{}", idx);
@@ -461,7 +451,7 @@ impl AwsClient {
                                             queue_url.clone(),
                                             msg_receipt_handle,
                                         );
-                                        buffer.push(msg_info);
+                                        buffer.push_back(msg_info);
                                     }
                                 }
                             }
@@ -492,7 +482,7 @@ impl AwsClient {
     ///
     /// Creates an independent stream for each queue that continuously polls, purges,
     /// and yields messages. All queue streams are merged into a single output stream.
-    /// The batch size is dynamically calculated based on available messages.
+    /// Uses long polling with a fixed max batch size for efficient message retrieval.
     pub fn sqs_response_stream(
         &self,
         long_poll_secs: i32,
@@ -500,7 +490,7 @@ impl AwsClient {
         let queue_urls = self.config().sqs_response_queue_urls().to_vec();
         let sqs = self.sqs.clone();
 
-        // Create a stream for each queue with dynamic batch sizing
+        // Create a stream for each queue
         let queue_streams: Vec<_> = queue_urls
             .into_iter()
             .map(|queue_url| Self::sqs_stream(sqs.clone(), queue_url, long_poll_secs))

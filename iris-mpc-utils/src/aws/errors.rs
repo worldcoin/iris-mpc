@@ -21,6 +21,14 @@ pub enum AwsClientError {
     #[error("AWS SNS publish batch error: {0}")]
     SnsPublishBatchError(String),
 
+    #[error(
+        "AWS SNS publish batch partial error: {message} ({published_count} messages published)"
+    )]
+    SnsPublishBatchPartialError {
+        message: String,
+        published_count: usize,
+    },
+
     #[error("AWS SQS delete message from queue error: {0}")]
     SqsDeleteMessageError(String),
 
