@@ -5,11 +5,11 @@ use rand::{CryptoRng, Rng, SeedableRng};
 
 use super::super::typeset::{IrisDescriptor, IrisPairDescriptor};
 use crate::{
-    client::options::{ServiceClientOptions, SharesGeneratorOptions},
+    client::options::SharesGeneratorOptions,
     constants::N_PARTIES,
     irises::{
-        generate_iris_shares_for_upload, reader::read_iris_shares_for_upload,
-        GaloisRingSharedIrisForUpload,
+        generate_iris_shares_for_upload, generate_iris_shares_mirrored_for_upload,
+        reader::read_iris_shares_for_upload, GaloisRingSharedIrisForUpload,
     },
 };
 
@@ -36,11 +36,11 @@ impl<R> SharesGenerator<R>
 where
     R: Rng + CryptoRng + SeedableRng + Send,
 {
-    pub(crate) fn from_options(opts: &ServiceClientOptions) -> Self {
-        match opts.shares_generator() {
+    pub fn from_options(opts: SharesGeneratorOptions) -> Self {
+        match opts {
             SharesGeneratorOptions::FromCompute { rng_seed } => {
                 tracing::info!("Parsing SharesGeneratorOptions::FromCompute");
-                SharesGenerator::<R>::new_compute(*rng_seed)
+                SharesGenerator::<R>::new_compute(rng_seed)
             }
             SharesGeneratorOptions::FromFile {
                 path_to_ndjson_file,
@@ -51,7 +51,7 @@ where
                 let path = path_to_ndjson_file.as_deref().expect(
                     "FromFile requires path_to_ndjson_file (set via CLI --path-to-iris-shares)",
                 );
-                SharesGenerator::new_file(PathBuf::from(path), *rng_seed, *selection_strategy)
+                SharesGenerator::new_file(PathBuf::from(path), rng_seed, selection_strategy)
             }
         }
     }
@@ -114,6 +114,43 @@ where
             },
         }
     }
+
+    /// Generates pairs of mirrored Iris shares for upstream processing.
+    /// this function swaps the irises too, so that the user doesn't have to.
+    pub(crate) fn generate_mirrored(
+        &mut self,
+        iris_pair: Option<&IrisPairDescriptor>,
+    ) -> BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]> {
+        let (maybe_left_desc, maybe_right_desc) = match iris_pair {
+            Some(descriptor) => (Some(descriptor.right()), Some(descriptor.left())),
+            None => (None, None),
+        };
+
+        [
+            self.generate_single_mirrored(maybe_left_desc),
+            self.generate_single_mirrored(maybe_right_desc),
+        ]
+    }
+
+    /// Generates a single set of mirrored Iris shares for upstream processing.
+    fn generate_single_mirrored(
+        &mut self,
+        maybe_iris_descriptor: Option<&IrisDescriptor>,
+    ) -> [GaloisRingSharedIrisForUpload; N_PARTIES] {
+        match self {
+            Self::FromCompute { rng } => generate_iris_shares_mirrored_for_upload(rng, None),
+            Self::FromFile { iris_shares } => {
+                let base = match maybe_iris_descriptor {
+                    Some(iris_descriptor) => iris_shares[iris_descriptor.index()].clone(),
+                    None => iris_shares.pop().expect("Shares generator is exhausted"),
+                };
+                base.map(|share| GaloisRingSharedIrisForUpload {
+                    code: share.code.mirrored_code(),
+                    mask: share.mask.mirrored_mask(),
+                })
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -121,15 +158,10 @@ mod tests {
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
     use super::SharesGenerator;
-    use crate::fsys::local::get_path_to_ndjson;
 
     impl<R: Rng + CryptoRng + SeedableRng + Send> SharesGenerator<R> {
         pub(crate) fn new_compute_1() -> Self {
             Self::new_compute(Some(42))
-        }
-
-        pub(crate) fn new_file_1() -> Self {
-            Self::new_file(get_path_to_ndjson(), Some(42), None)
         }
     }
 
