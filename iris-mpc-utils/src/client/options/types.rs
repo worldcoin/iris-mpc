@@ -1,9 +1,16 @@
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::{
+    de::{self, Deserializer, Visitor},
+    ser::Serializer,
+    Deserialize, Serialize,
+};
 
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
+use uuid::Uuid;
 
-use crate::client::typeset::IrisPairDescriptor;
+use crate::client::{typeset::IrisPairDescriptor, Request, RequestInfo};
 
 /// AWS specific configuration settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,40 +30,102 @@ pub struct AwsOptions {
     /// SQS: long polling interval (seconds).
     sqs_long_poll_wait_time: usize,
 
-    /// SQS: system response eqgress queue URL.
-    sqs_response_queue_url: String,
+    /// SQS: system response egress queue URLs.
+    sqs_response_queue_urls: Vec<String>,
 
     /// SQS: wait time (seconds) between receive message polling.
     sqs_wait_time_seconds: usize,
 }
 
 impl AwsOptions {
-    pub fn environment(&self) -> &String {
+    pub fn environment(&self) -> &str {
         &self.environment
     }
 
-    pub fn public_key_base_url(&self) -> &String {
+    pub fn public_key_base_url(&self) -> &str {
         &self.public_key_base_url
     }
 
-    pub fn s3_request_bucket_name(&self) -> &String {
+    pub fn s3_request_bucket_name(&self) -> &str {
         &self.s3_request_bucket_name
     }
 
-    pub fn sns_request_topic_arn(&self) -> &String {
+    pub fn sns_request_topic_arn(&self) -> &str {
         &self.sns_request_topic_arn
     }
 
-    pub fn sqs_long_poll_wait_time(&self) -> &usize {
-        &self.sqs_long_poll_wait_time
+    pub fn sqs_long_poll_wait_time(&self) -> usize {
+        self.sqs_long_poll_wait_time
     }
 
-    pub fn sqs_response_queue_url(&self) -> &String {
-        &self.sqs_response_queue_url
+    pub fn sqs_response_queue_urls(&self) -> &[String] {
+        &self.sqs_response_queue_urls
     }
 
-    pub fn sqs_wait_time_seconds(&self) -> &usize {
-        &self.sqs_wait_time_seconds
+    pub fn sqs_wait_time_seconds(&self) -> usize {
+        self.sqs_wait_time_seconds
+    }
+}
+
+/// A parent reference: either a label (resolved later) or a known serial ID.
+///
+/// In TOML:
+///   `parent = "some-label"` → `Parent::Label` (child waits for parent)
+///   `parent = 42`           → `Parent::Id`    (serial_id already known)
+#[derive(Debug, Clone)]
+pub enum Parent {
+    /// A label referring to a Uniqueness request whose serial ID is not yet known.
+    Label(String),
+    /// A known Iris serial ID; no dependency resolution needed.
+    Id(IrisSerialId),
+}
+
+impl Serialize for Parent {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Parent::Label(s) => serializer.serialize_str(s),
+            Parent::Id(id) => serializer.serialize_u32(*id),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Parent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ParentVisitor;
+
+        impl<'de> Visitor<'de> for ParentVisitor {
+            type Value = Parent;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "a string label or an integer serial ID")
+            }
+
+            fn visit_u32<E: de::Error>(self, v: u32) -> Result<Self::Value, E> {
+                Ok(Parent::Id(v))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                u32::try_from(v)
+                    .map(Parent::Id)
+                    .map_err(|_| E::custom("serial ID out of range for u32"))
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                u32::try_from(v)
+                    .map(Parent::Id)
+                    .map_err(|_| E::custom("serial ID must be non-negative"))
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(Parent::Label(v.to_string()))
+            }
+
+            fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+                Ok(Parent::Label(v))
+            }
+        }
+
+        deserializer.deserialize_any(ParentVisitor)
     }
 }
 
@@ -68,7 +137,7 @@ pub enum RequestBatchOptions {
         // Batches of batches of request options.
         batches: Vec<Vec<RequestOptions>>,
     },
-    // Options for generating a set of simple request batches.
+    // Options for generating a set of homogeneous request batches.
     Simple {
         /// Number of request batches to generate.
         batch_count: usize,
@@ -81,6 +150,19 @@ pub enum RequestBatchOptions {
 
         // A known serial identifier that allows response correlation to be bypassed.
         known_iris_serial_id: Option<IrisSerialId>,
+    },
+    /// Used to make large heterogenerous batches with minimal configuration
+    Random {
+        batch_count: usize,
+
+        batch_size: usize,
+
+        // these percentages must sum to <= 100.
+        // if percent_uniqueness + percent_reauth < 100 then
+        // the  remaining percentage will be the other request types
+        percent_uniqueness: usize,
+
+        percent_reauth: usize,
     },
 }
 
@@ -126,7 +208,7 @@ impl RequestBatchOptions {
         labels.into_iter().find(|l| !seen.insert(l.clone()))
     }
 
-    /// Validates that every parent label references a declared Uniqueness request.
+    /// Validates that every `Parent::Label` references a declared Uniqueness request.
     /// Returns `Ok(())` if valid, or `Err(message)` describing the first violation.
     pub(crate) fn validate_parents(&self) -> Result<(), String> {
         match self {
@@ -137,7 +219,11 @@ impl RequestBatchOptions {
                 let uniqueness_labels: std::collections::HashSet<_> = all_items
                     .iter()
                     .filter(|item| {
-                        matches!(item.payload(), RequestPayloadOptions::Uniqueness { .. })
+                        matches!(
+                            item.payload(),
+                            RequestPayloadOptions::Uniqueness { .. }
+                                | RequestPayloadOptions::Mirrored { .. }
+                        )
                     })
                     .filter_map(|item| item.label())
                     .collect();
@@ -151,7 +237,7 @@ impl RequestBatchOptions {
                         }
                         if !uniqueness_labels.contains(&parent_label) {
                             return Err(format!(
-                                "parent '{}' must be a Uniqueness request",
+                                "parent '{}' must be a Uniqueness or Mirrored request",
                                 parent_label
                             ));
                         }
@@ -164,36 +250,32 @@ impl RequestBatchOptions {
     }
 
     /// Returns an error if any iris index appears in multiple different pairs.
-    /// Duplicate pairs (same or swapped eyes) are allowed.
+    /// Exact duplicate pairs are allowed, but swapped pairs are not.
     ///
     /// # Panics
     /// Panics if called on `RequestBatchOptions::Simple`.
     pub(crate) fn validate_iris_pairs(&self) -> Result<(), String> {
         let mut index_to_pair: std::collections::HashMap<usize, (usize, usize)> =
             std::collections::HashMap::new();
+        // each pair is a pair of indices into the input file (ndjson format)
         for pair in self.iris_code_pairs() {
-            let normalized = if pair.0 <= pair.1 {
-                pair
-            } else {
-                (pair.1, pair.0)
-            };
-            for idx in [normalized.0, normalized.1] {
+            for idx in [pair.0, pair.1] {
                 if let Some(existing) = index_to_pair.get(&idx) {
-                    if *existing != normalized {
+                    if *existing != pair {
                         return Err(format!(
-                            "iris index {} appears in multiple different pairs",
-                            idx
+                            "iris index {} appears in multiple different pairs: {:?} and {:?}",
+                            idx, existing, pair
                         ));
                     }
                 } else {
-                    index_to_pair.insert(idx, normalized);
+                    index_to_pair.insert(idx, pair);
                 }
             }
         }
         Ok(())
     }
 
-    /// Returns an error if a child references a parent in the same or later batch.
+    /// Returns an error if a `Parent::Label` child references a parent in the same or later batch.
     pub(crate) fn validate_batch_ordering(&self) -> Result<(), String> {
         match self {
             Self::Complex { batches } => {
@@ -240,14 +322,28 @@ pub struct RequestOptions {
 
     // Inner request payload options.
     payload: RequestPayloadOptions,
+
+    // Optional expected response fields for validation.
+    #[serde(default)]
+    expected: Option<serde_json::Value>,
 }
 
 impl RequestOptions {
     pub fn new(label: Option<&str>, payload: RequestPayloadOptions) -> Self {
         Self {
             label: label.map(|s| s.to_string()),
+            expected: None,
             payload,
         }
+    }
+
+    pub fn with_expected(mut self, expected: serde_json::Value) -> Self {
+        self.expected = Some(expected);
+        self
+    }
+
+    pub fn expected(&self) -> Option<&serde_json::Value> {
+        self.expected.as_ref()
     }
 
     pub fn label(&self) -> Option<String> {
@@ -262,8 +358,75 @@ impl RequestOptions {
         self.payload().iris_pair()
     }
 
+    /// Returns the parent label if this request has a `Parent::Label` parent.
     pub fn label_of_parent(&self) -> Option<String> {
         self.payload().label_of_parent()
+    }
+
+    pub fn make_request(
+        &self,
+        info: RequestInfo,
+        parent_serial_id: Option<IrisSerialId>,
+    ) -> Result<Request, String> {
+        let corr_uuid = Uuid::new_v4();
+
+        let request = match self.payload() {
+            RequestPayloadOptions::Uniqueness { iris_pair, .. }
+            | RequestPayloadOptions::Mirrored { iris_pair, .. } => Request::Uniqueness {
+                info,
+                iris_pair: *iris_pair,
+                signup_id: corr_uuid,
+            },
+            RequestPayloadOptions::Reauthorisation { iris_pair, .. } => {
+                let parent =
+                    parent_serial_id.ok_or("Reauthorisation requires a parent serial ID")?;
+                Request::Reauthorization {
+                    info,
+                    iris_pair: *iris_pair,
+                    parent,
+                    reauth_id: corr_uuid,
+                }
+            }
+            RequestPayloadOptions::RecoveryCheck { iris_pair } => Request::RecoveryCheck {
+                info,
+                iris_pair: *iris_pair,
+                request_id: corr_uuid,
+            },
+            RequestPayloadOptions::ResetCheck { iris_pair } => Request::ResetCheck {
+                info,
+                iris_pair: *iris_pair,
+                reset_id: corr_uuid,
+            },
+            RequestPayloadOptions::ResetUpdate { iris_pair, .. } => {
+                let parent = parent_serial_id.ok_or("ResetUpdate requires a parent serial ID")?;
+                Request::ResetUpdate {
+                    info,
+                    iris_pair: *iris_pair,
+                    parent,
+                    reset_id: corr_uuid,
+                }
+            }
+            RequestPayloadOptions::IdentityDeletion { .. } => {
+                let parent =
+                    parent_serial_id.ok_or("IdentityDeletion requires a parent serial ID")?;
+                Request::IdentityDeletion { info, parent }
+            }
+        };
+
+        Ok(request)
+    }
+
+    pub fn is_mirrored(&self) -> bool {
+        matches!(self.payload(), RequestPayloadOptions::Mirrored { .. })
+    }
+
+    pub fn get_parent(&self) -> Option<Parent> {
+        match self.payload() {
+            RequestPayloadOptions::IdentityDeletion { parent }
+            | RequestPayloadOptions::Reauthorisation { parent, .. }
+            | RequestPayloadOptions::ResetUpdate { parent, .. } => Some(parent.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -272,28 +435,41 @@ impl RequestOptions {
 pub enum RequestPayloadOptions {
     // Options over a deletion request payload.
     IdentityDeletion {
-        parent: String,
+        parent: Parent,
     },
     // Options over a reauthorisation request payload.
     Reauthorisation {
-        iris_pair: IrisPairDescriptor,
-        parent: String,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
+        parent: Parent,
+    },
+    // Options over a recovery check request payload.
+    RecoveryCheck {
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
     },
     // Options over a reset check request payload.
     ResetCheck {
-        iris_pair: IrisPairDescriptor,
-    },
-    RecoveryCheck {
-        iris_pair: IrisPairDescriptor,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
     },
     // Options over a reset update request payload.
     ResetUpdate {
-        iris_pair: IrisPairDescriptor,
-        parent: String,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
+        parent: Parent,
     },
     // Options over a uniqueness request payload.
     Uniqueness {
-        iris_pair: IrisPairDescriptor,
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
+        insertion_layers: Option<(usize, usize)>,
+    },
+    // Options over a mirrored uniqueness request payload.
+    // Generates a Uniqueness request whose iris shares are mirror-transformed.
+    Mirrored {
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
         insertion_layers: Option<(usize, usize)>,
     },
 }
@@ -301,20 +477,30 @@ pub enum RequestPayloadOptions {
 impl RequestPayloadOptions {
     pub fn iris_pair(&self) -> Option<&IrisPairDescriptor> {
         match &self {
-            Self::IdentityDeletion { .. }
-            | Self::ResetCheck { .. }
-            | Self::RecoveryCheck { .. } => None,
+            Self::IdentityDeletion { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
+            | Self::RecoveryCheck { iris_pair, .. }
+            | Self::ResetCheck { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
-            | Self::Uniqueness { iris_pair, .. } => Some(iris_pair),
+            | Self::Uniqueness { iris_pair, .. }
+            | Self::Mirrored { iris_pair, .. } => iris_pair.as_ref(),
         }
     }
 
+    /// Returns the parent label only for `Parent::Label` variants.
     pub fn label_of_parent(&self) -> Option<String> {
         match &self {
-            Self::IdentityDeletion { parent }
-            | Self::Reauthorisation { parent, .. }
-            | Self::ResetUpdate { parent, .. } => Some(parent.clone()),
+            Self::IdentityDeletion {
+                parent: Parent::Label(l),
+            }
+            | Self::Reauthorisation {
+                parent: Parent::Label(l),
+                ..
+            }
+            | Self::ResetUpdate {
+                parent: Parent::Label(l),
+                ..
+            } => Some(l.clone()),
             _ => None,
         }
     }
@@ -340,6 +526,229 @@ pub enum SharesGeneratorOptions {
         // Instruction in respect of Iris code selection.
         selection_strategy: Option<IrisSelection>,
     },
+}
+
+impl IntoIterator for RequestBatchOptions {
+    type Item = Vec<RequestOptions>;
+    type IntoIter = std::vec::IntoIter<Vec<RequestOptions>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            RequestBatchOptions::Complex { batches } => batches.into_iter(),
+            RequestBatchOptions::Random {
+                batch_count,
+                batch_size,
+                percent_uniqueness,
+                percent_reauth,
+            } => random_into_iter(batch_count, batch_size, percent_uniqueness, percent_reauth),
+            RequestBatchOptions::Simple {
+                batch_count,
+                batch_kind,
+                batch_size,
+                ..
+            } => simple_into_iter(batch_count, batch_kind, batch_size),
+        }
+    }
+}
+
+fn random_into_iter(
+    batch_count: usize,
+    batch_size: usize,
+    percent_uniqueness: usize,
+    percent_reauth: usize,
+) -> std::vec::IntoIter<Vec<RequestOptions>> {
+    use rand::seq::SliceRandom;
+    use rand::Rng;
+
+    const INITIAL_SEED_BATCH_SIZE: usize = 50;
+
+    let mut batches: Vec<Vec<RequestOptions>> = Vec::new();
+    let mut prev_labels: Vec<String> = Vec::new();
+    let mut uniqueness_counter = 0;
+    let mut rng = rand::thread_rng();
+
+    // Calculate number of each type of request in this batch
+    let num_uniqueness = (batch_size * percent_uniqueness) / 100;
+    let num_reauth = (batch_size * percent_reauth) / 100;
+    let num_other = batch_size.saturating_sub(num_uniqueness + num_reauth);
+
+    // Start with an initial batch of uniqueness requests to seed the label pool.
+    let mut initial_batch = Vec::new();
+    for _ in 0..INITIAL_SEED_BATCH_SIZE {
+        let label = format!("uniqueness-{}", uniqueness_counter);
+        uniqueness_counter += 1;
+
+        initial_batch.push(RequestOptions::new(
+            Some(&label),
+            RequestPayloadOptions::Uniqueness {
+                iris_pair: None,
+                insertion_layers: None,
+            },
+        ));
+
+        prev_labels.push(label);
+    }
+    batches.push(initial_batch);
+
+    // Generate the remaining batches
+    for _batch_idx in 0..batch_count {
+        let mut batch = Vec::new();
+
+        let mut new_labels: Vec<String> = Vec::new();
+
+        // Generate uniqueness requests for this batch
+        for _ in 0..num_uniqueness {
+            let label = format!("uniqueness-{}", uniqueness_counter);
+            uniqueness_counter += 1;
+
+            batch.push(RequestOptions::new(
+                Some(&label),
+                RequestPayloadOptions::Uniqueness {
+                    iris_pair: None,
+                    insertion_layers: None,
+                },
+            ));
+
+            new_labels.push(label);
+        }
+
+        // Generate reauth requests - only reference labels from previous batches
+        for _ in 0..num_reauth {
+            let payload = if !prev_labels.is_empty() {
+                let random_index = rng.gen_range(0..prev_labels.len());
+                let parent_label = prev_labels[random_index].clone();
+                RequestPayloadOptions::Reauthorisation {
+                    iris_pair: None,
+                    parent: Parent::Label(parent_label),
+                }
+            } else {
+                // No labels available yet, use ResetCheck as fallback
+                RequestPayloadOptions::ResetCheck { iris_pair: None }
+            };
+
+            batch.push(RequestOptions::new(None, payload));
+        }
+
+        // Generate other requests — only reference labels from previous batches.
+        // The i % 3 dispatch distributes types in a fixed 1:1:1 ratio:
+        //   0 → IdentityDeletion, 1 → ResetCheck, 2 → ResetUpdate
+        for i in 0..num_other {
+            let payload = if !prev_labels.is_empty() {
+                match i % 3 {
+                    0 => {
+                        // IdentityDeletion — remove the label after using it
+                        let random_index = rng.gen_range(0..prev_labels.len());
+                        let parent_label = prev_labels.swap_remove(random_index);
+                        RequestPayloadOptions::IdentityDeletion {
+                            parent: Parent::Label(parent_label),
+                        }
+                    }
+                    1 => RequestPayloadOptions::ResetCheck { iris_pair: None },
+                    2 => {
+                        // Guard: prev_labels may have been emptied by earlier deletions
+                        if prev_labels.is_empty() {
+                            RequestPayloadOptions::ResetCheck { iris_pair: None }
+                        } else {
+                            let random_index = rng.gen_range(0..prev_labels.len());
+                            let parent_label = prev_labels[random_index].clone();
+                            RequestPayloadOptions::ResetUpdate {
+                                iris_pair: None,
+                                parent: Parent::Label(parent_label),
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                // No labels available, use ResetCheck as fallback
+                RequestPayloadOptions::ResetCheck { iris_pair: None }
+            };
+
+            batch.push(RequestOptions::new(None, payload));
+        }
+
+        prev_labels.extend(new_labels);
+
+        batch.shuffle(&mut rng);
+        batches.push(batch);
+    }
+
+    batches.into_iter()
+}
+
+fn simple_into_iter(
+    batch_count: usize,
+    batch_kind: String,
+    batch_size: usize,
+) -> std::vec::IntoIter<Vec<RequestOptions>> {
+    use iris_mpc_common::helpers::smpc_request::{
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    };
+
+    let requires_parent = matches!(
+        batch_kind.as_str(),
+        IDENTITY_DELETION_MESSAGE_TYPE | REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE
+    );
+
+    let mut v: Vec<Vec<RequestOptions>> = vec![];
+    for _ in 0..batch_count {
+        if !requires_parent {
+            let batch = (0..batch_size)
+                .map(|_| match batch_kind.as_str() {
+                    UNIQUENESS_MESSAGE_TYPE => RequestOptions::new(
+                        None,
+                        RequestPayloadOptions::Uniqueness {
+                            iris_pair: None,
+                            insertion_layers: None,
+                        },
+                    ),
+                    RESET_CHECK_MESSAGE_TYPE => RequestOptions::new(
+                        None,
+                        RequestPayloadOptions::ResetCheck { iris_pair: None },
+                    ),
+                    _ => unreachable!(
+                        "Simple batch_kind '{}' should have been rejected by validation",
+                        batch_kind
+                    ),
+                })
+                .collect();
+            v.push(batch);
+        } else {
+            // Two batches: uniqueness preamble (with UUID labels) + desired type
+            // (referencing those labels via Parent::Label).
+            let mut uniqueness_batch = vec![];
+            let mut child_batch = vec![];
+            for _ in 0..batch_size {
+                let label = uuid::Uuid::new_v4().to_string();
+                uniqueness_batch.push(RequestOptions::new(
+                    Some(label.as_str()),
+                    RequestPayloadOptions::Uniqueness {
+                        iris_pair: None,
+                        insertion_layers: None,
+                    },
+                ));
+                let payload = match batch_kind.as_str() {
+                    IDENTITY_DELETION_MESSAGE_TYPE => RequestPayloadOptions::IdentityDeletion {
+                        parent: Parent::Label(label),
+                    },
+                    REAUTH_MESSAGE_TYPE => RequestPayloadOptions::Reauthorisation {
+                        iris_pair: None,
+                        parent: Parent::Label(label),
+                    },
+                    RESET_UPDATE_MESSAGE_TYPE => RequestPayloadOptions::ResetUpdate {
+                        iris_pair: None,
+                        parent: Parent::Label(label),
+                    },
+                    _ => unreachable!("already checked requires_parent"),
+                };
+                child_batch.push(RequestOptions::new(None, payload));
+            }
+            v.push(uniqueness_batch);
+            v.push(child_batch);
+        }
+    }
+    v.into_iter()
 }
 
 #[cfg(test)]
@@ -390,6 +799,45 @@ mod tests {
         "#;
         let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
         let _ = toml::to_string(&opts).unwrap();
+    }
+
+    #[test]
+    fn test_parent_label_deserialization() {
+        let toml_str = r#"
+            [Complex]
+            batches = [[
+                { label = "U-0", payload = { Uniqueness = { iris_pair = [{ index = 1 }, { index = 2 }] } } },
+                { label = "D-0", payload = { IdentityDeletion = { parent = "U-0" } } },
+            ]]
+        "#;
+        let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
+        if let RequestBatchOptions::Complex { batches } = &opts {
+            let deletion = &batches[0][1];
+            if let RequestPayloadOptions::IdentityDeletion { parent } = deletion.payload() {
+                assert!(matches!(parent, Parent::Label(l) if l == "U-0"));
+            } else {
+                panic!("Expected IdentityDeletion");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parent_id_deserialization() {
+        let toml_str = r#"
+            [Complex]
+            batches = [[
+                { label = "D-0", payload = { IdentityDeletion = { parent = 42 } } },
+            ]]
+        "#;
+        let opts: RequestBatchOptions = toml::from_str(toml_str).unwrap();
+        if let RequestBatchOptions::Complex { batches } = &opts {
+            let deletion = &batches[0][0];
+            if let RequestPayloadOptions::IdentityDeletion { parent } = deletion.payload() {
+                assert!(matches!(parent, Parent::Id(42)));
+            } else {
+                panic!("Expected IdentityDeletion");
+            }
+        }
     }
 
     #[test]
