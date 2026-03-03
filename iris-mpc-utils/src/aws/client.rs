@@ -19,7 +19,7 @@ use super::{
     keys::download_public_keyset,
     types::{S3ObjectInfo, SnsMessageInfo, SqsMessageInfo},
 };
-use crate::{client::AwsOptions, constants, types::PublicKeyset};
+use crate::{client::AwsOptions, types::PublicKeyset};
 
 /// Encapsulates access to a node's set of AWS service clients.
 #[derive(Clone, Debug)]
@@ -302,7 +302,7 @@ impl AwsClient {
                                 .and_then(|count| count.parse::<i32>().ok())
                                 .unwrap_or(0);
 
-                            let message_count = cmp::min(MAX_BATCH_COUNT, message_count);
+                            let message_count = cmp::min(MAX_SQS_BATCH, message_count);
                             cmp::max(message_count, 1)
                         }
                         Err(e) => {
