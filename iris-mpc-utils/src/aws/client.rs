@@ -7,7 +7,7 @@ use aws_sdk_s3::{
 };
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::{types::QueueAttributeName, Client as SQSClient};
+use aws_sdk_sqs::Client as SQSClient;
 use futures::stream::Stream;
 use serde_json;
 
@@ -215,7 +215,6 @@ impl AwsClient {
 
     /// Purges all SQS response queues.
     pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
-        use futures::stream::futures_unordered;
         tracing::info!("AWS-SQS: purging system response queues");
 
         let purge_futures: Vec<_> = self
@@ -244,7 +243,7 @@ impl AwsClient {
             .collect();
 
         // Return first error if any, otherwise Ok
-        for result in futures_unordered::join_all(purge_futures).await {
+        for result in futures::future::join_all(purge_futures).await {
             result?;
         }
 
