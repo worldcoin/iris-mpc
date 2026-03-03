@@ -4,11 +4,12 @@ use std::{
 };
 
 use async_from::{self, AsyncFrom};
+use futures::StreamExt;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 use rand::rngs::StdRng;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
-use tokio::time::{sleep, Instant};
+use tokio::time::{sleep, timeout, Instant};
 use uuid::Uuid;
 
 use crate::{
@@ -517,18 +518,25 @@ impl ExecState {
         }
     }
 
-    // Drains outstanding_requests and outstanding_deletions by polling SQS until both are empty.
+    // Drains outstanding_requests and outstanding_deletions by consuming from the SQS response stream.
     // Times out if no response is received within RESPONSE_TIMEOUT_SECS.
     async fn process_responses(&mut self, aws_client: &AwsClient) {
         use crate::constants::N_PARTIES;
-        let mut last_response_time = Instant::now();
 
-        'OUTER: while !self.outstanding_requests.is_empty()
-            || !self.outstanding_deletions.is_empty()
-        {
-            let deadline =
-                RESPONSE_TIMEOUT_SECS.saturating_sub(last_response_time.elapsed().as_secs());
-            if deadline == 0 {
+        let configured_max = aws_client.config().sqs_long_poll_wait_time() as i32;
+        let mut response_stream = aws_client
+            .sqs_response_stream(N_PARTIES, configured_max)
+            .fuse();
+
+        let mut last_response_time = Instant::now();
+        let timeout_duration = Duration::from_secs(RESPONSE_TIMEOUT_SECS);
+
+        while !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
+            let remaining_time = timeout_duration
+                .checked_sub(last_response_time.elapsed())
+                .unwrap_or(Duration::ZERO);
+
+            if remaining_time.is_zero() {
                 self.error_bits.set_response_timeout_error();
                 tracing::error!(
                     "Response timeout: no response received for {} seconds",
@@ -537,44 +545,45 @@ impl ExecState {
                 break;
             }
 
-            let configured_max = aws_client.config().sqs_long_poll_wait_time();
-            let long_poll_time = std::cmp::min(deadline, configured_max as u64) as i32;
-            let messages = match aws_client
-                .sqs_receive_messages(Some(N_PARTIES), Some(long_poll_time))
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    self.error_bits.set_sqs_receive_error();
-                    tracing::error!("SQS receive failed: {:?}", e);
-                    break 'OUTER;
+            // Wait for next message with timeout
+            match timeout(remaining_time, response_stream.next()).await {
+                Ok(Some(Ok(sqs_msg))) => {
+                    last_response_time = Instant::now();
+
+                    let response = match typeset::ResponsePayload::try_from(&sqs_msg) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!(
+                                "failed to parse response payload for sqs msg {}: {}",
+                                sqs_msg.kind(),
+                                e
+                            );
+                            continue;
+                        }
+                    };
+                    tracing::info!("received {}", response.log_tag());
+                    self.correlate_response(&response);
                 }
-            };
-
-            if !messages.is_empty() {
-                last_response_time = Instant::now();
-            }
-
-            for sqs_msg in messages {
-                if let Err(e) = aws_client.sqs_purge_response_queue_message(&sqs_msg).await {
+                Ok(Some(Err(e))) => {
                     self.error_bits.set_sqs_receive_error();
-                    tracing::error!("SQS message purge failed: {:?}", e);
-                    break 'OUTER;
+                    tracing::error!("SQS stream error: {:?}", e);
+                    break;
                 }
-
-                let response = match typeset::ResponsePayload::try_from(&sqs_msg) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!(
-                            "failed to parse response payload for sqs msg {}: {}",
-                            sqs_msg.kind(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-                tracing::info!("received {}", response.log_tag());
-                self.correlate_response(&response);
+                Ok(None) => {
+                    // Stream ended unexpectedly
+                    self.error_bits.set_sqs_receive_error();
+                    tracing::error!("SQS response stream ended unexpectedly");
+                    break;
+                }
+                Err(_) => {
+                    // Timeout elapsed
+                    self.error_bits.set_response_timeout_error();
+                    tracing::error!(
+                        "Response timeout: no response received for {} seconds",
+                        RESPONSE_TIMEOUT_SECS
+                    );
+                    break;
+                }
             }
         }
 

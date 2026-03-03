@@ -6,6 +6,7 @@ use aws_sdk_s3::{
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client as SQSClient;
+use futures::stream::Stream;
 use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
@@ -262,6 +263,161 @@ impl AwsClient {
         }
 
         Ok(all_messages)
+    }
+
+    /// Creates a stream for a single SQS queue that continuously polls, purges, and yields messages.
+    ///
+    /// The stream will:
+    /// 1. Poll the queue for messages using long polling
+    /// 2. Parse and validate each message
+    /// 3. Delete the message from the queue (purge)
+    /// 4. Yield the parsed message info
+    fn sqs_queue_stream(
+        sqs: SQSClient,
+        queue_url: String,
+        max_messages: i32,
+        long_poll_secs: i32,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<SqsMessageInfo, AwsClientError>> + Send>> {
+        Box::pin(futures::stream::unfold(
+            (sqs, queue_url, max_messages, long_poll_secs, Vec::new()),
+            move |(sqs, queue_url, max_messages, long_poll_secs, mut buffer)| async move {
+                loop {
+                    // Yield buffered messages first
+                    if let Some(msg) = buffer.pop() {
+                        return Some((
+                            Ok(msg),
+                            (sqs, queue_url, max_messages, long_poll_secs, buffer),
+                        ));
+                    }
+
+                    // Poll the queue
+                    let response = match sqs
+                        .receive_message()
+                        .queue_url(&queue_url)
+                        .wait_time_seconds(long_poll_secs)
+                        .max_number_of_messages(max_messages)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!("AWS-SQS receive error (queue: {}): {}", queue_url, e);
+                            return Some((
+                                Err(AwsClientError::SqsReceiveMessageError(e.to_string())),
+                                (sqs, queue_url, max_messages, long_poll_secs, buffer),
+                            ));
+                        }
+                    };
+
+                    let messages = response.messages.unwrap_or_default();
+                    for msg in messages {
+                        // Parse message
+                        let body_str = match msg.body() {
+                            Some(b) => b,
+                            None => {
+                                tracing::warn!("SQS message has no body, skipping");
+                                continue;
+                            }
+                        };
+
+                        let decoded: serde_json::Value = match serde_json::from_str(body_str) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!("SQS message has invalid JSON body: {}", e);
+                                continue;
+                            }
+                        };
+
+                        let msg_kind = match decoded
+                            .get("MessageAttributes")
+                            .and_then(|v| v.get("message_type"))
+                            .and_then(|v| v.get("Value"))
+                            .and_then(|v| v.as_str())
+                        {
+                            Some(k) => k.to_string(),
+                            None => {
+                                tracing::warn!("SQS message missing message_type attribute");
+                                continue;
+                            }
+                        };
+
+                        let msg_body = match decoded.get("Message").and_then(|v| v.as_str()) {
+                            Some(b) => b.to_string(),
+                            None => {
+                                tracing::warn!("SQS message missing Message field");
+                                continue;
+                            }
+                        };
+
+                        let msg_receipt_handle = match msg.receipt_handle() {
+                            Some(h) => h.to_string(),
+                            None => {
+                                tracing::warn!("SQS message missing receipt_handle");
+                                continue;
+                            }
+                        };
+
+                        // Delete message from queue (purge) before yielding
+                        if let Err(e) = sqs
+                            .delete_message()
+                            .queue_url(&queue_url)
+                            .receipt_handle(&msg_receipt_handle)
+                            .send()
+                            .await
+                        {
+                            tracing::error!(
+                                "Failed to delete message from queue {}: {}",
+                                queue_url,
+                                e
+                            );
+                            return Some((
+                                Err(AwsClientError::SqsDeleteMessageError(e.to_string())),
+                                (sqs, queue_url, max_messages, long_poll_secs, buffer),
+                            ));
+                        }
+
+                        let msg_info = SqsMessageInfo::new(
+                            msg_kind,
+                            msg_body,
+                            queue_url.clone(),
+                            msg_receipt_handle,
+                        );
+
+                        buffer.push(msg_info);
+                    }
+
+                    // Continue loop to yield buffered messages
+                    if !buffer.is_empty() {
+                        continue;
+                    }
+                }
+            },
+        ))
+    }
+
+    /// Returns a stream that merges responses from all SQS response queues.
+    ///
+    /// Creates an independent stream for each queue that continuously polls, purges,
+    /// and yields messages. All queue streams are merged into a single output stream.
+    pub fn sqs_response_stream(
+        &self,
+        max_messages_per_queue: usize,
+        long_poll_secs: i32,
+    ) -> impl Stream<Item = Result<SqsMessageInfo, AwsClientError>> + '_ {
+        let queue_urls = self.config().sqs_response_queue_urls().to_vec();
+        let sqs = self.sqs.clone();
+        let max_messages = max_messages_per_queue as i32;
+
+        // Create a stream for each queue
+        let queue_streams: Vec<_> = queue_urls
+            .into_iter()
+            .map(|queue_url| {
+                Self::sqs_queue_stream(sqs.clone(), queue_url, max_messages, long_poll_secs)
+            })
+            .collect();
+
+        // Merge all queue streams into one
+        futures::stream::select_all(queue_streams)
     }
 }
 
