@@ -7,8 +7,6 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     vector_id::VectorId,
 };
-use rand::{Rng, SeedableRng};
-use rand::rngs::StdRng;
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
     hawkers::aby3::aby3_store::Aby3Store,
@@ -18,6 +16,8 @@ use iris_mpc_cpu::{
     },
 };
 use iris_mpc_store::Store;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -36,8 +36,11 @@ const SAMPLE_COUNT: usize = 1_000;
 /// Number of recent processed modifications whose serial IDs to include in the sample.
 const RECENT_MOD_COUNT: i64 = 100;
 /// Modification request types that update (overwrite) existing iris code data.
-const IRIS_UPDATE_TYPES: &[&str] =
-    &[RESET_UPDATE_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE];
+const IRIS_UPDATE_TYPES: &[&str] = &[
+    RESET_UPDATE_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE,
+    REAUTH_MESSAGE_TYPE,
+];
 
 #[derive(Parser)]
 #[command(
