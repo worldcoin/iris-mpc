@@ -9,6 +9,7 @@ db-sanity-check \
   --db-url <DATABASE_URL> \
   --hnsw-schema <SCHEMA> \
   --gpu-schema <SCHEMA> \
+  --seed <SEED> \
   [--m <M>] \
   [--exclusions-file <PATH>] \
   [--output-dir <DIR>]
@@ -21,6 +22,7 @@ db-sanity-check \
 | `--db-url` | `DATABASE_URL` | yes | | Postgres connection string |
 | `--hnsw-schema` | | yes | | HNSW (CPU) schema name (e.g. `SMPC_hnsw_dev_0`) |
 | `--gpu-schema` | | yes | | GPU schema name (e.g. `SMPC_gpu_dev_0`) |
+| `--seed` | | yes | | RNG seed for reproducible cross-schema sampling (check 3c) |
 | `--m` | | no | `256` | HNSW M parameter for degree bound checks |
 | `--layer-probability` | | no | `1/M` | Layer probability q for geometric distribution check |
 | `--exclusions-file` | | no | | Path to JSON file with `{"deleted_serial_ids": [...]}` |
@@ -56,6 +58,7 @@ cargo run --release -p iris-mpc-bins --bin db-sanity-check -- \
   --db-url "postgres://postgres:postgres@localhost:5432/SMPC_dev_0" \
   --hnsw-schema SMPC_dev_0 \
   --gpu-schema SMPC_dev_0 \
+  --seed 42 \
   --output-dir sanity-check/party0
 ```
 
@@ -66,6 +69,7 @@ db-sanity-check \
   --db-url "postgres://user:pass@rds-host:5432/mydb" \
   --hnsw-schema SMPC_hnsw_prod_0 \
   --gpu-schema SMPC_gpu_prod_0 \
+  --seed 42 \
   --m 256 \
   --exclusions-file deleted_serial_ids.json \
   --output-dir sanity-check/party0
@@ -85,11 +89,11 @@ db-sanity-check \
 | 1h | Entry point validity | HNSW graph |
 | 1i | Left/Right graph sync (same layer-0 serial IDs) | HNSW graph |
 | 1j | Layer density near geometric (within 3σ of Binomial(N, q^L)) | HNSW graph |
-| 2a | last_indexed_iris_id consistency | Persistent state |
+| 2a | last_indexed_iris_id matches irises table max serial ID | Persistent state |
 | 2b | Graph max serial_id alignment (left == right) | Persistent state |
 | 3a | Same row count (HNSW vs GPU, id ≤ last_indexed) | Cross-schema |
 | 3b | Same max serial ID (id ≤ last_indexed) | Cross-schema |
-| 3c | Byte-identical shares (SQL JOIN, id ≤ last_indexed) | Cross-schema |
+| 3c | Byte-identical shares for sampled IDs (random sample of ~1k + up to 100 recent modification serial IDs; pending iris-code-updating modifications excluded) | Cross-schema |
 
 ## Scaling notes
 
