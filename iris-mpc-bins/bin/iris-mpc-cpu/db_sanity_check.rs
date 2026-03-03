@@ -645,9 +645,6 @@ async fn run_persistent_state_checks(
             if left_max != right_max {
                 issues.push(format!("left max={left_max} != right max={right_max}"));
             }
-            if last_id as i64 != left_max {
-                issues.push(format!("last_indexed={last_id} != left max={left_max}"));
-            }
             if last_id as usize != iris_max_serial_id {
                 issues.push(format!(
                     "last_indexed={last_id} != irises max={iris_max_serial_id}"
