@@ -17,7 +17,7 @@ use iris_mpc_common::{
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::HashMap, marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tracing::debug;
 
 use eyre::{bail, Result};
@@ -138,10 +138,6 @@ impl<D: DistanceOps> PlaintextStore<D> {
 
         Ok(graph)
     }
-}
-
-pub fn fraction_ordering(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> Ordering {
-    FhdOps::plaintext_ordering(dist_1, dist_2)
 }
 
 impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
