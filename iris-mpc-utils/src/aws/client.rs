@@ -401,26 +401,24 @@ impl AwsClient {
                     if !parsed_messages.is_empty() {
                         use aws_sdk_sqs::types::DeleteMessageBatchRequestEntry;
 
-                        let delete_entries: Result<
-                            Vec<DeleteMessageBatchRequestEntry>,
-                            AwsClientError,
-                        > = parsed_messages
-                            .iter()
-                            .map(|(idx, _, _, receipt_handle)| {
-                                DeleteMessageBatchRequestEntry::builder()
-                                    .id(format!("msg-{}", idx))
-                                    .receipt_handle(receipt_handle)
-                                    .build()
-                                    .map_err(|e| {
-                                        AwsClientError::SqsDeleteMessageError(format!(
+                        let to_delete: Result<Vec<DeleteMessageBatchRequestEntry>, AwsClientError> =
+                            parsed_messages
+                                .iter()
+                                .map(|(idx, _, _, receipt_handle)| {
+                                    DeleteMessageBatchRequestEntry::builder()
+                                        .id(format!("msg-{}", idx))
+                                        .receipt_handle(receipt_handle)
+                                        .build()
+                                        .map_err(|e| {
+                                            AwsClientError::SqsDeleteMessageError(format!(
                                             "Failed to build DeleteMessageBatchRequestEntry: {}",
                                             e
                                         ))
-                                    })
-                            })
-                            .collect();
+                                        })
+                                })
+                                .collect();
 
-                        let delete_entries = match delete_entries {
+                        let to_delete = match to_delete {
                             Ok(entries) => entries,
                             Err(e) => {
                                 tracing::error!("Failed to build delete entries: {}", e);
@@ -431,34 +429,32 @@ impl AwsClient {
                         match sqs
                             .delete_message_batch()
                             .queue_url(&queue_url)
-                            .set_entries(Some(delete_entries))
+                            .set_entries(Some(to_delete))
                             .send()
                             .await
                         {
                             Ok(delete_response) => {
-                                // Collect successfully deleted message IDs
-                                let successful_ids: HashSet<String> = delete_response
-                                    .successful
-                                    .into_iter()
-                                    .map(|s| s.id)
+                                // Collect failed message IDs
+                                let failed_ids: HashSet<String> = delete_response
+                                    .failed
+                                    .iter()
+                                    .map(|f| {
+                                        tracing::error!(
+                                            "Failed to delete message {} from queue {}: {} - {}",
+                                            f.id,
+                                            queue_url,
+                                            f.code,
+                                            f.message.as_deref().unwrap_or_default()
+                                        );
+                                        f.id.clone()
+                                    })
                                     .collect();
 
-                                // Log any failures
-                                for failure in delete_response.failed {
-                                    tracing::error!(
-                                        "Failed to delete message {} from queue {}: {} - {}",
-                                        failure.id,
-                                        queue_url,
-                                        failure.code,
-                                        failure.message.unwrap_or_default()
-                                    );
-                                }
-
-                                // Only add successfully deleted messages to buffer
+                                // Only add successfully deleted messages to buffer (exclude failures)
                                 for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages
                                 {
                                     let msg_id = format!("msg-{}", idx);
-                                    if successful_ids.contains(&msg_id) {
+                                    if !failed_ids.contains(&msg_id) {
                                         let msg_info = SqsMessageInfo::new(
                                             msg_kind,
                                             msg_body,
