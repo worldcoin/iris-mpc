@@ -1,4 +1,4 @@
-use std::cmp;
+use std::{cmp, collections::HashSet};
 
 use async_from::AsyncFrom;
 use aws_sdk_s3::{
@@ -7,7 +7,7 @@ use aws_sdk_s3::{
 };
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::Client as SQSClient;
+use aws_sdk_sqs::{types::QueueAttributeName, Client as SQSClient};
 use futures::stream::Stream;
 use serde_json;
 
@@ -130,6 +130,11 @@ impl AwsClient {
     /// Enqueues multiple messages upon an AWS SNS service topic using batch publish.
     /// AWS SNS supports up to 10 messages per batch.
     /// Returns the number of successfully published messages.
+    ///
+    /// # Errors
+    /// Returns an error if the batch publish request fails or if any message in a chunk
+    /// fails to publish. On partial failure, the error message includes the count of
+    /// successful publishes before the failure occurred.
     pub async fn sns_publish_json_batch(
         &self,
         messages: &[SnsMessageInfo],
@@ -145,7 +150,7 @@ impl AwsClient {
 
         // Process messages in chunks of up to 10
         for (chunk_idx, chunk) in messages.chunks(MAX_BATCH_SIZE).enumerate() {
-            let entries: Vec<PublishBatchRequestEntry> = chunk
+            let entries: Result<Vec<PublishBatchRequestEntry>, AwsClientError> = chunk
                 .iter()
                 .enumerate()
                 .map(|(idx, msg)| {
@@ -155,9 +160,16 @@ impl AwsClient {
                         .message_group_id(msg.group_id())
                         .set_message_attributes(Some(create_sns_message_attributes(msg.kind())))
                         .build()
-                        .expect("Failed to build PublishBatchRequestEntry")
+                        .map_err(|e| {
+                            AwsClientError::SnsPublishBatchError(format!(
+                                "Failed to build PublishBatchRequestEntry: {}",
+                                e
+                            ))
+                        })
                 })
                 .collect();
+
+            let entries = entries?;
 
             let response = self
                 .sns
@@ -184,12 +196,12 @@ impl AwsClient {
                 }
             }
 
-            // If any messages in this chunk failed, return error
+            // If any messages in this chunk failed, return error with context
             if successful < chunk.len() {
                 return Err(AwsClientError::SnsPublishBatchError(format!(
-                    "Only {}/{} messages published successfully in chunk {}",
-                    successful,
-                    chunk.len(),
+                    "Partial failure: {}/{} total messages published before failure in chunk {}",
+                    total_published,
+                    messages.len(),
                     chunk_idx
                 )));
             }
@@ -207,9 +219,7 @@ impl AwsClient {
                 .sqs
                 .get_queue_attributes()
                 .queue_url(queue_url)
-                .attribute_names(
-                    aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages,
-                )
+                .attribute_names(QueueAttributeName::ApproximateNumberOfMessages)
                 .send()
                 .await
                 .map_err(|e| {
@@ -219,9 +229,7 @@ impl AwsClient {
 
             let message_count = attributes
                 .attributes()
-                .and_then(|attrs| {
-                    attrs.get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
-                })
+                .and_then(|attrs| attrs.get(&QueueAttributeName::ApproximateNumberOfMessages))
                 .and_then(|count| count.parse::<i32>().ok())
                 .unwrap_or(0);
 
@@ -267,6 +275,9 @@ impl AwsClient {
 
     /// Creates a stream for a single SQS queue with dynamic batch sizing.
     /// Checks queue depth before each receive and adjusts batch size accordingly.
+    ///
+    /// Messages are deleted from the queue immediately upon successful receipt and parsing.
+    /// Only successfully deleted messages are yielded from the stream.
     fn sqs_stream(
         sqs: SQSClient,
         queue_url: String,
@@ -287,9 +298,7 @@ impl AwsClient {
                     let max_messages = match sqs
                         .get_queue_attributes()
                         .queue_url(&queue_url)
-                        .attribute_names(
-                            aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages,
-                        )
+                        .attribute_names(QueueAttributeName::ApproximateNumberOfMessages)
                         .send()
                         .await
                     {
@@ -297,7 +306,7 @@ impl AwsClient {
                             let message_count = attributes
                                 .attributes()
                                 .and_then(|attrs| {
-                                    attrs.get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+                                    attrs.get(&QueueAttributeName::ApproximateNumberOfMessages)
                                 })
                                 .and_then(|count| count.parse::<i32>().ok())
                                 .unwrap_or(0);
@@ -392,16 +401,32 @@ impl AwsClient {
                     if !parsed_messages.is_empty() {
                         use aws_sdk_sqs::types::DeleteMessageBatchRequestEntry;
 
-                        let delete_entries: Vec<DeleteMessageBatchRequestEntry> = parsed_messages
+                        let delete_entries: Result<
+                            Vec<DeleteMessageBatchRequestEntry>,
+                            AwsClientError,
+                        > = parsed_messages
                             .iter()
                             .map(|(idx, _, _, receipt_handle)| {
                                 DeleteMessageBatchRequestEntry::builder()
                                     .id(format!("msg-{}", idx))
                                     .receipt_handle(receipt_handle)
                                     .build()
-                                    .expect("Failed to build DeleteMessageBatchRequestEntry")
+                                    .map_err(|e| {
+                                        AwsClientError::SqsDeleteMessageError(format!(
+                                            "Failed to build DeleteMessageBatchRequestEntry: {}",
+                                            e
+                                        ))
+                                    })
                             })
                             .collect();
+
+                        let delete_entries = match delete_entries {
+                            Ok(entries) => entries,
+                            Err(e) => {
+                                tracing::error!("Failed to build delete entries: {}", e);
+                                return Some((Err(e), (sqs, queue_url, long_poll_secs, buffer)));
+                            }
+                        };
 
                         match sqs
                             .delete_message_batch()
@@ -411,6 +436,13 @@ impl AwsClient {
                             .await
                         {
                             Ok(delete_response) => {
+                                // Collect successfully deleted message IDs
+                                let successful_ids: HashSet<String> = delete_response
+                                    .successful
+                                    .into_iter()
+                                    .map(|s| s.id)
+                                    .collect();
+
                                 // Log any failures
                                 for failure in delete_response.failed {
                                     tracing::error!(
@@ -422,15 +454,19 @@ impl AwsClient {
                                     );
                                 }
 
-                                // Add successfully deleted messages to buffer
-                                for (_, msg_kind, msg_body, msg_receipt_handle) in parsed_messages {
-                                    let msg_info = SqsMessageInfo::new(
-                                        msg_kind,
-                                        msg_body,
-                                        queue_url.clone(),
-                                        msg_receipt_handle,
-                                    );
-                                    buffer.push(msg_info);
+                                // Only add successfully deleted messages to buffer
+                                for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages
+                                {
+                                    let msg_id = format!("msg-{}", idx);
+                                    if successful_ids.contains(&msg_id) {
+                                        let msg_info = SqsMessageInfo::new(
+                                            msg_kind,
+                                            msg_body,
+                                            queue_url.clone(),
+                                            msg_receipt_handle,
+                                        );
+                                        buffer.push(msg_info);
+                                    }
                                 }
                             }
                             Err(e) => {
