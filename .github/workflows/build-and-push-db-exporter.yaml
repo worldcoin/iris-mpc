@@ -1,11 +1,12 @@
-name: Release - Build and push docker image
+name: Build and push image for iris-mpc-db-exporter
 
 on:
   release:
     types:
       - "published"
-  branch:
-    - "ertugrulaypek/pop-3534-migrate-iris-mpc-db-exporter-to-iris-mpc-repo"
+  push:
+    branches:
+      - "ertugrulaypek/pop-3534-migrate-iris-mpc-db-exporter-to-iris-mpc-repo"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -14,12 +15,13 @@ concurrency:
 env:
   ENV: CI
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: "${{ github.repository }}-db-exporter"
   SERVICE_NAME: iris-mpc-db-exporter
 
 jobs:
   docker:
-    runs-on: arc-large-amd64-runner
+    runs-on:
+      labels: ubuntu-22.04-16core
     permissions:
       packages: write
       contents: read
@@ -42,17 +44,19 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b
         with:
-          go-version-file: 'go.mod'
+          go-version-file: 'iris-mpc-db-exporter/go.mod'
       - name: Compile binary
+        working-directory: iris-mpc-db-exporter
         run: CGO_ENABLED=1 go build -buildvcs=false -o ${{ env.SERVICE_NAME }} -ldflags="-extldflags=-static"
       - name: Build and Push
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4
         with:
-          context: .
+          context: iris-mpc-db-exporter
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }},
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ github.event_name == 'release' && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
