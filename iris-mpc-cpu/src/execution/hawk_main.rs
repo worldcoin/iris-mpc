@@ -742,10 +742,6 @@ impl HawkActor {
         side: usize,
         partial_distances: BTreeMap<i64, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>>,
     ) -> Result<()> {
-        if !HawkOps::SUPPORTS_ANON_STATS {
-            return Ok(());
-        }
-
         let Some(store) = &self.anon_stats_store else {
             return Ok(());
         };
