@@ -215,43 +215,39 @@ impl AwsClient {
 
     /// Purges all SQS response queues.
     pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
+        use futures::stream::futures_unordered;
         tracing::info!("AWS-SQS: purging system response queues");
-        for queue_url in self.config().sqs_response_queue_urls() {
-            // Check if queue has any messages before purging
-            let attributes = self
-                .sqs
-                .get_queue_attributes()
-                .queue_url(queue_url)
-                .attribute_names(QueueAttributeName::ApproximateNumberOfMessages)
-                .send()
-                .await
-                .map_err(|e| {
-                    tracing::error!("AWS-SQS: get queue attributes error: {}", e);
-                    AwsClientError::SqsGetQueueAttributesError(e.to_string())
-                })?;
 
-            let message_count = attributes
-                .attributes()
-                .and_then(|attrs| attrs.get(&QueueAttributeName::ApproximateNumberOfMessages))
-                .and_then(|count| count.parse::<i32>().ok())
-                .unwrap_or(0);
+        let purge_futures: Vec<_> = self
+            .config()
+            .sqs_response_queue_urls()
+            .iter()
+            .map(|queue_url| {
+                let sqs = self.sqs.clone();
+                let queue_url = queue_url.to_string();
+                async move {
+                    sqs.purge_queue()
+                        .queue_url(&queue_url)
+                        .send()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| {
+                            tracing::error!(
+                                "AWS-SQS: response queue purge error for {}: {}",
+                                queue_url,
+                                e
+                            );
+                            AwsClientError::SqsPurgeQueueError(e.to_string())
+                        })
+                }
+            })
+            .collect();
 
-            if message_count == 0 {
-                tracing::debug!("AWS-SQS: queue is empty, skipping purge for {}", queue_url);
-                continue;
-            }
-
-            self.sqs
-                .purge_queue()
-                .queue_url(queue_url)
-                .send()
-                .await
-                .map(|_| {})
-                .map_err(|e| {
-                    tracing::error!("AWS-SQS: response queue purge error: {}", e);
-                    AwsClientError::SqsPurgeQueueError(e.to_string())
-                })?;
+        // Return first error if any, otherwise Ok
+        for result in futures_unordered::join_all(purge_futures).await {
+            result?;
         }
+
         tracing::info!("AWS-SQS: purge finished");
         Ok(())
     }
@@ -473,7 +469,7 @@ fn parse_sqs_messages(
 }
 
 /// Batch deletes messages from SQS queue.
-/// Returns the set of successfully deleted message IDs.
+/// Returns the set of FAILED message IDs (messages that could not be deleted).
 async fn delete_messages_batch(
     sqs: &SQSClient,
     queue_url: &str,
