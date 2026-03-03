@@ -102,20 +102,30 @@ impl ServiceClient {
 
         // Send deletion requests for all live serial IDs.
         let live_serial_ids = std::mem::take(&mut self.state.live_serial_ids);
-        for serial_id in live_serial_ids.into_iter() {
-            let payload = RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest {
-                serial_id,
-            });
-            let sns_msg_info = SnsMessageInfo::from(payload);
-            if let Err(e) = self
-                .aws_client
-                .sns_publish_json(sns_msg_info)
-                .await
-                .map_err(ServiceClientError::AwsServiceError)
-            {
-                tracing::error!("Failed to send deletion for serial_id {}: {}", serial_id, e);
-            } else {
-                tracing::info!("publishing Deletion for {}", serial_id);
+        let deletion_messages: Vec<SnsMessageInfo> = live_serial_ids
+            .iter()
+            .map(|&serial_id| {
+                let payload =
+                    RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest {
+                        serial_id,
+                    });
+                SnsMessageInfo::from(payload)
+            })
+            .collect();
+
+        match self
+            .aws_client
+            .sns_publish_json_batch(&deletion_messages)
+            .await
+            .map_err(ServiceClientError::AwsServiceError)
+        {
+            Ok(published_count) => {
+                for serial_id in live_serial_ids.iter().take(published_count) {
+                    tracing::info!("publishing Deletion for {}", serial_id);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to send deletion batch: {}", e);
             }
         }
         // iris-mpc-hawk will not send responses for a batch of just deletions
@@ -277,30 +287,23 @@ impl ServiceClient {
     ) -> usize {
         use crate::aws::types::SnsMessageInfo;
 
-        let mut published_count = 0;
-        for request in batch_requests.iter() {
-            let log_tag = request.log_tag();
-            let sns_msg_info = SnsMessageInfo::from(request);
+        // Collect all messages for batch publishing
+        let messages: Vec<SnsMessageInfo> =
+            batch_requests.iter().map(SnsMessageInfo::from).collect();
 
-            match self.aws_client.sns_publish_json(sns_msg_info).await {
-                Ok(_) => {
-                    tracing::info!("publishing {}", log_tag);
-                    published_count += 1;
+        match self.aws_client.sns_publish_json_batch(&messages).await {
+            Ok(published_count) => {
+                for request in batch_requests.iter().take(published_count) {
+                    tracing::info!("publishing {}", request.log_tag());
                 }
-                Err(e) => {
-                    self.state.error_bits.set_sns_publish_error();
-                    tracing::error!(
-                        "batch {}: SNS publish failed for request {}: {:?}",
-                        batch_idx,
-                        log_tag,
-                        e,
-                    );
-                    // Stop publishing further requests, but return count of already published
-                    break;
-                }
+                published_count
+            }
+            Err(e) => {
+                self.state.error_bits.set_sns_publish_error();
+                tracing::error!("batch {}: SNS batch publish failed: {:?}", batch_idx, e,);
+                0
             }
         }
-        published_count
     }
 }
 
@@ -521,12 +524,8 @@ impl ExecState {
     // Drains outstanding_requests and outstanding_deletions by consuming from the SQS response stream.
     // Times out if no response is received within RESPONSE_TIMEOUT_SECS.
     async fn process_responses(&mut self, aws_client: &AwsClient) {
-        use crate::constants::N_PARTIES;
-
-        let configured_max = aws_client.config().sqs_long_poll_wait_time() as i32;
-        let mut response_stream = aws_client
-            .sqs_response_stream(N_PARTIES, configured_max)
-            .fuse();
+        let max_poll_time = aws_client.config().sqs_long_poll_wait_time() as i32;
+        let mut response_stream = aws_client.sqs_response_stream(max_poll_time).fuse();
 
         let mut last_response_time = Instant::now();
         let timeout_duration = Duration::from_secs(RESPONSE_TIMEOUT_SECS);
