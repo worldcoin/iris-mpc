@@ -270,6 +270,7 @@ impl ServiceClient {
         &mut self,
         batch_shares: Vec<Option<(Uuid, BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>)>>,
     ) -> Result<(), ServiceClientError> {
+        tracing::info!("uploading iris shares");
         for shares_info in batch_shares.iter().filter_map(|opt| opt.as_ref()) {
             let (op_uuid, shares) = shares_info;
             if let Err(e) = self.aws_client.s3_upload_iris_shares(op_uuid, shares).await {
@@ -277,6 +278,7 @@ impl ServiceClient {
                 return Err(ServiceClientError::SharesUploadError);
             }
         }
+        tracing::info!("upload finished");
         Ok(())
     }
 
