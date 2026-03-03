@@ -322,149 +322,40 @@ impl AwsClient {
                         continue;
                     }
 
-                    // Parse all messages and collect receipt handles for deletion
-                    // ALL messages must be deleted to prevent poison message redelivery
-                    let mut all_receipt_handles = Vec::new();
-                    let mut parsed_messages = Vec::new();
-
-                    for (idx, msg) in messages.iter().enumerate() {
-                        let receipt_handle = match msg.receipt_handle() {
-                            Some(h) => h.to_string(),
-                            None => {
-                                tracing::warn!(
-                                    "SQS message {} missing receipt_handle, cannot delete",
-                                    idx
-                                );
-                                continue;
-                            }
-                        };
-
-                        // Always collect receipt handle for deletion
-                        all_receipt_handles.push((idx, receipt_handle.clone()));
-
-                        // Try to parse message
-                        let body_str = match msg.body() {
-                            Some(b) => b,
-                            None => {
-                                tracing::warn!(
-                                    "SQS message {} has no body, will delete without processing",
-                                    idx
-                                );
-                                continue;
-                            }
-                        };
-
-                        let decoded: serde_json::Value = match serde_json::from_str(body_str) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!("SQS message {} has invalid JSON body: {}, will delete without processing", idx, e);
-                                continue;
-                            }
-                        };
-
-                        let msg_kind = match decoded
-                            .get("MessageAttributes")
-                            .and_then(|v| v.get("message_type"))
-                            .and_then(|v| v.get("Value"))
-                            .and_then(|v| v.as_str())
-                        {
-                            Some(k) => k.to_string(),
-                            None => {
-                                tracing::warn!("SQS message {} missing message_type attribute, will delete without processing", idx);
-                                continue;
-                            }
-                        };
-
-                        let msg_body = match decoded.get("Message").and_then(|v| v.as_str()) {
-                            Some(b) => b.to_string(),
-                            None => {
-                                tracing::warn!("SQS message {} missing Message field, will delete without processing", idx);
-                                continue;
-                            }
-                        };
-
-                        // Successfully parsed - add to parsed messages
-                        parsed_messages.push((idx, msg_kind, msg_body, receipt_handle));
-                    }
+                    // Parse messages and collect receipt handles for deletion
+                    let (all_receipt_handles, parsed_messages) = parse_sqs_messages(&messages);
 
                     // Batch delete ALL messages (including unparseable ones)
                     if !all_receipt_handles.is_empty() {
-                        use aws_sdk_sqs::types::DeleteMessageBatchRequestEntry;
-
-                        let to_delete: Result<Vec<DeleteMessageBatchRequestEntry>, AwsClientError> =
-                            all_receipt_handles
-                                .iter()
-                                .map(|(idx, receipt_handle)| {
-                                    DeleteMessageBatchRequestEntry::builder()
-                                        .id(format!("msg-{}", idx))
-                                        .receipt_handle(receipt_handle)
-                                        .build()
-                                        .map_err(|e| {
-                                            AwsClientError::SqsDeleteMessageError(format!(
-                                            "Failed to build DeleteMessageBatchRequestEntry: {}",
-                                            e
-                                        ))
-                                        })
-                                })
-                                .collect();
-
-                        let to_delete = match to_delete {
-                            Ok(entries) => entries,
-                            Err(e) => {
-                                tracing::error!("Failed to build delete entries: {}", e);
-                                return Some((Err(e), (sqs, queue_url, long_poll_secs, buffer)));
-                            }
-                        };
-
-                        match sqs
-                            .delete_message_batch()
-                            .queue_url(&queue_url)
-                            .set_entries(Some(to_delete))
-                            .send()
-                            .await
-                        {
-                            Ok(delete_response) => {
-                                // Collect failed message IDs
-                                let failed_ids: HashSet<String> = delete_response
-                                    .failed
-                                    .iter()
-                                    .map(|f| {
-                                        tracing::error!(
-                                            "Failed to delete message {} from queue {}: {} - {}",
-                                            f.id,
-                                            queue_url,
-                                            f.code,
-                                            f.message.as_deref().unwrap_or_default()
-                                        );
-                                        f.id.clone()
-                                    })
-                                    .collect();
-
-                                // Only yield successfully parsed AND successfully deleted messages
-                                for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages
-                                {
-                                    let msg_id = format!("msg-{}", idx);
-                                    if !failed_ids.contains(&msg_id) {
-                                        let msg_info = SqsMessageInfo::new(
-                                            msg_kind,
-                                            msg_body,
-                                            queue_url.clone(),
-                                            msg_receipt_handle,
-                                        );
-                                        buffer.push_back(msg_info);
-                                    }
+                        let failed_ids =
+                            match delete_messages_batch(&sqs, &queue_url, &all_receipt_handles)
+                                .await
+                            {
+                                Ok(failed) => failed,
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to batch delete messages from queue {}: {}",
+                                        queue_url,
+                                        e
+                                    );
+                                    return Some((
+                                        Err(e),
+                                        (sqs, queue_url, long_poll_secs, buffer),
+                                    ));
                                 }
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to batch delete messages from queue {}: {}",
-                                    queue_url,
-                                    e
+                            };
+
+                        // Only yield successfully parsed AND successfully deleted messages
+                        for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages {
+                            let msg_id = format!("msg-{}", idx);
+                            if !failed_ids.contains(&msg_id) {
+                                let msg_info = SqsMessageInfo::new(
+                                    msg_kind,
+                                    msg_body,
+                                    queue_url.clone(),
+                                    msg_receipt_handle,
                                 );
-                                return Some((
-                                    Err(AwsClientError::SqsDeleteMessageError(e.to_string())),
-                                    (sqs, queue_url, long_poll_secs, buffer),
-                                ));
+                                buffer.push_back(msg_info);
                             }
                         }
                     }
@@ -499,6 +390,141 @@ impl AwsClient {
         // Merge all queue streams into one
         futures::stream::select_all(queue_streams)
     }
+}
+
+/// Parses SQS messages and collects receipt handles for deletion.
+/// Returns (all_receipt_handles, parsed_messages).
+/// ALL messages have their receipt handles collected to prevent poison message redelivery.
+#[allow(clippy::type_complexity)]
+fn parse_sqs_messages(
+    messages: &[aws_sdk_sqs::types::Message],
+) -> (Vec<(usize, String)>, Vec<(usize, String, String, String)>) {
+    let mut all_receipt_handles = Vec::new();
+    let mut parsed_messages = Vec::new();
+
+    for (idx, msg) in messages.iter().enumerate() {
+        let receipt_handle = match msg.receipt_handle() {
+            Some(h) => h.to_string(),
+            None => {
+                tracing::warn!("SQS message {} missing receipt_handle, cannot delete", idx);
+                continue;
+            }
+        };
+
+        // Always collect receipt handle for deletion
+        all_receipt_handles.push((idx, receipt_handle.clone()));
+
+        // Try to parse message
+        let body_str = match msg.body() {
+            Some(b) => b,
+            None => {
+                tracing::warn!(
+                    "SQS message {} has no body, will delete without processing",
+                    idx
+                );
+                continue;
+            }
+        };
+
+        let decoded: serde_json::Value = match serde_json::from_str(body_str) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "SQS message {} has invalid JSON body: {}, will delete without processing",
+                    idx,
+                    e
+                );
+                continue;
+            }
+        };
+
+        let msg_kind = match decoded
+            .get("MessageAttributes")
+            .and_then(|v| v.get("message_type"))
+            .and_then(|v| v.get("Value"))
+            .and_then(|v| v.as_str())
+        {
+            Some(k) => k.to_string(),
+            None => {
+                tracing::warn!(
+                    "SQS message {} missing message_type attribute, will delete without processing",
+                    idx
+                );
+                continue;
+            }
+        };
+
+        let msg_body = match decoded.get("Message").and_then(|v| v.as_str()) {
+            Some(b) => b.to_string(),
+            None => {
+                tracing::warn!(
+                    "SQS message {} missing Message field, will delete without processing",
+                    idx
+                );
+                continue;
+            }
+        };
+
+        // Successfully parsed - add to parsed messages
+        parsed_messages.push((idx, msg_kind, msg_body, receipt_handle));
+    }
+
+    (all_receipt_handles, parsed_messages)
+}
+
+/// Batch deletes messages from SQS queue.
+/// Returns the set of successfully deleted message IDs.
+async fn delete_messages_batch(
+    sqs: &SQSClient,
+    queue_url: &str,
+    all_receipt_handles: &[(usize, String)],
+) -> Result<HashSet<String>, AwsClientError> {
+    use aws_sdk_sqs::types::DeleteMessageBatchRequestEntry;
+
+    let to_delete: Result<Vec<DeleteMessageBatchRequestEntry>, AwsClientError> =
+        all_receipt_handles
+            .iter()
+            .map(|(idx, receipt_handle)| {
+                DeleteMessageBatchRequestEntry::builder()
+                    .id(format!("msg-{}", idx))
+                    .receipt_handle(receipt_handle)
+                    .build()
+                    .map_err(|e| {
+                        AwsClientError::SqsDeleteMessageError(format!(
+                            "Failed to build DeleteMessageBatchRequestEntry: {}",
+                            e
+                        ))
+                    })
+            })
+            .collect();
+
+    let to_delete = to_delete?;
+
+    let delete_response = sqs
+        .delete_message_batch()
+        .queue_url(queue_url)
+        .set_entries(Some(to_delete))
+        .send()
+        .await
+        .map_err(|e| AwsClientError::SqsDeleteMessageError(e.to_string()))?;
+
+    // Collect failed message IDs
+    let failed_ids: HashSet<String> = delete_response
+        .failed
+        .iter()
+        .map(|f| {
+            tracing::error!(
+                "Failed to delete message {} from queue {}: {} - {}",
+                f.id,
+                queue_url,
+                f.code,
+                f.message.as_deref().unwrap_or_default()
+            );
+            f.id.clone()
+        })
+        .collect();
+
+    Ok(failed_ids)
 }
 
 #[cfg(test)]
