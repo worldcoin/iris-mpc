@@ -129,6 +129,34 @@ impl AwsClient {
     pub async fn sqs_purge_response_queue(&self) -> Result<(), AwsClientError> {
         tracing::debug!("AWS-SQS: purging system response queues");
         for queue_url in self.config().sqs_response_queue_urls() {
+            // Check if queue has any messages before purging
+            let attributes = self
+                .sqs
+                .get_queue_attributes()
+                .queue_url(queue_url)
+                .attribute_names(
+                    aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages,
+                )
+                .send()
+                .await
+                .map_err(|e| {
+                    tracing::error!("AWS-SQS: get queue attributes error: {}", e);
+                    AwsClientError::SqsGetQueueAttributesError(e.to_string())
+                })?;
+
+            let message_count = attributes
+                .attributes()
+                .and_then(|attrs| {
+                    attrs.get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+                })
+                .and_then(|count| count.parse::<i32>().ok())
+                .unwrap_or(0);
+
+            if message_count == 0 {
+                tracing::debug!("AWS-SQS: queue is empty, skipping purge for {}", queue_url);
+                continue;
+            }
+
             self.sqs
                 .purge_queue()
                 .queue_url(queue_url)
