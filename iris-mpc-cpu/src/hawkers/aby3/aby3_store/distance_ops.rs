@@ -1,10 +1,14 @@
 use std::{cmp::Ordering, fmt::Debug};
 
 use ampc_actor_utils::{
-    constants::MATCH_THRESHOLD_RATIO,
     execution::session::Session,
     network::value::NetworkInt,
     protocol::{
+        nhd_ops::{
+            nhd_comparison_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
+            nhd_min_of_pair_batch, nhd_oblivious_cross_compare, nhd_oblivious_cross_compare_lifted,
+            nhd_plaintext_is_match,
+        },
         ops::{
             batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
             oblivious_cross_compare_lifted,
@@ -24,11 +28,7 @@ use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
     protocol::{
         fhd_ops::{cross_compare, lte_threshold_and_open, min_round_robin_batch},
-        nhd_ops::{
-            nhd_comparison_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
-            nhd_min_of_pair_batch, nhd_min_round_robin_batch, nhd_oblivious_cross_compare,
-            nhd_oblivious_cross_compare_lifted, nhd_plaintext_is_match,
-        },
+        nhd_ops::nhd_min_round_robin_batch,
         ops::{DistancePair, IdDistance},
     },
 };
@@ -200,7 +200,7 @@ impl DistanceOps for FhdOps {
 
     fn plaintext_is_match(d: &(u16, u16)) -> bool {
         let (a, b) = *d;
-        (a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO
+        (a as f64) < (b as f64) * crate::protocol::fhd_ops::MATCH_THRESHOLD_RATIO
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
@@ -272,7 +272,12 @@ impl DistanceOps for NhdOps {
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
     ) -> Result<Vec<bool>> {
-        nhd_lte_threshold_and_open(session, distances).await
+        nhd_lte_threshold_and_open(
+            session,
+            distances,
+            crate::protocol::nhd_ops::MATCH_THRESHOLD_RATIO,
+        )
+        .await
     }
 
     fn to_usize(value: Self::Ring) -> usize {
@@ -286,7 +291,7 @@ impl DistanceOps for NhdOps {
     }
 
     fn plaintext_is_match(d: &(u16, u16)) -> bool {
-        nhd_plaintext_is_match(d.0, d.1)
+        nhd_plaintext_is_match(d.0, d.1, crate::protocol::nhd_ops::MATCH_THRESHOLD_RATIO)
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
