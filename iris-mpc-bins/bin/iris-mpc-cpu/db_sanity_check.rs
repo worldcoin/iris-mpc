@@ -214,11 +214,11 @@ async fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i64>> {
-    let ids: Vec<(i64,)> = sqlx::query_as("SELECT id FROM irises ORDER BY id")
+    let ids: Vec<(i64,)> = sqlx::query_as("SELECT id FROM irises")
         .fetch_all(&store.pool)
         .await?;
 
-    let max_id = ids.last().map(|(id,)| *id).unwrap_or(0);
+    let max_id = ids.iter().map(|(id,)| *id).max().unwrap_or(0);
     stats.add("Total iris count (HNSW)", ids.len().to_string());
     stats.add("Max serial ID (HNSW)", max_id.to_string());
 
@@ -641,26 +641,18 @@ async fn run_persistent_state_checks(
     let left_max = get_graph_max_serial_id(graph_pg, StoreId::Left).await?;
     let right_max = get_graph_max_serial_id(graph_pg, StoreId::Right).await?;
 
-    // 2a
+    // 2a: last_indexed_iris_id matches irises table max serial ID
     match last_indexed {
         Some(last_id) => {
-            let mut issues = Vec::new();
-            if left_max != right_max {
-                issues.push(format!("left max={left_max} != right max={right_max}"));
-            }
-            if last_id as usize != iris_max_serial_id {
-                issues.push(format!(
-                    "last_indexed={last_id} != irises max={iris_max_serial_id}"
-                ));
-            }
+            let ok = last_id as usize == iris_max_serial_id;
             checks.push(CheckResult::new(
                 "2a",
                 "last_indexed_iris_id",
-                issues.is_empty(),
-                if issues.is_empty() {
+                ok,
+                if ok {
                     format!("Consistent: {last_id}")
                 } else {
-                    issues.join("; ")
+                    format!("last_indexed={last_id} != irises max={iris_max_serial_id}")
                 },
             ));
         }
