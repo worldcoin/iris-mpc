@@ -218,11 +218,22 @@ impl<D: DistanceOps> VectorStoreMut for PlaintextStore<D> {
 }
 
 /// PlaintextStore with synchronization primitives for multithreaded use.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SharedPlaintextStore<D = FhdOps> {
     pub storage: PlaintextSharedIrisesRef,
     pub distance_fn: DistanceFn,
     _phantom: PhantomData<D>,
+}
+
+// Manual Clone impl: PhantomData<D> is always Clone regardless of D.
+impl<D> Clone for SharedPlaintextStore<D> {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            distance_fn: self.distance_fn,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<D: DistanceOps> Default for SharedPlaintextStore<D> {
