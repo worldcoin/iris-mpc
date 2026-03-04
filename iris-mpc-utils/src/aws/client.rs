@@ -353,6 +353,7 @@ impl AwsClient {
     }
 }
 
+// AI slop... sry about the type complexity
 /// Parses SQS messages and collects receipt handles for deletion.
 /// Returns (all_receipt_handles, parsed_messages).
 /// ALL messages have their receipt handles collected to prevent poison message redelivery.
@@ -360,7 +361,9 @@ impl AwsClient {
 fn parse_sqs_messages(
     messages: &[aws_sdk_sqs::types::Message],
 ) -> (Vec<(usize, String)>, Vec<(usize, String, String, String)>) {
+    // Vec<(message_index, receipt_handle)>
     let mut all_receipt_handles = Vec::new();
+    // Vec<(message_index, message_kind, message_body, receipt_handle)>
     let mut parsed_messages = Vec::new();
 
     for (idx, msg) in messages.iter().enumerate() {
