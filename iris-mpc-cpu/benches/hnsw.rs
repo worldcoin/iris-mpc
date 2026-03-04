@@ -6,14 +6,15 @@ use iris_mpc_cpu::{
     execution::local::LocalRuntime,
     hawkers::{
         aby3::{
-            aby3_store::Aby3Query,
+            aby3_store::{Aby3Query, FhdOps},
             test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
         },
         plaintext_store::PlaintextStore,
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
     protocol::{
-        ops::{cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3},
+        fhd_ops::cross_compare,
+        ops::{galois_ring_pairwise_distance, galois_ring_to_rep3},
         shared_iris::GaloisRingSharedIris,
     },
     shares::share::DistanceShare,
@@ -42,7 +43,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
 
         let (vector, graph) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            let mut vector = PlaintextStore::new();
+            let mut vector = PlaintextStore::<FhdOps>::new();
             let mut graph = GraphMem::new();
             let searcher = HnswSearcher::new_with_test_parameters();
 

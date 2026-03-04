@@ -1,7 +1,10 @@
 use std::fmt::Display;
 
 use iris_mpc_common::helpers::{
-    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+    smpc_request::{
+        REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+        UNIQUENESS_MESSAGE_TYPE,
+    },
     sync::{Modification, MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS},
 };
 use serde::{Deserialize, Serialize};
@@ -12,6 +15,8 @@ pub enum ModificationType {
     /// searches for a new iris scan and if it finds a match, overwrites the iris code
     /// in the system with the new scan. AKA reset-check plus overwrite
     ResetUpdate,
+    /// similar to `ResetUpdate` but triggered via recovery flow
+    RecoveryUpdate,
     /// lets the user update their iris scan to a new version
     Reauth,
     /// ignored by genesis
@@ -79,7 +84,9 @@ impl ModificationType {
     pub fn is_updating(&self) -> bool {
         matches!(
             self,
-            ModificationType::ResetUpdate | ModificationType::Reauth
+            ModificationType::ResetUpdate
+                | ModificationType::RecoveryUpdate
+                | ModificationType::Reauth
         )
     }
 }
@@ -88,6 +95,7 @@ impl Display for ModificationType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let variant = match self {
             ModificationType::ResetUpdate => RESET_UPDATE_MESSAGE_TYPE,
+            ModificationType::RecoveryUpdate => RECOVERY_UPDATE_MESSAGE_TYPE,
             ModificationType::Reauth => REAUTH_MESSAGE_TYPE,
             ModificationType::Uniqueness => UNIQUENESS_MESSAGE_TYPE,
         };

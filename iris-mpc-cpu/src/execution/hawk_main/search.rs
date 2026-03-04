@@ -1,7 +1,7 @@
 use super::{
     rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
-    BothEyes, HawkInsertPlan, HawkSession, VecRequests, LEFT, RIGHT,
+    BothEyes, HawkInsertPlan, HawkOps, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
     execution::hawk_main::{
@@ -93,7 +93,7 @@ pub async fn search<const ROTMASK: u32>(
     Ok(results)
 }
 
-async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store>>(
+async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
     session: &HawkSession,
     search_queries: &SearchQueries<ROTMASK>,
     search_ids: &SearchIds,
@@ -136,10 +136,10 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store>>(
     Ok(())
 }
 
-async fn per_insert_query<N: Neighborhood<Aby3Store>>(
+async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     query: Aby3Query,
     search_params: &SearchParams,
-    aby3_store: &mut Aby3Store,
+    aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
     insertion_layer: usize,
 ) -> Result<HawkInsertPlan> {
@@ -178,7 +178,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store>>(
 async fn per_search_query(
     query: Aby3Query,
     search_params: &SearchParams,
-    aby3_store: &mut Aby3Store,
+    aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
@@ -222,7 +222,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     query: Aby3Query,
     searcher: &HnswSearcher,
     identifier: &H,
-) -> Result<InsertPlanV<Aby3Store>> {
+) -> Result<InsertPlanV<Aby3Store<HawkOps>>> {
     let start = Instant::now();
 
     let mut store = session.aby3_store.write().await;

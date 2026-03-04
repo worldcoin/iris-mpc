@@ -1,3 +1,4 @@
+use super::HawkOps;
 use super::{BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT};
 use crate::{
     execution::hawk_main::VecRotations,
@@ -104,7 +105,7 @@ async fn per_session(
 async fn per_query(
     query: Aby3Query,
     vector_ids: &[VectorId],
-    store: &mut Aby3Store,
+    store: &mut Aby3Store<HawkOps>,
 ) -> Result<MapEdges<bool>> {
     let distances = store.eval_distance_batch(&query, vector_ids).await?;
 

@@ -1,0 +1,36 @@
+image: "ghcr.io/worldcoin/iris-mpc-db-exporter:v0.2.4@sha256:5d634832fed42f5229aa4cbf13ca144e964f9886e5728b15ad553076dcfa5f97"
+
+replicaCount: 1
+
+environment: stage
+
+schedule: "0 10 * * *"
+
+# this is needed to prevent the job from restarting if it fails
+backoffLimit: 0
+
+args:
+  - "export-db"
+  - "--export-mode=COMPLETE_EXPORT"
+  - "--export-format=binary"
+  - "--export-output=s3"
+  - "--batch-size=16000"
+  - "--parallelism=60"
+  - "--output-folder=even_odd_with_version_id_output_16k"
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: 7
+    memory: 31Gi
+  requests:
+    cpu: 4
+    memory: 25Gi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+# If it is time for a new Job run and the previous Job run hasn't finished yet, the CronJob replaces the currently running Job run with a new Job run
+concurrencyPolicy: Replace

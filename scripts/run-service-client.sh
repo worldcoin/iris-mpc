@@ -22,6 +22,7 @@ Options:
   -e ENV           Environment: dev-dkr (default) or dev-stg
   -i IRIS_SHARES   Path or filename of iris shares NDJSON file
                    (required for FromFile configs)
+  -ls              List available TOML files in assets/service-client
   -h               Show this help
 
 Arguments:
@@ -90,6 +91,14 @@ while [[ $# -gt 0 ]]; do
             fi
             iris_shares="$2"
             shift 2
+            ;;
+        -ls)
+            echo "=== service-client configs ==="
+            ls "${PROJECT_ROOT}/iris-mpc-utils/assets/service-client"
+            echo ""
+            echo "=== iris-codes-plaintext ==="
+            ls "${PROJECT_ROOT}/iris-mpc-utils/assets/iris-codes-plaintext"
+            exit 0
             ;;
         -h)
             usage
