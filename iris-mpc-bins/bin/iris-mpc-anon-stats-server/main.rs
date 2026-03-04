@@ -428,9 +428,10 @@ impl AnonStatsProcessor {
         let min_job_size = sync_on_job_sizes(session, available_capped).await?;
         let required_min = match kind {
             JobKind::Gpu1DReauth | JobKind::Hnsw1DReauth => self.config.min_1d_job_size_reauth,
-            JobKind::Gpu1D | JobKind::Hnsw1D | JobKind::Gpu1DRecovery | JobKind::Hnsw1DRecovery => {
-                self.config.min_1d_job_size
+            JobKind::Gpu1DRecovery | JobKind::Hnsw1DRecovery => {
+                self.config.min_1d_job_size_recovery
             }
+            JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
             _ => panic!("Invalid job kind for 1D job"),
         };
 
@@ -596,9 +597,10 @@ impl AnonStatsProcessor {
         let min_job_size = sync_on_job_sizes(session, available_capped).await?;
         let required_min = match kind {
             JobKind::Gpu2DReauth | JobKind::Hnsw2DReauth => self.config.min_2d_job_size_reauth,
-            JobKind::Gpu2D | JobKind::Gpu2DRecovery | JobKind::Hnsw2D | JobKind::Hnsw2DRecovery => {
-                self.config.min_2d_job_size
+            JobKind::Gpu2DRecovery | JobKind::Hnsw2DRecovery => {
+                self.config.min_2d_job_size_recovery
             }
+            JobKind::Gpu2D | JobKind::Hnsw2D => self.config.min_2d_job_size,
             _ => panic!("Invalid job kind for 2D job"),
         };
 
