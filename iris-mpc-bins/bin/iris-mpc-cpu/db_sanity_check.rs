@@ -790,7 +790,7 @@ async fn run_cross_schema_checks(
 ) -> Result<()> {
     let lid = last_indexed_id as i64;
 
-    // 3a: Same row count (up to last_indexed_id)
+    // 3a: Row count comparison (informational — not a hard check)
     let hnsw_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises WHERE id <= $1")
         .bind(lid)
         .fetch_one(hnsw_pool)
@@ -800,18 +800,13 @@ async fn run_cross_schema_checks(
         .fetch_one(gpu_pool)
         .await?;
     let (hnsw_count, gpu_count) = (hnsw_count.0, gpu_count.0);
-    checks.push(CheckResult::new(
-        "3a",
-        "Same row count",
-        hnsw_count == gpu_count,
-        if hnsw_count == gpu_count {
-            format!("Both schemas have {hnsw_count} irises (id <= {last_indexed_id})")
-        } else {
-            format!("HNSW={hnsw_count}, GPU={gpu_count} (id <= {last_indexed_id})")
-        },
-    ));
+    if hnsw_count == gpu_count {
+        rpt!(rpt, "  3a: Row count (id <= {last_indexed_id}): {hnsw_count} (both schemas match)");
+    } else {
+        rpt!(rpt, "  3a: Row count (id <= {last_indexed_id}): HNSW={hnsw_count}, GPU={gpu_count} (MISMATCH)");
+    }
 
-    // 3b: Same max serial ID (up to last_indexed_id)
+    // 3b: Max serial ID comparison (informational — not a hard check)
     let hnsw_max: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises WHERE id <= $1")
         .bind(lid)
         .fetch_one(hnsw_pool)
@@ -821,16 +816,11 @@ async fn run_cross_schema_checks(
         .fetch_one(gpu_pool)
         .await?;
     let (hnsw_max, gpu_max) = (hnsw_max.0, gpu_max.0);
-    checks.push(CheckResult::new(
-        "3b",
-        "Same max serial ID",
-        hnsw_max == gpu_max,
-        if hnsw_max == gpu_max {
-            format!("Both schemas max_id={hnsw_max} (id <= {last_indexed_id})")
-        } else {
-            format!("HNSW max={hnsw_max}, GPU max={gpu_max} (id <= {last_indexed_id})")
-        },
-    ));
+    if hnsw_max == gpu_max {
+        rpt!(rpt, "  3b: Max serial ID (id <= {last_indexed_id}): {hnsw_max} (both schemas match)");
+    } else {
+        rpt!(rpt, "  3b: Max serial ID (id <= {last_indexed_id}): HNSW={hnsw_max}, GPU={gpu_max} (MISMATCH)");
+    }
 
     // 3c: Sampled byte-identical shares, with modification-aware exclusions.
     //

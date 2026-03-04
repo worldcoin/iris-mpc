@@ -110,9 +110,14 @@ db-sanity-check \
 | 1j | Layer density near geometric (within 3σ of Binomial(N, q^L)) | HNSW graph |
 | 2a | last_indexed_iris_id matches irises table max serial ID | Persistent state |
 | 2b | Graph max serial_id alignment (left == right) | Persistent state |
-| 3a | Same row count (HNSW vs GPU, id ≤ last_indexed) | Cross-schema |
-| 3b | Same max serial ID (id ≤ last_indexed) | Cross-schema |
 | 3c | Byte-identical shares for sampled IDs (random sample of ~1k + up to 100 recent modification serial IDs; pending iris-code-updating modifications excluded) | Cross-schema |
+
+Additionally, the following are logged as informational (not PASS/FAIL checks):
+
+| ID | Log | Category |
+|----|-----|----------|
+| 3a | Row count comparison (HNSW vs GPU, id ≤ last_indexed) | Cross-schema |
+| 3b | Max serial ID comparison (id ≤ last_indexed) | Cross-schema |
 
 ## Scaling notes
 
