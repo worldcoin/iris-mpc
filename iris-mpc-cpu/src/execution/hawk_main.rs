@@ -154,6 +154,10 @@ pub type HawkOps = FhdOps;
 pub type GraphStore = graph_store::GraphPg<Aby3Store<HawkOps>>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store<HawkOps>>;
 
+/// Maps a composite match ID to its anon-stats operation and collected distance shares.
+type PartialDistancesMap =
+    BTreeMap<i64, (AnonStatsOperation, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>)>;
+
 mod identity_update;
 pub mod insert;
 mod intra_batch;
@@ -716,10 +720,9 @@ impl HawkActor {
         &mut self,
         search_results: &[VecRotations<HawkInsertPlan>],
         request_types: &[String],
-    ) -> BTreeMap<i64, (AnonStatsOperation, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>)> {
+    ) -> PartialDistancesMap {
         // maps query_id and db_id to an operation and a vector of distances.
-        let mut distances_with_ids: BTreeMap<i64, (AnonStatsOperation, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>)> =
-            BTreeMap::new();
+        let mut distances_with_ids: PartialDistancesMap = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             let operation = request_types
                 .get(query_idx)
@@ -754,7 +757,7 @@ impl HawkActor {
     async fn persist_cached_distances(
         &self,
         side: usize,
-        partial_distances: BTreeMap<i64, (AnonStatsOperation, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>)>,
+        partial_distances: PartialDistancesMap,
     ) -> Result<()> {
         let Some(store) = &self.anon_stats_store else {
             return Ok(());

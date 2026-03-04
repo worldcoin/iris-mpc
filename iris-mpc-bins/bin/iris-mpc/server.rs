@@ -515,7 +515,7 @@ async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::from)?;
 
-                        if !is_enabled(&request_type, &config) {
+                        if !is_enabled(request_type, config) {
                             metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
                             tracing::warn!("{} is disabled, skipping request", request_type);
                             continue;
@@ -531,7 +531,7 @@ async fn receive_batch(
                         let modification = store
                             .insert_modification(
                                 None,
-                                &request_type,
+                                request_type,
                                 Some(identity_match_check_request.s3_key.as_str()),
                             )
                             .await?;
@@ -549,7 +549,7 @@ async fn receive_batch(
                         batch_query.push_matching_request(
                             sns_message_id,
                             identity_match_check_request.request_id.clone(),
-                            &request_type,
+                            request_type,
                             batch_metadata,
                             vec![], // use AND rule for identity match check requests
                             false,  // skip_persistence is only used for uniqueness requests
