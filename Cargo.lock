@@ -3239,6 +3239,7 @@ dependencies = [
 name = "iris-mpc-utils"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "async_from",
  "aws-config",
