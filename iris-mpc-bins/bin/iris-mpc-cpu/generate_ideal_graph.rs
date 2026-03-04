@@ -1,7 +1,7 @@
 use eyre::Result;
 use iris_mpc_common::IrisVectorId;
-use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceFn, FhdOps};
-use iris_mpc_cpu::hawkers::plaintext_store::{fraction_ordering, PlaintextStore};
+use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
+use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::searcher::LayerMode;
 use iris_mpc_cpu::hnsw::{HnswSearcher, VectorStore};
 use iris_mpc_cpu::utils::serialization::graph::write_graph_current;
@@ -37,6 +37,96 @@ where
     let de = toml::de::Deserializer::new(&text);
     let t = serde_path_to_error::deserialize(de)?;
     Ok(t)
+}
+
+async fn run_sanity_check<D: DistanceOps>(
+    graph: &GraphMem<IrisVectorId>,
+    searcher: &HnswSearcher,
+    irises: Vec<iris_mpc_common::iris_db::iris::IrisCode>,
+    echoice: EngineChoice,
+) {
+    // Check number of neighbors for all nodes
+    for (lc, layer) in graph.layers.iter().enumerate() {
+        let expected_nb_size = searcher.params.get_M_max(lc).min(layer.links.len() - 1);
+        for (_, value) in layer.links.iter() {
+            assert_eq!(value.len(), expected_nb_size);
+        }
+    }
+
+    // Check layers and entry points are valid for layer mode
+    match searcher.layer_mode {
+        LayerMode::Standard { max_graph_layer } => {
+            assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
+            assert!(graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX));
+        }
+        LayerMode::LinearScan { max_graph_layer } => {
+            assert!(graph.num_layers() <= max_graph_layer + 1);
+        }
+    }
+
+    // All entry points should exist in the top graph layer as well
+    let last_graph_layer = graph.layers.last().unwrap();
+    for entry in &graph.entry_points {
+        assert!(
+            last_graph_layer.links.contains_key(&entry.point),
+            "Entry point {:?} not found in last graph layer",
+            entry
+        );
+    }
+
+    let mut entropy_rng = rand::rngs::StdRng::from_entropy();
+
+    // Sample one iris from the highest graph layer and assert that its neighborhood
+    // is correct in every layer.
+    let sample = last_graph_layer
+        .links
+        .keys()
+        .choose(&mut entropy_rng)
+        .cloned()
+        .expect("last layer should have at least one key");
+
+    let mut store = PlaintextStore::<D>::new();
+    store.distance_fn = echoice.distance_fn();
+
+    for (i, iris) in irises.into_iter().enumerate() {
+        store.insert_with_id(IrisVectorId::from_serial_id((i as u32) + 1), Arc::new(iris));
+    }
+
+    let sample_iris = store.storage.get_vector(&sample).cloned().unwrap();
+
+    for lc in 0..graph.layers.len() {
+        let neighbors = graph.layers[lc]
+            .get_links(&sample)
+            .unwrap_or_else(|| panic!("{}", lc));
+
+        let mut dists = Vec::new();
+        for k in graph.layers[lc].links.keys() {
+            if *k != sample {
+                let dist = store.eval_distance(&sample_iris, k).await.unwrap();
+                dists.push((*k, dist));
+            }
+        }
+
+        if !dists.is_empty() {
+            dists.sort_by(|a, b| D::plaintext_ordering(&a.1, &b.1));
+            dists.truncate(neighbors.len());
+            let kth_dist = dists.last().unwrap().1;
+
+            let count_greater = neighbors
+                .iter()
+                .filter(|n| {
+                    let d = D::plaintext_distance(
+                        &sample_iris,
+                        store.storage.get_vector(n).unwrap(),
+                        store.distance_fn,
+                    );
+                    matches!(D::plaintext_ordering(&d, &kth_dist), Ordering::Greater)
+                })
+                .count();
+
+            assert!(count_greater == 0);
+        }
+    }
 }
 
 /// This binary constructs an idealized HNSW GraphMem
@@ -80,89 +170,12 @@ async fn main() {
     .unwrap();
 
     if config.sanity_check {
-        // Check number of neighbors for all nodes
-        for (lc, layer) in graph.layers.iter().enumerate() {
-            let expected_nb_size = searcher.params.get_M_max(lc).min(layer.links.len() - 1);
-            for (_, value) in layer.links.iter() {
-                assert_eq!(value.len(), expected_nb_size);
+        match config.echoice {
+            EngineChoice::NaiveFHD | EngineChoice::NaiveMinFHD => {
+                run_sanity_check::<FhdOps>(&graph, &searcher, irises, config.echoice).await;
             }
-        }
-
-        // Check layers and entry points are valid for layer mode
-        match searcher.layer_mode {
-            LayerMode::Standard { max_graph_layer } => {
-                assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-                assert!(
-                    graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX)
-                );
-            }
-            LayerMode::LinearScan { max_graph_layer } => {
-                assert!(graph.num_layers() <= max_graph_layer + 1);
-            }
-        }
-
-        // All entry points should exist in the top graph layer as well
-        let last_graph_layer = graph.layers.last().unwrap();
-        for entry in &graph.entry_points {
-            assert!(
-                last_graph_layer.links.contains_key(&entry.point),
-                "Entry point {:?} not found in last graph layer",
-                entry
-            );
-        }
-
-        let mut entropy_rng = rand::rngs::StdRng::from_entropy();
-
-        // Sample one iris from the highest graph layer and assert that its neighborhood
-        // is correct in every layer.
-
-        let sample = last_graph_layer
-            .links
-            .keys()
-            .choose(&mut entropy_rng)
-            .cloned()
-            .expect("last layer should have at least one key");
-
-        let mut store = PlaintextStore::<FhdOps>::new();
-        store.distance_fn = match config.echoice {
-            EngineChoice::NaiveFHD => DistanceFn::Simple,
-            EngineChoice::NaiveMinFHD => DistanceFn::MinRotation,
-        };
-
-        for (i, iris) in irises.into_iter().enumerate() {
-            store.insert_with_id(IrisVectorId::from_serial_id((i as u32) + 1), Arc::new(iris));
-        }
-
-        let sample_iris = store.storage.get_vector(&sample).cloned().unwrap();
-
-        for lc in 0..graph.layers.len() {
-            let neighbors = graph.layers[lc]
-                .get_links(&sample)
-                .unwrap_or_else(|| panic!("{}", lc));
-
-            let mut dists = Vec::new();
-            for k in graph.layers[lc].links.keys() {
-                if *k != sample {
-                    let dist = store.eval_distance(&sample_iris, k).await.unwrap();
-                    dists.push((*k, dist));
-                }
-            }
-
-            if !dists.is_empty() {
-                dists.sort_by(|a, b| fraction_ordering(&a.1, &b.1));
-                dists.truncate(neighbors.len());
-                let kth_dist = dists.last().unwrap().1;
-
-                let count_greater = neighbors
-                    .iter()
-                    .filter(|n| {
-                        let d =
-                            sample_iris.get_distance_fraction(store.storage.get_vector(n).unwrap());
-                        matches!(fraction_ordering(&d, &kth_dist), Ordering::Greater)
-                    })
-                    .count();
-
-                assert!(count_greater == 0);
+            EngineChoice::NaiveNHD | EngineChoice::NaiveMinNHD => {
+                run_sanity_check::<NhdOps>(&graph, &searcher, irises, config.echoice).await;
             }
         }
     }
