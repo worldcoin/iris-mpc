@@ -1,6 +1,6 @@
 use eyre::Result;
 use iris_mpc_common::IrisVectorId;
-use iris_mpc_cpu::hawkers::aby3::aby3_store::DistanceFn;
+use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceFn, FhdOps};
 use iris_mpc_cpu::hawkers::plaintext_store::{fraction_ordering, PlaintextStore};
 use iris_mpc_cpu::hnsw::searcher::LayerMode;
 use iris_mpc_cpu::hnsw::{HnswSearcher, VectorStore};
@@ -123,10 +123,10 @@ async fn main() {
             .cloned()
             .expect("last layer should have at least one key");
 
-        let mut store = PlaintextStore::new();
+        let mut store = PlaintextStore::<FhdOps>::new();
         store.distance_fn = match config.echoice {
-            EngineChoice::NaiveFHD => DistanceFn::Fhd,
-            EngineChoice::NaiveMinFHD => DistanceFn::MinFhd,
+            EngineChoice::NaiveFHD => DistanceFn::Simple,
+            EngineChoice::NaiveMinFHD => DistanceFn::MinRotation,
         };
 
         for (i, iris) in irises.into_iter().enumerate() {
