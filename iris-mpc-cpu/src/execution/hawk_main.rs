@@ -729,12 +729,8 @@ impl HawkActor {
 
         // Persist 2D distances (combined left + right)
         let [left_distances, right_distances] = per_side_distances;
-        self.persist_cached_distances_2d(
-            anon_orientation,
-            left_distances,
-            right_distances,
-        )
-        .await?;
+        self.persist_cached_distances_2d(anon_orientation, left_distances, right_distances)
+            .await?;
 
         Ok(())
     }
