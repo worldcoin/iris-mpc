@@ -17,7 +17,7 @@ use iris_mpc_common::{
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::HashMap, marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tracing::debug;
 
 use eyre::{bail, Result};
@@ -140,10 +140,6 @@ impl<D: DistanceOps> PlaintextStore<D> {
     }
 }
 
-pub fn fraction_ordering(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> Ordering {
-    FhdOps::plaintext_ordering(dist_1, dist_2)
-}
-
 impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
     type QueryRef = Arc<IrisCode>;
     type VectorRef = VectorId;
@@ -222,11 +218,22 @@ impl<D: DistanceOps> VectorStoreMut for PlaintextStore<D> {
 }
 
 /// PlaintextStore with synchronization primitives for multithreaded use.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SharedPlaintextStore<D = FhdOps> {
     pub storage: PlaintextSharedIrisesRef,
     pub distance_fn: DistanceFn,
     _phantom: PhantomData<D>,
+}
+
+// Manual Clone impl: PhantomData<D> is always Clone regardless of D.
+impl<D> Clone for SharedPlaintextStore<D> {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            distance_fn: self.distance_fn,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<D: DistanceOps> Default for SharedPlaintextStore<D> {

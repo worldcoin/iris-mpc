@@ -29,6 +29,7 @@ license = "MIT OR (Apache-2.0 WITH LLVM-exception)"
 repository = "https://github.com/worldcoin/iris-mpc"
 
 [workspace.dependencies]
+async-stream = "0.3"
 aws-config = { version = "1.5.10", features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1.44.0" }
 aws-sdk-rds = { version = "1.44.0" }
