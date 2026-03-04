@@ -12,18 +12,24 @@ ark-bls12-381 = "0.5.0"
 ark-ff = "0.5.0"
 ark-ec = "0.5.0"
 ark-serialize = "0.5.0"
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
+aws-sdk-secretsmanager.workspace = true
 axum.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 clap = { workspace = true, features = ["env"] }
 eyre.workspace = true
 bytemuck.workspace = true
+base64.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde-big-array = "0.5"
 tracing.workspace = true
 itertools.workspace = true
 rand.workspace = true
 rand_chacha = "0.3"
+sqlx.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 
@@ -36,11 +42,17 @@ prost = "0.13.3"
 sha2.workspace = true
 thiserror.workspace = true
 blake3 = "1.8.2"
+futures.workspace = true
+tokio-util.workspace = true
 
 
 [dev-dependencies]
 criterion = "0.5"
 rayon = "1.10.0"
+dotenvy.workspace = true
+
+[features]
+db_dependent = []
 
 
 [build-dependencies]
