@@ -1,6 +1,7 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
 use async_from::AsyncFrom;
+use async_stream::stream;
 use aws_sdk_s3::{
     primitives::{ByteStream, SdkBody},
     Client as S3Client,
@@ -267,85 +268,66 @@ impl AwsClient {
     ) -> std::pin::Pin<Box<dyn Stream<Item = Result<SqsMessageInfo, AwsClientError>> + Send>> {
         const MAX_SQS_BATCH: i32 = 10;
 
-        Box::pin(futures::stream::unfold(
-            (sqs, queue_url, long_poll_secs, VecDeque::new()),
-            move |(sqs, queue_url, long_poll_secs, mut buffer)| async move {
-                loop {
-                    // Yield buffered messages first
-                    if let Some(msg) = buffer.pop_front() {
-                        return Some((Ok(msg), (sqs, queue_url, long_poll_secs, buffer)));
-                    }
-
-                    // Poll the queue with fixed max batch size
-                    let response = match sqs
-                        .receive_message()
-                        .queue_url(&queue_url)
-                        .wait_time_seconds(long_poll_secs)
-                        .max_number_of_messages(MAX_SQS_BATCH)
-                        .send()
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::error!("AWS-SQS receive error (queue: {}): {}", queue_url, e);
-                            return Some((
-                                Err(AwsClientError::SqsReceiveMessageError(e.to_string())),
-                                (sqs, queue_url, long_poll_secs, buffer),
-                            ));
-                        }
-                    };
-
-                    let messages = response.messages.unwrap_or_default();
-
-                    if messages.is_empty() {
+        Box::pin(stream! {
+            loop {
+                let response = match sqs
+                    .receive_message()
+                    .queue_url(&queue_url)
+                    .wait_time_seconds(long_poll_secs)
+                    .max_number_of_messages(MAX_SQS_BATCH)
+                    .send()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!("AWS-SQS receive error (queue: {}): {}", queue_url, e);
+                        yield Err(AwsClientError::SqsReceiveMessageError(e.to_string()));
                         continue;
                     }
+                };
 
-                    // Parse messages and collect receipt handles for deletion
-                    let (all_receipt_handles, parsed_messages) = parse_sqs_messages(&messages);
+                let messages = response.messages.unwrap_or_default();
+                if messages.is_empty() {
+                    continue;
+                }
 
-                    // Batch delete ALL messages (including unparseable ones)
-                    if !all_receipt_handles.is_empty() {
-                        let failed_ids =
-                            match delete_messages_batch(&sqs, &queue_url, &all_receipt_handles)
-                                .await
-                            {
-                                Ok(failed) => failed,
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to batch delete messages from queue {}: {}",
-                                        queue_url,
-                                        e
-                                    );
-                                    return Some((
-                                        Err(e),
-                                        (sqs, queue_url, long_poll_secs, buffer),
-                                    ));
-                                }
-                            };
+                // Parse messages and collect receipt handles for deletion
+                let (all_receipt_handles, parsed_messages) = parse_sqs_messages(&messages);
 
-                        // Only yield successfully parsed AND successfully deleted messages
-                        for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages {
-                            let msg_id = format!("msg-{}", idx);
-                            if !failed_ids.contains(&msg_id) {
-                                let msg_info = SqsMessageInfo::new(
-                                    msg_kind,
-                                    msg_body,
-                                    queue_url.clone(),
-                                    msg_receipt_handle,
+                // Batch delete ALL messages (including unparseable ones)
+                if !all_receipt_handles.is_empty() {
+                    let failed_ids =
+                        match delete_messages_batch(&sqs, &queue_url, &all_receipt_handles)
+                            .await
+                        {
+                            Ok(failed) => failed,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to batch delete messages from queue {}: {}",
+                                    queue_url,
+                                    e
                                 );
-                                buffer.push_back(msg_info);
+                                yield Err(e);
+                                continue;
                             }
-                        }
-                    }
+                        };
 
-                    // Continue loop to yield buffered messages
-                    if !buffer.is_empty() {
-                        continue;
+                    // Only yield successfully parsed AND successfully deleted messages
+                    for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages {
+                        let msg_id = format!("msg-{}", idx);
+                        if !failed_ids.contains(&msg_id) {
+                            let msg_info = SqsMessageInfo::new(
+                                msg_kind,
+                                msg_body,
+                                queue_url.clone(),
+                                msg_receipt_handle,
+                            );
+                            yield Ok(msg_info);
+                        }
                     }
                 }
-            },
-        ))
+            }
+        })
     }
 
     /// Returns a stream that merges responses from all SQS response queues.
