@@ -801,7 +801,10 @@ async fn run_cross_schema_checks(
         .await?;
     let (hnsw_count, gpu_count) = (hnsw_count.0, gpu_count.0);
     if hnsw_count == gpu_count {
-        rpt!(rpt, "  3a: Row count (id <= {last_indexed_id}): {hnsw_count} (both schemas match)");
+        rpt!(
+            rpt,
+            "  3a: Row count (id <= {last_indexed_id}): {hnsw_count} (both schemas match)"
+        );
     } else {
         rpt!(rpt, "  3a: Row count (id <= {last_indexed_id}): HNSW={hnsw_count}, GPU={gpu_count} (MISMATCH)");
     }
@@ -817,7 +820,10 @@ async fn run_cross_schema_checks(
         .await?;
     let (hnsw_max, gpu_max) = (hnsw_max.0, gpu_max.0);
     if hnsw_max == gpu_max {
-        rpt!(rpt, "  3b: Max serial ID (id <= {last_indexed_id}): {hnsw_max} (both schemas match)");
+        rpt!(
+            rpt,
+            "  3b: Max serial ID (id <= {last_indexed_id}): {hnsw_max} (both schemas match)"
+        );
     } else {
         rpt!(rpt, "  3b: Max serial ID (id <= {last_indexed_id}): HNSW={hnsw_max}, GPU={gpu_max} (MISMATCH)");
     }
