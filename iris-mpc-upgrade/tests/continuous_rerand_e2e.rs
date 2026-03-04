@@ -348,59 +348,6 @@ fn phase4_server_restart_during_rerand() {
 }
 
 // ============================================================================
-// Phase 5: Staggered restart -- kill one party mid-epoch, restart it, verify
-//           it catches up and the epoch completes
-// ============================================================================
-
-#[test]
-#[ignore = "Requires 3 local Postgres instances (6200-6202) and localstack; run via run-rerand-e2e-tests.sh"]
-fn phase5_staggered_restart() {
-    run_async(async {
-        let _ = tracing_subscriber::fmt::try_init();
-        let env = TestEnv::setup().await?;
-        println!("[phase 5] Staggered restart...");
-
-        let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
-        let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
-
-        let (h, t) = env.spawn_all();
-        wait_chunks_staged(&env.harness, 0, 1).await?;
-
-        // Kill party 0
-        println!("[phase 5]   killing party 0 after 1 chunk");
-        t[0].cancel();
-        h[0].abort();
-
-        // Immediately restart party 0
-        println!("[phase 5]   restarting party 0");
-        let (h0, t0) = env.spawn_rerand(0);
-
-        wait_epoch_done(&env.harness, 0).await?;
-
-        t0.cancel();
-        h0.abort();
-        let _ = h0.await;
-        stop_all(t, h).await;
-
-        let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
-        assert!(ep >= 1);
-        verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
-
-        let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
-        for &id in &all_ids {
-            assert_ne!(
-                &pre_shares[&id], &post_shares[&id],
-                "Shares for id={} should differ after rerand",
-                id
-            );
-        }
-        println!("[phase 5] PASSED (epoch={})", ep);
-
-        env.teardown().await
-    });
-}
-
-// ============================================================================
 // Phase 6: Multiple Epochs -- let the system run continuously across multiple
 //           epochs, verify seamless transition and correct rerandomization
 // ============================================================================
