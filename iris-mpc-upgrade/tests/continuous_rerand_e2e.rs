@@ -622,16 +622,13 @@ fn phase9_asymmetric_modification_consistency() {
         let post_shares = snapshot_raw_shares(&env.harness, &[target_id]).await?;
         for party in 1..NUM_PARTIES {
             assert_eq!(
-                &pre_shares[&target_id][party],
-                &post_shares[&target_id][party],
+                &pre_shares[&target_id][party], &post_shares[&target_id][party],
                 "P{} shares for excluded id={} should be unchanged",
-                party,
-                target_id
+                party, target_id
             );
         }
         assert_ne!(
-            &pre_shares[&target_id][0],
-            &post_shares[&target_id][0],
+            &pre_shares[&target_id][0], &post_shares[&target_id][0],
             "P0 shares for id={} should differ (byte-flip modification)",
             target_id
         );
