@@ -313,14 +313,14 @@ impl AwsClient {
                         };
 
                     // Only yield successfully parsed AND successfully deleted messages
-                    for (idx, msg_kind, msg_body, msg_receipt_handle) in parsed_messages {
-                        let msg_id = format!("msg-{}", idx);
+                    for msg in parsed_messages {
+                        let msg_id = format!("msg-{}", msg.index);
                         if !failed_ids.contains(&msg_id) {
                             let msg_info = SqsMessageInfo::new(
-                                msg_kind,
-                                msg_body,
+                                msg.kind,
+                                msg.body,
                                 queue_url.clone(),
-                                msg_receipt_handle,
+                                msg.receipt_handle,
                             );
                             yield Ok(msg_info);
                         }
@@ -353,17 +353,27 @@ impl AwsClient {
     }
 }
 
-// AI slop... sry about the type complexity
+/// Receipt handle info for message deletion
+struct MessageReceiptHandle {
+    index: usize,
+    receipt_handle: String,
+}
+
+/// Successfully parsed SQS message
+struct ParsedSqsMessage {
+    index: usize,
+    kind: String,
+    body: String,
+    receipt_handle: String,
+}
+
 /// Parses SQS messages and collects receipt handles for deletion.
 /// Returns (all_receipt_handles, parsed_messages).
 /// ALL messages have their receipt handles collected to prevent poison message redelivery.
-#[allow(clippy::type_complexity)]
 fn parse_sqs_messages(
     messages: &[aws_sdk_sqs::types::Message],
-) -> (Vec<(usize, String)>, Vec<(usize, String, String, String)>) {
-    // Vec<(message_index, receipt_handle)>
+) -> (Vec<MessageReceiptHandle>, Vec<ParsedSqsMessage>) {
     let mut all_receipt_handles = Vec::new();
-    // Vec<(message_index, message_kind, message_body, receipt_handle)>
     let mut parsed_messages = Vec::new();
 
     for (idx, msg) in messages.iter().enumerate() {
@@ -376,7 +386,10 @@ fn parse_sqs_messages(
         };
 
         // Always collect receipt handle for deletion
-        all_receipt_handles.push((idx, receipt_handle.clone()));
+        all_receipt_handles.push(MessageReceiptHandle {
+            index: idx,
+            receipt_handle: receipt_handle.clone(),
+        });
 
         // Try to parse message
         let body_str = match msg.body() {
@@ -430,7 +443,12 @@ fn parse_sqs_messages(
         };
 
         // Successfully parsed - add to parsed messages
-        parsed_messages.push((idx, msg_kind, msg_body, receipt_handle));
+        parsed_messages.push(ParsedSqsMessage {
+            index: idx,
+            kind: msg_kind,
+            body: msg_body,
+            receipt_handle,
+        });
     }
 
     (all_receipt_handles, parsed_messages)
@@ -441,17 +459,17 @@ fn parse_sqs_messages(
 async fn delete_messages_batch(
     sqs: &SQSClient,
     queue_url: &str,
-    all_receipt_handles: &[(usize, String)],
+    all_receipt_handles: &[MessageReceiptHandle],
 ) -> Result<HashSet<String>, AwsClientError> {
     use aws_sdk_sqs::types::DeleteMessageBatchRequestEntry;
 
     let to_delete: Result<Vec<DeleteMessageBatchRequestEntry>, AwsClientError> =
         all_receipt_handles
             .iter()
-            .map(|(idx, receipt_handle)| {
+            .map(|handle| {
                 DeleteMessageBatchRequestEntry::builder()
-                    .id(format!("msg-{}", idx))
-                    .receipt_handle(receipt_handle)
+                    .id(format!("msg-{}", handle.index))
+                    .receipt_handle(&handle.receipt_handle)
                     .build()
                     .map_err(|e| {
                         AwsClientError::SqsDeleteMessageError(format!(
