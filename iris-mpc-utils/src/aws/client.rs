@@ -296,8 +296,10 @@ impl AwsClient {
     /// Creates a stream for a single SQS queue.
     ///
     /// Uses long polling with a fixed max batch size to efficiently receive messages.
-    /// Messages are deleted from the queue immediately upon successful receipt and parsing.
-    /// Only successfully deleted messages are yielded from the stream.
+    /// Messages are batch-deleted from the queue as soon as they are received, even if they
+    /// subsequently fail to parse, in order to avoid poison-message redelivery.
+    /// Only messages that were successfully parsed and deleted are yielded from the stream.
+    /// Callers MUST NOT rely on at-least-once delivery semantics for messages that fail to parse.
     fn sqs_stream(
         sqs: SQSClient,
         queue_url: String,
