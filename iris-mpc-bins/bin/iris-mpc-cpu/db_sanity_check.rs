@@ -20,7 +20,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
     path::{Path, PathBuf},
@@ -48,9 +48,12 @@ const IRIS_UPDATE_TYPES: &[&str] = &[
     about = "Validate DB state for a single MPC party"
 )]
 struct Args {
-    /// Postgres connection string
-    #[arg(long, env = "DATABASE_URL")]
-    db_url: String,
+    /// Postgres connection string for the HNSW (CPU) database
+    #[arg(long, env = "HNSW_DATABASE_URL")]
+    hnsw_db_url: String,
+    /// Postgres connection string for the GPU database
+    #[arg(long, env = "GPU_DATABASE_URL")]
+    gpu_db_url: String,
     /// HNSW (CPU) schema name
     #[arg(long)]
     hnsw_schema: String,
@@ -73,6 +76,9 @@ struct Args {
     /// RNG seed for reproducible cross-schema sampling
     #[arg(long)]
     seed: u64,
+    /// S3 URI to upload output files to (e.g. s3://bucket/prefix/)
+    #[arg(long)]
+    s3_output: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +93,8 @@ struct CheckResult {
     #[serde(rename = "status", serialize_with = "ser_status")]
     passed: bool,
     detail: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
 }
 
 fn ser_status<S: serde::Serializer>(v: &bool, s: S) -> std::result::Result<S::Ok, S::Error> {
@@ -100,7 +108,13 @@ impl CheckResult {
             name: name.to_string(),
             passed: ok,
             detail: detail.into(),
+            warnings: Vec::new(),
         }
+    }
+
+    fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
     }
 }
 
@@ -135,7 +149,9 @@ async fn main() -> Result<()> {
     println!();
 
     let hnsw_pg =
-        PostgresClient::new(&args.db_url, &args.hnsw_schema, AccessMode::ReadOnly).await?;
+        PostgresClient::new(&args.hnsw_db_url, &args.hnsw_schema, AccessMode::ReadOnly).await?;
+    let gpu_pg =
+        PostgresClient::new(&args.gpu_db_url, &args.gpu_schema, AccessMode::ReadOnly).await?;
     let hnsw_store = Store::new(&hnsw_pg).await?;
     let graph_pg = GraphPg::<Aby3Store>::new(&hnsw_pg).await?;
 
@@ -175,12 +191,11 @@ async fn main() -> Result<()> {
 
     println!("--- Check 3: HNSW vs GPU iris consistency (sampled, modification-aware) ---");
     run_cross_schema_checks(
-        &args.hnsw_schema,
-        &args.gpu_schema,
         iris_max,
         last_mod_id,
         args.seed,
         &hnsw_store.pool,
+        &gpu_pg.pool,
         &mut checks,
     )
     .await?;
@@ -202,7 +217,12 @@ async fn main() -> Result<()> {
         checks.len()
     );
 
-    write_json_reports(&args.output_dir, &checks, &stats, &degree_hist)?;
+    let json_files = write_json_reports(&args.output_dir, &checks, &stats, &degree_hist)?;
+
+    if let Some(s3_uri) = &args.s3_output {
+        upload_to_s3(s3_uri, &json_files).await?;
+    }
+
     if fail_count > 0 {
         process::exit(1);
     }
@@ -701,38 +721,26 @@ async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreI
 // Check 3: Cross-schema consistency (HNSW vs GPU)
 // ---------------------------------------------------------------------------
 
-fn validate_schema_name(name: &str) -> Result<()> {
-    eyre::ensure!(
-        !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'),
-        "invalid schema name: {name}"
-    );
-    Ok(())
-}
-
 async fn run_cross_schema_checks(
-    hnsw_schema: &str,
-    gpu_schema: &str,
     last_indexed_id: usize,
     last_indexed_mod_id: Option<i64>,
     seed: u64,
-    pool: &sqlx::PgPool,
+    hnsw_pool: &sqlx::PgPool,
+    gpu_pool: &sqlx::PgPool,
     checks: &mut Vec<CheckResult>,
 ) -> Result<()> {
-    validate_schema_name(hnsw_schema)?;
-    validate_schema_name(gpu_schema)?;
     let lid = last_indexed_id as i64;
 
     // 3a: Same row count (up to last_indexed_id)
-    let count_query = format!(
-        r#"SELECT
-             (SELECT COUNT(*) FROM "{}".irises WHERE id <= $1) AS hnsw_count,
-             (SELECT COUNT(*) FROM "{}".irises WHERE id <= $1) AS gpu_count"#,
-        hnsw_schema, gpu_schema
-    );
-    let (hnsw_count, gpu_count): (i64, i64) = sqlx::query_as(&count_query)
+    let hnsw_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises WHERE id <= $1")
         .bind(lid)
-        .fetch_one(pool)
+        .fetch_one(hnsw_pool)
         .await?;
+    let gpu_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises WHERE id <= $1")
+        .bind(lid)
+        .fetch_one(gpu_pool)
+        .await?;
+    let (hnsw_count, gpu_count) = (hnsw_count.0, gpu_count.0);
     checks.push(CheckResult::new(
         "3a",
         "Same row count",
@@ -745,16 +753,17 @@ async fn run_cross_schema_checks(
     ));
 
     // 3b: Same max serial ID (up to last_indexed_id)
-    let max_id_query = format!(
-        r#"SELECT
-             (SELECT COALESCE(MAX(id), 0) FROM "{}".irises WHERE id <= $1) AS hnsw_max,
-             (SELECT COALESCE(MAX(id), 0) FROM "{}".irises WHERE id <= $1) AS gpu_max"#,
-        hnsw_schema, gpu_schema
-    );
-    let (hnsw_max, gpu_max): (i64, i64) = sqlx::query_as(&max_id_query)
-        .bind(lid)
-        .fetch_one(pool)
-        .await?;
+    let hnsw_max: (i64,) =
+        sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises WHERE id <= $1")
+            .bind(lid)
+            .fetch_one(hnsw_pool)
+            .await?;
+    let gpu_max: (i64,) =
+        sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises WHERE id <= $1")
+            .bind(lid)
+            .fetch_one(gpu_pool)
+            .await?;
+    let (hnsw_max, gpu_max) = (hnsw_max.0, gpu_max.0);
     checks.push(CheckResult::new(
         "3b",
         "Same max serial ID",
@@ -773,7 +782,7 @@ async fn run_cross_schema_checks(
     //   2. Augment with up to RECENT_MOD_COUNT serial IDs from the most-recent
     //      processed modifications (id <= last_indexed_mod_id), so recently
     //      modified irises are always exercised.
-    //   3. Fetch mismatches for those IDs using a targeted JOIN.
+    //   3. Fetch iris data from each DB independently, compare in Rust.
     //   4. Load any modifications that arrived *after* last_indexed_mod_id and
     //      that update iris code data; exclude their serial IDs from the check
     //      because GPU may reflect the new code while HNSW still has the old one.
@@ -802,6 +811,7 @@ async fn run_cross_schema_checks(
     };
 
     // Step 2: Augment with serial IDs from recently processed modifications.
+    // The modifications table lives in the GPU schema.
     let after_mod_id = last_indexed_mod_id.unwrap_or(0);
     if last_indexed_mod_id.is_some() {
         let recent: Vec<(i64,)> = sqlx::query_as(
@@ -811,7 +821,7 @@ async fn run_cross_schema_checks(
         )
         .bind(after_mod_id)
         .bind(RECENT_MOD_COUNT)
-        .fetch_all(pool)
+        .fetch_all(gpu_pool)
         .await?;
         for (sid,) in recent {
             if (1..=lid).contains(&sid) {
@@ -826,24 +836,84 @@ async fn run_cross_schema_checks(
         sample_vec.len(),
     );
 
-    // Step 3: Find mismatches within the sample.
-    let mismatch_query = format!(
-        r#"SELECT h.id FROM "{}".irises h
-           JOIN "{}".irises g ON h.id = g.id
-           WHERE h.id = ANY($1)
-             AND (h.left_code != g.left_code
-              OR h.left_mask != g.left_mask
-              OR h.right_code != g.right_code
-              OR h.right_mask != g.right_mask)"#,
-        hnsw_schema, gpu_schema
-    );
-    let mismatched_raw: Vec<(i64,)> = sqlx::query_as(&mismatch_query)
-        .bind(&sample_vec)
-        .fetch_all(pool)
-        .await?;
+    // Step 3: Fetch iris data from each DB independently and compare in Rust.
+    let hnsw_rows: Vec<(i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, left_code, left_mask, right_code, right_mask \
+         FROM irises WHERE id = ANY($1)",
+    )
+    .bind(&sample_vec)
+    .fetch_all(hnsw_pool)
+    .await?;
+
+    let gpu_rows: Vec<(i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, left_code, left_mask, right_code, right_mask \
+         FROM irises WHERE id = ANY($1)",
+    )
+    .bind(&sample_vec)
+    .fetch_all(gpu_pool)
+    .await?;
+
+    let hnsw_map: HashMap<i64, (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = hnsw_rows
+        .into_iter()
+        .map(|(id, lc, lm, rc, rm)| (id, (lc, lm, rc, rm)))
+        .collect();
+    let gpu_map: HashMap<i64, (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = gpu_rows
+        .into_iter()
+        .map(|(id, lc, lm, rc, rm)| (id, (lc, lm, rc, rm)))
+        .collect();
+
+    let mut mismatched_raw: Vec<i64> = Vec::new();
+    let mut only_in_hnsw: Vec<i64> = Vec::new();
+    let mut only_in_gpu: Vec<i64> = Vec::new();
+    for (&id, hnsw_data) in &hnsw_map {
+        match gpu_map.get(&id) {
+            Some(gpu_data) if gpu_data != hnsw_data => mismatched_raw.push(id),
+            None => only_in_hnsw.push(id),
+            _ => {}
+        }
+    }
+    for &id in gpu_map.keys() {
+        if !hnsw_map.contains_key(&id) {
+            only_in_gpu.push(id);
+        }
+    }
+
+    // Warn about one-sided IDs.  A handful is expected around identity
+    // deletions; a large number suggests a real problem.
+    const ONE_SIDED_WARN_THRESHOLD: usize = 10;
+    let mut one_sided_warnings: Vec<String> = Vec::new();
+    if !only_in_hnsw.is_empty() {
+        let level = if only_in_hnsw.len() >= ONE_SIDED_WARN_THRESHOLD {
+            "WARNING"
+        } else {
+            "NOTICE"
+        };
+        let msg = format!(
+            "{} sampled IDs in HNSW but not GPU (deletion after genesis?): {:?}",
+            only_in_hnsw.len(),
+            &only_in_hnsw[..only_in_hnsw.len().min(10)],
+        );
+        println!("  [{level}] {msg}");
+        one_sided_warnings.push(msg);
+    }
+    if !only_in_gpu.is_empty() {
+        let level = if only_in_gpu.len() >= ONE_SIDED_WARN_THRESHOLD {
+            "WARNING"
+        } else {
+            "NOTICE"
+        };
+        let msg = format!(
+            "{} sampled IDs in GPU but not HNSW (identity deletion set?): {:?}",
+            only_in_gpu.len(),
+            &only_in_gpu[..only_in_gpu.len().min(10)],
+        );
+        println!("  [{level}] {msg}");
+        one_sided_warnings.push(msg);
+    }
 
     // Step 4: Load serial IDs of pending iris-code-updating modifications
     // (id > last_indexed_mod_id).  These may diverge between schemas legitimately.
+    // The modifications table lives in the GPU schema.
     let update_types: Vec<String> = IRIS_UPDATE_TYPES.iter().map(|s| s.to_string()).collect();
     let pending: Vec<(i64,)> = sqlx::query_as(
         "SELECT DISTINCT serial_id FROM modifications \
@@ -851,37 +921,45 @@ async fn run_cross_schema_checks(
     )
     .bind(after_mod_id)
     .bind(&update_types)
-    .fetch_all(pool)
+    .fetch_all(gpu_pool)
     .await?;
     let pending_set: HashSet<i64> = pending.into_iter().map(|(sid,)| sid).collect();
 
     // Step 5: Filter out legitimately-diverging IDs.
+    // One-sided IDs are not counted as mismatches (logged as warnings above).
     let mismatched_ids: Vec<i64> = mismatched_raw
         .into_iter()
-        .map(|(id,)| id)
         .filter(|id| !pending_set.contains(id))
         .collect();
 
-    checks.push(CheckResult::new(
-        "3c",
-        "Byte-identical shares (sampled)",
-        mismatched_ids.is_empty(),
-        if mismatched_ids.is_empty() {
-            format!(
-                "{} IDs sampled, {} pending-update IDs excluded, 0 mismatches",
-                sample_vec.len(),
-                pending_set.len(),
-            )
-        } else {
-            format!(
-                "{} IDs sampled, {} pending-update IDs excluded, {} mismatches (first 10): {:?}",
-                sample_vec.len(),
-                pending_set.len(),
-                mismatched_ids.len(),
-                &mismatched_ids[..mismatched_ids.len().min(10)],
-            )
-        },
-    ));
+    let one_sided_total = only_in_hnsw.len() + only_in_gpu.len();
+    checks.push(
+        CheckResult::new(
+            "3c",
+            "Byte-identical shares (sampled)",
+            mismatched_ids.is_empty(),
+            if mismatched_ids.is_empty() {
+                format!(
+                    "{} IDs sampled, {} pending-update IDs excluded, \
+                     {} one-sided IDs (not counted as mismatches), 0 mismatches",
+                    sample_vec.len(),
+                    pending_set.len(),
+                    one_sided_total,
+                )
+            } else {
+                format!(
+                    "{} IDs sampled, {} pending-update IDs excluded, \
+                     {} one-sided IDs, {} mismatches (first 10): {:?}",
+                    sample_vec.len(),
+                    pending_set.len(),
+                    one_sided_total,
+                    mismatched_ids.len(),
+                    &mismatched_ids[..mismatched_ids.len().min(10)],
+                )
+            },
+        )
+        .with_warnings(one_sided_warnings),
+    );
 
     Ok(())
 }
@@ -895,12 +973,14 @@ fn write_json_reports(
     checks: &[CheckResult],
     stats: &Stats,
     hist: &[DegreeHistEntry],
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     fs::create_dir_all(dir)?;
+    let mut files = Vec::new();
 
     let p = dir.join("checks.json");
     fs::write(&p, serde_json::to_string_pretty(checks)?)?;
     println!("Wrote {}", p.display());
+    files.push(p);
 
     let p = dir.join("stats.json");
     let map: serde_json::Map<String, serde_json::Value> = stats
@@ -913,10 +993,65 @@ fn write_json_reports(
         serde_json::to_string_pretty(&serde_json::Value::Object(map))?,
     )?;
     println!("Wrote {}", p.display());
+    files.push(p);
 
     let p = dir.join("degree_histogram.json");
     fs::write(&p, serde_json::to_string_pretty(hist)?)?;
     println!("Wrote {}", p.display());
+    files.push(p);
+
+    Ok(files)
+}
+
+// ---------------------------------------------------------------------------
+// S3 upload
+// ---------------------------------------------------------------------------
+
+/// Parse an S3 URI like `s3://bucket/prefix/` into (bucket, key_prefix).
+fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
+    let stripped = uri
+        .strip_prefix("s3://")
+        .ok_or_else(|| eyre::eyre!("S3 URI must start with s3://"))?;
+    let (bucket, prefix) = stripped
+        .split_once('/')
+        .unwrap_or((stripped, ""));
+    eyre::ensure!(!bucket.is_empty(), "S3 URI has empty bucket name");
+    Ok((bucket.to_string(), prefix.to_string()))
+}
+
+async fn upload_to_s3(s3_uri: &str, files: &[PathBuf]) -> Result<()> {
+    let (bucket, prefix) = parse_s3_uri(s3_uri)?;
+    println!("\n--- Uploading to S3: s3://{bucket}/{prefix} ---");
+
+    let config = aws_config::from_env().load().await;
+    let s3_config = aws_sdk_s3::config::Builder::from(&config)
+        .force_path_style(true)
+        .build();
+    let client = aws_sdk_s3::Client::from_conf(s3_config);
+
+    for path in files {
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| eyre::eyre!("no filename for {}", path.display()))?
+            .to_string_lossy();
+        let key = if prefix.is_empty() {
+            file_name.to_string()
+        } else {
+            let trimmed = prefix.trim_end_matches('/');
+            format!("{trimmed}/{file_name}")
+        };
+
+        let body = aws_sdk_s3::primitives::ByteStream::from_path(path).await?;
+        client
+            .put_object()
+            .bucket(&bucket)
+            .key(&key)
+            .body(body)
+            .content_type("application/json")
+            .send()
+            .await?;
+        println!("  Uploaded s3://{bucket}/{key}");
+    }
 
     Ok(())
 }

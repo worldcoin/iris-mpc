@@ -38,7 +38,8 @@ for test_id in "${TESTS[@]}"; do
         log_file="$output_dir/run.log"
 
         if ! "$SANITY_BIN" \
-            --db-url "postgres://postgres:postgres@localhost:5432/SMPC_dev_${party_id}" \
+            --hnsw-db-url "postgres://postgres:postgres@localhost:5432/SMPC_dev_${party_id}" \
+            --gpu-db-url "postgres://postgres:postgres@localhost:5432/SMPC_dev_${party_id}" \
             --hnsw-schema "SMPC_hnsw_dev_${party_id}" \
             --gpu-schema "SMPC_dev_${party_id}" \
             --seed "$SEED" \
