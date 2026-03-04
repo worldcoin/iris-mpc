@@ -13,7 +13,7 @@ use tokio::time::{sleep, timeout, Instant};
 use uuid::Uuid;
 
 use crate::{
-    aws::{types::SnsMessageInfo, AwsClientError},
+    aws::types::SnsMessageInfo,
     client::options::{RequestBatchOptions, SharesGeneratorOptions},
     constants::N_PARTIES,
     irises::GaloisRingSharedIrisForUpload,
@@ -101,7 +101,9 @@ impl ServiceClient {
         );
 
         // Send deletion requests for all live serial IDs.
-        let live_serial_ids = std::mem::take(&mut self.state.live_serial_ids);
+        let live_serial_ids = std::mem::take(&mut self.state.live_serial_ids)
+            .into_iter()
+            .collect::<Vec<_>>();
         let deletion_messages: Vec<SnsMessageInfo> = live_serial_ids
             .iter()
             .map(|&serial_id| {
@@ -113,23 +115,23 @@ impl ServiceClient {
             })
             .collect();
 
-        match self
+        let idxs = self
             .aws_client
             .sns_publish_json_batch(&deletion_messages)
-            .await
-            .map_err(ServiceClientError::AwsServiceError)
-        {
-            Ok(published_count) => {
-                for serial_id in live_serial_ids.iter().take(published_count) {
-                    tracing::info!("publishing Deletion for {}", serial_id);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to send deletion batch: {}", e);
-            }
+            .await;
+
+        for idx in &idxs {
+            tracing::info!("publishing Deletion for {}", live_serial_ids[*idx]);
         }
-        // iris-mpc-hawk will not send responses for a batch of just deletions
-        tracing::info!("Cleanup complete. Deletions have been submitted.");
+
+        if idxs.len() != live_serial_ids.len() {
+            tracing::error!(
+                "Failed to send {} deletions",
+                live_serial_ids.len() - idxs.len()
+            );
+        } else {
+            tracing::info!("Cleanup complete. Deletions have been submitted.");
+        }
 
         Ok(())
     }
@@ -165,11 +167,11 @@ impl ServiceClient {
         // Phase 4: Publish requests to SNS.
         // From this point forward, continue on error in an attempt to clean up requests
         // which have already been published
-        let published_count = self.publish_requests(batch_idx, &batch_requests).await;
+        let published_idxs = self.publish_requests(&batch_requests).await;
 
         // Phase 5: Track published requests and wait for responses.
         self.state
-            .track_batch_requests(&batch_requests[..published_count]);
+            .track_batch_requests(&published_idxs, &batch_requests);
         self.state.process_responses(&self.aws_client).await;
 
         // Check all error conditions and return consolidated error
@@ -282,46 +284,24 @@ impl ServiceClient {
         Ok(())
     }
 
-    async fn publish_requests(
-        &mut self,
-        batch_idx: usize,
-        batch_requests: &[typeset::Request],
-    ) -> usize {
+    async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
         use crate::aws::types::SnsMessageInfo;
 
         // Collect all messages for batch publishing
         let messages: Vec<SnsMessageInfo> =
             batch_requests.iter().map(SnsMessageInfo::from).collect();
 
-        match self.aws_client.sns_publish_json_batch(&messages).await {
-            Ok(published_count) => {
-                for request in batch_requests.iter().take(published_count) {
-                    tracing::info!("publishing {}", request.log_tag());
-                }
-                published_count
-            }
-            Err(AwsClientError::SnsPublishBatchPartialError {
-                message,
-                published_count,
-            }) => {
-                self.state.error_bits.set_sns_publish_error();
-                tracing::error!(
-                    "batch {}: SNS batch publish partial failure: {} ({} messages published)",
-                    batch_idx,
-                    message,
-                    published_count
-                );
-                for request in batch_requests.iter().take(published_count) {
-                    tracing::info!("publishing {}", request.log_tag());
-                }
-                published_count
-            }
-            Err(e) => {
-                self.state.error_bits.set_sns_publish_error();
-                tracing::error!("batch {}: SNS batch publish failed: {:?}", batch_idx, e,);
-                0
-            }
+        let idxs = self.aws_client.sns_publish_json_batch(&messages).await;
+        if idxs.len() != messages.len() {
+            self.state.error_bits.set_sns_publish_error();
         }
+
+        for idx in &idxs {
+            let request = &batch_requests[*idx];
+            tracing::info!("publishing {}", request.log_tag());
+        }
+
+        idxs
     }
 }
 
@@ -512,8 +492,9 @@ impl ExecState {
 
     // Phase 5: Register published requests so responses can be correlated. IdentityDeletion
     // correlates by serial_id rather than UUID, so it goes into outstanding_deletions.
-    fn track_batch_requests(&mut self, batch_requests: &[typeset::Request]) {
-        for request in batch_requests {
+    fn track_batch_requests(&mut self, idxs: &[usize], batch_requests: &[typeset::Request]) {
+        for idx in idxs {
+            let request = &batch_requests[*idx];
             let opt_tracking_uuid: Option<Uuid> = match request {
                 typeset::Request::Uniqueness { signup_id, .. } => {
                     if let Some(label) = request.info().label() {

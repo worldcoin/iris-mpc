@@ -129,28 +129,19 @@ impl AwsClient {
 
     /// Enqueues multiple messages upon an AWS SNS service topic using batch publish.
     /// AWS SNS supports up to 10 messages per batch.
-    /// Returns the number of successfully published messages.
-    ///
-    /// # Errors
-    /// Returns an error if the batch publish request fails or if any message in a chunk
-    /// fails to publish. On partial failure, the error message includes the count of
-    /// successful publishes before the failure occurred.
-    pub async fn sns_publish_json_batch(
-        &self,
-        messages: &[SnsMessageInfo],
-    ) -> Result<usize, AwsClientError> {
+    /// Returns the indexes of messages which were successfully published
+    pub async fn sns_publish_json_batch(&self, messages: &[SnsMessageInfo]) -> Vec<usize> {
         use aws_sdk_sns::types::PublishBatchRequestEntry;
+        const MAX_BATCH_SIZE: usize = 10;
+        let mut indices = vec![];
 
         if messages.is_empty() {
-            return Ok(0);
+            return indices;
         }
-
-        const MAX_BATCH_SIZE: usize = 10;
-        let mut total_published = 0;
 
         // Process messages in chunks of up to 10
         for (chunk_idx, chunk) in messages.chunks(MAX_BATCH_SIZE).enumerate() {
-            let entries: Result<Vec<PublishBatchRequestEntry>, AwsClientError> = chunk
+            let entries: Result<Vec<_>, _> = chunk
                 .iter()
                 .enumerate()
                 .map(|(idx, msg)| {
@@ -160,24 +151,16 @@ impl AwsClient {
                         .message_group_id(msg.group_id())
                         .set_message_attributes(Some(create_sns_message_attributes(msg.kind())))
                         .build()
-                        .map_err(|e| {
-                            AwsClientError::SnsPublishBatchError(format!(
-                                "Failed to build PublishBatchRequestEntry: {}",
-                                e
-                            ))
-                        })
                 })
                 .collect();
 
-            let entries = entries.map_err(|e| match e {
-                AwsClientError::SnsPublishBatchError(msg) => {
-                    AwsClientError::SnsPublishBatchPartialError {
-                        message: msg,
-                        published_count: total_published,
-                    }
+            let entries = match entries {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("failed to build PublishBatchRequestEntry: {:?}", e);
+                    return indices;
                 }
-                other => other,
-            })?;
+            };
 
             let response = self
                 .sns
@@ -185,54 +168,33 @@ impl AwsClient {
                 .topic_arn(self.config().sns_request_topic_arn())
                 .set_publish_batch_request_entries(Some(entries))
                 .send()
-                .await
-                .map_err(|e| AwsClientError::SnsPublishBatchPartialError {
-                    message: e.to_string(),
-                    published_count: total_published,
-                })?;
+                .await;
 
-            // Count successful publishes
-            let successful = response.successful.unwrap_or_default().len();
-            total_published += successful;
-
-            // Check for any failures and stop immediately
-            if let Some(failed) = response.failed {
-                if !failed.is_empty() {
-                    for failure in &failed {
-                        tracing::error!(
-                            "SNS batch publish failed for message {}: {} - {}",
-                            failure.id,
-                            failure.code,
-                            failure.message.as_deref().unwrap_or("")
-                        );
-                    }
-                    return Err(AwsClientError::SnsPublishBatchPartialError {
-                        message: format!(
-                            "Partial failure in chunk {}: {}/{} messages published successfully",
-                            chunk_idx,
-                            successful,
-                            chunk.len()
-                        ),
-                        published_count: total_published,
-                    });
+            let response = match response {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("Failed to publish batch: {:?}", e);
+                    return indices;
                 }
-            }
+            };
 
-            // Sanity check: ensure we got a response for all messages
-            if successful != chunk.len() {
-                return Err(AwsClientError::SnsPublishBatchPartialError {
-                    message: format!(
-                        "Unexpected response in chunk {}: {}/{} messages confirmed successful",
-                        chunk_idx,
-                        successful,
-                        chunk.len()
-                    ),
-                    published_count: total_published,
-                });
+            // Map successful response IDs to original message indices
+            if let Some(successful) = response.successful {
+                for success in successful {
+                    // Parse the ID format "msg-{chunk_idx}-{idx}" to get the original index
+                    if let Some(id) = success.id {
+                        if let Some(idx_str) = id.strip_prefix(&format!("msg-{}-", chunk_idx)) {
+                            if let Ok(local_idx) = idx_str.parse::<usize>() {
+                                let original_idx = chunk_idx * MAX_BATCH_SIZE + local_idx;
+                                indices.push(original_idx);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        Ok(total_published)
+        indices
     }
 
     /// Purges all SQS response queues.
@@ -296,10 +258,8 @@ impl AwsClient {
     /// Creates a stream for a single SQS queue.
     ///
     /// Uses long polling with a fixed max batch size to efficiently receive messages.
-    /// Messages are batch-deleted from the queue as soon as they are received, even if they
-    /// subsequently fail to parse, in order to avoid poison-message redelivery.
-    /// Only messages that were successfully parsed and deleted are yielded from the stream.
-    /// Callers MUST NOT rely on at-least-once delivery semantics for messages that fail to parse.
+    /// Messages are deleted from the queue immediately upon successful receipt and parsing.
+    /// Only successfully deleted messages are yielded from the stream.
     fn sqs_stream(
         sqs: SQSClient,
         queue_url: String,
