@@ -18,6 +18,8 @@ jobs:
   test:
     runs-on:
       labels: ubuntu-22.04-16core
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:15
