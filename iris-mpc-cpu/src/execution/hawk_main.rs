@@ -155,8 +155,13 @@ pub type GraphStore = graph_store::GraphPg<Aby3Store<HawkOps>>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store<HawkOps>>;
 
 /// Maps a composite match ID to its anon-stats operation and collected distance shares.
-type PartialDistancesMap =
-    BTreeMap<i64, (AnonStatsOperation, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>)>;
+type PartialDistancesMap = BTreeMap<
+    i64,
+    (
+        AnonStatsOperation,
+        Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>,
+    ),
+>;
 
 mod identity_update;
 pub mod insert;
