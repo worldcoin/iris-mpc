@@ -749,6 +749,8 @@ mod tests {
                 node_id: 1,
                 serial_id: 100,
                 success: true,
+                error: None,
+                error_reason: None,
             })
             .unwrap(),
         );
@@ -969,6 +971,8 @@ mod tests {
             node_id: 2,
             serial_id: 456,
             success: true,
+            error: None,
+            error_reason: None,
         };
 
         // Serialize the original result
