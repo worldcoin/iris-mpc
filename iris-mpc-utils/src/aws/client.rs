@@ -528,16 +528,16 @@ async fn delete_messages_batch(
     // Collect failed message IDs
     let failed_ids: HashSet<String> = delete_response
         .failed
-        .iter()
+        .into_iter()
         .map(|f| {
             tracing::error!(
                 "Failed to delete message {} from queue {}: {} - {}",
                 f.id,
                 queue_url,
                 f.code,
-                f.message.as_deref().unwrap_or_default()
+                f.message.unwrap_or_default()
             );
-            f.id.clone()
+            f.id
         })
         .collect();
 
