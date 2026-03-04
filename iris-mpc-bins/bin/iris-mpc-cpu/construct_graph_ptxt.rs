@@ -2,13 +2,14 @@ use std::{iter::once, path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use eyre::{bail, Result};
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::{chain, Itertools};
 use serde::Deserialize;
 
 use iris_mpc_cpu::{
     hawkers::{
-        aby3::aby3_store::DistanceFn, build_plaintext::plaintext_parallel_batch_insert,
+        aby3::aby3_store::{DistanceFn, DistanceOps, FhdOps, NhdOps},
+        build_plaintext::plaintext_parallel_batch_insert,
         plaintext_store::SharedPlaintextStore,
     },
     hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
@@ -27,6 +28,14 @@ struct Args {
     job_spec: PathBuf,
 }
 
+/// Selects the distance operations type at runtime.
+#[derive(Clone, Copy, Debug, Deserialize, Default)]
+enum DistanceOpsKind {
+    #[default]
+    Fhd,
+    Nhd,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct CliConfig {
     /// Specification for iris codes to use in the construction.
@@ -40,6 +49,10 @@ struct CliConfig {
 
     /// Distance function for comparison of iris codes.
     distance_fn: DistanceFn,
+
+    /// Selects the distance operations type (Fhd or Nhd). Defaults to Fhd.
+    #[serde(default)]
+    distance_ops: DistanceOpsKind,
 
     /// Seed value used for sampling graph layers for insertion.
     hnsw_prf_seed: Option<u64>,
@@ -101,37 +114,15 @@ impl Checkpoints {
 }
 
 #[allow(non_snake_case)]
-#[tokio::main]
-async fn main() -> Result<()> {
-    let filter = EnvFilter::new("info,iris_mpc_cpu::hnsw=off");
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(filter))
-        .init();
-
-    // parse args
-    tracing::info!("Loading configuration from file");
-    let cli = Args::parse();
-    let config: CliConfig = load_toml(&cli.job_spec)?;
-    tracing::info!("Configuration loaded from {}", cli.job_spec.display());
-
-    tracing::info!("Initializing searcher");
-    let searcher: HnswSearcher = (&config.searcher).try_into()?;
-    let prf_seed = (config.hnsw_prf_seed.unwrap_or(0) as u128).to_le_bytes();
-
-    tracing::info!("Loading iris codes");
-    let irises_ = iris_mpc_cpu::utils::cli::load_irises(config.irises).await?;
-    let irises: Vec<_> = irises_
-        .into_iter()
-        .enumerate()
-        .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
-        .collect();
-    if irises.is_empty() {
-        bail!("Iris DB is empty");
-    }
-    tracing::info!("Loaded {} iris codes to memory", irises.len());
-
-    let (mut graph, graph_max_id) = if let Some(graph_spec) = config.graph {
+async fn build_graph<D: DistanceOps>(
+    irises: Vec<(IrisVectorId, IrisCode)>,
+    graph_spec: Option<LoadGraphConfig>,
+    distance_fn: DistanceFn,
+    searcher: &HnswSearcher,
+    prf_seed: &[u8; 16],
+    output: OutputGraphConfig,
+) -> Result<()> {
+    let (mut graph, graph_max_id) = if let Some(graph_spec) = graph_spec {
         tracing::info!("Loading graph from file");
         let graph = graph_spec.read_graph_from_file()?;
         let graph_max_id = graph
@@ -169,13 +160,13 @@ async fn main() -> Result<()> {
 
     // insert irises which are already represented in the graph
     tracing::info!("Initializing vector store");
-    let mut store = SharedPlaintextStore::new();
-    store.distance_fn = config.distance_fn;
+    let mut store = SharedPlaintextStore::<D>::new();
+    store.distance_fn = distance_fn;
     for (id, iris) in irises[0..(graph_max_id as usize)].iter() {
         let _id = store.insert_at(id, &Arc::new(iris.clone())).await?;
     }
 
-    match config.output {
+    match output {
         OutputGraphConfig::Simple { path } => {
             tracing::info!("Building HNSW graph for ids {first_id} to {last_id}");
             let new_irises = irises[(graph_max_id as usize)..].to_vec();
@@ -183,9 +174,9 @@ async fn main() -> Result<()> {
                 Some(graph),
                 Some(store),
                 new_irises,
-                &searcher,
+                searcher,
                 1,
-                &prf_seed,
+                prf_seed,
             )
             .await?;
 
@@ -225,9 +216,9 @@ async fn main() -> Result<()> {
                     Some(graph),
                     Some(store),
                     i_new_irises,
-                    &searcher,
+                    searcher,
                     1,
-                    &prf_seed,
+                    prf_seed,
                 )
                 .await?;
 
@@ -237,6 +228,66 @@ async fn main() -> Result<()> {
                 tracing::info!("Persisting HNSW graph to file: {filename}");
                 write_graph_to_file(output_path, graph.clone())?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(non_snake_case)]
+#[tokio::main]
+async fn main() -> Result<()> {
+    let filter = EnvFilter::new("info,iris_mpc_cpu::hnsw=off");
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(filter))
+        .init();
+
+    // parse args
+    tracing::info!("Loading configuration from file");
+    let cli = Args::parse();
+    let config: CliConfig = load_toml(&cli.job_spec)?;
+    tracing::info!("Configuration loaded from {}", cli.job_spec.display());
+
+    tracing::info!("Initializing searcher");
+    let searcher: HnswSearcher = (&config.searcher).try_into()?;
+    let prf_seed = (config.hnsw_prf_seed.unwrap_or(0) as u128).to_le_bytes();
+
+    tracing::info!("Loading iris codes");
+    let irises_ = iris_mpc_cpu::utils::cli::load_irises(config.irises).await?;
+    let irises: Vec<_> = irises_
+        .into_iter()
+        .enumerate()
+        .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
+        .collect();
+    if irises.is_empty() {
+        bail!("Iris DB is empty");
+    }
+    tracing::info!("Loaded {} iris codes to memory", irises.len());
+
+    tracing::info!("Using distance ops: {:?}", config.distance_ops);
+    match config.distance_ops {
+        DistanceOpsKind::Fhd => {
+            build_graph::<FhdOps>(
+                irises,
+                config.graph,
+                config.distance_fn,
+                &searcher,
+                &prf_seed,
+                config.output,
+            )
+            .await?
+        }
+        DistanceOpsKind::Nhd => {
+            build_graph::<NhdOps>(
+                irises,
+                config.graph,
+                config.distance_fn,
+                &searcher,
+                &prf_seed,
+                config.output,
+            )
+            .await?
         }
     }
 

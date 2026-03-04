@@ -1,0 +1,18 @@
+env:
+  - name: ENV
+    value: stage
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  - name: SERVICE_NAME
+    value: iris-mpc-db-exporter-0
+  - name: AWS_REGION
+    value: eu-north-1
+  - name: GIN_MODE
+    value: release
+  - name: EXPORT_S3_BUCKET_NAME
+    value: "iris-mpc-db-exporter-store-node-0-stage--eun1-az3--x-s3"
+  - name: NODE_ID
+    value: "0"

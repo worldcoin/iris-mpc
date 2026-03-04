@@ -24,7 +24,7 @@ use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
-    RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
@@ -288,6 +288,7 @@ struct SnsAttributesMaps {
     reset_update_result_attributes: HashMap<String, MessageAttributeValue>,
     identity_deletion_result_attributes: HashMap<String, MessageAttributeValue>,
     recovery_check_result_attributes: HashMap<String, MessageAttributeValue>,
+    recovery_update_result_attributes: HashMap<String, MessageAttributeValue>,
 }
 
 /// Returns a set of attribute maps used to interact with AWS SNS.
@@ -302,6 +303,8 @@ fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     let recovery_check_result_attributes =
         create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
+    let recovery_update_result_attributes =
+        create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
     Ok(SnsAttributesMaps {
         uniqueness_result_attributes,
         reauth_result_attributes,
@@ -309,6 +312,7 @@ fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
         reset_update_result_attributes,
         identity_deletion_result_attributes,
         recovery_check_result_attributes,
+        recovery_update_result_attributes,
     })
 }
 
@@ -572,6 +576,7 @@ async fn start_results_thread(
                 &sns_attributes_maps.reset_check_result_attributes,
                 &sns_attributes_maps.reset_update_result_attributes,
                 &sns_attributes_maps.recovery_check_result_attributes,
+                &sns_attributes_maps.recovery_update_result_attributes,
                 &shutdown_handler_bg,
             )
             .await
