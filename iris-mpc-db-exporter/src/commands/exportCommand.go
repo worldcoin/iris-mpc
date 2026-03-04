@@ -163,7 +163,7 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 
 	o11y.S(ctx).Infof("Will be processed in %d batches. \n", batchesCount)
 
-	runningCoroutines := 0
+	var runningCoroutines atomic.Int32
 	var successfulBatches atomic.Int32
 
 	var exportNewerThan *int64
@@ -184,13 +184,13 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 			batchSize = totalIrises - start + 1
 		}
 
-		for runningCoroutines >= parallelism {
+		for runningCoroutines.Load() >= int32(parallelism) {
 			o11y.S(ctx).Debug("Waiting for coroutines to finish")
 			time.Sleep(time.Second)
 		}
 
 		wg.Add(1)
-		runningCoroutines++
+		runningCoroutines.Add(1)
 		go func(start, count int) {
 			defer wg.Done()
 			success := true
@@ -222,7 +222,7 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 				successfulBatches.Add(1)
 			}
 
-			runningCoroutines--
+			runningCoroutines.Add(-1)
 		}(start, batchSize-1)
 	}
 
@@ -237,6 +237,11 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 			fmt.Sprintf("successful:%t", exportSuccess),
 			fmt.Sprintf("completion_time:%s", exportDuration),
 		}, 1)
+
+	if !exportSuccess {
+		o11y.S(ctx).Error("Export did not fully succeed, skipping timestamp marker to avoid advancing the checkpoint")
+		return
+	}
 
 	// Create the file with the date of the beginning of the export to mark the completion of the export
 	err = writer.Persist(timestampFilePath, []byte{})
