@@ -31,6 +31,9 @@ for test_id in "${TESTS[@]}"; do
             -- --include-ignored 2>&1 | grep -E "test.*ok|test.*FAILED|^error"
     )
 
+    # Allow DB persistence pipelines to flush before checking.
+    sleep 10
+
     for party_id in "${PARTIES[@]}"; do
         log "Sanity check: genesis_${test_id} party ${party_id}"
         output_dir="$REPO_ROOT/sanity-check/genesis_${test_id}/party${party_id}"

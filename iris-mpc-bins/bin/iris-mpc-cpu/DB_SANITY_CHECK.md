@@ -6,20 +6,23 @@ Read-only validation of a single MPC party's Postgres database state. Checks HNS
 
 ```bash
 db-sanity-check \
-  --db-url <DATABASE_URL> \
+  --hnsw-db-url <HNSW_DATABASE_URL> \
+  --gpu-db-url <GPU_DATABASE_URL> \
   --hnsw-schema <SCHEMA> \
   --gpu-schema <SCHEMA> \
   --seed <SEED> \
   [--m <M>] \
   [--exclusions-file <PATH>] \
-  [--output-dir <DIR>]
+  [--output-dir <DIR>] \
+  [--s3-output <S3_URI>]
 ```
 
 ### Arguments
 
 | Argument | Env var | Required | Default | Description |
 |----------|---------|----------|---------|-------------|
-| `--db-url` | `DATABASE_URL` | yes | | Postgres connection string |
+| `--hnsw-db-url` | `HNSW_DATABASE_URL` | yes | | Postgres connection string for the HNSW (CPU) database |
+| `--gpu-db-url` | `GPU_DATABASE_URL` | yes | | Postgres connection string for the GPU database |
 | `--hnsw-schema` | | yes | | HNSW (CPU) schema name (e.g. `SMPC_hnsw_dev_0`) |
 | `--gpu-schema` | | yes | | GPU schema name (e.g. `SMPC_gpu_dev_0`) |
 | `--seed` | | yes | | RNG seed for reproducible cross-schema sampling (check 3c) |
@@ -27,6 +30,7 @@ db-sanity-check \
 | `--layer-probability` | | no | `1/M` | Layer probability q for geometric distribution check |
 | `--exclusions-file` | | no | | Path to JSON file with `{"deleted_serial_ids": [...]}` |
 | `--output-dir` | | no | `.` | Directory for JSON output files |
+| `--s3-output` | | no | | S3 URI to upload output files to (e.g. `s3://bucket/prefix/`) |
 
 ### Exit code
 
@@ -53,26 +57,41 @@ cargo run --release -p iris-mpc-bins --bin init-test-dbs -- \
   --db-schema-party3 SMPC_dev_2 \
   --target-db-size 1000
 
-# Run sanity check (locally, same schema for both hnsw/gpu)
+# Run sanity check (locally, same DB instance for both hnsw/gpu)
 cargo run --release -p iris-mpc-bins --bin db-sanity-check -- \
-  --db-url "postgres://postgres:postgres@localhost:5432/SMPC_dev_0" \
+  --hnsw-db-url "postgres://postgres:postgres@localhost:5432/SMPC_dev_0" \
+  --gpu-db-url "postgres://postgres:postgres@localhost:5432/SMPC_dev_0" \
   --hnsw-schema SMPC_dev_0 \
   --gpu-schema SMPC_dev_0 \
   --seed 42 \
   --output-dir sanity-check/party0
 ```
 
-### Against a remote DB (separate HNSW and GPU schemas)
+### Against remote DBs (separate HNSW and GPU instances)
 
 ```bash
 db-sanity-check \
-  --db-url "postgres://user:pass@rds-host:5432/mydb" \
+  --hnsw-db-url "postgres://user:pass@hnsw-rds-host:5432/mydb" \
+  --gpu-db-url "postgres://user:pass@gpu-rds-host:5432/mydb" \
   --hnsw-schema SMPC_hnsw_prod_0 \
   --gpu-schema SMPC_gpu_prod_0 \
   --seed 42 \
   --m 256 \
   --exclusions-file deleted_serial_ids.json \
   --output-dir sanity-check/party0
+```
+
+### With S3 upload
+
+```bash
+db-sanity-check \
+  --hnsw-db-url "postgres://user:pass@hnsw-rds-host:5432/mydb" \
+  --gpu-db-url "postgres://user:pass@gpu-rds-host:5432/mydb" \
+  --hnsw-schema SMPC_hnsw_prod_0 \
+  --gpu-schema SMPC_gpu_prod_0 \
+  --seed 42 \
+  --output-dir /tmp/sanity-check \
+  --s3-output s3://my-bucket/sanity-check/party0/
 ```
 
 ## Checks
@@ -103,6 +122,9 @@ The tool currently loads the full HNSW graph into memory (one eye at a time). Fo
 
 Written to `--output-dir`:
 
-- **`checks.json`** — array of `{id, name, status, detail}`
+- **`checks.json`** — array of `{id, name, status, detail}` (with optional `warnings` array)
 - **`stats.json`** — object of key-value statistics
 - **`degree_histogram.json`** — array of `{eye, layer, degree, node_count}`
+- **`report.txt`** — human-readable report (same content as stdout)
+
+When `--s3-output` is set, all four files are uploaded to the specified S3 prefix after being written locally.

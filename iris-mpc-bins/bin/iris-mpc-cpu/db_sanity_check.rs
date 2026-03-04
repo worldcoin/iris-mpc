@@ -23,9 +23,42 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
+    io::Write as IoWrite,
     path::{Path, PathBuf},
     process,
 };
+
+/// Dual-output writer: every line goes to both stdout and an internal buffer.
+/// The buffer is saved to `report.txt` alongside the JSON output files.
+struct Report(String);
+
+impl Report {
+    fn new() -> Self {
+        Self(String::new())
+    }
+
+    fn log(&mut self, line: &str) {
+        println!("{line}");
+        self.0.push_str(line);
+        self.0.push('\n');
+    }
+
+    fn save(&self, dir: &Path) -> eyre::Result<PathBuf> {
+        let p = dir.join("report.txt");
+        let mut f = fs::File::create(&p)?;
+        f.write_all(self.0.as_bytes())?;
+        Ok(p)
+    }
+}
+
+macro_rules! rpt {
+    ($report:expr) => {
+        $report.log("")
+    };
+    ($report:expr, $($arg:tt)*) => {
+        $report.log(&format!($($arg)*))
+    };
+}
 
 const STATE_DOMAIN: &str = "genesis";
 const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
@@ -33,6 +66,11 @@ const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_
 
 /// Number of random serial IDs to sample for the cross-schema iris comparison.
 const SAMPLE_COUNT: usize = 1_000;
+
+/// Iris row from DB: (id, left_code, left_mask, right_code, right_mask).
+type IrisRow = (i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
+/// Iris code data: (left_code, left_mask, right_code, right_mask).
+type IrisData = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 /// Number of recent processed modifications whose serial IDs to include in the sample.
 const RECENT_MOD_COUNT: i64 = 100;
 /// Modification request types that update (overwrite) existing iris code data.
@@ -141,12 +179,17 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
-    println!("=== DB Sanity Check ===");
-    println!(
+    let mut rpt = Report::new();
+
+    rpt!(rpt, "=== DB Sanity Check ===");
+    rpt!(
+        rpt,
         "HNSW schema: {}  GPU schema: {}  M: {}",
-        args.hnsw_schema, args.gpu_schema, args.m
+        args.hnsw_schema,
+        args.gpu_schema,
+        args.m
     );
-    println!();
+    rpt!(rpt);
 
     let hnsw_pg =
         PostgresClient::new(&args.hnsw_db_url, &args.hnsw_schema, AccessMode::ReadOnly).await?;
@@ -167,10 +210,10 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    println!("--- Collecting iris IDs ---");
+    rpt!(rpt, "--- Collecting iris IDs ---");
     let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
 
-    println!("--- Check 1: HNSW graph structural checks ---");
+    rpt!(rpt, "--- Check 1: HNSW graph structural checks ---");
     let layer_probability = args.layer_probability.unwrap_or((args.m as f64).recip());
     run_graph_checks(
         &graph_pg,
@@ -181,15 +224,19 @@ async fn main() -> Result<()> {
         &mut checks,
         &mut degree_hist,
         &mut stats,
+        &mut rpt,
     )
     .await?;
 
-    println!("--- Check 2: Persistent state consistency ---");
+    rpt!(rpt, "--- Check 2: Persistent state consistency ---");
     let iris_max = hnsw_store.get_max_serial_id().await?;
     let last_mod_id =
         run_persistent_state_checks(&graph_pg, iris_max, &mut checks, &mut stats).await?;
 
-    println!("--- Check 3: HNSW vs GPU iris consistency (sampled, modification-aware) ---");
+    rpt!(
+        rpt,
+        "--- Check 3: HNSW vs GPU iris consistency (sampled, modification-aware) ---"
+    );
     run_cross_schema_checks(
         iris_max,
         last_mod_id,
@@ -197,30 +244,35 @@ async fn main() -> Result<()> {
         &hnsw_store.pool,
         &gpu_pg.pool,
         &mut checks,
+        &mut rpt,
     )
     .await?;
 
     // --- Report ---
-    println!("\n--- Checks ---");
+    rpt!(rpt, "\n--- Checks ---");
     let pass_count = checks.iter().filter(|c| c.passed).count();
     for c in &checks {
         let tag = if c.passed { "PASS" } else { "FAIL" };
-        println!("[{tag}] {}: {} ({})", c.id, c.name, c.detail);
+        rpt!(rpt, "[{tag}] {}: {} ({})", c.id, c.name, c.detail);
     }
-    println!("\n--- Stats ---");
+    rpt!(rpt, "\n--- Stats ---");
     for (k, v) in &stats.0 {
-        println!("{k}: {v}");
+        rpt!(rpt, "{k}: {v}");
     }
     let fail_count = checks.len() - pass_count;
-    println!(
+    rpt!(
+        rpt,
         "\n=== Summary: {pass_count}/{} checks passed, {fail_count} failed ===",
         checks.len()
     );
 
-    let json_files = write_json_reports(&args.output_dir, &checks, &stats, &degree_hist)?;
+    let mut output_files = write_json_reports(&args.output_dir, &checks, &stats, &degree_hist)?;
+    let report_path = rpt.save(&args.output_dir)?;
+    println!("Wrote {}", report_path.display());
+    output_files.push(report_path);
 
     if let Some(s3_uri) = &args.s3_output {
-        upload_to_s3(s3_uri, &json_files).await?;
+        upload_to_s3(s3_uri, &output_files).await?;
     }
 
     if fail_count > 0 {
@@ -249,6 +301,7 @@ async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i6
 // Check 1: HNSW graph structural checks
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn run_graph_checks(
     graph_pg: &GraphPg<Aby3Store>,
     iris_ids: &HashSet<i64>,
@@ -258,11 +311,12 @@ async fn run_graph_checks(
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
     stats: &mut Stats,
+    rpt: &mut Report,
 ) -> Result<()> {
     // Load one graph at a time to halve peak memory.
     let mut l0_id_sets: Vec<(&str, HashSet<u32>)> = Vec::new();
     for (eye, store_id) in [("left", StoreId::Left), ("right", StoreId::Right)] {
-        println!("  Loading {eye} graph...");
+        rpt!(rpt, "  Loading {eye} graph...");
         let graph = load_graph(graph_pg, store_id).await?;
         let l0_ids = check_single_graph(
             eye,
@@ -274,6 +328,7 @@ async fn run_graph_checks(
             checks,
             degree_hist,
             stats,
+            rpt,
         );
         drop(graph);
         l0_id_sets.push((eye, l0_ids));
@@ -300,6 +355,7 @@ async fn run_graph_checks(
 }
 
 /// Run per-eye checks (1a–1h, 1j) and return the layer-0 serial ID set.
+#[allow(clippy::too_many_arguments)]
 fn check_single_graph(
     eye: &str,
     graph: &GraphMem<VectorId>,
@@ -310,6 +366,7 @@ fn check_single_graph(
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
     stats: &mut Stats,
+    rpt: &mut Report,
 ) -> HashSet<u32> {
     // ef values are irrelevant
     let params = HnswParams::new(1, 1, m);
@@ -532,7 +589,8 @@ fn check_single_graph(
             if nbs.len() > m_limit {
                 degree_viol += 1;
                 if degree_viol <= 5 {
-                    println!(
+                    rpt!(
+                        rpt,
                         "  [1g] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
                         nbs.len()
                     );
@@ -642,7 +700,7 @@ async fn load_graph(
 ) -> Result<GraphMem<VectorId>> {
     let mut tx = graph_pg.tx().await?;
     let mut ops = tx.with_graph(store_id);
-    Ok(ops.load_to_mem(graph_pg.pool(), 4).await?)
+    ops.load_to_mem(graph_pg.pool(), 4).await
 }
 
 // ---------------------------------------------------------------------------
@@ -728,6 +786,7 @@ async fn run_cross_schema_checks(
     hnsw_pool: &sqlx::PgPool,
     gpu_pool: &sqlx::PgPool,
     checks: &mut Vec<CheckResult>,
+    rpt: &mut Report,
 ) -> Result<()> {
     let lid = last_indexed_id as i64;
 
@@ -753,16 +812,14 @@ async fn run_cross_schema_checks(
     ));
 
     // 3b: Same max serial ID (up to last_indexed_id)
-    let hnsw_max: (i64,) =
-        sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises WHERE id <= $1")
-            .bind(lid)
-            .fetch_one(hnsw_pool)
-            .await?;
-    let gpu_max: (i64,) =
-        sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises WHERE id <= $1")
-            .bind(lid)
-            .fetch_one(gpu_pool)
-            .await?;
+    let hnsw_max: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises WHERE id <= $1")
+        .bind(lid)
+        .fetch_one(hnsw_pool)
+        .await?;
+    let gpu_max: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises WHERE id <= $1")
+        .bind(lid)
+        .fetch_one(gpu_pool)
+        .await?;
     let (hnsw_max, gpu_max) = (hnsw_max.0, gpu_max.0);
     checks.push(CheckResult::new(
         "3b",
@@ -831,13 +888,14 @@ async fn run_cross_schema_checks(
     }
 
     let sample_vec: Vec<i64> = sample_set.into_iter().collect();
-    println!(
+    rpt!(
+        rpt,
         "  Comparing {} sampled serial IDs between schemas (seed={seed})...",
         sample_vec.len(),
     );
 
     // Step 3: Fetch iris data from each DB independently and compare in Rust.
-    let hnsw_rows: Vec<(i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+    let hnsw_rows: Vec<IrisRow> = sqlx::query_as(
         "SELECT id, left_code, left_mask, right_code, right_mask \
          FROM irises WHERE id = ANY($1)",
     )
@@ -845,7 +903,7 @@ async fn run_cross_schema_checks(
     .fetch_all(hnsw_pool)
     .await?;
 
-    let gpu_rows: Vec<(i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+    let gpu_rows: Vec<IrisRow> = sqlx::query_as(
         "SELECT id, left_code, left_mask, right_code, right_mask \
          FROM irises WHERE id = ANY($1)",
     )
@@ -853,11 +911,11 @@ async fn run_cross_schema_checks(
     .fetch_all(gpu_pool)
     .await?;
 
-    let hnsw_map: HashMap<i64, (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = hnsw_rows
+    let hnsw_map: HashMap<i64, IrisData> = hnsw_rows
         .into_iter()
         .map(|(id, lc, lm, rc, rm)| (id, (lc, lm, rc, rm)))
         .collect();
-    let gpu_map: HashMap<i64, (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> = gpu_rows
+    let gpu_map: HashMap<i64, IrisData> = gpu_rows
         .into_iter()
         .map(|(id, lc, lm, rc, rm)| (id, (lc, lm, rc, rm)))
         .collect();
@@ -893,7 +951,7 @@ async fn run_cross_schema_checks(
             only_in_hnsw.len(),
             &only_in_hnsw[..only_in_hnsw.len().min(10)],
         );
-        println!("  [{level}] {msg}");
+        rpt!(rpt, "  [{level}] {msg}");
         one_sided_warnings.push(msg);
     }
     if !only_in_gpu.is_empty() {
@@ -907,7 +965,7 @@ async fn run_cross_schema_checks(
             only_in_gpu.len(),
             &only_in_gpu[..only_in_gpu.len().min(10)],
         );
-        println!("  [{level}] {msg}");
+        rpt!(rpt, "  [{level}] {msg}");
         one_sided_warnings.push(msg);
     }
 
@@ -1012,16 +1070,14 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
     let stripped = uri
         .strip_prefix("s3://")
         .ok_or_else(|| eyre::eyre!("S3 URI must start with s3://"))?;
-    let (bucket, prefix) = stripped
-        .split_once('/')
-        .unwrap_or((stripped, ""));
+    let (bucket, prefix) = stripped.split_once('/').unwrap_or((stripped, ""));
     eyre::ensure!(!bucket.is_empty(), "S3 URI has empty bucket name");
     Ok((bucket.to_string(), prefix.to_string()))
 }
 
 async fn upload_to_s3(s3_uri: &str, files: &[PathBuf]) -> Result<()> {
     let (bucket, prefix) = parse_s3_uri(s3_uri)?;
-    println!("\n--- Uploading to S3: s3://{bucket}/{prefix} ---");
+    println!("--- Uploading to S3: s3://{bucket}/{prefix} ---");
 
     let config = aws_config::from_env().load().await;
     let s3_config = aws_sdk_s3::config::Builder::from(&config)
@@ -1041,13 +1097,18 @@ async fn upload_to_s3(s3_uri: &str, files: &[PathBuf]) -> Result<()> {
             format!("{trimmed}/{file_name}")
         };
 
+        let content_type = if file_name.ends_with(".json") {
+            "application/json"
+        } else {
+            "text/plain"
+        };
         let body = aws_sdk_s3::primitives::ByteStream::from_path(path).await?;
         client
             .put_object()
             .bucket(&bucket)
             .key(&key)
             .body(body)
-            .content_type("application/json")
+            .content_type(content_type)
             .send()
             .await?;
         println!("  Uploaded s3://{bucket}/{key}");
