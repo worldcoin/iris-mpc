@@ -275,8 +275,11 @@ fn version_map_hash(version_map: &[(i64, i16)]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-/// Upload the version map and its blake3 hash for a chunk.
-pub async fn upload_chunk_version_map(
+/// Upload only the blake3 hash of a chunk's version map. The full map is
+/// deferred and only uploaded when a cross-party hash mismatch is detected
+/// (see [`compute_cross_party_divergent_ids`]), avoiding per-chunk S3 storage
+/// on the happy path.
+pub async fn upload_chunk_version_hash(
     s3: &S3Client,
     bucket: &str,
     epoch: u32,
@@ -285,10 +288,19 @@ pub async fn upload_chunk_version_map(
     version_map: &[(i64, i16)],
 ) -> Result<()> {
     let prefix = format!("{}/chunk-{}", epoch_party_prefix(epoch, party), chunk_id);
-
     let hash = version_map_hash(version_map);
-    upload_marker(s3, bucket, &format!("{prefix}/version-hash"), hash.to_vec()).await?;
+    upload_marker(s3, bucket, &format!("{prefix}/version-hash"), hash.to_vec()).await
+}
 
+async fn upload_chunk_version_map_body(
+    s3: &S3Client,
+    bucket: &str,
+    epoch: u32,
+    party: u8,
+    chunk_id: u32,
+    version_map: &[(i64, i16)],
+) -> Result<()> {
+    let prefix = format!("{}/chunk-{}", epoch_party_prefix(epoch, party), chunk_id);
     let body = serde_json::to_vec(version_map)?;
     upload_marker(s3, bucket, &format!("{prefix}/version-map"), body).await
 }
@@ -338,12 +350,17 @@ async fn download_chunk_version_map(
 ///
 /// Fast path: download only the 32-byte blake3 hashes concurrently. If all
 /// match, return empty (no disagreements). Slow path (hash mismatch):
-/// download the full maps concurrently and compute the exact disagreement set.
+/// upload this party's full version map, then download all maps concurrently
+/// and compute the exact disagreement set. All three parties independently
+/// detect the mismatch and upload, so polling converges without extra
+/// signaling.
 pub async fn compute_cross_party_divergent_ids(
     s3: &S3Client,
     bucket: &str,
     epoch: u32,
     chunk_id: u32,
+    party: u8,
+    version_map: &[(i64, i16)],
     poll_interval: Duration,
 ) -> Result<Vec<i64>> {
     let hashes: Vec<[u8; 32]> = try_join_all((0..NUM_PARTIES).map(|party| {
@@ -356,10 +373,12 @@ pub async fn compute_cross_party_divergent_ids(
     }
 
     tracing::info!(
-        "Epoch {} chunk {}: version-map hashes differ, downloading full maps",
+        "Epoch {} chunk {}: version-map hashes differ, uploading full map and downloading peers",
         epoch,
         chunk_id,
     );
+
+    upload_chunk_version_map_body(s3, bucket, epoch, party, chunk_id, version_map).await?;
 
     use std::collections::HashMap;
     let all_maps: Vec<HashMap<i64, i16>> = try_join_all((0..NUM_PARTIES).map(|party| {

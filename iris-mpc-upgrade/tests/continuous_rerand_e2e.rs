@@ -135,6 +135,9 @@ fn phase1_clean_epoch() {
         let env = TestEnv::setup().await?;
         println!("[phase 1] Clean epoch...");
 
+        let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
+        let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+
         let (h, t) = env.spawn_all();
         wait_epoch_done(&env.harness, 0).await?;
         stop_all(t, h).await;
@@ -142,6 +145,15 @@ fn phase1_clean_epoch() {
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1, "Expected rerand_epoch >= 1, got {}", ep);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
+
+        let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+        for &id in &all_ids {
+            assert_ne!(
+                &pre_shares[&id], &post_shares[&id],
+                "Shares for id={} should differ after rerand",
+                id
+            );
+        }
         println!("[phase 1] PASSED (epoch={})", ep);
 
         env.teardown().await
@@ -160,6 +172,9 @@ fn phase2_kill_and_resume() {
         let env = TestEnv::setup().await?;
         println!("[phase 2] Kill-and-resume...");
 
+        let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
+        let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+
         // Run epoch 0, let 2 chunks stage, then kill
         let (h, t) = env.spawn_all();
         wait_chunks_staged(&env.harness, 0, 2).await?;
@@ -175,6 +190,15 @@ fn phase2_kill_and_resume() {
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
+
+        let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+        for &id in &all_ids {
+            assert_ne!(
+                &pre_shares[&id], &post_shares[&id],
+                "Shares for id={} should differ after rerand",
+                id
+            );
+        }
         println!("[phase 2] PASSED (epoch={})", ep);
 
         env.teardown().await
@@ -193,6 +217,8 @@ fn phase3_concurrent_modifications() {
         let _ = tracing_subscriber::fmt::try_init();
         let env = TestEnv::setup().await?;
         let modified_ids: Vec<i64> = vec![5, 10, 15];
+        let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
+        let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
         println!("[phase 3] Concurrent modifications...");
 
         let (h, t) = env.spawn_all();
@@ -238,6 +264,31 @@ fn phase3_concurrent_modifications() {
         let ep = assert_consistent_rerand_epoch(&env.harness, &modified_ids).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &modified_ids).await?;
+
+        // Modified irises were skipped by rerand (version_id CAS mismatch).
+        // snapshot_all_fingerprints reconstructs from all 3 parties' shares,
+        // so succeeding here proves the modified irises are still reconstructable.
+        let post_fps = snapshot_all_fingerprints(&env.harness, &[]).await?;
+        for &id in &modified_ids {
+            assert!(
+                post_fps.contains_key(&id),
+                "Modified id {} missing from post-rerand snapshot",
+                id
+            );
+        }
+        println!("[phase 3]   modified irises verified (shares reconstruct)");
+
+        let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+        for &id in &all_ids {
+            if modified_ids.contains(&id) {
+                continue;
+            }
+            assert_ne!(
+                &pre_shares[&id], &post_shares[&id],
+                "Shares for id={} should differ after rerand",
+                id
+            );
+        }
         println!("[phase 3] PASSED (epoch={})", ep);
 
         env.teardown().await
@@ -257,6 +308,9 @@ fn phase4_server_restart_during_rerand() {
         let env = TestEnv::setup().await?;
         println!("[phase 4] Server restart during rerand...");
 
+        let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
+        let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+
         let (h, t) = env.spawn_all();
         wait_chunks_staged(&env.harness, 0, 1).await?;
 
@@ -271,6 +325,22 @@ fn phase4_server_restart_during_rerand() {
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
+
+        // Verify shares actually changed (not just that plaintext still matches).
+        let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+        for &id in &all_ids {
+            let pre = &pre_shares[&id];
+            let post = &post_shares[&id];
+            assert_ne!(
+                pre, post,
+                "Shares for id={} should differ after rerandomization",
+                id
+            );
+        }
+        println!(
+            "[phase 4]   verified all {} irises have different shares after rerand",
+            all_ids.len()
+        );
         println!("[phase 4] PASSED (epoch={})", ep);
 
         env.teardown().await
@@ -290,11 +360,14 @@ fn phase5_staggered_restart() {
         let env = TestEnv::setup().await?;
         println!("[phase 5] Staggered restart...");
 
+        let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
+        let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+
         let (h, t) = env.spawn_all();
-        wait_chunks_staged(&env.harness, 0, 2).await?;
+        wait_chunks_staged(&env.harness, 0, 1).await?;
 
         // Kill party 0
-        println!("[phase 5]   killing party 0 after 2 chunks");
+        println!("[phase 5]   killing party 0 after 1 chunk");
         t[0].cancel();
         h[0].abort();
 
@@ -312,6 +385,15 @@ fn phase5_staggered_restart() {
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
+
+        let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+        for &id in &all_ids {
+            assert_ne!(
+                &pre_shares[&id], &post_shares[&id],
+                "Shares for id={} should differ after rerand",
+                id
+            );
+        }
         println!("[phase 5] PASSED (epoch={})", ep);
 
         env.teardown().await
@@ -331,6 +413,9 @@ fn phase6_multiple_epochs() {
         let env = TestEnv::setup().await?;
         println!("[phase 6] Multiple epochs...");
 
+        let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
+        let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+
         let (h, t) = env.spawn_all();
 
         // Wait for epoch 0 to finish
@@ -341,11 +426,22 @@ fn phase6_multiple_epochs() {
         wait_epoch_done(&env.harness, 1).await?;
         println!("[phase 6]   epoch 1 completed");
 
+        // The inter-epoch delay (chunk_delay) gives the cancel token time to
+        // be observed before the next epoch's work begins.
         stop_all(t, h).await;
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 2, "Expected rerand_epoch >= 2, got {}", ep);
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
+
+        let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+        for &id in &all_ids {
+            assert_ne!(
+                &pre_shares[&id], &post_shares[&id],
+                "Shares for id={} should differ after rerand",
+                id
+            );
+        }
         println!("[phase 6] PASSED (epoch={})", ep);
 
         env.teardown().await
@@ -471,6 +567,7 @@ fn phase9_asymmetric_modification_consistency() {
         let _ = tracing_subscriber::fmt::try_init();
         let env = TestEnv::setup().await?;
         let target_id: i64 = 20;
+        let pre_shares = snapshot_raw_shares(&env.harness, &[target_id]).await?;
         println!("[phase 9] Asymmetric modification consistency...");
 
         // Modify iris on P0 ONLY — simulates a reauth that propagated to
@@ -511,6 +608,37 @@ fn phase9_asymmetric_modification_consistency() {
             epochs_consistent,
             "rerand_epoch diverged for id={}: {:?}",
             target_id, epochs
+        );
+
+        // The excluded iris must have rerand_epoch == 0 (skipped everywhere).
+        assert_eq!(
+            epochs[0], 0,
+            "Excluded iris id={} should have rerand_epoch=0, got {}",
+            target_id, epochs[0]
+        );
+
+        // The iris was skipped by rerand, so P1 and P2 (unmodified) should
+        // have identical shares to before the test. P0 was byte-flipped.
+        let post_shares = snapshot_raw_shares(&env.harness, &[target_id]).await?;
+        for party in 1..NUM_PARTIES {
+            assert_eq!(
+                &pre_shares[&target_id][party],
+                &post_shares[&target_id][party],
+                "P{} shares for excluded id={} should be unchanged",
+                party,
+                target_id
+            );
+        }
+        assert_ne!(
+            &pre_shares[&target_id][0],
+            &post_shares[&target_id][0],
+            "P0 shares for id={} should differ (byte-flip modification)",
+            target_id
+        );
+
+        println!(
+            "[phase 9]   excluded iris id={} correctly skipped (rerand_epoch=0, P1/P2 unchanged)",
+            target_id
         );
 
         // Verify non-modified rows reconstruct correctly.

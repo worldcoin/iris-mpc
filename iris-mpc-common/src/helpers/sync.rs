@@ -17,8 +17,9 @@ pub struct SyncState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RerandSyncState {
     pub epoch: i32,
-    /// Highest chunk_id where live_applied = TRUE. -1 if none applied.
-    pub max_applied_chunk: i32,
+    /// Highest chunk_id where `live_applied = TRUE`, or `None` if no chunks
+    /// have been applied yet.
+    pub max_applied_chunk: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -195,6 +195,9 @@ pub async fn server_main(config: Config) -> Result<()> {
     // Everything from here until freeze release must be wrapped so that
     // errors always release the freeze.
     let frozen_result = async {
+        // Acquire the apply lock to prevent concurrent startup DB loads.
+        // This should theoretically not be needed since the freeze should have
+        // prevented concurrent startup DB loads, but it's here for extra safety.
         let rerand_lock_conn = rerand_store::acquire_apply_lock(&iris_store.pool).await?;
 
         if shutdown_handler.is_shutting_down() {

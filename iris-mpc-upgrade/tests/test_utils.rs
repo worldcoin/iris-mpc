@@ -142,7 +142,7 @@ impl TestEnv {
             s3_bucket: self.bucket.clone(),
             schema_name: format!("{}_{}", self.prefix, party_id),
             chunk_size: CHUNK_SIZE,
-            chunk_delay_secs: 0,
+            chunk_delay_secs: 1,
             safety_buffer_ids: 0,
             s3_poll_interval_ms: 200,
             healthcheck_port: 3020 + party_id as usize,
@@ -567,6 +567,8 @@ pub async fn shares_are_consistent(harness: &TestHarness, id: i64) -> Result<boo
     let lag_10 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID0);
     let lag_12 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID2);
     let lag_21 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID1);
+    let lag_02 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID2);
+    let lag_20 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID2, PartyID::ID0);
 
     for [s0, s1, s2] in &pairs {
         let recon01: Vec<u16> = s0
@@ -587,11 +589,43 @@ pub async fn shares_are_consistent(harness: &TestHarness, id: i64) -> Result<boo
                 (a * lag_12 + b * lag_21).coefs
             })
             .collect();
-        if recon01 != recon12 {
+        let recon02: Vec<u16> = s0
+            .chunks_exact(4)
+            .zip_eq(s2.chunks_exact(4))
+            .flat_map(|(a, b)| {
+                let a = GaloisRingElement::<Monomial>::from_coefs(a.try_into().unwrap());
+                let b = GaloisRingElement::<Monomial>::from_coefs(b.try_into().unwrap());
+                (a * lag_02 + b * lag_20).coefs
+            })
+            .collect();
+        if recon01 != recon12 || recon01 != recon02 {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// Snapshot raw share bytes for a set of IDs (all parties).
+/// Returns a map from id → Vec of (left_code, left_mask, right_code, right_mask) per party.
+pub async fn snapshot_raw_shares(
+    harness: &TestHarness,
+    ids: &[i64],
+) -> Result<HashMap<i64, Vec<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)>>> {
+    let mut result = HashMap::new();
+    for &id in ids {
+        let mut party_shares = Vec::new();
+        for party in 0..NUM_PARTIES {
+            let iris = harness.store(party).get_iris_data_by_id(id).await?;
+            party_shares.push((
+                bytemuck::cast_slice::<u16, u8>(iris.left_code()).to_vec(),
+                bytemuck::cast_slice::<u16, u8>(iris.left_mask()).to_vec(),
+                bytemuck::cast_slice::<u16, u8>(iris.right_code()).to_vec(),
+                bytemuck::cast_slice::<u16, u8>(iris.right_mask()).to_vec(),
+            ));
+        }
+        result.insert(id, party_shares);
+    }
+    Ok(result)
 }
 
 /// Get the rerand_epoch for a specific iris ID across all parties.

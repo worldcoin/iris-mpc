@@ -358,9 +358,7 @@ pub async fn build_rerand_sync_state(pool: &PgPool) -> Result<Option<RerandSyncS
             return Err(e);
         }
     };
-    let max_applied = get_max_applied_chunk_for_epoch(pool, epoch)
-        .await?
-        .unwrap_or(-1);
+    let max_applied = get_max_applied_chunk_for_epoch(pool, epoch).await?;
     Ok(Some(RerandSyncState {
         epoch,
         max_applied_chunk: max_applied,
@@ -395,7 +393,7 @@ fn rerand_control_exists(err: &sqlx::Error) -> bool {
 /// Request the rerand worker to freeze. Writes a unique `freeze_generation`
 /// to `rerand_control`. Returns the generation token.
 pub async fn request_rerand_freeze(pool: &PgPool) -> Result<Option<String>> {
-    let generation = uuid::Uuid::new_v4().to_string();
+    let generation = uuid::Uuid::now_v7().to_string();
     match sqlx::query(
         "UPDATE rerand_control SET freeze_requested = TRUE, freeze_generation = $1, frozen_generation = NULL WHERE id = 1",
     )

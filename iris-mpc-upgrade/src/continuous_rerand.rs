@@ -54,7 +54,7 @@ pub async fn run_continuous_rerand(
             return Ok(());
         }
 
-        let epoch_hint = get_current_epoch(pool).await?.map(|e| e as u32);
+        let epoch_hint = get_current_epoch(pool).await?.unwrap_or(0) as u32;
         let active_epoch = epoch::determine_active_epoch(s3, &config.s3_bucket, epoch_hint).await?;
         tracing::info!("Active epoch: {}", active_epoch);
 
@@ -136,16 +136,19 @@ pub async fn run_continuous_rerand(
                 set_staging_written(pool, active_epoch as i32, chunk_id as i32).await?;
             }
 
-            // --- Upload version map + staged marker (both idempotent) ---
+            // Load the version map once; used for the hash upload below and
+            // for on-demand full-map upload if hashes diverge across parties.
+            let version_map = get_staging_version_map(
+                pool,
+                &staging_schema,
+                active_epoch as i32,
+                chunk_id as i32,
+            )
+            .await?;
+
+            // --- Upload version hash + staged marker (both idempotent) ---
             if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
-                let version_map = get_staging_version_map(
-                    pool,
-                    &staging_schema,
-                    active_epoch as i32,
-                    chunk_id as i32,
-                )
-                .await?;
-                s3_coordination::upload_chunk_version_map(
+                s3_coordination::upload_chunk_version_hash(
                     s3,
                     &config.s3_bucket,
                     active_epoch,
@@ -163,7 +166,7 @@ pub async fn run_continuous_rerand(
                 )
                 .await?;
                 tracing::info!(
-                    "Epoch {} chunk {}: version map + staged marker uploaded",
+                    "Epoch {} chunk {}: version hash + staged marker uploaded",
                     active_epoch,
                     chunk_id
                 );
@@ -203,6 +206,8 @@ pub async fn run_continuous_rerand(
                 &config.s3_bucket,
                 active_epoch,
                 chunk_id,
+                config.party_id,
+                &version_map,
                 poll_interval,
             )
             .await?;
@@ -257,6 +262,10 @@ pub async fn run_continuous_rerand(
         )
         .await?;
         tracing::info!("Epoch {} completed, moving to next epoch", active_epoch);
+
+        if chunk_delay > Duration::ZERO {
+            sleep(chunk_delay).await;
+        }
     }
 }
 

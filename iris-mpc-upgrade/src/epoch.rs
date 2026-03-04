@@ -140,6 +140,8 @@ pub async fn idempotent_keygen(
     let private_key = if saved {
         private_key
     } else {
+        // This branch is hit when two instances of the binary race during a rolling deployment,
+        // which should not happen. It only exists for defensive purposes.
         tracing::warn!(
             "Epoch {}: private key already exists in SM (likely concurrent start); reloading it",
             epoch
@@ -214,13 +216,9 @@ pub async fn derive_shared_secret(
 /// manifest but without all three `complete` markers.
 ///
 /// `start_hint` allows callers to skip already-completed epochs (e.g. from
-/// `get_current_epoch`). Falls back to 0 if no hint is available.
-pub async fn determine_active_epoch(
-    s3: &S3Client,
-    bucket: &str,
-    start_hint: Option<u32>,
-) -> Result<u32> {
-    let mut epoch: u32 = start_hint.unwrap_or(0);
+/// `get_current_epoch`). Use `0` when no prior epoch information is available.
+pub async fn determine_active_epoch(s3: &S3Client, bucket: &str, start_hint: u32) -> Result<u32> {
+    let mut epoch: u32 = start_hint;
     loop {
         if !s3_coordination::manifest_exists(s3, bucket, epoch).await? {
             break;

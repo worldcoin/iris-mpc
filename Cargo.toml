@@ -77,7 +77,7 @@ thiserror = "1"
 tokio = { version = "=1.49", features = ["full", "rt-multi-thread"] }
 tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
 ampc-anon-stats =  { git = "https://github.com/worldcoin/ampc-common.git", rev = "9e19ea57b1f7db11843d39ada2599557ce028a7b" }
 ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "9e19ea57b1f7db11843d39ada2599557ce028a7b" }
