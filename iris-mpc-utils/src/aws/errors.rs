@@ -24,9 +24,6 @@ pub enum AwsClientError {
     #[error("AWS SQS purge queue error: {0}")]
     SqsPurgeQueueError(String),
 
-    #[error("AWS SQS get queue attributes error: {0}")]
-    SqsGetQueueAttributesError(String),
-
     #[error("AWS SQS receive message from queue error: {0}")]
     SqsReceiveMessageError(String),
 }

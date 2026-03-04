@@ -236,31 +236,12 @@ impl AwsClient {
         Ok(())
     }
 
-    /// Purges SQS response queue message.
-    pub async fn sqs_purge_response_queue_message(
-        &self,
-        sqs_msg: &SqsMessageInfo,
-    ) -> Result<(), AwsClientError> {
-        self.sqs
-            .delete_message()
-            .queue_url(sqs_msg.queue_url())
-            .receipt_handle(sqs_msg.receipt_handle())
-            .send()
-            .await
-            .map(|_| {
-                tracing::debug!("AWS-SQS: purged message -> {}", sqs_msg.kind());
-            })
-            .map_err(|e| {
-                tracing::error!("AWS-SQS: purged message -> error: {}", e);
-                AwsClientError::SqsDeleteMessageError(e.to_string())
-            })
-    }
-
     /// Creates a stream for a single SQS queue.
     ///
     /// Uses long polling with a fixed max batch size to efficiently receive messages.
-    /// Messages are deleted from the queue immediately upon successful receipt and parsing.
-    /// Only successfully deleted messages are yielded from the stream.
+    /// All received messages are batch-deleted immediately (even unparseable ones) to
+    /// prevent poison-message redelivery. Only successfully parsed and deleted messages
+    /// are yielded from the stream.
     fn sqs_stream(
         sqs: SQSClient,
         queue_url: String,
@@ -456,6 +437,9 @@ fn parse_sqs_messages(
 
 /// Batch deletes messages from SQS queue.
 /// Returns the set of FAILED message IDs (messages that could not be deleted).
+/// Callers must ensure `all_receipt_handles` has at most 10 entries
+/// (the SQS DeleteMessageBatch API limit). This is guaranteed when called from
+/// `sqs_stream` since `MAX_SQS_BATCH = 10`.
 async fn delete_messages_batch(
     sqs: &SQSClient,
     queue_url: &str,
