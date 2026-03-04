@@ -129,7 +129,7 @@ Written to `--output-dir`:
 
 - **`checks.json`** — array of `{id, name, status, detail}` (with optional `warnings` array)
 - **`stats.json`** — object of key-value statistics
-- **`degree_histogram.json`** — array of `{eye, layer, degree, node_count}`
+- **`degree_histogram.csv`** — CSV with columns `eye, layer, degree, node_count`
 - **`report.txt`** — human-readable report (same content as stdout)
 
 When `--s3-output` is set, all four files are uploaded to the specified S3 prefix after being written locally.

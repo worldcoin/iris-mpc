@@ -1049,8 +1049,14 @@ fn write_json_reports(
     println!("Wrote {}", p.display());
     files.push(p);
 
-    let p = dir.join("degree_histogram.json");
-    fs::write(&p, serde_json::to_string_pretty(hist)?)?;
+    let p = dir.join("degree_histogram.csv");
+    {
+        let mut wtr = csv::Writer::from_path(&p)?;
+        for entry in hist {
+            wtr.serialize(entry)?;
+        }
+        wtr.flush()?;
+    }
     println!("Wrote {}", p.display());
     files.push(p);
 
