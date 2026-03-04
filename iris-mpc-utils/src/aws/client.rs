@@ -169,7 +169,15 @@ impl AwsClient {
                 })
                 .collect();
 
-            let entries = entries?;
+            let entries = entries.map_err(|e| match e {
+                AwsClientError::SnsPublishBatchError(msg) => {
+                    AwsClientError::SnsPublishBatchPartialError {
+                        message: msg,
+                        published_count: total_published,
+                    }
+                }
+                other => other,
+            })?;
 
             let response = self
                 .sns
@@ -178,29 +186,43 @@ impl AwsClient {
                 .set_publish_batch_request_entries(Some(entries))
                 .send()
                 .await
-                .map_err(|e| AwsClientError::SnsPublishBatchError(e.to_string()))?;
+                .map_err(|e| AwsClientError::SnsPublishBatchPartialError {
+                    message: e.to_string(),
+                    published_count: total_published,
+                })?;
 
             // Count successful publishes
             let successful = response.successful.unwrap_or_default().len();
             total_published += successful;
 
-            // Log any failures
+            // Check for any failures and stop immediately
             if let Some(failed) = response.failed {
-                for failure in failed {
-                    tracing::error!(
-                        "SNS batch publish failed for message {}: {} - {}",
-                        failure.id,
-                        failure.code,
-                        failure.message.unwrap_or_default()
-                    );
+                if !failed.is_empty() {
+                    for failure in &failed {
+                        tracing::error!(
+                            "SNS batch publish failed for message {}: {} - {}",
+                            failure.id,
+                            failure.code,
+                            failure.message.as_deref().unwrap_or("")
+                        );
+                    }
+                    return Err(AwsClientError::SnsPublishBatchPartialError {
+                        message: format!(
+                            "Partial failure in chunk {}: {}/{} messages published successfully",
+                            chunk_idx,
+                            successful,
+                            chunk.len()
+                        ),
+                        published_count: total_published,
+                    });
                 }
             }
 
-            // If any messages in this chunk failed, return error with published count
-            if successful < chunk.len() {
+            // Sanity check: ensure we got a response for all messages
+            if successful != chunk.len() {
                 return Err(AwsClientError::SnsPublishBatchPartialError {
                     message: format!(
-                        "Partial failure in chunk {}: {}/{} messages in chunk published",
+                        "Unexpected response in chunk {}: {}/{} messages confirmed successful",
                         chunk_idx,
                         successful,
                         chunk.len()
