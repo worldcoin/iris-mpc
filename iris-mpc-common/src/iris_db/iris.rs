@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 pub const MATCH_THRESHOLD_RATIO: f64 = 0.345;
+pub const ANON_STATS_THRESHOLD_RATIO: f64 = 0.375;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]

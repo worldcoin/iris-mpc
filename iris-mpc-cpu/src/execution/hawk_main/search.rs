@@ -1,17 +1,19 @@
 use super::{
     rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
-    BothEyes, HawkInsertPlan, HawkSession, VecRequests, LEFT, RIGHT,
+    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkSession, SaturableMatches, VecRequests, LEFT,
+    RIGHT,
 };
 use crate::{
     execution::hawk_main::{
         scheduler::{collect_results, parallelize},
         InsertPlanV, StoreId,
     },
-    hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
+    hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef},
     hnsw::{
         graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
         searcher::{NeighborhoodMode, UpdateEntryPoint},
+        vector_store::VectorStore,
         GraphMem, HnswSearcher, SortedNeighborhood,
     },
 };
@@ -31,7 +33,27 @@ pub type SearchIds = Arc<VecRequests<String>>;
 #[derive(Clone)]
 pub struct SearchParams {
     pub hnsw: Arc<HnswSearcher>,
+    /// Searcher with layer-0 ef params overridden to `ef_supermatch`, for supermatcher re-search.
+    hnsw_supermatch: Option<Arc<HnswSearcher>>,
     pub do_match: bool,
+}
+
+impl SearchParams {
+    pub fn new(hnsw: Arc<HnswSearcher>, do_match: bool, ef_supermatch: Option<usize>) -> Self {
+        let hnsw_supermatch = ef_supermatch.map(|ef_sm| {
+            let mut searcher = (*hnsw).clone();
+            let p = &mut searcher.params;
+            p.ef_search[0] = p.ef_search[0].max(ef_sm);
+            p.ef_constr_search[0] = p.ef_constr_search[0].max(ef_sm);
+            p.ef_constr_insert[0] = p.ef_constr_insert[0].max(ef_sm);
+            Arc::new(searcher)
+        });
+        Self {
+            hnsw,
+            hnsw_supermatch,
+            do_match,
+        }
+    }
 }
 
 pub async fn search<const ROTMASK: u32>(
@@ -136,6 +158,112 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store>>(
     Ok(())
 }
 
+/// Classify search results at both thresholds and optionally re-search with extended ef.
+async fn classify_and_extend(
+    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    query: &Aby3Query,
+    search_params: &SearchParams,
+    aby3_store: &mut Aby3Store,
+    graph_store: &GraphMem<Aby3VectorRef>,
+    ef: usize,
+) -> Result<ClassifiedMatches> {
+    let classified = classify_edges(edges, aby3_store, ef).await?;
+
+    // Extended search if anon stats threshold is saturated (supermatcher)
+    if let Some((ef_supermatch, hnsw_supermatch)) = classified
+        .anon_stats_matches
+        .saturated
+        .then(|| {
+            search_params
+                .hnsw_supermatch
+                .as_ref()
+                .map(|s| (s.params.get_ef_search(0), s))
+        })
+        .flatten()
+        .filter(|(ef_sm, _)| *ef_sm > ef)
+    {
+        tracing::info!(
+            "Supermatcher detected: all {ef} results below anon stats threshold, \
+             re-searching with ef={ef_supermatch}",
+        );
+        metrics::counter!("supermatcher_extended_searches").increment(1);
+
+        let supermatch_neighbors = hnsw_supermatch
+            .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, query, ef_supermatch)
+            .await?;
+
+        let supermatch_classified =
+            classify_edges(&supermatch_neighbors.edges, aby3_store, ef_supermatch).await?;
+
+        if supermatch_classified.anon_stats_matches.saturated {
+            tracing::warn!(
+                "Supermatcher still saturated after extended search (ef={ef_supermatch})",
+            );
+        }
+
+        return Ok(supermatch_classified);
+    }
+
+    Ok(classified)
+}
+
+/// Batch-classify edges at both the match threshold and the anon stats threshold.
+async fn classify_edges(
+    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    aby3_store: &mut Aby3Store,
+    ef: usize,
+) -> Result<ClassifiedMatches> {
+    let all_distances: Vec<_> = edges.iter().map(|(_, d)| *d).collect();
+
+    // Step 1: Batch-check all edges at match threshold
+    let match_bits = aby3_store.is_match_batch(&all_distances).await?;
+    let matches: Vec<_> = edges
+        .iter()
+        .zip(&match_bits)
+        .filter(|(_, &b)| b)
+        .map(|(edge, _)| *edge)
+        .collect();
+    let matches_saturated = matches.len() == ef;
+
+    // Step 2: Batch-check non-matched edges at anon stats threshold
+    let remaining_distances: Vec<_> = all_distances
+        .iter()
+        .zip(&match_bits)
+        .filter(|(_, &b)| !b)
+        .map(|(d, _)| *d)
+        .collect();
+    let anon_stats_matches = if remaining_distances.is_empty() {
+        matches.clone()
+    } else {
+        let anon_bits = aby3_store
+            .is_match_anon_stats_batch(&remaining_distances)
+            .await?;
+        let anon_extra: Vec<_> = edges
+            .iter()
+            .zip(&match_bits)
+            .filter(|(_, &b)| !b)
+            .zip(anon_bits)
+            .filter(|(_, is_match)| *is_match)
+            .map(|((edge, _), _)| *edge)
+            .collect();
+        let mut all = matches.clone();
+        all.extend(anon_extra);
+        all
+    };
+    let anon_stats_saturated = anon_stats_matches.len() == ef;
+
+    Ok(ClassifiedMatches {
+        matches: SaturableMatches {
+            results: matches,
+            saturated: matches_saturated,
+        },
+        anon_stats_matches: SaturableMatches {
+            results: anon_stats_matches,
+            saturated: anon_stats_saturated,
+        },
+    })
+}
+
 async fn per_insert_query<N: Neighborhood<Aby3Store>>(
     query: Aby3Query,
     search_params: &SearchParams,
@@ -150,10 +278,24 @@ async fn per_insert_query<N: Neighborhood<Aby3Store>>(
         .search_to_insert::<_, N>(aby3_store, graph_store, &query, insertion_layer)
         .await?;
 
-    let matches = if search_params.do_match {
-        search_params.hnsw.matches(aby3_store, &links).await?
+    let classified = if search_params.do_match {
+        match links.first() {
+            Some(bottom_layer) => {
+                let ef = search_params.hnsw.params.get_ef_constr_insert(0);
+                classify_and_extend(
+                    bottom_layer.as_ref(),
+                    &query,
+                    search_params,
+                    aby3_store,
+                    graph_store,
+                    ef,
+                )
+                .await?
+            }
+            None => ClassifiedMatches::default(),
+        }
     } else {
-        vec![]
+        ClassifiedMatches::default()
     };
 
     // Trim and extract unstructured vector lists
@@ -171,7 +313,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store>>(
             links: links_unstructured,
             update_ep,
         },
-        matches,
+        classified,
     })
 }
 
@@ -183,23 +325,26 @@ async fn per_search_query(
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
+    let ef_search = search_params.hnsw.params.get_ef_search(0);
     let layer_0_neighbors = search_params
         .hnsw
-        .search::<_, SortedNeighborhood<_>>(
-            aby3_store,
-            graph_store,
-            &query,
-            search_params.hnsw.params.get_ef_search(0),
-        )
+        .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, &query, ef_search)
         .await?;
 
     let links_unstructured = vec![layer_0_neighbors.edge_ids()];
-    let links = vec![layer_0_neighbors];
 
-    let matches = if search_params.do_match {
-        search_params.hnsw.matches(aby3_store, &links).await?
+    let classified = if search_params.do_match {
+        classify_and_extend(
+            &layer_0_neighbors.edges,
+            &query,
+            search_params,
+            aby3_store,
+            graph_store,
+            ef_search,
+        )
+        .await?
     } else {
-        vec![]
+        ClassifiedMatches::default()
     };
 
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
@@ -209,7 +354,7 @@ async fn per_search_query(
             links: links_unstructured,
             update_ep: UpdateEntryPoint::False,
         },
-        matches,
+        classified,
     })
 }
 
@@ -278,10 +423,7 @@ mod tests {
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
         let search_queries = &request.queries(Orientation::Normal);
-        let search_params = SearchParams {
-            hnsw: actor.searcher(),
-            do_match: true,
-        };
+        let search_params = SearchParams::new(actor.searcher(), true, Some(4000));
 
         let result = search(
             &sessions,
@@ -296,10 +438,12 @@ mod tests {
             assert_eq!(side.len(), batch_size);
             for (i, rotations) in side.iter().enumerate() {
                 // Match because i from make_request is the same as i from init_db.
-                assert_eq!(rotations.center().matches.len(), 1);
+                assert_eq!(rotations.center().classified.matches.results.len(), 1);
                 assert!(rotations
                     .center()
+                    .classified
                     .matches
+                    .results
                     .iter()
                     .any(|(v, _)| *v == VectorId::from_0_index(i as u32)));
             }

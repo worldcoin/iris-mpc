@@ -16,7 +16,8 @@ use crate::{
         ops::{
             conditionally_select_distances_with_plain_ids,
             conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
-            conditionally_swap_distances_plain_ids, galois_ring_to_rep3, DistancePair, IdDistance,
+            conditionally_swap_distances_plain_ids, galois_ring_to_rep3,
+            lte_anon_stats_threshold_and_open, open_ring, DistancePair, IdDistance,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -26,7 +27,6 @@ use crate::{
         RingElement,
     },
 };
-use ampc_actor_utils::protocol::ops::open_ring;
 use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -554,6 +554,18 @@ where
         self.distance_fn
             .eval_distance_multibatch(self, batches)
             .await
+    }
+
+    /// Check whether a batch of distances are matches at the higher anon stats
+    /// threshold (0.375 vs 0.345 for standard matching).
+    pub async fn is_match_anon_stats_batch(
+        &mut self,
+        distances: &[DistanceShare<u32>],
+    ) -> Result<Vec<bool>> {
+        if distances.is_empty() {
+            return Ok(vec![]);
+        }
+        lte_anon_stats_threshold_and_open(&mut self.session, distances).await
     }
 }
 

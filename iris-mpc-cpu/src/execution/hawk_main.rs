@@ -240,6 +240,9 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = 256)]
     pub hnsw_param_ef_search: usize,
 
+    #[clap(long, default_value_t = 4000)]
+    pub hnsw_param_ef_supermatch: usize,
+
     #[clap(long)]
     pub hnsw_layer_density: Option<usize>,
 
@@ -398,6 +401,23 @@ pub struct HawkSession {
 
 pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef);
 
+/// A list of matches paired with a saturation flag.
+#[derive(Debug, Clone, Default)]
+pub struct SaturableMatches {
+    pub results: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    /// True if all `ef` search results were below this threshold (more matches likely exist).
+    pub saturated: bool,
+}
+
+/// Search results classified at dual thresholds (match + anon stats).
+#[derive(Debug, Clone, Default)]
+pub struct ClassifiedMatches {
+    /// Neighbors below the match threshold (0.345). Used for uniqueness decisions.
+    pub matches: SaturableMatches,
+    /// Neighbors below the anon stats threshold (0.375). Superset of `matches`. Used for anon stats.
+    pub anon_stats_matches: SaturableMatches,
+}
+
 /// A high-level plan for inserting a query into the HNSW graph after a search.
 ///
 /// This struct is created as a result of the search phase that precedes an insertion.
@@ -408,7 +428,7 @@ pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef)
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
     pub plan: InsertPlanV<Aby3Store>,
-    pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    pub classified: ClassifiedMatches,
 }
 
 /// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
@@ -709,9 +729,12 @@ impl HawkActor {
         let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
-                let matches = insert_plan.matches.clone();
+                // Use anon_stats_matches (higher threshold) for distance collection,
+                // matching GPU behavior of collecting all partial matches at the
+                // anon stats threshold.
+                let anon_stats_matches = insert_plan.classified.anon_stats_matches.results.clone();
 
-                for (vector_id, distance) in matches {
+                for (vector_id, distance) in anon_stats_matches {
                     let distance_share = distance;
                     let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
@@ -1264,6 +1287,7 @@ impl HawkResult {
                     .filter_map(|&m| match m {
                         Search(id) | Luc(id) | Reauth(id) => Some(id),
                         IntraBatch(req_i) => self.inserted_id(req_i),
+                        Supermatch => None,
                     })
                     .map(|id| id.index())
                     .sorted()
@@ -1629,10 +1653,11 @@ impl HawkHandle {
             // Search for nearest neighbors for all requests, all rotations (if applicable) and both eyes.
             let sessions_search = &sessions.for_search(orient);
             let search_ids = &request.ids;
-            let search_params = SearchParams {
-                hnsw: hawk_actor.searcher(),
-                do_match: true,
-            };
+            let search_params = SearchParams::new(
+                hawk_actor.searcher(),
+                true,
+                Some(hawk_actor.args.hnsw_param_ef_supermatch),
+            );
 
             let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
                 sessions_search,
@@ -2261,6 +2286,7 @@ mod tests_db {
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
+            hnsw_param_ef_supermatch: 4000,
             hnsw_layer_density: None,
             hnsw_prf_key: None,
             numa: true,
