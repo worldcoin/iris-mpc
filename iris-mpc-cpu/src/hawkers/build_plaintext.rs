@@ -8,21 +8,24 @@ use tracing::info;
 
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
-    hawkers::plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
+    hawkers::{
+        aby3::aby3_store::DistanceOps,
+        plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
+    },
     hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
 };
 
 /// Number of entries to insert before reporting a new info log entry
 const REPORTING_INTERVAL: usize = 1000;
 
-pub async fn plaintext_parallel_batch_insert(
+pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
     graph: Option<GraphMem<PlaintextVectorRef>>,
-    store: Option<SharedPlaintextStore>,
+    store: Option<SharedPlaintextStore<D>>,
     irises: Vec<(IrisVectorId, IrisCode)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMem<PlaintextVectorRef>, SharedPlaintextStore)> {
+) -> Result<(GraphMem<PlaintextVectorRef>, SharedPlaintextStore<D>)> {
     assert!(graph.is_none() == store.is_none());
     let mut graph = Arc::new(graph.unwrap_or_default());
     let mut store = store.unwrap_or_default();
@@ -61,7 +64,7 @@ pub async fn plaintext_parallel_batch_insert(
                     links_unstructured.push(l.edge_ids())
                 }
 
-                let insert_plan: InsertPlanV<SharedPlaintextStore> = InsertPlanV {
+                let insert_plan: InsertPlanV<SharedPlaintextStore<D>> = InsertPlanV {
                     query,
                     links: links_unstructured,
                     update_ep,
