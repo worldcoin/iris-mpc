@@ -63,6 +63,9 @@ env:
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1800"
 
+  - name: SMPC__HNSW_FIXED_LAYER_SEARCH_BATCH_SIZE
+    value: "10000"
+
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "96"
 

@@ -459,6 +459,7 @@ async fn init_hawk_actor(
         hnsw_param_M: config.hnsw_param_M,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
         hnsw_layer_density: config.hnsw_layer_density,
+        hnsw_fixed_layer_search_batch_size: config.hnsw_fixed_layer_search_batch_size,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
         hnsw_disable_memory_persistence: config.hnsw_disable_memory_persistence,

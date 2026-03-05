@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=567d9d613cde09bb1226776472029a24f2510394#567d9d613cde09bb1226776472029a24f2510394"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#1cadc9461e65044ac1390553982fe1dbf4136563"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -110,7 +110,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=567d9d613cde09bb1226776472029a24f2510394#567d9d613cde09bb1226776472029a24f2510394"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#1cadc9461e65044ac1390553982fe1dbf4136563"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -136,7 +136,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=567d9d613cde09bb1226776472029a24f2510394#567d9d613cde09bb1226776472029a24f2510394"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#1cadc9461e65044ac1390553982fe1dbf4136563"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -151,7 +151,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=567d9d613cde09bb1226776472029a24f2510394#567d9d613cde09bb1226776472029a24f2510394"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Fflat-transpose-packed#1cadc9461e65044ac1390553982fe1dbf4136563"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -3024,6 +3024,7 @@ dependencies = [
  "chrono",
  "clap",
  "config",
+ "core_affinity",
  "eyre",
  "float_eq",
  "hex",
@@ -3032,6 +3033,7 @@ dependencies = [
  "itertools 0.13.0",
  "metrics",
  "metrics-exporter-statsd",
+ "nix 0.29.0",
  "num_cpus",
  "percent-encoding",
  "rand 0.8.5",
@@ -3729,6 +3731,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.6.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4242,7 +4256,7 @@ dependencies = [
  "inferno",
  "libc",
  "log",
- "nix",
+ "nix 0.26.4",
  "once_cell",
  "prost 0.12.6",
  "prost-build 0.12.6",
