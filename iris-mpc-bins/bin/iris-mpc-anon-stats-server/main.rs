@@ -251,19 +251,6 @@ impl AnonStatsProcessor {
 
         // --- HNSW 1D ---
         // Uniqueness: Normal + Mirror
-        // Recovery: Normal only
-        for origin in GPU_1D_NORMAL_ORIGINS {
-            self.run_1d_job(
-                session,
-                origin,
-                JobKind::Gpu1DRecovery,
-                AnonStatsOperation::Recovery,
-            )
-            .await?;
-        }
-
-        // --- HNSW 1D ---
-        // Uniqueness: Normal only (HNSW doesn't support Mirror yet)
         for origin in HNSW_1D_ORIGINS {
             self.run_1d_job(
                 session,
@@ -285,19 +272,6 @@ impl AnonStatsProcessor {
         }
         // Recovery: Normal only
         for origin in HNSW_1D_NORMAL_ORIGINS {
-            self.run_1d_job(
-                session,
-                origin,
-                JobKind::Hnsw1DRecovery,
-                AnonStatsOperation::Recovery,
-            )
-            .await?;
-        }
-
-        // --- GPU 2D ---
-        // Uniqueness: Normal + Mirror
-        // Recovery: Normal only
-        for origin in HNSW_1D_ORIGINS {
             self.run_1d_job(
                 session,
                 origin,
@@ -366,16 +340,6 @@ impl AnonStatsProcessor {
                 session,
                 origin,
                 JobKind::Hnsw2DRecovery,
-                AnonStatsOperation::Recovery,
-            )
-            .await?;
-        }
-        // Recovery: Normal only
-        for origin in GPU_2D_NORMAL_ORIGINS {
-            self.run_2d_job(
-                session,
-                origin,
-                JobKind::Gpu2DRecovery,
                 AnonStatsOperation::Recovery,
             )
             .await?;
