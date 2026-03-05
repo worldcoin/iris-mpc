@@ -54,6 +54,7 @@ for test_id in "${TESTS[@]}"; do
             --hnsw-schema "SMPC_hnsw_dev_${party_id}" \
             --gpu-schema "SMPC_dev_${party_id}" \
             --seed "$SEED" \
+            --exclusions-s3-uri "$EXCLUSIONS_S3_URI" \
             --output-dir "$output_dir" \
             > "$log_file" 2>&1
         then
