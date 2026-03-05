@@ -12,7 +12,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::{
         graph::{graph_store::GraphPg, layered_graph::GraphMem},
-        searcher::{HnswParams, N_PARAM_LAYERS},
+        searcher::HnswParams,
     },
 };
 use iris_mpc_store::Store;
@@ -585,7 +585,7 @@ fn check_single_graph(
     // -- 1g: Degree bounds --
     let mut degree_viol = 0u64;
     for (lc, layer) in graph.layers.iter().enumerate() {
-        let m_limit = params.M_limit[lc.min(N_PARAM_LAYERS - 1)];
+        let m_limit = params.get_M_limit(lc);
         for (node, nbs) in layer.links.iter() {
             if nbs.len() > m_limit {
                 degree_viol += 1;
@@ -606,8 +606,8 @@ fn check_single_graph(
         if degree_viol == 0 {
             format!(
                 "L0 M_limit={}, L1+ M_limit={}",
-                params.M_limit[0],
-                params.M_limit[1.min(N_PARAM_LAYERS - 1)]
+                params.get_M_limit(0),
+                params.get_M_limit(1),
             )
         } else {
             format!("{degree_viol} nodes exceed M_limit")
