@@ -982,10 +982,12 @@ async fn run_cross_schema_checks(
 
     // Step 5: Filter out legitimately-diverging IDs.
     // One-sided IDs are not counted as mismatches (logged as warnings above).
+    let raw_mismatch_count = mismatched_raw.len();
     let mismatched_ids: Vec<i64> = mismatched_raw
         .into_iter()
         .filter(|id| !pending_set.contains(id))
         .collect();
+    let excluded_count = raw_mismatch_count - mismatched_ids.len();
 
     let one_sided_total = only_in_hnsw.len() + only_in_gpu.len();
     checks.push(
@@ -995,18 +997,21 @@ async fn run_cross_schema_checks(
             mismatched_ids.is_empty(),
             if mismatched_ids.is_empty() {
                 format!(
-                    "{} IDs sampled, {} pending-update IDs excluded, \
-                     {} one-sided IDs (not counted as mismatches), 0 mismatches",
+                    "{} IDs sampled, {} pending-update IDs identified, \
+                     {} excluded, {} one-sided IDs (not counted as mismatches), \
+                     0 mismatches",
                     sample_vec.len(),
                     pending_set.len(),
+                    excluded_count,
                     one_sided_total,
                 )
             } else {
                 format!(
-                    "{} IDs sampled, {} pending-update IDs excluded, \
-                     {} one-sided IDs, {} mismatches (first 10): {:?}",
+                    "{} IDs sampled, {} pending-update IDs identified, \
+                     {} excluded, {} one-sided IDs, {} mismatches (first 10): {:?}",
                     sample_vec.len(),
                     pending_set.len(),
+                    excluded_count,
                     one_sided_total,
                     mismatched_ids.len(),
                     &mismatched_ids[..mismatched_ids.len().min(10)],
