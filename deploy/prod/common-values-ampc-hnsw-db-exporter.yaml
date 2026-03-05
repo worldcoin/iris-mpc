@@ -1,8 +1,8 @@
-image: "ghcr.io/worldcoin/iris-mpc-db-exporter:v0.2.4@sha256:5d634832fed42f5229aa4cbf13ca144e964f9886e5728b15ad553076dcfa5f97"
+image: "ghcr.io/worldcoin/iris-mpc-db-exporter:v0.31.0@sha256:db0fcf30da61b526e34e5e9081ca59858ddf00d506b08019734c0a3d2dd57007"
 
-replicaCount: 1
+replicaCount: 0
 
-environment: stage
+environment: prod
 
 schedule: "0 10 * * *"
 
@@ -16,7 +16,7 @@ args:
   - "--export-output=s3"
   - "--batch-size=16000"
   - "--parallelism=60"
-  - "--output-folder=even_odd_with_version_id_output_16k"
+  - "--output-folder=hnsw_even_odd_with_version_id_output_16k"
 
 imagePullSecrets:
   - name: github-secret
