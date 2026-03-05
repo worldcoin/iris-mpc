@@ -743,7 +743,7 @@ async fn run_persistent_state_checks(
         )),
     }
 
-    // 2b
+    // 2b: left and right graphs have the same max serial ID
     checks.push(CheckResult::new(
         "2b",
         "Graph max serial_id alignment",
