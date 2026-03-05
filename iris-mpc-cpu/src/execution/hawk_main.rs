@@ -795,6 +795,8 @@ impl HawkActor {
             context: AnonStatsContext::HNSW,
         };
 
+        let is_normal = orientation == AnonStatsOrientation::Normal;
+
         let mut uniqueness_bundles = Vec::new();
         let mut reauth_bundles = Vec::new();
         let mut recovery_bundles = Vec::new();
@@ -805,9 +807,10 @@ impl HawkActor {
             }
             let bundle = (*match_id, shares.clone());
             match operation {
-                AnonStatsOperation::Reauth => reauth_bundles.push(bundle),
-                AnonStatsOperation::Recovery => recovery_bundles.push(bundle),
+                AnonStatsOperation::Reauth if is_normal => reauth_bundles.push(bundle),
+                AnonStatsOperation::Recovery if is_normal => recovery_bundles.push(bundle),
                 AnonStatsOperation::Uniqueness => uniqueness_bundles.push(bundle),
+                _ => {} // Skip Reauth/Recovery for Mirror orientation
             }
         }
 
@@ -858,6 +861,8 @@ impl HawkActor {
             context: AnonStatsContext::HNSW,
         };
 
+        let is_normal = orientation == AnonStatsOrientation::Normal;
+
         // 2D bundles combine left and right eye distances for the same match_id.
         // Only include entries present in both eyes.
         let mut uniqueness_bundles = Vec::new();
@@ -876,9 +881,10 @@ impl HawkActor {
             }
             let bundle = (match_id, (left_shares.clone(), right_shares.clone()));
             match operation {
-                AnonStatsOperation::Reauth => reauth_bundles.push(bundle),
-                AnonStatsOperation::Recovery => recovery_bundles.push(bundle),
+                AnonStatsOperation::Reauth if is_normal => reauth_bundles.push(bundle),
+                AnonStatsOperation::Recovery if is_normal => recovery_bundles.push(bundle),
                 AnonStatsOperation::Uniqueness => uniqueness_bundles.push(bundle),
+                _ => {} // Skip Reauth/Recovery for Mirror orientation
             }
         }
 
