@@ -12,7 +12,7 @@ db-sanity-check \
   --gpu-schema <SCHEMA> \
   --seed <SEED> \
   [--m <M>] \
-  [--exclusions-file <PATH>] \
+  [--exclusions-s3-uri <S3_URI>] \
   [--output-dir <DIR>] \
   [--s3-output <S3_URI>]
 ```
@@ -28,7 +28,7 @@ db-sanity-check \
 | `--seed` | | yes | | RNG seed for reproducible cross-schema sampling (check 3c) |
 | `--m` | | no | `256` | HNSW M parameter for degree bound checks |
 | `--layer-probability` | | no | `1/M` | Layer probability q for geometric distribution check |
-| `--exclusions-file` | | no | | Path to JSON file with `{"deleted_serial_ids": [...]}` |
+| `--exclusions-s3-uri` | | no | | S3 URI to JSON exclusions file with `{"deleted_serial_ids": [...]}` (e.g. `s3://bucket/path/deleted_serial_ids.json`) |
 | `--output-dir` | | no | `.` | Directory for JSON output files |
 | `--s3-output` | | no | | S3 URI to upload output files to (e.g. `s3://bucket/prefix/`) |
 
@@ -77,7 +77,7 @@ db-sanity-check \
   --gpu-schema SMPC_gpu_prod_0 \
   --seed 42 \
   --m 256 \
-  --exclusions-file deleted_serial_ids.json \
+  --exclusions-s3-uri s3://my-bucket/path/deleted_serial_ids.json \
   --output-dir sanity-check/party0
 ```
 

@@ -12,7 +12,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::{
         graph::{graph_store::GraphPg, layered_graph::GraphMem},
-        searcher::{HnswParams, N_PARAM_LAYERS},
+        searcher::HnswParams,
     },
 };
 use iris_mpc_store::Store;
@@ -105,9 +105,10 @@ struct Args {
     /// Each layer should have ~q fraction of the nodes in the layer below.
     #[arg(long)]
     layer_probability: Option<f64>,
-    /// Path to JSON exclusions file with {"deleted_serial_ids": [...]}
+    /// S3 URI to JSON exclusions file with {"deleted_serial_ids": [...]}
+    /// (e.g. s3://bucket/path/deleted_serial_ids.json)
     #[arg(long)]
-    exclusions_file: Option<PathBuf>,
+    exclusions_s3_uri: Option<String>,
     /// Directory for JSON output files
     #[arg(long, default_value = ".")]
     output_dir: PathBuf,
@@ -202,9 +203,9 @@ async fn main() -> Result<()> {
     let mut stats = Stats::new();
     let mut degree_hist: Vec<DegreeHistEntry> = Vec::new();
 
-    let exclusions: Option<HashSet<u32>> = match &args.exclusions_file {
-        Some(path) => {
-            let parsed: ExclusionsFile = serde_json::from_str(&fs::read_to_string(path)?)?;
+    let exclusions: Option<HashSet<u32>> = match &args.exclusions_s3_uri {
+        Some(uri) => {
+            let parsed = download_exclusions_from_s3(uri).await?;
             Some(parsed.deleted_serial_ids.into_iter().collect())
         }
         None => None,
@@ -584,7 +585,7 @@ fn check_single_graph(
     // -- 1g: Degree bounds --
     let mut degree_viol = 0u64;
     for (lc, layer) in graph.layers.iter().enumerate() {
-        let m_limit = params.M_limit[lc.min(N_PARAM_LAYERS - 1)];
+        let m_limit = params.get_M_limit(lc);
         for (node, nbs) in layer.links.iter() {
             if nbs.len() > m_limit {
                 degree_viol += 1;
@@ -605,8 +606,8 @@ fn check_single_graph(
         if degree_viol == 0 {
             format!(
                 "L0 M_limit={}, L1+ M_limit={}",
-                params.M_limit[0],
-                params.M_limit[1.min(N_PARAM_LAYERS - 1)]
+                params.get_M_limit(0),
+                params.get_M_limit(1),
             )
         } else {
             format!("{degree_viol} nodes exceed M_limit")
@@ -742,7 +743,7 @@ async fn run_persistent_state_checks(
         )),
     }
 
-    // 2b
+    // 2b: left and right graphs have the same max serial ID
     checks.push(CheckResult::new(
         "2b",
         "Graph max serial_id alignment",
@@ -981,10 +982,12 @@ async fn run_cross_schema_checks(
 
     // Step 5: Filter out legitimately-diverging IDs.
     // One-sided IDs are not counted as mismatches (logged as warnings above).
+    let raw_mismatch_count = mismatched_raw.len();
     let mismatched_ids: Vec<i64> = mismatched_raw
         .into_iter()
         .filter(|id| !pending_set.contains(id))
         .collect();
+    let excluded_count = raw_mismatch_count - mismatched_ids.len();
 
     let one_sided_total = only_in_hnsw.len() + only_in_gpu.len();
     checks.push(
@@ -994,18 +997,21 @@ async fn run_cross_schema_checks(
             mismatched_ids.is_empty(),
             if mismatched_ids.is_empty() {
                 format!(
-                    "{} IDs sampled, {} pending-update IDs excluded, \
-                     {} one-sided IDs (not counted as mismatches), 0 mismatches",
+                    "{} IDs sampled, {} pending-update IDs identified, \
+                     {} excluded, {} one-sided IDs (not counted as mismatches), \
+                     0 mismatches",
                     sample_vec.len(),
                     pending_set.len(),
+                    excluded_count,
                     one_sided_total,
                 )
             } else {
                 format!(
-                    "{} IDs sampled, {} pending-update IDs excluded, \
-                     {} one-sided IDs, {} mismatches (first 10): {:?}",
+                    "{} IDs sampled, {} pending-update IDs identified, \
+                     {} excluded, {} one-sided IDs, {} mismatches (first 10): {:?}",
                     sample_vec.len(),
                     pending_set.len(),
+                    excluded_count,
                     one_sided_total,
                     mismatched_ids.len(),
                     &mismatched_ids[..mismatched_ids.len().min(10)],
@@ -1077,15 +1083,38 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
     Ok((bucket.to_string(), prefix.to_string()))
 }
 
+fn build_s3_client(config: &aws_config::SdkConfig) -> aws_sdk_s3::Client {
+    let s3_config = aws_sdk_s3::config::Builder::from(config)
+        .force_path_style(true)
+        .build();
+    aws_sdk_s3::Client::from_conf(s3_config)
+}
+
+async fn download_exclusions_from_s3(s3_uri: &str) -> Result<ExclusionsFile> {
+    let (bucket, key) = parse_s3_uri(s3_uri)?;
+    eyre::ensure!(!key.is_empty(), "S3 URI must include an object key");
+    println!("Downloading exclusions from s3://{bucket}/{key}");
+
+    let config = aws_config::from_env().load().await;
+    let client = build_s3_client(&config);
+
+    let response = client.get_object().bucket(&bucket).key(&key).send().await?;
+    let body = response.body.collect().await?;
+    let exclusions: ExclusionsFile = serde_json::from_slice(&body.into_bytes())?;
+
+    println!(
+        "  Loaded {} excluded serial IDs",
+        exclusions.deleted_serial_ids.len()
+    );
+    Ok(exclusions)
+}
+
 async fn upload_to_s3(s3_uri: &str, files: &[PathBuf]) -> Result<()> {
     let (bucket, prefix) = parse_s3_uri(s3_uri)?;
     println!("--- Uploading to S3: s3://{bucket}/{prefix} ---");
 
     let config = aws_config::from_env().load().await;
-    let s3_config = aws_sdk_s3::config::Builder::from(&config)
-        .force_path_style(true)
-        .build();
-    let client = aws_sdk_s3::Client::from_conf(s3_config);
+    let client = build_s3_client(&config);
 
     for path in files {
         let file_name = path

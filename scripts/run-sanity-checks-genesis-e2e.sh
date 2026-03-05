@@ -9,14 +9,22 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 SEED=42
 PARTIES=(0 1 2)
 TESTS=(100 101 102 103 104 105 106)
+EXCLUSIONS_S3_URI="s3://wf-smpcv2-dev-sync-protocol/dev_deleted_serial_ids.json"
 
 # Override the Docker-internal LocalStack hostname for host-side runs.
 export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_REGION=us-east-1
 
 log()  { echo "$(date +%Y-%m-%dT%H:%M:%S) [INFO] $*"; }
 fail() { echo "$(date +%Y-%m-%dT%H:%M:%S) [FAIL] $*" >&2; exit 1; }
 
 cd "$REPO_ROOT"
+
+log "Building genesis e2e tests..."
+(cd "$REPO_ROOT/iris-mpc-upgrade-hawk" && \
+    cargo test --release --test e2e_genesis --no-run 2>&1 | grep -E "^error|Compiling|Finished")
 
 log "Building db-sanity-check..."
 cargo build --release -p iris-mpc-bins --bin db-sanity-check 2>&1 | grep -E "^error|Finished"
@@ -32,7 +40,7 @@ for test_id in "${TESTS[@]}"; do
     )
 
     # Allow DB persistence pipelines to flush before checking.
-    sleep 10
+    sleep 5
 
     for party_id in "${PARTIES[@]}"; do
         log "Sanity check: genesis_${test_id} party ${party_id}"
@@ -46,6 +54,7 @@ for test_id in "${TESTS[@]}"; do
             --hnsw-schema "SMPC_hnsw_dev_${party_id}" \
             --gpu-schema "SMPC_dev_${party_id}" \
             --seed "$SEED" \
+            --exclusions-s3-uri "$EXCLUSIONS_S3_URI" \
             --output-dir "$output_dir" \
             > "$log_file" 2>&1
         then
