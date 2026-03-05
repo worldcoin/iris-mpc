@@ -105,9 +105,10 @@ struct Args {
     /// Each layer should have ~q fraction of the nodes in the layer below.
     #[arg(long)]
     layer_probability: Option<f64>,
-    /// Path to JSON exclusions file with {"deleted_serial_ids": [...]}
+    /// S3 URI to JSON exclusions file with {"deleted_serial_ids": [...]}
+    /// (e.g. s3://bucket/path/deleted_serial_ids.json)
     #[arg(long)]
-    exclusions_file: Option<PathBuf>,
+    exclusions_s3_uri: Option<String>,
     /// Directory for JSON output files
     #[arg(long, default_value = ".")]
     output_dir: PathBuf,
@@ -202,9 +203,9 @@ async fn main() -> Result<()> {
     let mut stats = Stats::new();
     let mut degree_hist: Vec<DegreeHistEntry> = Vec::new();
 
-    let exclusions: Option<HashSet<u32>> = match &args.exclusions_file {
-        Some(path) => {
-            let parsed: ExclusionsFile = serde_json::from_str(&fs::read_to_string(path)?)?;
+    let exclusions: Option<HashSet<u32>> = match &args.exclusions_s3_uri {
+        Some(uri) => {
+            let parsed = download_exclusions_from_s3(uri).await?;
             Some(parsed.deleted_serial_ids.into_iter().collect())
         }
         None => None,
@@ -1077,15 +1078,38 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
     Ok((bucket.to_string(), prefix.to_string()))
 }
 
+fn build_s3_client(config: &aws_config::SdkConfig) -> aws_sdk_s3::Client {
+    let s3_config = aws_sdk_s3::config::Builder::from(config)
+        .force_path_style(true)
+        .build();
+    aws_sdk_s3::Client::from_conf(s3_config)
+}
+
+async fn download_exclusions_from_s3(s3_uri: &str) -> Result<ExclusionsFile> {
+    let (bucket, key) = parse_s3_uri(s3_uri)?;
+    eyre::ensure!(!key.is_empty(), "S3 URI must include an object key");
+    println!("Downloading exclusions from s3://{bucket}/{key}");
+
+    let config = aws_config::from_env().load().await;
+    let client = build_s3_client(&config);
+
+    let response = client.get_object().bucket(&bucket).key(&key).send().await?;
+    let body = response.body.collect().await?;
+    let exclusions: ExclusionsFile = serde_json::from_slice(&body.into_bytes())?;
+
+    println!(
+        "  Loaded {} excluded serial IDs",
+        exclusions.deleted_serial_ids.len()
+    );
+    Ok(exclusions)
+}
+
 async fn upload_to_s3(s3_uri: &str, files: &[PathBuf]) -> Result<()> {
     let (bucket, prefix) = parse_s3_uri(s3_uri)?;
     println!("--- Uploading to S3: s3://{bucket}/{prefix} ---");
 
     let config = aws_config::from_env().load().await;
-    let s3_config = aws_sdk_s3::config::Builder::from(&config)
-        .force_path_style(true)
-        .build();
-    let client = aws_sdk_s3::Client::from_conf(s3_config);
+    let client = build_s3_client(&config);
 
     for path in files {
         let file_name = path
