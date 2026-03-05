@@ -4,11 +4,12 @@ use std::{
 };
 
 use async_from::{self, AsyncFrom};
+use futures::StreamExt;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 use rand::rngs::StdRng;
 
 use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
-use tokio::time::{sleep, Instant};
+use tokio::time::{sleep, timeout, Instant};
 use uuid::Uuid;
 
 use crate::{
@@ -100,25 +101,37 @@ impl ServiceClient {
         );
 
         // Send deletion requests for all live serial IDs.
-        let live_serial_ids = std::mem::take(&mut self.state.live_serial_ids);
-        for serial_id in live_serial_ids.into_iter() {
-            let payload = RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest {
-                serial_id,
-            });
-            let sns_msg_info = SnsMessageInfo::from(payload);
-            if let Err(e) = self
-                .aws_client
-                .sns_publish_json(sns_msg_info)
-                .await
-                .map_err(ServiceClientError::AwsServiceError)
-            {
-                tracing::error!("Failed to send deletion for serial_id {}: {}", serial_id, e);
-            } else {
-                tracing::info!("publishing Deletion for {}", serial_id);
-            }
+        let live_serial_ids = std::mem::take(&mut self.state.live_serial_ids)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let deletion_messages: Vec<SnsMessageInfo> = live_serial_ids
+            .iter()
+            .map(|&serial_id| {
+                let payload =
+                    RequestPayload::IdentityDeletion(smpc_request::IdentityDeletionRequest {
+                        serial_id,
+                    });
+                SnsMessageInfo::from(payload)
+            })
+            .collect();
+
+        let idxs = self
+            .aws_client
+            .sns_publish_json_batch(&deletion_messages)
+            .await;
+
+        for idx in &idxs {
+            tracing::info!("publishing Deletion for {}", live_serial_ids[*idx]);
         }
-        // iris-mpc-hawk will not send responses for a batch of just deletions
-        tracing::info!("Cleanup complete. Deletions have been submitted.");
+
+        if idxs.len() != live_serial_ids.len() {
+            tracing::error!(
+                "Failed to send {} deletions",
+                live_serial_ids.len() - idxs.len()
+            );
+        } else {
+            tracing::info!("Cleanup complete. Deletions have been submitted.");
+        }
 
         Ok(())
     }
@@ -154,11 +167,11 @@ impl ServiceClient {
         // Phase 4: Publish requests to SNS.
         // From this point forward, continue on error in an attempt to clean up requests
         // which have already been published
-        let published_count = self.publish_requests(batch_idx, &batch_requests).await;
+        let published_idxs = self.publish_requests(&batch_requests).await;
 
         // Phase 5: Track published requests and wait for responses.
         self.state
-            .track_batch_requests(&batch_requests[..published_count]);
+            .track_batch_requests(&published_idxs, &batch_requests);
         self.state.process_responses(&self.aws_client).await;
 
         // Check all error conditions and return consolidated error
@@ -259,6 +272,7 @@ impl ServiceClient {
         &mut self,
         batch_shares: Vec<Option<(Uuid, BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>)>>,
     ) -> Result<(), ServiceClientError> {
+        tracing::info!("uploading iris shares");
         for shares_info in batch_shares.iter().filter_map(|opt| opt.as_ref()) {
             let (op_uuid, shares) = shares_info;
             if let Err(e) = self.aws_client.s3_upload_iris_shares(op_uuid, shares).await {
@@ -266,40 +280,28 @@ impl ServiceClient {
                 return Err(ServiceClientError::SharesUploadError);
             }
         }
+        tracing::info!("upload finished");
         Ok(())
     }
 
-    async fn publish_requests(
-        &mut self,
-        batch_idx: usize,
-        batch_requests: &[typeset::Request],
-    ) -> usize {
+    async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
         use crate::aws::types::SnsMessageInfo;
 
-        let mut published_count = 0;
-        for request in batch_requests.iter() {
-            let log_tag = request.log_tag();
-            let sns_msg_info = SnsMessageInfo::from(request);
+        // Collect all messages for batch publishing
+        let messages: Vec<SnsMessageInfo> =
+            batch_requests.iter().map(SnsMessageInfo::from).collect();
 
-            match self.aws_client.sns_publish_json(sns_msg_info).await {
-                Ok(_) => {
-                    tracing::info!("publishing {}", log_tag);
-                    published_count += 1;
-                }
-                Err(e) => {
-                    self.state.error_bits.set_sns_publish_error();
-                    tracing::error!(
-                        "batch {}: SNS publish failed for request {}: {:?}",
-                        batch_idx,
-                        log_tag,
-                        e,
-                    );
-                    // Stop publishing further requests, but return count of already published
-                    break;
-                }
-            }
+        let idxs = self.aws_client.sns_publish_json_batch(&messages).await;
+        if idxs.len() != messages.len() {
+            self.state.error_bits.set_sns_publish_error();
         }
-        published_count
+
+        for idx in &idxs {
+            let request = &batch_requests[*idx];
+            tracing::info!("publishing {}", request.log_tag());
+        }
+
+        idxs
     }
 }
 
@@ -490,8 +492,9 @@ impl ExecState {
 
     // Phase 5: Register published requests so responses can be correlated. IdentityDeletion
     // correlates by serial_id rather than UUID, so it goes into outstanding_deletions.
-    fn track_batch_requests(&mut self, batch_requests: &[typeset::Request]) {
-        for request in batch_requests {
+    fn track_batch_requests(&mut self, idxs: &[usize], batch_requests: &[typeset::Request]) {
+        for idx in idxs {
+            let request = &batch_requests[*idx];
             let opt_tracking_uuid: Option<Uuid> = match request {
                 typeset::Request::Uniqueness { signup_id, .. } => {
                     if let Some(label) = request.info().label() {
@@ -517,18 +520,21 @@ impl ExecState {
         }
     }
 
-    // Drains outstanding_requests and outstanding_deletions by polling SQS until both are empty.
+    // Drains outstanding_requests and outstanding_deletions by consuming from the SQS response stream.
     // Times out if no response is received within RESPONSE_TIMEOUT_SECS.
     async fn process_responses(&mut self, aws_client: &AwsClient) {
-        use crate::constants::N_PARTIES;
-        let mut last_response_time = Instant::now();
+        let max_poll_time = aws_client.config().sqs_long_poll_wait_time() as i32;
+        let mut response_stream = aws_client.sqs_response_stream(max_poll_time).fuse();
 
-        'OUTER: while !self.outstanding_requests.is_empty()
-            || !self.outstanding_deletions.is_empty()
-        {
-            let deadline =
-                RESPONSE_TIMEOUT_SECS.saturating_sub(last_response_time.elapsed().as_secs());
-            if deadline == 0 {
+        let mut last_response_time = Instant::now();
+        let timeout_duration = Duration::from_secs(RESPONSE_TIMEOUT_SECS);
+
+        while !self.outstanding_requests.is_empty() || !self.outstanding_deletions.is_empty() {
+            let remaining_time = timeout_duration
+                .checked_sub(last_response_time.elapsed())
+                .unwrap_or(Duration::ZERO);
+
+            if remaining_time.is_zero() {
                 self.error_bits.set_response_timeout_error();
                 tracing::error!(
                     "Response timeout: no response received for {} seconds",
@@ -537,44 +543,45 @@ impl ExecState {
                 break;
             }
 
-            let configured_max = aws_client.config().sqs_long_poll_wait_time();
-            let long_poll_time = std::cmp::min(deadline, configured_max as u64) as i32;
-            let messages = match aws_client
-                .sqs_receive_messages(Some(N_PARTIES), Some(long_poll_time))
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    self.error_bits.set_sqs_receive_error();
-                    tracing::error!("SQS receive failed: {:?}", e);
-                    break 'OUTER;
+            // Wait for next message with timeout
+            match timeout(remaining_time, response_stream.next()).await {
+                Ok(Some(Ok(sqs_msg))) => {
+                    last_response_time = Instant::now();
+
+                    let response = match typeset::ResponsePayload::try_from(&sqs_msg) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!(
+                                "failed to parse response payload for sqs msg {}: {}",
+                                sqs_msg.kind(),
+                                e
+                            );
+                            continue;
+                        }
+                    };
+                    tracing::info!("received {}", response.log_tag());
+                    self.correlate_response(&response);
                 }
-            };
-
-            if !messages.is_empty() {
-                last_response_time = Instant::now();
-            }
-
-            for sqs_msg in messages {
-                if let Err(e) = aws_client.sqs_purge_response_queue_message(&sqs_msg).await {
+                Ok(Some(Err(e))) => {
                     self.error_bits.set_sqs_receive_error();
-                    tracing::error!("SQS message purge failed: {:?}", e);
-                    break 'OUTER;
+                    tracing::error!("SQS stream error: {:?}", e);
+                    break;
                 }
-
-                let response = match typeset::ResponsePayload::try_from(&sqs_msg) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!(
-                            "failed to parse response payload for sqs msg {}: {}",
-                            sqs_msg.kind(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-                tracing::info!("received {}", response.log_tag());
-                self.correlate_response(&response);
+                Ok(None) => {
+                    // Stream ended unexpectedly
+                    self.error_bits.set_sqs_receive_error();
+                    tracing::error!("SQS response stream ended unexpectedly");
+                    break;
+                }
+                Err(_) => {
+                    // Timeout elapsed
+                    self.error_bits.set_response_timeout_error();
+                    tracing::error!(
+                        "Response timeout: no response received for {} seconds",
+                        RESPONSE_TIMEOUT_SECS
+                    );
+                    break;
+                }
             }
         }
 
