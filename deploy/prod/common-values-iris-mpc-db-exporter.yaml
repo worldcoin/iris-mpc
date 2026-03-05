@@ -1,12 +1,11 @@
-image: "ghcr.io/worldcoin/iris-mpc-db-exporter:v0.2.4@sha256:5d634832fed42f5229aa4cbf13ca144e964f9886e5728b15ad553076dcfa5f97"
+image: "ghcr.io/worldcoin/iris-mpc-db-exporter:v0.31.0@sha256:db0fcf30da61b526e34e5e9081ca59858ddf00d506b08019734c0a3d2dd57007"
 
 replicaCount: 1
 
-environment: stage
+environment: prod
 
-schedule: "0 10 * * *"
+schedule: "0 7,19 * * *"
 
-# this is needed to prevent the job from restarting if it fails
 backoffLimit: 0
 
 args:
@@ -15,8 +14,8 @@ args:
   - "--export-format=binary"
   - "--export-output=s3"
   - "--batch-size=16000"
-  - "--parallelism=60"
-  - "--output-folder=hnsw_even_odd_with_version_id_output_16k"
+  - "--parallelism=96"
+  - "--output-folder=even_odd_with_version_id_output_16k_rerandomized"
 
 imagePullSecrets:
   - name: github-secret
@@ -24,10 +23,10 @@ imagePullSecrets:
 resources:
   limits:
     cpu: 7
-    memory: 31Gi
+    memory: 26Gi
   requests:
-    cpu: 4
-    memory: 25Gi
+    cpu: 7
+    memory: 26Gi
 
 nodeSelector:
   kubernetes.io/arch: amd64
