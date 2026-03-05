@@ -257,6 +257,9 @@ pub struct HawkArgs {
     pub hnsw_layer_density: Option<usize>,
 
     #[clap(long)]
+    pub hnsw_fixed_layer_search_batch_size: Option<usize>,
+
+    #[clap(long)]
     pub hnsw_prf_key: Option<u64>,
 
     #[clap(long, default_value_t = false)]
@@ -470,6 +473,9 @@ impl HawkActor {
             } else {
                 // default geometric distribution uses layer_density value of `M`
             }
+
+            searcher_.fixed_layer_search_batch_size =
+                args.hnsw_fixed_layer_search_batch_size;
 
             Arc::new(searcher_)
         };
@@ -2324,6 +2330,7 @@ mod tests_db {
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
             hnsw_layer_density: None,
+            hnsw_fixed_layer_search_batch_size: None,
             hnsw_prf_key: None,
             numa: true,
             disable_persistence: false,

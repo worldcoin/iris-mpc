@@ -114,6 +114,7 @@ impl TryFrom<&SearcherConfig> for HnswSearcher {
             params,
             layer_mode,
             layer_distribution,
+            fixed_layer_search_batch_size: None,
         })
     }
 }
