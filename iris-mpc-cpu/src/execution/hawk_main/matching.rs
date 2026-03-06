@@ -73,6 +73,8 @@ impl BatchStep1 {
 struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
     anti_join: BothEyes<VecEdges<VectorId>>,
+    /// True per eye if any rotation's match results were saturated (supermatcher).
+    saturated: BothEyes<bool>,
     luc_ids: Vec<VectorId>,
     request_type: RequestType,
 }
@@ -85,16 +87,21 @@ impl Step1 {
     ) -> Step1 {
         let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
 
+        let mut saturated = [false, false];
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
-                for (vector_id, _) in rotation.matches.iter() {
+                if rotation.classified.matches.saturated {
+                    saturated[side] = true;
+                }
+                for (vector_id, _) in rotation.classified.matches.results.iter() {
                     full_join.entry(*vector_id).or_default()[side] = true;
                 }
             }
         }
 
         let mut step1 = Step1::with_capacity(full_join.len());
+        step1.saturated = saturated;
         step1.luc_ids = luc_ids;
         step1.request_type = request_type;
 
@@ -123,6 +130,7 @@ impl Step1 {
                 Vec::with_capacity(capacity / 2),
                 Vec::with_capacity(capacity / 2),
             ],
+            saturated: [false, false],
             luc_ids: Vec::new(),
             request_type: RequestType::Unsupported,
         }
@@ -183,6 +191,7 @@ impl Step1 {
             luc_results,
             reauth_result,
             intra_matches,
+            saturated: self.saturated,
             request_type: self.request_type,
         };
 
@@ -243,6 +252,9 @@ impl BatchStep3 {
     ///
     /// Emulate the behavior of inserting entries one by one. Intra-batch matches
     /// only count if they are being inserted themselves.
+    ///
+    /// Applies supermatcher rejection: if any rotation's match results were
+    /// saturated on either eye, the decision is forced to `NoMutation`.
     pub fn decisions(&self) -> VecRequests<Decision> {
         tracing::info!(
             "Calculating decisions for batch of {} requests",
@@ -264,10 +276,16 @@ impl BatchStep3 {
                 request.normal.request_type,
                 request.mirror.request_type,
             );
+            let mut because_supermatch = false;
+
             let decision = match request.normal.request_type {
                 RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
                     let is_match = request.select(filter).any(|id| match id {
                         Search(_) | Luc(_) | Reauth(_) => true,
+                        Supermatch => {
+                            because_supermatch = true;
+                            true
+                        }
                         IntraBatch(request_i) => {
                             match decisions.get(request_i) {
                                 // If the request we matched with will be inserted or updated,
@@ -298,9 +316,15 @@ impl BatchStep3 {
                 // Unsupported request. Nothing to do.
                 RequestType::Unsupported => NoMutation,
             };
+
+            if because_supermatch {
+                tracing::info!("Supermatcher rejection");
+                metrics::counter!("supermatcher_rejections").increment(1);
+            }
             tracing::info!("Pushing decision: {decision:?}");
             decisions.push(decision);
         }
+
         decisions
     }
 
@@ -320,6 +344,8 @@ struct Step2 {
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
     reauth_result: Option<(VectorId, UseOrRule, BothEyes<bool>)>,
     intra_matches: Vec<IntraMatch>,
+    /// True per eye if any rotation's match results were saturated (supermatcher).
+    saturated: BothEyes<bool>,
     request_type: RequestType,
 }
 
@@ -349,7 +375,11 @@ impl Step2 {
             .filter(move |m| filter.intra_rule(m.is_match[LEFT], m.is_match[RIGHT]))
             .map(|m| MatchId::IntraBatch(m.other_request_i));
 
-        chain!(search, luc, reauth, intra)
+        let supermatch = filter
+            .supermatch_rule(self.saturated)
+            .then_some(MatchId::Supermatch);
+
+        chain!(search, luc, reauth, intra, supermatch)
     }
 }
 
@@ -359,6 +389,8 @@ pub enum MatchId {
     Luc(VectorId),
     Reauth(VectorId),
     IntraBatch(usize),
+    /// Search results were saturated (supermatcher).
+    Supermatch,
 }
 use MatchId::*;
 
@@ -456,7 +488,17 @@ impl Filter {
     fn intra_rule(&self, left: bool, right: bool) -> bool {
         self.intra_batch && self.search_rule(left, right)
     }
+
+    /// Supermatch uses OR policy: saturated on either eye is a supermatch.
+    fn supermatch_rule(&self, [left, right]: BothEyes<bool>) -> bool {
+        match self.eyes {
+            Only(Left) => left,
+            Only(Right) => right,
+            Both => left || right,
+        }
+    }
 }
+
 #[cfg(test)]
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
@@ -464,7 +506,8 @@ mod tests {
     use ampc_secret_sharing::Share;
 
     use crate::execution::hawk_main::{
-        HawkResult, InsertPlanV, VecRotations, HAWK_BASE_ROTATIONS_MASK,
+        ClassifiedMatches, HawkResult, InsertPlanV, SaturableMatches, VecRotations,
+        HAWK_BASE_ROTATIONS_MASK,
     };
     use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::searcher::UpdateEntryPoint;
@@ -567,11 +610,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_supermatch_rule() {
+        for x in [false, true] {
+            // Supermatch uses OR rule: either eye saturated is a supermatch
+            assert_eq!(FILTER_BOTH.supermatch_rule([false, false]), false);
+            assert_eq!(FILTER_BOTH.supermatch_rule([true, x]), true);
+            assert_eq!(FILTER_BOTH.supermatch_rule([x, true]), true);
+            // Only left
+            assert_eq!(FILTER_LEFT.supermatch_rule([true, x]), true);
+            assert_eq!(FILTER_LEFT.supermatch_rule([false, x]), false);
+            // Only right
+            assert_eq!(FILTER_RIGHT.supermatch_rule([x, true]), true);
+            assert_eq!(FILTER_RIGHT.supermatch_rule([x, false]), false);
+        }
+    }
+
     #[derive(Clone, Debug)]
     struct TestCase {
         search_match: bool,
         other_side_match: bool,
         reauth_match: bool,
+        /// Saturated flags per eye: [left, right]. Simulates super-matcher.
+        saturated: BothEyes<bool>,
         expected_decision: Decision,
         expected_matches: Vec<MatchId>,
         request_type: RequestType,
@@ -583,6 +644,7 @@ mod tests {
                 search_match: false,
                 other_side_match: false,
                 reauth_match: false,
+                saturated: [false, false],
                 expected_decision: NoMutation,
                 expected_matches: vec![],
                 request_type: RequestType::Uniqueness(UniquenessRequest {
@@ -658,6 +720,53 @@ mod tests {
                 expected_matches: vec![],
                 ..TestCase::default()
             },
+            // ### Super-matcher requests
+            // Left eye saturated, no search match → supermatch rejection
+            TestCase {
+                saturated: [true, false],
+                expected_decision: Decision::NoMutation,
+                expected_matches: vec![MatchId::Supermatch],
+                ..TestCase::default()
+            },
+            // Right eye saturated, no search match → supermatch rejection
+            TestCase {
+                saturated: [false, true],
+                expected_decision: Decision::NoMutation,
+                expected_matches: vec![MatchId::Supermatch],
+                ..TestCase::default()
+            },
+            // Both eyes saturated → supermatch rejection
+            TestCase {
+                saturated: [true, true],
+                expected_decision: Decision::NoMutation,
+                expected_matches: vec![MatchId::Supermatch],
+                ..TestCase::default()
+            },
+            // Saturated but also has a search match → NoMutation (match takes priority)
+            TestCase {
+                search_match: true,
+                saturated: [true, false],
+                expected_decision: Decision::NoMutation,
+                expected_matches: vec![MatchId::Search(BOTH_MATCH), MatchId::Supermatch],
+                ..TestCase::default()
+            },
+            // Saturated with skip_persistence → still NoMutation (supermatch overrides)
+            TestCase {
+                request_type: RequestType::Uniqueness(UniquenessRequest {
+                    skip_persistence: true,
+                }),
+                saturated: [true, false],
+                expected_decision: Decision::NoMutation,
+                expected_matches: vec![MatchId::Supermatch],
+                ..TestCase::default()
+            },
+            // Not saturated, no match → normal insertion
+            TestCase {
+                saturated: [false, false],
+                expected_decision: Decision::UniqueInsert,
+                expected_matches: vec![],
+                ..TestCase::default()
+            },
         ];
 
         for case in &cases {
@@ -704,15 +813,24 @@ mod tests {
             match_right.push(BOTH_MATCH);
         }
 
-        let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
+        let saturated = tc.saturated;
+        let search_result = |match_ids: Vec<VectorId>,
+                             non_match_ids: Vec<VectorId>,
+                             side_saturated: bool| {
             let links_unstructured = vec![chain!(match_ids.clone(), non_match_ids).collect_vec()];
 
+            let matches: Vec<_> = match_ids.iter().cloned().map(|v| (v, distance())).collect();
             let insert_plan = HawkInsertPlan {
-                matches: match_ids
-                    .iter()
-                    .cloned()
-                    .map(|v| (v, distance()))
-                    .collect::<Vec<_>>(),
+                classified: ClassifiedMatches {
+                    anon_stats_matches: SaturableMatches {
+                        results: matches.clone(),
+                        saturated: side_saturated,
+                    },
+                    matches: SaturableMatches {
+                        results: matches,
+                        saturated: side_saturated,
+                    },
+                },
                 plan: InsertPlanV {
                     query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
                     links: links_unstructured,
@@ -726,8 +844,12 @@ mod tests {
         };
 
         let search_results = [
-            vec![search_result(match_left, non_match_left)],
-            vec![search_result(match_right, non_match_right)],
+            vec![search_result(match_left, non_match_left, saturated[LEFT])],
+            vec![search_result(
+                match_right,
+                non_match_right,
+                saturated[RIGHT],
+            )],
         ];
         let luc_ids = vec![vec![LUC_REQUESTED, LUC_REQUESTED_DUP]];
         let request_types = vec![tc.request_type];

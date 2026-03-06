@@ -3,7 +3,9 @@ use crate::{
     protocol::shared_iris::ArcIris,
 };
 use ampc_actor_utils::network::value::NetworkInt;
-use ampc_actor_utils::protocol::binary::bit_inject;
+use ampc_actor_utils::protocol::binary::{
+    bit_inject, extract_msb_batch, lift, mul_lift_2k_to_32, open_bin, single_extract_msb,
+};
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
     sub_pub,
@@ -23,14 +25,64 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
-use std::time::Instant;
+use std::{ops::Not, time::Instant};
 use tracing::instrument;
 
 pub(crate) type DistancePair<T> = (DistanceShare<T>, DistanceShare<T>);
 pub(crate) type IdDistance<T> = (Share<T>, DistanceShare<T>);
 
+pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
+pub(crate) const ANON_STATS_THRESHOLD_RATIO: f64 =
+    iris_mpc_common::iris_db::iris::ANON_STATS_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
 pub(crate) const B: u64 = 1 << B_BITS;
+pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
+pub(crate) const A_ANON: u64 = ((1. - 2. * ANON_STATS_THRESHOLD_RATIO) * B as f64) as u64;
+
+/// Compares the distance between two iris pairs to a threshold.
+///
+/// - Takes as input two code and mask dot products between two irises,
+///   i.e., code_dist = <iris1.code, iris2.code> and mask_dist = <iris1.mask, iris2.mask>,
+///   already lifted to 32 bits if they are originally 16-bit.
+/// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
+///   * MATCH_THRESHOLD_RATIO) * B as f64).
+/// - Compares mask_dist * A > code_dist * B.
+/// - This corresponds to "distance > threshold", that is NOT match.
+pub async fn greater_than_threshold(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+) -> Result<Vec<Share<Bit>>> {
+    let diffs: Vec<Share<u32>> = distances
+        .iter()
+        .map(|d| {
+            let x = d.mask_dot * A as u32;
+            let y = d.code_dot * B as u32;
+            y - x
+        })
+        .collect();
+
+    extract_msb_batch(session, &diffs).await
+}
+
+/// The same as compare_threshold, but the input shares are 16-bit and lifted to
+/// 32-bit before threshold comparison.
+///
+/// See compare_threshold for more details.
+pub async fn lift_and_compare_threshold(
+    session: &mut Session,
+    code_dist: Share<u16>,
+    mask_dist: Share<u16>,
+) -> Result<Share<Bit>> {
+    let mut y = mul_lift_2k_to_32::<B_BITS>(&code_dist);
+    let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
+    let mut x = x
+        .pop()
+        .ok_or(eyre!("Expected a single element in the VecShare"))?;
+    x *= A as u32;
+    y -= x;
+
+    single_extract_msb(session, y).await
+}
 
 /// Conditionally selects equally-sized slices of input shares based on control bits.
 /// If the control bit is 1, it selects the left value shares; otherwise, it selects the right value share.
@@ -689,6 +741,47 @@ pub fn non_existent_distance() -> Vec<RingElement<u16>> {
         RingElement(SHARE_OF_MAX_DISTANCE.0),
         RingElement(SHARE_OF_MAX_DISTANCE.1),
     ]
+}
+
+/// Same as `greater_than_threshold` but using the higher anon stats threshold.
+///
+/// Returns 1 if `distance > anon_stats_threshold`, 0 otherwise.
+pub async fn greater_than_anon_stats_threshold(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+) -> Result<Vec<Share<Bit>>> {
+    let diffs: Vec<Share<u32>> = distances
+        .iter()
+        .map(|d| {
+            let x = d.mask_dot * A_ANON as u32;
+            let y = d.code_dot * B as u32;
+            y - x
+        })
+        .collect();
+
+    extract_msb_batch(session, &diffs).await
+}
+
+/// Compares the given distance to a threshold and reveal the bit "less than or equal".
+pub async fn lte_threshold_and_open(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+) -> Result<Vec<bool>> {
+    let bits = greater_than_threshold(session, distances).await?;
+    open_bin(session, &bits)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+}
+
+/// Same as `lte_threshold_and_open` but using the higher anon stats threshold.
+pub async fn lte_anon_stats_threshold_and_open(
+    session: &mut Session,
+    distances: &[DistanceShare<u32>],
+) -> Result<Vec<bool>> {
+    let bits = greater_than_anon_stats_threshold(session, distances).await?;
+    open_bin(session, &bits)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
 
 #[cfg(test)]
