@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/recovery-update"
+      - "mihai/dual-thresh-analysis"
 
     paths-ignore:
       - "deploy/**"
