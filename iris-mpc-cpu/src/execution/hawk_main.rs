@@ -256,6 +256,12 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = 4000)]
     pub hnsw_param_ef_supermatch: usize,
 
+    #[clap(long, default_value_t = 0)]
+    pub ef_supermatch_force_n_requests: usize,
+
+    #[clap(long, default_value_t = 12)]
+    pub ef_supermatch_force_n_searches: usize,
+
     #[clap(long)]
     pub hnsw_layer_density: Option<usize>,
 
@@ -1776,68 +1782,81 @@ impl HawkHandle {
         // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
 
+        // Build force-extend sets for benchmarking (empty when knobs are at defaults).
+        let force_extend_sets = search::build_force_extend_sets(
+            hawk_actor.args.ef_supermatch_force_n_requests,
+            hawk_actor.args.ef_supermatch_force_n_searches,
+            HAWK_BASE_ROTATIONS_MASK.count_ones() as usize,
+        );
+
         // Compute search results for a given orientation and compute matching information
-        let do_search = async |orient| -> Result<_> {
-            let search_queries = &request.queries(orient);
-            let (luc_ids, request_types) = {
-                // Choice of LEFT store here is arbitrary, because it's only used for VectorId bookkeeping.
-                // The two sides are in sync w.r.t stored vector ids.
-                let store = hawk_actor.iris_store[LEFT].read().await;
-                (
-                    request.luc_ids(&store),
-                    request.request_types(&store, orient),
+        let do_search =
+            async |orient: Orientation, force_extend: search::ForceExtendSet| -> Result<_> {
+                let search_queries = &request.queries(orient);
+                let (luc_ids, request_types) = {
+                    // Choice of LEFT store here is arbitrary, because it's only used for VectorId bookkeeping.
+                    // The two sides are in sync w.r.t stored vector ids.
+                    let store = hawk_actor.iris_store[LEFT].read().await;
+                    (
+                        request.luc_ids(&store),
+                        request.request_types(&store, orient),
+                    )
+                };
+
+                // Job that computes intra-batch matches. Note that it is awaited later, allowing it
+                // to run in parallel with the HNSW searches.
+                let intra_results = {
+                    let sessions_intra = sessions.for_intra_batch(orient);
+                    let search_queries = search_queries.clone();
+                    tokio::spawn(
+                        async move {
+                            intra_batch_is_match(&sessions_intra, &search_queries).await
+                        },
+                    )
+                };
+
+                // Search for nearest neighbors for all requests, all rotations (if applicable) and both eyes.
+                let sessions_search = &sessions.for_search(orient);
+                let search_ids = &request.ids;
+                let search_params = SearchParams::new(
+                    hawk_actor.searcher(),
+                    true,
+                    Some(hawk_actor.args.hnsw_param_ef_supermatch),
+                    force_extend,
+                );
+
+                let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
+                    sessions_search,
+                    search_queries,
+                    search_ids,
+                    search_params,
+                    NEIGHBORHOOD_MODE,
                 )
+                .await?;
+
+                // Organize results per orientation. Consult the matching module for details on organizing steps.
+                let match_result = {
+                    let step1 =
+                        matching::BatchStep1::new(&search_results, &luc_ids, request_types);
+
+                    // Fetch the missing vector IDs for each side and calculate their is_match.
+                    let missing_is_match =
+                        is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
+                            .await?;
+
+                    step1.step2(&missing_is_match, intra_results.await??)
+                };
+
+                Ok((search_results, match_result))
             };
-
-            // Job that computes intra-batch matches. Note that it is awaited later, allowing it
-            // to run in parallel with the HNSW searches.
-            let intra_results = {
-                let sessions_intra = sessions.for_intra_batch(orient);
-                let search_queries = search_queries.clone();
-                tokio::spawn(
-                    async move { intra_batch_is_match(&sessions_intra, &search_queries).await },
-                )
-            };
-
-            // Search for nearest neighbors for all requests, all rotations (if applicable) and both eyes.
-            let sessions_search = &sessions.for_search(orient);
-            let search_ids = &request.ids;
-            let search_params = SearchParams::new(
-                hawk_actor.searcher(),
-                true,
-                Some(hawk_actor.args.hnsw_param_ef_supermatch),
-            );
-
-            let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
-                sessions_search,
-                search_queries,
-                search_ids,
-                search_params,
-                NEIGHBORHOOD_MODE,
-            )
-            .await?;
-
-            // Organize results per orientation. Consult the matching module for details on organizing steps.
-            let match_result = {
-                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
-
-                // Fetch the missing vector IDs for each side and calculate their is_match.
-                let missing_is_match =
-                    is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
-                        .await?;
-
-                step1.step2(&missing_is_match, intra_results.await??)
-            };
-
-            Ok((search_results, match_result))
-        };
 
         // Search for both orientations
+        let [force_extend_normal, force_extend_mirror] = force_extend_sets;
         let (search_normal, search_mirror, match_result) = {
             let start = Instant::now();
             let ((search_normal, matches_normal), (search_mirror, matches_mirror)) = try_join!(
-                do_search(Orientation::Normal),
-                do_search(Orientation::Mirror),
+                do_search(Orientation::Normal, force_extend_normal),
+                do_search(Orientation::Mirror, force_extend_mirror),
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
@@ -2453,6 +2472,8 @@ mod tests_db {
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
             hnsw_param_ef_supermatch: 4000,
+            ef_supermatch_force_n_requests: 0,
+            ef_supermatch_force_n_searches: 12,
             hnsw_layer_density: None,
             hnsw_prf_key: None,
             numa: true,

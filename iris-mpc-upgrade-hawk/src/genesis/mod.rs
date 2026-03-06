@@ -923,6 +923,8 @@ async fn get_hawk_actor(
         hnsw_param_M: config.hnsw_param_M,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
         hnsw_param_ef_supermatch: config.hnsw_param_ef_supermatch,
+        ef_supermatch_force_n_requests: config.ef_supermatch_force_n_requests,
+        ef_supermatch_force_n_searches: config.ef_supermatch_force_n_searches,
         hnsw_layer_density: config.hnsw_layer_density,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,

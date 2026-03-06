@@ -188,6 +188,8 @@ async fn e2e_test_async() -> Result<()> {
         hnsw_param_M: HNSW_M,
         hnsw_param_ef_search: HNSW_EF_SEARCH,
         hnsw_param_ef_supermatch: 4000,
+        ef_supermatch_force_n_requests: 0,
+        ef_supermatch_force_n_searches: 12,
         hnsw_layer_density: None,
         hnsw_prf_key: None,
         disable_persistence: false,

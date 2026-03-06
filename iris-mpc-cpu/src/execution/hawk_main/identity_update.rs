@@ -35,7 +35,8 @@ pub async fn search_to_identity_update(
         request.identity_updates(&store)
     };
 
-    let search_params = SearchParams::new(hawk_actor.searcher(), false, None);
+    let search_params =
+        SearchParams::new(hawk_actor.searcher(), false, None, Default::default());
 
     // Search the central rotation to determine how to insert the update vectors.
     let search_results = search::search::<{ CENTER_ONLY_MASK }>(

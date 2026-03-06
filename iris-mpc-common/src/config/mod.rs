@@ -217,6 +217,19 @@ pub struct Config {
     #[serde(default = "default_hnsw_param_ef_supermatch")]
     pub hnsw_param_ef_supermatch: usize,
 
+    /// Benchmark knob: number of requests per batch that force-trigger
+    /// extended-ef search (bypassing saturation check). 0 = normal auto
+    /// behavior.
+    #[serde(default)]
+    pub ef_supermatch_force_n_requests: usize,
+
+    /// Benchmark knob: for each forced request, how many of its 12 independent
+    /// searches (2 eyes × 3 rotations × 2 orientations) should use extended ef.
+    /// Applied in deterministic order: orientation(normal first) → eye(left
+    /// first) → rotation(center first). Range 1–12, default 12.
+    #[serde(default = "default_ef_supermatch_force_n_searches")]
+    pub ef_supermatch_force_n_searches: usize,
+
     #[serde(default)]
     pub hnsw_layer_density: Option<usize>,
 
@@ -398,6 +411,10 @@ fn default_hnsw_param_ef_search() -> usize {
 
 fn default_hnsw_param_ef_supermatch() -> usize {
     4000
+}
+
+fn default_ef_supermatch_force_n_searches() -> usize {
+    12
 }
 
 fn default_hawk_numa() -> bool {
@@ -660,6 +677,8 @@ pub struct CommonConfig {
     hnsw_param_M: usize,
     hnsw_param_ef_search: usize,
     hnsw_param_ef_supermatch: usize,
+    ef_supermatch_force_n_requests: usize,
+    ef_supermatch_force_n_searches: usize,
     hnsw_layer_density: Option<usize>,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
@@ -745,6 +764,8 @@ impl From<Config> for CommonConfig {
             hnsw_param_M,
             hnsw_param_ef_search,
             hnsw_param_ef_supermatch,
+            ef_supermatch_force_n_requests,
+            ef_supermatch_force_n_searches,
             hnsw_layer_density,
             hawk_prf_key,
             hawk_numa: _, // could be different for each server
@@ -817,6 +838,8 @@ impl From<Config> for CommonConfig {
             hnsw_param_M,
             hnsw_param_ef_search,
             hnsw_param_ef_supermatch,
+            ef_supermatch_force_n_requests,
+            ef_supermatch_force_n_searches,
             hnsw_layer_density,
             hawk_prf_key,
             max_deletions_per_batch,

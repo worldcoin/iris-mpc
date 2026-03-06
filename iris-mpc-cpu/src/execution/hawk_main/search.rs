@@ -18,6 +18,7 @@ use crate::{
     },
 };
 use eyre::{OptionExt, Result};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -30,16 +31,74 @@ pub type SearchResults<const ROTMASK: u32> =
 /// Identifiers of requests
 pub type SearchIds = Arc<VecRequests<String>>;
 
+/// Set of `(i_request, i_eye, i_rotation)` tuples that should force-trigger
+/// extended-ef search regardless of saturation.
+pub type ForceExtendSet = Arc<HashSet<(usize, usize, usize)>>;
+
+/// Build force-extend sets for both orientations from the two benchmark knobs.
+///
+/// Each request has `2 × 2 × n_rotations` independent searches (2 orientations
+/// × 2 eyes × n_rotations). The deterministic order used for selecting which
+/// searches to force is: orientation(normal first) → eye(left first) →
+/// rotation(center first, then outward alternating).
+///
+/// Returns `[normal_set, mirror_set]`.
+pub fn build_force_extend_sets(
+    n_requests_to_force: usize,
+    n_searches_per_request: usize,
+    n_rotations: usize,
+) -> [ForceExtendSet; 2] {
+    // Deterministic ordering of (eye, rotation) within one orientation.
+    let center = n_rotations / 2;
+    let rotation_order: Vec<usize> = std::iter::once(center)
+        .chain((1..n_rotations).map(|delta| {
+            if delta % 2 == 1 {
+                center.wrapping_sub((delta + 1) / 2)
+            } else {
+                center + delta / 2
+            }
+        }))
+        .filter(|&r| r < n_rotations)
+        .collect();
+
+    let per_orient: Vec<(usize, usize)> = (0..2_usize)
+        .flat_map(|eye| rotation_order.iter().map(move |&rot| (eye, rot)))
+        .collect();
+
+    // Full ordering across orientations: normal's (eye,rot) pairs first, then mirror's.
+    // orient_index 0 = normal, 1 = mirror
+    let all_coords: Vec<(usize, usize, usize)> = (0..2_usize)
+        .flat_map(|orient| per_orient.iter().map(move |&(eye, rot)| (orient, eye, rot)))
+        .collect();
+
+    let mut sets = [HashSet::new(), HashSet::new()];
+    for i_request in 0..n_requests_to_force {
+        for &(orient, i_eye, i_rotation) in all_coords.iter().take(n_searches_per_request) {
+            sets[orient].insert((i_request, i_eye, i_rotation));
+        }
+    }
+
+    sets.map(|s| Arc::new(s))
+}
+
 #[derive(Clone)]
 pub struct SearchParams {
     pub hnsw: Arc<HnswSearcher>,
     /// Searcher with layer-0 ef params overridden to `ef_supermatch`, for supermatcher re-search.
     hnsw_supermatch: Option<Arc<HnswSearcher>>,
     pub do_match: bool,
+    /// Searches in this set bypass the saturation check and always trigger
+    /// extended-ef re-search. Used for benchmarking.
+    force_extend: ForceExtendSet,
 }
 
 impl SearchParams {
-    pub fn new(hnsw: Arc<HnswSearcher>, do_match: bool, ef_supermatch: Option<usize>) -> Self {
+    pub fn new(
+        hnsw: Arc<HnswSearcher>,
+        do_match: bool,
+        ef_supermatch: Option<usize>,
+        force_extend: ForceExtendSet,
+    ) -> Self {
         let hnsw_supermatch = ef_supermatch.map(|ef_sm| {
             let mut searcher = (*hnsw).clone();
             let p = &mut searcher.params;
@@ -52,6 +111,7 @@ impl SearchParams {
             hnsw,
             hnsw_supermatch,
             do_match,
+            force_extend,
         }
     }
 }
@@ -128,6 +188,9 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
 
     for task in batch.tasks {
         let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
+        let force_extend = search_params
+            .force_extend
+            .contains(&(task.i_request, batch.i_eye, task.i_rotation));
         let result = if task.is_central {
             // search_to_insert for centers
             let query_uuid = search_ids
@@ -145,11 +208,13 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
                 &mut vector_store,
                 &graph_store,
                 insertion_layer,
+                force_extend,
             )
             .await?
         } else {
             // plain search for non-centers
-            per_search_query(query, search_params, &mut vector_store, &graph_store).await?
+            per_search_query(query, search_params, &mut vector_store, &graph_store, force_extend)
+                .await?
         };
 
         tx.send((task.id(), result))?;
@@ -159,6 +224,9 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
 }
 
 /// Classify search results at both thresholds and optionally re-search with extended ef.
+///
+/// When `force_extend` is true, the saturation check is bypassed and the
+/// extended search is always triggered (for benchmarking).
 async fn classify_and_extend(
     edges: &[(Aby3VectorRef, Aby3DistanceRef)],
     query: &Aby3Query,
@@ -166,13 +234,14 @@ async fn classify_and_extend(
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
     ef: usize,
+    force_extend: bool,
 ) -> Result<ClassifiedMatches> {
     let classified = classify_edges(edges, aby3_store, ef).await?;
 
-    // Extended search if anon stats threshold is saturated (supermatcher)
-    if let Some((ef_supermatch, hnsw_supermatch)) = classified
-        .anon_stats_matches
-        .saturated
+    let should_extend = classified.anon_stats_matches.saturated || force_extend;
+
+    // Extended search if anon stats threshold is saturated (supermatcher) or forced
+    if let Some((ef_supermatch, hnsw_supermatch)) = should_extend
         .then(|| {
             search_params
                 .hnsw_supermatch
@@ -270,6 +339,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
     insertion_layer: usize,
+    force_extend: bool,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
@@ -289,6 +359,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
                     aby3_store,
                     graph_store,
                     ef,
+                    force_extend,
                 )
                 .await?
             }
@@ -322,6 +393,7 @@ async fn per_search_query(
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
+    force_extend: bool,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
@@ -341,6 +413,7 @@ async fn per_search_query(
             aby3_store,
             graph_store,
             ef_search,
+            force_extend,
         )
         .await?
     } else {
@@ -423,7 +496,8 @@ mod tests {
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
         let search_queries = &request.queries(Orientation::Normal);
-        let search_params = SearchParams::new(actor.searcher(), true, Some(4000));
+        let search_params =
+            SearchParams::new(actor.searcher(), true, Some(4000), Default::default());
 
         let result = search(
             &sessions,
@@ -450,5 +524,55 @@ mod tests {
         }
         actor.sync_peers().await?;
         Ok(actor)
+    }
+
+    #[test]
+    fn test_build_force_extend_sets() {
+        let n_rotations = 3; // rotations 0, 1(center), 2
+
+        // No forcing → both sets empty
+        let [normal, mirror] = build_force_extend_sets(0, 12, n_rotations);
+        assert!(normal.is_empty());
+        assert!(mirror.is_empty());
+
+        // 1 request, 1 search → only normal, left eye, center rotation
+        let [normal, mirror] = build_force_extend_sets(1, 1, n_rotations);
+        assert_eq!(normal.len(), 1);
+        assert!(normal.contains(&(0, 0, 1))); // request 0, eye 0 (left), rotation 1 (center)
+        assert!(mirror.is_empty());
+
+        // 1 request, 6 searches → all 6 normal searches, no mirror
+        let [normal, mirror] = build_force_extend_sets(1, 6, n_rotations);
+        assert_eq!(normal.len(), 6);
+        for eye in 0..2 {
+            for rot in 0..3 {
+                assert!(normal.contains(&(0, eye, rot)));
+            }
+        }
+        assert!(mirror.is_empty());
+
+        // 1 request, 7 searches → all 6 normal + 1 mirror
+        let [normal, mirror] = build_force_extend_sets(1, 7, n_rotations);
+        assert_eq!(normal.len(), 6);
+        assert_eq!(mirror.len(), 1);
+        assert!(mirror.contains(&(0, 0, 1))); // mirror, left eye, center
+
+        // 1 request, 12 searches → all 12
+        let [normal, mirror] = build_force_extend_sets(1, 12, n_rotations);
+        assert_eq!(normal.len(), 6);
+        assert_eq!(mirror.len(), 6);
+
+        // 2 requests, 1 search each
+        let [normal, mirror] = build_force_extend_sets(2, 1, n_rotations);
+        assert_eq!(normal.len(), 2);
+        assert!(normal.contains(&(0, 0, 1)));
+        assert!(normal.contains(&(1, 0, 1)));
+        assert!(mirror.is_empty());
+
+        // Rotation order: center(1) first, then 0, then 2
+        let [normal, _] = build_force_extend_sets(1, 3, n_rotations);
+        assert!(normal.contains(&(0, 0, 1))); // left, center
+        assert!(normal.contains(&(0, 0, 0))); // left, rotation 0
+        assert!(normal.contains(&(0, 0, 2))); // left, rotation 2
     }
 }
