@@ -1,8 +1,8 @@
 use super::{
     rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
-    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkSession, SaturableMatches, VecRequests, LEFT,
-    RIGHT,
+    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkOps, HawkSession, SaturableMatches,
+    VecRequests, LEFT, RIGHT,
 };
 use crate::{
     execution::hawk_main::{
@@ -115,7 +115,7 @@ pub async fn search<const ROTMASK: u32>(
     Ok(results)
 }
 
-async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store>>(
+async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
     session: &HawkSession,
     search_queries: &SearchQueries<ROTMASK>,
     search_ids: &SearchIds,
@@ -163,7 +163,7 @@ async fn classify_and_extend(
     edges: &[(Aby3VectorRef, Aby3DistanceRef)],
     query: &Aby3Query,
     search_params: &SearchParams,
-    aby3_store: &mut Aby3Store,
+    aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
     ef: usize,
 ) -> Result<ClassifiedMatches> {
@@ -210,7 +210,7 @@ async fn classify_and_extend(
 /// Batch-classify edges at both the match threshold and the anon stats threshold.
 async fn classify_edges(
     edges: &[(Aby3VectorRef, Aby3DistanceRef)],
-    aby3_store: &mut Aby3Store,
+    aby3_store: &mut Aby3Store<HawkOps>,
     ef: usize,
 ) -> Result<ClassifiedMatches> {
     let all_distances: Vec<_> = edges.iter().map(|(_, d)| *d).collect();
@@ -264,10 +264,10 @@ async fn classify_edges(
     })
 }
 
-async fn per_insert_query<N: Neighborhood<Aby3Store>>(
+async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     query: Aby3Query,
     search_params: &SearchParams,
-    aby3_store: &mut Aby3Store,
+    aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
     insertion_layer: usize,
 ) -> Result<HawkInsertPlan> {
@@ -320,7 +320,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store>>(
 async fn per_search_query(
     query: Aby3Query,
     search_params: &SearchParams,
-    aby3_store: &mut Aby3Store,
+    aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
@@ -367,7 +367,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     query: Aby3Query,
     searcher: &HnswSearcher,
     identifier: &H,
-) -> Result<InsertPlanV<Aby3Store>> {
+) -> Result<InsertPlanV<Aby3Store<HawkOps>>> {
     let start = Instant::now();
 
     let mut store = session.aby3_store.write().await;
