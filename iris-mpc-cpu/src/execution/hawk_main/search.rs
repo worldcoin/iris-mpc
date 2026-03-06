@@ -20,8 +20,15 @@ use crate::{
 use eyre::{OptionExt, Result};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+
+fn epoch_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
 
 pub type SearchQueries<const ROTMASK: u32> =
     Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROTMASK>>>>;
@@ -257,12 +264,17 @@ async fn classify_and_extend(
         );
         metrics::counter!("supermatcher_extended_searches").increment(1);
 
+        let extend_start = Instant::now();
         let supermatch_neighbors = hnsw_supermatch
             .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, query, ef_supermatch)
             .await?;
 
         let supermatch_classified =
             classify_edges(&supermatch_neighbors.edges, aby3_store, ef_supermatch).await?;
+        let extend_duration = extend_start.elapsed().as_secs_f64();
+        let extend_end_t = epoch_ms();
+        metrics::histogram!("search_query_extended_duration").record(extend_duration);
+        tracing::info!(extend_start_t = extend_end_t - extend_duration, extend_end_t, extend_duration, "Extended search completed");
 
         if supermatch_classified.anon_stats_matches.saturated {
             tracing::warn!(
@@ -377,7 +389,10 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
         links_unstructured.push(l.edge_ids())
     }
 
-    metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
+    let duration = start.elapsed().as_secs_f64();
+    let end_t = epoch_ms();
+    metrics::histogram!("search_query_duration").record(duration);
+    tracing::info!(start_t = end_t - duration, end_t, duration, force_extend, "per_insert_query completed");
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
@@ -420,7 +435,10 @@ async fn per_search_query(
         ClassifiedMatches::default()
     };
 
-    metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
+    let duration = start.elapsed().as_secs_f64();
+    let end_t = epoch_ms();
+    metrics::histogram!("search_query_duration").record(duration);
+    tracing::info!(start_t = end_t - duration, end_t, duration, force_extend, "per_search_query completed");
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,
@@ -460,7 +478,10 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
         links_unstructured.push(l.edge_ids());
     }
 
-    metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
+    let duration = start.elapsed().as_secs_f64();
+    let end_t = epoch_ms();
+    metrics::histogram!("search_query_duration").record(duration);
+    tracing::info!(start_t = end_t - duration, end_t, duration, "search_single_query completed");
 
     Ok(InsertPlanV {
         query,
