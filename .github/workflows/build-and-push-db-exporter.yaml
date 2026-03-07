@@ -6,7 +6,7 @@ on:
       - "published"
   push:
     branches:
-      - "ertugrulaypek/pop-3534-migrate-iris-mpc-db-exporter-to-iris-mpc-repo"
+      - "chore/rename-export-image"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -15,7 +15,7 @@ concurrency:
 env:
   ENV: CI
   REGISTRY: ghcr.io
-  IMAGE_NAME: "${{ github.repository }}-db-exporter"
+  IMAGE_NAME: "${{ github.repository }}-database-exporter"
   SERVICE_NAME: iris-mpc-db-exporter
 
 jobs:
