@@ -43,10 +43,18 @@ pub async fn main() -> Result<()> {
     }
     opts.validate()?;
 
+    let server_config_urls = if options.no_batch_size_control {
+        None
+    } else {
+        opts.server_config_urls
+    };
+
     let client = ServiceClient::new(
         AwsOptions::from(&options),
         opts.request_batch,
         opts.shares_generator,
+        server_config_urls,
+        options.batch_size_script.clone(),
     )
     .await?;
 
@@ -68,6 +76,14 @@ struct CliOptions {
     /// Path to iris shares NDJSON file (required when shares_generator is FromFile).
     #[clap(long)]
     path_to_iris_shares: Option<String>,
+
+    /// Disable batch size control (setting fixed_batch_size on servers before each batch).
+    #[clap(long, default_value_t = false)]
+    no_batch_size_control: bool,
+
+    /// Path to the set-batch-size script.
+    #[clap(long, default_value = "scripts/set-batch-size.sh")]
+    batch_size_script: String,
 }
 
 impl CliOptions {

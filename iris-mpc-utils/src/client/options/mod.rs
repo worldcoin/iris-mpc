@@ -25,6 +25,11 @@ pub struct ServiceClientOptions {
 
     // Associated Iris shares generator configuration.
     pub shares_generator: SharesGeneratorOptions,
+
+    // Optional coordination server URLs for runtime config (e.g. fixed batch size).
+    // One URL per party, e.g. ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"]
+    #[serde(default)]
+    pub server_config_urls: Option<Vec<String>>,
 }
 
 impl ServiceClientOptions {

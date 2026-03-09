@@ -48,6 +48,8 @@ pub struct ServiceClient {
     request_batch: Option<RequestBatchOptions>,
     shares_generator: SharesGenerator<StdRng>,
     state: ExecState,
+    server_config_urls: Option<Vec<String>>,
+    batch_size_script: String,
 }
 
 impl ServiceClient {
@@ -55,6 +57,8 @@ impl ServiceClient {
         opts_aws: AwsOptions,
         request_batch: RequestBatchOptions,
         shares_generator: SharesGeneratorOptions,
+        server_config_urls: Option<Vec<String>>,
+        batch_size_script: String,
     ) -> Result<Self, ServiceClientError> {
         let aws_client = AwsClient::async_from(opts_aws).await;
         let shares_generator = SharesGenerator::<StdRng>::from_options(shares_generator);
@@ -64,6 +68,8 @@ impl ServiceClient {
             request_batch: Some(request_batch),
             shares_generator,
             state: ExecState::new(),
+            server_config_urls,
+            batch_size_script,
         })
     }
 
@@ -143,11 +149,74 @@ impl ServiceClient {
             .expect("exec() called more than once");
 
         for (batch_idx, batch) in request_batch.into_iter().enumerate() {
+            let batch_size = batch.len();
+
+            if self.server_config_urls.is_some() {
+                if let Err(e) = self.run_batch_size_script(&batch_size.to_string()) {
+                    tracing::error!("Failed to set fixed batch size: {}", e);
+                    break;
+                }
+            }
+
             if let Err(e) = self.handle_batch(batch_idx, batch).await {
                 tracing::error!("{}", e);
                 break;
             }
         }
+
+        // Clear fixed_batch_size on all parties so it doesn't affect subsequent runs.
+        if self.server_config_urls.is_some() {
+            if let Err(e) = self.run_batch_size_script("clear") {
+                tracing::error!("Failed to clear fixed batch size: {}", e);
+            }
+        }
+    }
+
+    /// Calls the batch size script with the given action ("clear" or a number) and server URLs.
+    fn run_batch_size_script(&self, action: &str) -> Result<(), ServiceClientError> {
+        let urls = self
+            .server_config_urls
+            .as_ref()
+            .expect("run_batch_size_script called without server_config_urls");
+
+        let mut cmd = std::process::Command::new(&self.batch_size_script);
+        cmd.arg(action);
+        for url in urls {
+            cmd.arg(url);
+        }
+
+        tracing::info!("Running: {} {} {}", self.batch_size_script, action, urls.join(" "));
+
+        let output = cmd.output().map_err(|e| {
+            ServiceClientError::RuntimeConfigError(format!(
+                "failed to run '{}': {}",
+                self.batch_size_script, e
+            ))
+        })?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if !stdout.is_empty() {
+            for line in stdout.lines() {
+                tracing::info!("[set-batch-size] {}", line);
+            }
+        }
+        if !stderr.is_empty() {
+            for line in stderr.lines() {
+                tracing::error!("[set-batch-size] {}", line);
+            }
+        }
+
+        if !output.status.success() {
+            return Err(ServiceClientError::RuntimeConfigError(format!(
+                "'{}' exited with status {}",
+                self.batch_size_script,
+                output.status
+            )));
+        }
+
+        Ok(())
     }
 
     async fn handle_batch(
