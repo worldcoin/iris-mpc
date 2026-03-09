@@ -554,7 +554,7 @@ where
                     "
                     SELECT serial_id, version_id, links, layer FROM {table}
                     WHERE graph_id = $1
-                    ORDER BY serial_id, layer
+                    ORDER BY serial_id, version_id, layer
                     OFFSET $2 LIMIT $3
                 "
                 );

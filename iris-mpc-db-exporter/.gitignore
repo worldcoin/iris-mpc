@@ -1,0 +1,7 @@
+tmp/
+.idea
+/build
+.DS_Store
+iris-mpc-db-exporter
+/output
+*.iml

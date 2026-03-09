@@ -154,6 +154,15 @@ pub type HawkOps = FhdOps;
 pub type GraphStore = graph_store::GraphPg<Aby3Store<HawkOps>>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store<HawkOps>>;
 
+/// Maps a composite match ID to its anon-stats operation and collected distance shares.
+type PartialDistancesMap = BTreeMap<
+    i64,
+    (
+        AnonStatsOperation,
+        Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>,
+    ),
+>;
+
 mod identity_update;
 pub mod insert;
 mod intra_batch;
@@ -695,32 +704,58 @@ impl HawkActor {
     async fn update_anon_stats(
         &mut self,
         search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
+        request_types: &[String],
+        orientation: Orientation,
     ) -> Result<()> {
+        let anon_orientation = match orientation {
+            Orientation::Normal => AnonStatsOrientation::Normal,
+            Orientation::Mirror => AnonStatsOrientation::Mirror,
+        };
+
+        let mut per_side_distances = [BTreeMap::new(), BTreeMap::new()];
         for side in [LEFT, RIGHT] {
             let sided_search_results = &search_results[side];
 
             tracing::info!(
-                "Keeping distances for eye {side} out of {} search results",
+                "Keeping distances for eye {side}, orientation {orientation:?} out of {} search results",
                 sided_search_results.len(),
             );
 
-            let partial_distances = self.get_partial_distances(sided_search_results);
-            self.persist_cached_distances(side, partial_distances)
+            let partial_distances = self.get_partial_distances(sided_search_results, request_types);
+            per_side_distances[side] = partial_distances.clone();
+            self.persist_cached_distances(side, anon_orientation, partial_distances)
                 .await?;
         }
+
+        // Persist 2D distances (combined left + right)
+        let [left_distances, right_distances] = per_side_distances;
+        self.persist_cached_distances_2d(anon_orientation, left_distances, right_distances)
+            .await?;
+
         Ok(())
     }
 
     fn get_partial_distances(
         &mut self,
         search_results: &[VecRotations<HawkInsertPlan>],
-    ) -> BTreeMap<i64, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>> {
-        // maps query_id and db_id to a vector of distances.
-        let mut distances_with_ids: BTreeMap<
-            i64,
-            Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>,
-        > = BTreeMap::new();
+        request_types: &[String],
+    ) -> PartialDistancesMap {
+        // maps query_id and db_id to an operation and a vector of distances.
+        let mut distances_with_ids: PartialDistancesMap = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
+            let operation = request_types
+                .get(query_idx)
+                .map(|rt| {
+                    if rt.as_str() == REAUTH_MESSAGE_TYPE {
+                        AnonStatsOperation::Reauth
+                    } else if rt.as_str() == RECOVERY_CHECK_MESSAGE_TYPE {
+                        AnonStatsOperation::Recovery
+                    } else {
+                        AnonStatsOperation::Uniqueness
+                    }
+                })
+                .unwrap_or(AnonStatsOperation::Uniqueness);
+
             for insert_plan in vec_rots.iter() {
                 let matches = insert_plan.matches.clone();
 
@@ -729,7 +764,8 @@ impl HawkActor {
                     let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
                         .entry(match_id)
-                        .or_default()
+                        .or_insert_with(|| (operation, Vec::new()))
+                        .1
                         .push(distance_share);
                 }
             }
@@ -740,26 +776,12 @@ impl HawkActor {
     async fn persist_cached_distances(
         &self,
         side: usize,
-        partial_distances: BTreeMap<i64, Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>>,
+        orientation: AnonStatsOrientation,
+        partial_distances: PartialDistancesMap,
     ) -> Result<()> {
         let Some(store) = &self.anon_stats_store else {
             return Ok(());
         };
-
-        let bundles = partial_distances
-            .iter()
-            .filter_map(|(match_id, shares)| {
-                if shares.is_empty() {
-                    None
-                } else {
-                    Some((*match_id, shares.clone()))
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if bundles.is_empty() {
-            return Ok(());
-        }
 
         let eye = match side {
             LEFT => Eye::Left,
@@ -769,13 +791,130 @@ impl HawkActor {
 
         let origin = AnonStatsOrigin {
             side: Some(eye),
-            orientation: AnonStatsOrientation::Normal,
+            orientation,
             context: AnonStatsContext::HNSW,
         };
 
-        store
-            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::Uniqueness)
-            .await?;
+        let is_normal = orientation == AnonStatsOrientation::Normal;
+
+        let mut uniqueness_bundles = Vec::new();
+        let mut reauth_bundles = Vec::new();
+        let mut recovery_bundles = Vec::new();
+
+        for (match_id, (operation, shares)) in &partial_distances {
+            if shares.is_empty() {
+                continue;
+            }
+            let bundle = (*match_id, shares.clone());
+            match operation {
+                AnonStatsOperation::Reauth if is_normal => reauth_bundles.push(bundle),
+                AnonStatsOperation::Recovery if is_normal => recovery_bundles.push(bundle),
+                AnonStatsOperation::Uniqueness => uniqueness_bundles.push(bundle),
+                _ => {} // Skip Reauth/Recovery for Mirror orientation
+            }
+        }
+
+        if !uniqueness_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &uniqueness_bundles,
+                    origin,
+                    AnonStatsOperation::Uniqueness,
+                )
+                .await?;
+        }
+        if !reauth_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &reauth_bundles,
+                    origin,
+                    AnonStatsOperation::Reauth,
+                )
+                .await?;
+        }
+        if !recovery_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &recovery_bundles,
+                    origin,
+                    AnonStatsOperation::Recovery,
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn persist_cached_distances_2d(
+        &self,
+        orientation: AnonStatsOrientation,
+        left_distances: PartialDistancesMap,
+        right_distances: PartialDistancesMap,
+    ) -> Result<()> {
+        let Some(store) = &self.anon_stats_store else {
+            return Ok(());
+        };
+
+        let origin = AnonStatsOrigin {
+            side: None,
+            orientation,
+            context: AnonStatsContext::HNSW,
+        };
+
+        let is_normal = orientation == AnonStatsOrientation::Normal;
+
+        // 2D bundles combine left and right eye distances for the same match_id.
+        // Only include entries present in both eyes.
+        let mut uniqueness_bundles = Vec::new();
+        let mut reauth_bundles = Vec::new();
+        let mut recovery_bundles = Vec::new();
+
+        for (match_id, (operation, left_shares)) in left_distances {
+            if left_shares.is_empty() {
+                continue;
+            }
+            let Some((_, right_shares)) = right_distances.get(&match_id) else {
+                continue;
+            };
+            if right_shares.is_empty() {
+                continue;
+            }
+            let bundle = (match_id, (left_shares.clone(), right_shares.clone()));
+            match operation {
+                AnonStatsOperation::Reauth if is_normal => reauth_bundles.push(bundle),
+                AnonStatsOperation::Recovery if is_normal => recovery_bundles.push(bundle),
+                AnonStatsOperation::Uniqueness => uniqueness_bundles.push(bundle),
+                _ => {} // Skip Reauth/Recovery for Mirror orientation
+            }
+        }
+
+        if !uniqueness_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_2d_lifted(
+                    &uniqueness_bundles,
+                    origin,
+                    AnonStatsOperation::Uniqueness,
+                )
+                .await?;
+        }
+        if !reauth_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_2d_lifted(
+                    &reauth_bundles,
+                    origin,
+                    AnonStatsOperation::Reauth,
+                )
+                .await?;
+        }
+        if !recovery_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_2d_lifted(
+                    &recovery_bundles,
+                    origin,
+                    AnonStatsOperation::Recovery,
+                )
+                .await?;
+        }
 
         Ok(())
     }
@@ -1672,20 +1811,37 @@ impl HawkHandle {
         };
 
         // Search for both orientations
-        let (search_results, match_result) = {
+        let (search_normal, search_mirror, match_result) = {
             let start = Instant::now();
-            let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
+            let ((search_normal, matches_normal), (search_mirror, matches_mirror)) = try_join!(
                 do_search(Orientation::Normal),
                 do_search(Orientation::Mirror),
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
             // Apply final organization + decision step, using results for both orientations
-            (search_normal, matches_normal.step3(matches_mirror))
+            (
+                search_normal,
+                search_mirror,
+                matches_normal.step3(matches_mirror),
+            )
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
-        hawk_actor.update_anon_stats(&search_results).await?;
+        hawk_actor
+            .update_anon_stats(
+                &search_normal,
+                &request.batch.request_types,
+                Orientation::Normal,
+            )
+            .await?;
+        hawk_actor
+            .update_anon_stats(
+                &search_mirror,
+                &request.batch.request_types,
+                Orientation::Mirror,
+            )
+            .await?;
         tracing::info!("Updated anonymized statistics.");
 
         // Identity Updates. Find how to insert the new irises into the graph.
@@ -1697,7 +1853,7 @@ impl HawkHandle {
         let mutations = Self::handle_mutations(
             hawk_actor,
             sessions_mutations,
-            search_results,
+            search_normal,
             &match_result,
             identity_updates,
             &request,
