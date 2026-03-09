@@ -2,6 +2,7 @@ use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
+use ampc_server_utils::FIXED_BATCH_SIZE;
 use ampc_server_utils::{
     get_approximate_number_of_messages, get_batch_sync_states, BatchSyncResult,
     BatchSyncSharedState, BatchSyncState,
@@ -1019,19 +1020,44 @@ pub async fn get_own_batch_sync_state(
         approximate_visible_messages
     );
 
-    let index = (current_batch_id - 1) as usize;
+    // Check for a fixed batch size override (set via /config HTTP endpoint)
+    let fixed = *FIXED_BATCH_SIZE.lock().expect("FIXED_BATCH_SIZE poisoned");
 
-    let messages_to_poll = if config.predefined_batch_sizes.len() > index {
-        // predefined_batch_sizes are only used in test environments to reproduce specific scenarios
-        tracing::info!(
-            "Using predefined batch size {} for batch ID {}",
-            config.predefined_batch_sizes[index],
-            current_batch_id
-        );
-        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
+    let messages_to_poll = if let Some(fixed_size) = fixed {
+        // Fixed batch size overrides max_batch_size — that's its purpose.
+        // Wait until SQS reports at least `fixed_size` messages, then poll exactly that many.
+        // Returning 0 makes the caller's retry loop (3s sleep) wait and re-check.
+        if approximate_visible_messages >= fixed_size as u32 {
+            tracing::info!(
+                "Fixed batch size {} satisfied for batch ID {} (approximate_visible_messages={})",
+                fixed_size,
+                current_batch_id,
+                approximate_visible_messages
+            );
+            fixed_size as u32
+        } else {
+            tracing::info!(
+                "Waiting for fixed batch size {} for batch ID {} (approximate_visible_messages={})",
+                fixed_size,
+                current_batch_id,
+                approximate_visible_messages
+            );
+            0
+        }
     } else {
-        // Use the dynamic batch size calculation based on SQS approximate visible messages
-        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
+        let index = (current_batch_id - 1) as usize;
+        if config.predefined_batch_sizes.len() > index {
+            // predefined_batch_sizes are only used in test environments to reproduce specific scenarios
+            tracing::info!(
+                "Using predefined batch size {} for batch ID {}",
+                config.predefined_batch_sizes[index],
+                current_batch_id
+            );
+            std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
+        } else {
+            // Use the dynamic batch size calculation based on SQS approximate visible messages
+            std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
+        }
     };
 
     let batch_sync_state = BatchSyncState {

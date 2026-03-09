@@ -36,6 +36,7 @@ mod tests {
             // This field is #[serde(skip_serializing)]
             next_start_time_utc_timestamp: Some(Utc::now()),
             is_mirror_orientation: false,
+            distance_function: DistanceFunction::FHD,
         };
 
         // Serialize to JSON
@@ -153,6 +154,7 @@ mod tests {
             next_start_time_utc_timestamp: None,
             is_mirror_orientation: false,
             operation: AnonStatsOperation::Uniqueness,
+            distance_function: DistanceFunction::FHD,
         };
 
         // Serialize
@@ -217,7 +219,7 @@ mod tests {
             128,
             n,
             42,
-            DistanceFunction::default(),
+            DistanceFunction::FHD,
             AnonStatsResultSource::Legacy,
             Some(AnonStatsOperation::Uniqueness),
         );

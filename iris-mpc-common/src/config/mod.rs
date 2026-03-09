@@ -102,6 +102,11 @@ pub struct Config {
     #[serde(default)]
     pub fake_db_size: usize,
 
+    /// Enable the /config HTTP endpoint for dynamic runtime configuration
+    /// (e.g., fixed batch size). Defaults to false.
+    #[serde(default)]
+    pub hawk_dyn_config: bool,
+
     #[serde(default)]
     pub return_partial_results: bool,
 
@@ -775,6 +780,7 @@ impl From<Config> for CommonConfig {
             tokio_threads: _,
             sns_retry_max_attempts: _,
             enable_recovery,
+            hawk_dyn_config: _, // per-server runtime config toggle, not part of common hash
         } = value;
 
         assert!(
