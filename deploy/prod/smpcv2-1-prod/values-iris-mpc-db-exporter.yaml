@@ -1,0 +1,22 @@
+env:
+  - name: ENV
+    value: prod
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  - name: SMPC_SCHEMA_NAME
+    value: "SMPC_rerand"
+  - name: SERVICE_NAME
+    value: iris-mpc-db-exporter-1
+  - name: AWS_REGION
+    value: eu-north-1
+  - name: GIN_MODE
+    value: release
+  - name: EXPORT_S3_BUCKET_NAME
+    value: "iris-mpc-db-exporter-store-node-1-prod--eun1-az3--x-s3"
+  - name: NODE_ID
+    value: "1"
+  - name: GOMEMLIMIT
+    value: "25GiB"

@@ -73,7 +73,7 @@ impl TestRun for Test {
         }
         join_runners!(join_set);
 
-        // Persist initial modificatgions, and insert additional modifications
+        // Persist initial modifications, and insert additional modifications
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             join_set.spawn(async move {

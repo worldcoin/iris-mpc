@@ -1,0 +1,100 @@
+name: Test iris-mpc-db-exporter
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+env:
+  ENV: CI
+
+jobs:
+  test:
+    runs-on:
+      labels: ubuntu-22.04-16core
+
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: dbuser
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dbuser"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - run: git config --global url."https://${{ secrets.GIT_HUB_TOKEN }}:x-oauth-basic@github.com/worldcoin/".insteadOf "https://github.com/worldcoin/"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Add safe directory for Git
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62
+        with:
+          files_yaml: |
+            src:
+              - iris-mpc-db-exporter/**
+              - .github/workflows/test-db-exporter.yaml
+
+      - name: Run go fmt
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        working-directory: iris-mpc-db-exporter
+        run: |
+          go fmt ./...
+
+      - name: golangci-lint
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9
+        env:
+          GOFLAGS: "-buildvcs=false"
+        with:
+          version: v2.4.0
+          install-mode: goinstall
+          args: --timeout=5m
+          working-directory: iris-mpc-db-exporter
+
+      - run: go install github.com/joho/godotenv/cmd/godotenv@latest
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+
+      - name: Run unit tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        working-directory: iris-mpc-db-exporter
+        run: godotenv -f .env.ci go test -v ./src/...
+
+      - name: Run e2e populate test
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        working-directory: iris-mpc-db-exporter
+        run: godotenv -f .env.ci go test -v test/e2e_populate_test.go
+
+      - name: Run e2e binary export test
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        working-directory: iris-mpc-db-exporter
+        run: godotenv -f .env.ci go test -v test/e2e_binary_hdd_export_test.go

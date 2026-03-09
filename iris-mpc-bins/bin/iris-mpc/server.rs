@@ -39,14 +39,15 @@ use iris_mpc_common::{
         key_pair::SharesEncryptionKeyPairs,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
-            CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
-            ResetCheckRequest, ResetUpdateRequest, SQSMessage, UniquenessRequest,
-            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+            CircuitBreakerRequest, IdentityDeletionRequest, IdentityMatchCheckRequest,
+            IdentityUpdateRequest, ReAuthRequest, ReceiveRequestError, SQSMessage,
+            UniquenessRequest, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
+            REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
             RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
-            create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
-            ResetCheckResult, ResetUpdateAckResult, UniquenessResult,
+            create_message_type_attribute_map, IdentityDeletionResult, IdentityMatchCheckResult,
+            IdentityUpdateAckResult, ReAuthResult, UniquenessResult,
             ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
             SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
@@ -61,7 +62,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
-use itertools::{cloned, izip};
+use itertools::{cloned, izip, Itertools};
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -82,7 +83,6 @@ use tokio::{
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
-
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
@@ -117,7 +117,8 @@ pub fn receive_batch_stream(
     shutdown_handler: Arc<ShutdownHandler>,
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
-    reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    recovery_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
 ) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
 
@@ -139,7 +140,8 @@ pub fn receive_batch_stream(
                 &shutdown_handler,
                 &uniqueness_error_result_attributes,
                 &reauth_error_result_attributes,
-                &reset_error_result_attributes,
+                &reset_check_error_result_attributes,
+                &recovery_check_error_result_attributes,
             )
             .await;
 
@@ -168,7 +170,8 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-    reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    recovery_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
@@ -493,14 +496,16 @@ async fn receive_batch(
                         }
                     }
 
-                    RESET_CHECK_MESSAGE_TYPE => {
+                    RECOVERY_CHECK_MESSAGE_TYPE | RESET_CHECK_MESSAGE_TYPE => {
                         let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
 
-                        let reset_check_request: ResetCheckRequest =
+                        let identity_match_check_request: IdentityMatchCheckRequest =
                             serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("Reset check request", e)
+                                ReceiveRequestError::json_parse_error(
+                                    "Identity match check request",
+                                    e,
+                                )
                             })?;
-                        metrics::counter!("request.received", "type" => "reset_check").increment(1);
 
                         client
                             .delete_message()
@@ -510,64 +515,70 @@ async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::from)?;
 
-                        if config.enable_reset {
-                            msg_counter += 1;
-
-                            // Persist in progress reset_check message.
-                            // Note that reset_check is only a query and does not persist anything into the database.
-                            // We store modification so that the SNS result can be replayed.
-                            let modification = store
-                                .insert_modification(
-                                    None,
-                                    RESET_CHECK_MESSAGE_TYPE,
-                                    Some(reset_check_request.s3_key.as_str()),
-                                )
-                                .await?;
-                            batch_query.modifications.insert(
-                                RequestId(reset_check_request.reset_id.clone()),
-                                modification,
-                            );
-
-                            if let Some(batch_size) = reset_check_request.batch_size {
-                                *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                    batch_size.clamp(1, max_batch_size);
-                                tracing::info!("Updating batch size to {}", batch_size);
-                            }
-
-                            batch_query.push_matching_request(
-                                sns_message_id,
-                                reset_check_request.reset_id.clone(),
-                                RESET_CHECK_MESSAGE_TYPE,
-                                batch_metadata,
-                                vec![], // use AND rule for reset check requests
-                                false,  // skip_persistence is only used for uniqueness requests
-                            );
-
-                            let semaphore = Arc::clone(&semaphore);
-                            let s3_client_arc = s3_client.clone();
-                            let bucket_name = config.shares_bucket_name.clone();
-                            let s3_key = reset_check_request.s3_key.clone();
-                            let handle = get_iris_shares_parse_task(
-                                party_id,
-                                shares_encryption_key_pairs,
-                                semaphore,
-                                s3_client_arc,
-                                bucket_name,
-                                s3_key,
-                            )?;
-
-                            handles.push(handle);
+                        if !is_enabled(request_type, config) {
+                            metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
+                            tracing::warn!("{} is disabled, skipping request", request_type);
+                            continue;
                         }
+                        metrics::counter!("request.received", "type" => request_type.to_string())
+                            .increment(1);
+
+                        msg_counter += 1;
+
+                        // Persist in progress identity match check message.
+                        // Note that identity match check is only a query and does not persist anything into the database.
+                        // We store modification so that the SNS result can be replayed.
+                        let modification = store
+                            .insert_modification(
+                                None,
+                                request_type,
+                                Some(identity_match_check_request.s3_key.as_str()),
+                            )
+                            .await?;
+                        batch_query.modifications.insert(
+                            RequestId(identity_match_check_request.request_id.clone()),
+                            modification,
+                        );
+
+                        if let Some(batch_size) = identity_match_check_request.batch_size {
+                            *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                batch_size.clamp(1, max_batch_size);
+                            tracing::info!("Updating batch size to {}", batch_size);
+                        }
+
+                        batch_query.push_matching_request(
+                            sns_message_id,
+                            identity_match_check_request.request_id.clone(),
+                            request_type,
+                            batch_metadata,
+                            vec![], // use AND rule for identity match check requests
+                            false,  // skip_persistence is only used for uniqueness requests
+                        );
+
+                        let semaphore = Arc::clone(&semaphore);
+                        let s3_client_arc = s3_client.clone();
+                        let bucket_name = config.shares_bucket_name.clone();
+                        let s3_key = identity_match_check_request.s3_key.clone();
+                        let handle = get_iris_shares_parse_task(
+                            party_id,
+                            shares_encryption_key_pairs,
+                            semaphore,
+                            s3_client_arc,
+                            bucket_name,
+                            s3_key,
+                        )?;
+
+                        handles.push(handle);
                     }
 
-                    RESET_UPDATE_MESSAGE_TYPE => {
+                    RESET_UPDATE_MESSAGE_TYPE | RECOVERY_UPDATE_MESSAGE_TYPE => {
                         let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
 
-                        let reset_update_request: ResetUpdateRequest =
+                        let identity_update_request: IdentityUpdateRequest =
                             serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("Reset update request", e)
+                                ReceiveRequestError::json_parse_error("Identity update request", e)
                             })?;
-                        metrics::counter!("request.received", "type" => "reset_update")
+                        metrics::counter!("request.received", "type" => request_type.to_string())
                             .increment(1);
 
                         client
@@ -578,12 +589,18 @@ async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::from)?;
 
-                        if config.enable_reset {
+                        let is_enabled = match request_type {
+                            RESET_UPDATE_MESSAGE_TYPE => config.enable_reset,
+                            RECOVERY_UPDATE_MESSAGE_TYPE => config.enable_recovery,
+                            _ => false,
+                        };
+
+                        if is_enabled {
                             // Fetch new iris shares from S3
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_arc = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
-                            let s3_key = reset_update_request.s3_key.clone();
+                            let s3_key = identity_update_request.s3_key.clone();
 
                             let task_handle = get_iris_shares_parse_task(
                                 party_id,
@@ -595,18 +612,21 @@ async fn receive_batch(
                             )?;
 
                             let (left_shares, right_shares) = match task_handle.await {
-                                Ok(result) => {
-                                    match result {
-                                        Ok(shares) => shares,
-                                        Err(e) => {
-                                            tracing::error!("Failed to process iris shares for reset update: {:?}", e);
-                                            continue;
-                                        }
+                                Ok(result) => match result {
+                                    Ok(shares) => shares,
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to process iris shares for {}: {:?}",
+                                            request_type,
+                                            e
+                                        );
+                                        continue;
                                     }
-                                }
+                                },
                                 Err(e) => {
                                     tracing::error!(
-                                        "Failed to join task handle for reset update: {:?}",
+                                        "Failed to join task handle for {}: {:?}",
+                                        request_type,
                                         e
                                     );
                                     continue;
@@ -615,32 +635,33 @@ async fn receive_batch(
 
                             if batch_query
                                 .modifications
-                                .contains_key(&RequestSerialId(reset_update_request.serial_id))
+                                .contains_key(&RequestSerialId(identity_update_request.serial_id))
                             {
                                 tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                reset_update_request.serial_id,
-                                reset_update_request,
+                                identity_update_request.serial_id,
+                                identity_update_request,
                             );
                                 continue;
                             }
 
                             let modification = store
                                 .insert_modification(
-                                    Some(reset_update_request.serial_id as i64),
-                                    RESET_UPDATE_MESSAGE_TYPE,
-                                    Some(reset_update_request.s3_key.as_str()),
+                                    Some(identity_update_request.serial_id as i64),
+                                    request_type,
+                                    Some(identity_update_request.s3_key.as_str()),
                                 )
                                 .await?;
                             batch_query.modifications.insert(
-                                RequestSerialId(reset_update_request.serial_id),
+                                RequestSerialId(identity_update_request.serial_id),
                                 modification,
                             );
 
-                            batch_query.push_reset_update_request(
+                            batch_query.push_identity_update_request(
                                 sns_message_id,
-                                reset_update_request.reset_id,
-                                reset_update_request.serial_id - 1,
+                                identity_update_request.request_id,
+                                request_type,
+                                identity_update_request.serial_id - 1,
                                 GaloisSharesBothSides {
                                     code_left: left_shares.code,
                                     mask_left: left_shares.mask,
@@ -678,7 +699,8 @@ async fn receive_batch(
                 // Return error message back to the signup-service if failed to process iris
                 // shares
                 let request_id = batch_query.request_ids[index].clone();
-                let (result_attributes, message) = match batch_query.request_types[index].as_str() {
+                let request_type = batch_query.request_types[index].as_str();
+                let (result_attributes, message) = match request_type {
                     UNIQUENESS_MESSAGE_TYPE => {
                         let message = UniquenessResult::new_error_result(
                             config.party_id,
@@ -699,13 +721,22 @@ async fn receive_batch(
                         (reauth_error_result_attributes, serialized)
                     }
                     RESET_CHECK_MESSAGE_TYPE => {
-                        let message = ResetCheckResult::new_error_result(
+                        let message = IdentityMatchCheckResult::new_error_result(
                             request_id.clone(),
                             config.party_id,
                             ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
                         );
                         let serialized = serde_json::to_string(&message).unwrap();
-                        (reset_error_result_attributes, serialized)
+                        (reset_check_error_result_attributes, serialized)
+                    }
+                    RECOVERY_CHECK_MESSAGE_TYPE => {
+                        let message = IdentityMatchCheckResult::new_error_result(
+                            request_id.clone(),
+                            config.party_id,
+                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                        );
+                        let serialized = serde_json::to_string(&message).unwrap();
+                        (recovery_check_error_result_attributes, serialized)
                     }
                     _ => unreachable!(), // we don't push a handle for unknown message types
                 };
@@ -894,8 +925,12 @@ async fn server_main(config: Config) -> Result<()> {
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_check_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let recovery_check_result_attributes =
+        create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
     let reset_update_result_attributes =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
+    let recovery_update_result_attributes =
+        create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
 
@@ -1422,9 +1457,10 @@ async fn server_main(config: Config) -> Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
-            reset_update_indices,
-            reset_update_request_ids,
-            reset_update_shares,
+            identity_update_indices,
+            identity_update_request_ids,
+            identity_update_request_types,
+            identity_update_shares,
             mut modifications,
             actor_data: _,
             full_face_mirror_attack_detected,
@@ -1615,14 +1651,14 @@ async fn server_main(config: Config) -> Result<()> {
                 })
                 .collect::<Vec<String>>();
 
-            let reset_check_results = request_types
+            let identity_checks_by_type = request_types
                 .iter()
                 .enumerate()
-                .filter(|(_, request_type)| *request_type == RESET_CHECK_MESSAGE_TYPE)
-                .map(|(i, _)| {
-                    let reset_id = request_ids[i].clone();
-                    let result_event = ResetCheckResult::new(
-                        reset_id.clone(),
+                .filter(|(_, request_type)| matches!(request_type.as_str(), RESET_CHECK_MESSAGE_TYPE | RECOVERY_CHECK_MESSAGE_TYPE))
+                .map(|(i, request_type)| {
+                    let request_id = request_ids[i].clone();
+                    let result_event = IdentityMatchCheckResult::new(
+                        request_id.clone(),
                         party_id,
                         Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                         Some(
@@ -1648,31 +1684,36 @@ async fn server_main(config: Config) -> Result<()> {
                     // Note that reset_check is only a query and does not persist anything into the database.
                     // We store modification so that the SNS result can be replayed.
                     modifications
-                        .get_mut(&RequestId(reset_id))
+                        .get_mut(&RequestId(request_id))
                         .unwrap()
                         .mark_completed(false, &result_string, None, None);
-                    result_string
+                    (request_type.clone().to_string(), result_string.clone())
                 })
-                .collect::<Vec<String>>();
+                .collect::<Vec<(String, String)>>()
+                .into_iter()
+                .into_group_map();
 
-            // reset update results
-            let reset_update_results = reset_update_request_ids
+            // identity update results (reset_update and recovery_update)
+            let identity_update_results_by_type = identity_update_request_ids
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
-                    let reset_id = reset_update_request_ids[i].clone();
-                    let serial_id = reset_update_indices[i] + 1;
+                    let request_id = identity_update_request_ids[i].clone();
+                    let request_type = identity_update_request_types[i].clone();
+                    let serial_id = identity_update_indices[i] + 1;
                     let result_event =
-                        ResetUpdateAckResult::new(reset_id.clone(), party_id, serial_id);
+                        IdentityUpdateAckResult::new(request_id.clone(), party_id, serial_id);
                     let result_string = serde_json::to_string(&result_event)
-                        .expect("failed to serialize reset update result");
+                        .expect("failed to serialize identity update result");
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
                         .mark_completed(true, &result_string, None, None);
-                    result_string
+                    (request_type, result_string)
                 })
-                .collect::<Vec<String>>();
+                .collect::<Vec<(String, String)>>()
+                .into_iter()
+                .into_group_map();
 
             let mut tx = store_bg.tx().await?;
 
@@ -1752,24 +1793,27 @@ async fn server_main(config: Config) -> Result<()> {
                     .await?;
                 }
 
-                // persist reset_update results into db
-                for (idx, shares) in izip!(reset_update_indices, reset_update_shares) {
-                    // overwrite postgres db with reset update shares.
+                // persist identity update (reset_update/recovery_update) results into db
+                for (idx, shares) in
+                    izip!(identity_update_indices, identity_update_shares)
+                {
+                    // overwrite postgres db with identity update shares.
                     // note that both serial_id and postgres db are 1-indexed.
                     let serial_id = idx + 1;
                     tracing::info!(
-                        "Persisting reset update into postgres on serial id {}",
+                        "Persisting identity update into postgres on serial id {}",
                         serial_id
                     );
-                    store_bg.update_iris(
-                        Some(&mut tx),
-                        serial_id as i64,
-                        &shares.code_left,
-                        &shares.mask_left,
-                        &shares.code_right,
-                        &shares.mask_right,
-                    )
-                    .await?;
+                    store_bg
+                        .update_iris(
+                            Some(&mut tx),
+                            serial_id as i64,
+                            &shares.code_left,
+                            &shares.mask_left,
+                            &shares.code_right,
+                            &shares.mask_right,
+                        )
+                        .await?;
                 }
             }
 
@@ -1816,6 +1860,7 @@ async fn server_main(config: Config) -> Result<()> {
             )
             .await?;
 
+            let reset_check_results = identity_checks_by_type.get(RESET_CHECK_MESSAGE_TYPE).unwrap_or(&Vec::new()).clone();
             if !reset_check_results.is_empty() {
                 tracing::info!("Sending {} reset check results", reset_check_results.len());
                 send_results_to_sns(
@@ -1828,7 +1873,24 @@ async fn server_main(config: Config) -> Result<()> {
                 )
                 .await?;
             }
+            let recovery_check_results = identity_checks_by_type.get(RECOVERY_CHECK_MESSAGE_TYPE).unwrap_or(&Vec::new()).clone();
+            if !recovery_check_results.is_empty() {
+                tracing::info!("Sending {} recovery check results", recovery_check_results.len());
+                send_results_to_sns(
+                    recovery_check_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &recovery_check_result_attributes,
+                    RECOVERY_CHECK_MESSAGE_TYPE,
+                )
+                .await?;
+            }
 
+            let reset_update_results = identity_update_results_by_type
+                .get(RESET_UPDATE_MESSAGE_TYPE)
+                .unwrap_or(&Vec::new())
+                .clone();
             if !reset_update_results.is_empty() {
                 tracing::info!(
                     "Sending {} reset update results",
@@ -1841,6 +1903,26 @@ async fn server_main(config: Config) -> Result<()> {
                     &config_bg,
                     &reset_update_result_attributes,
                     RESET_UPDATE_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            let recovery_update_results = identity_update_results_by_type
+                .get(RECOVERY_UPDATE_MESSAGE_TYPE)
+                .unwrap_or(&Vec::new())
+                .clone();
+            if !recovery_update_results.is_empty() {
+                tracing::info!(
+                    "Sending {} recovery update results",
+                    recovery_update_results.len()
+                );
+                send_results_to_sns(
+                    recovery_update_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &recovery_update_result_attributes,
+                    RECOVERY_UPDATE_MESSAGE_TYPE,
                 )
                 .await?;
             }
@@ -1915,6 +1997,10 @@ async fn server_main(config: Config) -> Result<()> {
         create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let reset_update_error_result_attribute =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
+    let recovery_update_error_result_attribute =
+        create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
+    let recovery_check_error_result_attribute =
+        create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
     let res: Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
@@ -1944,6 +2030,7 @@ async fn server_main(config: Config) -> Result<()> {
             uniqueness_error_result_attribute,
             reauth_error_result_attribute,
             reset_check_error_result_attribute,
+            recovery_check_error_result_attribute,
         );
 
         loop {
@@ -2017,4 +2104,12 @@ async fn server_main(config: Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_enabled(request_type: &str, config: &Config) -> bool {
+    match request_type {
+        RECOVERY_CHECK_MESSAGE_TYPE => config.enable_recovery,
+        RESET_CHECK_MESSAGE_TYPE => config.enable_reset,
+        _ => true,
+    }
 }

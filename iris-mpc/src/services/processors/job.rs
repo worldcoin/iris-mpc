@@ -4,18 +4,21 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{bail, Result, WrapErr};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::{
-    IdentityDeletionResult, ReAuthResult, ResetCheckResult, ResetUpdateAckResult, UniquenessResult,
+    IdentityDeletionResult, IdentityMatchCheckResult, IdentityUpdateAckResult, ReAuthResult,
+    UniquenessResult,
 };
+
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
-use itertools::izip;
+use itertools::{izip, Itertools};
 use sqlx::{Postgres, Transaction};
 use std::{collections::HashMap, time::Instant};
 
@@ -34,6 +37,8 @@ pub async fn process_job_result(
     identity_deletion_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_check_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_update_result_attributes: &HashMap<String, MessageAttributeValue>,
+    recovery_check_result_attributes: &HashMap<String, MessageAttributeValue>,
+    recovery_update_result_attributes: &HashMap<String, MessageAttributeValue>,
     shutdown_handler: &ShutdownHandler,
 ) -> Result<()> {
     let ServerJobResult {
@@ -59,9 +64,10 @@ pub async fn process_job_result(
         mut modifications,
         actor_data: hawk_mutation,
         full_face_mirror_attack_detected,
-        reset_update_request_ids,
-        reset_update_indices,
-        reset_update_shares,
+        identity_update_request_ids,
+        identity_update_request_types,
+        identity_update_indices,
+        identity_update_shares,
         ..
     } = job_result;
     let now = Instant::now();
@@ -104,12 +110,12 @@ pub async fn process_job_result(
                     true => None,
                 },
                 Some(matched_batch_request_ids[i].clone()),
-                match partial_match_counters_left.is_empty() {
-                    false => Some(partial_match_counters_left[i]),
-                    true => None,
-                },
                 match partial_match_counters_right.is_empty() {
                     false => Some(partial_match_counters_right[i]),
+                    true => None,
+                },
+                match partial_match_counters_left.is_empty() {
+                    false => Some(partial_match_counters_left[i]),
                     true => None,
                 },
                 None, // partial_match_rotation_indices_left - not applicable for CPU
@@ -217,15 +223,19 @@ pub async fn process_job_result(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // handling reset check results
-    let reset_check_results = request_types
+    let identity_match_results_by_type = request_types
         .iter()
         .enumerate()
-        .filter(|(_, request_type)| *request_type == RESET_CHECK_MESSAGE_TYPE)
-        .map(|(i, _)| {
-            let reset_id = request_ids[i].clone();
-            let result_event = ResetCheckResult::new(
-                reset_id.clone(),
+        .filter(|(_, request_type)| {
+            matches!(
+                request_type.as_str(),
+                RESET_CHECK_MESSAGE_TYPE | RECOVERY_CHECK_MESSAGE_TYPE
+            )
+        })
+        .map(|(i, request_type)| {
+            let request_id = request_ids[i].clone();
+            let result_event = IdentityMatchCheckResult::new(
+                request_id.clone(),
                 party_id,
                 Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                 Some(
@@ -245,38 +255,44 @@ pub async fn process_job_result(
                 Some(partial_match_counters_left[i]),
             );
             let result_string = serde_json::to_string(&result_event)
-                .wrap_err("failed to serialize reset check result")?;
+                .wrap_err("failed to serialize identity match check result")?;
 
             // Mark the reset check modification as completed.
             // Note that reset_check is only a query and does not persist anything into the database.
             // We store modification so that the SNS result can be replayed.
-            let modification_key = RequestId(reset_id);
+            let modification_key = RequestId(request_id);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
                 .mark_completed(false, &result_string, None, None);
 
-            Ok(result_string)
+            Ok((request_type.clone(), result_string))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<(String, String)>>>()?
+        .into_iter()
+        .into_group_map();
 
-    // handling reset update results
-    let reset_update_results = reset_update_request_ids
+    // handling identity update results (reset_update and recovery_update)
+    let identity_update_results_by_type = identity_update_request_ids
         .iter()
         .enumerate()
         .map(|(i, _)| {
-            let reset_id = reset_update_request_ids[i].clone();
-            let serial_id = reset_update_indices[i] + 1;
-            let result_event = ResetUpdateAckResult::new(reset_id.clone(), party_id, serial_id);
+            let request_id = identity_update_request_ids[i].clone();
+            let request_type = identity_update_request_types[i].clone();
+            let serial_id = identity_update_indices[i] + 1;
+            let result_event =
+                IdentityUpdateAckResult::new(request_id.clone(), party_id, serial_id);
             let result_string = serde_json::to_string(&result_event)
-                .wrap_err("failed to serialize reset update result")?;
+                .wrap_err("failed to serialize identity update result")?;
             modifications
                 .get_mut(&RequestSerialId(serial_id))
                 .unwrap()
                 .mark_completed(true, &result_string, None, None);
-            Ok(result_string)
+            Ok((request_type, result_string))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<(String, String)>>>()?
+        .into_iter()
+        .into_group_map();
 
     let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
@@ -343,13 +359,13 @@ pub async fn process_job_result(
                 .await?;
         }
 
-        // persist reset_update results into db
-        for (idx, shares) in izip!(reset_update_indices, reset_update_shares) {
-            // overwrite postgres db with reset update shares.
+        // persist identity update (reset_update/recovery_update) results into db
+        for (idx, shares) in izip!(identity_update_indices, identity_update_shares) {
+            // overwrite postgres db with identity update shares.
             // note that both serial_id and postgres db are 1-indexed.
             let serial_id = idx + 1;
             tracing::info!(
-                "Persisting reset update into postgres on serial id {}",
+                "Persisting identity update into postgres on serial id {}",
                 serial_id
             );
             store
@@ -399,8 +415,22 @@ pub async fn process_job_result(
 
     let n_uniqueness = uniqueness_results.len();
     let n_reauth = reauth_results.len();
-    let n_reset_check = reset_check_results.len();
-    let n_reset_update = reset_update_results.len();
+    let n_reset_check = identity_match_results_by_type
+        .get(RESET_CHECK_MESSAGE_TYPE)
+        .unwrap_or(&Vec::new())
+        .len();
+    let n_recovery_check = identity_match_results_by_type
+        .get(RECOVERY_CHECK_MESSAGE_TYPE)
+        .unwrap_or(&Vec::new())
+        .len();
+    let n_reset_update = identity_update_results_by_type
+        .get(RESET_UPDATE_MESSAGE_TYPE)
+        .unwrap_or(&Vec::new())
+        .len();
+    let n_recovery_update = identity_update_results_by_type
+        .get(RECOVERY_UPDATE_MESSAGE_TYPE)
+        .unwrap_or(&Vec::new())
+        .len();
     let n_deletion = identity_deletion_results.len();
 
     send_results_to_sns(
@@ -434,7 +464,10 @@ pub async fn process_job_result(
     .await?;
 
     send_results_to_sns(
-        reset_check_results,
+        identity_match_results_by_type
+            .get(RESET_CHECK_MESSAGE_TYPE)
+            .unwrap_or(&Vec::new())
+            .clone(),
         &metadata,
         sns_client,
         config,
@@ -444,7 +477,10 @@ pub async fn process_job_result(
     .await?;
 
     send_results_to_sns(
-        reset_update_results,
+        identity_update_results_by_type
+            .get(RESET_UPDATE_MESSAGE_TYPE)
+            .unwrap_or(&Vec::new())
+            .clone(),
         &metadata,
         sns_client,
         config,
@@ -453,16 +489,44 @@ pub async fn process_job_result(
     )
     .await?;
 
+    send_results_to_sns(
+        identity_match_results_by_type
+            .get(RECOVERY_CHECK_MESSAGE_TYPE)
+            .unwrap_or(&Vec::new())
+            .clone(),
+        &metadata,
+        sns_client,
+        config,
+        recovery_check_result_attributes,
+        RECOVERY_CHECK_MESSAGE_TYPE,
+    )
+    .await?;
+
+    send_results_to_sns(
+        identity_update_results_by_type
+            .get(RECOVERY_UPDATE_MESSAGE_TYPE)
+            .unwrap_or(&Vec::new())
+            .clone(),
+        &metadata,
+        sns_client,
+        config,
+        recovery_update_result_attributes,
+        RECOVERY_UPDATE_MESSAGE_TYPE,
+    )
+    .await?;
+
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
     tracing::info!(
-        "RESULT_SUMMARY party={} uniqueness={} reauth={} reset_check={} reset_update={} deletion={} persist_ms={} total_ms={}",
+        "RESULT_SUMMARY party={} uniqueness={} reauth={} reset_check={} reset_update={} recovery_update={} deletion={} recovery_check={} persist_ms={} total_ms={}",
         party_id,
         n_uniqueness,
         n_reauth,
         n_reset_check,
         n_reset_update,
+        n_recovery_update,
         n_deletion,
+        n_recovery_check,
         persist_total_start.elapsed().as_millis(),
         now.elapsed().as_millis(),
     );

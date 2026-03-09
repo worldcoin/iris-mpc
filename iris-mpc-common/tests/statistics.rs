@@ -1,5 +1,5 @@
 mod tests {
-    use ampc_anon_stats::types::{AnonStatsResultSource, Eye};
+    use ampc_anon_stats::types::{AnonStatsResultSource, DistanceFunction, Eye};
     use ampc_anon_stats::{
         AnonStatsOperation, Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D,
     };
@@ -35,6 +35,7 @@ mod tests {
             // This field is #[serde(skip_serializing)]
             next_start_time_utc_timestamp: Some(Utc::now()),
             is_mirror_orientation: false,
+            distance_function: DistanceFunction::FHD,
         };
 
         // Serialize to JSON
@@ -151,6 +152,7 @@ mod tests {
             next_start_time_utc_timestamp: None,
             is_mirror_orientation: false,
             operation: AnonStatsOperation::Uniqueness,
+            distance_function: DistanceFunction::FHD,
         };
 
         // Serialize
@@ -215,6 +217,7 @@ mod tests {
             128,
             n,
             42,
+            DistanceFunction::FHD,
             AnonStatsResultSource::Legacy,
             Some(AnonStatsOperation::Uniqueness),
         );

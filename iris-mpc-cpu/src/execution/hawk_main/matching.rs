@@ -286,8 +286,8 @@ impl BatchStep3 {
                         UniqueInsert
                     }
                 }
-                // Reset Check request. Nothing to do.
-                RequestType::ResetCheck => NoMutation,
+                // Identity Match Check request. Nothing to do.
+                RequestType::IdentityMatchCheck => NoMutation,
                 // Reauth request.
                 RequestType::Reauth(_) => match request.normal.reauth_result {
                     Some((id, or_rule, matches)) if filter.reauth_rule(or_rule, matches) => {
@@ -368,7 +368,7 @@ pub enum RequestType {
     /// A request to check if a vector is unique.
     Uniqueness(UniquenessRequest),
     /// A request to check if a vector is unique without inserting it.
-    ResetCheck,
+    IdentityMatchCheck,
     /// A request to check if a vector matches a target and replace it.
     Reauth(Option<(VectorId, UseOrRule)>),
     /// Other features.

@@ -8,8 +8,10 @@ pub const AWS_S3_REQUEST_BUCKET_NAME: &str = "wf-smpcv2-dev-sns-requests";
 pub const AWS_SNS_REQUEST_TOPIC_ARN: &str =
     "arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo";
 
-/// AWS: default SQS system response queue URL.
-pub const AWS_SQS_RESPONSE_QUEUE_URL: &str = "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo";
+/// AWS: default SQS system response queue URLs.
+pub const AWS_SQS_RESPONSE_QUEUE_URLS: &[&str] = &[
+    "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo",
+];
 
 /// AWS: default SQS long polling wait time in seconds.
 pub const AWS_SQS_LONG_POLL_WAIT_TIME: usize = 10;

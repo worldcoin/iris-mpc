@@ -50,7 +50,7 @@ jobs:
 
       - name: Install Dependencies
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: sudo apt install protobuf-compiler
+        run: sudo apt-get update && sudo apt install protobuf-compiler
 
       - name: Show errors inline
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

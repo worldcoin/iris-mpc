@@ -925,6 +925,7 @@ async fn get_hawk_actor(
         hnsw_layer_density: config.hnsw_layer_density,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
+        hnsw_disable_memory_persistence: config.hnsw_disable_memory_persistence,
         tls: config.tls.clone(),
         numa: config.hawk_numa,
     };

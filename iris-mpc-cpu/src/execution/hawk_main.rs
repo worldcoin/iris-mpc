@@ -15,7 +15,7 @@
 //!   Each session encapsulates the necessary cryptographic context for a
 //!   single thread of work.
 //! - **Request Processing**: Handling [`HawkRequest`]s, which represent batches of requests of the
-//!   usual types: Uniqueness, ResetCheck, ResetUpdate, Reauth and Deletion.
+//!   usual types: Uniqueness, ResetCheck, RecoveryCheck, ResetUpdate, RecoveryUpdate, Reauth and Deletion.
 //!   . This involves:
 //!     - Searching the HNSW graph for nearest neighbors of a given iris, both for matching and graph insertion purposes.
 //!     - Performing secret-shared distance evaluations and comparisons using the ABY3 protocol.
@@ -46,16 +46,16 @@
 //!
 //! There are two choices of distance function:
 //!
-//! - **`FHD` (Fractional Hamming Distance)**: Computes the standard fractional Hamming distance.
-//! - **`MinFHDX` (Minimum Fractional Hamming Distance)**: Obliviously finds the minimum
-//!   FHD distance across rotation amounts `-X, -(X-1).. 0 .. (X - 1), X`.
+//! - **`Simple`**: Computes the standard distance (single orientation).
+//! - **`MinRotation`**: Obliviously finds the minimum distance across rotation
+//!   amounts `-X, -(X-1).. 0 .. (X - 1), X`.
 //!
 //! The choice of distance function is set by the constant `HAWK_DISTANCE_FN`.
-//! One must also set the `HAWK_MINFHD_ROTATIONS` constant, which refers to the total rotations considered by MinFHD.
-//! Note that one should set it to `2 * X + 1` to work with `MinFHDX`.
+//! One must also set the `HAWK_MIN_DIST_ROTATIONS` constant, which refers to the total rotations considered by MinRotation.
+//! Note that one should set it to `2 * X + 1` to work with `MinRotationX`.
 //! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
 //! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
-//! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinFhd5 encodes the set `{-10, 0, 10}`.
+//! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinRotation5 encodes the set `{-10, 0, 10}`.
 //!
 //! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
 //!
@@ -65,6 +65,8 @@
 //!
 //! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
 
+#[allow(unused_imports)]
+use crate::hawkers::aby3::aby3_store::NhdOps;
 use crate::{
     execution::{
         hawk_main::{
@@ -78,7 +80,7 @@ use crate::{
     hawkers::{
         aby3::aby3_store::{
             Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
-            Aby3VectorRef, DistanceFn,
+            Aby3VectorRef, DistanceFn, DistanceOps, FhdOps,
         },
         shared_irises::SharedIrises,
     },
@@ -101,6 +103,9 @@ use ampc_anon_stats::{
 use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::{future::try_join_all, try_join};
+use identity_update::{
+    apply_deletions, search_to_identity_update, IdentityUpdatePlan, IdentityUpdateRequests,
+};
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
@@ -109,7 +114,8 @@ use iris_mpc_common::{
 };
 use iris_mpc_common::{
     helpers::smpc_request::{
-        REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+        UNIQUENESS_MESSAGE_TYPE,
     },
     vector_id::VectorId,
 };
@@ -122,7 +128,6 @@ use matching::{
 };
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
 use serde::{Deserialize, Serialize};
@@ -143,44 +148,55 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub type GraphStore = graph_store::GraphPg<Aby3Store>;
-pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
+/// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
+pub type HawkOps = FhdOps;
 
+pub type GraphStore = graph_store::GraphPg<Aby3Store<HawkOps>>;
+pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store<HawkOps>>;
+
+/// Maps a composite match ID to its anon-stats operation and collected distance shares.
+type PartialDistancesMap = BTreeMap<
+    i64,
+    (
+        AnonStatsOperation,
+        Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>,
+    ),
+>;
+
+mod identity_update;
 pub mod insert;
 mod intra_batch;
 pub mod iris_worker;
 mod is_match_batch;
 mod matching;
-mod reset;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
 mod session_groups;
 pub mod state_check;
-use crate::shares::share::DistanceShare;
 use is_match_batch::is_match_batch;
 
 /// Distance function used by the HawkActor
-pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinFhd;
-/// Number of rotations considered by the MinFhd distance.
-/// Not used for non-MinFhd distance, but should be set to `1`.
-pub const HAWK_MINFHD_ROTATIONS: usize = 11;
+pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinRotation;
+/// Number of rotations considered by the MinRotation distance.
+/// Not used for non-MinRotation distance, but must be set to `1`.
+pub const HAWK_MIN_DIST_ROTATIONS: usize = 11;
 /// Bitmask of base rotations, i.e rotations of the query for which
 /// the HawkActor will launch independent HNSW searches.
 pub const HAWK_BASE_ROTATIONS_MASK: u32 = CENTER_AND_10_MASK;
 
-// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MINFHD_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
+// --- Compile-time checks for HAWK_DISTANCE_FN, HAWK_MIN_DIST_ROTATIONS, HAWK_BASE_ROTATIONS_MASK ---
 const _: () = {
     match HAWK_DISTANCE_FN {
-        DistanceFn::Fhd => {
-            // For Fhd the base rotations should consist of all 31 rotations.
-            // HAWK_MINFHD_ROTATIONS is not actually used in this case, but it must be set to 1.
-            if HAWK_MINFHD_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
+        DistanceFn::Simple => {
+            // For Simple the base rotations should consist of all 31 rotations.
+            // HAWK_MIN_DIST_ROTATIONS is not actually used in this case, but it must be set to 1.
+            if HAWK_MIN_DIST_ROTATIONS != 1 || HAWK_BASE_ROTATIONS_MASK != ALL_ROTATIONS_MASK {
                 panic!();
             }
         }
-        _ => match HAWK_MINFHD_ROTATIONS {
-            // Variants correspond to "full" minfhd, minfhd5 and minfhd6.
+        DistanceFn::MinRotation => match HAWK_MIN_DIST_ROTATIONS {
+            // Variants correspond to "full" min-rotation, min-rotation-5 and min-rotation-6.
             // The former requires center-only as base, while the latter two
             // require -10, 0, 10 as base rotations for searches.
             31 => {
@@ -246,6 +262,9 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
 
+    #[clap(long, default_value_t = false)]
+    pub hnsw_disable_memory_persistence: bool,
+
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
 
@@ -273,7 +292,7 @@ pub struct HawkArgs {
 ///   statistics about match distributions.
 pub struct HawkActor {
     /// Command-line arguments and configuration for the actor.
-    args: HawkArgs,
+    pub(crate) args: HawkArgs,
     // ---- Shared MPC & HNSW setup ----
     /// The HNSW searcher, containing parameters and logic for graph traversal.
     searcher: Arc<HnswSearcher>,
@@ -369,7 +388,7 @@ type MapEdges<T> = HashMap<VectorId, T>;
 /// If true, a match is `left OR right`, otherwise `left AND right`.
 type UseOrRule = bool;
 
-type Aby3Ref = Arc<RwLock<Aby3Store>>;
+type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
@@ -390,7 +409,10 @@ pub struct HawkSession {
     pub hnsw_prf_key: Arc<[u8; 16]>,
 }
 
-pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef);
+pub type SearchResult = (
+    Aby3VectorRef,
+    <Aby3Store<HawkOps> as VectorStore>::DistanceRef,
+);
 
 /// A high-level plan for inserting a query into the HNSW graph after a search.
 ///
@@ -401,8 +423,11 @@ pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef)
 /// to be inserted.
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
-    pub plan: InsertPlanV<Aby3Store>,
-    pub matches: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    pub plan: InsertPlanV<Aby3Store<HawkOps>>,
+    pub matches: Vec<(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )>,
 }
 
 /// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
@@ -412,7 +437,7 @@ pub struct HawkInsertPlan {
 /// represents the full set of atomic graph updates required. This includes not only the new
 /// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
-pub type ConnectPlan = ConnectPlanV<Aby3Store>;
+pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -420,7 +445,7 @@ impl HawkActor {
             args,
             shutdown_ct,
             [(); 2].map(|_| GraphMem::new()),
-            [(); 2].map(|_| Aby3Store::new_storage(None)),
+            [(); 2].map(|_| Aby3Store::<HawkOps>::new_storage(None)),
         )
         .await
     }
@@ -624,14 +649,42 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        // Map insertion plans to inner InsertionPlanV
-        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
-
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
             .map(|id_option| id_option.map(|original_id| original_id.next_version()))
             .collect_vec();
+
+        if self.args.hnsw_disable_memory_persistence {
+            tracing::debug!("In-memory persistence disabled, skipping HNSW insert");
+            // Compute would-be VectorIds without mutating the store or graph,
+            // so that downstream result derivation (merged_results / inserted_id)
+            // still sees the correct serial IDs.
+            let mut next_serial_id = self.iris_store[LEFT].read().await.next_id;
+            return Ok(plans
+                .into_iter()
+                .zip(insertion_ids.iter())
+                .map(|(plan, id)| {
+                    plan.map(|_| {
+                        let inserted_vector = if let Some(id) = id {
+                            *id
+                        } else {
+                            let vid = VectorId::from_serial_id(next_serial_id);
+                            next_serial_id += 1;
+                            vid
+                        };
+                        crate::hnsw::searcher::ConnectPlan {
+                            inserted_vector,
+                            updates: BTreeMap::new(),
+                            update_ep: UpdateEntryPoint::False,
+                        }
+                    })
+                })
+                .collect_vec());
+        }
+
+        // Map insertion plans to inner InsertionPlanV
+        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
 
         // Parallel insertions are not supported, so only one session is needed.
         let session = &sessions[0];
@@ -651,29 +704,58 @@ impl HawkActor {
     async fn update_anon_stats(
         &mut self,
         search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
+        request_types: &[String],
+        orientation: Orientation,
     ) -> Result<()> {
+        let anon_orientation = match orientation {
+            Orientation::Normal => AnonStatsOrientation::Normal,
+            Orientation::Mirror => AnonStatsOrientation::Mirror,
+        };
+
+        let mut per_side_distances = [BTreeMap::new(), BTreeMap::new()];
         for side in [LEFT, RIGHT] {
             let sided_search_results = &search_results[side];
 
             tracing::info!(
-                "Keeping distances for eye {side} out of {} search results",
+                "Keeping distances for eye {side}, orientation {orientation:?} out of {} search results",
                 sided_search_results.len(),
             );
 
-            let partial_distances = self.get_partial_distances(sided_search_results);
-            self.persist_cached_distances(side, partial_distances)
+            let partial_distances = self.get_partial_distances(sided_search_results, request_types);
+            per_side_distances[side] = partial_distances.clone();
+            self.persist_cached_distances(side, anon_orientation, partial_distances)
                 .await?;
         }
+
+        // Persist 2D distances (combined left + right)
+        let [left_distances, right_distances] = per_side_distances;
+        self.persist_cached_distances_2d(anon_orientation, left_distances, right_distances)
+            .await?;
+
         Ok(())
     }
 
     fn get_partial_distances(
         &mut self,
         search_results: &[VecRotations<HawkInsertPlan>],
-    ) -> BTreeMap<i64, Vec<DistanceShare<u32>>> {
-        // maps query_id and db_id to a vector of distances.
-        let mut distances_with_ids: BTreeMap<i64, Vec<DistanceShare<u32>>> = BTreeMap::new();
+        request_types: &[String],
+    ) -> PartialDistancesMap {
+        // maps query_id and db_id to an operation and a vector of distances.
+        let mut distances_with_ids: PartialDistancesMap = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
+            let operation = request_types
+                .get(query_idx)
+                .map(|rt| {
+                    if rt.as_str() == REAUTH_MESSAGE_TYPE {
+                        AnonStatsOperation::Reauth
+                    } else if rt.as_str() == RECOVERY_CHECK_MESSAGE_TYPE {
+                        AnonStatsOperation::Recovery
+                    } else {
+                        AnonStatsOperation::Uniqueness
+                    }
+                })
+                .unwrap_or(AnonStatsOperation::Uniqueness);
+
             for insert_plan in vec_rots.iter() {
                 let matches = insert_plan.matches.clone();
 
@@ -682,7 +764,8 @@ impl HawkActor {
                     let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
                     distances_with_ids
                         .entry(match_id)
-                        .or_default()
+                        .or_insert_with(|| (operation, Vec::new()))
+                        .1
                         .push(distance_share);
                 }
             }
@@ -693,26 +776,12 @@ impl HawkActor {
     async fn persist_cached_distances(
         &self,
         side: usize,
-        partial_distances: BTreeMap<i64, Vec<DistanceShare<u32>>>,
+        orientation: AnonStatsOrientation,
+        partial_distances: PartialDistancesMap,
     ) -> Result<()> {
         let Some(store) = &self.anon_stats_store else {
             return Ok(());
         };
-
-        let bundles = partial_distances
-            .iter()
-            .filter_map(|(match_id, shares)| {
-                if shares.is_empty() {
-                    None
-                } else {
-                    Some((*match_id, shares.clone()))
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if bundles.is_empty() {
-            return Ok(());
-        }
 
         let eye = match side {
             LEFT => Eye::Left,
@@ -722,13 +791,130 @@ impl HawkActor {
 
         let origin = AnonStatsOrigin {
             side: Some(eye),
-            orientation: AnonStatsOrientation::Normal,
+            orientation,
             context: AnonStatsContext::HNSW,
         };
 
-        store
-            .insert_anon_stats_batch_1d_lifted(&bundles, origin, AnonStatsOperation::Uniqueness)
-            .await?;
+        let is_normal = orientation == AnonStatsOrientation::Normal;
+
+        let mut uniqueness_bundles = Vec::new();
+        let mut reauth_bundles = Vec::new();
+        let mut recovery_bundles = Vec::new();
+
+        for (match_id, (operation, shares)) in &partial_distances {
+            if shares.is_empty() {
+                continue;
+            }
+            let bundle = (*match_id, shares.clone());
+            match operation {
+                AnonStatsOperation::Reauth if is_normal => reauth_bundles.push(bundle),
+                AnonStatsOperation::Recovery if is_normal => recovery_bundles.push(bundle),
+                AnonStatsOperation::Uniqueness => uniqueness_bundles.push(bundle),
+                _ => {} // Skip Reauth/Recovery for Mirror orientation
+            }
+        }
+
+        if !uniqueness_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &uniqueness_bundles,
+                    origin,
+                    AnonStatsOperation::Uniqueness,
+                )
+                .await?;
+        }
+        if !reauth_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &reauth_bundles,
+                    origin,
+                    AnonStatsOperation::Reauth,
+                )
+                .await?;
+        }
+        if !recovery_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_1d_lifted(
+                    &recovery_bundles,
+                    origin,
+                    AnonStatsOperation::Recovery,
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn persist_cached_distances_2d(
+        &self,
+        orientation: AnonStatsOrientation,
+        left_distances: PartialDistancesMap,
+        right_distances: PartialDistancesMap,
+    ) -> Result<()> {
+        let Some(store) = &self.anon_stats_store else {
+            return Ok(());
+        };
+
+        let origin = AnonStatsOrigin {
+            side: None,
+            orientation,
+            context: AnonStatsContext::HNSW,
+        };
+
+        let is_normal = orientation == AnonStatsOrientation::Normal;
+
+        // 2D bundles combine left and right eye distances for the same match_id.
+        // Only include entries present in both eyes.
+        let mut uniqueness_bundles = Vec::new();
+        let mut reauth_bundles = Vec::new();
+        let mut recovery_bundles = Vec::new();
+
+        for (match_id, (operation, left_shares)) in left_distances {
+            if left_shares.is_empty() {
+                continue;
+            }
+            let Some((_, right_shares)) = right_distances.get(&match_id) else {
+                continue;
+            };
+            if right_shares.is_empty() {
+                continue;
+            }
+            let bundle = (match_id, (left_shares.clone(), right_shares.clone()));
+            match operation {
+                AnonStatsOperation::Reauth if is_normal => reauth_bundles.push(bundle),
+                AnonStatsOperation::Recovery if is_normal => recovery_bundles.push(bundle),
+                AnonStatsOperation::Uniqueness => uniqueness_bundles.push(bundle),
+                _ => {} // Skip Reauth/Recovery for Mirror orientation
+            }
+        }
+
+        if !uniqueness_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_2d_lifted(
+                    &uniqueness_bundles,
+                    origin,
+                    AnonStatsOperation::Uniqueness,
+                )
+                .await?;
+        }
+        if !reauth_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_2d_lifted(
+                    &reauth_bundles,
+                    origin,
+                    AnonStatsOperation::Reauth,
+                )
+                .await?;
+        }
+        if !recovery_bundles.is_empty() {
+            store
+                .insert_anon_stats_batch_2d_lifted(
+                    &recovery_bundles,
+                    origin,
+                    AnonStatsOperation::Recovery,
+                )
+                .await?;
+        }
 
         Ok(())
     }
@@ -1089,7 +1275,8 @@ impl HawkRequest {
                 } else {
                     None
                 }),
-                RESET_CHECK_MESSAGE_TYPE => ResetCheck,
+                RESET_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
+                RECOVERY_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
                 _ => Unsupported,
             })
             .collect_vec()
@@ -1120,10 +1307,10 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn reset_updates(&self, iris_store: &Aby3SharedIrises) -> ResetRequests {
+    fn identity_updates(&self, iris_store: &Aby3SharedIrises) -> IdentityUpdateRequests {
         let queries = [LEFT, RIGHT].map(|side| {
             self.batch
-                .reset_update_shares
+                .identity_update_shares
                 .iter()
                 .map(|iris| {
                     let iris = if side == LEFT {
@@ -1142,9 +1329,9 @@ impl HawkRequest {
                 })
                 .collect_vec()
         });
-        ResetRequests {
-            vector_ids: iris_store.from_0_indices(&self.batch.reset_update_indices),
-            request_ids: Arc::new(self.batch.reset_update_request_ids.clone()),
+        IdentityUpdateRequests {
+            vector_ids: iris_store.from_0_indices(&self.batch.identity_update_indices),
+            request_ids: Arc::new(self.batch.identity_update_request_ids.clone()),
             queries: Arc::new(queries),
         }
     }
@@ -1371,9 +1558,10 @@ impl HawkResult {
             reauth_target_indices: batch.reauth_target_indices,
             reauth_or_rule_used: batch.reauth_use_or_rule,
 
-            reset_update_indices: batch.reset_update_indices,
-            reset_update_request_ids: batch.reset_update_request_ids,
-            reset_update_shares: batch.reset_update_shares,
+            identity_update_indices: batch.identity_update_indices,
+            identity_update_request_ids: batch.identity_update_request_ids,
+            identity_update_request_types: batch.identity_update_request_types,
+            identity_update_shares: batch.identity_update_shares,
 
             modifications: batch.modifications,
 
@@ -1623,33 +1811,51 @@ impl HawkHandle {
         };
 
         // Search for both orientations
-        let (search_results, match_result) = {
+        let (search_normal, search_mirror, match_result) = {
             let start = Instant::now();
-            let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
+            let ((search_normal, matches_normal), (search_mirror, matches_mirror)) = try_join!(
                 do_search(Orientation::Normal),
                 do_search(Orientation::Mirror),
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
             // Apply final organization + decision step, using results for both orientations
-            (search_normal, matches_normal.step3(matches_mirror))
+            (
+                search_normal,
+                search_mirror,
+                matches_normal.step3(matches_mirror),
+            )
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
-        hawk_actor.update_anon_stats(&search_results).await?;
+        hawk_actor
+            .update_anon_stats(
+                &search_normal,
+                &request.batch.request_types,
+                Orientation::Normal,
+            )
+            .await?;
+        hawk_actor
+            .update_anon_stats(
+                &search_mirror,
+                &request.batch.request_types,
+                Orientation::Mirror,
+            )
+            .await?;
         tracing::info!("Updated anonymized statistics.");
 
-        // Reset Updates. Find how to insert the new irises into the graph.
+        // Identity Updates. Find how to insert the new irises into the graph.
         // TODO: Parallelize with the other searches
-        let resets = search_to_reset(hawk_actor, sessions_mutations, &request).await?;
+        let identity_updates =
+            search_to_identity_update(hawk_actor, sessions_mutations, &request).await?;
 
         // Insert into the in memory stores.
         let mutations = Self::handle_mutations(
             hawk_actor,
             sessions_mutations,
-            search_results,
+            search_normal,
             &match_result,
-            resets,
+            identity_updates,
             &request,
         )
         .await?;
@@ -1669,7 +1875,7 @@ impl HawkHandle {
         sessions: &BothEyes<Vec<HawkSession>>,
         search_results: BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
         match_result: &matching::BatchStep3,
-        resets: ResetPlan,
+        identity_updates: IdentityUpdatePlan,
         request: &HawkRequest,
     ) -> Result<HawkMutation> {
         use Decision::*;
@@ -1677,7 +1883,7 @@ impl HawkHandle {
         let decisions = match_result.decisions();
         let requests_order = &request.batch.requests_order;
 
-        // Fetch targeted vector IDs of reauths and resets (None for uniqueness insertions).
+        // Fetch targeted vector IDs of reauths and identity updates (None for uniqueness insertions).
         let update_ids = requests_order
             .iter()
             .map(|req_index| match req_index {
@@ -1697,7 +1903,7 @@ impl HawkHandle {
                     }
                     _ => None,
                 },
-                RequestIndex::ResetUpdate(i) => Some(resets.vector_ids[*i]),
+                RequestIndex::IdentityUpdate(i) => Some(identity_updates.vector_ids[*i]),
                 RequestIndex::Deletion(_) => None,
             })
             .collect_vec();
@@ -1709,9 +1915,12 @@ impl HawkHandle {
             vec![[None, None]; requests_order.len()];
 
         // For both eyes.
-        for (side, sessions, search_results, reset_results) in
-            izip!(&STORE_IDS, sessions, search_results, resets.search_results)
-        {
+        for (side, sessions, search_results, reset_results) in izip!(
+            &STORE_IDS,
+            sessions,
+            search_results,
+            identity_updates.search_results
+        ) {
             let unique_insertions_persistence_skipped = decisions
                 .iter()
                 .map(|decision| matches!(decision, UniqueInsertSkipped))
@@ -1722,7 +1931,7 @@ impl HawkHandle {
                 .map(|decision| matches!(decision, UniqueInsert))
                 .collect_vec();
 
-            // The accepted insertions for uniqueness, reauth, and resets.
+            // The accepted insertions for uniqueness, reauth, and identity updates.
             // Focus on the insertions and keep only the centered irises.
             tracing::info!(
                 "Inserting {} new irises for eye {}",
@@ -1755,7 +1964,7 @@ impl HawkHandle {
                             .is_mutation()
                             .then(|| search_results[*i].center().clone()),
                     },
-                    RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
+                    RequestIndex::IdentityUpdate(i) => Some(reset_results[*i].center().clone()),
                     // Deletions were handled earlier in handle_job
                     RequestIndex::Deletion(_) => None,
                 })
@@ -1790,9 +1999,9 @@ impl HawkHandle {
                         UniqueInsertSkipped | NoMutation => None,
                     }
                 }
-                RequestIndex::ResetUpdate(i) => {
+                RequestIndex::IdentityUpdate(i) => {
                     // This is a reset update mutation.
-                    if let Some(&vector_id) = resets.vector_ids.get(i) {
+                    if let Some(&vector_id) = identity_updates.vector_ids.get(i) {
                         Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                     } else {
                         None
@@ -2100,11 +2309,11 @@ mod tests {
             all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
 
             assert_eq!(
-                all_results[i].reset_update_shares.len(),
-                all_results[0].reset_update_shares.len(),
-                "All parties must agree on the reset update shares"
+                all_results[i].identity_update_shares.len(),
+                all_results[0].identity_update_shares.len(),
+                "All parties must agree on the identity update shares"
             );
-            all_results[i].reset_update_shares = all_results[0].reset_update_shares.clone();
+            all_results[i].identity_update_shares = all_results[0].identity_update_shares.clone();
         }
 
         assert!(
@@ -2185,7 +2394,7 @@ mod tests_db {
         };
 
         // Populate the SQL store with test data.
-        let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
+        let graph_store = TestGraphPg::<Aby3Store<HawkOps>>::new().await.unwrap();
         {
             let plans_left = make_plans(StoreId::Left);
             let plans_right = make_plans(StoreId::Right);
@@ -2225,6 +2434,7 @@ mod tests_db {
             hnsw_prf_key: None,
             numa: true,
             disable_persistence: false,
+            hnsw_disable_memory_persistence: false,
             tls: None,
         };
         let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
@@ -2312,8 +2522,8 @@ mod hawk_mutation_tests {
 
         let index1 = RequestIndex::UniqueReauthResetCheck(0);
         let index2 = RequestIndex::UniqueReauthResetCheck(1);
-        let index3 = RequestIndex::ResetUpdate(0);
-        let index_wrong = RequestIndex::ResetUpdate(1);
+        let index3 = RequestIndex::IdentityUpdate(0);
+        let index_wrong = RequestIndex::IdentityUpdate(1);
 
         let mutation1 = SingleHawkMutation {
             plans: [

@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use super::{graph_store::GraphPg, layered_graph::EntryPoint};
 use crate::{
-    execution::hawk_main::StoreId, hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem,
+    execution::hawk_main::StoreId,
+    hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
+    hnsw::GraphMem,
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use crate::{
@@ -281,7 +283,7 @@ impl DbContext {
     pub async fn store_random_graph(&self) -> Result<()> {
         const NUM_RANDOM_IRIS_CODES: usize = 10;
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let mut vector_store = PlaintextStore::new();
+        let mut vector_store = PlaintextStore::<FhdOps>::new();
 
         let vectors = {
             let mut v = vec![];
