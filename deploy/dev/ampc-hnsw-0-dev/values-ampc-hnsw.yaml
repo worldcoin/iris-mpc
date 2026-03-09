@@ -84,6 +84,9 @@ env:
   - name: SMPC__EF_SUPERMATCH_FORCE_N_SEARCHES
     value: "12"
 
+  - name: SMPC__TOKIO_THREADS
+    value: "24"
+
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "96"
 
