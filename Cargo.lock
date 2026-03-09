@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#3d6d945ca18919d988dc59c5960f7b2ccd66f9ce"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#23318abd305301fadfffad4edb6010607f0cd51e"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -110,7 +110,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#3d6d945ca18919d988dc59c5960f7b2ccd66f9ce"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#23318abd305301fadfffad4edb6010607f0cd51e"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -136,7 +136,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#3d6d945ca18919d988dc59c5960f7b2ccd66f9ce"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#23318abd305301fadfffad4edb6010607f0cd51e"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -151,7 +151,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#3d6d945ca18919d988dc59c5960f7b2ccd66f9ce"
+source = "git+https://github.com/worldcoin/ampc-common.git?branch=mihai%2Faxum-config-endpoint#23318abd305301fadfffad4edb6010607f0cd51e"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -1238,7 +1238,7 @@ dependencies = [
  "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -4341,7 +4341,7 @@ checksum = "0c1318b19085f08681016926435853bbf7858f9c082d0999b80550ff5d9abe15"
 dependencies = [
  "bytes",
  "heck",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "once_cell",
@@ -4374,7 +4374,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9552f850d5f0964a4e4d0bf306459ac29323ddfbae05e35a7c0d35cb0803cc5"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn",
