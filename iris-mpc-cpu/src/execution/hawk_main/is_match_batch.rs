@@ -1,3 +1,4 @@
+use super::emit_tokio_task_metrics;
 use super::HawkOps;
 use super::{BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT};
 use crate::{
@@ -10,6 +11,7 @@ use futures::future::JoinAll;
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
+use tokio_metrics::TaskMonitor;
 
 pub async fn is_match_batch(
     search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
@@ -65,11 +67,13 @@ async fn per_side(
     assert!(chunks.len() <= n_sessions);
 
     // Process the chunks in parallel (CPU and IO).
+    let monitor = TaskMonitor::new();
     let results = izip!(chunks, sessions)
         .map(|(chunk, session)| per_session(chunk, session.clone()))
-        .map(tokio::spawn)
+        .map(|t| tokio::spawn(monitor.instrument(t)))
         .collect::<JoinAll<_>>()
         .await;
+    emit_tokio_task_metrics("is_match_batch", &monitor);
 
     // Undo the chunking per session.
     let results = unsplit_tasks(results)?;

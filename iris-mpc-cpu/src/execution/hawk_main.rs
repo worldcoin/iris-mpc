@@ -175,6 +175,33 @@ pub(crate) mod search;
 mod session_groups;
 pub mod state_check;
 use is_match_batch::is_match_batch;
+use tokio_metrics::TaskMonitor;
+
+/// Emit cumulative tokio task scheduling metrics for a completed phase.
+///
+/// Reports `mean_scheduled_duration` (time tasks waited in tokio's run queue
+/// after being woken) and `mean_poll_duration` (time spent inside each poll)
+/// as histograms tagged by phase name. These help diagnose whether tokio is
+/// starved for CPU cores.
+fn emit_tokio_task_metrics(phase: &str, monitor: &TaskMonitor) {
+    let m = monitor.cumulative();
+    let mean_sched = m.mean_scheduled_duration().as_secs_f64();
+    let mean_poll = m.mean_poll_duration().as_secs_f64();
+    let total_sched_count = m.total_scheduled_count;
+    let total_poll_count = m.total_poll_count;
+    metrics::histogram!("tokio.mean_scheduled_duration_s", "phase" => phase.to_string())
+        .record(mean_sched);
+    metrics::histogram!("tokio.mean_poll_duration_s", "phase" => phase.to_string())
+        .record(mean_poll);
+    tracing::debug!(
+        phase,
+        mean_sched_us = mean_sched * 1e6,
+        mean_poll_us = mean_poll * 1e6,
+        total_sched_count,
+        total_poll_count,
+        "tokio task metrics"
+    );
+}
 
 /// Distance function used by the HawkActor
 pub const HAWK_DISTANCE_FN: DistanceFn = DistanceFn::MinRotation;

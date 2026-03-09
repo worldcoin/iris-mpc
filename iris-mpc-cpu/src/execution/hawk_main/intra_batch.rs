@@ -1,9 +1,10 @@
 use super::{
+    emit_tokio_task_metrics,
     scheduler::{Batch, Schedule, Task},
     BothEyes, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::{scheduler::parallelize, VecRotations},
+    execution::hawk_main::{scheduler::parallelize_monitored, VecRotations},
     hawkers::aby3::aby3_store::Aby3Query,
     hnsw::VectorStore,
     protocol::shared_iris::ArcIris,
@@ -12,6 +13,7 @@ use eyre::Result;
 use itertools::{izip, Itertools};
 use std::{collections::BTreeMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio_metrics::TaskMonitor;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct IntraMatch {
@@ -41,7 +43,9 @@ pub async fn intra_batch_is_match(
         async move { per_session(&search_queries, &session, batch, tx).await }
     };
 
-    parallelize(batches.into_iter().map(per_session)).await?;
+    let monitor = TaskMonitor::new();
+    parallelize_monitored(batches.into_iter().map(per_session), Some(&monitor)).await?;
+    emit_tokio_task_metrics("intra_batch", &monitor);
 
     let res = aggregate_results(n_requests, rx).await?;
 
@@ -136,6 +140,7 @@ async fn aggregate_results(
 mod tests {
     use super::super::test_utils::setup_hawk_actors;
     use super::*;
+    use crate::execution::hawk_main::scheduler::parallelize;
     use crate::execution::hawk_main::test_utils::make_request_intra_match;
     use crate::execution::hawk_main::{HawkActor, Orientation};
     use tracing_test::traced_test;

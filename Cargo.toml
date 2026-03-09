@@ -76,6 +76,7 @@ telemetry-batteries = "0.1.1"
 thiserror = "1"
 # Pinned: minor version updates have introduced performance regressions in the past
 tokio = { version = "=1.49", features = ["full", "rt-multi-thread"] }
+tokio-metrics = "0.4"
 tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }

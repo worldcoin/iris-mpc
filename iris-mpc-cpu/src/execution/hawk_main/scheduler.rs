@@ -4,6 +4,7 @@ use futures::future::JoinAll;
 use itertools::Itertools;
 use std::{collections::HashMap, future::Future};
 use tokio::{sync::mpsc::UnboundedReceiver, task::JoinError};
+use tokio_metrics::TaskMonitor;
 
 const N_EYES: usize = 2;
 
@@ -157,12 +158,35 @@ where
     F: Future<Output = Result<T>> + Send + 'static,
     F::Output: Send + 'static,
 {
-    tasks
-        .map(tokio::spawn)
-        .collect::<JoinAll<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Result<Vec<T>>, JoinError>>()?
+    parallelize_monitored(tasks, None).await
+}
+
+pub async fn parallelize_monitored<F, T>(
+    tasks: impl Iterator<Item = F>,
+    monitor: Option<&TaskMonitor>,
+) -> Result<Vec<T>>
+where
+    F: Future<Output = Result<T>> + Send + 'static,
+    F::Output: Send + 'static,
+{
+    match monitor {
+        Some(monitor) => {
+            tasks
+                .map(|t| tokio::spawn(monitor.instrument(t)))
+                .collect::<JoinAll<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Result<Vec<T>>, JoinError>>()?
+        }
+        None => {
+            tasks
+                .map(tokio::spawn)
+                .collect::<JoinAll<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Result<Vec<T>>, JoinError>>()?
+        }
+    }
 }
 
 pub async fn collect_results<T>(

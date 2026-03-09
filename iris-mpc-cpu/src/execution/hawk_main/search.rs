@@ -1,11 +1,12 @@
 use super::{
+    emit_tokio_task_metrics,
     rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
     BothEyes, HawkInsertPlan, HawkOps, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
     execution::hawk_main::{
-        scheduler::{collect_results, parallelize},
+        scheduler::{collect_results, parallelize_monitored},
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
@@ -19,6 +20,7 @@ use eyre::{OptionExt, Result};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio_metrics::TaskMonitor;
 
 pub type SearchQueries<const ROTMASK: u32> =
     Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROTMASK>>>>;
@@ -86,7 +88,13 @@ pub async fn search<const ROTMASK: u32>(
 
     let schedule = Schedule::new(n_sessions, n_requests, ROTMASK.count_ones() as usize);
 
-    parallelize(schedule.search_batches().into_iter().map(per_session)).await?;
+    let monitor = TaskMonitor::new();
+    parallelize_monitored(
+        schedule.search_batches().into_iter().map(per_session),
+        Some(&monitor),
+    )
+    .await?;
+    emit_tokio_task_metrics("search", &monitor);
 
     let results = schedule.organize_results(collect_results(rx).await?)?;
 
@@ -256,6 +264,7 @@ mod tests {
     use super::super::test_utils::setup_hawk_actors;
     use super::super::VectorId;
     use super::*;
+    use crate::execution::hawk_main::scheduler::parallelize;
     use crate::execution::hawk_main::test_utils::{init_graph, init_iris_db, make_request};
     use crate::execution::hawk_main::{HawkActor, Orientation};
 
