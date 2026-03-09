@@ -637,7 +637,7 @@ impl AnonStatsProcessor {
                 )
                 .await?;
 
-                self.log_job_metrics("2d-nhd", origin, kind, job_size, start.elapsed())
+                self.log_job_metrics("2d", origin, kind, job_size, start.elapsed())
                     .await;
 
                 let report_time = Utc::now();
@@ -659,7 +659,7 @@ impl AnonStatsProcessor {
                 )
                 .await?;
 
-                self.log_job_metrics("2d", origin, kind, job_size, start.elapsed())
+                self.log_job_metrics("2d-nhd", origin, kind, job_size, start.elapsed())
                     .await;
 
                 let report_time = Utc::now();
