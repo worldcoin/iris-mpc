@@ -339,20 +339,27 @@ pub async fn wait_epoch_done(harness: &TestHarness, epoch: i32) -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     let start = std::time::Instant::now();
     let mut last_print = start;
+    let expected_chunks: i64 = ((DB_SIZE as i64) + (CHUNK_SIZE as i64) - 1) / (CHUNK_SIZE as i64);
     loop {
         if tokio::time::Instant::now() > deadline {
             eyre::bail!("Timeout waiting for epoch {}", epoch);
         }
         let mut done = true;
         let mut applied = [0usize; 3];
+        let mut totals = [0usize; 3];
         for (i, party) in harness.parties.iter().enumerate() {
-            let rows: Vec<(bool,)> =
-                sqlx::query_as("SELECT live_applied FROM rerand_progress WHERE epoch = $1")
-                    .bind(epoch)
-                    .fetch_all(&party.store.pool)
-                    .await?;
-            applied[i] = rows.iter().filter(|(a,)| *a).count();
-            if rows.is_empty() || !rows.iter().all(|(a,)| *a) {
+            let (total, applied_count): (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*), COUNT(*) FILTER (WHERE live_applied = TRUE) \
+                 FROM rerand_progress WHERE epoch = $1",
+            )
+            .bind(epoch)
+            .fetch_one(&party.store.pool)
+            .await?;
+
+            totals[i] = total as usize;
+            applied[i] = applied_count as usize;
+
+            if total < expected_chunks || applied_count < expected_chunks {
                 done = false;
             }
         }
@@ -366,9 +373,10 @@ pub async fn wait_epoch_done(harness: &TestHarness, epoch: i32) -> Result<()> {
         }
         if last_print.elapsed() > Duration::from_secs(5) {
             println!(
-                "  waiting epoch {}: applied {:?} ({:.0}s)",
+                "  waiting epoch {}: applied {:?} / totals {:?} ({:.0}s)",
                 epoch,
                 applied,
+                totals,
                 start.elapsed().as_secs_f64()
             );
             last_print = std::time::Instant::now();
@@ -606,7 +614,7 @@ pub async fn shares_are_consistent(harness: &TestHarness, id: i64) -> Result<boo
 }
 
 /// Snapshot raw share bytes for a set of IDs (all parties).
-/// Returns a map from id → Vec of (left_code, left_mask, right_code, right_mask) per party.
+/// Returns a map from id to Vec of (left_code, left_mask, right_code, right_mask) per party.
 pub async fn snapshot_raw_shares(
     harness: &TestHarness,
     ids: &[i64],
@@ -639,6 +647,50 @@ pub async fn get_rerand_epochs_for_id(harness: &TestHarness, id: i64) -> Result<
         epochs[i] = ep;
     }
     Ok(epochs)
+}
+
+/// Assert that all parties have the exact expected rerand_epoch for every id.
+pub async fn assert_rerand_epoch_equals_for_ids(
+    harness: &TestHarness,
+    ids: &[i64],
+    expected_epoch: i32,
+) -> Result<()> {
+    for &id in ids {
+        let epochs = get_rerand_epochs_for_id(harness, id).await?;
+        for (party, epoch) in epochs.iter().enumerate() {
+            eyre::ensure!(
+                *epoch == expected_epoch,
+                "Expected rerand_epoch={} for id={} on party {}, got {}",
+                expected_epoch,
+                id,
+                party,
+                epoch
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Assert that all parties have rerand_epoch >= min_epoch for every id.
+pub async fn assert_rerand_epoch_at_least_for_ids(
+    harness: &TestHarness,
+    ids: &[i64],
+    min_epoch: i32,
+) -> Result<()> {
+    for &id in ids {
+        let epochs = get_rerand_epochs_for_id(harness, id).await?;
+        for (party, epoch) in epochs.iter().enumerate() {
+            eyre::ensure!(
+                *epoch >= min_epoch,
+                "Expected rerand_epoch>={} for id={} on party {}, got {}",
+                min_epoch,
+                id,
+                party,
+                epoch
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn cleanup(harness: &TestHarness) -> Result<()> {

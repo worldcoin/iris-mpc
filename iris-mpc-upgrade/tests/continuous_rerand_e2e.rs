@@ -144,13 +144,14 @@ fn phase1_clean_epoch() {
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1, "Expected rerand_epoch >= 1, got {}", ep);
+        assert_rerand_epoch_equals_for_ids(&env.harness, &all_ids, 1).await?;
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
 
         let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
         for &id in &all_ids {
             assert_ne!(
                 &pre_shares[&id], &post_shares[&id],
-                "Shares for id={} should differ after rerand",
+                "Shares for id={} should differ after rerandomization",
                 id
             );
         }
@@ -189,13 +190,14 @@ fn phase2_kill_and_resume() {
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
+        assert_rerand_epoch_equals_for_ids(&env.harness, &all_ids, 1).await?;
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
 
         let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
         for &id in &all_ids {
             assert_ne!(
                 &pre_shares[&id], &post_shares[&id],
-                "Shares for id={} should differ after rerand",
+                "Shares for id={} should differ after rerandomization",
                 id
             );
         }
@@ -218,6 +220,11 @@ fn phase3_concurrent_modifications() {
         let env = TestEnv::setup().await?;
         let modified_ids: Vec<i64> = vec![5, 10, 15];
         let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
+        let non_modified_ids: Vec<i64> = all_ids
+            .iter()
+            .copied()
+            .filter(|id| !modified_ids.contains(id))
+            .collect();
         let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
         println!("[phase 3] Concurrent modifications...");
 
@@ -263,29 +270,17 @@ fn phase3_concurrent_modifications() {
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &modified_ids).await?;
         assert!(ep >= 1);
+        // Modified IDs can be 0 or 1 depending on whether each party staged the
+        // chunk before or after the local version bump. We skip them in strict
+        // cross-party checks and focus on non-modified IDs + fingerprint safety.
+        assert_rerand_epoch_equals_for_ids(&env.harness, &non_modified_ids, 1).await?;
         verify_fingerprints(&env.harness, &env.fingerprints, &modified_ids).await?;
 
-        // Modified irises were skipped by rerand (version_id CAS mismatch).
-        // snapshot_all_fingerprints reconstructs from all 3 parties' shares,
-        // so succeeding here proves the modified irises are still reconstructable.
-        let post_fps = snapshot_all_fingerprints(&env.harness, &[]).await?;
-        for &id in &modified_ids {
-            assert!(
-                post_fps.contains_key(&id),
-                "Modified id {} missing from post-rerand snapshot",
-                id
-            );
-        }
-        println!("[phase 3]   modified irises verified (shares reconstruct)");
-
         let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
-        for &id in &all_ids {
-            if modified_ids.contains(&id) {
-                continue;
-            }
+        for &id in &non_modified_ids {
             assert_ne!(
                 &pre_shares[&id], &post_shares[&id],
-                "Shares for id={} should differ after rerand",
+                "Shares for id={} should differ after rerandomization",
                 id
             );
         }
@@ -324,23 +319,17 @@ fn phase4_server_restart_during_rerand() {
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
+        assert_rerand_epoch_equals_for_ids(&env.harness, &all_ids, 1).await?;
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
 
-        // Verify shares actually changed (not just that plaintext still matches).
         let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
         for &id in &all_ids {
-            let pre = &pre_shares[&id];
-            let post = &post_shares[&id];
             assert_ne!(
-                pre, post,
+                &pre_shares[&id], &post_shares[&id],
                 "Shares for id={} should differ after rerandomization",
                 id
             );
         }
-        println!(
-            "[phase 4]   verified all {} irises have different shares after rerand",
-            all_ids.len()
-        );
         println!("[phase 4] PASSED (epoch={})", ep);
 
         env.teardown().await
@@ -379,13 +368,14 @@ fn phase6_multiple_epochs() {
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 2, "Expected rerand_epoch >= 2, got {}", ep);
+        assert_rerand_epoch_at_least_for_ids(&env.harness, &all_ids, 2).await?;
         verify_fingerprints(&env.harness, &env.fingerprints, &[]).await?;
 
         let post_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
         for &id in &all_ids {
             assert_ne!(
                 &pre_shares[&id], &post_shares[&id],
-                "Shares for id={} should differ after rerand",
+                "Shares for id={} should differ after rerandomization",
                 id
             );
         }
@@ -514,6 +504,7 @@ fn phase9_asymmetric_modification_consistency() {
         let _ = tracing_subscriber::fmt::try_init();
         let env = TestEnv::setup().await?;
         let target_id: i64 = 20;
+        let non_target_ids: Vec<i64> = (1..=DB_SIZE as i64).filter(|id| *id != target_id).collect();
         let pre_shares = snapshot_raw_shares(&env.harness, &[target_id]).await?;
         println!("[phase 9] Asymmetric modification consistency...");
 
@@ -541,6 +532,7 @@ fn phase9_asymmetric_modification_consistency() {
         // Non-modified rows should still be rerandomized consistently.
         let ep = assert_consistent_rerand_epoch(&env.harness, &[target_id]).await?;
         assert!(ep >= 1);
+        assert_rerand_epoch_equals_for_ids(&env.harness, &non_target_ids, 1).await?;
 
         // The modified ID should have been skipped (rerand_epoch stays 0)
         // on ALL parties, OR applied consistently. Either way shares must

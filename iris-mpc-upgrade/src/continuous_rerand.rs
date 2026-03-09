@@ -263,6 +263,10 @@ pub async fn run_continuous_rerand(
         .await?;
         tracing::info!("Epoch {} completed, moving to next epoch", active_epoch);
 
+        if is_cancelled(cancel) {
+            return Ok(());
+        }
+
         if chunk_delay > Duration::ZERO {
             sleep(chunk_delay).await;
         }
