@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::sync::{LazyLock, RwLock};
 
@@ -152,6 +153,7 @@ pub fn restrict_tokio_runtime() {
 // =============================================================================
 
 /// Parses a Linux cpulist format string (e.g., "0-15,32-47") into a vector of CPU IDs.
+#[cfg(target_os = "linux")]
 fn parse_cpulist(cpulist: &str) -> Vec<usize> {
     let mut cpus = Vec::new();
     for part in cpulist.trim().split(',') {
@@ -201,6 +203,7 @@ fn _get_cores_for_node(node: usize) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_cpulist_simple_range() {
         let cpus = parse_cpulist("0-95");
@@ -208,6 +211,7 @@ mod tests {
         assert_eq!(cpus, (0..=95).collect::<Vec<_>>());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_cpulist_multiple_ranges() {
         let cpus = parse_cpulist("0-15,32-47");
@@ -215,24 +219,28 @@ mod tests {
         assert_eq!(cpus, expected);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_cpulist_single_values() {
         let cpus = parse_cpulist("0,5,10");
         assert_eq!(cpus, vec![0, 5, 10]);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_cpulist_mixed() {
         let cpus = parse_cpulist("0-3,8,12-14");
         assert_eq!(cpus, vec![0, 1, 2, 3, 8, 12, 13, 14]);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_cpulist_with_whitespace() {
         let cpus = parse_cpulist("  0-3 \n");
         assert_eq!(cpus, vec![0, 1, 2, 3]);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_parse_cpulist_empty() {
         let cpus = parse_cpulist("");
