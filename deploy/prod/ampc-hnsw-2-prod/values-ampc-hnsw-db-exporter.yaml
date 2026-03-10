@@ -1,0 +1,23 @@
+env:
+  - name: ENV
+    value: prod
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_URL
+        name: application
+  - name: SERVICE_NAME
+    value: ampc-hnsw-db-exporter-2
+  - name: AWS_REGION
+    value: eu-north-1
+  - name: GIN_MODE
+    value: release
+  - name: EXPORT_S3_BUCKET_NAME
+    value: "ampc-hnsw-db-exporter-store-node-2-prod--eun1-az3--x-s3"
+  - name: NODE_ID
+    value: "2"
+
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+    - sg-06d122297c6a69d6c # smpc2-prod ampc-hnsw-db-exporter pod sg
