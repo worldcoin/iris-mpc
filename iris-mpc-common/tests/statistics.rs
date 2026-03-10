@@ -29,7 +29,6 @@ mod tests {
             party_id: 999,
             operation: AnonStatsOperation::Uniqueness,
             eye: Some(Eye::Right),
-            distance_function: DistanceFunction::default(),
             source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: known_start_time,
             end_time_utc_timestamp: Some(known_end_time),
@@ -144,7 +143,6 @@ mod tests {
             match_distances_buffer_size: 42,
             party_id: 777,
             eye: Some(Eye::Right),
-            distance_function: DistanceFunction::default(),
             source: AnonStatsResultSource::Aggregator,
             start_time_utc_timestamp: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
             end_time_utc_timestamp: Some(
