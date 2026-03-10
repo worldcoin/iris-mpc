@@ -3,6 +3,9 @@
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
+use ampc_server_utils::batch_sync::{
+    BatchSyncSharedState, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES,
+};
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
     init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
@@ -17,6 +20,7 @@ use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
+use iris_mpc::services::processors::batch::receive_batch_stream as synchronized_receive_batch_stream;
 use iris_mpc::services::processors::get_iris_shares_parse_task;
 use iris_mpc::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -37,6 +41,7 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
+        sha256::sha256_bytes,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, IdentityMatchCheckRequest,
@@ -70,7 +75,10 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     mem, panic,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, LazyLock, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::Receiver;
@@ -1052,6 +1060,9 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
+    let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
+    let batch_sync_shared_state =
+        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
     // --------------------------------------------------------------------------
     // ANCHOR: Starting Healthcheck, Readiness and Sync server
@@ -1075,7 +1086,7 @@ async fn server_main(config: Config) -> Result<()> {
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
-        None,
+        Some(batch_sync_shared_state.clone()),
     )
     .await;
 
@@ -1808,25 +1819,28 @@ async fn server_main(config: Config) -> Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let mut batch_stream = receive_batch_stream(
+        let (mut batch_stream, sem) = synchronized_receive_batch_stream(
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
             aws_clients.s3_client.clone(),
             config.clone(),
-            store.clone(),
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),
             uniqueness_error_result_attribute,
             reauth_error_result_attribute,
             reset_check_error_result_attribute,
             recovery_check_error_result_attribute,
+            current_batch_id_atomic.clone(),
+            store.clone(),
+            batch_sync_shared_state.clone(),
         );
+        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
         loop {
             let now = Instant::now();
 
-            let batch = match batch_stream.recv().await {
+            let mut batch = match batch_stream.recv().await {
                 Some(Ok(None)) | None => {
                     tracing::info!("No more batches to process, exiting main loop");
                     return Ok(());
@@ -1836,6 +1850,29 @@ async fn server_main(config: Config) -> Result<()> {
                 }
                 Some(Ok(Some(batch))) => batch,
             };
+
+            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+            let batch_valid_entries = batch.valid_entries.clone();
+            *CURRENT_BATCH_SHA
+                .lock()
+                .expect("Failed to lock CURRENT_BATCH_SHA") = batch_hash;
+            *CURRENT_BATCH_VALID_ENTRIES
+                .lock()
+                .expect("Failed to lock CURRENT_BATCH_VALID_ENTRIES") = batch_valid_entries;
+
+            loop {
+                if shutdown_handler.is_shutting_down() {
+                    tracing::info!("Shutdown requested during batch sync retry, exiting");
+                    return Ok(());
+                }
+
+                match batch.sync_batch_entries(&config).await {
+                    Ok(()) => break,
+                    Err(e) => {
+                        tracing::warn!("Batch sync entries failed: {:?}. Retrying...", e);
+                    }
+                }
+            }
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -1855,6 +1892,8 @@ async fn server_main(config: Config) -> Result<()> {
             }
 
             background_tasks.check_tasks();
+            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+            sem.add_permits(1);
 
             let result_future = handle.submit_batch_query(batch);
 
