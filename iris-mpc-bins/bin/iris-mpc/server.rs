@@ -20,7 +20,7 @@ use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
-use iris_mpc::services::processors::batch::receive_batch_stream
+use iris_mpc::services::processors::batch::receive_batch_stream;
 use iris_mpc::services::processors::get_iris_shares_parse_task;
 use iris_mpc::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
