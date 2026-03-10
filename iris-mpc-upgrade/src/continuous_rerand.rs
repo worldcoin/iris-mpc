@@ -12,14 +12,24 @@ use iris_mpc_store::rerand::{
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
+use std::future::Future;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::RerandomizeContinuousConfig;
 use crate::epoch;
 use crate::rerandomization::randomize_iris;
 use crate::s3_coordination::{self, Manifest};
+
+const INTERRUPTIBLE_POLL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const MIN_POLL_SLICE: Duration = Duration::from_secs(2);
+const MAX_POLL_SLICE: Duration = Duration::from_secs(30);
+
+enum PollOutcome<T> {
+    Completed(T),
+    Cancelled,
+}
 
 /// Run the continuous rerandomization loop.
 ///
@@ -178,14 +188,26 @@ pub async fn run_continuous_rerand(
 
             // --- Wait for all parties to confirm staging ---
             if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
-                s3_coordination::poll_chunk_staged_all(
-                    s3,
-                    &config.s3_bucket,
-                    active_epoch,
-                    chunk_id,
+                match run_interruptible_poll(
+                    pool,
+                    cancel,
                     poll_interval,
+                    "chunk staged confirmation",
+                    || {
+                        s3_coordination::poll_chunk_staged_all(
+                            s3,
+                            &config.s3_bucket,
+                            active_epoch,
+                            chunk_id,
+                            poll_interval,
+                        )
+                    },
                 )
-                .await?;
+                .await?
+                {
+                    PollOutcome::Completed(()) => {}
+                    PollOutcome::Cancelled => return Ok(()),
+                }
                 set_all_confirmed(pool, active_epoch as i32, chunk_id as i32).await?;
                 tracing::info!(
                     "Epoch {} chunk {}: all parties confirmed",
@@ -201,16 +223,28 @@ pub async fn run_continuous_rerand(
             // --- Apply ---
             // 1. Compute staging-time cross-party disagreements from version maps.
             //    This is pure S3 reads — no DB lock held.
-            let staging_divergent = s3_coordination::compute_cross_party_divergent_ids(
-                s3,
-                &config.s3_bucket,
-                active_epoch,
-                chunk_id,
-                config.party_id,
-                &version_map,
+            let staging_divergent = match run_interruptible_poll(
+                pool,
+                cancel,
                 poll_interval,
+                "cross-party version-map convergence",
+                || {
+                    s3_coordination::compute_cross_party_divergent_ids(
+                        s3,
+                        &config.s3_bucket,
+                        active_epoch,
+                        chunk_id,
+                        config.party_id,
+                        &version_map,
+                        poll_interval,
+                    )
+                },
             )
-            .await?;
+            .await?
+            {
+                PollOutcome::Completed(ids) => ids,
+                PollOutcome::Cancelled => return Ok(()),
+            };
 
             // 2. Apply under lock. The function acquires RERAND_MODIFY_LOCK +
             //    RERAND_APPLY_LOCK, deletes staging_divergent, applies via
@@ -275,6 +309,51 @@ pub async fn run_continuous_rerand(
 
 fn is_cancelled(cancel: Option<&CancellationToken>) -> bool {
     cancel.is_some_and(|c| c.is_cancelled())
+}
+
+fn poll_slice_duration(poll_interval: Duration) -> Duration {
+    poll_interval
+        .saturating_add(poll_interval)
+        .max(MIN_POLL_SLICE)
+        .min(MAX_POLL_SLICE)
+}
+
+async fn run_interruptible_poll<T, F, Fut>(
+    pool: &PgPool,
+    cancel: Option<&CancellationToken>,
+    poll_interval: Duration,
+    stage_name: &str,
+    mut op: F,
+) -> Result<PollOutcome<T>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let deadline = Instant::now() + INTERRUPTIBLE_POLL_TIMEOUT;
+    let slice = poll_slice_duration(poll_interval);
+
+    loop {
+        if is_cancelled(cancel) {
+            return Ok(PollOutcome::Cancelled);
+        }
+        if !check_and_handle_freeze(pool, cancel).await? {
+            return Ok(PollOutcome::Cancelled);
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "Timeout after {:?} while waiting for {}",
+                INTERRUPTIBLE_POLL_TIMEOUT,
+                stage_name
+            );
+        }
+
+        match timeout(slice, op()).await {
+            Ok(result) => return Ok(PollOutcome::Completed(result?)),
+            Err(_) => {
+                tracing::debug!("Still waiting for {}; rechecking freeze/cancel", stage_name);
+            }
+        }
+    }
 }
 
 async fn get_or_create_manifest(
