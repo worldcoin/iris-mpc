@@ -42,14 +42,11 @@ fn main() -> Result<()> {
     let args = parse_args()?;
 
     numactl::init(config.tokio_threads);
-    numactl::restrict_tokio_runtime();
 
     // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.
+    // Tokio threads are not pinned — they float across all CPUs. Workers are pinned to their
+    // exclusive NUMA cores, so tokio naturally gravitates to the unreserved cores under load.
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(numactl::get_tokio_worker_threads())
-        .on_thread_start(move || {
-            numactl::restrict_tokio_runtime();
-        })
         .enable_all()
         .build()
         .unwrap();
