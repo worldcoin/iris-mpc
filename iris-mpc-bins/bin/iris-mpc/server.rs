@@ -4,14 +4,14 @@ use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
 use ampc_server_utils::{
-    delete_messages_until_sequence_num, get_next_sns_seq_num, shutdown_handler::ShutdownHandler,
-    ReadyProbeResponse, TaskMonitor,
+    delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
+    init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
+    start_coordination_server, wait_for_others_ready, wait_for_others_unready, TaskMonitor,
 };
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
-use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
@@ -64,17 +64,13 @@ use iris_mpc_store::{
 };
 use itertools::{cloned, izip, Itertools};
 use metrics_exporter_statsd::StatsdBuilder;
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::process::exit;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Debug,
     mem, panic,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, LazyLock, Mutex,
-    },
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::Receiver;
@@ -103,6 +99,22 @@ fn decode_iris_message_shares(
 
 fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
     mask.into()
+}
+
+async fn delete_sqs_message(
+    client: &Client,
+    queue_url: &str,
+    receipt_handle: &str,
+) -> Result<(), ReceiveRequestError> {
+    client
+        .delete_message()
+        .queue_url(queue_url)
+        .receipt_handle(receipt_handle)
+        .send()
+        .await
+        .map_err(ReceiveRequestError::from)?;
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -187,6 +199,14 @@ async fn receive_batch(
     let mut msg_counter = 0;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
+        if shutdown_handler.is_shutting_down() {
+            tracing::info!("Stopping batch receive before polling SQS due to shutdown signal...");
+            if batch_query.requests_order.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
@@ -232,13 +252,21 @@ async fn receive_batch(
                                     e,
                                 )
                             })?;
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        if shutdown_handler.is_shutting_down() {
+                            tracing::info!(
+                                "Shutdown detected before deleting SQS message for identity deletion."
+                            );
+                            if batch_query.requests_order.is_empty() {
+                                return Ok(None);
+                            }
+                            break;
+                        }
+                        delete_sqs_message(
+                            client,
+                            queue_url,
+                            sqs_message.receipt_handle.as_deref().unwrap(),
+                        )
+                        .await?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
                         if batch_query
@@ -283,13 +311,21 @@ async fn receive_batch(
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
 
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        if shutdown_handler.is_shutting_down() {
+                            tracing::info!(
+                                "Shutdown detected before deleting SQS message for uniqueness request."
+                            );
+                            if batch_query.requests_order.is_empty() {
+                                return Ok(None);
+                            }
+                            break;
+                        }
+                        delete_sqs_message(
+                            client,
+                            queue_url,
+                            sqs_message.receipt_handle.as_deref().unwrap(),
+                        )
+                        .await?;
 
                         if let Some(batch_size) = uniqueness_request.batch_size {
                             // Updating the batch size instantly makes it a bit unpredictable, since
@@ -392,13 +428,21 @@ async fn receive_batch(
                             .map_err(|e| {
                                 ReceiveRequestError::json_parse_error("Reauth request", e)
                             })?;
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        if shutdown_handler.is_shutting_down() {
+                            tracing::info!(
+                                "Shutdown detected before deleting SQS message for reauth request."
+                            );
+                            if batch_query.requests_order.is_empty() {
+                                return Ok(None);
+                            }
+                            break;
+                        }
+                        delete_sqs_message(
+                            client,
+                            queue_url,
+                            sqs_message.receipt_handle.as_deref().unwrap(),
+                        )
+                        .await?;
 
                         metrics::counter!("request.received", "type" => "reauth").increment(1);
 
@@ -507,13 +551,21 @@ async fn receive_batch(
                                 )
                             })?;
 
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        if shutdown_handler.is_shutting_down() {
+                            tracing::info!(
+                                "Shutdown detected before deleting SQS message for identity match check."
+                            );
+                            if batch_query.requests_order.is_empty() {
+                                return Ok(None);
+                            }
+                            break;
+                        }
+                        delete_sqs_message(
+                            client,
+                            queue_url,
+                            sqs_message.receipt_handle.as_deref().unwrap(),
+                        )
+                        .await?;
 
                         if !is_enabled(request_type, config) {
                             metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
@@ -581,13 +633,21 @@ async fn receive_batch(
                         metrics::counter!("request.received", "type" => request_type.to_string())
                             .increment(1);
 
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        if shutdown_handler.is_shutting_down() {
+                            tracing::info!(
+                                "Shutdown detected before deleting SQS message for identity update."
+                            );
+                            if batch_query.requests_order.is_empty() {
+                                return Ok(None);
+                            }
+                            break;
+                        }
+                        delete_sqs_message(
+                            client,
+                            queue_url,
+                            sqs_message.receipt_handle.as_deref().unwrap(),
+                        )
+                        .await?;
 
                         let is_enabled = match request_type {
                             RESET_UPDATE_MESSAGE_TYPE => config.enable_reset,
@@ -673,13 +733,21 @@ async fn receive_batch(
                     }
 
                     _ => {
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::from)?;
+                        if shutdown_handler.is_shutting_down() {
+                            tracing::info!(
+                                "Shutdown detected before deleting SQS message for unknown request."
+                            );
+                            if batch_query.requests_order.is_empty() {
+                                return Ok(None);
+                            }
+                            break;
+                        }
+                        delete_sqs_message(
+                            client,
+                            queue_url,
+                            sqs_message.receipt_handle.as_deref().unwrap(),
+                        )
+                        .await?;
                         tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                     }
                 }
@@ -990,9 +1058,6 @@ async fn server_main(config: Config) -> Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
-    let is_ready_flag = Arc::new(AtomicBool::new(false));
-    let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
-
     let my_state = SyncState {
         db_len: store_len as u64,
         modifications: store.last_modifications(max_modification_lookback).await?,
@@ -1002,234 +1067,23 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Sync state: {:?}", my_state);
 
-    let health_shutdown_handler = Arc::clone(&shutdown_handler);
     let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
         panic!("Server coordination config must be provided for healthcheck server");
     });
-    let verified_peers = Arc::new(Mutex::new(HashSet::new()));
-    let uuid = uuid::Uuid::new_v4().to_string();
-
-    let _health_check_abort = background_tasks.spawn({
-        let uuid = uuid.clone();
-        let is_ready_flag = Arc::clone(&is_ready_flag);
-        let verified_peers = Arc::clone(&verified_peers);
-        let image_name = server_coord_config.image_name.to_string();
-
-        // Pre-calculate parts of the response that don't change
-        let base_response = ReadyProbeResponse {
-            image_name: image_name.clone(),
-            shutting_down: false,
-            uuid: uuid.clone(),
-            verified_peers: HashSet::new(),
-            is_ready: false,
-        };
-
-        let my_state = my_state.clone();
-        async move {
-            let is_ready_flag_health = Arc::clone(&is_ready_flag);
-            let is_ready_flag_ready = Arc::clone(&is_ready_flag);
-            // Generate a random UUID for each run.
-            let app = Router::new()
-                .route(
-                    "/health",
-                    get(move || {
-                        let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
-                        let verified_peers_clone = Arc::clone(&verified_peers);
-                        let is_ready_flag_clone = Arc::clone(&is_ready_flag_health);
-                        let mut response = base_response.clone();
-                        async move {
-                            response.shutting_down = shutdown_handler_clone.is_shutting_down();
-                            response.verified_peers =
-                                verified_peers_clone.lock().expect("Mutex poisoned").clone();
-                            response.is_ready = is_ready_flag_clone.load(Ordering::SeqCst);
-                            let serialized_response = serde_json::to_string(&response)
-                                .expect("Serialization to JSON to probe response failed");
-                            tracing::info!("Healthcheck probe response: {}", serialized_response);
-                            serialized_response
-                        }
-                    }),
-                )
-                .route(
-                    "/ready",
-                    get(move || async move {
-                        if is_ready_flag_ready.load(Ordering::SeqCst) {
-                            "ready".into_response()
-                        } else {
-                            StatusCode::SERVICE_UNAVAILABLE.into_response()
-                        }
-                    }),
-                )
-                .route(
-                    "/startup-sync",
-                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
-                );
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-                .await
-                .wrap_err("healthcheck listener bind error")?;
-            axum::serve(listener, app)
-                .await
-                .wrap_err("healthcheck listener server launch error")?;
-
-            Ok::<(), eyre::Error>(())
-        }
-    });
+    let (is_ready_flag, verified_peers, uuid) = start_coordination_server(
+        &server_coord_config,
+        &mut background_tasks,
+        &shutdown_handler,
+        &my_state,
+        None,
+    )
+    .await;
 
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck and Readiness server running on port 3000.");
-
-    tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
-    // Check other nodes and wait until all nodes are ready.
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let unready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut connected_but_unready = [false, false];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
-
-                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
-                    connected_but_unready[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected_but_unready.iter().all(|&c| c) {
-                        return;
-                    }
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
-
-    tracing::info!("Waiting for all nodes to be unready...");
-    match tokio::time::timeout(
-        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
-        unready_check,
-    )
-    .await
-    {
-        Ok(res) => {
-            res?;
-        }
-        Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be unready.");
-            bail!("Timeout waiting for all nodes to be unready.");
-        }
-    };
-    tracing::info!("All nodes are starting up.");
-
-    let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
-    let mut heartbeat_tx = Some(heartbeat_tx);
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let image_name = server_coord_config.image_name.clone();
-    let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
-    let _heartbeat = background_tasks.spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut last_response = [String::default(), String::default()];
-        let mut connected = [false, false];
-        let mut retries = [0, 0];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
-                if res.is_err() || !res.as_ref().unwrap().status().is_success() {
-                    // If it's the first time after startup, we allow a few retries to let the other
-                    // nodes start up as well.
-                    if last_response[i] == String::default()
-                        && retries[i] < server_coord_config.heartbeat_initial_retries
-                    {
-                        retries[i] += 1;
-                        tracing::warn!("Node {} did not respond with success, retrying...", host);
-                        continue;
-                    }
-                    tracing::info!(
-                        "Node {} did not respond with success, starting graceful shutdown",
-                        host
-                    );
-                    // if the nodes are still starting up and they get a failure - we can panic and
-                    // not start graceful shutdown
-                    if last_response[i] == String::default() {
-                        panic!(
-                            "Node {} did not respond with success during heartbeat init phase, \
-                             killing server...",
-                            host
-                        );
-                    }
-
-                    if !heartbeat_shutdown_handler.is_shutting_down() {
-                        heartbeat_shutdown_handler.trigger_manual_shutdown();
-                        tracing::error!(
-                            "Node {} has not completed health check, therefore graceful shutdown \
-                             has been triggered",
-                            host
-                        );
-                    } else {
-                        tracing::info!("Node {} has already started graceful shutdown.", host);
-                    }
-                    continue;
-                }
-
-                let probe_response = res
-                    .unwrap()
-                    .json::<ReadyProbeResponse>()
-                    .await
-                    .expect("Deserialization of probe response failed");
-                if probe_response.image_name != image_name {
-                    // Do not create a panic as we still can continue to process before its
-                    // updated
-                    tracing::error!(
-                        "Host {} is using image {} which differs from current node image: {}",
-                        host,
-                        probe_response.image_name.clone(),
-                        image_name
-                    );
-                }
-                if last_response[i] == String::default() {
-                    last_response[i] = probe_response.uuid;
-                    connected[i] = true;
-
-                    // If all nodes are connected, notify the main thread.
-                    if connected.iter().all(|&c| c) {
-                        if let Some(tx) = heartbeat_tx.take() {
-                            tx.send(()).unwrap();
-                        }
-                    }
-                } else if probe_response.uuid != last_response[i] {
-                    // If the UUID response is different, the node has restarted without us
-                    // noticing. Our main NCCL connections cannot recover from
-                    // this, so we panic.
-                    panic!("Node {} seems to have restarted, killing server...", host);
-                } else if probe_response.shutting_down {
-                    tracing::info!("Node {} has starting graceful shutdown", host);
-
-                    if !heartbeat_shutdown_handler.is_shutting_down() {
-                        heartbeat_shutdown_handler.trigger_manual_shutdown();
-                        tracing::error!(
-                            "Node {} has starting graceful shutdown, therefore triggering \
-                             graceful shutdown",
-                            host
-                        );
-                    }
-                } else {
-                    tracing::info!("Heartbeat: Node {} is healthy", host);
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(
-                server_coord_config.heartbeat_interval_secs,
-            ))
-            .await;
-        }
-    });
-
-    tracing::info!("Heartbeat starting...");
-    heartbeat_rx.await?;
-    tracing::info!("Heartbeat on all nodes started.");
     let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     background_tasks.check_tasks();
+    wait_for_others_unready(&server_coord_config, &verified_peers, &uuid).await?;
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
@@ -1251,37 +1105,9 @@ async fn server_main(config: Config) -> Result<()> {
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let next_node = &all_nodes[(config.party_id + 1) % 3];
-    let prev_node = &all_nodes[(config.party_id + 2) % 3];
-
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
-    for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
-        match res {
-            Ok(res) => {
-                let state: SyncState = match res.json().await {
-                    Ok(state) => state,
-                    Err(e) => {
-                        tracing::error!("Failed to parse sync state from party {}: {:?}", host, e);
-                        panic!(
-                            "could not get sync state from party {}, trying to restart",
-                            host
-                        );
-                    }
-                };
-                states.push(state);
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch sync state from party {}: {:?}", host, e);
-                panic!(
-                    "could not get sync state from party {}, trying to restart",
-                    host
-                );
-            }
-        }
-    }
+    states.extend(get_others_sync_state::<SyncState>(&server_coord_config).await?);
     let sync_result = SyncResult::new(my_state.clone(), states);
 
     // check if common part of the config is the same across all nodes
@@ -1938,50 +1764,14 @@ async fn server_main(config: Config) -> Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Enable readiness and check all nodes");
 
-    // Set the readiness flag to true, which will make the readiness server return a
-    // 200 status code.
-    is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
-
-    // Check other nodes and wait until all nodes are ready.
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let ready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut connected = [false, false];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
-
-                if res.is_ok() && res.as_ref().unwrap().status().is_success() {
-                    connected[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected.iter().all(|&c| c) {
-                        return;
-                    }
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
-
-    tracing::info!("Waiting for all nodes to be ready...");
-    match tokio::time::timeout(
-        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
-        ready_check,
+    init_heartbeat_task(
+        &server_coord_config,
+        &mut background_tasks,
+        &shutdown_handler,
     )
-    .await
-    {
-        Ok(res) => {
-            res?;
-        }
-        Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be ready.");
-            bail!("Timeout waiting for all nodes to be ready.");
-        }
-    }
-    tracing::info!("All nodes are ready.");
+    .await?;
+    set_node_ready(is_ready_flag);
+    wait_for_others_ready(&server_coord_config).await?;
     background_tasks.check_tasks();
 
     // --------------------------------------------------------------------------
