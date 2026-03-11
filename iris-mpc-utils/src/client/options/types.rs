@@ -409,7 +409,11 @@ impl RequestOptions {
             RequestPayloadOptions::IdentityDeletion { .. } => {
                 let parent =
                     parent_serial_id.ok_or("IdentityDeletion requires a parent serial ID")?;
-                Request::IdentityDeletion { info, parent }
+                Request::IdentityDeletion {
+                    info,
+                    parent,
+                    deletion_id: corr_uuid,
+                }
             }
         };
 

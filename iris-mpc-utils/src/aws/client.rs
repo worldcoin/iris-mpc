@@ -150,6 +150,7 @@ impl AwsClient {
                         .id(format!("msg-{}-{}", chunk_idx, idx))
                         .message(msg.body())
                         .message_group_id(msg.group_id())
+                        .message_deduplication_id(msg.deduplication_id())
                         .set_message_attributes(Some(create_sns_message_attributes(msg.kind())))
                         .build()
                 })

@@ -15,6 +15,8 @@ pub enum Request {
         info: RequestInfo,
         // Serial ID of associated uniqueness request (always known at creation).
         parent: IrisSerialId,
+        // Operation identifier for deduplication.
+        deletion_id: uuid::Uuid,
     },
     Reauthorization {
         // Standard request information.
@@ -148,7 +150,7 @@ impl Request {
                 Some(("reset_id", *reset_id))
             }
             Self::RecoveryUpdate { recovery_id, .. } => Some(("recovery_id", *recovery_id)),
-            Self::IdentityDeletion { .. } => None,
+            Self::IdentityDeletion { deletion_id, .. } => Some(("deletion_id", *deletion_id)),
         };
 
         let mut parts = vec![kind.to_string()];

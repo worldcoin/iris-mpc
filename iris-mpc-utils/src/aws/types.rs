@@ -3,6 +3,7 @@ use std::fmt;
 use iris_mpc_common::helpers::smpc_request;
 use serde::ser::Serialize;
 use serde_json;
+use uuid;
 
 use crate::client::{Request, RequestPayload};
 
@@ -63,6 +64,9 @@ pub struct SnsMessageInfo {
 
     // SNS message kind - e.g. "uniqueness".
     kind: String,
+
+    // SNS message deduplication ID for FIFO topics.
+    deduplication_id: String,
 }
 
 impl SnsMessageInfo {
@@ -78,7 +82,11 @@ impl SnsMessageInfo {
         &self.kind
     }
 
-    pub fn new<T>(group_id: &str, kind: &str, body: &T) -> Self
+    pub fn deduplication_id(&self) -> &str {
+        &self.deduplication_id
+    }
+
+    pub fn new<T>(group_id: &str, kind: &str, body: &T, deduplication_id: String) -> Self
     where
         T: ?Sized + Serialize,
     {
@@ -86,6 +94,7 @@ impl SnsMessageInfo {
             body: serde_json::to_string(body).unwrap(),
             group_id: String::from(group_id),
             kind: String::from(kind),
+            deduplication_id,
         }
     }
 }
@@ -147,47 +156,73 @@ impl fmt::Display for SqsMessageInfo {
 
 impl From<&Request> for SnsMessageInfo {
     fn from(request: &Request) -> Self {
-        Self::from(RequestPayload::from(request))
+        let dedup_id = match request {
+            Request::IdentityDeletion { deletion_id, .. } => deletion_id.to_string(),
+            Request::Reauthorization { reauth_id, .. } => reauth_id.to_string(),
+            Request::RecoveryCheck { request_id, .. } => request_id.to_string(),
+            Request::ResetCheck { reset_id, .. } => reset_id.to_string(),
+            Request::ResetUpdate { reset_id, .. } => reset_id.to_string(),
+            Request::RecoveryUpdate { recovery_id, .. } => recovery_id.to_string(),
+            Request::Uniqueness { signup_id, .. } => signup_id.to_string(),
+        };
+
+        let payload = RequestPayload::from(request);
+        Self::from_payload(payload, dedup_id)
     }
 }
 
 impl From<RequestPayload> for SnsMessageInfo {
-    fn from(body: RequestPayload) -> Self {
+    fn from(payload: RequestPayload) -> Self {
+        // Generate a fresh UUID for deduplication when creating from payload directly
+        let dedup_id = uuid::Uuid::new_v4().to_string();
+        Self::from_payload(payload, dedup_id)
+    }
+}
+
+impl SnsMessageInfo {
+    fn from_payload(body: RequestPayload, dedup_id: String) -> Self {
         match body {
             RequestPayload::IdentityDeletion(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
                 &body,
+                dedup_id,
             ),
             RequestPayload::Reauthorization(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::REAUTH_MESSAGE_TYPE,
                 &body,
+                dedup_id,
             ),
             RequestPayload::RecoveryCheck(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RECOVERY_CHECK_MESSAGE_TYPE,
                 &body,
+                dedup_id,
             ),
             RequestPayload::ResetCheck(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RESET_CHECK_MESSAGE_TYPE,
                 &body,
+                dedup_id,
             ),
             RequestPayload::ResetUpdate(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RESET_UPDATE_MESSAGE_TYPE,
                 &body,
+                dedup_id,
             ),
             RequestPayload::RecoveryUpdate(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE,
                 &body,
+                dedup_id,
             ),
             RequestPayload::Uniqueness(body) => Self::new(
                 ENROLLMENT_REQUEST_TYPE,
                 smpc_request::UNIQUENESS_MESSAGE_TYPE,
                 &body,
+                dedup_id,
             ),
         }
     }
