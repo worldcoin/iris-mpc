@@ -990,6 +990,8 @@ async fn server_main(config: Config) -> Result<()> {
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_check_error_result_attribute =
         create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let identity_deletion_error_result_attribute =
+        create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     let reset_update_error_result_attribute =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let recovery_update_error_result_attribute =
@@ -1035,6 +1037,9 @@ async fn server_main(config: Config) -> Result<()> {
             reauth_error_result_attribute,
             reset_check_error_result_attribute,
             recovery_check_error_result_attribute,
+            identity_deletion_error_result_attribute,
+            reset_update_error_result_attribute,
+            recovery_update_error_result_attribute,
             current_batch_id_atomic.clone(),
             store.clone(),
             batch_sync_shared_state.clone(),
