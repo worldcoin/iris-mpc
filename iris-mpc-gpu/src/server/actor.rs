@@ -705,21 +705,7 @@ impl ServerActor {
 
         let mut batch = batch;
         let mut batch_size = batch.left_iris_requests.code.len();
-        let has_blind_requests = !batch.deletion_requests_indices.is_empty()
-            || !batch.identity_update_request_ids.is_empty();
-        if batch_size == 0 {
-            if has_blind_requests {
-                tracing::info!(
-                    "Processing blind-update-only batch: {} identity_update, {} deletion requests",
-                    batch.identity_update_request_ids.len(),
-                    batch.deletion_requests_indices.len(),
-                );
-                self.apply_blind_requests(&batch, is_first_query)?;
-                return Ok(Self::blind_only_result(batch));
-            }
-            bail!("Received empty GPU batch without queries or blind updates");
-        }
-        assert!(batch_size <= self.max_batch_size);
+        assert!(batch_size > 0 && batch_size <= self.max_batch_size);
         assert!(
             batch_size == batch.left_iris_requests.mask.len()
                 && batch_size == batch.request_ids.len()
@@ -858,7 +844,95 @@ impl ServerActor {
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
         self.internal_batch_counter += 1;
 
-        self.apply_blind_requests(&batch, is_first_query)?;
+        ///////////////////////////////////////////////////////////////////
+        // PERFORM DELETIONS (IF ANY)
+        ///////////////////////////////////////////////////////////////////
+        if !batch.deletion_requests_indices.is_empty() && is_first_query {
+            tracing::info!("Performing deletions");
+            // Prepare dummy deletion shares
+            let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
+            let (dummy_queries, dummy_sums) =
+                self.prepare_device_query_for_shares(&dummy_code_share, &dummy_mask_share)?;
+
+            // Overwrite the in-memory db
+            for deletion_index in batch.deletion_requests_indices.clone() {
+                let device_index = deletion_index % self.device_manager.device_count() as u32;
+                let device_db_index = deletion_index / self.device_manager.device_count() as u32;
+                if device_db_index as usize >= self.current_db_sizes[device_index as usize] {
+                    tracing::warn!(
+                        "Deletion index {} is out of bounds for device {}",
+                        deletion_index,
+                        device_index
+                    );
+                    continue;
+                }
+                self.device_manager
+                    .device(device_index as usize)
+                    .bind_to_thread()
+                    .unwrap();
+                write_db_at_index(
+                    &self.left_code_db_slices,
+                    &self.left_mask_db_slices,
+                    &self.right_code_db_slices,
+                    &self.right_mask_db_slices,
+                    &dummy_queries,
+                    &dummy_sums,
+                    &dummy_queries,
+                    &dummy_sums,
+                    0,
+                    device_db_index as usize,
+                    device_index as usize,
+                    &self.streams[0],
+                );
+            }
+        }
+
+        ///////////////////////////////////////////////////////////////////
+        // PERFORM IDENTITY UPDATES (RESET/RECOVERY) (IF ANY)
+        ///////////////////////////////////////////////////////////////////
+        if !batch.identity_update_request_ids.is_empty() && is_first_query {
+            tracing::info!("Performing identity updates");
+
+            // Overwrite the in-memory db
+            for (update_index, shares) in izip!(
+                batch.identity_update_indices.clone(),
+                batch.identity_update_shares.clone()
+            ) {
+                let (queries_left, sums_left) =
+                    self.prepare_device_query_for_shares(&shares.code_left, &shares.mask_left)?;
+                let (queries_right, sums_right) =
+                    self.prepare_device_query_for_shares(&shares.code_right, &shares.mask_right)?;
+
+                let device_index = update_index % self.device_manager.device_count() as u32;
+                let device_db_index = update_index / self.device_manager.device_count() as u32;
+                if device_db_index as usize >= self.current_db_sizes[device_index as usize] {
+                    tracing::warn!(
+                        "Identity update index {} is out of bounds for device {}",
+                        update_index,
+                        device_index
+                    );
+                    continue;
+                }
+                self.device_manager
+                    .device(device_index as usize)
+                    .bind_to_thread()
+                    .unwrap();
+                write_db_at_index(
+                    &self.left_code_db_slices,
+                    &self.left_mask_db_slices,
+                    &self.right_code_db_slices,
+                    &self.right_mask_db_slices,
+                    &queries_left,
+                    &sums_left,
+                    &queries_right,
+                    &sums_right,
+                    0,
+                    device_db_index as usize,
+                    device_index as usize,
+                    &self.streams[0],
+                );
+            }
+        }
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE FULL SCAN EYE QUERIES, PREFILTERING
@@ -2600,111 +2674,6 @@ impl ServerActor {
             }
         }
         Ok(())
-    }
-
-    fn apply_blind_requests(
-        &mut self,
-        batch: &PreprocessedBatchQuery,
-        is_first_query: bool,
-    ) -> Result<()> {
-        if !is_first_query {
-            return Ok(());
-        }
-
-        if !batch.deletion_requests_indices.is_empty() {
-            tracing::info!("Performing deletions");
-            let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
-            let (dummy_queries, dummy_sums) =
-                self.prepare_device_query_for_shares(&dummy_code_share, &dummy_mask_share)?;
-
-            for deletion_index in batch.deletion_requests_indices.clone() {
-                let device_index = deletion_index % self.device_manager.device_count() as u32;
-                let device_db_index = deletion_index / self.device_manager.device_count() as u32;
-                if device_db_index as usize >= self.current_db_sizes[device_index as usize] {
-                    tracing::warn!(
-                        "Deletion index {} is out of bounds for device {}",
-                        deletion_index,
-                        device_index
-                    );
-                    continue;
-                }
-                self.device_manager
-                    .device(device_index as usize)
-                    .bind_to_thread()
-                    .unwrap();
-                write_db_at_index(
-                    &self.left_code_db_slices,
-                    &self.left_mask_db_slices,
-                    &self.right_code_db_slices,
-                    &self.right_mask_db_slices,
-                    &dummy_queries,
-                    &dummy_sums,
-                    &dummy_queries,
-                    &dummy_sums,
-                    0,
-                    device_db_index as usize,
-                    device_index as usize,
-                    &self.streams[0],
-                );
-            }
-        }
-
-        if !batch.identity_update_request_ids.is_empty() {
-            tracing::info!("Performing identity updates");
-
-            for (update_index, shares) in izip!(
-                batch.identity_update_indices.clone(),
-                batch.identity_update_shares.clone()
-            ) {
-                let (queries_left, sums_left) =
-                    self.prepare_device_query_for_shares(&shares.code_left, &shares.mask_left)?;
-                let (queries_right, sums_right) =
-                    self.prepare_device_query_for_shares(&shares.code_right, &shares.mask_right)?;
-
-                let device_index = update_index % self.device_manager.device_count() as u32;
-                let device_db_index = update_index / self.device_manager.device_count() as u32;
-                if device_db_index as usize >= self.current_db_sizes[device_index as usize] {
-                    tracing::warn!(
-                        "Identity update index {} is out of bounds for device {}",
-                        update_index,
-                        device_index
-                    );
-                    continue;
-                }
-                self.device_manager
-                    .device(device_index as usize)
-                    .bind_to_thread()
-                    .unwrap();
-                write_db_at_index(
-                    &self.left_code_db_slices,
-                    &self.left_mask_db_slices,
-                    &self.right_code_db_slices,
-                    &self.right_mask_db_slices,
-                    &queries_left,
-                    &sums_left,
-                    &queries_right,
-                    &sums_right,
-                    0,
-                    device_db_index as usize,
-                    device_index as usize,
-                    &self.streams[0],
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    fn blind_only_result(batch: PreprocessedBatchQuery) -> ServerJobResult {
-        ServerJobResult {
-            deleted_ids: batch.deletion_requests_indices,
-            identity_update_indices: batch.identity_update_indices,
-            identity_update_request_ids: batch.identity_update_request_ids,
-            identity_update_request_types: batch.identity_update_request_types,
-            identity_update_shares: batch.identity_update_shares,
-            modifications: batch.modifications,
-            ..Default::default()
-        }
     }
 
     fn sync_batch_entries(
