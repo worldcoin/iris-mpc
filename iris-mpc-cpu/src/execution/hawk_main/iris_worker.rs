@@ -164,7 +164,7 @@ impl IrisPoolHandle {
     }
 
     /// Maximum size of batches for rotation aware dot product batch tasks.
-    const ROT_AWARE_BATCH_CHUNK_SIZE: usize = 512;
+    const ROT_AWARE_BATCH_CHUNK_SIZE: usize = 128;
 
     /// Number of chunks a batch is split into for rotation aware dot product
     /// batch evaluation.
