@@ -12,7 +12,7 @@ env:
     value: "full"
 
   - name: SMPC__TOKIO_THREADS
-    value: "48"
+    value: "10"
 
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
