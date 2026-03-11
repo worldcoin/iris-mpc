@@ -28,8 +28,8 @@ use iris_mpc_common::helpers::smpc_request::{
     ReceiveRequestError, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::{
-    IdentityMatchCheckResult, ReAuthResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-    SMPC_MESSAGE_TYPE_ATTRIBUTE,
+    IdentityDeletionResult, IdentityMatchCheckResult, IdentityUpdateAckResult, ReAuthResult,
+    UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
 };
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
@@ -55,6 +55,9 @@ pub fn receive_batch_stream(
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reset_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
     recovery_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    identity_deletion_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_update_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    recovery_update_error_result_attributes: HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
@@ -97,6 +100,9 @@ pub fn receive_batch_stream(
                     &reauth_error_result_attributes,
                     &reset_check_error_result_attributes,
                     &recovery_check_error_result_attributes,
+                    &identity_deletion_error_result_attributes,
+                    &reset_update_error_result_attributes,
+                    &recovery_update_error_result_attributes,
                     current_batch_id_atomic.clone(),
                     &iris_store,
                     batch_sync_shared_state.clone(),
@@ -130,6 +136,9 @@ async fn receive_batch(
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     recovery_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    identity_deletion_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_update_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    recovery_update_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
@@ -146,6 +155,9 @@ async fn receive_batch(
         reauth_error_result_attributes,
         reset_check_error_result_attributes,
         recovery_check_error_result_attributes,
+        identity_deletion_error_result_attributes,
+        reset_update_error_result_attributes,
+        recovery_update_error_result_attributes,
         current_batch_id_atomic,
         iris_store,
         batch_sync_shared_state,
@@ -166,6 +178,9 @@ pub struct BatchProcessor<'a> {
     reauth_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
     reset_check_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
     recovery_check_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+    identity_deletion_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+    reset_update_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+    recovery_update_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
     batch_query: BatchQuery,
     semaphore: Arc<Semaphore>,
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
@@ -189,6 +204,9 @@ impl<'a> BatchProcessor<'a> {
         reauth_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         reset_check_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         recovery_check_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+        identity_deletion_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+        reset_update_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+        recovery_update_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         current_batch_id_atomic: Arc<AtomicU64>,
         iris_store: &'a Store,
         batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
@@ -205,6 +223,9 @@ impl<'a> BatchProcessor<'a> {
             reauth_error_result_attributes,
             reset_check_error_result_attributes,
             recovery_check_error_result_attributes,
+            identity_deletion_error_result_attributes,
+            reset_update_error_result_attributes,
+            recovery_update_error_result_attributes,
             batch_query: BatchQuery::default(),
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             handles: vec![],
@@ -466,13 +487,12 @@ impl<'a> BatchProcessor<'a> {
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
         let sns_message_id = message.message_id.clone();
+        let identity_deletion_request: IdentityDeletionRequest =
+            serde_json::from_str(&message.message).map_err(|e| {
+                ReceiveRequestError::json_parse_error("Identity deletion request", e)
+            })?;
 
         if self.config.hawk_server_deletions_enabled {
-            let identity_deletion_request: IdentityDeletionRequest =
-                serde_json::from_str(&message.message).map_err(|e| {
-                    ReceiveRequestError::json_parse_error("Identity deletion request", e)
-                })?;
-
             // Skip the request if serial ID already exists in current batch modifications
             if self
                 .batch_query
@@ -480,10 +500,26 @@ impl<'a> BatchProcessor<'a> {
                 .contains_key(&RequestSerialId(identity_deletion_request.serial_id))
             {
                 tracing::warn!(
-                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                identity_deletion_request.serial_id,
-                                identity_deletion_request,
-                            );
+                    "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                    identity_deletion_request.serial_id,
+                    identity_deletion_request,
+                );
+                metrics::counter!("request.skipped_duplicate", "type" => IDENTITY_DELETION_MESSAGE_TYPE).increment(1);
+                let error_result = IdentityDeletionResult::new_error_result(
+                    self.config.party_id,
+                    identity_deletion_request.serial_id,
+                    "duplicate serial_id in batch",
+                );
+                let message = serde_json::to_string(&error_result).unwrap();
+                send_error_results_to_sns(
+                    message,
+                    &batch_metadata,
+                    self.sns_client,
+                    self.config,
+                    self.identity_deletion_error_result_attributes,
+                    IDENTITY_DELETION_MESSAGE_TYPE,
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -508,6 +544,21 @@ impl<'a> BatchProcessor<'a> {
             );
         } else {
             tracing::warn!("Identity deletions are disabled");
+            let error_result = IdentityDeletionResult::new_error_result(
+                self.config.party_id,
+                identity_deletion_request.serial_id,
+                "Identity deletions are disabled",
+            );
+            let message = serde_json::to_string(&error_result).unwrap();
+            send_error_results_to_sns(
+                message,
+                &batch_metadata,
+                self.sns_client,
+                self.config,
+                self.identity_deletion_error_result_attributes,
+                IDENTITY_DELETION_MESSAGE_TYPE,
+            )
+            .await?;
         }
 
         Ok(())
@@ -518,11 +569,10 @@ impl<'a> BatchProcessor<'a> {
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
+        metrics::counter!("request.received", "type" => "uniqueness_verification").increment(1);
         let sns_message_id = message.message_id.clone();
         let uniqueness_request: UniquenessRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
-
-        metrics::counter!("request.received", "type" => "uniqueness_verification").increment(1);
 
         // Persist in progress modification
         let modification = persist_modification(
@@ -567,15 +617,31 @@ impl<'a> BatchProcessor<'a> {
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
+        metrics::counter!("request.received", "type" => "reauth").increment(1);
         let sns_message_id = message.message_id.clone();
         let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Reauth request", e))?;
 
-        metrics::counter!("request.received", "type" => "reauth").increment(1);
         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
         if !self.config.hawk_server_reauths_enabled {
-            tracing::warn!("Reauth is disabled, skipping reauth request");
+            tracing::warn!("Reauth is disabled");
+            let error_result = ReAuthResult::new_error_result(
+                reauth_request.reauth_id,
+                self.config.party_id,
+                reauth_request.serial_id,
+                "Reauth is disabled",
+            );
+            let message = serde_json::to_string(&error_result).unwrap();
+            send_error_results_to_sns(
+                message,
+                &batch_metadata,
+                self.sns_client,
+                self.config,
+                self.reauth_error_result_attributes,
+                REAUTH_MESSAGE_TYPE,
+            )
+            .await?;
             return Ok(());
         }
 
@@ -583,8 +649,24 @@ impl<'a> BatchProcessor<'a> {
             && !(self.config.luc_enabled && self.config.luc_serial_ids_from_smpc_request)
         {
             tracing::error!(
-                "Received a reauth request with use_or_rule set to true, but LUC is not enabled. Skipping request."
+                "Received a reauth request with use_or_rule set to true, but LUC is not enabled"
             );
+            let error_result = ReAuthResult::new_error_result(
+                reauth_request.reauth_id,
+                self.config.party_id,
+                reauth_request.serial_id,
+                "LUC is not enabled for use_or_rule",
+            );
+            let message = serde_json::to_string(&error_result).unwrap();
+            send_error_results_to_sns(
+                message,
+                &batch_metadata,
+                self.sns_client,
+                self.config,
+                self.reauth_error_result_attributes,
+                REAUTH_MESSAGE_TYPE,
+            )
+            .await?;
             return Ok(());
         }
 
@@ -595,10 +677,28 @@ impl<'a> BatchProcessor<'a> {
             .contains_key(&RequestSerialId(reauth_request.serial_id))
         {
             tracing::warn!(
-                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                reauth_request.serial_id,
-                                reauth_request,
-                            );
+                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                reauth_request.serial_id,
+                reauth_request,
+            );
+            metrics::counter!("request.skipped_duplicate", "type" => REAUTH_MESSAGE_TYPE)
+                .increment(1);
+            let error_result = ReAuthResult::new_error_result(
+                reauth_request.reauth_id,
+                self.config.party_id,
+                reauth_request.serial_id,
+                "duplicate serial_id in batch",
+            );
+            let message = serde_json::to_string(&error_result).unwrap();
+            send_error_results_to_sns(
+                message,
+                &batch_metadata,
+                self.sns_client,
+                self.config,
+                self.reauth_error_result_attributes,
+                REAUTH_MESSAGE_TYPE,
+            )
+            .await?;
             return Ok(());
         }
 
@@ -651,23 +751,42 @@ impl<'a> BatchProcessor<'a> {
         request_type: &str,
         is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
-        if !is_request_type_enabled {
-            metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
-            tracing::warn!("{} is disabled, skipping request", request_type);
-            return Ok(());
-        }
-
+        metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
         let sns_message_id = message.message_id.clone();
         let identity_match_check_request: IdentityMatchCheckRequest =
             serde_json::from_str(&message.message)
                 .map_err(|e| ReceiveRequestError::json_parse_error("Identity check request", e))?;
 
-        metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
         tracing::debug!(
             "Received {} request: {:?}",
             request_type,
             identity_match_check_request.clone()
         );
+
+        if !is_request_type_enabled {
+            tracing::warn!("{} is disabled", request_type);
+            let error_result = IdentityMatchCheckResult::new_error_result(
+                identity_match_check_request.request_id,
+                self.config.party_id,
+                &format!("{} is disabled", request_type),
+            );
+            let message = serde_json::to_string(&error_result).unwrap();
+            let error_attrs = if request_type == RESET_CHECK_MESSAGE_TYPE {
+                self.reset_check_error_result_attributes
+            } else {
+                self.recovery_check_error_result_attributes
+            };
+            send_error_results_to_sns(
+                message,
+                &batch_metadata,
+                self.sns_client,
+                self.config,
+                error_attrs,
+                request_type,
+            )
+            .await?;
+            return Ok(());
+        }
 
         // Persist in progress reset_check message.
         // Note that reset_check is only a query and does not persist anything into the database.
@@ -702,26 +821,46 @@ impl<'a> BatchProcessor<'a> {
     async fn process_identity_update_request(
         &mut self,
         message: &SQSMessage,
-        _batch_metadata: BatchMetadata,
+        batch_metadata: BatchMetadata,
         request_type: &str,
         is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
-        if !is_request_type_enabled {
-            metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
-            tracing::warn!("{} is disabled, skipping request", request_type);
-            return Ok(());
-        }
-
+        metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
         let sns_message_id = message.message_id.clone();
         let identity_update_request: IdentityUpdateRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Identity update request", e))?;
 
-        metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
         tracing::debug!(
             "Received {} request: {:?}",
             request_type,
             identity_update_request
         );
+
+        if !is_request_type_enabled {
+            tracing::warn!("{} is disabled", request_type);
+            let error_result = IdentityUpdateAckResult::new_error_result(
+                identity_update_request.request_id,
+                self.config.party_id,
+                identity_update_request.serial_id,
+                &format!("{} is disabled", request_type),
+            );
+            let message = serde_json::to_string(&error_result).unwrap();
+            let error_attrs = if request_type == RESET_UPDATE_MESSAGE_TYPE {
+                self.reset_update_error_result_attributes
+            } else {
+                self.recovery_update_error_result_attributes
+            };
+            send_error_results_to_sns(
+                message,
+                &batch_metadata,
+                self.sns_client,
+                self.config,
+                error_attrs,
+                request_type,
+            )
+            .await?;
+            return Ok(());
+        }
 
         // Check for duplicate serial_id before downloading S3 shares to avoid wasted work
         if self
@@ -734,6 +873,29 @@ impl<'a> BatchProcessor<'a> {
                 identity_update_request.serial_id,
                 identity_update_request,
             );
+            metrics::counter!("request.skipped_duplicate", "type" => request_type.to_string())
+                .increment(1);
+            let error_result = IdentityUpdateAckResult::new_error_result(
+                identity_update_request.request_id,
+                self.config.party_id,
+                identity_update_request.serial_id,
+                "duplicate serial_id in batch",
+            );
+            let message = serde_json::to_string(&error_result).unwrap();
+            let error_attrs = if request_type == RESET_UPDATE_MESSAGE_TYPE {
+                self.reset_update_error_result_attributes
+            } else {
+                self.recovery_update_error_result_attributes
+            };
+            send_error_results_to_sns(
+                message,
+                &batch_metadata,
+                self.sns_client,
+                self.config,
+                error_attrs,
+                request_type,
+            )
+            .await?;
             return Ok(());
         }
 
