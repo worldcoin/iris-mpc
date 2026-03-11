@@ -77,6 +77,9 @@ env:
 
   - name: SMPC__HNSW_FIXED_LAYER_SEARCH_BATCH_SIZE
     value: "8000"
+	 
+  - name: SMPC__TOKIO_THREADS
+    value: "24"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "96"
