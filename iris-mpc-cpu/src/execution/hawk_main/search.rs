@@ -15,10 +15,12 @@ use crate::{
         GraphMem, HnswSearcher, SortedNeighborhood,
     },
 };
+use crate::phase_trace;
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+
 
 pub type SearchQueries<const ROTMASK: u32> =
     Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROTMASK>>>>;
@@ -32,6 +34,9 @@ pub type SearchIds = Arc<VecRequests<String>>;
 pub struct SearchParams {
     pub hnsw: Arc<HnswSearcher>,
     pub do_match: bool,
+    /// Orientation label for phase tracing (e.g. 'N' or 'M').
+    #[cfg(feature = "phase_trace")]
+    pub orient: char,
 }
 
 pub async fn search<const ROTMASK: u32>(
@@ -101,39 +106,57 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
     tx: UnboundedSender<(TaskId, HawkInsertPlan)>,
     batch: Batch,
 ) -> Result<()> {
-    let mut vector_store = session.aby3_store.write().await;
-    let graph_store = session.graph_store.clone().read_owned().await;
+    let inner = async {
+        let mut vector_store = session.aby3_store.write().await;
+        let graph_store = session.graph_store.clone().read_owned().await;
 
-    for task in batch.tasks {
-        let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
-        let result = if task.is_central {
-            // search_to_insert for centers
-            let query_uuid = search_ids
-                .get(task.i_request)
-                .ok_or_eyre("Invalid request id for uuid lookup")?
-                .clone();
-            let side: StoreId = batch.i_eye.try_into()?;
-            let layer_selection_value = (query_uuid, side);
-            let insertion_layer = search_params
-                .hnsw
-                .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
-            per_insert_query::<N>(
-                query,
-                search_params,
-                &mut vector_store,
-                &graph_store,
-                insertion_layer,
-            )
-            .await?
-        } else {
-            // plain search for non-centers
-            per_search_query(query, search_params, &mut vector_store, &graph_store).await?
+        for task in batch.tasks {
+            phase_trace!("per_query", "search", "i_request" => task.i_request, "i_rotation" => task.i_rotation);
+            let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
+            let result = if task.is_central {
+                // search_to_insert for centers
+                let query_uuid = search_ids
+                    .get(task.i_request)
+                    .ok_or_eyre("Invalid request id for uuid lookup")?
+                    .clone();
+                let side: StoreId = batch.i_eye.try_into()?;
+                let layer_selection_value = (query_uuid, side);
+                let insertion_layer = search_params
+                    .hnsw
+                    .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
+                per_insert_query::<N>(
+                    query,
+                    search_params,
+                    &mut vector_store,
+                    &graph_store,
+                    insertion_layer,
+                )
+                .await?
+            } else {
+                // plain search for non-centers
+                per_search_query(query, search_params, &mut vector_store, &graph_store).await?
+            };
+
+            tx.send((task.id(), result))?;
+        }
+
+        Ok(())
+    };
+
+    #[cfg(feature = "phase_trace")]
+    {
+        use super::phase_tracer::{SessionContext, SESSION_CTX};
+        let ctx = SessionContext {
+            i_eye: batch.i_eye,
+            i_session: batch.i_session,
+            orient: search_params.orient,
         };
-
-        tx.send((task.id(), result))?;
+        SESSION_CTX.scope(ctx, inner).await
     }
-
-    Ok(())
+    #[cfg(not(feature = "phase_trace"))]
+    {
+        inner.await
+    }
 }
 
 async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
@@ -281,6 +304,8 @@ mod tests {
         let search_params = SearchParams {
             hnsw: actor.searcher(),
             do_match: true,
+            #[cfg(feature = "phase_trace")]
+            orient: 'T', // test
         };
 
         let result = search(

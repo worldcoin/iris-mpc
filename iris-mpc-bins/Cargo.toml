@@ -14,6 +14,7 @@ helpers = [
   "dep:aws-sdk-secretsmanager",
   "dep:reqwest",
 ]
+phase_trace = ["iris-mpc-cpu/phase_trace"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
@@ -70,7 +71,7 @@ uuid.workspace = true
 
 iris-mpc = { path = "../iris-mpc" }
 iris-mpc-common = { path = "../iris-mpc-common" }
-iris-mpc-cpu = { path = "../iris-mpc-cpu" }
+iris-mpc-cpu = { path = "../iris-mpc-cpu", features = [] }
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }

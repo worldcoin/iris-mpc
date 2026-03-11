@@ -169,6 +169,8 @@ mod intra_batch;
 pub mod iris_worker;
 mod is_match_batch;
 mod matching;
+#[cfg(feature = "phase_trace")]
+pub mod phase_tracer;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
@@ -1706,6 +1708,9 @@ impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
         let mut sessions = hawk_actor.new_session_groups().await?;
 
+        #[cfg(feature = "phase_trace")]
+        phase_tracer::init(hawk_actor.party_id as u32);
+
         // Validate the common state before starting.
         HawkSession::state_check(sessions.for_state_check()).await?;
 
@@ -1753,6 +1758,9 @@ impl HawkHandle {
             request.batch.request_ids.len()
         );
 
+        #[cfg(feature = "phase_trace")]
+        phase_tracer::advance_batch();
+
         let request = request
             .numa_realloc(hawk_actor.workers_handle.clone())
             .await;
@@ -1790,6 +1798,11 @@ impl HawkHandle {
             let search_params = SearchParams {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
+                #[cfg(feature = "phase_trace")]
+                orient: match orient {
+                    Orientation::Normal => 'N',
+                    Orientation::Mirror => 'M',
+                },
             };
 
             let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
@@ -1867,6 +1880,9 @@ impl HawkHandle {
         .await?;
 
         let results = HawkResult::new(request.batch, match_result, mutations);
+
+        #[cfg(feature = "phase_trace")]
+        phase_tracer::flush();
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);

@@ -1,5 +1,5 @@
 use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
-
+use crate::phase_trace;
 use super::{Aby3Query, Aby3Store, ArcIris, DistanceOps, DistanceShare, VectorId};
 use ampc_secret_sharing::shares::int_ring::IntRing2k;
 use clap::ValueEnum;
@@ -185,27 +185,37 @@ impl DistanceMinimalRotation {
     where
         Standard: Distribution<D::Ring>,
     {
-        let dot_start = std::time::Instant::now();
-        let ds_and_ts = store
-            .workers
-            .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
-            .await?;
-        metrics::histogram!("eval_distance_dot_product_duration")
-            .record(dot_start.elapsed().as_secs_f64());
+        let ds_and_ts = {
+            let dot_start = std::time::Instant::now();
+            phase_trace!("dot_product", "cpu", "n_vectors" => vectors.len());
+            let res = store
+                .workers
+                .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
+                .await?;
+            metrics::histogram!("eval_distance_dot_product_duration")
+                .record(dot_start.elapsed().as_secs_f64());
+            res
+        };
 
-        let lift_start = std::time::Instant::now();
-        let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        metrics::histogram!("eval_distance_lift_duration")
-            .record(lift_start.elapsed().as_secs_f64());
+        let distances = {
+            let lift_start = std::time::Instant::now();
+            phase_trace!("mpc_lift", "mpc", "n_vectors" => vectors.len());
+            let res = store.gr_to_lifted_distances(ds_and_ts).await?;
+            metrics::histogram!("eval_distance_lift_duration")
+                .record(lift_start.elapsed().as_secs_f64());
+            res
+        };
 
-        let omin_start = std::time::Instant::now();
-        let result = store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
-            .await;
-        metrics::histogram!("eval_distance_oblivious_min_duration")
-            .record(omin_start.elapsed().as_secs_f64());
-
-        result
+        {
+            let omin_start = std::time::Instant::now();
+            phase_trace!("oblivious_min", "mpc", "n_vectors" => vectors.len());
+            let result = store
+                .oblivious_min_distance_batch(transpose_from_flat(&distances))
+                .await;
+            metrics::histogram!("eval_distance_oblivious_min_duration")
+                .record(omin_start.elapsed().as_secs_f64());
+            result
+        }
     }
 
     /// Evaluates distances for multiple (query, vectors) batches efficiently.

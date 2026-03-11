@@ -74,11 +74,13 @@ ampc-server-utils.workspace = true
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
+tokio-metrics = "0.4"
 
 [features]
 db_dependent = []
 networking_metrics = []
 chacha_prf = []
+phase_trace = []
 
 [[bench]]
 name = "hnsw"
@@ -98,3 +100,10 @@ harness = false
 
 [[example]]
 name = "hnsw-ex"
+
+[[example]]
+name = "bench_collect"
+
+[[example]]
+name = "test_phase_trace"
+required-features = ["phase_trace"]

@@ -38,6 +38,8 @@ pub async fn search_to_identity_update(
     let search_params = SearchParams {
         hnsw: hawk_actor.searcher(),
         do_match: false,
+        #[cfg(feature = "phase_trace")]
+        orient: 'U', // identity Update
     };
 
     // Search the central rotation to determine how to insert the update vectors.
