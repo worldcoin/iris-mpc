@@ -714,7 +714,7 @@ impl ServerActor {
                     batch.identity_update_request_ids.len(),
                     batch.deletion_requests_indices.len(),
                 );
-                self.apply_blind_requests(&batch, is_first_query)?;
+                self.apply_non_mpc_updates(&batch, is_first_query)?;
                 return Ok(Self::blind_only_result(batch));
             }
             bail!("Received empty GPU batch without queries or blind updates");
@@ -858,7 +858,7 @@ impl ServerActor {
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
         self.internal_batch_counter += 1;
 
-        self.apply_blind_requests(&batch, is_first_query)?;
+        self.apply_non_mpc_updates(&batch, is_first_query)?;
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE FULL SCAN EYE QUERIES, PREFILTERING
@@ -2602,7 +2602,7 @@ impl ServerActor {
         Ok(())
     }
 
-    fn apply_blind_requests(
+    fn apply_non_mpc_updates(
         &mut self,
         batch: &PreprocessedBatchQuery,
         is_first_query: bool,
