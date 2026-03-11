@@ -122,7 +122,7 @@ fn tracer() -> &'static PhaseTracer {
 fn is_phase_enabled(name: &str) -> bool {
     match &tracer().filter {
         None => true,
-        Some(filter) => filter.iter().any(|&f| f == name),
+        Some(filter) => filter.contains(&name),
     }
 }
 
