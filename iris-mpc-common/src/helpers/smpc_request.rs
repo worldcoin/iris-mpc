@@ -166,8 +166,8 @@ pub enum ReceiveRequestError {
     #[error("Failed to delete request from SQS: {0}")]
     FailedToDeleteFromSQS(#[from] Box<SdkError<DeleteMessageError>>),
 
-    #[error("Failed to mark request as deleted in the database: {0}")]
-    FailedToMarkRequestAsDeleted(#[from] Report),
+    #[error("Failed to persist request modification in the database: {0}")]
+    FailedToPersistModification(#[from] Report),
 
     #[error("Failed to parse {json_name} JSON: {err}")]
     JsonParseError {
