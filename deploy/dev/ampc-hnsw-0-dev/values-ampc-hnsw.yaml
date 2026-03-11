@@ -13,6 +13,9 @@ env:
 
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
+  
+  - name: SMPC__TOKIO_THREADS
+    value: "24"	
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
     value: "true"
