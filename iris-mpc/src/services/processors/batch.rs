@@ -593,8 +593,7 @@ impl<'a> BatchProcessor<'a> {
         {
             if enable_mirror_attacks != self.batch_query.full_face_mirror_attacks_detection_enabled
             {
-                self.batch_query.full_face_mirror_attacks_detection_enabled =
-                    enable_mirror_attacks;
+                self.batch_query.full_face_mirror_attacks_detection_enabled = enable_mirror_attacks;
                 tracing::info!(
                     "Setting mirror attack to {} for batch due to request from {}",
                     enable_mirror_attacks,
