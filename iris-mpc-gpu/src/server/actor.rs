@@ -705,19 +705,19 @@ impl ServerActor {
 
         let mut batch = batch;
         let mut batch_size = batch.left_iris_requests.code.len();
-        let has_blind_requests = !batch.deletion_requests_indices.is_empty()
+        let has_non_mpc_updates = !batch.deletion_requests_indices.is_empty()
             || !batch.identity_update_request_ids.is_empty();
         if batch_size == 0 {
-            if has_blind_requests {
+            if has_non_mpc_updates {
                 tracing::info!(
-                    "Processing blind-update-only batch: {} identity_update, {} deletion requests",
+                    "Processing non-mpc-update-only batch: {} identity_update, {} deletion requests",
                     batch.identity_update_request_ids.len(),
                     batch.deletion_requests_indices.len(),
                 );
                 self.apply_non_mpc_updates(&batch, is_first_query)?;
-                return Ok(Self::blind_only_result(batch));
+                return Ok(Self::non_mpc_updates_only(batch));
             }
-            bail!("Received empty GPU batch without queries or blind updates");
+            bail!("Received empty GPU batch without queries or non-mpc updates");
         }
         assert!(batch_size <= self.max_batch_size);
         assert!(
@@ -2695,7 +2695,7 @@ impl ServerActor {
         Ok(())
     }
 
-    fn blind_only_result(batch: PreprocessedBatchQuery) -> ServerJobResult {
+    fn non_mpc_updates_only(batch: PreprocessedBatchQuery) -> ServerJobResult {
         ServerJobResult {
             deleted_ids: batch.deletion_requests_indices,
             identity_update_indices: batch.identity_update_indices,
