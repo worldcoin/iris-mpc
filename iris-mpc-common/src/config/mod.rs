@@ -387,7 +387,6 @@ fn default_hnsw_param_ef_constr() -> usize {
     320
 }
 
-#[allow(non_snake_case)]
 fn default_hnsw_param_m() -> usize {
     256
 }
@@ -620,7 +619,6 @@ where
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
-#[allow(non_snake_case)]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
     environment: String,

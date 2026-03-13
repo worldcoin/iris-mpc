@@ -94,7 +94,6 @@ pub struct PersistentState {
 
 /// Logical configuration parameters of genesis `Config` struct.
 #[derive(Debug, Default, Clone, Copy)]
-#[allow(non_snake_case)]
 pub struct GenesisConfig {
     pub hnsw_m: usize,
 

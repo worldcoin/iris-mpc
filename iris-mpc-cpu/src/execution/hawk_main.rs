@@ -225,7 +225,6 @@ pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
 const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
 #[derive(Clone, Parser)]
-#[allow(non_snake_case)]
 pub struct HawkArgs {
     #[clap(short, long)]
     pub party_index: usize,
@@ -2428,7 +2427,7 @@ mod tests_db {
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
-            hnsw_param_M: 256,
+            hnsw_param_m: 256,
             hnsw_param_ef_search: 256,
             hnsw_layer_density: None,
             hnsw_prf_key: None,
