@@ -209,6 +209,7 @@ pub struct Config {
     pub hnsw_param_ef_constr: usize,
 
     #[serde(default = "default_hnsw_param_M")]
+    #[serde(alias = "hnsw_param_m")]
     pub hnsw_param_M: usize,
 
     #[serde(default = "default_hnsw_param_ef_search")]
