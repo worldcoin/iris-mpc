@@ -210,7 +210,7 @@ pub struct Config {
     pub hnsw_param_ef_constr: usize,
 
     // warning: do not change this to hnsw_param_M. the environment variable parsing
-    // converts all upper case env vars to all lower case. 
+    // converts all upper case env vars to all lower case.
     #[serde(default = "default_hnsw_param_m")]
     pub hnsw_param_m: usize,
 
