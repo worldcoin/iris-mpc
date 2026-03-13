@@ -351,6 +351,12 @@ impl HnswSearcher {
         M: usize,
         max_graph_layer: usize,
     ) -> Self {
+        tracing::info!(
+            "starting linear scan with params {} {} {}",
+            ef_constr,
+            ef_search,
+            M
+        );
         Self {
             params: HnswParams::new(ef_constr, ef_search, M),
             layer_mode: LayerMode::LinearScan { max_graph_layer },

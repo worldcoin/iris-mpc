@@ -208,8 +208,8 @@ pub struct Config {
     #[serde(default = "default_hnsw_param_ef_constr")]
     pub hnsw_param_ef_constr: usize,
 
-    #[serde(default = "default_hnsw_param_M")]
-    pub hnsw_param_M: usize,
+    #[serde(default = "default_hnsw_param_m")]
+    pub hnsw_param_m: usize,
 
     #[serde(default = "default_hnsw_param_ef_search")]
     pub hnsw_param_ef_search: usize,
@@ -385,7 +385,7 @@ fn default_hnsw_param_ef_constr() -> usize {
 }
 
 #[allow(non_snake_case)]
-fn default_hnsw_param_M() -> usize {
+fn default_hnsw_param_m() -> usize {
     256
 }
 
@@ -650,7 +650,7 @@ pub struct CommonConfig {
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
-    hnsw_param_M: usize,
+    hnsw_param_m: usize,
     hnsw_param_ef_search: usize,
     hnsw_layer_density: Option<usize>,
     hawk_prf_key: Option<u64>,
@@ -734,7 +734,7 @@ impl From<Config> for CommonConfig {
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
-            hnsw_param_M,
+            hnsw_param_m,
             hnsw_param_ef_search,
             hnsw_layer_density,
             hawk_prf_key,
@@ -805,7 +805,7 @@ impl From<Config> for CommonConfig {
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
-            hnsw_param_M,
+            hnsw_param_m,
             hnsw_param_ef_search,
             hnsw_layer_density,
             hawk_prf_key,
