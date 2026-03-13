@@ -550,8 +550,6 @@ impl E2EClient {
         };
 
         let request_message = UniquenessRequest {
-            // TODO: in future use the batch size from the request
-            batch_size: Some(1),
             signup_id: party_shares.signup_id.clone(),
             s3_key: bucket_key,
             or_rule_serial_ids: None,

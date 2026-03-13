@@ -114,7 +114,6 @@ pub const RECOVERY_UPDATE_MESSAGE_TYPE: &str = "recovery_update";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
-    pub batch_size: Option<usize>,
     pub signup_id: String,
     pub s3_key: String,
     pub or_rule_serial_ids: Option<Vec<u32>>,
@@ -125,9 +124,7 @@ pub struct UniquenessRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CircuitBreakerRequest {
-    pub batch_size: Option<usize>,
-}
+pub struct CircuitBreakerRequest {}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityDeletionRequest {
@@ -137,7 +134,6 @@ pub struct IdentityDeletionRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReAuthRequest {
     pub reauth_id: String,
-    pub batch_size: Option<usize>,
     pub s3_key: String,
     pub serial_id: u32,
     pub skip_persistence: Option<bool>,
@@ -147,7 +143,6 @@ pub struct ReAuthRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityMatchCheckRequest {
     pub request_id: String,
-    pub batch_size: Option<usize>,
     pub s3_key: String,
 }
 

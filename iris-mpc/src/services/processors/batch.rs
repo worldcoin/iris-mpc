@@ -926,6 +926,8 @@ impl<'a> BatchProcessor<'a> {
             bucket_name,
             identity_update_request.s3_key.clone(),
         )?;
+        // Preserve the old GPU-local behavior: skip only this identity update if share
+        // fetching/parsing fails, and keep receiving the rest of the batch.
         let (left_shares, right_shares) = match task_handle.await {
             Ok(result) => match result {
                 Ok(shares) => shares,
@@ -935,11 +937,23 @@ impl<'a> BatchProcessor<'a> {
                         request_type,
                         e
                     );
+                    metrics::counter!(
+                        "request.skipped",
+                        "type" => request_type.to_string(),
+                        "reason" => "failed_to_process_iris_shares"
+                    )
+                    .increment(1);
                     return Ok(());
                 }
             },
             Err(e) => {
                 tracing::error!("Failed to join task handle for {}: {:?}", request_type, e);
+                metrics::counter!(
+                    "request.skipped",
+                    "type" => request_type.to_string(),
+                    "reason" => "failed_to_join_handle"
+                )
+                .increment(1);
                 return Ok(());
             }
         };

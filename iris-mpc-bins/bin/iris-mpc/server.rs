@@ -77,7 +77,7 @@ use std::{
     mem, panic,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, LazyLock, Mutex,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -90,8 +90,6 @@ use tokio::{
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
-
-static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 fn decode_iris_message_shares(
     code_share: String,
@@ -143,10 +141,7 @@ async fn server_main(config: Config) -> Result<()> {
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.register_signal_handler().await;
-    // Load batch_size config
-    *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_modification_lookback = config.max_modifications_lookback;
-    tracing::info!("Set batch size to {}", config.max_batch_size);
 
     let schema_name = format!(
         "{}{}_{}_{}",
