@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/recovery-update"
+      - "sw/fix_bad_name"
 
     paths-ignore:
       - "deploy/**"

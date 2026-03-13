@@ -11,11 +11,14 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
+  - name: SMPC__HNSW_PARAM_M
+    value: "320"
+    
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "true"
+    value: "false"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
