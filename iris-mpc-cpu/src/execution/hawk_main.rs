@@ -248,7 +248,7 @@ pub struct HawkArgs {
     pub hnsw_param_ef_constr: usize,
 
     #[clap(long, default_value_t = 256)]
-    pub hnsw_param_M: usize,
+    pub hnsw_param_m: usize,
 
     #[clap(long, default_value_t = 256)]
     pub hnsw_param_ef_search: usize,
@@ -460,7 +460,7 @@ impl HawkActor {
             let mut searcher_ = HnswSearcher::new_linear_scan(
                 args.hnsw_param_ef_constr,
                 args.hnsw_param_ef_search,
-                args.hnsw_param_M,
+                args.hnsw_param_m,
                 LINEAR_SCAN_MAX_GRAPH_LAYER,
             );
 

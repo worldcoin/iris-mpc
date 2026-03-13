@@ -96,7 +96,7 @@ pub struct PersistentState {
 #[derive(Debug, Default, Clone, Copy)]
 #[allow(non_snake_case)]
 pub struct GenesisConfig {
-    pub hnsw_M: usize,
+    pub hnsw_m: usize,
 
     pub hnsw_ef_constr: usize,
 
@@ -145,7 +145,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     let batch_size = match &state.args.batch_size_config {
         BatchSizeConfig::Static { size } => *size,
         BatchSizeConfig::Dynamic { cap, error_rate } => {
-            let dynamic_size = BatchSize::get_dynamic_size(id, *error_rate, state.config.hnsw_M);
+            let dynamic_size = BatchSize::get_dynamic_size(id, *error_rate, state.config.hnsw_m);
             dynamic_size.min(*cap)
         }
     };
@@ -170,7 +170,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     let searcher = HnswSearcher::new_linear_scan(
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
-        state.config.hnsw_M,
+        state.config.hnsw_m,
         1, // should match the constant LINEAR_SCAN_MAX_GRAPH_LAYER
     );
 
@@ -419,7 +419,7 @@ mod tests {
                 },
             },
             config: GenesisConfig {
-                hnsw_M: 256,
+                hnsw_m: 256,
                 hnsw_ef_constr: 320,
                 hnsw_ef_search: 320,
                 hawk_prf_key: Some(0),
