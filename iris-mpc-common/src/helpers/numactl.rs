@@ -1,4 +1,3 @@
-use std::fs;
 use std::sync::OnceLock;
 
 // =============================================================================
@@ -44,11 +43,7 @@ pub fn init(tokio_threads: Option<usize>) {
 /// (minus reserved cores), or an empty vec for other nodes.
 pub fn get_cores_for_node(node: usize) -> Vec<usize> {
     let cpus = all_cores_for_node(node);
-    let skip_count = TOKIO_THREAD_COUNT
-        .get()
-        .copied()
-        .flatten()
-        .unwrap_or(0);
+    let skip_count = TOKIO_THREAD_COUNT.get().copied().flatten().unwrap_or(0);
     cpus.into_iter().skip(skip_count).collect()
 }
 
@@ -70,7 +65,7 @@ pub fn get_tokio_worker_threads() -> usize {
 pub fn get_numa_nodes() -> Vec<usize> {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(entries) = fs::read_dir("/sys/devices/system/node") {
+        if let Ok(entries) = std::fs::read_dir("/sys/devices/system/node") {
             let mut nodes: Vec<usize> = entries
                 .filter_map(|e| e.ok())
                 .filter_map(|e| {
@@ -146,6 +141,7 @@ pub fn restrict_tokio_runtime() {
 // =============================================================================
 
 /// Parses a Linux cpulist format string (e.g., "0-15,32-47") into a vector of CPU IDs.
+#[cfg(any(target_os = "linux", test))]
 fn parse_cpulist(cpulist: &str) -> Vec<usize> {
     let mut cpus = Vec::new();
     for part in cpulist.trim().split(',') {
@@ -169,7 +165,7 @@ fn all_cores_for_node(node: usize) -> Vec<usize> {
     #[cfg(target_os = "linux")]
     {
         let path = format!("/sys/devices/system/node/node{}/cpulist", node);
-        if let Ok(contents) = fs::read_to_string(&path) {
+        if let Ok(contents) = std::fs::read_to_string(&path) {
             return parse_cpulist(&contents);
         }
     }
