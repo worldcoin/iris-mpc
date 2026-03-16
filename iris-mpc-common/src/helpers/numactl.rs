@@ -1,5 +1,5 @@
 use std::fs;
-use std::sync::{LazyLock, RwLock};
+use std::sync::OnceLock;
 
 // =============================================================================
 // Static Variables
@@ -8,38 +8,31 @@ use std::sync::{LazyLock, RwLock};
 /// The number of cores reserved for the tokio runtime per NUMA node.
 /// Set via `init()` before using other functions in this module.
 /// If None, no cores are reserved and overlapping is allowed.
-static TOKIO_THREAD_COUNT: LazyLock<RwLock<Option<usize>>> = LazyLock::new(|| RwLock::new(None));
-
-/// Caches the number of NUMA nodes detected on the system.
-/// Defaults to 1 if not on Linux or if detection fails.
-pub static SHARD_COUNT: LazyLock<usize> = LazyLock::new(|| {
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(entries) = fs::read_dir("/sys/devices/system/node") {
-            let count = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_name().to_string_lossy().starts_with("node"))
-                .count();
-
-            // Handle edge case where dir exists but is empty
-            return if count > 0 { count } else { 1 };
-        }
-    }
-    1
-});
+static TOKIO_THREAD_COUNT: OnceLock<Option<usize>> = OnceLock::new();
 
 // =============================================================================
 // Public API
 // =============================================================================
 
-/// Initialize the sysfs module with the number of tokio runtime threads per NUMA node.
+/// Initialize the numactl module with the number of tokio runtime threads per NUMA node.
 /// If Some(n), reserves the first n cores on EACH node for tokio and skips them in worker allocation.
 /// Total tokio threads will be n * number_of_numa_nodes.
 /// If None, allows core overlap (no reservation) and restrict_tokio_runtime() becomes a no-op.
+///
+/// Panics if the reservation exceeds available cores on any NUMA node.
 pub fn init(tokio_threads: Option<usize>) {
-    if let Ok(mut count) = TOKIO_THREAD_COUNT.write() {
-        *count = tokio_threads;
+    if let Some(count) = tokio_threads {
+        for node in get_numa_nodes() {
+            let available = all_cores_for_node(node).len();
+            assert!(
+                count <= available,
+                "tokio_threads ({count}) exceeds available cores ({available}) on NUMA node {node}"
+            );
+        }
     }
+    TOKIO_THREAD_COUNT
+        .set(tokio_threads)
+        .expect("numactl::init() called more than once");
 }
 
 /// Returns the CPU IDs belonging to the specified NUMA node, skipping
@@ -50,11 +43,11 @@ pub fn init(tokio_threads: Option<usize>) {
 /// On non-Linux or if detection fails, returns available CPU IDs for node 0
 /// (minus reserved cores), or an empty vec for other nodes.
 pub fn get_cores_for_node(node: usize) -> Vec<usize> {
-    let cpus = _get_cores_for_node(node);
+    let cpus = all_cores_for_node(node);
     let skip_count = TOKIO_THREAD_COUNT
-        .read()
-        .ok()
-        .and_then(|guard| *guard)
+        .get()
+        .copied()
+        .flatten()
         .unwrap_or(0);
     cpus.into_iter().skip(skip_count).collect()
 }
@@ -63,12 +56,13 @@ pub fn get_cores_for_node(node: usize) -> Vec<usize> {
 /// If set via init(Some(n)), returns n * number_of_numa_nodes.
 /// If not set via init(), defaults to the number of available CPU cores.
 pub fn get_tokio_worker_threads() -> usize {
-    let r = TOKIO_THREAD_COUNT.read().ok().and_then(|g| *g);
-    r.map(|count| count * *SHARD_COUNT).unwrap_or_else(|| {
-        core_affinity::get_core_ids()
-            .map(|ids| ids.len())
-            .unwrap_or(1)
-    })
+    let r = TOKIO_THREAD_COUNT.get().copied().flatten();
+    r.map(|count| count * get_numa_nodes().len())
+        .unwrap_or_else(|| {
+            core_affinity::get_core_ids()
+                .map(|ids| ids.len())
+                .unwrap_or(1)
+        })
 }
 
 /// Returns a list of all available NUMA node IDs on the system.
@@ -109,7 +103,7 @@ pub fn restrict_tokio_runtime() {
     use nix::sched::{sched_setaffinity, CpuSet};
     use nix::unistd::Pid;
 
-    let tokio_count_per_node = match TOKIO_THREAD_COUNT.read().ok().and_then(|guard| *guard) {
+    let tokio_count_per_node = match TOKIO_THREAD_COUNT.get().copied().flatten() {
         None | Some(0) => return,
         Some(x) => x,
     };
@@ -118,7 +112,7 @@ pub fn restrict_tokio_runtime() {
     let numa_nodes = get_numa_nodes();
 
     for node in numa_nodes {
-        let all_cpus = _get_cores_for_node(node);
+        let all_cpus = all_cores_for_node(node);
         let cpus: Vec<_> = all_cpus.into_iter().take(tokio_count_per_node).collect();
 
         if cpus.is_empty() {
@@ -170,8 +164,8 @@ fn parse_cpulist(cpulist: &str) -> Vec<usize> {
     cpus
 }
 
-/// Internal helper that returns all CPU IDs for a node without skipping any.
-fn _get_cores_for_node(node: usize) -> Vec<usize> {
+/// Returns all CPU IDs for a node without skipping any.
+fn all_cores_for_node(node: usize) -> Vec<usize> {
     #[cfg(target_os = "linux")]
     {
         let path = format!("/sys/devices/system/node/node{}/cpulist", node);
@@ -252,10 +246,5 @@ mod tests {
         let mut sorted = nodes.clone();
         sorted.sort_unstable();
         assert_eq!(nodes, sorted);
-    }
-
-    #[test]
-    fn test_shard_count_positive() {
-        assert!(*SHARD_COUNT > 0);
     }
 }
