@@ -132,7 +132,7 @@ async fn start_hawk_node(
     let searcher = HnswSearcher::new_standard(
         args.hnsw_param_ef_constr,
         args.hnsw_param_ef_search,
-        args.hnsw_param_M,
+        args.hnsw_param_m,
     );
 
     let (graph, iris_store) =
@@ -185,7 +185,7 @@ async fn e2e_test_async() -> Result<()> {
         request_parallelism: HAWK_REQUEST_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
         hnsw_param_ef_constr: HNSW_EF_CONSTR,
-        hnsw_param_M: HNSW_M,
+        hnsw_param_m: HNSW_M,
         hnsw_param_ef_search: HNSW_EF_SEARCH,
         hnsw_layer_density: None,
         hnsw_prf_key: None,

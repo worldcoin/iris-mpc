@@ -190,6 +190,9 @@ hnsw-smpc-0:
     - name: SMPC__HAWK_SERVER_DELETIONS_ENABLED
       value: "true"
 
+    - name: SMPC__HAWK_SERVER_RECOVERY_ENABLED
+      value: "true"
+
     - name: SMPC__LUC_ENABLED
       value: "true"
 

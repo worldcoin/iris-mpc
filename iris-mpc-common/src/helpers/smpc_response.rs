@@ -122,6 +122,10 @@ pub struct IdentityDeletionResult {
     pub node_id: usize,
     pub serial_id: u32,
     pub success: bool,
+    #[serde(default)]
+    pub error: Option<bool>,
+    #[serde(default)]
+    pub error_reason: Option<String>,
 }
 
 impl IdentityDeletionResult {
@@ -130,6 +134,18 @@ impl IdentityDeletionResult {
             node_id,
             serial_id,
             success,
+            error: None,
+            error_reason: None,
+        }
+    }
+
+    pub fn new_error_result(node_id: usize, serial_id: u32, error_reason: &str) -> Self {
+        Self {
+            node_id,
+            serial_id,
+            success: false,
+            error: Some(true),
+            error_reason: Some(error_reason.to_string()),
         }
     }
 
