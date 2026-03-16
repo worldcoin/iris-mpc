@@ -588,7 +588,7 @@ async fn exec_indexation(
     let batch_size = ctx
         .args
         .batch_size_config
-        .compute_batch_size(ctx.config.hnsw_param_M);
+        .compute_batch_size(ctx.config.hnsw_param_m);
 
     if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
         log_warn(format!(
@@ -920,7 +920,7 @@ async fn get_hawk_actor(
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
-        hnsw_param_M: config.hnsw_param_M,
+        hnsw_param_m: config.hnsw_param_m,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
         hnsw_layer_density: config.hnsw_layer_density,
         hnsw_prf_key: config.hawk_prf_key,

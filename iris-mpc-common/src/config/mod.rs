@@ -26,7 +26,8 @@ pub struct Opt {
     party_id: Option<usize>,
 }
 
-#[allow(non_snake_case)]
+// note that the config is loaded from environment variables which are transformed from all upper case
+// to all lower case. ex: SMPC__SCHEMA_NAME -> schema_name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_schema_name")]
@@ -208,8 +209,10 @@ pub struct Config {
     #[serde(default = "default_hnsw_param_ef_constr")]
     pub hnsw_param_ef_constr: usize,
 
-    #[serde(default = "default_hnsw_param_M")]
-    pub hnsw_param_M: usize,
+    // warning: do not change this to hnsw_param_M. the environment variable parsing
+    // converts all upper case env vars to all lower case.
+    #[serde(default = "default_hnsw_param_m")]
+    pub hnsw_param_m: usize,
 
     #[serde(default = "default_hnsw_param_ef_search")]
     pub hnsw_param_ef_search: usize,
@@ -384,8 +387,7 @@ fn default_hnsw_param_ef_constr() -> usize {
     320
 }
 
-#[allow(non_snake_case)]
-fn default_hnsw_param_M() -> usize {
+fn default_hnsw_param_m() -> usize {
     256
 }
 
@@ -617,7 +619,6 @@ where
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
-#[allow(non_snake_case)]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
     environment: String,
@@ -650,7 +651,7 @@ pub struct CommonConfig {
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
-    hnsw_param_M: usize,
+    hnsw_param_m: usize,
     hnsw_param_ef_search: usize,
     hnsw_layer_density: Option<usize>,
     hawk_prf_key: Option<u64>,
@@ -734,7 +735,7 @@ impl From<Config> for CommonConfig {
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
-            hnsw_param_M,
+            hnsw_param_m,
             hnsw_param_ef_search,
             hnsw_layer_density,
             hawk_prf_key,
@@ -805,7 +806,7 @@ impl From<Config> for CommonConfig {
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
-            hnsw_param_M,
+            hnsw_param_m,
             hnsw_param_ef_search,
             hnsw_layer_density,
             hawk_prf_key,
