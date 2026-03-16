@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
-    numactl::init(config.tokio_threads);
+    numactl::init(config.separate_tokio_cores_per_node);
     numactl::restrict_tokio_runtime();
 
     // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.

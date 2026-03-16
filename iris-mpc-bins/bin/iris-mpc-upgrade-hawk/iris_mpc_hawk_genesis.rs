@@ -41,7 +41,7 @@ fn main() -> Result<()> {
     println!("Initialising args");
     let args = parse_args()?;
 
-    numactl::init(config.tokio_threads);
+    numactl::init(config.separate_tokio_cores_per_node);
     numactl::restrict_tokio_runtime();
 
     // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.

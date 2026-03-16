@@ -292,8 +292,8 @@ pub struct Config {
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
 
-    #[serde(default = "default_tokio_threads")]
-    pub tokio_threads: Option<usize>,
+    #[serde(default = "default_separate_tokio_cores_per_node")]
+    pub separate_tokio_cores_per_node: Option<usize>,
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
@@ -471,7 +471,7 @@ fn default_pprof_per_batch_enabled() -> bool {
     false
 }
 
-fn default_tokio_threads() -> Option<usize> {
+fn default_separate_tokio_cores_per_node() -> Option<usize> {
     None
 }
 
@@ -766,7 +766,7 @@ impl From<Config> for CommonConfig {
             pprof_flame_only: _,
             pprof_profile_only: _,
             enable_pprof_per_batch: _,
-            tokio_threads: _,
+            separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
             enable_recovery,
         } = value;

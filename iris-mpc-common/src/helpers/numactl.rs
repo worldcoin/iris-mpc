@@ -26,7 +26,7 @@ pub fn init(tokio_threads: Option<usize>) {
             let available = all_cores_for_node(node).len();
             assert!(
                 count <= available,
-                "tokio_threads ({count}) exceeds available cores ({available}) on NUMA node {node}"
+                "separate_tokio_cores_per_node ({count}) exceeds available cores ({available}) on NUMA node {node}"
             );
         }
     }
