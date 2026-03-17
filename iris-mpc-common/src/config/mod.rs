@@ -188,16 +188,16 @@ pub struct Config {
     #[serde(default = "default_match_distances_2d_buffer_size")]
     pub match_distances_2d_buffer_size: usize,
 
-    #[serde(default)]
+    #[serde(default = "default_enable_reauth")]
     pub enable_reauth: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_enable_reset")]
     pub enable_reset: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_enable_recovery")]
     pub enable_recovery: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_enable_deletion")]
     pub enable_deletion: bool,
 
     #[serde(default)]
@@ -364,6 +364,22 @@ fn default_match_distances_buffer_size_extra_percent() -> usize {
 // Default size for the 2D match distances buffer, needs to be a multiple of 64 at least
 fn default_match_distances_2d_buffer_size() -> usize {
     1 << 13 // 8192
+}
+
+fn default_enable_reauth() -> bool {
+    true
+}
+
+fn default_enable_reset() -> bool {
+    true
+}
+
+fn default_enable_recovery() -> bool {
+    true
+}
+
+fn default_enable_deletion() -> bool {
+    true
 }
 
 fn default_hawk_request_parallelism() -> usize {
