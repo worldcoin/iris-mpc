@@ -48,24 +48,11 @@ impl SetHash {
 
 // ── Binary-search state machine for iris diff debugging ──────────────────
 
-struct OpenRange {
-    lo: u32,
-    hi: u32,
+pub(crate) struct OpenRange {
+    pub(crate) lo: u32,
+    pub(crate) hi: u32,
     /// Hashes for [self, prev, next] over this range.
     hashes: [u64; 3],
-}
-
-/// The output of [`IrisDiffSearch::prepare_round`]: the left-half hashes
-/// that this party computed, along with the `(lo, mid)` splits so that
-/// neighbours can compute their own left-half hashes for the same ranges.
-#[cfg_attr(test, derive(Debug))]
-pub(crate) struct RoundQuery {
-    /// `(lo, mid)` for each range being split this round.  Used by tests
-    /// to compute neighbour hashes without networking.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub splits: Vec<(u32, u32)>,
-    /// This party's left-half hash for each split.
-    pub my_lefts: Vec<u64>,
 }
 
 /// Networking-free binary search over the serial-ID space.
@@ -76,7 +63,6 @@ pub(crate) struct RoundQuery {
 /// neighbours (via the network in production, or directly in tests).
 pub(crate) struct IrisDiffSearch {
     worklist: Vec<OpenRange>,
-    to_split: Vec<OpenRange>,
     found: Vec<u32>,
     max_samples: usize,
     max_rounds: usize,
@@ -91,7 +77,6 @@ impl IrisDiffSearch {
                 hi: global_hi,
                 hashes,
             }],
-            to_split: Vec::new(),
             found: Vec::new(),
             max_samples,
             max_rounds: 40,
@@ -103,8 +88,13 @@ impl IrisDiffSearch {
     /// party's left-half hashes for the remaining ranges.
     ///
     /// Returns `None` when the search is complete (worklist empty, sample
-    /// cap reached, or round limit hit).
-    pub fn prepare_round(&mut self, range_hash: impl Fn(u32, u32) -> u64) -> Option<RoundQuery> {
+    /// cap reached, or round limit hit).  On `Some`, returns the ranges
+    /// to split and this party's left-half hashes — pass both to
+    /// [`complete_round`] after exchanging hashes with neighbours.
+    pub fn prepare_round(
+        &mut self,
+        range_hash: impl Fn(u32, u32) -> u64,
+    ) -> Option<(Vec<OpenRange>, Vec<u64>)> {
         if self.worklist.is_empty()
             || self.found.len() >= self.max_samples
             || self.round >= self.max_rounds
@@ -114,36 +104,43 @@ impl IrisDiffSearch {
         self.round += 1;
 
         let current = std::mem::take(&mut self.worklist);
-        self.to_split.clear();
+        let mut to_split = Vec::new();
         for r in current {
             if r.hi - r.lo <= 1 {
                 if self.found.len() < self.max_samples {
                     self.found.push(r.lo);
                 }
             } else {
-                self.to_split.push(r);
+                to_split.push(r);
             }
         }
 
-        if self.to_split.is_empty() {
+        if to_split.is_empty() {
             return None;
         }
 
-        let mut splits = Vec::with_capacity(self.to_split.len());
-        let mut my_lefts = Vec::with_capacity(self.to_split.len());
-        for r in &self.to_split {
-            let mid = r.lo + (r.hi - r.lo) / 2;
-            splits.push((r.lo, mid));
-            my_lefts.push(range_hash(r.lo, mid));
-        }
+        let my_lefts: Vec<u64> = to_split
+            .iter()
+            .map(|r| {
+                let mid = r.lo + (r.hi - r.lo) / 2;
+                range_hash(r.lo, mid)
+            })
+            .collect();
 
-        Some(RoundQuery { splits, my_lefts })
+        Some((to_split, my_lefts))
     }
 
     /// Feed the exchanged left-half hashes back and advance the search.
-    pub fn complete_round(&mut self, my_lefts: &[u64], prev_lefts: &[u64], next_lefts: &[u64]) {
-        let to_split = std::mem::take(&mut self.to_split);
+    pub fn complete_round(
+        &mut self,
+        to_split: Vec<OpenRange>,
+        my_lefts: &[u64],
+        prev_lefts: &[u64],
+        next_lefts: &[u64],
+    ) {
         for (i, r) in to_split.into_iter().enumerate() {
+            // Cap the worklist to prevent blow-up when many serial IDs
+            // differ — each range can spawn 2 children per round.
             if self.found.len() + self.worklist.len() >= self.max_samples * 2 {
                 break;
             }
@@ -397,10 +394,10 @@ impl HawkSession {
             MAX_DIFF_SAMPLES,
         );
 
-        while let Some(query) = search.prepare_round(range_hash) {
+        while let Some((to_split, my_lefts)) = search.prepare_round(range_hash) {
             let (prev_lefts, next_lefts) = {
                 let packed: Vec<RingElement<u64>> =
-                    query.my_lefts.iter().map(|&h| RingElement(h)).collect();
+                    my_lefts.iter().map(|&h| RingElement(h)).collect();
                 let msg = NetworkValue::VecRing64(packed);
                 let mut store = session.aby3_store.write().await;
                 let net = &mut store.session.network_session;
@@ -418,17 +415,16 @@ impl HawkSession {
                 )
             };
 
-            if prev_lefts.len() != query.my_lefts.len() || next_lefts.len() != query.my_lefts.len()
-            {
+            if prev_lefts.len() != my_lefts.len() || next_lefts.len() != my_lefts.len() {
                 bail!(
                     "Debug protocol desync: expected {} hashes, got prev={}, next={}",
-                    query.my_lefts.len(),
+                    my_lefts.len(),
                     prev_lefts.len(),
                     next_lefts.len()
                 );
             }
 
-            search.complete_round(&query.my_lefts, &prev_lefts, &next_lefts);
+            search.complete_round(to_split, &my_lefts, &prev_lefts, &next_lefts);
         }
 
         // ── log findings ─────────────────────────────────────────────────
@@ -547,29 +543,23 @@ mod test {
 
     // ── helpers for IrisDiffSearch tests ──────────────────────────────
 
-    /// Build prefix sums and a clamped range-hash closure for a store.
-    fn prefix_and_range_hash(
-        store: &SharedIrises<u8>,
-    ) -> (Vec<u64>, impl Fn(u32, u32) -> u64 + '_) {
-        // We have to leak the prefix sums into a Box so the closure can
-        // own them without a self-referential borrow.  Tests only.
+    /// Build a clamped range-hash closure for a store.
+    fn range_hash_fn(store: &SharedIrises<u8>) -> impl Fn(u32, u32) -> u64 {
         let prefix = store.prefix_sums();
         let len = (prefix.len() - 1) as u32;
-        let rh = move |lo: u32, hi: u32| -> u64 {
+        move |lo: u32, hi: u32| -> u64 {
             let lo_c = lo.min(len) as usize;
             let hi_c = hi.min(len) as usize;
             prefix[hi_c].wrapping_sub(prefix[lo_c])
-        };
-        let prefix2 = store.prefix_sums(); // second copy for caller
-        (prefix2, rh)
+        }
     }
 
     /// Run the full binary search for 3 parties and return the sorted
     /// diff serial-IDs that party 0 would report.
     fn run_diff(stores: &[SharedIrises<u8>; 3], max_samples: usize) -> Vec<u32> {
-        let (_, rh0) = prefix_and_range_hash(&stores[0]);
-        let (_, rh1) = prefix_and_range_hash(&stores[1]);
-        let (_, rh2) = prefix_and_range_hash(&stores[2]);
+        let rh0 = range_hash_fn(&stores[0]);
+        let rh1 = range_hash_fn(&stores[1]);
+        let rh2 = range_hash_fn(&stores[2]);
 
         let lens: Vec<u32> = stores.iter().map(|s| s.get_points().len() as u32).collect();
         let global_hi = *lens.iter().max().unwrap();
@@ -583,10 +573,22 @@ mod test {
         let mut search = IrisDiffSearch::new(global_hi, hashes, max_samples);
 
         // hashes = [party0, party1, party2] — prev=party1, next=party2.
-        while let Some(query) = search.prepare_round(&rh0) {
-            let prev_lefts: Vec<u64> = query.splits.iter().map(|&(lo, mid)| rh1(lo, mid)).collect();
-            let next_lefts: Vec<u64> = query.splits.iter().map(|&(lo, mid)| rh2(lo, mid)).collect();
-            search.complete_round(&query.my_lefts, &prev_lefts, &next_lefts);
+        while let Some((to_split, my_lefts)) = search.prepare_round(&rh0) {
+            let prev_lefts: Vec<u64> = to_split
+                .iter()
+                .map(|r| {
+                    let mid = r.lo + (r.hi - r.lo) / 2;
+                    rh1(r.lo, mid)
+                })
+                .collect();
+            let next_lefts: Vec<u64> = to_split
+                .iter()
+                .map(|r| {
+                    let mid = r.lo + (r.hi - r.lo) / 2;
+                    rh2(r.lo, mid)
+                })
+                .collect();
+            search.complete_round(to_split, &my_lefts, &prev_lefts, &next_lefts);
         }
 
         search.into_found()

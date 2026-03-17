@@ -192,7 +192,7 @@ impl<I: Clone> SharedIrises<I> {
     /// Returns a vec of length `points.len() + 1` where `result[i]` is the
     /// cumulative hash of all entries with serial_id < i.  The hash of any
     /// range `[lo, hi)` is `result[hi].wrapping_sub(result[lo])`.
-    pub fn prefix_sums(&self) -> Vec<u64> {
+    pub(crate) fn prefix_sums(&self) -> Vec<u64> {
         let mut sums = Vec::with_capacity(self.points.len() + 1);
         let mut acc = 0u64;
         sums.push(acc);
