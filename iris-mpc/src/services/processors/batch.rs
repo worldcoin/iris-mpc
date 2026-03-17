@@ -2,7 +2,7 @@ use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
-use ampc_server_utils::FIXED_BATCH_SIZE;
+use ampc_server_utils::get_fixed_batch_size;
 use ampc_server_utils::{
     get_approximate_number_of_messages, get_batch_sync_states, BatchSyncResult,
     BatchSyncSharedState, BatchSyncState,
@@ -1021,7 +1021,7 @@ pub async fn get_own_batch_sync_state(
     );
 
     // Check for a fixed batch size override (set via /config HTTP endpoint)
-    let fixed = *FIXED_BATCH_SIZE.lock().expect("FIXED_BATCH_SIZE poisoned");
+    let fixed = get_fixed_batch_size();
 
     let messages_to_poll = if let Some(fixed_size) = fixed {
         // Fixed batch size overrides max_batch_size — that's its purpose.

@@ -13,8 +13,7 @@ use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRI
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, runtime_config_routes, set_node_ready,
-    start_coordination_server_with_extra_routes, wait_for_others_ready,
+    init_heartbeat_task, set_node_ready, start_coordination_server, wait_for_others_ready,
     wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
@@ -93,20 +92,14 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
-    // Start coordination server, optionally with runtime config routes
-    let extra_routes = if config.hawk_dyn_config {
-        tracing::info!("Dynamic runtime config enabled (SMPC__HAWK_DYN_CONFIG=true)");
-        Some(runtime_config_routes())
-    } else {
-        None
-    };
-    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
+    // Start coordination server (runtime config routes are auto-merged via the
+    // `runtime_config` feature flag on ampc-server-utils)
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        extra_routes,
     )
     .await;
     tracing::info!("Coordination server started");
