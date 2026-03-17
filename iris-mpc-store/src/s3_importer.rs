@@ -267,6 +267,7 @@ pub async fn last_snapshot_timestamp(
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_and_parse_chunks(
     store: Arc<impl ObjectStore>,
     concurrency: usize,
@@ -278,7 +279,11 @@ pub async fn fetch_and_parse_chunks(
     initial_backoff_ms: u64,
 ) -> Result<()> {
     let effective_last_serial_id = max_serial_id_to_load
-        .map(|max_serial_id| last_snapshot_details.last_serial_id.min(max_serial_id as i64))
+        .map(|max_serial_id| {
+            last_snapshot_details
+                .last_serial_id
+                .min(max_serial_id as i64)
+        })
         .unwrap_or(last_snapshot_details.last_serial_id);
     if let Some(max_serial_id_to_load) = max_serial_id_to_load {
         tracing::info!(
@@ -640,7 +645,6 @@ mod tests {
         }
         assert_eq!(count, MAX_SERIAL_ID_TO_LOAD);
         assert!(ids.is_empty(), "Expected to receive only capped entries");
-        
     }
 
     #[tokio::test]

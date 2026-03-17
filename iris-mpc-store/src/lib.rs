@@ -233,7 +233,9 @@ impl Store {
         max_serial_id_to_load: Option<usize>,
     ) -> impl Stream<Item = Result<DbStoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
-        let effective_count = max_serial_id_to_load.map(|max| count.min(max)).unwrap_or(count);
+        let effective_count = max_serial_id_to_load
+            .map(|max| count.min(max))
+            .unwrap_or(count);
         let partition_size = effective_count.div_ceil(partitions).max(1);
 
         let mut partition_streams = Vec::new();
