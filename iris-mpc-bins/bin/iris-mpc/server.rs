@@ -1010,22 +1010,12 @@ async fn server_main(config: Config) -> Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let mut coordinated_intake_config = config.clone();
-        coordinated_intake_config.hawk_server_reauths_enabled |=
-            coordinated_intake_config.enable_reauth;
-        coordinated_intake_config.hawk_server_resets_enabled |=
-            coordinated_intake_config.enable_reset;
-        coordinated_intake_config.hawk_server_recovery_enabled |=
-            coordinated_intake_config.enable_recovery;
-        // Preserve the legacy GPU behavior while this binary reuses the shared batch intake.
-        coordinated_intake_config.hawk_server_deletions_enabled = true;
-
         let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
             aws_clients.s3_client.clone(),
-            coordinated_intake_config,
+            config.clone(),
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),
             uniqueness_error_result_attribute,

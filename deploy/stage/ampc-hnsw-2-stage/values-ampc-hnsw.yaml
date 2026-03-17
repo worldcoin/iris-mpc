@@ -69,6 +69,7 @@ env:
   - name: SMPC__DISABLE_PERSISTENCE
     value: "false"
 
+  # TODO: remove duplicate hawk_server configs once new change released
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
 
@@ -79,6 +80,18 @@ env:
     value: "true"
 
   - name: SMPC__HAWK_SERVER_DELETIONS_ENABLED
+    value: "true"
+
+  - name: SMPC__ENABLE_REAUTH
+    value: "true"
+
+  - name: SMPC__ENABLE_RESET
+    value: "true"
+
+  - name: SMPC__ENABLE_RECOVERY
+    value: "true"
+
+  - name: SMPC__ENABLE_DELETION
     value: "true"
 
   - name: SMPC__LUC_ENABLED

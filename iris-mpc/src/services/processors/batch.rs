@@ -439,7 +439,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RECOVERY_CHECK_MESSAGE_TYPE,
-                    self.config.hawk_server_recovery_enabled,
+                    self.config.enable_recovery,
                 )
                 .await
             }
@@ -448,7 +448,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RESET_CHECK_MESSAGE_TYPE,
-                    self.config.hawk_server_resets_enabled,
+                    self.config.enable_reset,
                 )
                 .await
             }
@@ -457,7 +457,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RECOVERY_UPDATE_MESSAGE_TYPE,
-                    self.config.hawk_server_recovery_enabled,
+                    self.config.enable_recovery,
                 )
                 .await
             }
@@ -466,7 +466,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RESET_UPDATE_MESSAGE_TYPE,
-                    self.config.hawk_server_resets_enabled,
+                    self.config.enable_reset,
                 )
                 .await
             }
@@ -492,7 +492,7 @@ impl<'a> BatchProcessor<'a> {
                 ReceiveRequestError::json_parse_error("Identity deletion request", e)
             })?;
 
-        if self.config.hawk_server_deletions_enabled {
+        if self.config.enable_deletion {
             // Skip the request if serial ID already exists in current batch modifications
             if self
                 .batch_query
@@ -638,7 +638,7 @@ impl<'a> BatchProcessor<'a> {
 
         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-        if !self.config.hawk_server_reauths_enabled {
+        if !self.config.enable_reauth {
             tracing::warn!("Reauth is disabled");
             let error_result = ReAuthResult::new_error_result(
                 reauth_request.reauth_id,

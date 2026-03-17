@@ -195,6 +195,12 @@ pub struct Config {
     pub enable_reset: bool,
 
     #[serde(default)]
+    pub enable_recovery: bool,
+
+    #[serde(default)]
+    pub enable_deletion: bool,
+
+    #[serde(default)]
     pub hnsw_schema_name_suffix: String,
 
     #[serde(default)]
@@ -268,18 +274,6 @@ pub struct Config {
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
 
-    #[serde(default = "default_hawk_server_deletions_enabled")]
-    pub hawk_server_deletions_enabled: bool,
-
-    #[serde(default = "default_hawk_server_reauths_enabled")]
-    pub hawk_server_reauths_enabled: bool,
-
-    #[serde(default = "default_hawk_server_resets_enabled")]
-    pub hawk_server_resets_enabled: bool,
-
-    #[serde(default = "default_hawk_server_recovery_enabled")]
-    pub hawk_server_recovery_enabled: bool,
-
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
@@ -300,9 +294,6 @@ pub struct Config {
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
-
-    #[serde(default = "default_enable_recovery")]
-    pub enable_recovery: bool,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -415,22 +406,6 @@ fn default_sqs_sync_long_poll_seconds() -> i32 {
     10
 }
 
-fn default_hawk_server_reauths_enabled() -> bool {
-    false
-}
-
-fn default_hawk_server_resets_enabled() -> bool {
-    false
-}
-
-fn default_hawk_server_recovery_enabled() -> bool {
-    false
-}
-
-fn default_hawk_server_deletions_enabled() -> bool {
-    false
-}
-
 fn default_batch_polling_timeout_secs() -> i32 {
     1
 }
@@ -479,10 +454,6 @@ fn default_separate_tokio_cores_per_node() -> Option<usize> {
 
 fn default_sns_retry_max_attempts() -> u32 {
     5
-}
-
-fn default_enable_recovery() -> bool {
-    false
 }
 
 impl Config {
@@ -648,6 +619,7 @@ pub struct CommonConfig {
     enable_reauth: bool,
     enable_reset: bool,
     enable_recovery: bool,
+    enable_deletion: bool,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
@@ -660,13 +632,9 @@ pub struct CommonConfig {
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
-    hawk_server_deletions_enabled: bool,
-    hawk_server_reauths_enabled: bool,
     schema_name: String,
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
-    hawk_server_resets_enabled: bool,
-    hawk_server_recovery_enabled: bool,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
     batch_polling_timeout_secs: i32,
@@ -732,6 +700,8 @@ impl From<Config> for CommonConfig {
             match_distances_2d_buffer_size,
             enable_reauth,
             enable_reset,
+            enable_recovery,
+            enable_deletion,
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
@@ -745,13 +715,9 @@ impl From<Config> for CommonConfig {
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
-            hawk_server_deletions_enabled,
-            hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            hawk_server_resets_enabled,
-            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
@@ -769,7 +735,6 @@ impl From<Config> for CommonConfig {
             enable_pprof_per_batch: _,
             separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
-            enable_recovery,
         } = value;
 
         assert!(
@@ -803,6 +768,8 @@ impl From<Config> for CommonConfig {
             match_distances_2d_buffer_size,
             enable_reauth,
             enable_reset,
+            enable_recovery,
+            enable_deletion,
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
@@ -815,19 +782,14 @@ impl From<Config> for CommonConfig {
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
-            hawk_server_deletions_enabled,
-            hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            hawk_server_resets_enabled,
-            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
-            enable_recovery,
         }
     }
 }
