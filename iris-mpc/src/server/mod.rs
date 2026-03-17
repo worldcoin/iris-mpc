@@ -93,7 +93,8 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
-    // Start coordination server
+    // Start coordination server (runtime config routes are auto-merged via the
+    // `runtime_config` feature flag on ampc-server-utils)
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
         &server_coord_config,
         &mut background_tasks,

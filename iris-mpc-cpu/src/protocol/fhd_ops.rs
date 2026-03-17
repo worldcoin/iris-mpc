@@ -4,7 +4,7 @@ use ampc_actor_utils::{
     execution::session::Session,
     protocol::{
         binary::{extract_msb_batch, lift, mul_lift_2k_to_32, open_bin, single_extract_msb},
-        ops::{cross_mul, oblivious_cross_compare},
+        fhd_ops::cross_mul,
     },
 };
 use ampc_secret_sharing::{
@@ -86,6 +86,15 @@ pub async fn cross_compare(
     // Open the MSB
     let opened_b = open_bin(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
+}
+
+/// For every pair of distance fraction shares (d1, d2), computes the secret-shared bit d2 < d1.
+pub(crate) async fn oblivious_cross_compare(
+    session: &mut Session,
+    distances: &[DistancePair<u32>],
+) -> Result<Vec<Share<Bit>>> {
+    let diff = cross_mul(session, distances).await?;
+    extract_msb_batch(session, &diff).await
 }
 
 // Box the future returned by the comparison function to make it easier to pass into min_round_robin_batch_with.
