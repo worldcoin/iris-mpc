@@ -522,6 +522,7 @@ async fn load_database(
             iris_store,
             store_len,
             parallelism,
+            None,
             config,
             download_shutdown_handler,
         )

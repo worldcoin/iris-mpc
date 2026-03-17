@@ -272,11 +272,26 @@ pub async fn fetch_and_parse_chunks(
     concurrency: usize,
     prefix_name: String,
     last_snapshot_details: LastSnapshotDetails,
+    max_serial_id_to_load: Option<usize>,
     tx: Sender<S3StoredIris>,
     max_retries: usize,
     initial_backoff_ms: u64,
 ) -> Result<()> {
-    tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
+    let effective_last_serial_id = max_serial_id_to_load
+        .map(|max_serial_id| last_snapshot_details.last_serial_id.min(max_serial_id as i64))
+        .unwrap_or(last_snapshot_details.last_serial_id);
+    if let Some(max_serial_id_to_load) = max_serial_id_to_load {
+        tracing::info!(
+            "Generating chunk files using {:?}, capped at serial id {}",
+            last_snapshot_details,
+            max_serial_id_to_load
+        );
+    } else {
+        tracing::info!(
+            "Generating chunk files using {:?} without a serial id cap",
+            last_snapshot_details
+        );
+    }
     let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
         MAX_RANGE_SIZE
     } else {
@@ -285,11 +300,13 @@ pub async fn fetch_and_parse_chunks(
     let mut handles: VecDeque<task::JoinHandle<Result<(), eyre::Error>>> =
         VecDeque::with_capacity(concurrency);
 
-    for chunk in (1..=last_snapshot_details.last_serial_id).step_by(range_size) {
+    for chunk in (1..=effective_last_serial_id).step_by(range_size) {
         let chunk_id =
             (chunk / last_snapshot_details.chunk_size) * last_snapshot_details.chunk_size + 1;
         let prefix_name = prefix_name.clone();
         let offset_within_chunk = (chunk - chunk_id) as usize;
+        let remaining_items = (effective_last_serial_id - chunk + 1) as usize;
+        let requested_range_size = remaining_items.min(range_size);
 
         // Wait if we've hit the concurrency limit
         if handles.len() >= concurrency {
@@ -312,7 +329,7 @@ pub async fn fetch_and_parse_chunks(
                         Arc::clone(&store),
                         &key,
                         offset_within_chunk,
-                        range_size,
+                        requested_range_size,
                         tx.clone(),
                     )
                     .await
@@ -557,6 +574,7 @@ mod tests {
             1,
             "out".to_string(),
             last_snapshot_details,
+            None,
             tx,
             1,
             0,
@@ -570,6 +588,58 @@ mod tests {
         }
         assert_eq!(count, MOCK_ENTRIES);
         assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_parse_chunks_respects_max_serial_id_to_load() {
+        const SNAPSHOT_ENTRIES: usize = 36;
+        const MAX_SERIAL_ID_TO_LOAD: usize = 25;
+        const MOCK_CHUNK_SIZE: usize = 10;
+        let mut store = MockStore::new();
+
+        // Intentionally omit 31.bin: if the importer reads past the cap, MockStore
+        // will return "Object not found" and this test must fail.
+        for start_serial_id in [1, 11, 21] {
+            let end_serial_id = min(start_serial_id + MOCK_CHUNK_SIZE - 1, SNAPSHOT_ENTRIES);
+            store.add_test_data(
+                &format!("out/{start_serial_id}.bin"),
+                (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
+            );
+        }
+
+        let last_snapshot_details = LastSnapshotDetails {
+            timestamp: 0,
+            last_serial_id: SNAPSHOT_ENTRIES as i64,
+            chunk_size: MOCK_CHUNK_SIZE as i64,
+        };
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
+        let store_arc = Arc::new(store);
+        let result = fetch_and_parse_chunks(
+            store_arc,
+            1,
+            "out".to_string(),
+            last_snapshot_details,
+            Some(MAX_SERIAL_ID_TO_LOAD),
+            tx,
+            1,
+            0,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Expected fetch_and_parse_chunks to stay below the cap and therefore never request missing chunk 31.bin"
+        );
+
+        let mut count = 0;
+        let mut ids: HashSet<usize> = (1..=MAX_SERIAL_ID_TO_LOAD).collect();
+        while let Some(chunk) = rx.recv().await {
+            ids.remove(&chunk.serial_id());
+            count += 1;
+        }
+        assert_eq!(count, MAX_SERIAL_ID_TO_LOAD);
+        assert!(ids.is_empty(), "Expected to receive only capped entries");
+        
     }
 
     #[tokio::test]
@@ -607,6 +677,7 @@ mod tests {
             5,
             "out".to_string(),
             last_snapshot_details,
+            None,
             tx,
             5,
             100,

@@ -69,6 +69,7 @@ pub async fn load_iris_db(
     store: &Store,
     max_serial_id_to_load: usize,
     store_load_parallelism: usize,
+    s3_max_serial_id_to_load: Option<usize>,
     config: &Config,
     download_shutdown_handler: Arc<ShutdownHandler>,
 ) -> Result<()> {
@@ -116,6 +117,7 @@ pub async fn load_iris_db(
                 s3_load_parallelism,
                 s3_chunks_folder_name.clone(),
                 last_snapshot_details,
+                s3_max_serial_id_to_load,
                 tx.clone(),
                 s3_load_max_retries,
                 s3_load_initial_backoff_ms,
