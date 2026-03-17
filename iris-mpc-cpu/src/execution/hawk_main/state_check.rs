@@ -104,10 +104,7 @@ impl IrisDiffSearch {
     ///
     /// Returns `None` when the search is complete (worklist empty, sample
     /// cap reached, or round limit hit).
-    pub fn prepare_round(
-        &mut self,
-        range_hash: impl Fn(u32, u32) -> u64,
-    ) -> Option<RoundQuery> {
+    pub fn prepare_round(&mut self, range_hash: impl Fn(u32, u32) -> u64) -> Option<RoundQuery> {
         if self.worklist.is_empty()
             || self.found.len() >= self.max_samples
             || self.round >= self.max_rounds
@@ -144,12 +141,7 @@ impl IrisDiffSearch {
     }
 
     /// Feed the exchanged left-half hashes back and advance the search.
-    pub fn complete_round(
-        &mut self,
-        my_lefts: &[u64],
-        prev_lefts: &[u64],
-        next_lefts: &[u64],
-    ) {
+    pub fn complete_round(&mut self, my_lefts: &[u64], prev_lefts: &[u64], next_lefts: &[u64]) {
         let to_split = std::mem::take(&mut self.to_split);
         for (i, r) in to_split.into_iter().enumerate() {
             if self.found.len() + self.worklist.len() >= self.max_samples * 2 {
@@ -330,9 +322,7 @@ impl HawkSession {
         };
 
         if prev_state != my_state || next_state != my_state {
-            if prev_state.irises != my_state.irises
-                || next_state.irises != my_state.irises
-            {
+            if prev_state.irises != my_state.irises || next_state.irises != my_state.irises {
                 if let Err(e) = Self::debug_iris_diff(
                     session,
                     my_state.irises,
@@ -407,7 +397,7 @@ impl HawkSession {
             MAX_DIFF_SAMPLES,
         );
 
-        while let Some(query) = search.prepare_round(&range_hash) {
+        while let Some(query) = search.prepare_round(range_hash) {
             let (prev_lefts, next_lefts) = {
                 let packed: Vec<RingElement<u64>> =
                     query.my_lefts.iter().map(|&h| RingElement(h)).collect();
@@ -428,8 +418,7 @@ impl HawkSession {
                 )
             };
 
-            if prev_lefts.len() != query.my_lefts.len()
-                || next_lefts.len() != query.my_lefts.len()
+            if prev_lefts.len() != query.my_lefts.len() || next_lefts.len() != query.my_lefts.len()
             {
                 bail!(
                     "Debug protocol desync: expected {} hashes, got prev={}, next={}",
@@ -461,9 +450,7 @@ impl HawkSession {
             }
         }
         if found.len() >= MAX_DIFF_SAMPLES {
-            tracing::warn!(
-                "  … capped at {MAX_DIFF_SAMPLES} samples, more may exist"
-            );
+            tracing::warn!("  … capped at {MAX_DIFF_SAMPLES} samples, more may exist");
         }
 
         Ok(())
@@ -584,10 +571,7 @@ mod test {
         let (_, rh1) = prefix_and_range_hash(&stores[1]);
         let (_, rh2) = prefix_and_range_hash(&stores[2]);
 
-        let lens: Vec<u32> = stores
-            .iter()
-            .map(|s| s.get_points().len() as u32)
-            .collect();
+        let lens: Vec<u32> = stores.iter().map(|s| s.get_points().len() as u32).collect();
         let global_hi = *lens.iter().max().unwrap();
 
         let hashes: [u64; 3] = [
@@ -600,16 +584,8 @@ mod test {
 
         // hashes = [party0, party1, party2] — prev=party1, next=party2.
         while let Some(query) = search.prepare_round(&rh0) {
-            let prev_lefts: Vec<u64> = query
-                .splits
-                .iter()
-                .map(|&(lo, mid)| rh1(lo, mid))
-                .collect();
-            let next_lefts: Vec<u64> = query
-                .splits
-                .iter()
-                .map(|&(lo, mid)| rh2(lo, mid))
-                .collect();
+            let prev_lefts: Vec<u64> = query.splits.iter().map(|&(lo, mid)| rh1(lo, mid)).collect();
+            let next_lefts: Vec<u64> = query.splits.iter().map(|&(lo, mid)| rh2(lo, mid)).collect();
             search.complete_round(&query.my_lefts, &prev_lefts, &next_lefts);
         }
 
@@ -712,12 +688,7 @@ mod test {
 
         let cap = 10;
         let found = run_diff(&stores, cap);
-        assert_eq!(
-            found.len(),
-            cap,
-            "should cap at {cap}, got {}",
-            found.len()
-        );
+        assert_eq!(found.len(), cap, "should cap at {cap}, got {}", found.len());
         // All returned IDs should be valid serial_ids in [1, 200].
         for &sid in &found {
             assert!((1..=200).contains(&sid));

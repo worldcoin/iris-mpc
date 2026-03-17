@@ -198,10 +198,7 @@ impl<I: Clone> SharedIrises<I> {
         sums.push(acc);
         for (serial_id, opt) in self.points.iter().enumerate() {
             if let Some((version, _)) = opt {
-                acc = acc.wrapping_add(SetHash::hash(VectorId::new(
-                    serial_id as u32,
-                    *version,
-                )));
+                acc = acc.wrapping_add(SetHash::hash(VectorId::new(serial_id as u32, *version)));
             }
             sums.push(acc);
         }
