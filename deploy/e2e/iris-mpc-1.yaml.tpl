@@ -229,6 +229,9 @@ iris-mpc-1:
     - name: SMPC__ENABLE_RESET
       value: "true"
 
+    - name: SMPC__ENABLE_RECOVERY
+      value: "true"
+
     - name: SMPC__LUC_ENABLED
       value: "true"
 

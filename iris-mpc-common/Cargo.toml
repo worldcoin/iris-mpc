@@ -64,6 +64,8 @@ ampc-secret-sharing.workspace = true
 ampc-actor-utils.workspace = true
 ampc-server-utils.workspace = true
 ampc-anon-stats.workspace = true
+nix.workspace = true
+core_affinity.workspace = true
 
 [dev-dependencies]
 float_eq = "1"
