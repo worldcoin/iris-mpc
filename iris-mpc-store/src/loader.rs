@@ -192,14 +192,18 @@ pub async fn load_iris_db(
         );
 
         let stream_db = store
-            .stream_irises_par(Some(min_last_modified_at), store_load_parallelism)
+            .stream_irises_par(
+                Some(min_last_modified_at),
+                store_load_parallelism,
+                Some(max_serial_id_to_load),
+            )
             .await
             .boxed();
         load_db_records_from_aurora(actor, record_counter, &mut all_serial_ids, stream_db).await;
     } else {
         tracing::info!("S3 importer disabled. Fetching only from Aurora db");
         let stream_db = store
-            .stream_irises_par(None, store_load_parallelism)
+            .stream_irises_par(None, store_load_parallelism, Some(max_serial_id_to_load))
             .await
             .boxed();
         load_db_records_from_aurora(actor, record_counter, &mut all_serial_ids, stream_db).await;

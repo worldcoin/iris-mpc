@@ -282,9 +282,10 @@ pub async fn fetch_and_parse_chunks(
         .unwrap_or(last_snapshot_details.last_serial_id);
     if let Some(max_serial_id_to_load) = max_serial_id_to_load {
         tracing::info!(
-            "Generating chunk files using {:?}, capped at serial id {}",
+            "Generating chunk files using {:?}, requested cap {}, effective cap {}",
             last_snapshot_details,
-            max_serial_id_to_load
+            max_serial_id_to_load,
+            effective_last_serial_id
         );
     } else {
         tracing::info!(
