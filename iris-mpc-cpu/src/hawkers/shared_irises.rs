@@ -185,6 +185,28 @@ impl<I: Clone> SharedIrises<I> {
             })
             .collect_vec()
     }
+
+    /// Build prefix sums of per-entry [`SetHash`] values over the serial-ID
+    /// array.
+    ///
+    /// Returns a vec of length `points.len() + 1` where `result[i]` is the
+    /// cumulative hash of all entries with serial_id < i.  The hash of any
+    /// range `[lo, hi)` is `result[hi].wrapping_sub(result[lo])`.
+    pub fn prefix_sums(&self) -> Vec<u64> {
+        let mut sums = Vec::with_capacity(self.points.len() + 1);
+        let mut acc = 0u64;
+        sums.push(acc);
+        for (serial_id, opt) in self.points.iter().enumerate() {
+            if let Some((version, _)) = opt {
+                acc = acc.wrapping_add(SetHash::hash(VectorId::new(
+                    serial_id as u32,
+                    *version,
+                )));
+            }
+            sums.push(acc);
+        }
+        sums
+    }
 }
 
 /// Reference to inserted irises.
