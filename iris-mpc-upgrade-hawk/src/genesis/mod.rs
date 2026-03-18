@@ -1295,6 +1295,7 @@ async fn init_graph_from_stores(
         iris_store,
         max_index,
         iris_db_parallelism,
+        Some(max_index),
         config,
         shutdown_handler,
     )
