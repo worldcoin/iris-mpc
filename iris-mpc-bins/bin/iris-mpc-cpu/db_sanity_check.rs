@@ -203,16 +203,32 @@ async fn main() -> Result<()> {
     let mut stats = Stats::new();
     let mut degree_hist: Vec<DegreeHistEntry> = Vec::new();
 
-    let exclusions: Option<HashSet<u32>> = match &args.exclusions_s3_uri {
+    let raw_exclusions: Option<Vec<u32>> = match &args.exclusions_s3_uri {
         Some(uri) => {
             let parsed = download_exclusions_from_s3(uri).await?;
-            Some(parsed.deleted_serial_ids.into_iter().collect())
+            Some(parsed.deleted_serial_ids)
         }
         None => None,
     };
 
     rpt!(rpt, "--- Collecting iris IDs ---");
     let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
+
+    // Filter exclusions to IDs that actually exist in this DB snapshot.
+    // Genesis filters deletions to <= max_indexation_id; the S3 file may
+    // contain IDs beyond this snapshot's range.
+    let iris_max = iris_ids.iter().copied().max().unwrap_or(0) as u32;
+    let exclusions: Option<HashSet<u32>> = raw_exclusions.map(|raw| {
+        let before = raw.len();
+        let filtered: HashSet<u32> = raw.into_iter().filter(|&id| id <= iris_max).collect();
+        rpt!(
+            rpt,
+            "  Exclusions: {} total in file, {} after filtering to id <= {iris_max}",
+            before,
+            filtered.len()
+        );
+        filtered
+    });
 
     rpt!(rpt, "--- Check 1: HNSW graph structural checks ---");
     let layer_probability = args.layer_probability.unwrap_or((args.m as f64).recip());
