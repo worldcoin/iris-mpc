@@ -4,7 +4,7 @@ replicaCount: 1
 
 environment: prod
 
-schedule: "0 15 * * *"
+schedule: "0 7,19 * * *"
 
 backoffLimit: 0
 
@@ -15,7 +15,7 @@ args:
   - "--export-output=s3"
   - "--batch-size=16000"
   - "--parallelism=96"
-  - "--output-folder=genesis_base_even_odd_with_version_id_output_16k_rerandomized"
+  - "--output-folder=even_odd_with_version_id_output_16k_rerandomized"
 
 imagePullSecrets:
   - name: github-secret
