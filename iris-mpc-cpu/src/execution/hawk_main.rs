@@ -71,7 +71,7 @@ use crate::{
     execution::{
         hawk_main::{
             insert::InsertPlanV,
-            iris_worker::IrisPoolHandle,
+            iris_worker::{IrisPoolHandle, IrisWorkerPool},
             rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
@@ -92,7 +92,7 @@ use crate::{
     network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
-        shared_iris::GaloisRingSharedIris,
+        shared_iris::{ArcIris, GaloisRingSharedIris},
     },
 };
 use ampc_actor_utils::network::config::TlsConfig;
@@ -309,6 +309,9 @@ pub struct HawkActor {
     graph_store: BothEyes<GraphRef>,
     /// Handles to the iris worker pools for NUMA-aware data processing.
     workers_handle: BothEyes<IrisPoolHandle>,
+    /// Shared worker pools with query caches (one per eye). Cloned into each
+    /// `HawkSession` so all sessions for the same eye share the same cache.
+    worker_pools: BothEyes<iris_worker::LocalIrisWorkerPool>,
 
     /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
@@ -487,6 +490,12 @@ impl HawkActor {
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
             .map(|side| iris_worker::init_workers(side, iris_store[side].clone(), args.numa));
+        let worker_pools = [LEFT, RIGHT].map(|side| {
+            iris_worker::LocalIrisWorkerPool::new(
+                workers_handle[side].clone(),
+                iris_store[side].clone(),
+            )
+        });
 
         Ok(HawkActor {
             args: args.clone(),
@@ -500,6 +509,7 @@ impl HawkActor {
             party_id: args.party_index,
             error_ct: CancellationToken::new(),
             workers_handle,
+            worker_pools,
         })
     }
 
@@ -616,14 +626,12 @@ impl HawkActor {
     ) -> impl Future<Output = Result<HawkSession>> {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
-        let iris_pool = self.workers_handle(store_id);
-        let iris_store_ref = self.iris_store(store_id);
+        let workers = self.worker_pools[store_id as usize].clone();
         let hnsw_prf_key = hnsw_prf_key.clone();
 
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
-            let workers = iris_worker::LocalIrisWorkerPool::new(iris_pool, iris_store_ref);
             let aby3_store = Aby3Store::new(
                 storage,
                 Session {
@@ -1294,6 +1302,39 @@ impl HawkRequest {
         }
     }
 
+    /// Collects all `(QueryId, raw, preprocessed)` tuples for pre-caching in
+    /// the worker pool, grouped by eye (LEFT, RIGHT).
+    fn all_queries_for_cache(&self) -> BothEyes<Vec<(iris_worker::QueryId, ArcIris, ArcIris)>> {
+        [LEFT, RIGHT].map(|side| {
+            self.queries[side]
+                .iter()
+                .flat_map(|rots| rots.iter())
+                .chain(
+                    self.queries_mirror[side]
+                        .iter()
+                        .flat_map(|rots| rots.iter()),
+                )
+                .map(|q| (q.query_id, q.iris.clone(), q.iris_proc.clone()))
+                .collect()
+        })
+    }
+
+    /// Collects all `QueryId`s for eviction after batch processing.
+    fn all_query_ids(&self) -> BothEyes<Vec<iris_worker::QueryId>> {
+        [LEFT, RIGHT].map(|side| {
+            self.queries[side]
+                .iter()
+                .flat_map(|rots| rots.iter())
+                .chain(
+                    self.queries_mirror[side]
+                        .iter()
+                        .flat_map(|rots| rots.iter()),
+                )
+                .map(|q| q.query_id)
+                .collect()
+        })
+    }
+
     fn luc_ids(&self, iris_store: &Aby3SharedIrises) -> VecRequests<Vec<VectorId>> {
         let luc_lookback_ids = iris_store.last_vector_ids(self.batch.luc_lookback_records);
 
@@ -1756,6 +1797,16 @@ impl HawkHandle {
             .numa_realloc(hawk_actor.workers_handle.clone())
             .await;
 
+        // Pre-cache all queries in the shared worker pools so that
+        // ensure_queries_cached() is a no-op during distance computation.
+        {
+            let to_cache = request.all_queries_for_cache();
+            try_join!(
+                hawk_actor.worker_pools[LEFT].cache_queries(to_cache[LEFT].clone()),
+                hawk_actor.worker_pools[RIGHT].cache_queries(to_cache[RIGHT].clone()),
+            )?;
+        }
+
         // All deletions in a batch are applied at the beginning of batch processing
         // This is consistent with the GPU code's handling of deletions
         apply_deletions(hawk_actor, &request).await?;
@@ -1865,7 +1916,13 @@ impl HawkHandle {
         )
         .await?;
 
+        // Evict cached queries now that the batch is fully processed.
+        let query_ids = request.all_query_ids();
         let results = HawkResult::new(request.batch, match_result, mutations);
+        try_join!(
+            hawk_actor.worker_pools[LEFT].evict_queries(query_ids[LEFT].clone()),
+            hawk_actor.worker_pools[RIGHT].evict_queries(query_ids[RIGHT].clone()),
+        )?;
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
