@@ -18,8 +18,15 @@ use crate::protocol::{
     ops::{DistancePair, B, B_BITS},
 };
 
+use iris_mpc_common::iris_db::iris::Threshold;
+
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
-pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
+const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
+
+/// Precomputed threshold constant: A = (1 - 2*ratio) * B.
+fn threshold_a(threshold: Threshold) -> u64 {
+    ((1. - 2. * threshold.ratio()) * B as f64) as u64
+}
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
@@ -27,17 +34,19 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 ///   i.e., code_dist = <iris1.code, iris2.code> and mask_dist = <iris1.mask, iris2.mask>,
 ///   already lifted to 32 bits if they are originally 16-bit.
 /// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
-///   * MATCH_THRESHOLD_RATIO) * B as f64).
+///   * threshold_ratio) * B as f64).
 /// - Compares mask_dist * A > code_dist * B.
 /// - This corresponds to "distance > threshold", that is NOT match.
-pub async fn greater_than_threshold(
+pub async fn greater_than(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
+    threshold: Threshold,
 ) -> Result<Vec<Share<Bit>>> {
+    let a = threshold_a(threshold) as u32;
     let diffs: Vec<Share<u32>> = distances
         .iter()
         .map(|d| {
-            let x = d.mask_dot * A as u32;
+            let x = d.mask_dot * a;
             let y = d.code_dot * B as u32;
             y - x
         })
@@ -111,12 +120,13 @@ pub(crate) async fn min_round_robin_batch(
     .await
 }
 
-/// Compares the given distance to a threshold and reveal the bit "less than or equal".
-pub async fn lte_threshold_and_open(
+/// Compares distances to the given threshold and reveals "less than or equal".
+pub async fn lte_and_open(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
+    threshold: Threshold,
 ) -> Result<Vec<bool>> {
-    let bits = greater_than_threshold(session, distances).await?;
+    let bits = greater_than(session, distances, threshold).await?;
     open_bin(session, &bits)
         .await
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())

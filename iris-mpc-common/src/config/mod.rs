@@ -221,6 +221,9 @@ pub struct Config {
     pub hnsw_param_ef_supermatch: usize,
 
     #[serde(default)]
+    pub hnsw_param_ef_saturation_margin: usize,
+
+    #[serde(default)]
     pub hnsw_layer_density: Option<usize>,
 
     #[serde(default)]
@@ -661,6 +664,7 @@ pub struct CommonConfig {
     hnsw_param_m: usize,
     hnsw_param_ef_search: usize,
     hnsw_param_ef_supermatch: usize,
+    hnsw_param_ef_saturation_margin: usize,
     hnsw_layer_density: Option<usize>,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
@@ -746,6 +750,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_m,
             hnsw_param_ef_search,
             hnsw_param_ef_supermatch,
+            hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
             hawk_prf_key,
             hawk_numa: _, // could be different for each server
@@ -818,6 +823,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_m,
             hnsw_param_ef_search,
             hnsw_param_ef_supermatch,
+            hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
             hawk_prf_key,
             max_deletions_per_batch,

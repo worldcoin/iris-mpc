@@ -36,11 +36,27 @@ pub struct SearchParams {
     /// Searcher with layer-0 ef params overridden to `ef_supermatch`, for supermatcher re-search.
     hnsw_supermatch: Option<Arc<HnswSearcher>>,
     pub do_match: bool,
+    /// How many non-matches to tolerate before considering results "not saturated".
+    /// With margin=0 (default), all `ef` results must match to trigger extended search or to detect a supermatcher.
+    /// A small margin (e.g. 1-30) accounts for imprecision in the HNSW neighbor tail.
+    pub saturation_margin: usize,
 }
 
 impl SearchParams {
-    pub fn new(hnsw: Arc<HnswSearcher>, do_match: bool, ef_supermatch: Option<usize>) -> Self {
+    pub fn new(
+        hnsw: Arc<HnswSearcher>,
+        do_match: bool,
+        ef_supermatch: Option<usize>,
+        ef_saturation_margin: usize,
+    ) -> Self {
+        let ef = hnsw.params.get_ef_search(0);
         let hnsw_supermatch = ef_supermatch.map(|ef_sm| {
+            if ef_sm <= ef {
+                tracing::warn!(
+                    "ef_supermatch ({ef_sm}) <= ef_search ({ef}): \
+                     saturated results will not be extended"
+                );
+            }
             let mut searcher = (*hnsw).clone();
             let p = &mut searcher.params;
             p.ef_search[0] = p.ef_search[0].max(ef_sm);
@@ -52,7 +68,12 @@ impl SearchParams {
             hnsw,
             hnsw_supermatch,
             do_match,
+            saturation_margin: ef_saturation_margin,
         }
+    }
+
+    pub fn new_no_match(hnsw: Arc<HnswSearcher>) -> Self {
+        Self::new(hnsw, false, None, 0)
     }
 }
 
@@ -159,6 +180,14 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
 }
 
 /// Classify search results at both thresholds and optionally re-search with extended ef.
+/// Classify search results at two thresholds and optionally re-search with extended ef.
+///
+/// Two thresholds (GPU parity):
+/// - **Match threshold** (0.345): determines uniqueness decisions (match/no-match).
+/// - **Anon stats threshold** (0.375): higher threshold whose matches feed anonymous
+///   statistics. Also used as the saturation trigger: if all `ef` results are below
+///   this threshold, the query is a potential supermatcher and we re-search with a
+///   larger `ef` to get a more complete picture.
 async fn classify_and_extend(
     edges: &[(Aby3VectorRef, Aby3DistanceRef)],
     query: &Aby3Query,
@@ -167,7 +196,8 @@ async fn classify_and_extend(
     graph_store: &GraphMem<Aby3VectorRef>,
     ef: usize,
 ) -> Result<ClassifiedMatches> {
-    let classified = classify_edges(edges, aby3_store, ef).await?;
+    let margin = search_params.saturation_margin;
+    let classified = classify_edges(edges, aby3_store, ef, margin).await?;
 
     // Extended search if anon stats threshold is saturated (supermatcher)
     if let Some((ef_supermatch, hnsw_supermatch)) = classified
@@ -183,8 +213,8 @@ async fn classify_and_extend(
         .filter(|(ef_sm, _)| *ef_sm > ef)
     {
         tracing::info!(
-            "Supermatcher detected: all {ef} results below anon stats threshold, \
-             re-searching with ef={ef_supermatch}",
+            "Potential supermatcher: all {ef} results below anon stats threshold, \
+             re-searching with ef={ef_supermatch} to confirm",
         );
         metrics::counter!("supermatcher_extended_searches").increment(1);
 
@@ -192,13 +222,19 @@ async fn classify_and_extend(
             .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, query, ef_supermatch)
             .await?;
 
-        let supermatch_classified =
-            classify_edges(&supermatch_neighbors.edges, aby3_store, ef_supermatch).await?;
+        let supermatch_classified = classify_edges(
+            &supermatch_neighbors.edges,
+            aby3_store,
+            ef_supermatch,
+            margin,
+        )
+        .await?;
 
         if supermatch_classified.anon_stats_matches.saturated {
             tracing::warn!(
                 "Supermatcher still saturated after extended search (ef={ef_supermatch})",
             );
+            metrics::counter!("supermatcher_still_saturated_after_extended").increment(1);
         }
 
         return Ok(supermatch_classified);
@@ -212,6 +248,7 @@ async fn classify_edges(
     edges: &[(Aby3VectorRef, Aby3DistanceRef)],
     aby3_store: &mut Aby3Store<HawkOps>,
     ef: usize,
+    saturation_margin: usize,
 ) -> Result<ClassifiedMatches> {
     let all_distances: Vec<_> = edges.iter().map(|(_, d)| *d).collect();
 
@@ -223,7 +260,7 @@ async fn classify_edges(
         .filter(|(_, &b)| b)
         .map(|(edge, _)| *edge)
         .collect();
-    let matches_saturated = matches.len() == ef;
+    let matches_saturated = matches.len() + saturation_margin >= ef;
 
     // Step 2: Batch-check non-matched edges at anon stats threshold
     let remaining_distances: Vec<_> = all_distances
@@ -250,7 +287,7 @@ async fn classify_edges(
         all.extend(anon_extra);
         all
     };
-    let anon_stats_saturated = anon_stats_matches.len() == ef;
+    let anon_stats_saturated = anon_stats_matches.len() + saturation_margin >= ef;
 
     Ok(ClassifiedMatches {
         matches: SaturableMatches {
@@ -423,7 +460,7 @@ mod tests {
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
         let search_queries = &request.queries(Orientation::Normal);
-        let search_params = SearchParams::new(actor.searcher(), true, Some(4000));
+        let search_params = SearchParams::new(actor.searcher(), true, Some(4000), 0);
 
         let result = search(
             &sessions,

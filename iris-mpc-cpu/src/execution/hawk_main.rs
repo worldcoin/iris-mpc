@@ -255,6 +255,9 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = 4000)]
     pub hnsw_param_ef_supermatch: usize,
 
+    #[clap(long, default_value_t = 0)]
+    pub hnsw_param_ef_saturation_margin: usize,
+
     #[clap(long)]
     pub hnsw_layer_density: Option<usize>,
 
@@ -420,7 +423,8 @@ pub type SearchResult = (
 #[derive(Debug, Clone, Default)]
 pub struct SaturableMatches {
     pub results: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
-    /// True if all `ef` search results were below this threshold (more matches likely exist).
+    /// True if more matches likely exist.
+    /// This is detected when most or all `ef` search results are matches. See saturation_margin to make it more sensitive.
     pub saturated: bool,
 }
 
@@ -1805,6 +1809,7 @@ impl HawkHandle {
                 hawk_actor.searcher(),
                 true,
                 Some(hawk_actor.args.hnsw_param_ef_supermatch),
+                hawk_actor.args.hnsw_param_ef_saturation_margin,
             );
 
             let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
@@ -2452,6 +2457,7 @@ mod tests_db {
             hnsw_param_m: 256,
             hnsw_param_ef_search: 256,
             hnsw_param_ef_supermatch: 4000,
+            hnsw_param_ef_saturation_margin: 0,
             hnsw_layer_density: None,
             hnsw_prf_key: None,
             numa: true,

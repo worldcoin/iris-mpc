@@ -16,8 +16,8 @@ use crate::{
         ops::{
             conditionally_select_distances_with_plain_ids,
             conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
-            conditionally_swap_distances_plain_ids, galois_ring_to_rep3,
-            lte_anon_stats_threshold_and_open, open_ring, DistancePair, IdDistance,
+            conditionally_swap_distances_plain_ids, galois_ring_to_rep3, open_ring, DistancePair,
+            IdDistance,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -30,6 +30,7 @@ use crate::{
 use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    iris_db::iris::Threshold,
     vector_id::VectorId,
 };
 use itertools::{izip, Itertools};
@@ -560,12 +561,12 @@ where
     /// threshold (0.375 vs 0.345 for standard matching).
     pub async fn is_match_anon_stats_batch(
         &mut self,
-        distances: &[DistanceShare<u32>],
+        distances: &[DistanceShare<D::Ring>],
     ) -> Result<Vec<bool>> {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        lte_anon_stats_threshold_and_open(&mut self.session, distances).await
+        D::lte_and_open(&mut self.session, distances, Threshold::AnonStats).await
     }
 }
 
@@ -651,7 +652,12 @@ where
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(D::lte_threshold_and_open(&mut self.session, std::slice::from_ref(distance)).await?[0])
+        Ok(D::lte_and_open(
+            &mut self.session,
+            std::slice::from_ref(distance),
+            Threshold::Match,
+        )
+        .await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -684,7 +690,7 @@ where
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        D::lte_threshold_and_open(&mut self.session, distances).await
+        D::lte_and_open(&mut self.session, distances, Threshold::Match).await
     }
 
     async fn compact_neighborhood(
