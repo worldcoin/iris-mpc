@@ -18,10 +18,13 @@ use futures::future::try_join_all;
 use iris_mpc_common::vector_id::VectorId;
 use itertools::{izip, Itertools};
 use std::{
+    collections::HashMap,
+    fmt::Debug,
+    future::Future,
     iter,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, RwLock,
     },
     time::Instant,
 };
@@ -137,7 +140,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn dot_product_pairs(
-        &mut self,
+        &self,
         pairs: Vec<(ArcIris, VectorId)>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -179,7 +182,7 @@ impl IrisPoolHandle {
     /// Response channels are appended to `responses` for caller to await.
     #[inline(always)]
     fn dispatch_rotation_dot_product_batch(
-        &mut self,
+        &self,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
         responses: &mut Vec<oneshot::Receiver<Vec<RingElement<u16>>>>,
@@ -199,7 +202,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn rotation_aware_dot_product_pairs(
-        &mut self,
+        &self,
         pairs: Vec<(ArcIris, VectorId)>,
     ) -> Result<Vec<RingElement<u16>>> {
         let mut responses = Vec::with_capacity(pairs.len());
@@ -239,7 +242,7 @@ impl IrisPoolHandle {
     ///
     /// Returns results grouped by input batch.
     pub async fn rotation_aware_dot_product_multibatch(
-        &mut self,
+        &self,
         batches: Vec<(ArcIris, Vec<VectorId>)>,
     ) -> Result<Vec<Vec<RingElement<u16>>>> {
         // Track batch index for each chunk to enable reassembly
@@ -272,7 +275,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn bench_batch_dot(
-        &mut self,
+        &self,
         per_worker: usize,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
@@ -298,7 +301,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn galois_ring_pairwise_distances(
-        &mut self,
+        &self,
         input: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -307,7 +310,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn rotation_aware_pairwise_distances(
-        &mut self,
+        &self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<RingElement<u16>>> {
         let mut responses = Vec::with_capacity(pairs.len());
@@ -331,7 +334,7 @@ impl IrisPoolHandle {
     }
 
     async fn submit(
-        &mut self,
+        &self,
         task: IrisTask,
         rx: oneshot::Receiver<Vec<RingElement<u16>>>,
     ) -> Result<Vec<RingElement<u16>>> {
@@ -473,6 +476,265 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 );
                 let _ = rsp.send(r);
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IrisWorkerPool trait — abstracts over local/remote worker implementations
+// ---------------------------------------------------------------------------
+
+/// Unique identifier for a cached query in the worker pool.
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+pub struct QueryId(pub u64);
+
+static QUERY_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+impl QueryId {
+    pub fn new() -> Self {
+        Self(QUERY_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for QueryId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Distance computation mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DistanceMode {
+    Simple,
+    RotationAware,
+}
+
+/// Trait abstracting over iris worker pool implementations.
+///
+/// Mirrors the design from the "Iris Db Sharding and Memory Optimization"
+/// document. The five core operations are:
+///
+/// - **cache_queries**: push query irises into the worker pool by `QueryId`
+/// - **compute_dot_products**: compute distances using cached queries vs store targets
+/// - **compute_pairwise_distances**: compute distances between pairs of irises
+/// - **fetch_irises**: pull iris data from the worker's store
+/// - **insert_irises**: persist cached query irises into the worker's store
+/// - **evict_queries**: remove cached queries
+///
+/// The local implementation (`LocalIrisWorkerPool`) wraps `IrisPoolHandle` with
+/// a query cache. Future remote implementations will scatter-gather over a
+/// fleet of worker nodes via TCP.
+pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
+    /// Cache query irises for subsequent computation.
+    ///
+    /// The raw iris is stored and preprocessed internally. Caching an
+    /// already-cached `QueryId` is a no-op.
+    fn cache_queries(
+        &self,
+        queries: Vec<(QueryId, ArcIris)>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Compute dot products for batches of (query, targets).
+    ///
+    /// Each batch is a `(QueryId, Vec<VectorId>)`. Returns one `Vec<RingElement<u16>>`
+    /// per batch. The `mode` selects simple or rotation-aware distance.
+    fn compute_dot_products(
+        &self,
+        batches: Vec<(QueryId, Vec<VectorId>)>,
+        mode: DistanceMode,
+    ) -> impl Future<Output = Result<Vec<Vec<RingElement<u16>>>>> + Send;
+
+    /// Compute pairwise distances between pairs of irises.
+    ///
+    /// Takes raw `ArcIris` pairs directly (not `QueryId`-based) because the
+    /// pairwise path is used for compaction and test utilities where both
+    /// irises are constructed on the fly.
+    fn compute_pairwise_distances(
+        &self,
+        pairs: Vec<Option<(ArcIris, ArcIris)>>,
+        mode: DistanceMode,
+    ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send;
+
+    /// Fetch iris data from the worker's store by vector ID.
+    fn fetch_irises(
+        &self,
+        ids: Vec<VectorId>,
+    ) -> impl Future<Output = Result<Vec<(VectorId, ArcIris)>>> + Send;
+
+    /// Insert cached query irises into the worker's persistent store.
+    fn insert_irises(
+        &self,
+        inserts: Vec<(QueryId, VectorId)>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Evict cached queries, freeing memory.
+    fn evict_queries(
+        &self,
+        query_ids: Vec<QueryId>,
+    ) -> impl Future<Output = Result<()>> + Send;
+}
+
+// ---------------------------------------------------------------------------
+// LocalIrisWorkerPool — wraps IrisPoolHandle + query cache
+// ---------------------------------------------------------------------------
+
+/// Local implementation of `IrisWorkerPool` that wraps `IrisPoolHandle` with
+/// a `QueryId → (raw, preprocessed)` cache. Used for single-node operation.
+#[derive(Clone)]
+pub struct LocalIrisWorkerPool {
+    inner: IrisPoolHandle,
+    query_cache: Arc<RwLock<HashMap<QueryId, (ArcIris, ArcIris)>>>,
+    iris_store: SharedIrisesRef<ArcIris>,
+}
+
+impl Debug for LocalIrisWorkerPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalIrisWorkerPool")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl LocalIrisWorkerPool {
+    pub fn new(inner: IrisPoolHandle, iris_store: SharedIrisesRef<ArcIris>) -> Self {
+        Self {
+            inner,
+            query_cache: Arc::new(RwLock::new(HashMap::new())),
+            iris_store,
+        }
+    }
+
+    /// Access the underlying `IrisPoolHandle` for operations not on the trait
+    /// (e.g., `numa_realloc`, `insert`, `reserve`, `wait_completion`).
+    pub fn inner(&self) -> &IrisPoolHandle {
+        &self.inner
+    }
+}
+
+impl IrisWorkerPool for LocalIrisWorkerPool {
+    fn cache_queries(
+        &self,
+        queries: Vec<(QueryId, ArcIris)>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let query_cache = self.query_cache.clone();
+        async move {
+            let mut cache = query_cache.write().unwrap();
+            for (query_id, iris) in queries {
+                cache.entry(query_id).or_insert_with(|| {
+                    let mut preprocessed = (*iris).clone();
+                    preprocessed.code.preprocess_iris_code_query_share();
+                    preprocessed.mask.preprocess_mask_code_query_share();
+                    (iris, Arc::new(preprocessed))
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn compute_dot_products(
+        &self,
+        batches: Vec<(QueryId, Vec<VectorId>)>,
+        mode: DistanceMode,
+    ) -> impl Future<Output = Result<Vec<Vec<RingElement<u16>>>>> + Send {
+        let query_cache = self.query_cache.clone();
+        let mut inner = self.inner.clone();
+        async move {
+            // Look up preprocessed irises from cache (lock released before await)
+            let iris_batches: Vec<(ArcIris, Vec<VectorId>)> = {
+                let cache = query_cache.read().unwrap();
+                batches
+                    .into_iter()
+                    .map(|(qid, tids)| {
+                        let (_, iris_proc) = cache
+                            .get(&qid)
+                            .unwrap_or_else(|| panic!("Query {:?} not cached", qid));
+                        (iris_proc.clone(), tids)
+                    })
+                    .collect()
+            };
+
+            match mode {
+                DistanceMode::Simple => {
+                    let mut results = Vec::with_capacity(iris_batches.len());
+                    for (iris_proc, targets) in iris_batches {
+                        let r = inner.dot_product_batch(iris_proc, targets).await?;
+                        results.push(r);
+                    }
+                    Ok(results)
+                }
+                DistanceMode::RotationAware => {
+                    inner
+                        .rotation_aware_dot_product_multibatch(iris_batches)
+                        .await
+                }
+            }
+        }
+    }
+
+    fn compute_pairwise_distances(
+        &self,
+        pairs: Vec<Option<(ArcIris, ArcIris)>>,
+        mode: DistanceMode,
+    ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send {
+        let inner = self.inner.clone();
+        async move {
+            match mode {
+                DistanceMode::Simple => {
+                    inner.galois_ring_pairwise_distances(pairs).await
+                }
+                DistanceMode::RotationAware => {
+                    inner.rotation_aware_pairwise_distances(pairs).await
+                }
+            }
+        }
+    }
+
+    fn fetch_irises(
+        &self,
+        ids: Vec<VectorId>,
+    ) -> impl Future<Output = Result<Vec<(VectorId, ArcIris)>>> + Send {
+        let iris_store = self.iris_store.clone();
+        async move {
+            let store = iris_store.data.read().await;
+            let mut results = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Some(iris) = store.get_vector(&id) {
+                    results.push((id, iris.clone()));
+                }
+            }
+            Ok(results)
+        }
+    }
+
+    fn insert_irises(
+        &self,
+        inserts: Vec<(QueryId, VectorId)>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let inner = self.inner.clone();
+        let query_cache = self.query_cache.clone();
+        async move {
+            let cache = query_cache.read().unwrap();
+            for (query_id, vector_id) in inserts {
+                let (iris, _) = cache
+                    .get(&query_id)
+                    .unwrap_or_else(|| panic!("Query {:?} not cached for insert", query_id));
+                inner.insert(vector_id, iris.clone())?;
+            }
+            Ok(())
+        }
+    }
+
+    fn evict_queries(
+        &self,
+        query_ids: Vec<QueryId>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let query_cache = self.query_cache.clone();
+        async move {
+            let mut cache = query_cache.write().unwrap();
+            for qid in query_ids {
+                cache.remove(&qid);
+            }
+            Ok(())
         }
     }
 }
