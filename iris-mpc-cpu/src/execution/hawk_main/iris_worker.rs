@@ -617,6 +617,10 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         async move {
             let mut cache = query_cache.write().unwrap();
             for (query_id, iris, iris_proc) in queries {
+                // Note: iris_proc is NOT necessarily preprocess(iris). In production,
+                // Aby3Query::from_processed constructs them from independent data
+                // sources (rotated_requests vs interpolated_requests). The caller
+                // must provide the correct preprocessed iris.
                 cache.entry(query_id).or_insert((iris, iris_proc));
             }
             Ok(())
