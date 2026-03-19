@@ -13,11 +13,11 @@ use crate::{
     hnsw::{
         graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
         searcher::{NeighborhoodMode, UpdateEntryPoint},
-        vector_store::VectorStore,
         GraphMem, HnswSearcher, SortedNeighborhood,
     },
 };
 use eyre::{OptionExt, Result};
+use iris_mpc_common::iris_db::iris::Threshold;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -179,7 +179,6 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
     Ok(())
 }
 
-/// Classify search results at both thresholds and optionally re-search with extended ef.
 /// Classify search results at two thresholds and optionally re-search with extended ef.
 ///
 /// Two thresholds (GPU parity):
@@ -253,7 +252,9 @@ async fn classify_edges(
     let all_distances: Vec<_> = edges.iter().map(|(_, d)| *d).collect();
 
     // Step 1: Batch-check all edges at match threshold
-    let match_bits = aby3_store.is_match_batch(&all_distances).await?;
+    let match_bits = aby3_store
+        .is_match_at(&all_distances, Threshold::Match)
+        .await?;
     let matches: Vec<_> = edges
         .iter()
         .zip(&match_bits)
@@ -273,7 +274,7 @@ async fn classify_edges(
         matches.clone()
     } else {
         let anon_bits = aby3_store
-            .is_match_anon_stats_batch(&remaining_distances)
+            .is_match_at(&remaining_distances, Threshold::AnonStats)
             .await?;
         let anon_extra: Vec<_> = edges
             .iter()

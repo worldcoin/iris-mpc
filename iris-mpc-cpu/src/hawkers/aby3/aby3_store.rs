@@ -557,16 +557,16 @@ where
             .await
     }
 
-    /// Check whether a batch of distances are matches at the higher anon stats
-    /// threshold (0.375 vs 0.345 for standard matching).
-    pub async fn is_match_anon_stats_batch(
+    /// Check whether a batch of distances are matches at the given threshold.
+    pub async fn is_match_at(
         &mut self,
         distances: &[DistanceShare<D::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>> {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        D::lte_and_open(&mut self.session, distances, Threshold::AnonStats).await
+        D::lte_and_open(&mut self.session, distances, threshold).await
     }
 }
 
@@ -687,10 +687,7 @@ where
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
-        if distances.is_empty() {
-            return Ok(vec![]);
-        }
-        D::lte_and_open(&mut self.session, distances, Threshold::Match).await
+        self.is_match_at(distances, Threshold::Match).await
     }
 
     async fn compact_neighborhood(
