@@ -149,7 +149,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 /// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
-pub type HawkOps = FhdOps;
+pub type HawkOps = NhdOps;
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store<HawkOps>>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store<HawkOps>>;
