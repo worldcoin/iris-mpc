@@ -4,7 +4,7 @@ replicaCount: 0
 
 environment: prod
 
-schedule: "0 10 * * *"
+schedule: "0 18 * * *"
 
 # this is needed to prevent the job from restarting if it fails
 backoffLimit: 0
@@ -16,7 +16,7 @@ args:
   - "--export-output=s3"
   - "--batch-size=16000"
   - "--parallelism=60"
-  - "--output-folder=hnsw_even_odd_with_version_id_output_16k"
+  - "--output-folder=genesis_base_hnsw_even_odd_with_version_id_output_16k"
 
 imagePullSecrets:
   - name: github-secret
