@@ -225,7 +225,6 @@ pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
 const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
 #[derive(Clone, Parser)]
-#[allow(non_snake_case)]
 pub struct HawkArgs {
     #[clap(short, long)]
     pub party_index: usize,
@@ -248,7 +247,7 @@ pub struct HawkArgs {
     pub hnsw_param_ef_constr: usize,
 
     #[clap(long, default_value_t = 256)]
-    pub hnsw_param_M: usize,
+    pub hnsw_param_m: usize,
 
     #[clap(long, default_value_t = 256)]
     pub hnsw_param_ef_search: usize,
@@ -477,7 +476,7 @@ impl HawkActor {
             let mut searcher_ = HnswSearcher::new_linear_scan(
                 args.hnsw_param_ef_constr,
                 args.hnsw_param_ef_search,
-                args.hnsw_param_M,
+                args.hnsw_param_m,
                 LINEAR_SCAN_MAX_GRAPH_LAYER,
             );
 
@@ -2450,7 +2449,7 @@ mod tests_db {
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
-            hnsw_param_M: 256,
+            hnsw_param_m: 256,
             hnsw_param_ef_search: 256,
             hnsw_param_ef_supermatch: 4000,
             hnsw_layer_density: None,

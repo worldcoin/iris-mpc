@@ -2,11 +2,13 @@ use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::types::Eye;
 use ampc_anon_stats::{
-    process_1d_anon_stats_job, process_1d_lifted_anon_stats_job, process_2d_anon_stats_job,
-    process_2d_lifted_anon_stats_job, start_coordination_server, sync_on_id_hash,
-    sync_on_job_sizes, AnonStatsContext, AnonStatsMapping, AnonStatsOperation,
-    AnonStatsOrientation, AnonStatsOrigin, AnonStatsServerConfig, AnonStatsStore, BucketStatistics,
-    BucketStatistics2D, DistanceBundle1D, LiftedDistanceBundle1D, LiftedDistanceBundle2D, Opt,
+    anon_stats::iris_1d::process_1d_anon_stats_score_normalization_job,
+    anon_stats::iris_2d::process_2d_anon_stats_score_normalization_job, process_1d_anon_stats_job,
+    process_1d_lifted_anon_stats_job, process_2d_anon_stats_job, process_2d_lifted_anon_stats_job,
+    start_coordination_server, sync_on_id_hash, sync_on_job_sizes, AnonStatsContext,
+    AnonStatsMapping, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin,
+    AnonStatsServerConfig, AnonStatsStore, BucketStatistics, BucketStatistics2D, DistanceBundle1D,
+    LiftedDistanceBundle1D, LiftedDistanceBundle2D, Opt,
 };
 use ampc_server_utils::{
     init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
@@ -436,7 +438,7 @@ impl AnonStatsProcessor {
                 let start = Instant::now();
                 let mut stats = process_1d_anon_stats_job(
                     session,
-                    job,
+                    job.clone(),
                     &origin,
                     self.config.as_ref(),
                     Some(operation),
@@ -454,6 +456,28 @@ impl AnonStatsProcessor {
                 stats.next_start_time_utc_timestamp = Some(report_time);
 
                 self.publish_1d_stats(&stats).await?;
+                self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
+                    .await;
+
+                let start = Instant::now();
+                let mut stats = process_1d_anon_stats_score_normalization_job(
+                    session,
+                    job,
+                    &origin,
+                    self.config.as_ref(),
+                    Some(operation),
+                    last_report_time,
+                )
+                .await?;
+                let report_time = Utc::now();
+                let window_start = last_report_time.unwrap_or(report_time);
+                stats.start_time_utc_timestamp = window_start;
+                stats.end_time_utc_timestamp = Some(report_time);
+                stats.next_start_time_utc_timestamp = Some(report_time);
+                self.publish_1d_stats(&stats).await?;
+                self.log_job_metrics("1d-nhd", origin, kind, job_size, start.elapsed())
+                    .await;
+
                 self.last_report_times
                     .insert((origin, operation), report_time);
                 self.store.mark_anon_stats_processed_1d(&ids).await?;
@@ -605,7 +629,7 @@ impl AnonStatsProcessor {
                 let start = Instant::now();
                 let mut stats = process_2d_anon_stats_job(
                     session,
-                    job,
+                    job.clone(),
                     &origin,
                     self.config.as_ref(),
                     Some(operation),
@@ -623,6 +647,29 @@ impl AnonStatsProcessor {
                 stats.next_start_time_utc_timestamp = Some(report_time);
 
                 self.publish_2d_stats(&stats).await?;
+
+                let start = Instant::now();
+                let mut stats = process_2d_anon_stats_score_normalization_job(
+                    session,
+                    job,
+                    &origin,
+                    self.config.as_ref(),
+                    Some(operation),
+                    last_report_time,
+                )
+                .await?;
+
+                self.log_job_metrics("2d-nhd", origin, kind, job_size, start.elapsed())
+                    .await;
+
+                let report_time = Utc::now();
+                let window_start = last_report_time.unwrap_or(report_time);
+                stats.start_time_utc_timestamp = window_start;
+                stats.end_time_utc_timestamp = Some(report_time);
+                stats.next_start_time_utc_timestamp = Some(report_time);
+
+                self.publish_2d_stats(&stats).await?;
+
                 self.last_report_times
                     .insert((origin, operation), report_time);
                 self.store.mark_anon_stats_processed_2d(&ids).await?;

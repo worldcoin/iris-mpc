@@ -24,7 +24,8 @@ use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
-    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
@@ -456,7 +457,7 @@ async fn init_hawk_actor(
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
-        hnsw_param_M: config.hnsw_param_M,
+        hnsw_param_m: config.hnsw_param_m,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
         hnsw_param_ef_supermatch: config.hnsw_param_ef_supermatch,
         hnsw_layer_density: config.hnsw_layer_density,
@@ -522,6 +523,7 @@ async fn load_database(
             iris_store,
             store_len,
             parallelism,
+            None,
             config,
             download_shutdown_handler,
         )
@@ -629,6 +631,12 @@ async fn run_main_server_loop(
         create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let recovery_check_error_result_attributes =
         create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
+    let identity_deletion_error_result_attributes =
+        create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
+    let reset_update_error_result_attributes =
+        create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
+    let recovery_update_error_result_attributes =
+        create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
     let res: Result<()> = async {
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
@@ -645,6 +653,9 @@ async fn run_main_server_loop(
             reauth_error_result_attribute.clone(),
             reset_check_error_result_attributes.clone(),
             recovery_check_error_result_attributes.clone(),
+            identity_deletion_error_result_attributes.clone(),
+            reset_update_error_result_attributes.clone(),
+            recovery_update_error_result_attributes.clone(),
             current_batch_id_atomic.clone(),
             iris_store.clone(),
             batch_sync_shared_state.clone(),
