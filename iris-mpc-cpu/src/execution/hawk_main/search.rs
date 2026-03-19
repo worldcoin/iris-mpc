@@ -194,6 +194,7 @@ async fn classify_and_extend(
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem<Aby3VectorRef>,
     ef: usize,
+    insertion_layer: Option<usize>,
 ) -> Result<ClassifiedMatches> {
     let margin = search_params.saturation_margin;
     let classified = classify_edges(edges, aby3_store, ef, margin).await?;
@@ -217,17 +218,24 @@ async fn classify_and_extend(
         );
         metrics::counter!("supermatcher_extended_searches").increment(1);
 
-        let supermatch_neighbors = hnsw_supermatch
-            .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, query, ef_supermatch)
-            .await?;
+        let supermatch_edges = if let Some(layer) = insertion_layer {
+            let (links, _) = hnsw_supermatch
+                .search_to_insert::<_, SortedNeighborhood<_>>(aby3_store, graph_store, query, layer)
+                .await?;
+            links
+                .into_iter()
+                .next()
+                .map(|n| n.edges)
+                .unwrap_or_default()
+        } else {
+            hnsw_supermatch
+                .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, query, ef_supermatch)
+                .await?
+                .edges
+        };
 
-        let supermatch_classified = classify_edges(
-            &supermatch_neighbors.edges,
-            aby3_store,
-            ef_supermatch,
-            margin,
-        )
-        .await?;
+        let supermatch_classified =
+            classify_edges(&supermatch_edges, aby3_store, ef_supermatch, margin).await?;
 
         if supermatch_classified.anon_stats_matches.saturated {
             tracing::warn!(
@@ -327,6 +335,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
                     aby3_store,
                     graph_store,
                     ef,
+                    Some(insertion_layer),
                 )
                 .await?
             }
@@ -379,6 +388,7 @@ async fn per_search_query(
             aby3_store,
             graph_store,
             ef_search,
+            None,
         )
         .await?
     } else {
