@@ -527,11 +527,11 @@ pub enum DistanceMode {
 pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     /// Cache query irises for subsequent computation.
     ///
-    /// The raw iris is stored and preprocessed internally. Caching an
+    /// Each entry is `(QueryId, raw_iris, preprocessed_iris)`. Caching an
     /// already-cached `QueryId` is a no-op.
     fn cache_queries(
         &self,
-        queries: Vec<(QueryId, ArcIris)>,
+        queries: Vec<(QueryId, ArcIris, ArcIris)>,
     ) -> impl Future<Output = Result<()>> + Send;
 
     /// Compute dot products for batches of (query, targets).
@@ -568,10 +568,7 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     ) -> impl Future<Output = Result<()>> + Send;
 
     /// Evict cached queries, freeing memory.
-    fn evict_queries(
-        &self,
-        query_ids: Vec<QueryId>,
-    ) -> impl Future<Output = Result<()>> + Send;
+    fn evict_queries(&self, query_ids: Vec<QueryId>) -> impl Future<Output = Result<()>> + Send;
 }
 
 // ---------------------------------------------------------------------------
@@ -614,18 +611,13 @@ impl LocalIrisWorkerPool {
 impl IrisWorkerPool for LocalIrisWorkerPool {
     fn cache_queries(
         &self,
-        queries: Vec<(QueryId, ArcIris)>,
+        queries: Vec<(QueryId, ArcIris, ArcIris)>,
     ) -> impl Future<Output = Result<()>> + Send {
         let query_cache = self.query_cache.clone();
         async move {
             let mut cache = query_cache.write().unwrap();
-            for (query_id, iris) in queries {
-                cache.entry(query_id).or_insert_with(|| {
-                    let mut preprocessed = (*iris).clone();
-                    preprocessed.code.preprocess_iris_code_query_share();
-                    preprocessed.mask.preprocess_mask_code_query_share();
-                    (iris, Arc::new(preprocessed))
-                });
+            for (query_id, iris, iris_proc) in queries {
+                cache.entry(query_id).or_insert((iris, iris_proc));
             }
             Ok(())
         }
@@ -679,12 +671,8 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let inner = self.inner.clone();
         async move {
             match mode {
-                DistanceMode::Simple => {
-                    inner.galois_ring_pairwise_distances(pairs).await
-                }
-                DistanceMode::RotationAware => {
-                    inner.rotation_aware_pairwise_distances(pairs).await
-                }
+                DistanceMode::Simple => inner.galois_ring_pairwise_distances(pairs).await,
+                DistanceMode::RotationAware => inner.rotation_aware_pairwise_distances(pairs).await,
             }
         }
     }
@@ -724,10 +712,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         }
     }
 
-    fn evict_queries(
-        &self,
-        query_ids: Vec<QueryId>,
-    ) -> impl Future<Output = Result<()>> + Send {
+    fn evict_queries(&self, query_ids: Vec<QueryId>) -> impl Future<Output = Result<()>> + Send {
         let query_cache = self.query_cache.clone();
         async move {
             let mut cache = query_cache.write().unwrap();

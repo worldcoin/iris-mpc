@@ -1,6 +1,6 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::IrisPoolHandle,
+        hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool, QueryId},
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -52,18 +52,39 @@ pub use distance_ops::{DistanceOps, FhdOps, NhdOps};
 const MIN_ROUND_ROBIN_SIZE: usize = 1;
 const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 
-/// Iris to be searcher or inserted into the store.
+/// Iris to be searched or inserted into the store.
 ///
 /// This is an iris reference along with cached preprocessed version, used for
-/// efficient Galois ring MPC comparison.
-#[derive(Clone, Hash, Eq, PartialEq, Debug)]
+/// efficient Galois ring MPC comparison. Each query carries a unique `QueryId`
+/// for caching in the `IrisWorkerPool`.
+#[derive(Clone, Debug)]
 pub struct Aby3Query {
+    /// Unique identifier for caching in the worker pool.
+    pub query_id: QueryId,
+
     /// Iris in the Shamir secret shared form over a Galois ring.
     pub iris: ArcIris,
 
     /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
     pub iris_proc: ArcIris,
 }
+
+// Hash and Eq exclude query_id — two queries with the same iris content are
+// equal regardless of their cache key.
+impl std::hash::Hash for Aby3Query {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.iris.hash(state);
+        self.iris_proc.hash(state);
+    }
+}
+
+impl PartialEq for Aby3Query {
+    fn eq(&self, other: &Self) -> bool {
+        self.iris == other.iris && self.iris_proc == other.iris_proc
+    }
+}
+
+impl Eq for Aby3Query {}
 
 impl Aby3Query {
     /// Creates a new query from a secret shared iris. The input iris is preprocessed for
@@ -76,7 +97,11 @@ impl Aby3Query {
         preprocessed.mask.preprocess_mask_code_query_share();
         let iris_proc = Arc::new(preprocessed);
 
-        Self { iris, iris_proc }
+        Self {
+            query_id: QueryId::new(),
+            iris,
+            iris_proc,
+        }
     }
 
     pub fn new_from_raw(iris: GaloisRingSharedIris) -> Self {
@@ -98,7 +123,11 @@ impl Aby3Query {
             code: code_proc.clone(),
             mask: mask_proc.clone(),
         });
-        Self { iris, iris_proc }
+        Self {
+            query_id: QueryId::new(),
+            iris,
+            iris_proc,
+        }
     }
 }
 
@@ -110,31 +139,36 @@ pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
+/// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`) and `W`
+/// (worker pool implementation). The default `W = LocalIrisWorkerPool` is the
+/// single-node implementation; future remote implementations will enable
+/// horizontal scaling.
+///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
-pub struct Aby3Store<D = FhdOps> {
+pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
     /// Reference to the shared irises
     pub storage: Aby3SharedIrisesRef,
 
     /// Session for the SMPC operations
     pub session: Session,
 
-    /// used to spawn cpu bound tasks on a thread pool
-    pub workers: IrisPoolHandle,
+    /// Worker pool for CPU-bound distance computations.
+    pub workers: W,
 
     distance_fn: distance_fn::DistanceFn,
 
     _phantom: std::marker::PhantomData<D>,
 }
 
-impl<D: DistanceOps> Aby3Store<D>
+impl<D: DistanceOps, W: IrisWorkerPool> Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
 {
     pub fn new(
         storage: Aby3SharedIrisesRef,
         session: Session,
-        workers: IrisPoolHandle,
+        workers: W,
         distance_fn: DistanceFn,
     ) -> Self {
         Self {
@@ -144,6 +178,21 @@ where
             workers,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Ensures that the given queries are cached in the worker pool.
+    ///
+    /// This is called transparently before distance computation so that
+    /// callers (including tests) don't need to explicitly cache.
+    async fn ensure_queries_cached(&self, queries: &[&Aby3Query]) -> Result<()> {
+        let to_cache: Vec<_> = queries
+            .iter()
+            .map(|q| (q.query_id, q.iris.clone(), q.iris_proc.clone()))
+            .collect();
+        if !to_cache.is_empty() {
+            self.workers.cache_queries(to_cache).await?;
+        }
+        Ok(())
     }
 
     /// Converts distances from u16 secret shares to Ring-typed distance shares.
@@ -551,13 +600,15 @@ where
         if batches.is_empty() {
             return Ok(vec![]);
         }
+        let queries: Vec<&Aby3Query> = batches.iter().map(|(q, _)| q).collect();
+        self.ensure_queries_cached(&queries).await?;
         self.distance_fn
             .eval_distance_multibatch(self, batches)
             .await
     }
 }
 
-impl<D: DistanceOps> VectorStore for Aby3Store<D>
+impl<D: DistanceOps, W: IrisWorkerPool> VectorStore for Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
 {
@@ -604,6 +655,8 @@ where
         if pairs.is_empty() {
             return Ok(vec![]);
         }
+        let queries: Vec<&Aby3Query> = pairs.iter().map(|(q, _)| q).collect();
+        self.ensure_queries_cached(&queries).await?;
         self.distance_fn.eval_distance_pairs(self, pairs).await
     }
 
@@ -616,6 +669,7 @@ where
         if vectors.is_empty() {
             return Ok(vec![]);
         }
+        self.ensure_queries_cached(&[query]).await?;
         metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
         metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
         let start = std::time::Instant::now();
@@ -701,7 +755,7 @@ where
     }
 }
 
-impl<D: DistanceOps> VectorStoreMut for Aby3Store<D>
+impl<D: DistanceOps, W: IrisWorkerPool> VectorStoreMut for Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
 {

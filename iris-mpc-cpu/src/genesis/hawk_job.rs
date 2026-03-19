@@ -110,10 +110,14 @@ impl JobRequest {
         // Rebuild the same structure with the new irises.
         let new_requests = requests
             .iter()
-            .map(|_old_query| {
+            .map(|old_query| {
                 let iris = new_irises_iter.next().unwrap();
                 let iris_proc = new_irises_iter.next().unwrap();
-                Aby3Query { iris, iris_proc }
+                Aby3Query {
+                    query_id: old_query.query_id,
+                    iris,
+                    iris_proc,
+                }
             })
             .collect::<Vec<_>>();
 

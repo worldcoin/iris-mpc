@@ -616,12 +616,14 @@ impl HawkActor {
     ) -> impl Future<Output = Result<HawkSession>> {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
-        let workers = self.workers_handle(store_id);
+        let iris_pool = self.workers_handle(store_id);
+        let iris_store_ref = self.iris_store(store_id);
         let hnsw_prf_key = hnsw_prf_key.clone();
 
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+            let workers = iris_worker::LocalIrisWorkerPool::new(iris_pool, iris_store_ref);
             let aby3_store = Aby3Store::new(
                 storage,
                 Session {
@@ -1226,10 +1228,14 @@ impl HawkRequest {
             .iter()
             .map(|rots| {
                 rots.iter()
-                    .map(|_old_query| {
+                    .map(|old_query| {
                         let iris = new_irises_iter.next().unwrap();
                         let iris_proc = new_irises_iter.next().unwrap();
-                        Aby3Query { iris, iris_proc }
+                        Aby3Query {
+                            query_id: old_query.query_id,
+                            iris,
+                            iris_proc,
+                        }
                     })
                     .collect_vec()
                     .into()
