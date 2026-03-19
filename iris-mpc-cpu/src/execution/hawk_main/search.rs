@@ -251,44 +251,39 @@ async fn classify_edges(
 ) -> Result<ClassifiedMatches> {
     let all_distances: Vec<_> = edges.iter().map(|(_, d)| *d).collect();
 
-    // Step 1: Batch-check all edges at match threshold
-    let match_bits = aby3_store
-        .is_match_at(&all_distances, Threshold::Match)
+    // Step 1: Batch-check all edges at anon stats threshold (weaker, fewer passes)
+    let anon_bits = aby3_store
+        .is_match_at(&all_distances, Threshold::AnonStats)
         .await?;
-    let matches: Vec<_> = edges
+    let anon_stats_matches: Vec<_> = edges
         .iter()
-        .zip(&match_bits)
+        .zip(&anon_bits)
         .filter(|(_, &b)| b)
         .map(|(edge, _)| *edge)
         .collect();
-    let matches_saturated = matches.len() + saturation_margin >= ef;
+    let anon_stats_saturated = anon_stats_matches.len() + saturation_margin >= ef;
 
-    // Step 2: Batch-check non-matched edges at anon stats threshold
-    let remaining_distances: Vec<_> = all_distances
+    // Step 2: Batch-check anon stats matches at match threshold (stricter, smaller set)
+    let anon_distances: Vec<_> = all_distances
         .iter()
-        .zip(&match_bits)
-        .filter(|(_, &b)| !b)
+        .zip(&anon_bits)
+        .filter(|(_, &b)| b)
         .map(|(d, _)| *d)
         .collect();
-    let anon_stats_matches = if remaining_distances.is_empty() {
-        matches.clone()
+    let matches = if anon_distances.is_empty() {
+        vec![]
     } else {
-        let anon_bits = aby3_store
-            .is_match_at(&remaining_distances, Threshold::AnonStats)
+        let match_bits = aby3_store
+            .is_match_at(&anon_distances, Threshold::Match)
             .await?;
-        let anon_extra: Vec<_> = edges
+        anon_stats_matches
             .iter()
-            .zip(&match_bits)
-            .filter(|(_, &b)| !b)
-            .zip(anon_bits)
-            .filter(|(_, is_match)| *is_match)
-            .map(|((edge, _), _)| *edge)
-            .collect();
-        let mut all = matches.clone();
-        all.extend(anon_extra);
-        all
+            .zip(match_bits)
+            .filter(|(_, b)| *b)
+            .map(|(edge, _)| *edge)
+            .collect()
     };
-    let anon_stats_saturated = anon_stats_matches.len() + saturation_margin >= ef;
+    let matches_saturated = matches.len() + saturation_margin >= ef;
 
     Ok(ClassifiedMatches {
         matches: SaturableMatches {
@@ -441,6 +436,15 @@ mod tests {
     use super::*;
     use crate::execution::hawk_main::test_utils::{init_graph, init_iris_db, make_request};
     use crate::execution::hawk_main::{HawkActor, Orientation};
+    use iris_mpc_common::iris_db::iris::Threshold;
+
+    #[test]
+    fn match_threshold_is_stricter_than_anon_stats() {
+        assert!(
+            Threshold::Match.ratio() <= Threshold::AnonStats.ratio(),
+            "Match threshold must be stricter (lower) than anon stats threshold"
+        );
+    }
 
     #[tokio::test]
     async fn test_search() -> Result<()> {
