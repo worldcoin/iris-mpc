@@ -60,6 +60,9 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "96"
 
+  - name: SMPC__PREDEFINED_BATCH_SIZES
+    value: '[1, 2, 4, 8, 16, 32, 64, 96]'
+
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
 
