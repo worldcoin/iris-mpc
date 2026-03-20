@@ -11,7 +11,7 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
   - name: SCHEMA_NAME
-    value: SMPC_minfhd_dev_0
+    value: SMPC_dev_0
   - name: ENVIRONMENT
     value: dev
   - name: RERAND_S3_BUCKET
