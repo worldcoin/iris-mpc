@@ -560,8 +560,7 @@ impl HnswSearcher {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
             }
             _ => {
-                Self::layer_search_batched_v2(store, graph, q, W, ef, lc, fixed_batch_size)
-                    .await?;
+                Self::layer_search_batched_v2(store, graph, q, W, ef, lc, fixed_batch_size).await?;
             }
         }
         Ok(())
@@ -1120,8 +1119,8 @@ impl HnswSearcher {
 
             // Estimate the number of neighbors to visit which will result in approximately
             // the desired number of new elements to be inserted into the candidate neighborhood.
-            let target_batch_size = fixed_batch_size
-                .unwrap_or(insertion_batch_size * ins_rate_denom / INS_RATE_NUM);
+            let target_batch_size =
+                fixed_batch_size.unwrap_or(insertion_batch_size * ins_rate_denom / INS_RATE_NUM);
 
             // Open several candidate nodes, visit unvisited neighbors, and compute distances
             // between the query and neighbors as a batch. Opens nodes until at least
@@ -1400,7 +1399,16 @@ impl HnswSearcher {
         for lc in (0..n_layers).rev() {
             let layer_start = std::time::Instant::now();
             let ef = self.params.get_ef_search(lc);
-            Self::search_layer(store, graph, query, &mut W, ef, lc, self.fixed_layer_search_batch_size).await?;
+            Self::search_layer(
+                store,
+                graph,
+                query,
+                &mut W,
+                ef,
+                lc,
+                self.fixed_layer_search_batch_size,
+            )
+            .await?;
             metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
                 .record(layer_start.elapsed().as_secs_f64());
         }
@@ -1481,7 +1489,16 @@ impl HnswSearcher {
                 self.params.get_ef_constr_insert(lc)
             };
 
-            Self::search_layer(store, graph, query, &mut W, ef, lc, self.fixed_layer_search_batch_size).await?;
+            Self::search_layer(
+                store,
+                graph,
+                query,
+                &mut W,
+                ef,
+                lc,
+                self.fixed_layer_search_batch_size,
+            )
+            .await?;
             metrics::histogram!("search_to_insert_layer_duration", "layer" => lc.to_string())
                 .record(layer_start.elapsed().as_secs_f64());
 

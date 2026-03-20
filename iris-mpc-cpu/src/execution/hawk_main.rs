@@ -473,8 +473,7 @@ impl HawkActor {
                 // default geometric distribution uses layer_density value of `M`
             }
 
-            searcher_.fixed_layer_search_batch_size =
-                args.hnsw_fixed_layer_search_batch_size;
+            searcher_.fixed_layer_search_batch_size = args.hnsw_fixed_layer_search_batch_size;
 
             Arc::new(searcher_)
         };
