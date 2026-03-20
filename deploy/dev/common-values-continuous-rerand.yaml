@@ -3,9 +3,6 @@ replicaCount: 1
 
 environment: prod
 
-# this is needed to prevent the job from restarting if it fails
-backoffLimit: 0
-
 command: ["/bin/rerandomize-db"]
 args:
   - "rerandomize-continuous"
@@ -16,7 +13,7 @@ args:
 
 serviceAccount:
   create: true
-  name: "iris-mpc-db-rerandomization"
+  name: "ampc-hnsw-continuous-rerand"
 
 ports:
   - containerPort: 3000

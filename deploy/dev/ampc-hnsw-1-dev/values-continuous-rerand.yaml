@@ -1,6 +1,6 @@
 env:
   - name: SERVICE_NAME
-    value: iris-mpc-db-continuous-rerandomization-1
+    value: ampc-hnsw-continuous-rerand-1
   - name: AWS_REGION
     value: eu-north-1
   - name: PARTY_ID
