@@ -1,0 +1,47 @@
+env:
+  - name: RANGE_MIN
+    value: "1"
+  - name: RANGE_MAX_INCLUSIVE
+    value: "1000"
+  - name: CHUNK_SIZE
+    value: "1000"
+  - name: NUM_TASKS
+    value: "4"
+  - name: SCHEMA_NAME
+    value: 
+  - name: ENVIRONMENT
+    value: dev
+  - name: DB_URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
+  - name: SERVICE_NAME
+    value: iris-mpc-db-rerandomization-0
+  - name: AWS_REGION
+    value: eu-north-1
+  - name: PARTY_ID
+    value: "0"
+  - name: PUBLIC_KEY_BASE_URL
+    value: "https://pki-smpc.worldcoin.org/iris-mpc-tripartite-ecdh-public-key-party"
+  - name: PUBLIC_KEY_BUCKET_NAME
+    value: "wf-smpcv2-prod-public-keys"
+
+initContainer:
+  enabled: true
+  name: "rerandomize-db-key-gen"
+  image: "ghcr.io/worldcoin/rerandomization-protocol:v0.24.1@sha256:cdd05609f25a7f74a6dc75f07608d2217f6152351bbf9f69dab6651baff57b04"
+  imagePullPolicy: IfNotPresent
+  # add sleep because deployements are not synched. A party could
+  # end up reading an outdated public key if the key generation is not finished
+  command:
+    - /bin/sh
+    - -c
+    - rerandomize-db key-gen && sleep 30
+  env:
+    - name: ENVIRONMENT
+      value: prod
+    - name: PARTY_ID
+      value: "0"
+    - name: PUBLIC_KEY_BUCKET_NAME
+      value: "wf-smpcv2-prod-public-keys"

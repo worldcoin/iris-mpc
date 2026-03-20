@@ -1,0 +1,52 @@
+image: "ghcr.io/worldcoin/rerandomization-protocol:9ada456f64ffff48a2bbb3634859e00c7636faae"
+replicaCount: 1
+
+environment: prod
+
+# this is needed to prevent the job from restarting if it fails
+backoffLimit: 0
+
+command: ["/bin/rerandomize-db"]
+args:
+  - "rerandomize-continuous"
+  - "--range-min=$(RANGE_MIN)"
+  - "--range-max-inclusive=$(RANGE_MAX_INCLUSIVE)"
+  - "--chunk-size=$(CHUNK_SIZE)"
+  - "--num-tasks=$(NUM_TASKS)"
+
+serviceAccount:
+  create: true
+  name: "iris-mpc-db-rerandomization"
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+imagePullSecrets:
+  enabled: true
+  secretName: github-secret
+
+resources:
+  limits:
+    cpu: 3.5
+    memory: 12Gi
+  requests:
+    cpu: 3.5
+    memory: 12Gi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: "rerandomization"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "dbRerandomization"
+    effect: "NoSchedule"
+
+concurrencyPolicy: Replace
