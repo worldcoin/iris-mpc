@@ -190,6 +190,7 @@ async fn e2e_test_async() -> Result<()> {
         hnsw_param_ef_supermatch: 4000,
         hnsw_param_ef_saturation_margin: 0,
         hnsw_layer_density: None,
+        hnsw_fixed_layer_search_batch_size: None,
         hnsw_prf_key: None,
         disable_persistence: false,
         hnsw_disable_memory_persistence: false,

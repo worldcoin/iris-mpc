@@ -342,6 +342,8 @@ pub struct HnswConfig {
     pub ef_search: LayerValue<usize>,
     pub M: usize,
     pub layer_mode: LayerMode,
+    #[serde(default)]
+    pub fixed_layer_search_batch_size: Option<usize>,
 }
 
 impl From<&HnswConfig> for HnswSearcher {
@@ -372,6 +374,7 @@ impl From<&HnswConfig> for HnswSearcher {
             params,
             layer_mode,
             layer_distribution,
+            fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
         }
     }
 }
