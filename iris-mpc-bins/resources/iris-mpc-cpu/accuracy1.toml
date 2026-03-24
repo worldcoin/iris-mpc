@@ -19,6 +19,7 @@ layer_mode = { LinearScan = { max_graph_layer = 1 } }
 [analysis]
 sample_size = 20
 seed = 123
+distance_ops = "fhd"                  # Must be "fhd" or "nhd"
 distance_fn = "min_rotation"         # Must be "simple" or "min_rotation"
 neighborhood_mode = "Unsorted"  # Must be "Sorted" or "Unsorted"
 k_neighbors = 128
