@@ -13,3 +13,26 @@ pub mod utils;
 
 pub use ampc_actor_utils::network;
 pub use ampc_secret_sharing::shares;
+
+/// Instrument a phase with automatic begin/end events for the phase tracer.
+/// The guard lives until the end of the enclosing scope.
+/// No-op when the `phase_trace` feature is disabled.
+///
+/// Usage:
+///   `phase_trace!("dot_product");`
+///   `phase_trace!("dot_product", "n_vectors" => vectors.len());`
+#[macro_export]
+macro_rules! phase_trace {
+    ($name:expr) => {
+        #[cfg(feature = "phase_trace")]
+        let _phase_guard =
+            $crate::execution::hawk_main::phase_tracer::phase_begin($name, None);
+    };
+    ($name:expr, $($key:expr => $val:expr),+ $(,)?) => {
+        #[cfg(feature = "phase_trace")]
+        let _phase_guard = $crate::execution::hawk_main::phase_tracer::phase_begin(
+            $name,
+            Some(serde_json::json!({ $($key: $val),+ })),
+        );
+    };
+}
