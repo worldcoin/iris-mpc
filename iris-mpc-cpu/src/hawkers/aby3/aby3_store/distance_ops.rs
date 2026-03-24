@@ -25,6 +25,8 @@ use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use rand_distr::{Distribution, Standard};
 
+use iris_mpc_common::iris_db::iris::Threshold;
+
 use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
     protocol::{
@@ -55,8 +57,6 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
         + for<'de> serde::Deserialize<'de>
         + Send
         + Sync;
-
-    const MATCH_THRESHOLD_RATIO: f64;
 
     /// Lifts u16 distance shares to Ring-typed distance shares.
     async fn lift_distances(
@@ -192,14 +192,16 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     async fn greater_than_threshold(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<Share<Bit>>>;
 
-    /// Checks if distances are less than or equal to a threshold (for match detection).
-    async fn lte_threshold_and_open(
+    /// Checks if distances are less than or equal to the given threshold.
+    async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>> {
-        let gt_bits = Self::greater_than_threshold(session, distances).await?;
+        let gt_bits = Self::greater_than_threshold(session, distances, threshold).await?;
         let opened = open_bin(session, &gt_bits).await?;
         Ok(opened.into_iter().map(|b| !bool::from(b)).collect())
     }
@@ -239,8 +241,6 @@ pub struct FhdOps;
 impl DistanceOps for FhdOps {
     type Ring = u32;
 
-    const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
-
     async fn lift_distances(
         session: &mut Session,
         distances: Vec<Share<u16>>,
@@ -262,8 +262,9 @@ impl DistanceOps for FhdOps {
     async fn greater_than_threshold(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<Share<Bit>>> {
-        fhd_greater_than_threshold(session, distances, Self::MATCH_THRESHOLD_RATIO).await
+        fhd_greater_than_threshold(session, distances, threshold.ratio()).await
     }
 
     fn to_usize(value: Self::Ring) -> usize {
@@ -278,7 +279,7 @@ impl DistanceOps for FhdOps {
 
     fn plaintext_is_match(d: &(u16, u16)) -> bool {
         let (a, b) = *d;
-        (a as f64) < (b as f64) * Self::MATCH_THRESHOLD_RATIO
+        (a as f64) < (b as f64) * Threshold::Match.ratio()
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
@@ -303,8 +304,6 @@ pub struct NhdOps;
 impl DistanceOps for NhdOps {
     type Ring = Ring48;
 
-    const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
-
     async fn lift_distances(
         session: &mut Session,
         distances: Vec<Share<u16>>,
@@ -322,8 +321,9 @@ impl DistanceOps for NhdOps {
     async fn greater_than_threshold(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<Share<Bit>>> {
-        nhd_greater_than_threshold(session, distances, Self::MATCH_THRESHOLD_RATIO).await
+        nhd_greater_than_threshold(session, distances, threshold.ratio()).await
     }
 
     fn to_usize(value: Self::Ring) -> usize {
@@ -337,7 +337,7 @@ impl DistanceOps for NhdOps {
     }
 
     fn plaintext_is_match(d: &(u16, u16)) -> bool {
-        nhd_plaintext_is_match(d.0, d.1, Self::MATCH_THRESHOLD_RATIO)
+        nhd_plaintext_is_match(d.0, d.1, Threshold::Match.ratio())
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {

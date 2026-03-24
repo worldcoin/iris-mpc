@@ -223,6 +223,12 @@ pub struct Config {
     #[serde(default = "default_hnsw_param_ef_search")]
     pub hnsw_param_ef_search: usize,
 
+    #[serde(default = "default_hnsw_param_ef_supermatch")]
+    pub hnsw_param_ef_supermatch: usize,
+
+    #[serde(default)]
+    pub hnsw_param_ef_saturation_margin: usize,
+
     #[serde(default)]
     pub hnsw_layer_density: Option<usize>,
 
@@ -405,6 +411,10 @@ fn default_hnsw_param_m() -> usize {
 
 fn default_hnsw_param_ef_search() -> usize {
     256
+}
+
+fn default_hnsw_param_ef_supermatch() -> usize {
+    4000
 }
 
 fn default_hawk_numa() -> bool {
@@ -646,6 +656,8 @@ pub struct CommonConfig {
     hnsw_param_ef_constr: usize,
     hnsw_param_m: usize,
     hnsw_param_ef_search: usize,
+    hnsw_param_ef_supermatch: usize,
+    hnsw_param_ef_saturation_margin: usize,
     hnsw_layer_density: Option<usize>,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
@@ -728,6 +740,8 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_supermatch,
+            hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
             hnsw_fixed_layer_search_batch_size: _, // per-party tuning knob
             hawk_prf_key,
@@ -797,6 +811,8 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_supermatch,
+            hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
             hawk_prf_key,
             max_deletions_per_batch,
