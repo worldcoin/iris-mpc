@@ -355,7 +355,7 @@ mod tests {
             local::{generate_local_identities, LocalRuntime},
             session::{Session, SessionHandles},
         },
-        network::value::{NetworkInt, NetworkValue},
+        network::mpc::{NetworkInt, NetworkValue},
         protocol::shared_iris::GaloisRingSharedIris,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };

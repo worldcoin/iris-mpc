@@ -89,13 +89,13 @@ use crate::{
         searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint},
         GraphMem, HnswSearcher, VectorStore,
     },
-    network::tcp::{build_network_handle, NetworkHandle, NetworkHandleArgs},
+    network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },
 };
-use ampc_actor_utils::network::config::TlsConfig;
+use ampc_actor_utils::network::tcp::TlsConfig;
 use ampc_anon_stats::types::Eye;
 use ampc_anon_stats::{
     AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,

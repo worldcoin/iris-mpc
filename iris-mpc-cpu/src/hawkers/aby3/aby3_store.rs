@@ -737,7 +737,7 @@ mod tests {
             plaintext_store::PlaintextStore,
         },
         hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
-        network::NetworkType,
+        network::mpc::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
     };
     use aes_prng::AesRng;

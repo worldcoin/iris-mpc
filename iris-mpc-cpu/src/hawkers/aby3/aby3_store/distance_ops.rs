@@ -2,7 +2,7 @@ use std::{cmp::Ordering, fmt::Debug};
 
 use ampc_actor_utils::{
     execution::session::Session,
-    network::value::NetworkInt,
+    network::mpc::NetworkInt,
     protocol::{
         binary::{bit_inject, extract_msb_batch, open_bin},
         fhd_ops::{cross_mul, fhd_greater_than_threshold},
