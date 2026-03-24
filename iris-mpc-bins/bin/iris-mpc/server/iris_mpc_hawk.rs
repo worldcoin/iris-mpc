@@ -25,6 +25,7 @@ fn main() -> Result<()> {
             numactl::restrict_tokio_runtime();
         })
         .enable_all()
+        .enable_alt_timer()
         .build()
         .unwrap();
 
