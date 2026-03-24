@@ -24,10 +24,12 @@ use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use rand_distr::{Distribution, Standard};
 
+use iris_mpc_common::iris_db::iris::Threshold;
+
 use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
     protocol::{
-        fhd_ops::{cross_compare, lte_threshold_and_open, min_round_robin_batch},
+        fhd_ops::{cross_compare, lte_and_open as fhd_lte_and_open, min_round_robin_batch},
         nhd_ops::nhd_min_round_robin_batch,
         ops::{DistancePair, IdDistance},
     },
@@ -93,10 +95,11 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
         batch_size: usize,
     ) -> Result<Vec<DistanceShare<Self::Ring>>>;
 
-    /// Checks if distances are less than or equal to a threshold (for match detection).
-    async fn lte_threshold_and_open(
+    /// Checks if distances are less than or equal to the given threshold.
+    async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>>;
 
     /// Converts an opened ring value to a usize index.
@@ -181,11 +184,12 @@ impl DistanceOps for FhdOps {
         min_round_robin_batch(session, distances, batch_size).await
     }
 
-    async fn lte_threshold_and_open(
+    async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>> {
-        lte_threshold_and_open(session, distances).await
+        fhd_lte_and_open(session, distances, threshold).await
     }
 
     fn to_usize(value: Self::Ring) -> usize {
@@ -268,16 +272,12 @@ impl DistanceOps for NhdOps {
         nhd_min_round_robin_batch(session, distances, batch_size).await
     }
 
-    async fn lte_threshold_and_open(
+    async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>> {
-        nhd_lte_threshold_and_open(
-            session,
-            distances,
-            crate::protocol::nhd_ops::MATCH_THRESHOLD_RATIO,
-        )
-        .await
+        nhd_lte_threshold_and_open(session, distances, threshold.ratio()).await
     }
 
     fn to_usize(value: Self::Ring) -> usize {
