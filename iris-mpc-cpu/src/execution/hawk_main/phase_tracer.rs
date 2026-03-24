@@ -28,10 +28,7 @@ pub struct SessionContext {
 
 impl SessionContext {
     pub fn tid(&self) -> String {
-        format!(
-            "{}_eye{}_sess{}",
-            self.orient, self.i_eye, self.i_session
-        )
+        format!("{}_eye{}_sess{}", self.orient, self.i_eye, self.i_session)
     }
 }
 
@@ -149,10 +146,7 @@ impl Drop for PhaseGuard {
 }
 
 /// Begin a traced phase. Returns a guard that emits the end event on drop.
-pub fn phase_begin(
-    name: &'static str,
-    args: Option<serde_json::Value>,
-) -> PhaseGuard {
+pub fn phase_begin(name: &'static str, args: Option<serde_json::Value>) -> PhaseGuard {
     let tracer = tracer();
     let tid = SESSION_CTX
         .try_with(|ctx| ctx.tid())
@@ -177,4 +171,3 @@ pub fn phase_begin(
         start_time: tracer.start_time,
     }
 }
-

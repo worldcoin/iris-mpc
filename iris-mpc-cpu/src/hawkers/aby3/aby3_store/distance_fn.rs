@@ -1,6 +1,6 @@
+use super::{Aby3Query, Aby3Store, ArcIris, DistanceOps, DistanceShare, VectorId};
 use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
 use crate::phase_trace;
-use super::{Aby3Query, Aby3Store, ArcIris, DistanceOps, DistanceShare, VectorId};
 use ampc_secret_sharing::shares::int_ring::IntRing2k;
 use clap::ValueEnum;
 use eyre::Result;
