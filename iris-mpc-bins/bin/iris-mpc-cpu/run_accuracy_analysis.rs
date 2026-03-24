@@ -1,12 +1,15 @@
 use clap::Parser;
-use eyre::Result;
+use eyre::{bail, Result};
 use iris_mpc_cpu::analysis::accuracy::{
     load_graph, load_iris_store, process_results, run_analysis, Config,
 };
+use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
+use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::utils::serialization::load_toml;
 use metrics_tracing_context::{MetricsLayer, TracingContextLayer};
 use metrics_util::debugging::{DebuggingRecorder, Snapshotter};
 use metrics_util::layers::Layer;
+use rand::rngs::StdRng;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::layer::SubscriberExt;
@@ -20,17 +23,9 @@ struct Cli {
     job_spec: PathBuf,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let config: Config = load_toml(&cli.job_spec)?;
-
-    println!("Configuration loaded from {}.", cli.job_spec.display());
-    let mut rng = rand::SeedableRng::seed_from_u64(config.analysis.seed.unwrap_or(0));
-    //TODO: (?)separate analysis rng from iris and graph rng
-
-    let mut store =
-        load_iris_store(config.irises, &mut rng, config.analysis.get_distance_fn()?).await?;
+async fn run_with_ops<D: DistanceOps>(config: Config, rng: &mut StdRng) -> Result<()> {
+    let mut store: PlaintextStore<D> =
+        load_iris_store(config.irises, rng, config.analysis.get_distance_fn()?).await?;
     println!(
         "Loaded {} iris codes into PlaintextStore with distance_fn = {:?}.",
         store.len(),
@@ -38,7 +33,7 @@ async fn main() -> Result<()> {
     );
 
     println!("Initializing graph...");
-    let graph = load_graph(&config.graph, &mut store, &mut rng).await?;
+    let graph = load_graph(&config.graph, &mut store, rng).await?;
     println!("Graph initialized.");
 
     // Conditionally set up metrics collection
@@ -60,7 +55,7 @@ async fn main() -> Result<()> {
     };
 
     println!("Starting analysis...");
-    let results = run_analysis(config.analysis.clone(), store, graph, &mut rng).await?;
+    let results = run_analysis(config.analysis.clone(), store, graph, rng).await?;
 
     process_results(&config.analysis, results)?;
 
@@ -76,6 +71,24 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let config: Config = load_toml(&cli.job_spec)?;
+
+    println!("Configuration loaded from {}.", cli.job_spec.display());
+    let mut rng = rand::SeedableRng::seed_from_u64(config.analysis.seed.unwrap_or(0));
+
+    match config.analysis.distance_ops.as_str() {
+        "fhd" => run_with_ops::<FhdOps>(config, &mut rng).await,
+        "nhd" => run_with_ops::<NhdOps>(config, &mut rng).await,
+        other => bail!(
+            "Unknown distance_ops: '{}'. Must be \"fhd\" or \"nhd\".",
+            other
+        ),
+    }
 }
 
 fn export_metrics_csv(snapshotter: &Snapshotter, path: &Path) -> Result<()> {
