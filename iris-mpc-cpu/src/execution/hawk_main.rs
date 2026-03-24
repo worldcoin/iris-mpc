@@ -169,6 +169,8 @@ mod intra_batch;
 pub mod iris_worker;
 mod is_match_batch;
 mod matching;
+#[cfg(feature = "phase_trace")]
+pub mod phase_tracer;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
@@ -1729,6 +1731,9 @@ impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
         let mut sessions = hawk_actor.new_session_groups().await?;
 
+        #[cfg(feature = "phase_trace")]
+        phase_tracer::init(hawk_actor.party_id as u32);
+
         // Validate the common state before starting.
         HawkSession::state_check(sessions.for_state_check()).await?;
 
@@ -1736,11 +1741,13 @@ impl HawkHandle {
 
         // ---- Request Handler ----
         tokio::spawn(async move {
+            let mut batch_count: u32 = 0;
             while let Some(job) = rx.recv().await {
+                batch_count += 1;
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
                 let job_result = tokio::select! {
-                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request) => r,
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count) => r,
                     _ = error_ct.cancelled() => Err(eyre!("networking error")),
                 };
 
@@ -1769,6 +1776,7 @@ impl HawkHandle {
         hawk_actor: &mut HawkActor,
         sessions: &mut SessionGroups,
         request: HawkRequest,
+        #[allow(unused)] batch_count: u32,
     ) -> Result<HawkResult> {
         let now = Instant::now();
         tracing::info!(
@@ -1815,6 +1823,11 @@ impl HawkHandle {
                 true,
                 Some(hawk_actor.args.hnsw_param_ef_supermatch),
                 hawk_actor.args.hnsw_param_ef_saturation_margin,
+                #[cfg(feature = "phase_trace")]
+                match orient {
+                    Orientation::Normal => 'N',
+                    Orientation::Mirror => 'M',
+                },
             );
 
             let search_results = search::search::<HAWK_BASE_ROTATIONS_MASK>(
@@ -1892,6 +1905,9 @@ impl HawkHandle {
         .await?;
 
         let results = HawkResult::new(request.batch, match_result, mutations);
+
+        #[cfg(feature = "phase_trace")]
+        phase_tracer::flush(batch_count);
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);

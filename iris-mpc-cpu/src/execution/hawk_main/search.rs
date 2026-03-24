@@ -40,6 +40,9 @@ pub struct SearchParams {
     /// With margin=0 (default), all `ef` results must match to trigger extended search or to detect a supermatcher.
     /// A small margin (e.g. 1-30) accounts for imprecision in the HNSW neighbor tail.
     pub saturation_margin: usize,
+    /// Orientation label for phase tracing (e.g. 'N' or 'M').
+    #[cfg(feature = "phase_trace")]
+    pub orient: char,
 }
 
 impl SearchParams {
@@ -48,6 +51,7 @@ impl SearchParams {
         do_match: bool,
         ef_supermatch: Option<usize>,
         ef_saturation_margin: usize,
+        #[cfg(feature = "phase_trace")] orient: char,
     ) -> Self {
         let ef = hnsw.params.get_ef_search(0);
         let hnsw_supermatch = ef_supermatch.map(|ef_sm| {
@@ -69,11 +73,20 @@ impl SearchParams {
             hnsw_supermatch,
             do_match,
             saturation_margin: ef_saturation_margin,
+            #[cfg(feature = "phase_trace")]
+            orient,
         }
     }
 
     pub fn new_no_match(hnsw: Arc<HnswSearcher>) -> Self {
-        Self::new(hnsw, false, None, 0)
+        Self::new(
+            hnsw,
+            false,
+            None,
+            0,
+            #[cfg(feature = "phase_trace")]
+            'U',
+        )
     }
 }
 
@@ -144,39 +157,56 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
     tx: UnboundedSender<(TaskId, HawkInsertPlan)>,
     batch: Batch,
 ) -> Result<()> {
-    let mut vector_store = session.aby3_store.write().await;
-    let graph_store = session.graph_store.clone().read_owned().await;
+    let inner = async {
+        let mut vector_store = session.aby3_store.write().await;
+        let graph_store = session.graph_store.clone().read_owned().await;
 
-    for task in batch.tasks {
-        let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
-        let result = if task.is_central {
-            // search_to_insert for centers
-            let query_uuid = search_ids
-                .get(task.i_request)
-                .ok_or_eyre("Invalid request id for uuid lookup")?
-                .clone();
-            let side: StoreId = batch.i_eye.try_into()?;
-            let layer_selection_value = (query_uuid, side);
-            let insertion_layer = search_params
-                .hnsw
-                .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
-            per_insert_query::<N>(
-                query,
-                search_params,
-                &mut vector_store,
-                &graph_store,
-                insertion_layer,
-            )
-            .await?
-        } else {
-            // plain search for non-centers
-            per_search_query(query, search_params, &mut vector_store, &graph_store).await?
+        for task in batch.tasks {
+            let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
+            let result = if task.is_central {
+                // search_to_insert for centers
+                let query_uuid = search_ids
+                    .get(task.i_request)
+                    .ok_or_eyre("Invalid request id for uuid lookup")?
+                    .clone();
+                let side: StoreId = batch.i_eye.try_into()?;
+                let layer_selection_value = (query_uuid, side);
+                let insertion_layer = search_params
+                    .hnsw
+                    .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
+                per_insert_query::<N>(
+                    query,
+                    search_params,
+                    &mut vector_store,
+                    &graph_store,
+                    insertion_layer,
+                )
+                .await?
+            } else {
+                // plain search for non-centers
+                per_search_query(query, search_params, &mut vector_store, &graph_store).await?
+            };
+
+            tx.send((task.id(), result))?;
+        }
+
+        Ok(())
+    };
+
+    #[cfg(feature = "phase_trace")]
+    {
+        use super::phase_tracer::{SessionContext, SESSION_CTX};
+        let ctx = SessionContext {
+            i_eye: batch.i_eye,
+            i_session: batch.i_session,
+            orient: search_params.orient,
         };
-
-        tx.send((task.id(), result))?;
+        SESSION_CTX.scope(ctx, inner).await
     }
-
-    Ok(())
+    #[cfg(not(feature = "phase_trace"))]
+    {
+        inner.await
+    }
 }
 
 /// Classify search results at two thresholds and optionally re-search with extended ef.
@@ -465,7 +495,14 @@ mod tests {
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
         let search_queries = &request.queries(Orientation::Normal);
-        let search_params = SearchParams::new(actor.searcher(), true, Some(4000), 0);
+        let search_params = SearchParams::new(
+            actor.searcher(),
+            true,
+            Some(4000),
+            0,
+            #[cfg(feature = "phase_trace")]
+            'T',
+        );
 
         let result = search(
             &sessions,
