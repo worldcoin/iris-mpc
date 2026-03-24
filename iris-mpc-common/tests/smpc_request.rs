@@ -86,7 +86,6 @@ mod tests {
         let s3_client = Arc::new(S3Client::from_conf(s3_config));
 
         let smpc_request = UniquenessRequest {
-            batch_size: None,
             signup_id: "test_signup_id".to_string(),
             s3_key: key.to_string(),
             or_rule_serial_ids: None,

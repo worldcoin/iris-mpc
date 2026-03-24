@@ -225,7 +225,6 @@ pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
 const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
 #[derive(Clone, Parser)]
-#[allow(non_snake_case)]
 pub struct HawkArgs {
     #[clap(short, long)]
     pub party_index: usize,
@@ -248,13 +247,16 @@ pub struct HawkArgs {
     pub hnsw_param_ef_constr: usize,
 
     #[clap(long, default_value_t = 256)]
-    pub hnsw_param_M: usize,
+    pub hnsw_param_m: usize,
 
     #[clap(long, default_value_t = 256)]
     pub hnsw_param_ef_search: usize,
 
     #[clap(long)]
     pub hnsw_layer_density: Option<usize>,
+
+    #[clap(long)]
+    pub hnsw_fixed_layer_search_batch_size: Option<usize>,
 
     #[clap(long)]
     pub hnsw_prf_key: Option<u64>,
@@ -460,7 +462,7 @@ impl HawkActor {
             let mut searcher_ = HnswSearcher::new_linear_scan(
                 args.hnsw_param_ef_constr,
                 args.hnsw_param_ef_search,
-                args.hnsw_param_M,
+                args.hnsw_param_m,
                 LINEAR_SCAN_MAX_GRAPH_LAYER,
             );
 
@@ -470,6 +472,8 @@ impl HawkActor {
             } else {
                 // default geometric distribution uses layer_density value of `M`
             }
+
+            searcher_.fixed_layer_search_batch_size = args.hnsw_fixed_layer_search_batch_size;
 
             Arc::new(searcher_)
         };
@@ -2428,9 +2432,10 @@ mod tests_db {
             request_parallelism: 4,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
-            hnsw_param_M: 256,
+            hnsw_param_m: 256,
             hnsw_param_ef_search: 256,
             hnsw_layer_density: None,
+            hnsw_fixed_layer_search_batch_size: None,
             hnsw_prf_key: None,
             numa: true,
             disable_persistence: false,
