@@ -16,6 +16,25 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 pub const MATCH_THRESHOLD_RATIO: f64 = 0.345;
+pub const ANON_STATS_THRESHOLD_RATIO: f64 = 0.375;
+
+/// Which distance threshold to apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Threshold {
+    /// Standard match threshold (0.345).
+    Match,
+    /// Higher threshold used for anonymous statistics (0.375).
+    AnonStats,
+}
+
+impl Threshold {
+    pub fn ratio(self) -> f64 {
+        match self {
+            Threshold::Match => MATCH_THRESHOLD_RATIO,
+            Threshold::AnonStats => ANON_STATS_THRESHOLD_RATIO,
+        }
+    }
+}
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
