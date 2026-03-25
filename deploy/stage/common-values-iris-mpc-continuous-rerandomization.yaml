@@ -21,8 +21,7 @@ podSecurityContext:
   runAsGroup: 65534
 
 imagePullSecrets:
-  enabled: true
-  secretName: github-secret
+  - name: github-secret
 
 resources:
   limits:
