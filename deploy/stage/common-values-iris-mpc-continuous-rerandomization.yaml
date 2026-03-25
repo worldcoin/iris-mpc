@@ -1,5 +1,5 @@
 image: "ghcr.io/worldcoin/rerandomization-protocol:0bbe0c379e32ba7312d357ac56f295abcd96da08"
-replicaCount: 1
+replicaCount: 0
 
 environment: stage
 
