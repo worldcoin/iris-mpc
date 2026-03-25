@@ -8,10 +8,20 @@ use std::time::Duration;
 use crate::s3_coordination;
 use crate::tripartite_dh;
 
-fn secret_id(env: &str, epoch: u32, party_id: u8) -> String {
+fn service_prefix(service_name: &str) -> &str {
+    service_name
+        .rsplit_once('-')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(service_name)
+}
+
+fn secret_id(env: &str, service_name: &str, epoch: u32, party_id: u8) -> String {
     format!(
-        "{}/iris-mpc-db-rerandomization/epoch-{}/private-key-party-{}",
-        env, epoch, party_id
+        "{}/{}-continuous-rerandomisation/epoch-{}/private-key-party-{}",
+        env,
+        service_prefix(service_name),
+        epoch,
+        party_id
     )
 }
 
@@ -19,10 +29,11 @@ fn secret_id(env: &str, epoch: u32, party_id: u8) -> String {
 async fn load_private_key_from_sm(
     sm: &SecretsManagerClient,
     env: &str,
+    service_name: &str,
     epoch: u32,
     party_id: u8,
 ) -> Result<Option<tripartite_dh::PrivateKey>> {
-    let sid = secret_id(env, epoch, party_id);
+    let sid = secret_id(env, service_name, epoch, party_id);
     match sm
         .get_secret_value()
         .secret_id(&sid)
@@ -53,11 +64,12 @@ async fn load_private_key_from_sm(
 async fn save_private_key_to_sm(
     sm: &SecretsManagerClient,
     env: &str,
+    service_name: &str,
     epoch: u32,
     party_id: u8,
     key: &tripartite_dh::PrivateKey,
 ) -> Result<bool> {
-    let sid = secret_id(env, epoch, party_id);
+    let sid = secret_id(env, service_name, epoch, party_id);
     let b64 = STANDARD.encode(key.serialize());
 
     match sm
@@ -82,10 +94,11 @@ async fn save_private_key_to_sm(
 async fn delete_private_key_from_sm(
     sm: &SecretsManagerClient,
     env: &str,
+    service_name: &str,
     epoch: u32,
     party_id: u8,
 ) -> Result<()> {
-    let sid = secret_id(env, epoch, party_id);
+    let sid = secret_id(env, service_name, epoch, party_id);
     sm.delete_secret()
         .secret_id(&sid)
         .force_delete_without_recovery(true)
@@ -108,16 +121,17 @@ pub async fn idempotent_keygen(
     s3: &S3Client,
     bucket: &str,
     env: &str,
+    service_name: &str,
     epoch: u32,
     party_id: u8,
 ) -> Result<tripartite_dh::PrivateKey> {
     if epoch > 0 {
-        if let Err(e) = delete_private_key_from_sm(sm, env, epoch - 1, party_id).await {
+        if let Err(e) = delete_private_key_from_sm(sm, env, service_name, epoch - 1, party_id).await {
             tracing::debug!("Cleanup of epoch {} key (best-effort): {}", epoch - 1, e);
         }
     }
 
-    if let Some(existing) = load_private_key_from_sm(sm, env, epoch, party_id).await? {
+    if let Some(existing) = load_private_key_from_sm(sm, env, service_name, epoch, party_id).await? {
         tracing::info!(
             "Epoch {}: private key found in SM, re-uploading public key to S3",
             epoch
@@ -136,7 +150,7 @@ pub async fn idempotent_keygen(
     let mut rng = rand::rngs::OsRng;
     let private_key = tripartite_dh::PrivateKey::random(&mut rng);
 
-    let saved = save_private_key_to_sm(sm, env, epoch, party_id, &private_key).await?;
+    let saved = save_private_key_to_sm(sm, env, service_name, epoch, party_id, &private_key).await?;
     let private_key = if saved {
         private_key
     } else {
@@ -146,12 +160,12 @@ pub async fn idempotent_keygen(
             "Epoch {}: private key already exists in SM (likely concurrent start); reloading it",
             epoch
         );
-        load_private_key_from_sm(sm, env, epoch, party_id)
+        load_private_key_from_sm(sm, env, service_name, epoch, party_id)
             .await?
             .ok_or_else(|| {
                 eyre!(
                     "Secret existed but could not be loaded: {}",
-                    secret_id(env, epoch, party_id)
+                    secret_id(env, service_name, epoch, party_id)
                 )
             })?
     };
@@ -169,11 +183,12 @@ pub async fn derive_shared_secret(
     s3: &S3Client,
     bucket: &str,
     env: &str,
+    service_name: &str,
     epoch: u32,
     party_id: u8,
     poll_interval: Duration,
 ) -> Result<[u8; 32]> {
-    let private_key = idempotent_keygen(sm, s3, bucket, env, epoch, party_id).await?;
+    let private_key = idempotent_keygen(sm, s3, bucket, env, service_name, epoch, party_id).await?;
 
     let next_id = (party_id + 1) % 3;
     let prev_id = (party_id + 2) % 3;
@@ -238,6 +253,7 @@ pub async fn complete_epoch(
     s3: &S3Client,
     bucket: &str,
     env: &str,
+    service_name: &str,
     epoch: u32,
     party_id: u8,
     poll_interval: Duration,
@@ -252,6 +268,6 @@ pub async fn complete_epoch(
     s3_coordination::poll_epoch_complete_all(s3, bucket, epoch, poll_interval).await?;
     tracing::info!("Epoch {}: all parties completed", epoch);
 
-    delete_private_key_from_sm(sm, env, epoch, party_id).await?;
+    delete_private_key_from_sm(sm, env, service_name, epoch, party_id).await?;
     Ok(())
 }

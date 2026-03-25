@@ -354,6 +354,9 @@ pub struct RerandomizeContinuousConfig {
     #[clap(long, env = "ENVIRONMENT")]
     pub env: String,
 
+    #[clap(long, env = "SMPC__SERVICE__SERVICE_NAME")]
+    pub service_name: String,
+
     #[clap(long, env = "RERAND_S3_BUCKET")]
     pub s3_bucket: String,
 

@@ -139,6 +139,7 @@ impl TestEnv {
                 6200 + party_id as u16
             ),
             env: "testing".to_string(),
+            service_name: format!("iris-mpc-{}", party_id),
             s3_bucket: self.bucket.clone(),
             schema_name: format!("{}_{}", self.prefix, party_id),
             chunk_size: CHUNK_SIZE,
