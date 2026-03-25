@@ -71,8 +71,7 @@ async fn per_session(
     let query_pairs: Vec<Option<(_, _)>> = pairs
         .iter()
         .map(|pair| {
-            let spec_a =
-                search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].query_spec();
+            let spec_a = search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation];
             let id_b = search_queries[batch.i_eye][pair.earlier_request]
                 .center()
                 .query_id;

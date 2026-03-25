@@ -318,10 +318,9 @@ pub struct HawkActor {
     iris_store: BothEyes<Aby3SharedIrisesRef>,
     /// In-memory HNSW graphs for both left and right eyes.
     graph_store: BothEyes<GraphRef>,
-    /// Handles to the iris worker pools for NUMA-aware data processing.
-    workers_handle: BothEyes<IrisPoolHandle>,
     /// Shared worker pools with query caches (one per eye). Cloned into each
     /// `HawkSession` so all sessions for the same eye share the same cache.
+    /// Use `.inner()` to access the underlying `IrisPoolHandle`.
     pub(crate) worker_pools: BothEyes<iris_worker::LocalIrisWorkerPool>,
 
     /// Store for persisting detailed anonymized statistics.
@@ -536,7 +535,6 @@ impl HawkActor {
             networking,
             party_id: args.party_index,
             error_ct: CancellationToken::new(),
-            workers_handle,
             worker_pools,
         })
     }
@@ -555,10 +553,6 @@ impl HawkActor {
 
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
-    }
-
-    pub fn workers_handle(&self, store_id: StoreId) -> IrisPoolHandle {
-        self.workers_handle[store_id as usize].clone()
     }
 
     pub async fn db_size(&self) -> usize {
@@ -965,7 +959,10 @@ impl HawkActor {
             IrisLoader {
                 party_id: self.party_id,
                 db_size: &mut self.loader_db_size,
-                iris_pools: self.workers_handle.clone(),
+                iris_pools: [
+                    self.worker_pools[LEFT].inner().clone(),
+                    self.worker_pools[RIGHT].inner().clone(),
+                ],
             },
             GraphLoader([
                 self.graph_store[0].write().await,

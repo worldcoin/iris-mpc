@@ -36,10 +36,7 @@ impl DistanceFn {
             Simple => DistanceMode::Simple,
             MinRotation => DistanceMode::RotationAware,
         };
-        let batches = pairs
-            .iter()
-            .map(|(q, v)| (q.query_spec(), vec![*v]))
-            .collect();
+        let batches = pairs.iter().map(|(q, v)| (*q, vec![*v])).collect();
         let ds_and_ts_batches = store.workers.compute_dot_products(batches, mode).await?;
         let ds_and_ts: Vec<_> = ds_and_ts_batches.into_iter().flatten().collect();
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
@@ -71,7 +68,7 @@ impl DistanceFn {
         phase_trace!("dot_product", "n_vectors" => vectors.len());
         let ds_and_ts_batches = store
             .workers
-            .compute_dot_products(vec![(query.query_spec(), vectors.to_vec())], mode)
+            .compute_dot_products(vec![(*query, vectors.to_vec())], mode)
             .await?;
         let ds_and_ts = ds_and_ts_batches.into_iter().next().unwrap_or_default();
         metrics::histogram!("eval_distance_dot_product_duration")
@@ -121,10 +118,7 @@ impl DistanceFn {
 
         let batch_sizes: Vec<usize> = batches.iter().map(|(_, vids)| vids.len()).collect();
 
-        let trait_batches: Vec<_> = batches
-            .into_iter()
-            .map(|(q, vids)| (q.query_spec(), vids))
-            .collect();
+        let trait_batches: Vec<_> = batches;
 
         let ds_and_ts_batches = store
             .workers

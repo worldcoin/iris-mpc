@@ -164,7 +164,7 @@ impl Handle {
                             for queries_batch in queries_with_ids.chunks(n_sessions) {
                                 let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
                                     |((query, id), session)| {
-                                        let query = query.clone();
+                                        let query = *query;
                                         let searcher = searcher.clone();
                                         let session = session.clone();
                                         let identifier = (*id, side);

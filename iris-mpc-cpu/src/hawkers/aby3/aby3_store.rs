@@ -1,8 +1,6 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::{
-            IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec, CENTER_ROTATION,
-        },
+        hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec},
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -54,49 +52,10 @@ const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 
 /// Lightweight handle referencing a cached query in the `IrisWorkerPool`.
 ///
-/// The worker pool owns all iris data. `Aby3Query` is just a
-/// `(QueryId, rotation, mirrored)` triple that selects a specific
-/// preprocessed rotation from the cache.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct Aby3Query {
-    /// Identifies the base iris in the worker pool cache.
-    pub query_id: QueryId,
-    /// Rotation index (0–30). Index 15 = identity (center).
-    pub rotation: usize,
-    /// If true, selects the mirrored-then-preprocessed variant.
-    pub mirrored: bool,
-}
-
-impl Aby3Query {
-    /// Create a query handle for the identity rotation, non-mirrored.
-    ///
-    /// The iris must already be cached in the worker pool via `cache_queries`.
-    pub fn new(query_id: QueryId) -> Self {
-        Self {
-            query_id,
-            rotation: CENTER_ROTATION,
-            mirrored: false,
-        }
-    }
-
-    /// Create a query handle with explicit rotation and mirror flag.
-    pub fn with_rotation(query_id: QueryId, rotation: usize, mirrored: bool) -> Self {
-        Self {
-            query_id,
-            rotation,
-            mirrored,
-        }
-    }
-
-    /// Build a `QuerySpec` from this query.
-    pub fn query_spec(&self) -> QuerySpec {
-        QuerySpec {
-            query_id: self.query_id,
-            rotation: self.rotation,
-            mirrored: self.mirrored,
-        }
-    }
-}
+/// This is a type alias for `QuerySpec`. The worker pool owns all iris data;
+/// `Aby3Query` is just a `(QueryId, rotation, mirrored)` triple that selects
+/// a specific preprocessed rotation from the cache.
+pub type Aby3Query = QuerySpec;
 
 pub type Aby3VectorRef = VectorId;
 pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;

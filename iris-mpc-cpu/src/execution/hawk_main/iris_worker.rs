@@ -513,13 +513,36 @@ pub enum DistanceMode {
 ///
 /// Each cached iris produces 31 rotations × 2 orientations (normal + mirrored).
 /// `QuerySpec` selects which variant to use for a given distance computation.
-#[derive(Clone, Copy, Debug)]
+///
+/// Also used as the `QueryRef` type in `VectorStore` (via the `Aby3Query` alias
+/// in `aby3_store`).
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub struct QuerySpec {
     pub query_id: QueryId,
     /// Rotation index (0–30). Index 15 is the identity (center).
     pub rotation: usize,
     /// If true, use the mirrored-then-preprocessed variant.
     pub mirrored: bool,
+}
+
+impl QuerySpec {
+    /// Create a query handle for the identity rotation, non-mirrored.
+    pub fn new(query_id: QueryId) -> Self {
+        Self {
+            query_id,
+            rotation: CENTER_ROTATION,
+            mirrored: false,
+        }
+    }
+
+    /// Create a query handle with explicit rotation and mirror flag.
+    pub fn with_rotation(query_id: QueryId, rotation: usize, mirrored: bool) -> Self {
+        Self {
+            query_id,
+            rotation,
+            mirrored,
+        }
+    }
 }
 
 /// Rotation index for the identity (no rotation). This is index 15 in the
