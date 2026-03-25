@@ -6,14 +6,10 @@ environment: stage
 command: ["/bin/rerandomize-db"]
 args:
   - "rerandomize-continuous"
-  - "--range-min=$(RANGE_MIN)"
-  - "--range-max-inclusive=$(RANGE_MAX_INCLUSIVE)"
-  - "--chunk-size=$(CHUNK_SIZE)"
-  - "--num-tasks=$(NUM_TASKS)"
 
 serviceAccount:
   create: true
-  name: "ampc-hnsw-continuous-rerand"
+  name: "iris-mpc-continuous-rerand"
 
 ports:
   - containerPort: 3000
@@ -43,7 +39,7 @@ nodeSelector:
 tolerations:
   - key: "dedicated"
     operator: "Equal"
-    value: "dbRerandomization"
+    value: "continuousDbRerandomization"
     effect: "NoSchedule"
 
 concurrencyPolicy: Replace
