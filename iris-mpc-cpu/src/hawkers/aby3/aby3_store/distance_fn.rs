@@ -2,6 +2,7 @@ use crate::execution::hawk_main::{
     iris_worker::{DistanceMode, IrisWorkerPool},
     HAWK_MIN_DIST_ROTATIONS,
 };
+use crate::phase_trace;
 
 use super::{Aby3Query, Aby3Store, DistanceOps, DistanceShare, VectorId};
 use ampc_secret_sharing::shares::{
@@ -67,6 +68,7 @@ impl DistanceFn {
             MinRotation => DistanceMode::RotationAware,
         };
         let dot_start = std::time::Instant::now();
+        phase_trace!("dot_product", "n_vectors" => vectors.len());
         let ds_and_ts_batches = store
             .workers
             .compute_dot_products(vec![(query.query_spec(), vectors.to_vec())], mode)
@@ -78,6 +80,7 @@ impl DistanceFn {
         }
 
         let lift_start = std::time::Instant::now();
+        phase_trace!("mpc_lift", "n_vectors" => vectors.len());
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
         if mode == DistanceMode::RotationAware {
             metrics::histogram!("eval_distance_lift_duration")
@@ -88,6 +91,7 @@ impl DistanceFn {
             Simple => Ok(distances),
             MinRotation => {
                 let omin_start = std::time::Instant::now();
+                phase_trace!("oblivious_min", "n_vectors" => vectors.len());
                 let result = store
                     .oblivious_min_distance_batch(transpose_from_flat(&distances))
                     .await;
