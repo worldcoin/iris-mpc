@@ -729,20 +729,36 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 ));
             }
 
-            // NUMA-realloc only the original iris (needed for inserts into the
-            // NUMA-local store). Preprocessed rotations are only read once per
-            // distance batch (~38KB), so the cross-NUMA penalty is negligible
-            // compared to the many stored-vector reads. This reduces NUMA realloc
-            // from 63 ArcIris per query to 1.
+            // NUMA-realloc all irises onto the worker pool's NUMA node.
+            // The query iris is the "left" operand in every trick_dot and is
+            // read once per stored vector — for ef=128 that's 128 × ~38KB per
+            // search step, so NUMA locality matters.
             let mut realloc_futures = Vec::new();
             for (_, entry) in &entries {
                 realloc_futures.push(inner.numa_realloc(entry.original.clone()));
+                for rot in &entry.preprocessed_rotations {
+                    realloc_futures.push(inner.numa_realloc(rot.clone()));
+                }
+                for rot in &entry.mirrored_preprocessed_rotations {
+                    realloc_futures.push(inner.numa_realloc(rot.clone()));
+                }
             }
             let receivers: Vec<_> = realloc_futures.into_iter().collect::<Result<Vec<_>>>()?;
             let reallocated = try_join_all(receivers).await?;
 
-            for ((_, entry), realloced_original) in entries.iter_mut().zip(reallocated) {
-                entry.original = realloced_original;
+            // Write NUMA-local copies back into the entries.
+            let mut idx = 0;
+            for (_, entry) in &mut entries {
+                entry.original = reallocated[idx].clone();
+                idx += 1;
+                for rot in &mut entry.preprocessed_rotations {
+                    *rot = reallocated[idx].clone();
+                    idx += 1;
+                }
+                for rot in &mut entry.mirrored_preprocessed_rotations {
+                    *rot = reallocated[idx].clone();
+                    idx += 1;
+                }
             }
 
             // Store in cache.
