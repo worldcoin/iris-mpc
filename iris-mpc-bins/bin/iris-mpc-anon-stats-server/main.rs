@@ -1053,9 +1053,7 @@ async fn main() -> Result<()> {
     }
 
     shutdown_handler.wait_for_shutdown().await;
-    shutdown_handler
-        .wait_for_pending_batches_completion()
-        .await?;
+    let _ = shutdown_handler.wait_for_pending_batches_completion().await;
     ct.cancel();
     background_tasks.abort_and_wait_for_finish().await;
 

@@ -246,7 +246,10 @@ where
     pub async fn oblivious_min_distance(
         &mut self,
         distances: &[DistanceShare<D::Ring>],
-    ) -> Result<DistanceShare<D::Ring>> {
+    ) -> Result<DistanceShare<D::Ring>>
+    where
+        VecShare<D::Ring>: Transpose64,
+    {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -360,7 +363,10 @@ where
     pub(crate) async fn oblivious_min_distance_batch(
         &mut self,
         distances: Vec<Vec<DistanceShare<D::Ring>>>,
-    ) -> Result<Vec<DistanceShare<D::Ring>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        VecShare<D::Ring>: Transpose64,
+    {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
