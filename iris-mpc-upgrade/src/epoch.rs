@@ -17,7 +17,7 @@ fn service_prefix(service_name: &str) -> &str {
 
 fn secret_id(env: &str, service_name: &str, epoch: u32, party_id: u8) -> String {
     format!(
-        "{}/{}-continuous-rerandomisation/epoch-{}/private-key-party-{}",
+        "{}/{}/epoch-{}/private-key-party-{}",
         env,
         service_prefix(service_name),
         epoch,

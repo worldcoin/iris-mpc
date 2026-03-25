@@ -1,5 +1,5 @@
 env:
-  - name: SERVICE_NAME
+  - name: SMPC__SERVICE__SERVICE_NAME
     value: iris-mpc-continuous-rerandomization-2
   - name: AWS_REGION
     value: eu-north-1
