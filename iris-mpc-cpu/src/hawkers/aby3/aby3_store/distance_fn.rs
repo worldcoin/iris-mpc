@@ -74,18 +74,14 @@ impl DistanceFn {
             .compute_dot_products(vec![(query.query_spec(), vectors.to_vec())], mode)
             .await?;
         let ds_and_ts = ds_and_ts_batches.into_iter().next().unwrap_or_default();
-        if mode == DistanceMode::RotationAware {
-            metrics::histogram!("eval_distance_dot_product_duration")
-                .record(dot_start.elapsed().as_secs_f64());
-        }
+        metrics::histogram!("eval_distance_dot_product_duration")
+            .record(dot_start.elapsed().as_secs_f64());
 
         let lift_start = std::time::Instant::now();
         phase_trace!("mpc_lift", "n_vectors" => vectors.len());
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        if mode == DistanceMode::RotationAware {
-            metrics::histogram!("eval_distance_lift_duration")
-                .record(lift_start.elapsed().as_secs_f64());
-        }
+        metrics::histogram!("eval_distance_lift_duration")
+            .record(lift_start.elapsed().as_secs_f64());
 
         match self {
             Simple => Ok(distances),
@@ -135,36 +131,38 @@ impl DistanceFn {
             .compute_dot_products(trait_batches, mode)
             .await?;
 
+        // Flatten all batches into a single lift call to minimize MPC round-trips.
+        let flattened_ds_and_ts: Vec<_> = ds_and_ts_batches.into_iter().flatten().collect();
+
+        if flattened_ds_and_ts.is_empty() {
+            return Ok(batch_sizes.iter().map(|_| vec![]).collect());
+        }
+
+        let distances = store.gr_to_lifted_distances(flattened_ds_and_ts).await?;
+
         match self {
             Simple => {
+                // Split results back into per-batch vectors.
                 let mut results = Vec::with_capacity(batch_sizes.len());
-                for ds_and_ts in ds_and_ts_batches {
-                    let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-                    results.push(distances);
+                let mut offset = 0;
+                for batch_size in batch_sizes {
+                    results.push(distances[offset..offset + batch_size].to_vec());
+                    offset += batch_size;
                 }
                 Ok(results)
             }
             MinRotation => {
-                // Flatten all batches for single calls to post-processing
-                let flattened_ds_and_ts: Vec<_> = ds_and_ts_batches.into_iter().flatten().collect();
-
-                if flattened_ds_and_ts.is_empty() {
-                    return Ok(batch_sizes.iter().map(|_| vec![]).collect());
-                }
-
-                let distances = store.gr_to_lifted_distances(flattened_ds_and_ts).await?;
                 let all_mins = store
                     .oblivious_min_distance_batch(transpose_from_flat(&distances))
                     .await?;
 
-                // Split results back into per-batch vectors
+                // Split results back into per-batch vectors.
                 let mut results = Vec::with_capacity(batch_sizes.len());
                 let mut offset = 0;
                 for batch_size in batch_sizes {
                     results.push(all_mins[offset..offset + batch_size].to_vec());
                     offset += batch_size;
                 }
-
                 Ok(results)
             }
         }

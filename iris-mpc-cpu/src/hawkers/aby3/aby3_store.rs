@@ -604,15 +604,11 @@ where
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         let irises = self.storage.get_vectors_or_empty(&vectors).await;
         let to_cache: Vec<_> = irises
-            .iter()
-            .map(|iris| (QueryId::new(), (**iris).clone()))
+            .into_iter()
+            .map(|iris| (QueryId::new(), iris))
             .collect();
         let query_ids: Vec<QueryId> = to_cache.iter().map(|(qid, _)| *qid).collect();
-        let to_cache_arc: Vec<_> = to_cache
-            .into_iter()
-            .map(|(qid, iris)| (qid, Arc::new(iris)))
-            .collect();
-        self.workers.cache_queries(to_cache_arc).await.unwrap();
+        self.workers.cache_queries(to_cache).await.unwrap();
         query_ids.into_iter().map(Aby3Query::new).collect_vec()
     }
 
@@ -748,12 +744,12 @@ where
     VecShare<D::Ring>: Transpose64,
 {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        // insert_irises writes directly to the shared store (acquiring the
-        // write lock internally), so we can't hold it here. Instead, peek
-        // at the next ID without incrementing — insert will set it.
+        // Atomically allocate the next ID under a write lock, then insert
+        // the iris at that ID. This avoids a TOCTOU race between peeking
+        // next_id and the actual insert.
         let vector_id = {
-            let store = self.storage.data.read().await;
-            VectorId::from_serial_id(store.next_id)
+            let mut store = self.storage.data.write().await;
+            store.allocate_next_id()
         };
         self.workers
             .insert_irises(vec![(query.query_id, vector_id)])

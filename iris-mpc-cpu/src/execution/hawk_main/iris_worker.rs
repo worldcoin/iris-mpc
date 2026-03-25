@@ -663,6 +663,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let query_cache = self.query_cache.clone();
         let inner = self.inner.clone();
         async move {
+            let start = Instant::now();
             // Filter out already-cached queries.
             let new_queries: Vec<_> = {
                 let cache = query_cache.read().unwrap();
@@ -740,6 +741,8 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             for (query_id, entry) in entries {
                 cache.entry(query_id).or_insert(entry);
             }
+            metrics::histogram!("cache_queries_duration")
+                .record(start.elapsed().as_secs_f64());
             Ok(())
         }
     }
