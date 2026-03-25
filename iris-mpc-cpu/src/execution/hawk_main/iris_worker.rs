@@ -581,11 +581,12 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     /// (not stored vectors). Each `None` pair produces a max-distance sentinel.
     ///
     /// Convention: the first `QuerySpec` selects a **preprocessed** rotation,
-    /// the second selects the **raw (original)** iris. This matches the
-    /// `trick_dot` expectation (one preprocessed operand, one raw).
+    /// the second `QueryId` selects the **raw (original)** iris (only the
+    /// query identity matters — rotation/mirrored are not applicable for the
+    /// raw operand). This matches `trick_dot` (one preprocessed, one raw).
     fn compute_pairwise_distances(
         &self,
-        pairs: Vec<Option<(QuerySpec, QuerySpec)>>,
+        pairs: Vec<Option<(QuerySpec, QueryId)>>,
         mode: DistanceMode,
     ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send;
 
@@ -762,15 +763,15 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     .map(|(spec, tids)| {
                         let cached = cache
                             .get(&spec.query_id)
-                            .unwrap_or_else(|| panic!("Query {:?} not cached", spec.query_id));
+                            .ok_or_else(|| eyre::eyre!("Query {:?} not cached", spec.query_id))?;
                         let rotations = if spec.mirrored {
                             &cached.mirrored_preprocessed_rotations
                         } else {
                             &cached.preprocessed_rotations
                         };
-                        (rotations[spec.rotation].clone(), tids)
+                        Ok((rotations[spec.rotation].clone(), tids))
                     })
-                    .collect()
+                    .collect::<Result<Vec<_>>>()?
             };
 
             match mode {
@@ -823,12 +824,12 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     .map(|(qid, vid)| {
                         let iris = cache
                             .get(&qid)
-                            .unwrap_or_else(|| panic!("Query {:?} not cached for insert", qid))
+                            .ok_or_else(|| eyre::eyre!("Query {:?} not cached for insert", qid))?
                             .original
                             .clone();
-                        (vid, iris)
+                        Ok((vid, iris))
                     })
-                    .collect()
+                    .collect::<Result<Vec<_>>>()?
             };
             // Write directly to the shared store (not via IrisPoolHandle::insert
             // which is fire-and-forget). HNSW insertion needs the iris to be
@@ -843,34 +844,43 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
 
     fn compute_pairwise_distances(
         &self,
-        pairs: Vec<Option<(QuerySpec, QuerySpec)>>,
+        pairs: Vec<Option<(QuerySpec, QueryId)>>,
         mode: DistanceMode,
     ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send {
         let query_cache = self.query_cache.clone();
         let inner = self.inner.clone();
         async move {
-            // Resolve QuerySpec pairs to ArcIris pairs.
+            // Resolve pairs to ArcIris pairs.
             // First = preprocessed rotation, second = raw (original) iris.
             let iris_pairs: Vec<Option<(ArcIris, ArcIris)>> = {
                 let cache = query_cache.read().unwrap();
                 pairs
                     .into_iter()
-                    .map(|pair| {
-                        pair.map(|(a, b)| {
-                            let ca = cache.get(&a.query_id).unwrap();
-                            let cb = cache.get(&b.query_id).unwrap();
-                            let iris_a = if a.mirrored {
-                                &ca.mirrored_preprocessed_rotations
-                            } else {
-                                &ca.preprocessed_rotations
-                            }[a.rotation]
-                                .clone();
-                            // Second operand: raw (un-preprocessed) original iris.
-                            let iris_b = cb.original.clone();
-                            (iris_a, iris_b)
-                        })
+                    .map(|pair| -> Result<_> {
+                        match pair {
+                            None => Ok(None),
+                            Some((a, b_id)) => {
+                                let ca = cache.get(&a.query_id).ok_or_else(|| {
+                                    eyre::eyre!(
+                                        "Query {:?} not cached for pairwise (a)",
+                                        a.query_id
+                                    )
+                                })?;
+                                let cb = cache.get(&b_id).ok_or_else(|| {
+                                    eyre::eyre!("Query {:?} not cached for pairwise (b)", b_id)
+                                })?;
+                                let iris_a = if a.mirrored {
+                                    &ca.mirrored_preprocessed_rotations
+                                } else {
+                                    &ca.preprocessed_rotations
+                                }[a.rotation]
+                                    .clone();
+                                let iris_b = cb.original.clone();
+                                Ok(Some((iris_a, iris_b)))
+                            }
+                        }
                     })
-                    .collect()
+                    .collect::<Result<Vec<_>>>()?
             };
             match mode {
                 DistanceMode::Simple => inner.galois_ring_pairwise_distances(iris_pairs).await,

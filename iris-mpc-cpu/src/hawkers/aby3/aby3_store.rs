@@ -152,10 +152,10 @@ where
     ///
     /// Uses the store's configured distance function (Simple or MinRotation)
     /// and the worker pool's `compute_pairwise_distances` method.
-    /// Convention: first QuerySpec = preprocessed, second = raw (original).
+    /// Convention: first QuerySpec = preprocessed, second QueryId = raw (original).
     pub async fn eval_pairwise_distances(
         &mut self,
-        pairs: Vec<Option<(QuerySpec, QuerySpec)>>,
+        pairs: Vec<Option<(QuerySpec, QueryId)>>,
     ) -> Result<Vec<DistanceShare<D::Ring>>> {
         use crate::execution::hawk_main::iris_worker::DistanceMode;
 
@@ -434,6 +434,7 @@ where
         }
 
         let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await;
+        let cached_qids: Vec<QueryId> = base_node_queries.iter().map(|q| q.query_id).collect();
         let batches: Vec<(Aby3Query, Vec<VectorId>)> =
             izip!(base_node_queries, neighborhoods.iter())
                 .map(|(q, nbhd)| (q, nbhd.clone()))
@@ -556,6 +557,10 @@ where
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
+
+        // Evict cached queries from vectors_as_queries now that all
+        // distance computation using them is complete.
+        self.workers.evict_queries(cached_qids).await?;
 
         Ok(compacted_nbhds)
     }
@@ -754,7 +759,7 @@ where
         self.workers
             .insert_irises(vec![(query.query_id, vector_id)])
             .await
-            .unwrap();
+            .expect("insert_irises failed: query not cached or store write failed");
         vector_id
     }
 

@@ -73,10 +73,10 @@ async fn per_session(
         .map(|pair| {
             let spec_a =
                 search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].query_spec();
-            let spec_b = search_queries[batch.i_eye][pair.earlier_request]
+            let id_b = search_queries[batch.i_eye][pair.earlier_request]
                 .center()
-                .query_spec();
-            Some((spec_a, spec_b))
+                .query_id;
+            Some((spec_a, id_b))
         })
         .collect();
 
