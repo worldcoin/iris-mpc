@@ -162,7 +162,7 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
         let graph_store = session.graph_store.clone().read_owned().await;
 
         for task in batch.tasks {
-            let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
+            let query = search_queries[batch.i_eye][task.i_request][task.i_rotation];
             let result = if task.is_central {
                 // search_to_insert for centers
                 let query_uuid = search_ids
@@ -494,6 +494,7 @@ mod tests {
 
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
         let search_queries = &request.queries(Orientation::Normal);
         let search_params = SearchParams::new(
             actor.searcher(),

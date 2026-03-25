@@ -6,10 +6,9 @@ use crate::{
     execution::hawk_main::{scheduler::parallelize, VecRotations},
     hawkers::aby3::aby3_store::Aby3Query,
     hnsw::VectorStore,
-    protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
-use itertools::{izip, Itertools};
+use itertools::izip;
 use std::{collections::BTreeMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -19,9 +18,12 @@ pub struct IntraMatch {
     pub is_match: BothEyes<bool>,
 }
 
+/// `search_queries`: the orientation-specific queries (Normal or Mirror) — used for the "a" operand.
+/// `raw_queries`: always the Normal queries — used for the "b" (raw, same-eye) operand.
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRotations<Aby3Query>>>>,
+    raw_queries: &Arc<BothEyes<VecRequests<VecRotations<Aby3Query>>>>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
     let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
@@ -37,8 +39,9 @@ pub async fn intra_batch_is_match(
     let per_session = |batch: Batch| {
         let session = sessions[batch.i_eye][batch.i_session].clone();
         let search_queries = search_queries.clone();
+        let raw_queries = raw_queries.clone();
         let tx = tx.clone();
-        async move { per_session(&search_queries, &session, batch, tx).await }
+        async move { per_session(&search_queries, &raw_queries, &session, batch, tx).await }
     };
 
     parallelize(batches.into_iter().map(per_session)).await?;
@@ -51,13 +54,13 @@ pub async fn intra_batch_is_match(
 
 async fn per_session(
     search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
+    raw_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
     session: &HawkSession,
     batch: Batch,
     tx: UnboundedSender<IsMatch>,
 ) -> Result<()> {
     // Enumerate the pairs of requests.
-    // These are unordered pairs: if we do (i, j) we skip (j, i).
-    let pairs = batch
+    let pairs: Vec<IsMatch> = batch
         .tasks
         .into_iter()
         .flat_map(|task| {
@@ -67,23 +70,24 @@ async fn per_session(
                 earlier_request,
             })
         })
-        .collect_vec();
+        .collect();
 
-    // Compare the rotated and processed irises of one request, to the centered unprocessed iris of the other request.
-    let query_pairs: Vec<Option<(ArcIris, ArcIris)>> = pairs
+    // Compare the rotated+preprocessed iris of one request to the centered
+    // (raw, same-eye) iris of the other. For mirror orientation, search_queries
+    // carries the opposite eye's mirrored QueryId, so we use raw_queries
+    // (always Normal) for the "b" operand to get the correct same-eye iris.
+    let query_pairs: Vec<Option<(_, _)>> = pairs
         .iter()
         .map(|pair| {
-            let iris1_proc =
-                &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].iris_proc;
-            let iris2 = &search_queries[batch.i_eye][pair.earlier_request]
+            let spec_a = search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation];
+            let id_b = raw_queries[batch.i_eye][pair.earlier_request]
                 .center()
-                .iris;
-            Some((iris1_proc.clone(), iris2.clone()))
+                .query_id;
+            Some((spec_a, id_b))
         })
-        .collect_vec();
+        .collect();
 
     let mut store = session.aby3_store.write().await;
-
     let distances = store.eval_pairwise_distances(query_pairs).await?;
     let is_matches = store.is_match_batch(&distances).await?;
 
@@ -136,7 +140,9 @@ async fn aggregate_results(
 mod tests {
     use super::super::test_utils::setup_hawk_actors;
     use super::*;
-    use crate::execution::hawk_main::test_utils::make_request_intra_match;
+    use crate::execution::hawk_main::test_utils::{
+        make_request_intra_match, make_request_intra_match_mirror,
+    };
     use crate::execution::hawk_main::{HawkActor, Orientation};
     use tracing_test::traced_test;
 
@@ -155,9 +161,10 @@ mod tests {
 
         let batch_size = 3;
         let request = make_request_intra_match(batch_size, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
         let search_queries = &request.queries(Orientation::Normal);
 
-        let result = intra_batch_is_match(&sessions, search_queries).await?;
+        let result = intra_batch_is_match(&sessions, search_queries, search_queries).await?;
 
         assert_eq!(
             result,
@@ -165,6 +172,49 @@ mod tests {
                 vec![], // First request cannot have a match.
                 vec![], // Second request has no matches.
                 // Third request matches the first one (see make_request_intra_match).
+                vec![IntraMatch {
+                    other_request_i: 0,
+                    is_match: [true, true],
+                }],
+            ]
+        );
+        actor.sync_peers().await?;
+        Ok(actor)
+    }
+
+    /// Mirror intra-batch test with different left/right eye data.
+    ///
+    /// This exposes a bug where the "b" operand in mirror intra-batch
+    /// pairwise distances uses the wrong eye's raw iris (the opposite
+    /// eye's QueryId instead of the same eye's).
+    #[tokio::test]
+    #[traced_test]
+    async fn test_intra_batch_is_match_mirror() -> Result<()> {
+        let actors = setup_hawk_actors().await?;
+
+        parallelize(actors.into_iter().map(go_intra_batch_mirror)).await?;
+
+        Ok(())
+    }
+
+    async fn go_intra_batch_mirror(mut actor: HawkActor) -> Result<HawkActor> {
+        let sessions = actor.new_sessions().await?;
+
+        let batch_size = 3;
+        let request = make_request_intra_match_mirror(batch_size, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
+        let search_queries = &request.queries(Orientation::Mirror);
+        let raw_queries = &request.queries(Orientation::Normal);
+
+        let result = intra_batch_is_match(&sessions, search_queries, raw_queries).await?;
+
+        // Request 2 is a copy of request 0 (both eyes), so mirror
+        // intra-batch should detect the match on both eyes.
+        assert_eq!(
+            result,
+            vec![
+                vec![],
+                vec![],
                 vec![IntraMatch {
                     other_request_i: 0,
                     is_match: [true, true],
