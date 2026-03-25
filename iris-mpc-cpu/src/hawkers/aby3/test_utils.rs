@@ -9,18 +9,18 @@ use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
-        hawk_main::iris_worker,
+        hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool},
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
     hawkers::{
-        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef, Aby3VectorRef},
+        aby3::aby3_store::{Aby3SharedIrisesRef, Aby3VectorRef},
         plaintext_store::{PlaintextStore, PlaintextVectorRef},
         TEST_DISTANCE_FN,
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::mpc::NetworkType,
-    protocol::shared_iris::GaloisRingSharedIris,
+    protocol::shared_iris::{ArcIris, GaloisRingSharedIris},
     shares::{RingElement, Share},
     utils::serialization::{
         graph::{read_graph_from_file, GraphFormat},
@@ -77,7 +77,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .into_iter()
         .zip(storages.into_iter())
         .map(|(session, storage)| {
-            let workers = iris_worker::init_workers(0, storage.clone(), true);
+            let workers = LocalIrisWorkerPool::new_local(storage.clone());
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 storage,
                 session,
@@ -95,10 +95,9 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .into_iter()
         .map(|session| {
             let storage = Aby3Store::<FhdOps>::new_storage(None).to_arc();
-            let workers = iris_worker::init_workers(0, storage.clone(), true);
-
+            let workers = LocalIrisWorkerPool::new_local(storage.clone());
             Ok(Arc::new(Mutex::new(Aby3Store::new(
-                storage.clone(),
+                storage,
                 session,
                 workers,
                 TEST_DISTANCE_FN,
@@ -132,18 +131,18 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
 }
 
 /// Returns the distance between two vectors inserted into Aby3Store.
+///
+/// Caches the second vector as a query (with a fresh QueryId), then uses
+/// `eval_distance_batch` to compute the distance via the worker pool.
 pub async fn eval_vector_distance(
     store: &mut Aby3Store,
     vector1: &Aby3VectorRef,
     vector2: &Aby3VectorRef,
 ) -> Result<<Aby3Store as VectorStore>::DistanceRef> {
-    let point1 = store.storage.get_vector_or_empty(vector1).await;
-    let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
-    point2.code.preprocess_iris_code_query_share();
-    point2.mask.preprocess_mask_code_query_share();
-    let pairs = vec![Some((point1.clone(), Arc::new(point2)))];
-    let dist = store.eval_pairwise_distances(pairs).await?;
-    Ok(dist[0])
+    let query = store.cache_query_from_store(vector2).await?;
+    let distances = store.eval_distance_batch(&query, &[*vector1]).await?;
+    store.workers.evict_queries(vec![query.query_id]).await?;
+    Ok(distances[0])
 }
 
 // TODO Since GraphMem no longer caches distances, this function is now just a
@@ -327,16 +326,16 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     for store in local_stores.iter() {
         let role = get_owner_index(store).await?;
         let mut rng_searcher = rng_searcher.clone();
-        let queries = (0..database_size)
-            .map(|id| Aby3Query::new_from_raw(shared_irises[id][role].clone()))
-            .collect::<Vec<_>>();
+        let irises: Vec<ArcIris> = (0..database_size)
+            .map(|id| Arc::new(shared_irises[id][role].clone()))
+            .collect();
         let store = store.clone();
         let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> =
             tokio::spawn(async move {
                 let mut store_lock = store.lock().await;
+                let queries = store_lock.workers.cache_irises(irises).await?;
                 let mut graph_store = GraphMem::new();
                 let searcher = HnswSearcher::new_with_test_parameters();
-                // insert queries
                 for query in queries.iter() {
                     let insertion_layer = searcher.gen_layer_rng(&mut rng_searcher)?;
                     searcher
