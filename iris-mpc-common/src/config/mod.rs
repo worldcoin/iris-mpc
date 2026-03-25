@@ -324,7 +324,7 @@ fn default_processing_timeout_secs() -> u64 {
 }
 
 fn default_max_batch_size() -> usize {
-    if cfg!(feature = "send-batches") {
+    if cfg!(feature = "explicit-sns-batching") {
         1
     } else {
         64

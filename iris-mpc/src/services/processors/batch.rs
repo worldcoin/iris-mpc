@@ -19,11 +19,12 @@ use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
+#[cfg(feature = "explicit-sns-batching")]
+use iris_mpc_common::helpers::smpc_request::{BatchRequest, BATCH_MESSAGE_TYPE};
 use iris_mpc_common::helpers::smpc_request::{
-    BatchRequest, IdentityDeletionRequest, IdentityMatchCheckRequest, IdentityUpdateRequest,
-    ReAuthRequest, SQSMessage, UniquenessRequest, BATCH_MESSAGE_TYPE,
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IdentityDeletionRequest, IdentityMatchCheckRequest, IdentityUpdateRequest, ReAuthRequest,
+    SQSMessage, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_request::{
     ReceiveRequestError, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
@@ -426,7 +427,7 @@ impl<'a> BatchProcessor<'a> {
         self.delete_message(&sqs_message).await?;
 
         let res = match request_type {
-            #[cfg(feature = "send-batches")]
+            #[cfg(feature = "explicit-sns-batching")]
             BATCH_MESSAGE_TYPE => self.process_batch_message(&message, batch_metadata).await,
             _ => {
                 self.process_message_(&message, request_type, batch_metadata)
@@ -496,7 +497,7 @@ impl<'a> BatchProcessor<'a> {
         }
     }
 
-    #[cfg(feature = "send-batches")]
+    #[cfg(feature = "explicit-sns-batching")]
     async fn process_batch_message(
         &mut self,
         message: &SQSMessage,

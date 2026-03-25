@@ -18,7 +18,7 @@ helpers = [
   "dep:aws-sdk-secretsmanager",
   "dep:reqwest",
 ]
-send-batches = []
+explicit-sns-batching = []
 
 [dependencies]
 aws-config = { workspace = true, optional = true }

@@ -39,3 +39,6 @@ tracing.workspace = true
 uuid.workspace = true
 dirs = "6.0.0"
 async_from = "0.2.0"
+
+[features]
+explicit-sns-batching = []

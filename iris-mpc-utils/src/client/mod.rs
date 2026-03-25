@@ -284,6 +284,7 @@ impl ServiceClient {
         Ok(())
     }
 
+    #[cfg(not(feature = "explicit-sns-batching"))]
     async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
         use crate::aws::types::SnsMessageInfo;
 
@@ -304,7 +305,7 @@ impl ServiceClient {
         idxs
     }
 
-    #[cfg(feature = "send-batches")]
+    #[cfg(feature = "explicit-sns-batching")]
     async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
         use crate::aws::types::SnsMessageInfo;
         use aws_sdk_sns::types::MessageAttributeValue;

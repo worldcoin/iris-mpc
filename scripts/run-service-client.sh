@@ -150,7 +150,7 @@ cd "${PROJECT_ROOT}"
 
 feature_args=""
 if [[ -n "${send_batches}" ]]; then
-    feature_args="--features send-batches"
+    feature_args="--features explicit-sns-batching"
 fi
 
 exec cargo run --release -p iris-mpc-bins --bin service-client ${feature_args} -- \
