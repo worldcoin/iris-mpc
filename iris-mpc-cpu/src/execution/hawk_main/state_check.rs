@@ -16,7 +16,7 @@ use std::{
 use crate::{
     execution::hawk_main::{BothOrient, LEFT, RIGHT},
     genesis::{SYNC_DONE, SYNC_ERROR},
-    network::value::{NetworkValue, StateChecksum},
+    network::mpc::{NetworkValue, StateChecksum},
 };
 
 use super::{BothEyes, HawkSession};

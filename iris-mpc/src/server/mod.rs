@@ -861,7 +861,7 @@ async fn run_main_server_loop(
                  shutting down..."
             );
 
-            shutdown_handler.wait_for_pending_batches_completion().await;
+            let _ = shutdown_handler.wait_for_pending_batches_completion().await;
         }
         Err(e) => {
             tracing::error!("HawkActor processing error: {:?}", e);

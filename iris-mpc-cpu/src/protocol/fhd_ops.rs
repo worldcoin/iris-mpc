@@ -4,7 +4,7 @@ use ampc_actor_utils::{
     execution::session::Session,
     protocol::{
         binary::{extract_msb_batch, lift, mul_lift_2k_to_32, open_bin, single_extract_msb},
-        ops::{cross_mul, oblivious_cross_compare},
+        fhd_ops::cross_mul,
     },
 };
 use ampc_secret_sharing::{
@@ -75,7 +75,14 @@ pub async fn lift_and_compare_threshold(
     single_extract_msb(session, y).await
 }
 
-// consider putting this in ampc-common next to oblivious_cross_compare()
+pub(crate) async fn oblivious_cross_compare(
+    session: &mut Session,
+    distances: &[DistancePair<u32>],
+) -> Result<Vec<Share<Bit>>> {
+    let diff = cross_mul(session, distances).await?;
+    extract_msb_batch(session, &diff).await
+}
+
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 and opens it.
 ///
 /// The less-than operator is implemented in 2 steps:
@@ -143,7 +150,7 @@ mod tests {
             local::{generate_local_identities, LocalRuntime},
             session::SessionHandles,
         },
-        network::value::NetworkValue::RingElement32,
+        network::mpc::NetworkValue::RingElement32,
         protocol::{ops::batch_signed_lift_vec, test_utils::create_array_sharing},
     };
     use ampc_secret_sharing::RingElement;

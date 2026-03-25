@@ -3,7 +3,7 @@ use std::ops::Not;
 
 use ampc_actor_utils::{
     execution::session::{Session, SessionHandles},
-    network::value::NetworkInt,
+    network::mpc::NetworkInt,
     protocol::binary::{and_product, bit_inject},
 };
 use ampc_secret_sharing::{

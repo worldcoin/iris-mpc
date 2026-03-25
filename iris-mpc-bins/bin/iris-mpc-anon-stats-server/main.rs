@@ -31,7 +31,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::session::Session,
-    network::tcp::{build_network_handle, NetworkHandleArgs},
+    network::mpc::{build_network_handle, NetworkHandleArgs},
 };
 use sodiumoxide::hex;
 use std::collections::HashSet;
@@ -1053,7 +1053,7 @@ async fn main() -> Result<()> {
     }
 
     shutdown_handler.wait_for_shutdown().await;
-    shutdown_handler.wait_for_pending_batches_completion().await;
+    let _ = shutdown_handler.wait_for_pending_batches_completion().await;
     ct.cancel();
     background_tasks.abort_and_wait_for_finish().await;
 

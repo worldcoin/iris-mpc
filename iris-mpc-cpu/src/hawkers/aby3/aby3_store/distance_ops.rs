@@ -1,18 +1,19 @@
 use std::{cmp::Ordering, fmt::Debug};
 
+use std::ops::Not;
+
 use ampc_actor_utils::{
     execution::session::Session,
-    network::value::NetworkInt,
+    network::mpc::NetworkInt,
     protocol::{
+        binary::open_bin,
+        fhd_ops::{min_of_pair_batch, oblivious_cross_compare_lifted},
         nhd_ops::{
-            nhd_comparison_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
+            nhd_comparison_nmr, nhd_cross_compare, nhd_greater_than_threshold, nhd_lift_distances,
             nhd_min_of_pair_batch, nhd_oblivious_cross_compare, nhd_oblivious_cross_compare_lifted,
             nhd_plaintext_is_match,
         },
-        ops::{
-            batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
-            oblivious_cross_compare_lifted,
-        },
+        ops::batch_signed_lift_vec,
         shuffle::random_shuffle_batch,
     },
 };
@@ -29,7 +30,10 @@ use iris_mpc_common::iris_db::iris::Threshold;
 use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
     protocol::{
-        fhd_ops::{cross_compare, lte_and_open as fhd_lte_and_open, min_round_robin_batch},
+        fhd_ops::{
+            cross_compare, lte_and_open as fhd_lte_and_open, min_round_robin_batch,
+            oblivious_cross_compare,
+        },
         nhd_ops::nhd_min_round_robin_batch,
         ops::{DistancePair, IdDistance},
     },
@@ -277,7 +281,10 @@ impl DistanceOps for NhdOps {
         distances: &[DistanceShare<Self::Ring>],
         threshold: Threshold,
     ) -> Result<Vec<bool>> {
-        nhd_lte_threshold_and_open(session, distances, threshold.ratio()).await
+        let bits = nhd_greater_than_threshold(session, distances, threshold.ratio()).await?;
+        open_bin(session, &bits)
+            .await
+            .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
     }
 
     fn to_usize(value: Self::Ring) -> usize {

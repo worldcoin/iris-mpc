@@ -2,7 +2,7 @@ use crate::{
     execution::session::{Session, SessionHandles},
     protocol::shared_iris::ArcIris,
 };
-use ampc_actor_utils::network::value::NetworkInt;
+use ampc_actor_utils::network::mpc::NetworkInt;
 use ampc_actor_utils::protocol::binary::bit_inject;
 pub use ampc_actor_utils::protocol::ops::{
     galois_ring_to_rep3, lt_zero_and_open_u16, open_ring, setup_replicated_prf, setup_shared_seed,
@@ -696,7 +696,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
-        network::value::{NetworkInt, NetworkValue},
+        network::mpc::{NetworkInt, NetworkValue},
         protocol::shared_iris::GaloisRingSharedIris,
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
