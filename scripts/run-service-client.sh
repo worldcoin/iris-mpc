@@ -19,6 +19,7 @@ Usage: $(basename "$0") [-e ENV] [-i IRIS_SHARES] [TOML_FILE]
 Run the HNSW service client.
 
 Options:
+  -b               Send requests as a single batch message
   -e ENV           Environment: dev-dkr (default) or dev-stg
   -i IRIS_SHARES   Path or filename of iris shares NDJSON file
                    (required for FromFile configs)
@@ -71,9 +72,14 @@ resolve_file() {
 env="dev-dkr"
 exec_opts=""
 iris_shares=""
+send_batches=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -b)
+            send_batches="1"
+            shift
+            ;;
         -e)
             if [[ $# -lt 2 || -z "${2:-}" ]]; then
                 echo "Error: -e requires a non-empty environment argument." >&2
@@ -141,7 +147,13 @@ case "${env}" in
 esac
 
 cd "${PROJECT_ROOT}"
-exec cargo run --release -p iris-mpc-bins --bin service-client -- \
+
+feature_args=""
+if [[ -n "${send_batches}" ]]; then
+    feature_args="--features send-batches"
+fi
+
+exec cargo run --release -p iris-mpc-bins --bin service-client ${feature_args} -- \
     --path-to-opts "${exec_opts}" \
     --path-to-opts-aws "${aws_opts}" \
     "${iris_shares_args[@]+"${iris_shares_args[@]}"}"
