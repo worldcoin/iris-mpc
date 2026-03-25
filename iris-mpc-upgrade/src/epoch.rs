@@ -181,6 +181,7 @@ pub async fn idempotent_keygen(
 }
 
 /// Derive the shared secret for an epoch: keygen + download peer keys + BLS pairing.
+#[allow(clippy::too_many_arguments)]
 pub async fn derive_shared_secret(
     sm: &SecretsManagerClient,
     s3: &S3Client,
@@ -251,6 +252,7 @@ pub async fn determine_active_epoch(s3: &S3Client, bucket: &str, start_hint: u32
 }
 
 /// Upload completion marker, poll for all three, then delete the epoch key from SM.
+#[allow(clippy::too_many_arguments)]
 pub async fn complete_epoch(
     sm: &SecretsManagerClient,
     s3: &S3Client,

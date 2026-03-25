@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/rerandomization-protocol:9ada456f64ffff48a2bbb3634859e00c7636faae"
+image: "ghcr.io/worldcoin/rerandomization-protocol:71e7b94726273470510e7f7e5e8ac72162aa93a7"
 replicaCount: 1
 
 environment: stage
