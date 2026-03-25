@@ -27,6 +27,7 @@ use crate::{
         RingElement,
     },
 };
+use ampc_secret_sharing::shares::{vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -131,6 +132,7 @@ pub struct Aby3Store<D = FhdOps> {
 impl<D: DistanceOps> Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
+    VecShare<D::Ring>: Transpose64,
 {
     pub fn new(
         storage: Aby3SharedIrisesRef,
@@ -244,7 +246,10 @@ where
     pub async fn oblivious_min_distance(
         &mut self,
         distances: &[DistanceShare<D::Ring>],
-    ) -> Result<DistanceShare<D::Ring>> {
+    ) -> Result<DistanceShare<D::Ring>>
+    where
+        VecShare<D::Ring>: Transpose64,
+    {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -358,7 +363,10 @@ where
     pub(crate) async fn oblivious_min_distance_batch(
         &mut self,
         distances: Vec<Vec<DistanceShare<D::Ring>>>,
-    ) -> Result<Vec<DistanceShare<D::Ring>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        VecShare<D::Ring>: Transpose64,
+    {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -573,6 +581,7 @@ where
 impl<D: DistanceOps> VectorStore for Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
+    VecShare<D::Ring>: Transpose64,
 {
     /// Arc ref to a query.
     type QueryRef = Aby3Query;
@@ -719,6 +728,7 @@ where
 impl<D: DistanceOps> VectorStoreMut for Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
+    VecShare<D::Ring>: Transpose64,
 {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(&query.iris).await

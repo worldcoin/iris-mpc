@@ -1,7 +1,9 @@
 use super::{Aby3Query, Aby3Store, ArcIris, DistanceOps, DistanceShare, VectorId};
 use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
 use crate::phase_trace;
-use ampc_secret_sharing::shares::int_ring::IntRing2k;
+use ampc_secret_sharing::shares::{
+    int_ring::IntRing2k, vecshare_bittranspose::Transpose64, VecShare,
+};
 use clap::ValueEnum;
 use eyre::Result;
 use itertools::Itertools;
@@ -25,6 +27,7 @@ impl DistanceFn {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         match self {
             Simple => DistanceSimple::eval_pairwise_distances(store, pairs).await,
@@ -39,6 +42,7 @@ impl DistanceFn {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         match self {
             Simple => DistanceSimple::eval_distance_pairs(store, pairs).await,
@@ -54,6 +58,7 @@ impl DistanceFn {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         match self {
             Simple => DistanceSimple::eval_distance_batch(store, query, vectors).await,
@@ -73,6 +78,7 @@ impl DistanceFn {
     ) -> Result<Vec<Vec<DistanceShare<D::Ring>>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         match self {
             Simple => {
@@ -99,6 +105,7 @@ impl DistanceSimple {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let ds_and_ts = store.workers.galois_ring_pairwise_distances(pairs).await?;
         store.gr_to_lifted_distances(ds_and_ts).await
@@ -110,6 +117,7 @@ impl DistanceSimple {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let pairs = pairs
             .iter()
@@ -126,6 +134,7 @@ impl DistanceSimple {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let ds_and_ts = store
             .workers
@@ -144,6 +153,7 @@ impl DistanceMinimalRotation {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let ds_and_ts = store
             .workers
@@ -161,6 +171,7 @@ impl DistanceMinimalRotation {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let ds_and_ts = store
             .workers
@@ -184,6 +195,7 @@ impl DistanceMinimalRotation {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let ds_and_ts = {
             let dot_start = std::time::Instant::now();
@@ -227,6 +239,7 @@ impl DistanceMinimalRotation {
     ) -> Result<Vec<Vec<DistanceShare<D::Ring>>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         if batches.is_empty() {
             return Ok(vec![]);

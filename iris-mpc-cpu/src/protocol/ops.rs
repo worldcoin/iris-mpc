@@ -29,9 +29,6 @@ use tracing::instrument;
 pub(crate) type DistancePair<T> = (DistanceShare<T>, DistanceShare<T>);
 pub(crate) type IdDistance<T> = (Share<T>, DistanceShare<T>);
 
-pub(crate) const B_BITS: u64 = 16;
-pub(crate) const B: u64 = 1 << B_BITS;
-
 /// Conditionally selects equally-sized slices of input shares based on control bits.
 /// If the control bit is 1, it selects the left value shares; otherwise, it selects the right value share.
 async fn select_shared_slices_by_bits<T>(
