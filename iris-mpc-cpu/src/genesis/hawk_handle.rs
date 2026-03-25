@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     execution::hawk_main::{
-        insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, StoreId, LEFT, RIGHT,
-        STORE_IDS,
+        insert::insert, iris_worker::QueryId, scheduler::parallelize,
+        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkMutation, HawkSession,
+        SingleHawkMutation, StoreId, LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -272,7 +272,9 @@ impl Handle {
 
                                     // TODO remove any prior versions of this vector id from graph
 
-                                    let query = Aby3Query::new(&vector.get_vector_or_empty(&vector_id).await);
+                                    // The worker pool owns the iris data; we just need a
+                                    // lightweight query handle with a fresh QueryId.
+                                    let query = Aby3Query::new(QueryId::new());
                                     let insert_plan = search_single_query_no_match_count(
                                         session.clone(),
                                         query,

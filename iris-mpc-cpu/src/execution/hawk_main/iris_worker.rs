@@ -575,6 +575,20 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
         inserts: Vec<(QueryId, VectorId)>,
     ) -> impl Future<Output = Result<()>> + Send;
 
+    /// Compute pairwise distances between pairs of cached queries.
+    ///
+    /// Used for intra-batch matching where both irises are cached queries
+    /// (not stored vectors). Each `None` pair produces a max-distance sentinel.
+    ///
+    /// Convention: the first `QuerySpec` selects a **preprocessed** rotation,
+    /// the second selects the **raw (original)** iris. This matches the
+    /// `trick_dot` expectation (one preprocessed operand, one raw).
+    fn compute_pairwise_distances(
+        &self,
+        pairs: Vec<Option<(QuerySpec, QuerySpec)>>,
+        mode: DistanceMode,
+    ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send;
+
     /// Evict cached queries, freeing memory.
     fn evict_queries(&self, query_ids: Vec<QueryId>) -> impl Future<Output = Result<()>> + Send;
 }
@@ -760,6 +774,46 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 inner.insert(vector_id, cached.original.clone())?;
             }
             Ok(())
+        }
+    }
+
+    fn compute_pairwise_distances(
+        &self,
+        pairs: Vec<Option<(QuerySpec, QuerySpec)>>,
+        mode: DistanceMode,
+    ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send {
+        let query_cache = self.query_cache.clone();
+        let inner = self.inner.clone();
+        async move {
+            // Resolve QuerySpec pairs to ArcIris pairs.
+            // First = preprocessed rotation, second = raw (original) iris.
+            let iris_pairs: Vec<Option<(ArcIris, ArcIris)>> = {
+                let cache = query_cache.read().unwrap();
+                pairs
+                    .into_iter()
+                    .map(|pair| {
+                        pair.map(|(a, b)| {
+                            let ca = cache.get(&a.query_id).unwrap();
+                            let cb = cache.get(&b.query_id).unwrap();
+                            let iris_a = if a.mirrored {
+                                &ca.mirrored_preprocessed_rotations
+                            } else {
+                                &ca.preprocessed_rotations
+                            }[a.rotation]
+                                .clone();
+                            // Second operand: raw (un-preprocessed) original iris.
+                            let iris_b = cb.original.clone();
+                            (iris_a, iris_b)
+                        })
+                    })
+                    .collect()
+            };
+            match mode {
+                DistanceMode::Simple => inner.galois_ring_pairwise_distances(iris_pairs).await,
+                DistanceMode::RotationAware => {
+                    inner.rotation_aware_pairwise_distances(iris_pairs).await
+                }
+            }
         }
     }
 

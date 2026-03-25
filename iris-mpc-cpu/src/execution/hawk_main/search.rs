@@ -277,6 +277,7 @@ mod tests {
 
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
         let search_queries = &request.queries(Orientation::Normal);
         let search_params = SearchParams {
             hnsw: actor.searcher(),

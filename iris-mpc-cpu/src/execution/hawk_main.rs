@@ -102,7 +102,7 @@ use ampc_anon_stats::{
 };
 use clap::Parser;
 use eyre::{eyre, Report, Result};
-use futures::{future::try_join_all, try_join};
+use futures::try_join;
 use identity_update::{
     apply_deletions, search_to_identity_update, IdentityUpdatePlan, IdentityUpdateRequests,
 };
@@ -311,7 +311,7 @@ pub struct HawkActor {
     workers_handle: BothEyes<IrisPoolHandle>,
     /// Shared worker pools with query caches (one per eye). Cloned into each
     /// `HawkSession` so all sessions for the same eye share the same cache.
-    worker_pools: BothEyes<iris_worker::LocalIrisWorkerPool>,
+    pub(crate) worker_pools: BothEyes<iris_worker::LocalIrisWorkerPool>,
 
     /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
@@ -1088,6 +1088,10 @@ pub struct HawkRequest {
     queries_mirror: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
     /// The identifiers for each request in the batch.
     ids: SearchIds,
+    /// Raw irises per eye (one per request), for `cache_queries`.
+    raw_irises: BothEyes<Vec<ArcIris>>,
+    /// QueryIds per eye (one per request), corresponding to `raw_irises`.
+    query_ids: BothEyes<Vec<iris_worker::QueryId>>,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -1095,65 +1099,69 @@ pub struct HawkRequest {
 impl From<BatchQuery> for HawkRequest {
     #[allow(clippy::iter_skip_zero)]
     fn from(batch: BatchQuery) -> Self {
+        use iris_worker::QueryId;
         let n_queries = batch.request_ids.len();
 
+        // Assign one QueryId per request per eye. The worker pool will cache
+        // the raw iris once and produce all rotations internally.
+        let left_query_ids: Vec<QueryId> = (0..n_queries).map(|_| QueryId::new()).collect();
+        let right_query_ids: Vec<QueryId> = (0..n_queries).map(|_| QueryId::new()).collect();
+
+        // Collect the raw irises for caching (one per request per eye).
+        let left_raw_irises: Vec<ArcIris> = izip!(
+            &batch.left_iris_requests.code,
+            &batch.left_iris_requests.mask,
+        )
+        .map(|(code, mask)| {
+            Arc::new(GaloisRingSharedIris {
+                code: code.clone(),
+                mask: mask.clone(),
+            })
+        })
+        .collect_vec();
+
+        let right_raw_irises: Vec<ArcIris> = izip!(
+            &batch.right_iris_requests.code,
+            &batch.right_iris_requests.mask,
+        )
+        .map(|(code, mask)| {
+            Arc::new(GaloisRingSharedIris {
+                code: code.clone(),
+                mask: mask.clone(),
+            })
+        })
+        .collect_vec();
+
+        // Build the selected rotation indices from HAWK_BASE_ROTATIONS_MASK.
+        let selected_rotations: Vec<usize> = (0..ROTATIONS)
+            .filter(|rot_index| ((HAWK_BASE_ROTATIONS_MASK >> rot_index) & 1) > 0)
+            .collect_vec();
+
         let extract_queries = |orient: Orientation| {
-            let oriented = match orient {
-                Orientation::Normal => [
-                    // For left and right eyes.
-                    (
-                        &batch.left_iris_rotated_requests.code,
-                        &batch.left_iris_rotated_requests.mask,
-                        &batch.left_iris_interpolated_requests.code,
-                        &batch.left_iris_interpolated_requests.mask,
-                    ),
-                    (
-                        &batch.right_iris_rotated_requests.code,
-                        &batch.right_iris_rotated_requests.mask,
-                        &batch.right_iris_interpolated_requests.code,
-                        &batch.right_iris_interpolated_requests.mask,
-                    ),
-                ],
-                Orientation::Mirror => [
-                    // Swap the left and right sides to match against the opposite side database:
-                    // original left <-> mirrored interpolated right, and vice versa.
-                    // The original not-swapped queries are kept for intra-batch matching.
-                    (
-                        &batch.left_iris_rotated_requests.code,
-                        &batch.left_iris_rotated_requests.mask,
-                        &batch.right_mirrored_iris_interpolated_requests.code,
-                        &batch.right_mirrored_iris_interpolated_requests.mask,
-                    ),
-                    (
-                        &batch.right_iris_rotated_requests.code,
-                        &batch.right_iris_rotated_requests.mask,
-                        &batch.left_mirrored_iris_interpolated_requests.code,
-                        &batch.left_mirrored_iris_interpolated_requests.mask,
-                    ),
-                ],
+            // For each eye side, pick the correct query_id and mirrored flag.
+            // Normal LEFT  -> left_query_id,  mirrored=false
+            // Normal RIGHT -> right_query_id, mirrored=false
+            // Mirror LEFT  -> right_query_id, mirrored=true  (right eye mirrored into left db)
+            // Mirror RIGHT -> left_query_id,  mirrored=true  (left eye mirrored into right db)
+            let (left_ids, left_mirrored, right_ids, right_mirrored) = match orient {
+                Orientation::Normal => (&left_query_ids, false, &right_query_ids, false),
+                Orientation::Mirror => (&right_query_ids, true, &left_query_ids, true),
             };
 
-            let queries = oriented.map(|(codes, masks, codes_proc, masks_proc)| {
-                // Associate the raw and processed versions of codes and masks.
-                izip!(codes, masks, codes_proc, masks_proc)
-                    // The batch is a concatenation of rotations.
-                    .chunks(ROTATIONS)
-                    .into_iter()
-                    .map(|chunk| {
-                        // Collect the rotations for one request.
-                        chunk
-                            .enumerate()
-                            .filter(|(rot_index, _)| {
-                                ((HAWK_BASE_ROTATIONS_MASK >> rot_index) & 1) > 0
-                            })
-                            .map(|(_, (code, mask, code_proc, mask_proc))| {
-                                Aby3Query::from_processed(code, mask, code_proc, mask_proc)
-                            })
-                            .collect_vec()
-                            .into()
-                    })
-                    .collect_vec()
-            });
+            let queries =
+                [(left_ids, left_mirrored), (right_ids, right_mirrored)].map(|(ids, mirrored)| {
+                    ids.iter()
+                        .map(|&query_id| {
+                            selected_rotations
+                                .iter()
+                                .map(|&rot_index| {
+                                    Aby3Query::with_rotation(query_id, rot_index, mirrored)
+                                })
+                                .collect_vec()
+                                .into()
+                        })
+                        .collect_vec()
+                });
 
             assert_eq!(n_queries, queries[LEFT].len());
             assert_eq!(n_queries, queries[RIGHT].len());
@@ -1165,11 +1173,21 @@ impl From<BatchQuery> for HawkRequest {
         assert!(n_queries <= batch.requests_order.len());
         assert_eq!(n_queries, batch.request_types.len());
         assert_eq!(n_queries, batch.or_rule_indices.len());
+
+        let queries = extract_queries(Orientation::Normal);
+        let queries_mirror = extract_queries(Orientation::Mirror);
+
+        // Store the raw irises and query IDs for cache_queries.
+        let raw_irises = [left_raw_irises, right_raw_irises];
+        let query_ids = [left_query_ids, right_query_ids];
+
         Self {
-            queries: extract_queries(Orientation::Normal),
-            queries_mirror: extract_queries(Orientation::Mirror),
+            queries,
+            queries_mirror,
             batch,
             ids,
+            raw_irises,
+            query_ids,
         }
     }
 }
@@ -1177,81 +1195,13 @@ impl From<BatchQuery> for HawkRequest {
 impl HawkRequest {
     /// Reallocates iris data to be local to the NUMA node of the worker threads.
     ///
-    /// On NUMA (Non-Uniform Memory Access) architectures, memory is divided into nodes,
-    /// and accessing memory on a remote node is slower than accessing local memory.
-    /// This function optimizes performance by moving the secret-shared iris data for an
-    /// incoming request to the same NUMA node where the cryptographic computations will
-    /// be performed.
+    /// Now that `Aby3Query` is a lightweight handle (no iris data), NUMA
+    /// reallocation of query data is a no-op. The worker pool cache holds the
+    /// actual iris data and will handle NUMA-aware allocation internally.
     ///
-    /// It dispatches reallocation tasks to the `IrisPoolHandle` worker pools.
-    /// The workers, which are pinned to specific CPU
-    /// cores, handle the memory copy, ensuring data locality for subsequent processing.
-    async fn numa_realloc(self, workers: BothEyes<IrisPoolHandle>) -> Self {
-        // TODO: Result<Self>
-        let start = Instant::now();
-
-        let (queries, queries_mirror) = join!(
-            Self::numa_realloc_orient(self.queries, &workers),
-            Self::numa_realloc_orient(self.queries_mirror, &workers)
-        );
-
-        metrics::histogram!("numa_realloc_duration").record(start.elapsed().as_secs_f64());
-        Self {
-            batch: self.batch,
-            queries,
-            queries_mirror,
-            ids: self.ids,
-        }
-    }
-
-    async fn numa_realloc_orient(
-        queries: SearchQueries<HAWK_BASE_ROTATIONS_MASK>,
-        workers: &BothEyes<IrisPoolHandle>,
-    ) -> SearchQueries<HAWK_BASE_ROTATIONS_MASK> {
-        let (left, right) = join!(
-            Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
-            Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
-        );
-        Arc::new([left, right])
-    }
-
-    async fn numa_realloc_side(
-        requests: &VecRequests<VecRotations<Aby3Query>>,
-        worker: &IrisPoolHandle,
-    ) -> VecRequests<VecRotations<Aby3Query>> {
-        // Iterate over all the irises.
-        let all_irises_iter = requests.iter().flat_map(|rots| {
-            rots.iter()
-                .flat_map(|query| [&query.iris, &query.iris_proc])
-        });
-
-        // Go realloc the irises in parallel.
-        let tasks = all_irises_iter.map(|iris| worker.numa_realloc(iris.clone()).unwrap());
-
-        // Iterate over the results in the same order.
-        let mut new_irises_iter = try_join_all(tasks).await.unwrap().into_iter();
-
-        // Rebuild the same structure with the new irises.
-        let new_requests = requests
-            .iter()
-            .map(|rots| {
-                rots.iter()
-                    .map(|old_query| {
-                        let iris = new_irises_iter.next().unwrap();
-                        let iris_proc = new_irises_iter.next().unwrap();
-                        Aby3Query {
-                            query_id: old_query.query_id,
-                            iris,
-                            iris_proc,
-                        }
-                    })
-                    .collect_vec()
-                    .into()
-            })
-            .collect_vec();
-
-        assert!(new_irises_iter.next().is_none());
-        new_requests
+    // TODO: Implement NUMA-aware caching in the worker pool instead.
+    async fn numa_realloc(self, _workers: BothEyes<IrisPoolHandle>) -> Self {
+        self
     }
 
     fn request_types(
@@ -1302,21 +1252,35 @@ impl HawkRequest {
         }
     }
 
-    /// Collects all `(QueryId, raw, preprocessed)` tuples for pre-caching in
+    /// Collects all `(QueryId, ArcIris)` tuples for pre-caching in
     /// the worker pool, grouped by eye (LEFT, RIGHT).
-    fn all_queries_for_cache(&self) -> BothEyes<Vec<(iris_worker::QueryId, ArcIris, ArcIris)>> {
-        [LEFT, RIGHT].map(|side| {
-            self.queries[side]
-                .iter()
-                .flat_map(|rots| rots.iter())
-                .chain(
-                    self.queries_mirror[side]
-                        .iter()
-                        .flat_map(|rots| rots.iter()),
-                )
-                .map(|q| (q.query_id, q.iris.clone(), q.iris_proc.clone()))
-                .collect()
-        })
+    ///
+    /// Each physical iris is cached once (deduplicated by QueryId).
+    /// Cache all queries from this request into the given worker pools.
+    pub async fn cache_into(
+        &self,
+        worker_pools: &BothEyes<iris_worker::LocalIrisWorkerPool>,
+    ) -> Result<()> {
+        let to_cache = self.all_queries_for_cache();
+        // Cache all irises in both worker pools (mirror queries cross eyes).
+        futures::try_join!(
+            worker_pools[LEFT].cache_queries(to_cache.clone()),
+            worker_pools[RIGHT].cache_queries(to_cache),
+        )?;
+        Ok(())
+    }
+
+    /// Collect all irises for caching. Returns a single list (not per-eye)
+    /// because mirror queries cross eyes — a LEFT session may reference a
+    /// RIGHT QueryId. All irises must be in all worker pools.
+    fn all_queries_for_cache(&self) -> Vec<(iris_worker::QueryId, ArcIris)> {
+        [LEFT, RIGHT]
+            .into_iter()
+            .flat_map(|side| {
+                izip!(&self.query_ids[side], &self.raw_irises[side])
+                    .map(|(&qid, iris)| (qid, iris.clone()))
+            })
+            .collect()
     }
 
     /// Collects all `QueryId`s for eviction after batch processing.
@@ -1353,33 +1317,45 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn identity_updates(&self, iris_store: &Aby3SharedIrises) -> IdentityUpdateRequests {
+    fn identity_updates(
+        &self,
+        iris_store: &Aby3SharedIrises,
+    ) -> (
+        IdentityUpdateRequests,
+        BothEyes<Vec<(iris_worker::QueryId, ArcIris)>>,
+    ) {
+        let mut to_cache: BothEyes<Vec<(iris_worker::QueryId, ArcIris)>> = [vec![], vec![]];
         let queries = [LEFT, RIGHT].map(|side| {
             self.batch
                 .identity_update_shares
                 .iter()
-                .map(|iris| {
+                .map(|shares| {
+                    let query_id = iris_worker::QueryId::new();
                     let iris = if side == LEFT {
-                        GaloisRingSharedIris {
-                            code: iris.code_left.clone(),
-                            mask: iris.mask_left.clone(),
-                        }
+                        Arc::new(GaloisRingSharedIris {
+                            code: shares.code_left.clone(),
+                            mask: shares.mask_left.clone(),
+                        })
                     } else {
-                        GaloisRingSharedIris {
-                            code: iris.code_right.clone(),
-                            mask: iris.mask_right.clone(),
-                        }
+                        Arc::new(GaloisRingSharedIris {
+                            code: shares.code_right.clone(),
+                            mask: shares.mask_right.clone(),
+                        })
                     };
-                    let query = Aby3Query::new_from_raw(iris);
+                    to_cache[side].push((query_id, iris));
+                    let query = Aby3Query::new(query_id);
                     VecRotationSupport::new_center_only(query)
                 })
                 .collect_vec()
         });
-        IdentityUpdateRequests {
-            vector_ids: iris_store.from_0_indices(&self.batch.identity_update_indices),
-            request_ids: Arc::new(self.batch.identity_update_request_ids.clone()),
-            queries: Arc::new(queries),
-        }
+        (
+            IdentityUpdateRequests {
+                vector_ids: iris_store.from_0_indices(&self.batch.identity_update_indices),
+                request_ids: Arc::new(self.batch.identity_update_request_ids.clone()),
+                queries: Arc::new(queries),
+            },
+            to_cache,
+        )
     }
 
     fn deletion_ids(&self, iris_store: &Aby3SharedIrises) -> Vec<VectorId> {
@@ -1797,15 +1773,8 @@ impl HawkHandle {
             .numa_realloc(hawk_actor.workers_handle.clone())
             .await;
 
-        // Pre-cache all queries in the shared worker pools so that
-        // ensure_queries_cached() is a no-op during distance computation.
-        {
-            let to_cache = request.all_queries_for_cache();
-            try_join!(
-                hawk_actor.worker_pools[LEFT].cache_queries(to_cache[LEFT].clone()),
-                hawk_actor.worker_pools[RIGHT].cache_queries(to_cache[RIGHT].clone()),
-            )?;
-        }
+        // Pre-cache all queries in both worker pools (mirror queries cross eyes).
+        request.cache_into(&hawk_actor.worker_pools).await?;
 
         // All deletions in a batch are applied at the beginning of batch processing
         // This is consistent with the GPU code's handling of deletions

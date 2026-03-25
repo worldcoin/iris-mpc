@@ -30,10 +30,7 @@ use crate::{
 };
 use ampc_actor_utils::protocol::ops::open_ring;
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    vector_id::VectorId,
-};
+use iris_mpc_common::vector_id::VectorId;
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 use static_assertions::const_assert;
@@ -146,6 +143,35 @@ where
             distance_fn,
             workers,
             _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Compute pairwise distances between pairs of cached queries.
+    ///
+    /// Uses the store's configured distance function (Simple or MinRotation)
+    /// and the worker pool's `compute_pairwise_distances` method.
+    /// Convention: first QuerySpec = preprocessed, second = raw (original).
+    pub async fn eval_pairwise_distances(
+        &mut self,
+        pairs: Vec<Option<(QuerySpec, QuerySpec)>>,
+    ) -> Result<Vec<DistanceShare<D::Ring>>> {
+        use crate::execution::hawk_main::iris_worker::DistanceMode;
+
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
+        let mode = match self.distance_fn {
+            DistanceFn::Simple => DistanceMode::Simple,
+            DistanceFn::MinRotation => DistanceMode::RotationAware,
+        };
+        let ds_and_ts = self.workers.compute_pairwise_distances(pairs, mode).await?;
+        let distances = self.gr_to_lifted_distances(ds_and_ts).await?;
+        match self.distance_fn {
+            DistanceFn::Simple => Ok(distances),
+            DistanceFn::MinRotation => {
+                self.oblivious_min_distance_batch(distance_fn::transpose_from_flat(&distances))
+                    .await
+            }
         }
     }
 
@@ -724,7 +750,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        execution::{hawk_main::scheduler::parallelize, session::SessionHandles},
+        execution::{
+            hawk_main::{
+                iris_worker::{IrisWorkerPool, QueryId},
+                scheduler::parallelize,
+            },
+            session::SessionHandles,
+        },
         hawkers::{
             aby3::test_utils::{
                 eval_vector_distance, get_owner_index, lazy_random_setup,
@@ -758,9 +790,22 @@ mod tests {
         let mut jobs = JoinSet::new();
         for store in stores.iter() {
             let player_index = get_owner_index(store).await?;
-            let queries = (0..database_size)
-                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
-                .collect::<Vec<_>>();
+            let cache_entries: Vec<_> = (0..database_size)
+                .map(|id| {
+                    (
+                        QueryId::new(),
+                        Arc::new(shared_irises[id][player_index].clone()),
+                    )
+                })
+                .collect();
+            let query_ids: Vec<_> = cache_entries.iter().map(|(qid, _)| *qid).collect();
+            store
+                .lock()
+                .await
+                .workers
+                .cache_queries(cache_entries)
+                .await?;
+            let queries: Vec<_> = query_ids.iter().map(|qid| Aby3Query::new(*qid)).collect();
             let mut rng = rng.clone();
             let store = store.clone();
             jobs.spawn(async move {
@@ -788,7 +833,13 @@ mod tests {
                 let mut matching_results = vec![];
                 for v in inserted.into_iter() {
                     let iris = store.storage.get_vector_or_empty(&v).await;
-                    let query = Aby3Query::new(&iris);
+                    let qid = QueryId::new();
+                    store
+                        .workers
+                        .cache_queries(vec![(qid, iris)])
+                        .await
+                        .unwrap();
+                    let query = Aby3Query::new(qid);
                     let neighbors = db
                         .search::<_, SortedNeighborhood<_>>(&mut *store, &aby3_graph, &query, 1)
                         .await
@@ -864,8 +915,15 @@ mod tests {
                 let hawk_searcher = hawk_searcher.clone();
                 let v_lock = v.lock().await;
                 let g = g.clone();
-                let q = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                let q = Aby3Query::new(&q);
+                let iris = v_lock.storage.get_vector_or_empty(&vector_id).await;
+                let qid = QueryId::new();
+                v_lock
+                    .workers
+                    .cache_queries(vec![(qid, iris)])
+                    .await
+                    .unwrap();
+                let q = Aby3Query::new(qid);
+                drop(v_lock);
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
@@ -887,7 +945,13 @@ mod tests {
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
                     let iris = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                    let query = Aby3Query::new(&iris);
+                    let qid = QueryId::new();
+                    v_lock
+                        .workers
+                        .cache_queries(vec![(qid, iris)])
+                        .await
+                        .unwrap();
+                    let query = Aby3Query::new(qid);
                     let secret_neighbors: SortedNeighborhood<_> = hawk_searcher
                         .search(&mut *v_lock, &g, &query, 1)
                         .await
@@ -956,13 +1020,13 @@ mod tests {
         let mut aby3_inserts = vec![];
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
-            let player_preps: Vec<_> = (0..db_dim)
-                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
+            let player_irises: Vec<_> = (0..db_dim)
+                .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
-            for p in player_preps.iter() {
-                player_inserts.push(store_lock.storage.append(&p.iris).await);
+            for iris in player_irises.iter() {
+                player_inserts.push(store_lock.storage.append(iris).await);
             }
             aby3_inserts.push(player_inserts);
         }
@@ -1329,12 +1393,20 @@ mod tests {
         let mut queries = vec![];
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
-            let player_preps: Vec<_> = (0..db_size)
-                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
+            let cache_entries: Vec<_> = (0..db_size)
+                .map(|id| {
+                    (
+                        QueryId::new(),
+                        Arc::new(shared_irises[id][player_index].clone()),
+                    )
+                })
                 .collect();
+            let query_ids: Vec<_> = cache_entries.iter().map(|(qid, _)| *qid).collect();
+            let mut store_lock = store.lock().await;
+            store_lock.workers.cache_queries(cache_entries).await?;
+            let player_preps: Vec<_> = query_ids.iter().map(|qid| Aby3Query::new(*qid)).collect();
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
-            let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
                 player_inserts.push(store_lock.insert(p).await);
             }
@@ -1392,13 +1464,16 @@ mod tests {
             for (store, graph) in vectors_and_graphs.iter_mut() {
                 let graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store
-                    .lock()
+                let store_lock = store.lock().await;
+                let iris = store_lock.storage.get_vector_or_empty(&vector_id).await;
+                let qid = QueryId::new();
+                store_lock
+                    .workers
+                    .cache_queries(vec![(qid, iris)])
                     .await
-                    .storage
-                    .get_vector_or_empty(&vector_id)
-                    .await;
-                let q = Aby3Query::new(&q);
+                    .unwrap();
+                drop(store_lock);
+                let q = Aby3Query::new(qid);
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;

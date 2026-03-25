@@ -3,7 +3,7 @@ use crate::execution::hawk_main::{
     HAWK_MIN_DIST_ROTATIONS,
 };
 
-use super::{Aby3Query, Aby3Store, ArcIris, DistanceOps, DistanceShare, VectorId};
+use super::{Aby3Query, Aby3Store, DistanceOps, DistanceShare, VectorId};
 use ampc_secret_sharing::shares::int_ring::IntRing2k;
 use clap::ValueEnum;
 use eyre::Result;
@@ -20,33 +20,6 @@ use serde::{Deserialize, Serialize};
 use DistanceFn::{MinRotation, Simple};
 
 impl DistanceFn {
-    pub async fn eval_pairwise_distances<D: DistanceOps, W: IrisWorkerPool>(
-        self,
-        store: &mut Aby3Store<D, W>,
-        pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<DistanceShare<D::Ring>>>
-    where
-        Standard: Distribution<D::Ring>,
-    {
-        let mode = match self {
-            Simple => DistanceMode::Simple,
-            MinRotation => DistanceMode::RotationAware,
-        };
-        let ds_and_ts = store
-            .workers
-            .compute_pairwise_distances(pairs, mode)
-            .await?;
-        let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        match self {
-            Simple => Ok(distances),
-            MinRotation => {
-                store
-                    .oblivious_min_distance_batch(transpose_from_flat(&distances))
-                    .await
-            }
-        }
-    }
-
     pub async fn eval_distance_pairs<D: DistanceOps, W: IrisWorkerPool>(
         self,
         store: &mut Aby3Store<D, W>,
@@ -196,7 +169,9 @@ impl DistanceFn {
 ///
 /// With rotation r and batch item i:
 ///     `input[r + i * ROTATIONS] == output[r][i]`
-fn transpose_from_flat<T: IntRing2k>(distances: &[DistanceShare<T>]) -> Vec<Vec<DistanceShare<T>>> {
+pub(super) fn transpose_from_flat<T: IntRing2k>(
+    distances: &[DistanceShare<T>],
+) -> Vec<Vec<DistanceShare<T>>> {
     (0..HAWK_MIN_DIST_ROTATIONS)
         .map(|i| {
             distances

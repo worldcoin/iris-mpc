@@ -6,7 +6,7 @@ use super::{
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::{search::SearchIds, NEIGHBORHOOD_MODE},
+    execution::hawk_main::{iris_worker::IrisWorkerPool, search::SearchIds, NEIGHBORHOOD_MODE},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use eyre::Result;
@@ -30,10 +30,15 @@ pub async fn search_to_identity_update(
 ) -> Result<IdentityUpdatePlan> {
     let start = Instant::now();
 
-    let updates = {
+    let (updates, id_update_cache) = {
         let store = hawk_actor.iris_store[LEFT].read().await;
         request.identity_updates(&store)
     };
+    // Cache identity update irises in the worker pools.
+    futures::try_join!(
+        hawk_actor.worker_pools[LEFT].cache_queries(id_update_cache[LEFT].clone()),
+        hawk_actor.worker_pools[RIGHT].cache_queries(id_update_cache[RIGHT].clone()),
+    )?;
 
     let search_params = SearchParams {
         hnsw: hawk_actor.searcher(),

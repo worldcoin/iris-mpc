@@ -1,6 +1,6 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
-    execution::hawk_main::{BothEyes, LEFT, RIGHT},
+    execution::hawk_main::{iris_worker::QueryId, BothEyes, LEFT},
     hawkers::aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
 };
 use eyre::Result;
@@ -305,18 +305,14 @@ impl BatchIterator for BatchGenerator {
 
         self.batch_count += 1;
 
-        let left_queries = imem_iris_stores[LEFT]
-            .get_vectors_or_empty(vector_ids.iter())
-            .await
+        let left_queries = vector_ids
             .iter()
-            .map(Aby3Query::new)
+            .map(|_| Aby3Query::new(QueryId::new()))
             .collect();
 
-        let right_queries = imem_iris_stores[RIGHT]
-            .get_vectors_or_empty(vector_ids.iter())
-            .await
+        let right_queries = vector_ids
             .iter()
-            .map(Aby3Query::new)
+            .map(|_| Aby3Query::new(QueryId::new()))
             .collect();
 
         Ok(Some(Batch::new(
