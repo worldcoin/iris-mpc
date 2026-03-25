@@ -741,8 +741,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             for (query_id, entry) in entries {
                 cache.entry(query_id).or_insert(entry);
             }
-            metrics::histogram!("cache_queries_duration")
-                .record(start.elapsed().as_secs_f64());
+            metrics::histogram!("cache_queries_duration").record(start.elapsed().as_secs_f64());
             Ok(())
         }
     }

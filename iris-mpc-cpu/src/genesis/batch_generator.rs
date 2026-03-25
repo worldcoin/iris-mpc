@@ -329,8 +329,14 @@ impl BatchIterator for BatchGenerator {
             .map(|iris| (QueryId::new(), Arc::clone(&iris)))
             .collect();
 
-        let left_queries = left_cache.iter().map(|(qid, _)| Aby3Query::new(*qid)).collect();
-        let right_queries = right_cache.iter().map(|(qid, _)| Aby3Query::new(*qid)).collect();
+        let left_queries = left_cache
+            .iter()
+            .map(|(qid, _)| Aby3Query::new(*qid))
+            .collect();
+        let right_queries = right_cache
+            .iter()
+            .map(|(qid, _)| Aby3Query::new(*qid))
+            .collect();
 
         Ok(Some(Batch::new(
             self.batch_count,

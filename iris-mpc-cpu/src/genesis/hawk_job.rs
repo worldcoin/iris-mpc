@@ -1,8 +1,6 @@
 use super::Batch;
 use crate::{
-    execution::hawk_main::{
-        iris_worker::QueryId, BothEyes, HawkMutation, VecRequests,
-    },
+    execution::hawk_main::{iris_worker::QueryId, BothEyes, HawkMutation, VecRequests},
     hawkers::aby3::aby3_store::Aby3Query,
     protocol::shared_iris::ArcIris,
 };
@@ -81,7 +79,6 @@ impl JobRequest {
     pub fn new_modification(modification: Modification) -> Self {
         Self::Modification { modification }
     }
-
 }
 
 /// An indexation result over a set of irises.
