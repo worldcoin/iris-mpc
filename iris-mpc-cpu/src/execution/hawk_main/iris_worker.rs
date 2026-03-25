@@ -568,6 +568,18 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     /// rotations for both normal and mirrored variants.
     ///
     /// Caching an already-cached `QueryId` is a no-op.
+    ///
+    // TODO: Accept a rotation/mirror mask so callers can request only the
+    // variants they need. Currently every call generates all 31 rotations ×
+    // 2 orientations (63 variants), but:
+    //   - Hawk main only uses HAWK_BASE_ROTATIONS_MASK (3 rotations) × 2
+    //     orientations → 7 out of 63 used
+    //   - Genesis and compaction only use CENTER_ROTATION, no mirror → 1 out
+    //     of 63 used
+    // A signature like `cache_queries(queries, rotation_mask: u32, mirror: bool)`
+    // would let LocalIrisWorkerPool skip generating + NUMA-reallocating unused
+    // variants. This is the main remaining performance gap vs the old design
+    // (which only preprocessed the selected rotations).
     fn cache_queries(
         &self,
         queries: Vec<(QueryId, ArcIris)>,
