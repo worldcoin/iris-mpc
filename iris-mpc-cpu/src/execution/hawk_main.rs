@@ -1303,20 +1303,14 @@ impl HawkRequest {
             .collect()
     }
 
-    /// Collects all `QueryId`s for eviction after batch processing.
-    fn all_query_ids(&self) -> BothEyes<Vec<iris_worker::QueryId>> {
-        [LEFT, RIGHT].map(|side| {
-            self.queries[side]
-                .iter()
-                .flat_map(|rots| rots.iter())
-                .chain(
-                    self.queries_mirror[side]
-                        .iter()
-                        .flat_map(|rots| rots.iter()),
-                )
-                .map(|q| q.query_id)
-                .collect()
-        })
+    /// Collects all unique `QueryId`s for eviction after batch processing.
+    /// Returns a flat list since both worker pools hold all query IDs.
+    fn all_query_ids_flat(&self) -> Vec<iris_worker::QueryId> {
+        self.query_ids[LEFT]
+            .iter()
+            .chain(self.query_ids[RIGHT].iter())
+            .copied()
+            .collect()
     }
 
     fn luc_ids(&self, iris_store: &Aby3SharedIrises) -> VecRequests<Vec<VectorId>> {
@@ -1905,6 +1899,9 @@ impl HawkHandle {
         let identity_updates =
             search_to_identity_update(hawk_actor, sessions_mutations, &request).await?;
 
+        // Extract identity update query IDs before the plan is moved.
+        let id_update_query_ids = identity_updates.cached_query_ids.clone();
+
         // Insert into the in memory stores.
         let mutations = Self::handle_mutations(
             hawk_actor,
@@ -1917,11 +1914,14 @@ impl HawkHandle {
         .await?;
 
         // Evict cached queries now that the batch is fully processed.
-        let query_ids = request.all_query_ids();
+        // Both pools hold all query IDs (mirror queries cross eyes), so evict
+        // the full set from each. Include identity update query IDs as well.
+        let mut all_evict_ids = request.all_query_ids_flat();
+        all_evict_ids.extend_from_slice(&id_update_query_ids);
         let results = HawkResult::new(request.batch, match_result, mutations);
         try_join!(
-            hawk_actor.worker_pools[LEFT].evict_queries(query_ids[LEFT].clone()),
-            hawk_actor.worker_pools[RIGHT].evict_queries(query_ids[RIGHT].clone()),
+            hawk_actor.worker_pools[LEFT].evict_queries(all_evict_ids.clone()),
+            hawk_actor.worker_pools[RIGHT].evict_queries(all_evict_ids),
         )?;
 
         #[cfg(feature = "phase_trace")]

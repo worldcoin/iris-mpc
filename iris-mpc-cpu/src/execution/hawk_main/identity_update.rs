@@ -6,7 +6,11 @@ use super::{
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::{iris_worker::IrisWorkerPool, search::SearchIds, NEIGHBORHOOD_MODE},
+    execution::hawk_main::{
+        iris_worker::{IrisWorkerPool, QueryId},
+        search::SearchIds,
+        NEIGHBORHOOD_MODE,
+    },
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use eyre::Result;
@@ -21,6 +25,8 @@ pub struct IdentityUpdateRequests {
 pub struct IdentityUpdatePlan {
     pub vector_ids: Vec<VectorId>,
     pub search_results: SearchResults<{ CENTER_ONLY_MASK }>,
+    /// QueryIds from identity update irises, for eviction after batch processing.
+    pub cached_query_ids: Vec<QueryId>,
 }
 
 pub async fn search_to_identity_update(
@@ -52,10 +58,18 @@ pub async fn search_to_identity_update(
     )
     .await?;
 
+    // Collect all identity update query IDs for eviction.
+    let cached_query_ids: Vec<QueryId> = id_update_cache[LEFT]
+        .iter()
+        .chain(id_update_cache[RIGHT].iter())
+        .map(|(qid, _)| *qid)
+        .collect();
+
     metrics::histogram!("search_to_identity_update_duration").record(start.elapsed().as_secs_f64());
     Ok(IdentityUpdatePlan {
         vector_ids: updates.vector_ids,
         search_results,
+        cached_query_ids,
     })
 }
 

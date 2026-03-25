@@ -1,7 +1,10 @@
 use super::Batch;
 use crate::{
-    execution::hawk_main::{iris_worker::IrisPoolHandle, BothEyes, HawkMutation, VecRequests},
+    execution::hawk_main::{
+        iris_worker::QueryId, BothEyes, HawkMutation, VecRequests,
+    },
     hawkers::aby3::aby3_store::Aby3Query,
+    protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
@@ -47,6 +50,9 @@ pub enum JobRequest {
 
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
+
+        /// Irises to cache in worker pools before search, per eye [LEFT, RIGHT].
+        irises_to_cache: BothEyes<Vec<(QueryId, ArcIris)>>,
     },
     Modification {
         /// Modification entry for processing.
@@ -68,6 +74,7 @@ impl JobRequest {
             vector_ids: batch.vector_ids.clone(),
             queries: Arc::new([batch.left_queries.clone(), batch.right_queries.clone()]),
             vector_ids_to_persist: batch.vector_ids_to_persist.clone(),
+            irises_to_cache: batch.irises_to_cache.clone(),
         }
     }
 
@@ -75,15 +82,6 @@ impl JobRequest {
         Self::Modification { modification }
     }
 
-    /// NUMA reallocation is now a no-op since `Aby3Query` is a lightweight
-    /// handle without iris data. The worker pool cache holds the actual data.
-    // TODO: Implement NUMA-aware caching in the worker pool instead.
-    pub async fn numa_realloc(
-        queries: Aby3BatchQueryRef,
-        _workers: BothEyes<IrisPoolHandle>,
-    ) -> Aby3BatchQueryRef {
-        queries
-    }
 }
 
 /// An indexation result over a set of irises.
