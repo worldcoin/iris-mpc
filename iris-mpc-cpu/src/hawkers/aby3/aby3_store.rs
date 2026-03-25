@@ -724,7 +724,13 @@ where
     Standard: Distribution<D::Ring>,
 {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        let vector_id = self.storage.data.write().await.allocate_next_id();
+        // insert_irises writes directly to the shared store (acquiring the
+        // write lock internally), so we can't hold it here. Instead, peek
+        // at the next ID without incrementing — insert will set it.
+        let vector_id = {
+            let store = self.storage.data.read().await;
+            VectorId::from_serial_id(store.next_id)
+        };
         self.workers
             .insert_irises(vec![(query.query_id, vector_id)])
             .await

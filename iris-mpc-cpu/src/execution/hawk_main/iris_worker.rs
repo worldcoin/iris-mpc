@@ -810,15 +810,30 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         &self,
         inserts: Vec<(QueryId, VectorId)>,
     ) -> impl Future<Output = Result<()>> + Send {
-        let inner = self.inner.clone();
         let query_cache = self.query_cache.clone();
+        let iris_store = self.iris_store.clone();
         async move {
-            let cache = query_cache.read().unwrap();
-            for (query_id, vector_id) in inserts {
-                let cached = cache
-                    .get(&query_id)
-                    .unwrap_or_else(|| panic!("Query {:?} not cached for insert", query_id));
-                inner.insert(vector_id, cached.original.clone())?;
+            // Resolve query IDs to irises (release cache lock before await).
+            let resolved: Vec<_> = {
+                let cache = query_cache.read().unwrap();
+                inserts
+                    .into_iter()
+                    .map(|(qid, vid)| {
+                        let iris = cache
+                            .get(&qid)
+                            .unwrap_or_else(|| panic!("Query {:?} not cached for insert", qid))
+                            .original
+                            .clone();
+                        (vid, iris)
+                    })
+                    .collect()
+            };
+            // Write directly to the shared store (not via IrisPoolHandle::insert
+            // which is fire-and-forget). HNSW insertion needs the iris to be
+            // visible in the store immediately after this returns.
+            let mut store = iris_store.data.write().await;
+            for (vector_id, iris) in resolved {
+                store.insert(vector_id, iris);
             }
             Ok(())
         }
