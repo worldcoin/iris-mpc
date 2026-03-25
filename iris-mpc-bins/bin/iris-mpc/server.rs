@@ -1112,7 +1112,9 @@ async fn server_main(config: Config) -> Result<()> {
                  shutting down..."
             );
 
-            shutdown_handler.wait_for_pending_batches_completion().await;
+            shutdown_handler
+                .wait_for_pending_batches_completion()
+                .await?;
         }
         Err(e) => {
             tracing::error!("ServerActor processing error: {:?}", e);
