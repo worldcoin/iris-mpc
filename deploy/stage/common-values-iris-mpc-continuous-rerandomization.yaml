@@ -9,7 +9,7 @@ args:
 
 serviceAccount:
   create: true
-  name: "iris-mpc-continuous-rerand"
+  name: "iris-mpc-continuous-rerandomization"
 
 ports:
   - containerPort: 3000
