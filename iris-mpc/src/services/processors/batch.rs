@@ -20,9 +20,10 @@ use iris_mpc_common::helpers::aws::{
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
-    IdentityDeletionRequest, IdentityMatchCheckRequest, IdentityUpdateRequest, ReAuthRequest,
-    SQSMessage, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    BatchRequest, IdentityDeletionRequest, IdentityMatchCheckRequest, IdentityUpdateRequest,
+    ReAuthRequest, SQSMessage, UniquenessRequest, BATCH_MESSAGE_TYPE,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_request::{
     ReceiveRequestError, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
@@ -425,6 +426,24 @@ impl<'a> BatchProcessor<'a> {
         self.delete_message(&sqs_message).await?;
 
         let res = match request_type {
+            #[cfg(feature = "send-batches")]
+            BATCH_MESSAGE_TYPE => self.process_batch_message(&message, batch_metadata).await,
+            _ => {
+                self.process_message_(&message, request_type, batch_metadata)
+                    .await
+            }
+        };
+        self.msg_counter += 1;
+        res
+    }
+
+    async fn process_message_(
+        &mut self,
+        message: &SQSMessage,
+        request_type: &str,
+        batch_metadata: BatchMetadata,
+    ) -> Result<(), ReceiveRequestError> {
+        match request_type {
             IDENTITY_DELETION_MESSAGE_TYPE => {
                 self.process_identity_deletion(&message, batch_metadata)
                     .await
@@ -474,10 +493,33 @@ impl<'a> BatchProcessor<'a> {
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                 Ok(())
             }
-        };
+        }
+    }
 
-        self.msg_counter += 1;
-        res
+    #[cfg(feature = "send-batches")]
+    async fn process_batch_message(
+        &mut self,
+        message: &SQSMessage,
+        batch_metadata: BatchMetadata,
+    ) -> Result<(), ReceiveRequestError> {
+        let _sns_message_id = message.message_id.clone();
+        let batch_request: BatchRequest = serde_json::from_str(&message.message)
+            .map_err(|e| ReceiveRequestError::json_parse_error("Batch request", e))?;
+        let _ = message; // don't accidentally use it in the below loop
+
+        for msg in batch_request.messages {
+            let request_type = msg
+                .message_attributes
+                .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+                .string_value()
+                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
+
+            self.process_message_(&msg, request_type, batch_metadata.clone())
+                .await?;
+        }
+
+        Ok(())
     }
 
     async fn process_identity_deletion(

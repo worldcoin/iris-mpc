@@ -101,6 +101,7 @@ where
     map.serialize(serializer)
 }
 
+pub const BATCH_MESSAGE_TYPE: &str = "batch_message";
 pub const IDENTITY_DELETION_MESSAGE_TYPE: &str = "identity_deletion";
 pub const ANONYMIZED_STATISTICS_MESSAGE_TYPE: &str = "anonymized_statistics";
 pub const ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE: &str = "anonymized_statistics_2d";
@@ -125,6 +126,11 @@ pub struct UniquenessRequest {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CircuitBreakerRequest {}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BatchRequest {
+    pub messages: Vec<SQSMessage>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityDeletionRequest {

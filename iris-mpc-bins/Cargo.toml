@@ -15,6 +15,7 @@ helpers = [
   "dep:reqwest",
 ]
 phase_trace = ["iris-mpc-cpu/phase_trace"]
+send-batches = ["iris-mpc/send-batches"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
@@ -80,7 +81,6 @@ iris-mpc-utils = { path = "../iris-mpc-utils" }
 blake3 = "1.8.2"
 aws-smithy-types = "1.2.9"
 clap_builder = "4.5.51"
-
 
 # ---------------------
 # binaries for iris-mpc
