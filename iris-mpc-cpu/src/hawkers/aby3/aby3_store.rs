@@ -1,6 +1,8 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool, QueryId},
+        hawk_main::iris_worker::{
+            IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec, CENTER_ROTATION,
+        },
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -52,81 +54,48 @@ pub use distance_ops::{DistanceOps, FhdOps, NhdOps};
 const MIN_ROUND_ROBIN_SIZE: usize = 1;
 const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 
-/// Iris to be searched or inserted into the store.
+/// Lightweight handle referencing a cached query in the `IrisWorkerPool`.
 ///
-/// This is an iris reference along with cached preprocessed version, used for
-/// efficient Galois ring MPC comparison. Each query carries a unique `QueryId`
-/// for caching in the `IrisWorkerPool`.
-#[derive(Clone, Debug)]
+/// The worker pool owns all iris data. `Aby3Query` is just a
+/// `(QueryId, rotation, mirrored)` triple that selects a specific
+/// preprocessed rotation from the cache.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Aby3Query {
-    /// Unique identifier for caching in the worker pool.
+    /// Identifies the base iris in the worker pool cache.
     pub query_id: QueryId,
-
-    /// Iris in the Shamir secret shared form over a Galois ring.
-    pub iris: ArcIris,
-
-    /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub iris_proc: ArcIris,
+    /// Rotation index (0–30). Index 15 = identity (center).
+    pub rotation: usize,
+    /// If true, selects the mirrored-then-preprocessed variant.
+    pub mirrored: bool,
 }
-
-// Hash and Eq exclude query_id — two queries with the same iris content are
-// equal regardless of their cache key.
-impl std::hash::Hash for Aby3Query {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.iris.hash(state);
-        self.iris_proc.hash(state);
-    }
-}
-
-impl PartialEq for Aby3Query {
-    fn eq(&self, other: &Self) -> bool {
-        self.iris == other.iris && self.iris_proc == other.iris_proc
-    }
-}
-
-impl Eq for Aby3Query {}
 
 impl Aby3Query {
-    /// Creates a new query from a secret shared iris. The input iris is preprocessed for
-    /// faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub fn new(iris_ref: &ArcIris) -> Self {
-        let iris = iris_ref.clone();
-
-        let mut preprocessed = (**iris_ref).clone();
-        preprocessed.code.preprocess_iris_code_query_share();
-        preprocessed.mask.preprocess_mask_code_query_share();
-        let iris_proc = Arc::new(preprocessed);
-
+    /// Create a query handle for the identity rotation, non-mirrored.
+    ///
+    /// The iris must already be cached in the worker pool via `cache_queries`.
+    pub fn new(query_id: QueryId) -> Self {
         Self {
-            query_id: QueryId::new(),
-            iris,
-            iris_proc,
+            query_id,
+            rotation: CENTER_ROTATION,
+            mirrored: false,
         }
     }
 
-    pub fn new_from_raw(iris: GaloisRingSharedIris) -> Self {
-        let iris = Arc::new(iris);
-        Self::new(&iris)
+    /// Create a query handle with explicit rotation and mirror flag.
+    pub fn with_rotation(query_id: QueryId, rotation: usize, mirrored: bool) -> Self {
+        Self {
+            query_id,
+            rotation,
+            mirrored,
+        }
     }
 
-    pub fn from_processed(
-        code: &GaloisRingIrisCodeShare,
-        mask: &GaloisRingTrimmedMaskCodeShare,
-        code_proc: &GaloisRingIrisCodeShare,
-        mask_proc: &GaloisRingTrimmedMaskCodeShare,
-    ) -> Self {
-        let iris = Arc::new(GaloisRingSharedIris {
-            code: code.clone(),
-            mask: mask.clone(),
-        });
-        let iris_proc = Arc::new(GaloisRingSharedIris {
-            code: code_proc.clone(),
-            mask: mask_proc.clone(),
-        });
-        Self {
-            query_id: QueryId::new(),
-            iris,
-            iris_proc,
+    /// Build a `QuerySpec` from this query.
+    pub fn query_spec(&self) -> QuerySpec {
+        QuerySpec {
+            query_id: self.query_id,
+            rotation: self.rotation,
+            mirrored: self.mirrored,
         }
     }
 }
@@ -180,21 +149,6 @@ where
         }
     }
 
-    /// Ensures that the given queries are cached in the worker pool.
-    ///
-    /// This is called transparently before distance computation so that
-    /// callers (including tests) don't need to explicitly cache.
-    async fn ensure_queries_cached(&self, queries: &[&Aby3Query]) -> Result<()> {
-        let to_cache: Vec<_> = queries
-            .iter()
-            .map(|q| (q.query_id, q.iris.clone(), q.iris_proc.clone()))
-            .collect();
-        if !to_cache.is_empty() {
-            self.workers.cache_queries(to_cache).await?;
-        }
-        Ok(())
-    }
-
     /// Converts distances from u16 secret shares to Ring-typed distance shares.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn lift_distances(
@@ -214,23 +168,6 @@ where
     ) -> Result<Vec<DistanceShare<D::Ring>>> {
         let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(dist).await
-    }
-
-    /// Computes the dot product of the iris codes and masks of the given pairs of irises.
-    /// The input irises are given in the Shamir secret sharing scheme, while the output distances are additive replicated secret shares used in the ABY3 framework.
-    ///
-    /// Assumes that the first iris of each pair is preprocessed.
-    /// This first iris is usually preprocessed when a related query is created, see [Aby3Query] for more details.
-    #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn eval_pairwise_distances(
-        &mut self,
-        pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<DistanceShare<D::Ring>>> {
-        if pairs.is_empty() {
-            return Ok(vec![]);
-        }
-
-        self.distance_fn.eval_pairwise_distances(self, pairs).await
     }
 
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
@@ -600,8 +537,6 @@ where
         if batches.is_empty() {
             return Ok(vec![]);
         }
-        let queries: Vec<&Aby3Query> = batches.iter().map(|(q, _)| q).collect();
-        self.ensure_queries_cached(&queries).await?;
         self.distance_fn
             .eval_distance_multibatch(self, batches)
             .await
@@ -620,12 +555,18 @@ where
     type DistanceRef = Aby3DistanceRef<D::Ring>;
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        self.storage
-            .get_vectors_or_empty(&vectors)
-            .await
+        let irises = self.storage.get_vectors_or_empty(&vectors).await;
+        let to_cache: Vec<_> = irises
             .iter()
-            .map(Aby3Query::new)
-            .collect_vec()
+            .map(|iris| (QueryId::new(), (**iris).clone()))
+            .collect();
+        let query_ids: Vec<QueryId> = to_cache.iter().map(|(qid, _)| *qid).collect();
+        let to_cache_arc: Vec<_> = to_cache
+            .into_iter()
+            .map(|(qid, iris)| (qid, Arc::new(iris)))
+            .collect();
+        self.workers.cache_queries(to_cache_arc).await.unwrap();
+        query_ids.into_iter().map(Aby3Query::new).collect_vec()
     }
 
     async fn only_valid_vectors(
@@ -655,8 +596,6 @@ where
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let queries: Vec<&Aby3Query> = pairs.iter().map(|(q, _)| q).collect();
-        self.ensure_queries_cached(&queries).await?;
         self.distance_fn.eval_distance_pairs(self, pairs).await
     }
 
@@ -669,7 +608,6 @@ where
         if vectors.is_empty() {
             return Ok(vec![]);
         }
-        self.ensure_queries_cached(&[query]).await?;
         metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
         metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
         let start = std::time::Instant::now();
@@ -760,7 +698,12 @@ where
     Standard: Distribution<D::Ring>,
 {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.append(&query.iris).await
+        let vector_id = self.storage.data.write().await.allocate_next_id();
+        self.workers
+            .insert_irises(vec![(query.query_id, vector_id)])
+            .await
+            .unwrap();
+        vector_id
     }
 
     async fn insert_at(
@@ -768,7 +711,10 @@ where
         vector_ref: &Self::VectorRef,
         query: &Self::QueryRef,
     ) -> Result<Self::VectorRef> {
-        Ok(self.storage.insert(*vector_ref, &query.iris).await)
+        self.workers
+            .insert_irises(vec![(query.query_id, *vector_ref)])
+            .await?;
+        Ok(*vector_ref)
     }
 }
 
