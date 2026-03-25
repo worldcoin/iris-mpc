@@ -1,6 +1,6 @@
 env:
   - name: SERVICE_NAME
-    value: iris-mpc-continuous-rerandomisation-2
+    value: iris-mpc-continuous-rerandomization-2
   - name: AWS_REGION
     value: eu-north-1
   - name: PARTY_ID
@@ -15,7 +15,7 @@ env:
   - name: ENVIRONMENT
     value: dev
   - name: RERAND_S3_BUCKET
-    value: wf-smpcv2-stage-continuous-rerandomisation
+    value: wf-smpcv2-stage-continuous-rerandomization
   - name: CHUNK_SIZE
     value: "2000"
   - name: CHUNK_DELAY_SECS
