@@ -110,6 +110,16 @@ impl<I: Clone> SharedIrises<I> {
         VectorId::from_serial_id(self.next_id)
     }
 
+    /// Allocate the next VectorId without inserting any data.
+    ///
+    /// Used when the actual iris insertion is delegated to the worker pool
+    /// via `IrisWorkerPool::insert_irises`.
+    pub fn allocate_next_id(&mut self) -> VectorId {
+        let id = self.next_id();
+        self.next_id += 1;
+        id
+    }
+
     pub fn reserve(&mut self, additional: usize) {
         self.points.reserve(additional);
     }

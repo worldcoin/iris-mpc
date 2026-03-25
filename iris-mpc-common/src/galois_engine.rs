@@ -205,6 +205,18 @@ pub mod degree4 {
             result
         }
 
+        /// Mirror the mask share. Safe to call on already-trimmed data because
+        /// `remap_new_to_mirrored_index` preserves the `b` component and the
+        /// trimmed range corresponds to `b == 0`.
+        pub fn mirrored(&self) -> Self {
+            // mirrored_mask uses flip_imaginary = false, so no imaginary flip needed
+            let mut res = self.clone();
+            for i in 0..MASK_CODE_LENGTH {
+                res.coefs[GaloisRingIrisCodeShare::remap_new_to_mirrored_index(i)] = self.coefs[i];
+            }
+            res
+        }
+
         pub fn trick_dot(&self, other: &GaloisRingTrimmedMaskCodeShare) -> u16 {
             trick_dot(&self.coefs, &other.coefs)
         }

@@ -38,6 +38,14 @@ impl GaloisRingSharedIris {
         GaloisRingSharedIris { code, mask }
     }
 
+    /// Produce the mirrored variant of this iris share.
+    pub fn mirrored(&self) -> Self {
+        GaloisRingSharedIris {
+            code: self.code.mirrored_code(),
+            mask: self.mask.mirrored(),
+        }
+    }
+
     pub fn from_batch(batch: IrisQueryBatchEntries) -> Vec<Self> {
         izip!(batch.code, batch.mask)
             .map(|(code, mask)| GaloisRingSharedIris { code, mask })
