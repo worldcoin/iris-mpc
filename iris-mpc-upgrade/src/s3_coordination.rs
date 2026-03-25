@@ -1,3 +1,4 @@
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
 use futures::future::try_join_all;
@@ -49,14 +50,41 @@ pub async fn upload_marker(s3: &S3Client, bucket: &str, key: &str, body: Vec<u8>
 }
 
 pub async fn marker_exists(s3: &S3Client, bucket: &str, key: &str) -> Result<bool> {
+    tracing::debug!(bucket = bucket, key = key, "S3 HeadObject request");
     match s3.head_object().bucket(bucket).key(key).send().await {
-        Ok(_) => Ok(true),
+        Ok(_) => {
+            tracing::debug!(key = key, "S3 HeadObject: exists");
+            Ok(true)
+        }
         Err(e) => {
+            let status = e.raw_response().map(|r| r.status().as_u16());
+            let err_display = format!("{e}");
+            let debug_display = format!("{e:?}");
             let svc_err = e.into_service_error();
+            let code = svc_err.code().unwrap_or("<none>");
+            let message = svc_err.message().unwrap_or("<none>");
+            tracing::warn!(
+                bucket = bucket,
+                key = key,
+                http_status = ?status,
+                is_not_found = svc_err.is_not_found(),
+                error_code = code,
+                error_message = message,
+                error_display = %err_display,
+                error_debug = %debug_display,
+                "S3 HeadObject error details"
+            );
             if svc_err.is_not_found() {
                 Ok(false)
             } else {
-                Err(eyre!("S3 HeadObject failed for key {}: {}", key, svc_err))
+                Err(eyre!(
+                    "S3 HeadObject failed for key {} in bucket {}: status={:?} code={} message={}",
+                    key,
+                    bucket,
+                    status,
+                    code,
+                    message,
+                ))
             }
         }
     }

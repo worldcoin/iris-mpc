@@ -545,10 +545,21 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
     background_tasks.check_tasks();
 
     let sdk_config = aws_config::from_env().load().await;
+    tracing::info!(
+        region = ?sdk_config.region(),
+        "AWS SDK config loaded"
+    );
     let s3_config = aws_sdk_s3::config::Builder::from(&sdk_config);
     let sm_config = aws_sdk_secretsmanager::config::Builder::from(&sdk_config);
     let s3_client = S3Client::from_conf(s3_config.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config.build());
+
+    tracing::info!(
+        s3_bucket = %config.s3_bucket,
+        party_id = config.party_id,
+        environment = %config.env,
+        "Continuous rerand starting with config"
+    );
 
     let postgres_client =
         PostgresClient::new(&config.db_url, &config.schema_name, AccessMode::ReadWrite).await?;
