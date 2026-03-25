@@ -34,7 +34,7 @@ resources:
 
 nodeSelector:
   kubernetes.io/arch: amd64
-  workload: "rerandomization"
+  workload: "continuous_rerandomization"
 
 tolerations:
   - key: "dedicated"
