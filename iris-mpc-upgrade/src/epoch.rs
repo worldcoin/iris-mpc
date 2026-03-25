@@ -126,12 +126,14 @@ pub async fn idempotent_keygen(
     party_id: u8,
 ) -> Result<tripartite_dh::PrivateKey> {
     if epoch > 0 {
-        if let Err(e) = delete_private_key_from_sm(sm, env, service_name, epoch - 1, party_id).await {
+        if let Err(e) = delete_private_key_from_sm(sm, env, service_name, epoch - 1, party_id).await
+        {
             tracing::debug!("Cleanup of epoch {} key (best-effort): {}", epoch - 1, e);
         }
     }
 
-    if let Some(existing) = load_private_key_from_sm(sm, env, service_name, epoch, party_id).await? {
+    if let Some(existing) = load_private_key_from_sm(sm, env, service_name, epoch, party_id).await?
+    {
         tracing::info!(
             "Epoch {}: private key found in SM, re-uploading public key to S3",
             epoch
@@ -150,7 +152,8 @@ pub async fn idempotent_keygen(
     let mut rng = rand::rngs::OsRng;
     let private_key = tripartite_dh::PrivateKey::random(&mut rng);
 
-    let saved = save_private_key_to_sm(sm, env, service_name, epoch, party_id, &private_key).await?;
+    let saved =
+        save_private_key_to_sm(sm, env, service_name, epoch, party_id, &private_key).await?;
     let private_key = if saved {
         private_key
     } else {
