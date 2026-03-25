@@ -13,6 +13,7 @@ members = [
 ]
  default-members = [
     "iris-mpc",
+    "iris-mpc-bins",
     "iris-mpc-common",
     "iris-mpc-cpu",
     "iris-mpc-gpu",

@@ -4,7 +4,10 @@ use std::ops::Not;
 use ampc_actor_utils::{
     execution::session::{Session, SessionHandles},
     network::mpc::NetworkInt,
-    protocol::binary::{and_product, bit_inject},
+    protocol::{
+        binary::{and_product, bit_inject},
+        ops::DistancePair,
+    },
 };
 use ampc_secret_sharing::{
     shares::{bit::Bit, DistanceShare, RingRandFillable, VecRingElement, VecShare},
@@ -14,13 +17,11 @@ use eyre::Result;
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 
-use crate::protocol::ops::DistancePair;
-
 /// Builds round-robin comparison pairs from a flattened batch of distance shares.
 ///
 /// Within each batch, compute all the pairs to be compared in a round-robin fashion,
 /// namely, the pairs di, dj for all i < j, where di and dj are distances within the same batch.
-pub fn build_round_robin_pairs<T: IntRing2k>(
+pub(crate) fn build_round_robin_pairs<T: IntRing2k>(
     distances: &[DistanceShare<T>],
     batch_size: usize,
     num_batches: usize,
@@ -41,7 +42,7 @@ pub fn build_round_robin_pairs<T: IntRing2k>(
 /// Given round-robin comparison bits, selects the minimum distance in each batch.
 ///
 /// This is the generic core shared by both FHD and NHD round-robin minimum.
-pub async fn select_round_robin_min<T>(
+pub(crate) async fn select_round_robin_min<T>(
     session: &mut Session,
     distances: &[DistanceShare<T>],
     batch_size: usize,

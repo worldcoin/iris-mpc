@@ -1,28 +1,24 @@
 use std::{cmp::Ordering, fmt::Debug};
 
-use std::ops::Not;
-
-use ampc_actor_utils::protocol::binary::extract_msb_batch;
-use ampc_actor_utils::protocol::fhd_ops::{cross_compare, cross_mul, fhd_greater_than_threshold};
 use ampc_actor_utils::{
     execution::session::Session,
     network::mpc::NetworkInt,
     protocol::{
-        binary::open_bin,
-        fhd_ops::{min_of_pair_batch, oblivious_cross_compare_lifted},
+        binary::{bit_inject, extract_msb_batch, open_bin},
+        fhd_ops::{cross_mul, fhd_greater_than_threshold},
         nhd_ops::{
-            nhd_comparison_nmr, nhd_cross_compare, nhd_greater_than_threshold, nhd_lift_distances,
-            nhd_min_of_pair_batch, nhd_oblivious_cross_compare, nhd_oblivious_cross_compare_lifted,
+            nhd_comparison_nmr, nhd_cross_mul, nhd_greater_than_threshold, nhd_lift_distances,
             nhd_plaintext_is_match,
         },
-        ops::batch_signed_lift_vec,
+        ops::{batch_signed_lift_vec, conditionally_select_distance},
         shuffle::random_shuffle_batch,
     },
 };
-use ampc_secret_sharing::shares::vecshare_bittranspose::Transpose64;
-use ampc_secret_sharing::shares::VecShare;
 use ampc_secret_sharing::{
-    shares::{bit::Bit, DistanceShare, Ring48, RingRandFillable},
+    shares::{
+        bit::Bit, vecshare_bittranspose::Transpose64, DistanceShare, Ring48, RingRandFillable,
+        VecShare,
+    },
     IntRing2k, Share,
 };
 use eyre::Result;
@@ -31,10 +27,12 @@ use rand_distr::{Distribution, Standard};
 
 use iris_mpc_common::iris_db::iris::Threshold;
 
-use crate::protocol::min_round_robin::{build_round_robin_pairs, select_round_robin_min};
 use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
-    protocol::ops::{DistancePair, IdDistance},
+    protocol::{
+        min_round_robin::{build_round_robin_pairs, select_round_robin_min},
+        ops::{DistancePair, IdDistance},
+    },
 };
 
 use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
@@ -66,29 +64,67 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
         distances: Vec<Share<u16>>,
     ) -> Result<Vec<DistanceShare<Self::Ring>>>;
 
-    /// Compares pairs of distances and opens the result (d2 < d1 for each pair).
-    async fn cross_compare(
+    /// Cross-multiplies distance pairs to produce a difference value.
+    /// FHD: simple cross-multiply; NHD: polynomial NMR cross-multiply.
+    async fn cross_mul(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<bool>>;
+    ) -> Result<Vec<Share<Self::Ring>>>;
 
     /// Compares pairs of distances, returning secret-shared bits.
     async fn oblivious_cross_compare(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<Share<Bit>>>;
+    ) -> Result<Vec<Share<Bit>>>
+    where
+        VecShare<Self::Ring>: Transpose64,
+        Standard: Distribution<Self::Ring>,
+    {
+        let diff = Self::cross_mul(session, distances).await?;
+        extract_msb_batch(session, &diff).await
+    }
+
+    /// Compares pairs of distances and opens the result (d1 < d2 for each pair).
+    async fn cross_compare(
+        session: &mut Session,
+        distances: &[DistancePair<Self::Ring>],
+    ) -> Result<Vec<bool>>
+    where
+        VecShare<Self::Ring>: Transpose64,
+        Standard: Distribution<Self::Ring>,
+    {
+        let bits = Self::oblivious_cross_compare(session, distances).await?;
+        let opened_b = open_bin(session, &bits).await?;
+        opened_b.into_iter().map(|x| Ok(x.convert())).collect()
+    }
 
     /// Compares pairs of distances, returning lifted Ring-typed shares.
     async fn oblivious_cross_compare_lifted(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<Share<Self::Ring>>>;
+    ) -> Result<Vec<Share<Self::Ring>>>
+    where
+        VecShare<Self::Ring>: Transpose64,
+        Standard: Distribution<Self::Ring>,
+    {
+        let bits = Self::oblivious_cross_compare(session, distances).await?;
+        Ok(bit_inject::<Self::Ring>(session, VecShare { shares: bits })
+            .await?
+            .inner())
+    }
 
     /// Computes the minimum of each pair of distances.
     async fn min_of_pair_batch(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<DistanceShare<Self::Ring>>>;
+    ) -> Result<Vec<DistanceShare<Self::Ring>>>
+    where
+        VecShare<Self::Ring>: Transpose64,
+        Standard: Distribution<Self::Ring>,
+    {
+        let bits = Self::oblivious_cross_compare_lifted(session, distances).await?;
+        conditionally_select_distance(session, distances, bits.as_slice()).await
+    }
 
     /// Given a flattened array of distance shares arranged in batches,
     /// this function computes the minimum distance share within each batch via the round-robin method.
@@ -140,7 +176,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
         if distances.is_empty() {
             eyre::bail!("Expected at least one distance share");
         }
-        if distances.len() % batch_size != 0 {
+        if !distances.len().is_multiple_of(batch_size) {
             eyre::bail!("Distances length must be a multiple of batch size");
         }
         if batch_size < 2 {
@@ -152,12 +188,23 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
         select_round_robin_min(session, distances, batch_size, num_batches, comparison_bits).await
     }
 
+    /// Computes secret-shared bits indicating whether each distance exceeds the threshold.
+    async fn greater_than_threshold(
+        session: &mut Session,
+        distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
+    ) -> Result<Vec<Share<Bit>>>;
+
     /// Checks if distances are less than or equal to the given threshold.
     async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
         threshold: Threshold,
-    ) -> Result<Vec<bool>>;
+    ) -> Result<Vec<bool>> {
+        let gt_bits = Self::greater_than_threshold(session, distances, threshold).await?;
+        let opened = open_bin(session, &gt_bits).await?;
+        Ok(opened.into_iter().map(|b| !bool::from(b)).collect())
+    }
 
     /// Converts an opened ring value to a usize index.
     fn to_usize(value: Self::Ring) -> usize;
@@ -205,44 +252,19 @@ impl DistanceOps for FhdOps {
             .collect())
     }
 
-    async fn cross_compare(
-        session: &mut Session,
-        distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<bool>> {
-        cross_compare(session, distances).await
-    }
-
-    async fn oblivious_cross_compare(
-        session: &mut Session,
-        distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<Share<Bit>>> {
-        let diff = cross_mul(session, distances).await?;
-        extract_msb_batch(session, &diff).await
-    }
-
-    async fn oblivious_cross_compare_lifted(
+    async fn cross_mul(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<Share<Self::Ring>>> {
-        oblivious_cross_compare_lifted(session, distances).await
+        cross_mul(session, distances).await
     }
 
-    async fn min_of_pair_batch(
-        session: &mut Session,
-        distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
-        min_of_pair_batch(session, distances).await
-    }
-
-    async fn lte_and_open(
+    async fn greater_than_threshold(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
         threshold: Threshold,
-    ) -> Result<Vec<bool>> {
-        let bits = fhd_greater_than_threshold(session, distances, threshold.ratio()).await?;
-        open_bin(session, &bits)
-            .await
-            .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+    ) -> Result<Vec<Share<Bit>>> {
+        fhd_greater_than_threshold(session, distances, threshold.ratio()).await
     }
 
     fn to_usize(value: Self::Ring) -> usize {
@@ -289,43 +311,19 @@ impl DistanceOps for NhdOps {
         nhd_lift_distances(session, distances).await
     }
 
-    async fn cross_compare(
-        session: &mut Session,
-        distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<bool>> {
-        nhd_cross_compare(session, distances).await
-    }
-
-    async fn oblivious_cross_compare(
-        session: &mut Session,
-        distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<Share<Bit>>> {
-        nhd_oblivious_cross_compare(session, distances).await
-    }
-
-    async fn oblivious_cross_compare_lifted(
+    async fn cross_mul(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<Share<Self::Ring>>> {
-        nhd_oblivious_cross_compare_lifted(session, distances).await
+        nhd_cross_mul(session, distances).await
     }
 
-    async fn min_of_pair_batch(
-        session: &mut Session,
-        distances: &[DistancePair<Self::Ring>],
-    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
-        nhd_min_of_pair_batch(session, distances).await
-    }
-
-    async fn lte_and_open(
+    async fn greater_than_threshold(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
         threshold: Threshold,
-    ) -> Result<Vec<bool>> {
-        let bits = nhd_greater_than_threshold(session, distances, threshold.ratio()).await?;
-        open_bin(session, &bits)
-            .await
-            .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+    ) -> Result<Vec<Share<Bit>>> {
+        nhd_greater_than_threshold(session, distances, threshold.ratio()).await
     }
 
     fn to_usize(value: Self::Ring) -> usize {
