@@ -1193,17 +1193,6 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
-    /// Reallocates iris data to be local to the NUMA node of the worker threads.
-    ///
-    /// Now that `Aby3Query` is a lightweight handle (no iris data), NUMA
-    /// reallocation of query data is a no-op. The worker pool cache holds the
-    /// actual iris data and will handle NUMA-aware allocation internally.
-    ///
-    // TODO: Implement NUMA-aware caching in the worker pool instead.
-    async fn numa_realloc(self, _workers: BothEyes<IrisPoolHandle>) -> Self {
-        self
-    }
-
     fn request_types(
         &self,
         iris_store: &Aby3SharedIrises,
@@ -1769,11 +1758,8 @@ impl HawkHandle {
             request.batch.request_ids.len()
         );
 
-        let request = request
-            .numa_realloc(hawk_actor.workers_handle.clone())
-            .await;
-
-        // Pre-cache all queries in both worker pools (mirror queries cross eyes).
+        // Cache all queries in both worker pools. cache_queries handles the full
+        // pipeline: NUMA realloc → mirror → preprocess → all_rotations.
         request.cache_into(&hawk_actor.worker_pools).await?;
 
         // All deletions in a batch are applied at the beginning of batch processing

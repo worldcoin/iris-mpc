@@ -661,13 +661,23 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         queries: Vec<(QueryId, ArcIris)>,
     ) -> impl Future<Output = Result<()>> + Send {
         let query_cache = self.query_cache.clone();
+        let inner = self.inner.clone();
         async move {
-            let mut cache = query_cache.write().unwrap();
-            for (query_id, iris) in queries {
-                if cache.contains_key(&query_id) {
-                    continue;
-                }
+            // Filter out already-cached queries.
+            let new_queries: Vec<_> = {
+                let cache = query_cache.read().unwrap();
+                queries
+                    .into_iter()
+                    .filter(|(qid, _)| !cache.contains_key(qid))
+                    .collect()
+            };
+            if new_queries.is_empty() {
+                return Ok(());
+            }
 
+            // Preprocess + rotate, collecting all resulting ArcIris values.
+            let mut entries: Vec<(QueryId, CachedQuery)> = Vec::with_capacity(new_queries.len());
+            for (query_id, iris) in &new_queries {
                 // --- Normal: preprocess then rotate ---
                 let mut code_proc = iris.code.clone();
                 let mut mask_proc = iris.mask.clone();
@@ -684,14 +694,51 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 let mirrored_preprocessed_rotations =
                     zip_rotations(code_mirror.all_rotations(), mask_mirror.all_rotations());
 
-                cache.insert(
-                    query_id,
+                entries.push((
+                    *query_id,
                     CachedQuery {
-                        original: iris,
+                        original: iris.clone(),
                         preprocessed_rotations,
                         mirrored_preprocessed_rotations,
                     },
-                );
+                ));
+            }
+
+            // NUMA-realloc all irises onto the worker pool's NUMA node.
+            // Collect realloc futures for every ArcIris in every CachedQuery.
+            let mut realloc_futures = Vec::new();
+            for (_, entry) in &entries {
+                realloc_futures.push(inner.numa_realloc(entry.original.clone()));
+                for rot in &entry.preprocessed_rotations {
+                    realloc_futures.push(inner.numa_realloc(rot.clone()));
+                }
+                for rot in &entry.mirrored_preprocessed_rotations {
+                    realloc_futures.push(inner.numa_realloc(rot.clone()));
+                }
+            }
+            // Each numa_realloc returns Result<Receiver<ArcIris>>.
+            let receivers: Vec<_> = realloc_futures.into_iter().collect::<Result<Vec<_>>>()?;
+            let reallocated = try_join_all(receivers).await?;
+
+            // Write NUMA-local copies back into the entries.
+            let mut idx = 0;
+            for (_, entry) in &mut entries {
+                entry.original = reallocated[idx].clone();
+                idx += 1;
+                for rot in &mut entry.preprocessed_rotations {
+                    *rot = reallocated[idx].clone();
+                    idx += 1;
+                }
+                for rot in &mut entry.mirrored_preprocessed_rotations {
+                    *rot = reallocated[idx].clone();
+                    idx += 1;
+                }
+            }
+
+            // Store in cache.
+            let mut cache = query_cache.write().unwrap();
+            for (query_id, entry) in entries {
+                cache.entry(query_id).or_insert(entry);
             }
             Ok(())
         }
