@@ -4,7 +4,9 @@ use crate::execution::hawk_main::{
 };
 
 use super::{Aby3Query, Aby3Store, DistanceOps, DistanceShare, VectorId};
-use ampc_secret_sharing::shares::int_ring::IntRing2k;
+use ampc_secret_sharing::shares::{
+    int_ring::IntRing2k, vecshare_bittranspose::Transpose64, VecShare,
+};
 use clap::ValueEnum;
 use eyre::Result;
 use rand_distr::{Distribution, Standard};
@@ -27,6 +29,7 @@ impl DistanceFn {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let mode = match self {
             Simple => DistanceMode::Simple,
@@ -57,6 +60,7 @@ impl DistanceFn {
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         let mode = match self {
             Simple => DistanceMode::Simple,
@@ -104,6 +108,7 @@ impl DistanceFn {
     ) -> Result<Vec<Vec<DistanceShare<D::Ring>>>>
     where
         Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
     {
         if batches.is_empty() {
             return Ok(vec![]);

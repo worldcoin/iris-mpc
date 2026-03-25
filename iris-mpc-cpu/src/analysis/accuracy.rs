@@ -1,6 +1,6 @@
 use crate::{
     hawkers::{
-        aby3::aby3_store::DistanceFn,
+        aby3::aby3_store::{DistanceFn, DistanceOps},
         plaintext_store::{PlaintextStore, SharedPlaintextStore},
     },
     hnsw::{
@@ -55,6 +55,8 @@ pub struct AnalysisConfig {
     pub search_hnsw_config: HnswConfig,
     /// Search using sorted or unsorted neighborhoods
     pub neighborhood_mode: NeighborhoodMode,
+    /// Distance ops type: "fhd" (Fractional Hamming) or "nhd" (Normalized Hamming).
+    pub distance_ops: String,
 }
 
 impl AnalysisConfig {
@@ -91,9 +93,9 @@ where
     Ok(results)
 }
 
-pub async fn run_analysis(
+pub async fn run_analysis<D: DistanceOps>(
     config: AnalysisConfig,
-    store: PlaintextStore,
+    store: PlaintextStore<D>,
     graph: GraphMem<VectorId>,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
@@ -342,6 +344,8 @@ pub struct HnswConfig {
     pub ef_search: LayerValue<usize>,
     pub M: usize,
     pub layer_mode: LayerMode,
+    #[serde(default)]
+    pub fixed_layer_search_batch_size: Option<usize>,
 }
 
 impl From<&HnswConfig> for HnswSearcher {
@@ -372,6 +376,7 @@ impl From<&HnswConfig> for HnswSearcher {
             params,
             layer_mode,
             layer_distribution,
+            fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
         }
     }
 }
@@ -380,11 +385,11 @@ impl From<&HnswConfig> for HnswSearcher {
 
 /// Loads iris codes into a `PlaintextStore` based on `IrisesInit` config.
 /// Returns the store and an RNG for use in later steps.
-pub async fn load_iris_store(
+pub async fn load_iris_store<D: DistanceOps>(
     config: IrisesInit,
     rng: &mut StdRng,
     distance_fn: DistanceFn,
-) -> Result<PlaintextStore> {
+) -> Result<PlaintextStore<D>> {
     let irises = match config {
         IrisesInit::Random { number } => {
             println!("Generating {} random iris codes...", number);
@@ -412,9 +417,9 @@ pub async fn load_iris_store(
 }
 
 /// Loads or builds the HNSW graph.
-pub async fn load_graph(
+pub async fn load_graph<D: DistanceOps>(
     config: &GraphInit,
-    store: &mut PlaintextStore,
+    store: &mut PlaintextStore<D>,
     rng: &mut StdRng,
 ) -> Result<GraphMem<VectorId>> {
     match config {

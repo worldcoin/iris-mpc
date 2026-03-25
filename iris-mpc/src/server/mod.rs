@@ -459,7 +459,10 @@ async fn init_hawk_actor(
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_m: config.hnsw_param_m,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
+        hnsw_param_ef_supermatch: config.hnsw_param_ef_supermatch,
+        hnsw_param_ef_saturation_margin: config.hnsw_param_ef_saturation_margin,
         hnsw_layer_density: config.hnsw_layer_density,
+        hnsw_fixed_layer_search_batch_size: config.hnsw_fixed_layer_search_batch_size,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
         hnsw_disable_memory_persistence: config.hnsw_disable_memory_persistence,
@@ -858,7 +861,7 @@ async fn run_main_server_loop(
                  shutting down..."
             );
 
-            shutdown_handler.wait_for_pending_batches_completion().await;
+            let _ = shutdown_handler.wait_for_pending_batches_completion().await;
         }
         Err(e) => {
             tracing::error!("HawkActor processing error: {:?}", e);

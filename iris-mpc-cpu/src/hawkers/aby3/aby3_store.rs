@@ -18,7 +18,8 @@ use crate::{
         ops::{
             conditionally_select_distances_with_plain_ids,
             conditionally_select_distances_with_shared_ids, conditionally_swap_distances,
-            conditionally_swap_distances_plain_ids, galois_ring_to_rep3, DistancePair, IdDistance,
+            conditionally_swap_distances_plain_ids, galois_ring_to_rep3, open_ring, DistancePair,
+            IdDistance,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -28,9 +29,9 @@ use crate::{
         RingElement,
     },
 };
-use ampc_actor_utils::protocol::ops::open_ring;
+use ampc_secret_sharing::shares::{vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::{iris_db::iris::Threshold, vector_id::VectorId};
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 use static_assertions::const_assert;
@@ -130,6 +131,7 @@ pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
 impl<D: DistanceOps, W: IrisWorkerPool> Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
+    VecShare<D::Ring>: Transpose64,
 {
     pub fn new(
         storage: Aby3SharedIrisesRef,
@@ -255,7 +257,10 @@ where
     pub async fn oblivious_min_distance(
         &mut self,
         distances: &[DistanceShare<D::Ring>],
-    ) -> Result<DistanceShare<D::Ring>> {
+    ) -> Result<DistanceShare<D::Ring>>
+    where
+        VecShare<D::Ring>: Transpose64,
+    {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -369,7 +374,10 @@ where
     pub(crate) async fn oblivious_min_distance_batch(
         &mut self,
         distances: Vec<Vec<DistanceShare<D::Ring>>>,
-    ) -> Result<Vec<DistanceShare<D::Ring>>> {
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        VecShare<D::Ring>: Transpose64,
+    {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -567,11 +575,24 @@ where
             .eval_distance_multibatch(self, batches)
             .await
     }
+
+    /// Check whether a batch of distances are matches at the given threshold.
+    pub async fn is_match_at(
+        &mut self,
+        distances: &[DistanceShare<D::Ring>],
+        threshold: Threshold,
+    ) -> Result<Vec<bool>> {
+        if distances.is_empty() {
+            return Ok(vec![]);
+        }
+        D::lte_and_open(&mut self.session, distances, threshold).await
+    }
 }
 
 impl<D: DistanceOps, W: IrisWorkerPool> VectorStore for Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
+    VecShare<D::Ring>: Transpose64,
 {
     /// Arc ref to a query.
     type QueryRef = Aby3Query;
@@ -657,7 +678,12 @@ where
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(D::lte_threshold_and_open(&mut self.session, std::slice::from_ref(distance)).await?[0])
+        Ok(D::lte_and_open(
+            &mut self.session,
+            std::slice::from_ref(distance),
+            Threshold::Match,
+        )
+        .await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -687,10 +713,7 @@ where
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
-        if distances.is_empty() {
-            return Ok(vec![]);
-        }
-        D::lte_threshold_and_open(&mut self.session, distances).await
+        self.is_match_at(distances, Threshold::Match).await
     }
 
     async fn compact_neighborhood(
@@ -722,6 +745,7 @@ where
 impl<D: DistanceOps, W: IrisWorkerPool> VectorStoreMut for Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
+    VecShare<D::Ring>: Transpose64,
 {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // insert_irises writes directly to the shared store (acquiring the
@@ -771,7 +795,7 @@ mod tests {
             plaintext_store::PlaintextStore,
         },
         hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
-        network::NetworkType,
+        network::mpc::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
     };
     use aes_prng::AesRng;

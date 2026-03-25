@@ -280,6 +280,10 @@ pub struct HnswSearcher {
 
     /// Statistical distribution for layer selection
     pub layer_distribution: LayerDistribution,
+
+    /// If set, fixes the batch size used in `layer_search_batched_v2` instead
+    /// of using the adaptive insertion-rate estimator.
+    pub fixed_layer_search_batch_size: Option<usize>,
 }
 
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
@@ -340,6 +344,7 @@ impl HnswSearcher {
                 max_graph_layer: None,
             },
             layer_distribution: LayerDistribution::new_geometric_from_M(M),
+            fixed_layer_search_batch_size: None,
         }
     }
 
@@ -355,6 +360,7 @@ impl HnswSearcher {
             params: HnswParams::new(ef_constr, ef_search, M),
             layer_mode: LayerMode::LinearScan { max_graph_layer },
             layer_distribution: LayerDistribution::new_geometric_from_M(M),
+            fixed_layer_search_batch_size: None,
         }
     }
 
@@ -539,6 +545,7 @@ impl HnswSearcher {
         W: &mut N,
         ef: usize,
         lc: usize,
+        fixed_batch_size: Option<usize>,
     ) -> Result<()> {
         match ef {
             0 => {
@@ -553,7 +560,7 @@ impl HnswSearcher {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
             }
             _ => {
-                Self::layer_search_batched_v2(store, graph, q, W, ef, lc).await?;
+                Self::layer_search_batched_v2(store, graph, q, W, ef, lc, fixed_batch_size).await?;
             }
         }
         Ok(())
@@ -1013,6 +1020,7 @@ impl HnswSearcher {
         W: &mut N,
         ef: usize,
         lc: usize,
+        fixed_batch_size: Option<usize>,
     ) -> Result<()> {
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -1111,25 +1119,30 @@ impl HnswSearcher {
 
             // Estimate the number of neighbors to visit which will result in approximately
             // the desired number of new elements to be inserted into the candidate neighborhood.
-            let target_batch_size = insertion_batch_size * ins_rate_denom / INS_RATE_NUM;
+            let target_batch_size =
+                fixed_batch_size.unwrap_or(insertion_batch_size * ins_rate_denom / INS_RATE_NUM);
 
             // Open several candidate nodes, visit unvisited neighbors, and compute distances
             // between the query and neighbors as a batch. Opens nodes until at least
             // `target_batch_size` neighbors are visited or all nodes are opened.
-            let open_start = std::time::Instant::now();
-            let (new_opened, c_links) = HnswSearcher::open_nodes_batch(
-                store,
-                graph,
-                &cur_unopened,
-                lc,
-                q,
-                &mut visited,
-                Some(target_batch_size),
-            )
-            .instrument(eval_dist_span.clone())
-            .await?;
-            metrics::histogram!("layer_search_open_nodes_batch_duration")
-                .record(open_start.elapsed().as_secs_f64());
+            let (new_opened, c_links) = {
+                let open_start = std::time::Instant::now();
+                crate::phase_trace!("open_nodes", "n_unopened" => cur_unopened.len());
+                let res = HnswSearcher::open_nodes_batch(
+                    store,
+                    graph,
+                    &cur_unopened,
+                    lc,
+                    q,
+                    &mut visited,
+                    Some(target_batch_size),
+                )
+                .instrument(eval_dist_span.clone())
+                .await?;
+                metrics::histogram!("layer_search_open_nodes_batch_duration")
+                    .record(open_start.elapsed().as_secs_f64());
+                res
+            };
 
             opened_so_far += new_opened.len();
             visited_so_far += c_links.len();
@@ -1143,45 +1156,54 @@ impl HnswSearcher {
             );
             opened.extend(new_opened);
 
-            // Compare elements against current farthest element of W
-            let fq = W
-                .get_furthest()
-                .ok_or(eyre!("No furthest element found"))?
-                .1
-                .clone();
-            let batch: Vec<_> = c_links
-                .iter()
-                .map(|(_c, cq)| (cq.clone(), fq.clone()))
-                .collect();
-            let batch_size = batch.len();
-            let less_than_start = std::time::Instant::now();
-            let results = store
-                .less_than_batch(&batch)
-                .instrument(less_than_span.clone())
-                .await?;
-            metrics::histogram!("layer_search_less_than_batch_duration")
-                .record(less_than_start.elapsed().as_secs_f64());
+            // Compare elements against current farthest element of W and filter
+            let (filtered_links, batch_size) = {
+                let fq = W
+                    .get_furthest()
+                    .ok_or(eyre!("No furthest element found"))?
+                    .1
+                    .clone();
+                let batch: Vec<_> = c_links
+                    .iter()
+                    .map(|(_c, cq)| (cq.clone(), fq.clone()))
+                    .collect();
+                let batch_size = batch.len();
+                let less_than_start = std::time::Instant::now();
+                crate::phase_trace!("prune_candidates", "n_candidates" => batch_size);
+                let results = store
+                    .less_than_batch(&batch)
+                    .instrument(less_than_span.clone())
+                    .await?;
+                metrics::histogram!("layer_search_less_than_batch_duration")
+                    .record(less_than_start.elapsed().as_secs_f64());
 
-            // Filter out elements which are not strictly closer than the current worst candidate
-            let filtered_links: Vec<_> = results
-                .into_iter()
-                .zip(c_links)
-                .filter_map(|(res, link)| if res { Some(link) } else { None })
-                .collect();
+                // Filter out elements which are not strictly closer than the current worst candidate
+                let filtered_links: Vec<_> = results
+                    .into_iter()
+                    .zip(c_links)
+                    .filter_map(|(res, link)| if res { Some(link) } else { None })
+                    .collect();
+
+                debug!(
+                    batch_size,
+                    n_insertions = filtered_links.len(),
+                    "Batch distances comparison filter"
+                );
+                (filtered_links, batch_size)
+            };
 
             let n_insertions = filtered_links.len();
-            debug!(
-                batch_size,
-                n_insertions, "Batch distances comparison filter"
-            );
 
             // Insert elements which remain into candidate neighborhood, truncating to length `ef`
-            let insert_start = std::time::Instant::now();
-            W.insert_batch_and_trim(store, &filtered_links, ef)
-                .instrument(insert_span.clone())
-                .await?;
-            metrics::histogram!("layer_search_insert_batch_and_trim_duration")
-                .record(insert_start.elapsed().as_secs_f64());
+            {
+                let insert_start = std::time::Instant::now();
+                crate::phase_trace!("insert_and_trim", "n_insertions" => n_insertions);
+                W.insert_batch_and_trim(store, &filtered_links, ef)
+                    .instrument(insert_span.clone())
+                    .await?;
+                metrics::histogram!("layer_search_insert_batch_and_trim_duration")
+                    .record(insert_start.elapsed().as_secs_f64());
+            }
 
             // If measured insertion rate is too low, update the estimated insertion rate.
             //
@@ -1390,7 +1412,16 @@ impl HnswSearcher {
         for lc in (0..n_layers).rev() {
             let layer_start = std::time::Instant::now();
             let ef = self.params.get_ef_search(lc);
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            Self::search_layer(
+                store,
+                graph,
+                query,
+                &mut W,
+                ef,
+                lc,
+                self.fixed_layer_search_batch_size,
+            )
+            .await?;
             metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
                 .record(layer_start.elapsed().as_secs_f64());
         }
@@ -1471,7 +1502,16 @@ impl HnswSearcher {
                 self.params.get_ef_constr_insert(lc)
             };
 
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
+            Self::search_layer(
+                store,
+                graph,
+                query,
+                &mut W,
+                ef,
+                lc,
+                self.fixed_layer_search_batch_size,
+            )
+            .await?;
             metrics::histogram!("search_to_insert_layer_duration", "layer" => lc.to_string())
                 .record(layer_start.elapsed().as_secs_f64());
 

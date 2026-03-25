@@ -4,7 +4,7 @@ use crate::{
     hnsw::VectorStore,
     shares::{share::DistanceShare, Share},
 };
-use ampc_secret_sharing::shares::bit::Bit;
+use ampc_secret_sharing::shares::{bit::Bit, vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{eyre, Result};
 use itertools::{EitherOrBoth, Itertools};
 use rand_distr::{Distribution, Standard};
@@ -185,6 +185,7 @@ pub async fn apply_oblivious_swap_network<D: DistanceOps, W: IrisWorkerPool>(
 ) -> Result<Vec<(Share<D::Ring>, DistanceShare<D::Ring>)>>
 where
     Standard: Distribution<D::Ring>,
+    VecShare<D::Ring>: Transpose64,
 {
     let mut encrypted_list = Vec::new();
 

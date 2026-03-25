@@ -1,21 +1,26 @@
 use std::{cmp::Ordering, fmt::Debug};
 
+use std::ops::Not;
+
+use ampc_actor_utils::protocol::binary::extract_msb_batch;
+use ampc_actor_utils::protocol::fhd_ops::{cross_compare, cross_mul, fhd_greater_than_threshold};
 use ampc_actor_utils::{
     execution::session::Session,
-    network::value::NetworkInt,
+    network::mpc::NetworkInt,
     protocol::{
+        binary::open_bin,
+        fhd_ops::{min_of_pair_batch, oblivious_cross_compare_lifted},
         nhd_ops::{
-            nhd_comparison_nmr, nhd_cross_compare, nhd_lift_distances, nhd_lte_threshold_and_open,
+            nhd_comparison_nmr, nhd_cross_compare, nhd_greater_than_threshold, nhd_lift_distances,
             nhd_min_of_pair_batch, nhd_oblivious_cross_compare, nhd_oblivious_cross_compare_lifted,
             nhd_plaintext_is_match,
         },
-        ops::{
-            batch_signed_lift_vec, min_of_pair_batch, oblivious_cross_compare,
-            oblivious_cross_compare_lifted,
-        },
+        ops::batch_signed_lift_vec,
         shuffle::random_shuffle_batch,
     },
 };
+use ampc_secret_sharing::shares::vecshare_bittranspose::Transpose64;
+use ampc_secret_sharing::shares::VecShare;
 use ampc_secret_sharing::{
     shares::{bit::Bit, DistanceShare, Ring48, RingRandFillable},
     IntRing2k, Share,
@@ -24,13 +29,12 @@ use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use rand_distr::{Distribution, Standard};
 
+use iris_mpc_common::iris_db::iris::Threshold;
+
+use crate::protocol::min_round_robin::{build_round_robin_pairs, select_round_robin_min};
 use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
-    protocol::{
-        fhd_ops::{cross_compare, lte_threshold_and_open, min_round_robin_batch},
-        nhd_ops::nhd_min_round_robin_batch,
-        ops::{DistancePair, IdDistance},
-    },
+    protocol::ops::{DistancePair, IdDistance},
 };
 
 use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
@@ -86,17 +90,73 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
         distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<DistanceShare<Self::Ring>>>;
 
-    /// Computes the minimum distance per batch via round-robin comparison.
+    /// Given a flattened array of distance shares arranged in batches,
+    /// this function computes the minimum distance share within each batch via the round-robin method.
+    ///
+    /// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
+    /// then the input distance shares are arranged as follows:
+    /// `[
+    ///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
+    ///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
+    ///     ...,
+    ///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
+    /// ]`
+    ///
+    /// The round-robin method computes all pairwise "less-than" relations within each batch,
+    /// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
+    ///
+    ///    | d0 | d1 | d2 | d3 |
+    /// ------------------------
+    /// d0 | 1  | b01| b02| b03|
+    /// d1 | b10| 1  | b12| b13|
+    /// d2 | b20| b21| 1  | b23|
+    /// d3 | b30| b31| b32| 1  |
+    ///
+    /// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
+    /// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
+    /// that turns the comparison table into
+    ///
+    ///    | d0 | d1 | d2 | d3 |
+    /// ------------------------
+    /// d0 | 1  | b01| b02| b03|
+    /// d1 |!b01| 1  | b12| b13|
+    /// d2 |!b02|!b12| 1  | b23|
+    /// d3 |!b03|!b13|!b23| 1  |
+    ///
+    /// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
+    /// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
+    /// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
+    /// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
+    /// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
     async fn min_round_robin_batch(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
         batch_size: usize,
-    ) -> Result<Vec<DistanceShare<Self::Ring>>>;
+    ) -> Result<Vec<DistanceShare<Self::Ring>>>
+    where
+        VecShare<Self::Ring>: Transpose64,
+        Standard: Distribution<Self::Ring>,
+    {
+        if distances.is_empty() {
+            eyre::bail!("Expected at least one distance share");
+        }
+        if distances.len() % batch_size != 0 {
+            eyre::bail!("Distances length must be a multiple of batch size");
+        }
+        if batch_size < 2 {
+            return Ok(distances.to_vec());
+        }
+        let num_batches = distances.len() / batch_size;
+        let pairs = build_round_robin_pairs(distances, batch_size, num_batches);
+        let comparison_bits = Self::oblivious_cross_compare(session, &pairs).await?;
+        select_round_robin_min(session, distances, batch_size, num_batches, comparison_bits).await
+    }
 
-    /// Checks if distances are less than or equal to a threshold (for match detection).
-    async fn lte_threshold_and_open(
+    /// Checks if distances are less than or equal to the given threshold.
+    async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>>;
 
     /// Converts an opened ring value to a usize index.
@@ -156,7 +216,8 @@ impl DistanceOps for FhdOps {
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
     ) -> Result<Vec<Share<Bit>>> {
-        oblivious_cross_compare(session, distances).await
+        let diff = cross_mul(session, distances).await?;
+        extract_msb_batch(session, &diff).await
     }
 
     async fn oblivious_cross_compare_lifted(
@@ -173,19 +234,15 @@ impl DistanceOps for FhdOps {
         min_of_pair_batch(session, distances).await
     }
 
-    async fn min_round_robin_batch(
+    async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
-        batch_size: usize,
-    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
-        min_round_robin_batch(session, distances, batch_size).await
-    }
-
-    async fn lte_threshold_and_open(
-        session: &mut Session,
-        distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>> {
-        lte_threshold_and_open(session, distances).await
+        let bits = fhd_greater_than_threshold(session, distances, threshold.ratio()).await?;
+        open_bin(session, &bits)
+            .await
+            .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
     }
 
     fn to_usize(value: Self::Ring) -> usize {
@@ -200,7 +257,7 @@ impl DistanceOps for FhdOps {
 
     fn plaintext_is_match(d: &(u16, u16)) -> bool {
         let (a, b) = *d;
-        (a as f64) < (b as f64) * crate::protocol::fhd_ops::MATCH_THRESHOLD_RATIO
+        (a as f64) < (b as f64) * Threshold::Match.ratio()
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
@@ -260,24 +317,15 @@ impl DistanceOps for NhdOps {
         nhd_min_of_pair_batch(session, distances).await
     }
 
-    async fn min_round_robin_batch(
+    async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
-        batch_size: usize,
-    ) -> Result<Vec<DistanceShare<Self::Ring>>> {
-        nhd_min_round_robin_batch(session, distances, batch_size).await
-    }
-
-    async fn lte_threshold_and_open(
-        session: &mut Session,
-        distances: &[DistanceShare<Self::Ring>],
+        threshold: Threshold,
     ) -> Result<Vec<bool>> {
-        nhd_lte_threshold_and_open(
-            session,
-            distances,
-            crate::protocol::nhd_ops::MATCH_THRESHOLD_RATIO,
-        )
-        .await
+        let bits = nhd_greater_than_threshold(session, distances, threshold.ratio()).await?;
+        open_bin(session, &bits)
+            .await
+            .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
     }
 
     fn to_usize(value: Self::Ring) -> usize {
@@ -291,7 +339,7 @@ impl DistanceOps for NhdOps {
     }
 
     fn plaintext_is_match(d: &(u16, u16)) -> bool {
-        nhd_plaintext_is_match(d.0, d.1, crate::protocol::nhd_ops::MATCH_THRESHOLD_RATIO)
+        nhd_plaintext_is_match(d.0, d.1, Threshold::Match.ratio())
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
