@@ -15,7 +15,7 @@ helpers = [
   "dep:reqwest",
 ]
 phase_trace = ["iris-mpc-cpu/phase_trace"]
-send-batches = ["iris-mpc/send-batches"]
+send-batches = ["iris-mpc/send-batches", "iris-mpc-common/send-batches"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }

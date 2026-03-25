@@ -303,6 +303,69 @@ impl ServiceClient {
 
         idxs
     }
+
+    #[cfg(feature = "send-batches")]
+    async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
+        use crate::aws::types::SnsMessageInfo;
+        use aws_sdk_sns::types::MessageAttributeValue;
+        use iris_mpc_common::helpers::smpc_request::{BatchRequest, SQSMessage};
+        use iris_mpc_common::helpers::smpc_response::SMPC_MESSAGE_TYPE_ATTRIBUTE;
+        use std::collections::HashMap;
+
+        // Convert requests to SQSMessage with message_id as the index
+        let sqs_messages: Vec<SQSMessage> = batch_requests
+            .iter()
+            .enumerate()
+            .map(|(idx, request)| {
+                let sns_info = SnsMessageInfo::from(request);
+                let mut message_attributes = HashMap::new();
+                message_attributes.insert(
+                    SMPC_MESSAGE_TYPE_ATTRIBUTE.to_string(),
+                    MessageAttributeValue::builder()
+                        .data_type("String")
+                        .string_value(sns_info.kind())
+                        .build()
+                        .unwrap(),
+                );
+                SQSMessage {
+                    notification_type: "Notification".to_string(),
+                    message_id: idx.to_string(),
+                    sequence_number: String::new(),
+                    topic_arn: String::new(),
+                    message: sns_info.body().to_string(),
+                    timestamp: String::new(),
+                    unsubscribe_url: String::new(),
+                    message_attributes,
+                }
+            })
+            .collect();
+
+        let batch_message = BatchRequest {
+            messages: sqs_messages,
+        };
+
+        // Publish the batch as a single SNS message
+        let batch_sns_info = SnsMessageInfo::new(
+            "enrollment",
+            smpc_request::BATCH_MESSAGE_TYPE,
+            &batch_message,
+        );
+
+        let res = self.aws_client.sns_publish_json(batch_sns_info).await;
+        let published_idxs: Vec<usize> = if res.is_ok() {
+            (0..batch_requests.len()).collect()
+        } else {
+            self.state.error_bits.set_sns_publish_error();
+            Vec::new()
+        };
+
+        for &idx in &published_idxs {
+            let request = &batch_requests[idx];
+            tracing::info!("publishing {}", request.log_tag());
+        }
+
+        published_idxs
+    }
 }
 
 /// Bitmask for tracking various error conditions during batch processing.
