@@ -530,9 +530,7 @@ async fn exec_delta(
             log_info(String::from(
                 "Waiting for last delta modifications to be processed...",
             ));
-            shutdown_handler
-                .wait_for_pending_batches_completion()
-                .await?;
+            let _ = shutdown_handler.wait_for_pending_batches_completion().await;
             log_info(String::from("All delta modifications have been processed"));
 
             log_info(format!( "Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
