@@ -19,7 +19,7 @@ use crate::{
         TEST_DISTANCE_FN,
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
-    network::NetworkType,
+    network::mpc::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     shares::{RingElement, Share},
     utils::serialization::{

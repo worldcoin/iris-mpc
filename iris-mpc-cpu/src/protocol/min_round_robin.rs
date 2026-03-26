@@ -3,8 +3,11 @@ use std::ops::Not;
 
 use ampc_actor_utils::{
     execution::session::{Session, SessionHandles},
-    network::value::NetworkInt,
-    protocol::binary::{and_product, bit_inject},
+    network::mpc::NetworkInt,
+    protocol::{
+        binary::{and_product, bit_inject},
+        ops::DistancePair,
+    },
 };
 use ampc_secret_sharing::{
     shares::{bit::Bit, DistanceShare, RingRandFillable, VecRingElement, VecShare},
@@ -14,13 +17,11 @@ use eyre::Result;
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 
-use crate::protocol::ops::DistancePair;
-
 /// Builds round-robin comparison pairs from a flattened batch of distance shares.
 ///
 /// Within each batch, compute all the pairs to be compared in a round-robin fashion,
 /// namely, the pairs di, dj for all i < j, where di and dj are distances within the same batch.
-fn build_round_robin_pairs<T: IntRing2k>(
+pub(crate) fn build_round_robin_pairs<T: IntRing2k>(
     distances: &[DistanceShare<T>],
     batch_size: usize,
     num_batches: usize,
@@ -41,7 +42,7 @@ fn build_round_robin_pairs<T: IntRing2k>(
 /// Given round-robin comparison bits, selects the minimum distance in each batch.
 ///
 /// This is the generic core shared by both FHD and NHD round-robin minimum.
-async fn select_round_robin_min<T>(
+pub(crate) async fn select_round_robin_min<T>(
     session: &mut Session,
     distances: &[DistanceShare<T>],
     batch_size: usize,
@@ -140,75 +141,4 @@ where
         .map(|chunk| chunk.iter().cloned().reduce(|acc, a| acc + a).unwrap())
         .collect_vec();
     Ok(res)
-}
-
-/// Generalization of cross-compare results for both FHD and NHD, boxed to avoid lifetime issues when passing into other functions.
-pub(crate) type CrossCompareFnResult<'a> =
-    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Share<Bit>>>> + Send + 'a>>;
-
-/// Generalization of cross-compare function for both FHD and NHD, which can be passed into other functions.
-pub(crate) type CrossCompareFn<T> =
-    for<'a> fn(&'a mut Session, &'a [DistancePair<T>]) -> CrossCompareFnResult<'a>;
-
-/// Given a flattened array of distance shares arranged in batches,
-/// this function computes the minimum distance share within each batch via the round-robin method.
-///
-/// If `d[i][j]` is the ith distance share of the jth batch and `num_batches` is the number of input batches,
-/// then the input distance shares are arranged as follows:
-/// `[
-///     d[0][0],            d[0][1],            ..., d[0][num_batches-1], // first elements of each batch
-///     d[1][0],            d[1][1],            ..., d[1][num_batches-1], // second elements of each batch
-///     ...,
-///     d[batch_size-1][0], d[batch_size-1][1], ..., d[batch_size-1][num_batches-1] // last elements of each batch
-/// ]`
-///
-/// The round-robin method computes all pairwise "less-than" relations within each batch,
-/// and puts them into a comparison table. For example, for a batch size of 4, the comparison table looks like
-///
-///    | d0 | d1 | d2 | d3 |
-/// ------------------------
-/// d0 | 1  | b01| b02| b03|
-/// d1 | b10| 1  | b12| b13|
-/// d2 | b20| b21| 1  | b23|
-/// d3 | b30| b31| b32| 1  |
-///
-/// where `bij` is the bit corresponding to `di < dj` if `i < j`, and `bij` is the bit `di <= dj` if `i > j`.
-/// The latter bits are in fact negations of the former bits, i.e., if `i > j`, `bij = !(di > dj) = !bji`,
-/// that turns the comparison table into
-///
-///    | d0 | d1 | d2 | d3 |
-/// ------------------------
-/// d0 | 1  | b01| b02| b03|
-/// d1 |!b01| 1  | b12| b13|
-/// d2 |!b02|!b12| 1  | b23|
-/// d3 |!b03|!b13|!b23| 1  |
-///
-/// The minimum distance in each batch can then be identified by ANDing each row of the comparison table.
-/// If the ith distance is the minimum in its batch, then all bits in the ith row are 1, and the AND of the row is 1.
-/// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
-/// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
-/// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
-pub(crate) async fn min_round_robin_batch_with<T>(
-    session: &mut Session,
-    distances: &[DistanceShare<T>],
-    batch_size: usize,
-    cross_compare_fn: CrossCompareFn<T>,
-) -> Result<Vec<DistanceShare<T>>>
-where
-    T: IntRing2k + NetworkInt + RingRandFillable,
-    Standard: Distribution<T>,
-{
-    if distances.is_empty() {
-        eyre::bail!("Expected at least one distance share");
-    }
-    if distances.len() % batch_size != 0 {
-        eyre::bail!("Distances length must be a multiple of batch size");
-    }
-    if batch_size < 2 {
-        return Ok(distances.to_vec());
-    }
-    let num_batches = distances.len() / batch_size;
-    let pairs = build_round_robin_pairs(distances, batch_size, num_batches);
-    let comparison_bits = cross_compare_fn(session, &pairs).await?;
-    select_round_robin_min(session, distances, batch_size, num_batches, comparison_bits).await
 }

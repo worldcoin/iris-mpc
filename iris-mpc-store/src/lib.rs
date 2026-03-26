@@ -231,15 +231,22 @@ impl Store {
         &self,
         min_last_modified_at: Option<i64>,
         partitions: usize,
+        max_serial_id_to_load: Option<usize>,
     ) -> impl Stream<Item = Result<DbStoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
-        let partition_size = count.div_ceil(partitions).max(1);
+        let effective_count = max_serial_id_to_load
+            .map(|max| count.min(max))
+            .unwrap_or(count);
+        let partition_size = effective_count.div_ceil(partitions).max(1);
 
         let mut partition_streams = Vec::new();
         for i in 0..partitions {
             // we start from ID 1
             let start_id = 1 + partition_size * i;
-            let end_id = start_id + partition_size - 1;
+            if start_id > effective_count {
+                break;
+            }
+            let end_id = (start_id + partition_size - 1).min(effective_count);
 
             // This base query yields `DbStoredIris`
             let stream = match min_last_modified_at {
@@ -855,7 +862,7 @@ pub mod tests {
         assert_eq!(got.len(), 0);
 
         let got: Vec<DbStoredIris> = store
-            .stream_irises_par(Some(0), 2)
+            .stream_irises_par(Some(0), 2, None)
             .await
             .try_collect()
             .await?;
@@ -894,7 +901,7 @@ pub mod tests {
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
 
         let mut got_par: Vec<DbStoredIris> = store
-            .stream_irises_par(Some(0), 2)
+            .stream_irises_par(Some(0), 2, None)
             .await
             .try_collect()
             .await?;
@@ -970,13 +977,63 @@ pub mod tests {
         // Compare with the parallel version with several edge-cases.
         for parallelism in [1, 5, MAX_CONNECTIONS as usize + 1] {
             let mut got_par: Vec<DbStoredIris> = store
-                .stream_irises_par(Some(0), parallelism)
+                .stream_irises_par(Some(0), parallelism, None)
                 .await
                 .try_collect()
                 .await?;
             got_par.sort_by_key(|iris| iris.id);
             assert_eq!(got, got_par);
         }
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_irises_par_respects_max_serial_id_to_load() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let codes_and_masks = &[
+            StoredIrisRef {
+                id: 1,
+                left_code: &[1, 2, 3, 4],
+                left_mask: &[5, 6, 7, 8],
+                right_code: &[9, 10, 11, 12],
+                right_mask: &[13, 14, 15, 16],
+            },
+            StoredIrisRef {
+                id: 2,
+                left_code: &[17, 18, 19, 20],
+                left_mask: &[21, 22, 23, 24],
+                right_code: &[25, 26, 27, 28],
+                right_mask: &[29, 30, 31, 32],
+            },
+            StoredIrisRef {
+                id: 3,
+                left_code: &[33, 34, 35, 36],
+                left_mask: &[37, 38, 39, 40],
+                right_code: &[41, 42, 43, 44],
+                right_mask: &[45, 46, 47, 48],
+            },
+        ];
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, codes_and_masks).await?;
+        tx.commit().await?;
+
+        let mut got: Vec<DbStoredIris> = store
+            .stream_irises_par(Some(0), 2, Some(2))
+            .await
+            .try_collect()
+            .await?;
+        got.sort_by_key(|iris| iris.id);
+
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].serial_id(), 1);
+        assert_eq!(got[1].serial_id(), 2);
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())

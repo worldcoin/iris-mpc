@@ -3,20 +3,25 @@
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
+use ampc_server_utils::batch_sync::{
+    BatchSyncSharedState, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES,
+};
 use ampc_server_utils::{
-    delete_messages_until_sequence_num, get_next_sns_seq_num, shutdown_handler::ShutdownHandler,
-    ReadyProbeResponse, TaskMonitor,
+    delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
+    init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
+    TaskMonitor,
 };
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
-use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
+use iris_mpc::services::processors::batch::receive_batch_stream;
 use iris_mpc::services::processors::get_iris_shares_parse_task;
 use iris_mpc::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -37,6 +42,7 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
+        sha256::sha256_bytes,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, IdentityMatchCheckRequest,
@@ -65,16 +71,15 @@ use iris_mpc_store::{
 };
 use itertools::{cloned, izip, Itertools};
 use metrics_exporter_statsd::StatsdBuilder;
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::process::exit;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::Debug,
     mem, panic,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, LazyLock, Mutex,
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -87,8 +92,6 @@ use tokio::{
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
-
-static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 fn decode_iris_message_shares(
     code_share: String,
@@ -104,726 +107,6 @@ fn decode_iris_message_shares(
 
 fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
     mask.into()
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn receive_batch_stream(
-    party_id: usize,
-    client: Client,
-    sns_client: SNSClient,
-    s3_client: S3Client,
-    config: Config,
-    store: Store,
-    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
-    shutdown_handler: Arc<ShutdownHandler>,
-    uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
-    reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
-    reset_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
-    recovery_check_error_result_attributes: HashMap<String, MessageAttributeValue>,
-) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
-    let (tx, rx) = mpsc::channel(1);
-
-    tokio::spawn(async move {
-        loop {
-            let permit = match tx.reserve().await {
-                Ok(p) => p,
-                Err(_) => break,
-            };
-
-            let batch = receive_batch(
-                party_id,
-                &client,
-                &sns_client,
-                &s3_client,
-                &config,
-                &store,
-                shares_encryption_key_pairs.clone(),
-                &shutdown_handler,
-                &uniqueness_error_result_attributes,
-                &reauth_error_result_attributes,
-                &reset_check_error_result_attributes,
-                &recovery_check_error_result_attributes,
-            )
-            .await;
-
-            let stop = matches!(batch, Err(_) | Ok(None));
-            permit.send(batch);
-
-            if stop {
-                break;
-            }
-        }
-        tracing::info!("Stopping batch receiver.");
-    });
-
-    rx
-}
-
-async fn delete_message_from_sqs(
-    client: &Client,
-    queue_url: &str,
-    sqs_message: &aws_sdk_sqs::types::Message,
-) -> Result<(), ReceiveRequestError> {
-    let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
-        ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre!("Missing receipt handle"))
-    })?;
-    client
-        .delete_message()
-        .queue_url(queue_url)
-        .receipt_handle(receipt_handle)
-        .send()
-        .await
-        .map_err(ReceiveRequestError::from)?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn receive_batch(
-    party_id: usize,
-    client: &Client,
-    sns_client: &SNSClient,
-    s3_client: &S3Client,
-    config: &Config,
-    store: &Store,
-    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
-    shutdown_handler: &ShutdownHandler,
-    uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-    reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-    reset_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-    recovery_check_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-) -> Result<Option<BatchQuery>, ReceiveRequestError> {
-    let max_batch_size = config.clone().max_batch_size;
-    let queue_url = &config.clone().requests_queue_url;
-    if shutdown_handler.is_shutting_down() {
-        tracing::info!("Stopping batch receive due to shutdown signal...");
-        return Ok(None);
-    }
-
-    let mut batch_query = BatchQuery::default();
-
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
-    let mut handles = vec![];
-    let mut msg_counter = 0;
-
-    while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
-        let rcv_message_output = client
-            .receive_message()
-            .max_number_of_messages(1)
-            .queue_url(queue_url)
-            .send()
-            .await
-            .map_err(ReceiveRequestError::from)?;
-        if let Some(messages) = rcv_message_output.messages {
-            for sqs_message in messages {
-                let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
-                    .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-                let sns_message_id = message.message_id;
-
-                // messages arrive to SQS through SNS. So, all the attributes set in SNS are
-                // moved into the SQS body.
-                let message_attributes = message.message_attributes;
-
-                let mut batch_metadata = BatchMetadata::default();
-
-                if let Some(trace_id) = message_attributes.get(TRACE_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let trace_id = trace_id.string_value().unwrap();
-                    batch_metadata.trace_id = trace_id.to_string();
-                }
-                if let Some(span_id) = message_attributes.get(SPAN_ID_MESSAGE_ATTRIBUTE_NAME) {
-                    let span_id = span_id.string_value().unwrap();
-                    batch_metadata.span_id = span_id.to_string();
-                }
-
-                let request_type = message_attributes
-                    .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
-                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
-                    .string_value()
-                    .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
-
-                match request_type {
-                    IDENTITY_DELETION_MESSAGE_TYPE => {
-                        let identity_deletion_request: IdentityDeletionRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error(
-                                    "Identity deletion request",
-                                    e,
-                                )
-                            })?;
-                        metrics::counter!("request.received", "type" => "identity_deletion")
-                            .increment(1);
-                        if batch_query
-                            .modifications
-                            .contains_key(&RequestSerialId(identity_deletion_request.serial_id))
-                        {
-                            tracing::warn!(
-                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                identity_deletion_request.serial_id,
-                                identity_deletion_request,
-                            );
-                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                            continue;
-                        }
-                        let modification = store
-                            .insert_modification(
-                                Some(identity_deletion_request.serial_id as i64),
-                                IDENTITY_DELETION_MESSAGE_TYPE,
-                                None,
-                            )
-                            .await?;
-                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                        batch_query.modifications.insert(
-                            RequestSerialId(identity_deletion_request.serial_id),
-                            modification,
-                        );
-
-                        batch_query.push_deletion_request(
-                            sns_message_id,
-                            identity_deletion_request.serial_id - 1,
-                            batch_metadata,
-                        );
-                    }
-
-                    UNIQUENESS_MESSAGE_TYPE => {
-                        msg_counter += 1;
-
-                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
-
-                        let uniqueness_request: UniquenessRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("Uniqueness request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "uniqueness_verification")
-                            .increment(1);
-
-                        if let Some(batch_size) = uniqueness_request.batch_size {
-                            // Updating the batch size instantly makes it a bit unpredictable, since
-                            // if we're already above the new limit, we'll still process the current
-                            // batch at the higher limit. On the other
-                            // hand, updating it after the batch is
-                            // processed would not let us "unblock" the protocol if we're stuck with
-                            // low throughput.
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!("Updating batch size to {}", batch_size);
-                        }
-
-                        let modification = store
-                            .insert_modification(
-                                None,
-                                UNIQUENESS_MESSAGE_TYPE,
-                                Some(uniqueness_request.s3_key.as_str()),
-                            )
-                            .await?;
-                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                        batch_query.modifications.insert(
-                            RequestId(uniqueness_request.signup_id.clone()),
-                            modification,
-                        );
-
-                        if let Some(enable_mirror_attacks) =
-                            uniqueness_request.full_face_mirror_attacks_detection_enabled
-                        {
-                            if enable_mirror_attacks
-                                != batch_query.full_face_mirror_attacks_detection_enabled
-                            {
-                                batch_query.full_face_mirror_attacks_detection_enabled =
-                                    enable_mirror_attacks;
-                                tracing::info!(
-                                    "Setting mirror attack to {} for batch due to request from {}",
-                                    enable_mirror_attacks,
-                                    uniqueness_request.signup_id
-                                );
-                            }
-                        }
-
-                        if let Some(skip_persistence) = uniqueness_request.skip_persistence {
-                            tracing::info!(
-                                "Setting skip_persistence to {} for request id {}",
-                                skip_persistence,
-                                uniqueness_request.signup_id
-                            );
-                        }
-
-                        if config.luc_enabled && config.luc_lookback_records > 0 {
-                            batch_query.luc_lookback_records = config.luc_lookback_records;
-                        }
-
-                        let or_rule_indices = if config.luc_enabled
-                            && config.luc_serial_ids_from_smpc_request
-                        {
-                            if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.as_ref()
-                            {
-                                // convert from 1-based serial id to 0-based index in actor
-                                serial_ids.iter().map(|x| x - 1).collect()
-                            } else {
-                                tracing::warn!(
-                                        "LUC serial ids from request enabled, but no serial_ids were passed"
-                                    );
-                                vec![]
-                            }
-                        } else {
-                            vec![]
-                        };
-
-                        batch_query.push_matching_request(
-                            sns_message_id,
-                            uniqueness_request.signup_id.clone(),
-                            UNIQUENESS_MESSAGE_TYPE,
-                            batch_metadata,
-                            or_rule_indices,
-                            uniqueness_request.skip_persistence.unwrap_or(false),
-                        );
-
-                        let semaphore = Arc::clone(&semaphore);
-                        let s3_client_arc = s3_client.clone();
-                        let bucket_name = config.shares_bucket_name.clone();
-                        let s3_key = uniqueness_request.s3_key.clone();
-                        let handle = get_iris_shares_parse_task(
-                            party_id,
-                            shares_encryption_key_pairs,
-                            semaphore,
-                            s3_client_arc,
-                            bucket_name,
-                            s3_key,
-                        )?;
-
-                        handles.push(handle);
-                    }
-
-                    REAUTH_MESSAGE_TYPE => {
-                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
-
-                        let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
-                            .map_err(|e| {
-                                ReceiveRequestError::json_parse_error("Reauth request", e)
-                            })?;
-
-                        metrics::counter!("request.received", "type" => "reauth").increment(1);
-
-                        tracing::debug!("Received reauth request: {:?}", reauth_request);
-
-                        if config.enable_reauth {
-                            if reauth_request.use_or_rule
-                                && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
-                            {
-                                tracing::error!(
-                                "Received a reauth request with use_or_rule set to true, but LUC \
-                                 is not enabled. Skipping request."
-                            );
-                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                                continue;
-                            }
-
-                            if batch_query
-                                .modifications
-                                .contains_key(&RequestSerialId(reauth_request.serial_id))
-                            {
-                                tracing::warn!(
-                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                reauth_request.serial_id,
-                                reauth_request,
-                            );
-                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                                continue;
-                            }
-
-                            msg_counter += 1;
-
-                            let modification = store
-                                .insert_modification(
-                                    Some(reauth_request.serial_id as i64),
-                                    REAUTH_MESSAGE_TYPE,
-                                    Some(reauth_request.s3_key.as_str()),
-                                )
-                                .await?;
-                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                            batch_query
-                                .modifications
-                                .insert(RequestSerialId(reauth_request.serial_id), modification);
-
-                            if let Some(batch_size) = reauth_request.batch_size {
-                                // Updating the batch size instantly makes it a bit unpredictable,
-                                // since if we're already above the
-                                // new limit, we'll still process the current
-                                // batch at the higher limit. On the other
-                                // hand, updating it after the batch is
-                                // processed would not let us "unblock" the protocol if we're stuck
-                                // with low throughput.
-                                *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                    batch_size.clamp(1, max_batch_size);
-                                tracing::info!("Updating batch size to {}", batch_size);
-                            }
-
-                            batch_query.reauth_target_indices.insert(
-                                reauth_request.reauth_id.clone(),
-                                reauth_request.serial_id - 1,
-                            );
-                            batch_query.reauth_use_or_rule.insert(
-                                reauth_request.reauth_id.clone(),
-                                reauth_request.use_or_rule,
-                            );
-
-                            let or_rule_indices = if reauth_request.use_or_rule {
-                                vec![reauth_request.serial_id - 1]
-                            } else {
-                                vec![]
-                            };
-
-                            batch_query.push_matching_request(
-                                sns_message_id,
-                                reauth_request.reauth_id.clone(),
-                                REAUTH_MESSAGE_TYPE,
-                                batch_metadata,
-                                or_rule_indices,
-                                reauth_request.skip_persistence.unwrap_or(false),
-                            );
-
-                            let semaphore = Arc::clone(&semaphore);
-                            let s3_client_clone = s3_client.clone();
-                            let bucket_name = config.shares_bucket_name.clone();
-                            let s3_key = reauth_request.s3_key.clone();
-                            let handle = get_iris_shares_parse_task(
-                                party_id,
-                                shares_encryption_key_pairs,
-                                semaphore,
-                                s3_client_clone,
-                                bucket_name,
-                                s3_key,
-                            )?;
-
-                            handles.push(handle);
-                        } else {
-                            tracing::warn!("Reauth is disabled, skipping reauth request");
-                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                        }
-                    }
-
-                    RECOVERY_CHECK_MESSAGE_TYPE | RESET_CHECK_MESSAGE_TYPE => {
-                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
-
-                        let identity_match_check_request: IdentityMatchCheckRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error(
-                                    "Identity match check request",
-                                    e,
-                                )
-                            })?;
-
-                        if !is_enabled(request_type, config) {
-                            metrics::counter!("request.skipped", "type" => request_type.to_string()).increment(1);
-                            tracing::warn!("{} is disabled, skipping request", request_type);
-                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                            continue;
-                        }
-                        metrics::counter!("request.received", "type" => request_type.to_string())
-                            .increment(1);
-
-                        msg_counter += 1;
-
-                        let modification = store
-                            .insert_modification(
-                                None,
-                                request_type,
-                                Some(identity_match_check_request.s3_key.as_str()),
-                            )
-                            .await?;
-                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                        batch_query.modifications.insert(
-                            RequestId(identity_match_check_request.request_id.clone()),
-                            modification,
-                        );
-
-                        if let Some(batch_size) = identity_match_check_request.batch_size {
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!("Updating batch size to {}", batch_size);
-                        }
-
-                        batch_query.push_matching_request(
-                            sns_message_id,
-                            identity_match_check_request.request_id.clone(),
-                            request_type,
-                            batch_metadata,
-                            vec![], // use AND rule for identity match check requests
-                            false,  // skip_persistence is only used for uniqueness requests
-                        );
-
-                        let semaphore = Arc::clone(&semaphore);
-                        let s3_client_arc = s3_client.clone();
-                        let bucket_name = config.shares_bucket_name.clone();
-                        let s3_key = identity_match_check_request.s3_key.clone();
-                        let handle = get_iris_shares_parse_task(
-                            party_id,
-                            shares_encryption_key_pairs,
-                            semaphore,
-                            s3_client_arc,
-                            bucket_name,
-                            s3_key,
-                        )?;
-
-                        handles.push(handle);
-                    }
-
-                    RESET_UPDATE_MESSAGE_TYPE | RECOVERY_UPDATE_MESSAGE_TYPE => {
-                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
-
-                        let identity_update_request: IdentityUpdateRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("Identity update request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => request_type.to_string())
-                            .increment(1);
-
-                        let is_enabled = match request_type {
-                            RESET_UPDATE_MESSAGE_TYPE => config.enable_reset,
-                            RECOVERY_UPDATE_MESSAGE_TYPE => config.enable_recovery,
-                            _ => false,
-                        };
-
-                        if is_enabled {
-                            // Fetch new iris shares from S3
-                            let semaphore = Arc::clone(&semaphore);
-                            let s3_client_arc = s3_client.clone();
-                            let bucket_name = config.shares_bucket_name.clone();
-                            let s3_key = identity_update_request.s3_key.clone();
-
-                            let task_handle = get_iris_shares_parse_task(
-                                party_id,
-                                shares_encryption_key_pairs,
-                                semaphore,
-                                s3_client_arc,
-                                bucket_name,
-                                s3_key,
-                            )?;
-
-                            let (left_shares, right_shares) = match task_handle.await {
-                                Ok(result) => match result {
-                                    Ok(shares) => shares,
-                                    Err(e) => {
-                                        tracing::error!(
-                                            "Failed to process iris shares for {}: {:?}",
-                                            request_type,
-                                            e
-                                        );
-                                        continue;
-                                    }
-                                },
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to join task handle for {}: {:?}",
-                                        request_type,
-                                        e
-                                    );
-                                    continue;
-                                }
-                            };
-
-                            if batch_query
-                                .modifications
-                                .contains_key(&RequestSerialId(identity_update_request.serial_id))
-                            {
-                                tracing::warn!(
-                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
-                                identity_update_request.serial_id,
-                                identity_update_request,
-                            );
-                                delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                                continue;
-                            }
-
-                            let modification = store
-                                .insert_modification(
-                                    Some(identity_update_request.serial_id as i64),
-                                    request_type,
-                                    Some(identity_update_request.s3_key.as_str()),
-                                )
-                                .await?;
-
-                            // Delete the message from SQS after the modification is persisted
-                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-
-                            batch_query.modifications.insert(
-                                RequestSerialId(identity_update_request.serial_id),
-                                modification,
-                            );
-
-                            batch_query.push_identity_update_request(
-                                sns_message_id,
-                                identity_update_request.request_id,
-                                request_type,
-                                identity_update_request.serial_id - 1,
-                                GaloisSharesBothSides {
-                                    code_left: left_shares.code,
-                                    mask_left: left_shares.mask,
-                                    code_right: right_shares.code,
-                                    mask_right: right_shares.mask,
-                                },
-                            );
-                        } else {
-                            tracing::warn!("Reset is disabled, skipping reset update request");
-                            delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                        }
-                    }
-
-                    _ => {
-                        delete_message_from_sqs(client, queue_url, &sqs_message).await?;
-                        tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
-                    }
-                }
-            }
-        } else {
-            tokio::time::sleep(SQS_POLLING_INTERVAL).await;
-        }
-    }
-    for (index, handle) in handles.into_iter().enumerate() {
-        let result = handle
-            .await
-            .map_err(ReceiveRequestError::FailedToJoinHandle)?;
-        let (shares, valid_entry) = match result {
-            Ok(shares) => (shares, true),
-            Err(e) => {
-                tracing::error!("Failed to process iris shares: {:?}", e);
-                // Return error message back to the signup-service if failed to process iris
-                // shares
-                let request_id = batch_query.request_ids[index].clone();
-                let request_type = batch_query.request_types[index].as_str();
-                let (result_attributes, message) = match request_type {
-                    UNIQUENESS_MESSAGE_TYPE => {
-                        let message = UniquenessResult::new_error_result(
-                            config.party_id,
-                            request_id,
-                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-                        );
-                        let serialized = serde_json::to_string(&message).unwrap();
-                        (uniqueness_error_result_attributes, serialized)
-                    }
-                    REAUTH_MESSAGE_TYPE => {
-                        let message = ReAuthResult::new_error_result(
-                            request_id.clone(),
-                            config.party_id,
-                            *batch_query.reauth_target_indices.get(&request_id).unwrap(),
-                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-                        );
-                        let serialized = serde_json::to_string(&message).unwrap();
-                        (reauth_error_result_attributes, serialized)
-                    }
-                    RESET_CHECK_MESSAGE_TYPE => {
-                        let message = IdentityMatchCheckResult::new_error_result(
-                            request_id.clone(),
-                            config.party_id,
-                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-                        );
-                        let serialized = serde_json::to_string(&message).unwrap();
-                        (reset_check_error_result_attributes, serialized)
-                    }
-                    RECOVERY_CHECK_MESSAGE_TYPE => {
-                        let message = IdentityMatchCheckResult::new_error_result(
-                            request_id.clone(),
-                            config.party_id,
-                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-                        );
-                        let serialized = serde_json::to_string(&message).unwrap();
-                        (recovery_check_error_result_attributes, serialized)
-                    }
-                    _ => unreachable!(), // we don't push a handle for unknown message types
-                };
-
-                send_error_results_to_sns(
-                    message,
-                    &batch_query.metadata[index],
-                    sns_client,
-                    config,
-                    result_attributes,
-                    batch_query.request_types[index].as_str(),
-                )
-                .await?;
-                // If we failed to process the iris shares, we include a dummy entry in the
-                // batch in order to keep the same order across nodes
-                let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
-                let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
-                let dummy_one_side = GaloisShares {
-                    code: dummy_code_share.clone(),
-                    mask: dummy_mask_share.clone(),
-                    code_rotated: dummy_code_share.clone().all_rotations(),
-                    mask_rotated: dummy_mask_share.clone().all_rotations(),
-                    code_interpolated: dummy_code_share.clone().all_rotations(),
-                    mask_interpolated: dummy_mask_share.clone().all_rotations(),
-                    code_mirrored: dummy_code_share.clone().all_rotations(),
-                    mask_mirrored: dummy_mask_share.clone().all_rotations(),
-                };
-                ((dummy_one_side.clone(), dummy_one_side), false)
-            }
-        };
-
-        batch_query.valid_entries.push(valid_entry);
-
-        // push left iris related entries
-        batch_query.left_iris_requests.code.push(shares.0.code);
-        batch_query.left_iris_requests.mask.push(shares.0.mask);
-        batch_query
-            .left_iris_rotated_requests
-            .code
-            .extend(shares.0.code_rotated);
-        batch_query
-            .left_iris_rotated_requests
-            .mask
-            .extend(shares.0.mask_rotated);
-        batch_query
-            .left_iris_interpolated_requests
-            .code
-            .extend(shares.0.code_interpolated);
-        batch_query
-            .left_iris_interpolated_requests
-            .mask
-            .extend(shares.0.mask_interpolated);
-        batch_query
-            .left_mirrored_iris_interpolated_requests
-            .code
-            .extend(shares.0.code_mirrored);
-        batch_query
-            .left_mirrored_iris_interpolated_requests
-            .mask
-            .extend(shares.0.mask_mirrored);
-
-        // push right iris related entries
-        batch_query.right_iris_requests.code.push(shares.1.code);
-        batch_query.right_iris_requests.mask.push(shares.1.mask);
-        batch_query
-            .right_iris_rotated_requests
-            .code
-            .extend(shares.1.code_rotated);
-        batch_query
-            .right_iris_rotated_requests
-            .mask
-            .extend(shares.1.mask_rotated);
-        batch_query
-            .right_iris_interpolated_requests
-            .code
-            .extend(shares.1.code_interpolated);
-        batch_query
-            .right_iris_interpolated_requests
-            .mask
-            .extend(shares.1.mask_interpolated);
-        batch_query
-            .right_mirrored_iris_interpolated_requests
-            .code
-            .extend(shares.1.code_mirrored);
-        batch_query
-            .right_mirrored_iris_interpolated_requests
-            .mask
-            .extend(shares.1.mask_mirrored);
-    }
-
-    tracing::info!(
-        "Batch requests: {:?}",
-        batch_query
-            .request_ids
-            .iter()
-            .zip(batch_query.request_types.iter())
-            .collect::<Vec<_>>()
-    );
-
-    Ok(Some(batch_query))
 }
 
 #[tokio::main]
@@ -860,10 +143,7 @@ async fn server_main(config: Config) -> Result<()> {
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.register_signal_handler().await;
-    // Load batch_size config
-    *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_modification_lookback = config.max_modifications_lookback;
-    tracing::info!("Set batch size to {}", config.max_batch_size);
 
     let schema_name = format!(
         "{}{}_{}_{}",
@@ -971,14 +251,14 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
+    let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
+    let batch_sync_shared_state =
+        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
     // --------------------------------------------------------------------------
     // ANCHOR: Starting Healthcheck, Readiness and Sync server
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
-
-    let is_ready_flag = Arc::new(AtomicBool::new(false));
-    let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
     let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await?;
     let my_state = SyncState {
@@ -991,288 +271,55 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Sync state: {:?}", my_state);
 
-    let health_shutdown_handler = Arc::clone(&shutdown_handler);
     let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
         panic!("Server coordination config must be provided for healthcheck server");
     });
-    let verified_peers = Arc::new(Mutex::new(HashSet::new()));
-    let uuid = uuid::Uuid::new_v4().to_string();
-
-    let _health_check_abort = background_tasks.spawn({
-        let uuid = uuid.clone();
-        let is_ready_flag = Arc::clone(&is_ready_flag);
-        let verified_peers = Arc::clone(&verified_peers);
-        let image_name = server_coord_config.image_name.to_string();
-
-        let base_response = ReadyProbeResponse {
-            image_name: image_name.clone(),
-            shutting_down: false,
-            uuid: uuid.clone(),
-            verified_peers: HashSet::new(),
-            is_ready: false,
-        };
-
-        // Capture a base state for fields that don't change, but re-fetch
-        // rerand_state from the DB on each /startup-sync request so peers
-        // always see the live watermark (not a stale boot-time snapshot).
-        let base_sync_state = my_state.clone();
-        let sync_pool = store.pool.clone();
-        async move {
-            let is_ready_flag_health = Arc::clone(&is_ready_flag);
-            let is_ready_flag_ready = Arc::clone(&is_ready_flag);
-            let app = Router::new()
-                .route(
-                    "/health",
-                    get(move || {
-                        let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
-                        let verified_peers_clone = Arc::clone(&verified_peers);
-                        let is_ready_flag_clone = Arc::clone(&is_ready_flag_health);
-                        let mut response = base_response.clone();
-                        async move {
-                            response.shutting_down = shutdown_handler_clone.is_shutting_down();
-                            response.verified_peers =
-                                verified_peers_clone.lock().expect("Mutex poisoned").clone();
-                            response.is_ready = is_ready_flag_clone.load(Ordering::SeqCst);
-                            let serialized_response = serde_json::to_string(&response)
-                                .expect("Serialization to JSON to probe response failed");
-                            tracing::info!("Healthcheck probe response: {}", serialized_response);
-                            serialized_response
+    let rerand_watermark_route = {
+        let pool = store.pool.clone();
+        axum::Router::new().route(
+            "/rerand-watermark",
+            axum::routing::get(move || {
+                let pool = pool.clone();
+                async move {
+                    let wm = rerand_store::get_applied_watermark_from_pool(&pool).await;
+                    match wm {
+                        Ok(Some((epoch, chunk))) => (
+                            axum::http::StatusCode::OK,
+                            serde_json::to_string(&serde_json::json!({
+                                "epoch": epoch,
+                                "max_applied_chunk": chunk,
+                            }))
+                            .unwrap(),
+                        ),
+                        Ok(None) => (axum::http::StatusCode::OK, "null".to_string()),
+                        Err(e) => {
+                            tracing::warn!("rerand-watermark query failed: {:?}", e);
+                            (
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("DB error: {}", e),
+                            )
                         }
-                    }),
-                )
-                .route(
-                    "/ready",
-                    get(move || async move {
-                        if is_ready_flag_ready.load(Ordering::SeqCst) {
-                            "ready".into_response()
-                        } else {
-                            StatusCode::SERVICE_UNAVAILABLE.into_response()
-                        }
-                    }),
-                )
-                .route(
-                    "/startup-sync",
-                    get({
-                        let base = base_sync_state;
-                        let pool = sync_pool.clone();
-                        move || {
-                            let mut state = base.clone();
-                            let pool = pool.clone();
-                            async move {
-                                match rerand_store::build_rerand_sync_state(&pool).await {
-                                    Ok(live_rerand) => {
-                                        state.rerand_state = live_rerand;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Failed to fetch live rerand_state for /startup-sync, \
-                                             serving stale snapshot: {:?}",
-                                            e
-                                        );
-                                    }
-                                }
-                                serde_json::to_string(&state).unwrap()
-                            }
-                        }
-                    }),
-                )
-                .route(
-                    "/rerand-watermark",
-                    get({
-                        let pool = sync_pool.clone();
-                        move || {
-                            let pool = pool.clone();
-                            async move {
-                                let wm = rerand_store::get_applied_watermark_from_pool(&pool).await;
-                                match wm {
-                                    Ok(Some((epoch, chunk))) => (
-                                        StatusCode::OK,
-                                        serde_json::to_string(&serde_json::json!({
-                                            "epoch": epoch,
-                                            "max_applied_chunk": chunk,
-                                        }))
-                                        .unwrap(),
-                                    ),
-                                    Ok(None) => (StatusCode::OK, "null".to_string()),
-                                    Err(e) => {
-                                        tracing::warn!("rerand-watermark query failed: {:?}", e);
-                                        (
-                                            StatusCode::INTERNAL_SERVER_ERROR,
-                                            format!("DB error: {}", e),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }),
-                );
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-                .await
-                .wrap_err("healthcheck listener bind error")?;
-            axum::serve(listener, app)
-                .await
-                .wrap_err("healthcheck listener server launch error")?;
+                    }
+                }
+            }),
+        )
+    };
 
-            Ok::<(), eyre::Error>(())
-        }
-    });
+    let (is_ready_flag, verified_peers, uuid) = start_coordination_server_with_extra_routes(
+        &server_coord_config,
+        &mut background_tasks,
+        &shutdown_handler,
+        &my_state,
+        Some(batch_sync_shared_state.clone()),
+        Some(rerand_watermark_route),
+    )
+    .await;
 
     background_tasks.check_tasks();
-    tracing::info!("Healthcheck and Readiness server running on port 3000.");
-
-    tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
-    // Check other nodes and wait until all nodes are ready.
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let unready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut connected_but_unready = [false, false];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
-
-                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
-                    connected_but_unready[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected_but_unready.iter().all(|&c| c) {
-                        return;
-                    }
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
-
-    tracing::info!("Waiting for all nodes to be unready...");
-    match tokio::time::timeout(
-        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
-        unready_check,
-    )
-    .await
-    {
-        Ok(res) => {
-            res?;
-        }
-        Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be unready.");
-            bail!("Timeout waiting for all nodes to be unready.");
-        }
-    };
-    tracing::info!("All nodes are starting up.");
-
-    let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
-    let mut heartbeat_tx = Some(heartbeat_tx);
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let image_name = server_coord_config.image_name.clone();
-    let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
-    let _heartbeat = background_tasks.spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut last_response = [String::default(), String::default()];
-        let mut connected = [false, false];
-        let mut retries = [0, 0];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/health", host)).await;
-                if res.is_err() || !res.as_ref().unwrap().status().is_success() {
-                    // If it's the first time after startup, we allow a few retries to let the other
-                    // nodes start up as well.
-                    if last_response[i] == String::default()
-                        && retries[i] < server_coord_config.heartbeat_initial_retries
-                    {
-                        retries[i] += 1;
-                        tracing::warn!("Node {} did not respond with success, retrying...", host);
-                        continue;
-                    }
-                    tracing::info!(
-                        "Node {} did not respond with success, starting graceful shutdown",
-                        host
-                    );
-                    // if the nodes are still starting up and they get a failure - we can panic and
-                    // not start graceful shutdown
-                    if last_response[i] == String::default() {
-                        panic!(
-                            "Node {} did not respond with success during heartbeat init phase, \
-                             killing server...",
-                            host
-                        );
-                    }
-
-                    if !heartbeat_shutdown_handler.is_shutting_down() {
-                        heartbeat_shutdown_handler.trigger_manual_shutdown();
-                        tracing::error!(
-                            "Node {} has not completed health check, therefore graceful shutdown \
-                             has been triggered",
-                            host
-                        );
-                    } else {
-                        tracing::info!("Node {} has already started graceful shutdown.", host);
-                    }
-                    continue;
-                }
-
-                let probe_response = res
-                    .unwrap()
-                    .json::<ReadyProbeResponse>()
-                    .await
-                    .expect("Deserialization of probe response failed");
-                if probe_response.image_name != image_name {
-                    // Do not create a panic as we still can continue to process before its
-                    // updated
-                    tracing::error!(
-                        "Host {} is using image {} which differs from current node image: {}",
-                        host,
-                        probe_response.image_name.clone(),
-                        image_name
-                    );
-                }
-                if last_response[i] == String::default() {
-                    last_response[i] = probe_response.uuid;
-                    connected[i] = true;
-
-                    // If all nodes are connected, notify the main thread.
-                    if connected.iter().all(|&c| c) {
-                        if let Some(tx) = heartbeat_tx.take() {
-                            tx.send(()).unwrap();
-                        }
-                    }
-                } else if probe_response.uuid != last_response[i] {
-                    // If the UUID response is different, the node has restarted without us
-                    // noticing. Our main NCCL connections cannot recover from
-                    // this, so we panic.
-                    panic!("Node {} seems to have restarted, killing server...", host);
-                } else if probe_response.shutting_down {
-                    tracing::info!("Node {} has starting graceful shutdown", host);
-
-                    if !heartbeat_shutdown_handler.is_shutting_down() {
-                        heartbeat_shutdown_handler.trigger_manual_shutdown();
-                        tracing::error!(
-                            "Node {} has starting graceful shutdown, therefore triggering \
-                             graceful shutdown",
-                            host
-                        );
-                    }
-                } else {
-                    tracing::info!("Heartbeat: Node {} is healthy", host);
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(
-                server_coord_config.heartbeat_interval_secs,
-            ))
-            .await;
-        }
-    });
-
-    tracing::info!("Heartbeat starting...");
-    heartbeat_rx.await?;
-    tracing::info!("Heartbeat on all nodes started.");
     let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     background_tasks.check_tasks();
+    wait_for_others_unready(&server_coord_config, &verified_peers, &uuid).await?;
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
@@ -1294,37 +341,9 @@ async fn server_main(config: Config) -> Result<()> {
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let next_node = &all_nodes[(config.party_id + 1) % 3];
-    let prev_node = &all_nodes[(config.party_id + 2) % 3];
-
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
-    for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(format!("http://{}:3000/startup-sync", host)).await;
-        match res {
-            Ok(res) => {
-                let state: SyncState = match res.json().await {
-                    Ok(state) => state,
-                    Err(e) => {
-                        tracing::error!("Failed to parse sync state from party {}: {:?}", host, e);
-                        panic!(
-                            "could not get sync state from party {}, trying to restart",
-                            host
-                        );
-                    }
-                };
-                states.push(state);
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch sync state from party {}: {:?}", host, e);
-                panic!(
-                    "could not get sync state from party {}, trying to restart",
-                    host
-                );
-            }
-        }
-    }
+    states.extend(get_others_sync_state::<SyncState>(&server_coord_config).await?);
     let sync_result = SyncResult::new(my_state.clone(), states);
 
     // check if common part of the config is the same across all nodes
@@ -1458,6 +477,7 @@ async fn server_main(config: Config) -> Result<()> {
                                     &store,
                                     store_len,
                                     parallelism,
+                                    None,
                                     &config,
                                     download_shutdown_handler,
                                 )
@@ -2026,50 +1046,14 @@ async fn server_main(config: Config) -> Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Enable readiness and check all nodes");
 
-    // Set the readiness flag to true, which will make the readiness server return a
-    // 200 status code.
-    is_ready_flag_cloned.store(true, std::sync::atomic::Ordering::SeqCst);
-
-    // Check other nodes and wait until all nodes are ready.
-    let all_nodes = server_coord_config.node_hostnames.clone();
-    let ready_check = tokio::spawn(async move {
-        let next_node = &all_nodes[(config.party_id + 1) % 3];
-        let prev_node = &all_nodes[(config.party_id + 2) % 3];
-        let mut connected = [false, false];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(format!("http://{}:3000/ready", host)).await;
-
-                if res.is_ok() && res.as_ref().unwrap().status().is_success() {
-                    connected[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected.iter().all(|&c| c) {
-                        return;
-                    }
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
-
-    tracing::info!("Waiting for all nodes to be ready...");
-    match tokio::time::timeout(
-        Duration::from_secs(server_coord_config.startup_sync_timeout_secs),
-        ready_check,
+    init_heartbeat_task(
+        &server_coord_config,
+        &mut background_tasks,
+        &shutdown_handler,
     )
-    .await
-    {
-        Ok(res) => {
-            res?;
-        }
-        Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be ready.");
-            bail!("Timeout waiting for all nodes to be ready.");
-        }
-    }
-    tracing::info!("All nodes are ready.");
+    .await?;
+    set_node_ready(is_ready_flag);
+    wait_for_others_ready(&server_coord_config).await?;
     background_tasks.check_tasks();
 
     // --------------------------------------------------------------------------
@@ -2083,6 +1067,8 @@ async fn server_main(config: Config) -> Result<()> {
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_check_error_result_attribute =
         create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let identity_deletion_error_result_attribute =
+        create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     let reset_update_error_result_attribute =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let recovery_update_error_result_attribute =
@@ -2106,25 +1092,31 @@ async fn server_main(config: Config) -> Result<()> {
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let mut batch_stream = receive_batch_stream(
+        let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
             aws_clients.s3_client.clone(),
             config.clone(),
-            store.clone(),
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),
             uniqueness_error_result_attribute,
             reauth_error_result_attribute,
             reset_check_error_result_attribute,
             recovery_check_error_result_attribute,
+            identity_deletion_error_result_attribute,
+            reset_update_error_result_attribute,
+            recovery_update_error_result_attribute,
+            current_batch_id_atomic.clone(),
+            store.clone(),
+            batch_sync_shared_state.clone(),
         );
+        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
         loop {
             let now = Instant::now();
 
-            let batch = match batch_stream.recv().await {
+            let mut batch = match batch_stream.recv().await {
                 Some(Ok(None)) | None => {
                     tracing::info!("No more batches to process, exiting main loop");
                     return Ok(());
@@ -2134,6 +1126,29 @@ async fn server_main(config: Config) -> Result<()> {
                 }
                 Some(Ok(Some(batch))) => batch,
             };
+
+            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+            let batch_valid_entries = batch.valid_entries.clone();
+            *CURRENT_BATCH_SHA
+                .lock()
+                .expect("Failed to lock CURRENT_BATCH_SHA") = batch_hash;
+            *CURRENT_BATCH_VALID_ENTRIES
+                .lock()
+                .expect("Failed to lock CURRENT_BATCH_VALID_ENTRIES") = batch_valid_entries;
+
+            loop {
+                if shutdown_handler.is_shutting_down() {
+                    tracing::info!("Shutdown requested during batch sync retry, exiting");
+                    return Ok(());
+                }
+
+                match batch.sync_batch_entries(&config).await {
+                    Ok(()) => break,
+                    Err(e) => {
+                        tracing::warn!("Batch sync entries failed: {:?}. Retrying...", e);
+                    }
+                }
+            }
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -2153,6 +1168,8 @@ async fn server_main(config: Config) -> Result<()> {
             }
 
             background_tasks.check_tasks();
+            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+            sem.add_permits(1);
 
             let result_future = handle.submit_batch_query(batch);
 
@@ -2176,7 +1193,7 @@ async fn server_main(config: Config) -> Result<()> {
                  shutting down..."
             );
 
-            shutdown_handler.wait_for_pending_batches_completion().await;
+            let _ = shutdown_handler.wait_for_pending_batches_completion().await;
         }
         Err(e) => {
             tracing::error!("ServerActor processing error: {:?}", e);

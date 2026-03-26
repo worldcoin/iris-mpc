@@ -530,7 +530,7 @@ async fn exec_delta(
             log_info(String::from(
                 "Waiting for last delta modifications to be processed...",
             ));
-            shutdown_handler.wait_for_pending_batches_completion().await;
+            let _ = shutdown_handler.wait_for_pending_batches_completion().await;
             log_info(String::from("All delta modifications have been processed"));
 
             log_info(format!( "Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
@@ -588,7 +588,7 @@ async fn exec_indexation(
     let batch_size = ctx
         .args
         .batch_size_config
-        .compute_batch_size(ctx.config.hnsw_param_M);
+        .compute_batch_size(ctx.config.hnsw_param_m);
 
     if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
         log_warn(format!(
@@ -920,9 +920,12 @@ async fn get_hawk_actor(
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
-        hnsw_param_M: config.hnsw_param_M,
+        hnsw_param_m: config.hnsw_param_m,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
+        hnsw_param_ef_supermatch: config.hnsw_param_ef_supermatch,
+        hnsw_param_ef_saturation_margin: config.hnsw_param_ef_saturation_margin,
         hnsw_layer_density: config.hnsw_layer_density,
+        hnsw_fixed_layer_search_batch_size: config.hnsw_fixed_layer_search_batch_size,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
         hnsw_disable_memory_persistence: config.hnsw_disable_memory_persistence,
@@ -1295,6 +1298,7 @@ async fn init_graph_from_stores(
         iris_store,
         max_index,
         iris_db_parallelism,
+        Some(max_index),
         config,
         shutdown_handler,
     )

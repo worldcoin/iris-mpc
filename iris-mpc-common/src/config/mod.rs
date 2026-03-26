@@ -1,6 +1,6 @@
 use crate::config::json_wrapper::JsonStrWrapper;
-use ampc_actor_utils::network::config::deserialize_yaml_json_string;
-use ampc_actor_utils::network::config::TlsConfig;
+use ampc_actor_utils::network::tcp::config::deserialize_yaml_json_string;
+use ampc_actor_utils::network::tcp::TlsConfig;
 use ampc_anon_stats::types::Eye;
 use ampc_server_utils::{AwsConfig, ServerCoordinationConfig, ServiceConfig};
 use clap::Parser;
@@ -26,7 +26,8 @@ pub struct Opt {
     party_id: Option<usize>,
 }
 
-#[allow(non_snake_case)]
+// note that the config is loaded from environment variables which are transformed from all upper case
+// to all lower case. ex: SMPC__SCHEMA_NAME -> schema_name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_schema_name")]
@@ -187,11 +188,17 @@ pub struct Config {
     #[serde(default = "default_match_distances_2d_buffer_size")]
     pub match_distances_2d_buffer_size: usize,
 
-    #[serde(default)]
+    #[serde(default = "default_enable_reauth")]
     pub enable_reauth: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_enable_reset")]
     pub enable_reset: bool,
+
+    #[serde(default = "default_enable_recovery")]
+    pub enable_recovery: bool,
+
+    #[serde(default = "default_enable_deletion")]
+    pub enable_deletion: bool,
 
     #[serde(default)]
     pub hnsw_schema_name_suffix: String,
@@ -208,14 +215,27 @@ pub struct Config {
     #[serde(default = "default_hnsw_param_ef_constr")]
     pub hnsw_param_ef_constr: usize,
 
-    #[serde(default = "default_hnsw_param_M")]
-    pub hnsw_param_M: usize,
+    // warning: do not change this to hnsw_param_M. the environment variable parsing
+    // converts all upper case env vars to all lower case.
+    #[serde(default = "default_hnsw_param_m")]
+    pub hnsw_param_m: usize,
 
     #[serde(default = "default_hnsw_param_ef_search")]
     pub hnsw_param_ef_search: usize,
 
+    #[serde(default = "default_hnsw_param_ef_supermatch")]
+    pub hnsw_param_ef_supermatch: usize,
+
+    #[serde(default)]
+    pub hnsw_param_ef_saturation_margin: usize,
+
     #[serde(default)]
     pub hnsw_layer_density: Option<usize>,
+
+    /// If set, fixes the batch size used in `layer_search_batched_v2` instead
+    /// of using the adaptive insertion-rate estimator.
+    #[serde(default)]
+    pub hnsw_fixed_layer_search_batch_size: Option<usize>,
 
     #[serde(default)]
     pub hawk_prf_key: Option<u64>,
@@ -265,18 +285,6 @@ pub struct Config {
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
 
-    #[serde(default = "default_hawk_server_deletions_enabled")]
-    pub hawk_server_deletions_enabled: bool,
-
-    #[serde(default = "default_hawk_server_reauths_enabled")]
-    pub hawk_server_reauths_enabled: bool,
-
-    #[serde(default = "default_hawk_server_resets_enabled")]
-    pub hawk_server_resets_enabled: bool,
-
-    #[serde(default = "default_hawk_server_recovery_enabled")]
-    pub hawk_server_recovery_enabled: bool,
-
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
@@ -292,14 +300,11 @@ pub struct Config {
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
 
-    #[serde(default = "default_tokio_threads")]
-    pub tokio_threads: usize,
+    #[serde(default = "default_separate_tokio_cores_per_node")]
+    pub separate_tokio_cores_per_node: Option<usize>,
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
-
-    #[serde(default = "default_enable_recovery")]
-    pub enable_recovery: bool,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -372,6 +377,22 @@ fn default_match_distances_2d_buffer_size() -> usize {
     1 << 13 // 8192
 }
 
+fn default_enable_reauth() -> bool {
+    true
+}
+
+fn default_enable_reset() -> bool {
+    true
+}
+
+fn default_enable_recovery() -> bool {
+    true
+}
+
+fn default_enable_deletion() -> bool {
+    true
+}
+
 fn default_hawk_request_parallelism() -> usize {
     1024
 }
@@ -384,13 +405,16 @@ fn default_hnsw_param_ef_constr() -> usize {
     320
 }
 
-#[allow(non_snake_case)]
-fn default_hnsw_param_M() -> usize {
+fn default_hnsw_param_m() -> usize {
     256
 }
 
 fn default_hnsw_param_ef_search() -> usize {
     256
+}
+
+fn default_hnsw_param_ef_supermatch() -> usize {
+    4000
 }
 
 fn default_hawk_numa() -> bool {
@@ -411,22 +435,6 @@ fn default_max_modifications_lookback() -> usize {
 
 fn default_sqs_sync_long_poll_seconds() -> i32 {
     10
-}
-
-fn default_hawk_server_reauths_enabled() -> bool {
-    false
-}
-
-fn default_hawk_server_resets_enabled() -> bool {
-    false
-}
-
-fn default_hawk_server_recovery_enabled() -> bool {
-    false
-}
-
-fn default_hawk_server_deletions_enabled() -> bool {
-    false
 }
 
 fn default_batch_polling_timeout_secs() -> i32 {
@@ -471,16 +479,12 @@ fn default_pprof_per_batch_enabled() -> bool {
     false
 }
 
-fn default_tokio_threads() -> usize {
-    num_cpus::get()
+fn default_separate_tokio_cores_per_node() -> Option<usize> {
+    None
 }
 
 fn default_sns_retry_max_attempts() -> u32 {
     5
-}
-
-fn default_enable_recovery() -> bool {
-    false
 }
 
 impl Config {
@@ -617,7 +621,6 @@ where
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
-#[allow(non_snake_case)]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
     environment: String,
@@ -647,11 +650,14 @@ pub struct CommonConfig {
     enable_reauth: bool,
     enable_reset: bool,
     enable_recovery: bool,
+    enable_deletion: bool,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
-    hnsw_param_M: usize,
+    hnsw_param_m: usize,
     hnsw_param_ef_search: usize,
+    hnsw_param_ef_supermatch: usize,
+    hnsw_param_ef_saturation_margin: usize,
     hnsw_layer_density: Option<usize>,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
@@ -659,13 +665,9 @@ pub struct CommonConfig {
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
-    hawk_server_deletions_enabled: bool,
-    hawk_server_reauths_enabled: bool,
     schema_name: String,
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
-    hawk_server_resets_enabled: bool,
-    hawk_server_recovery_enabled: bool,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
     batch_polling_timeout_secs: i32,
@@ -731,12 +733,17 @@ impl From<Config> for CommonConfig {
             match_distances_2d_buffer_size,
             enable_reauth,
             enable_reset,
+            enable_recovery,
+            enable_deletion,
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
-            hnsw_param_M,
+            hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_supermatch,
+            hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
+            hnsw_fixed_layer_search_batch_size: _, // per-party tuning knob
             hawk_prf_key,
             hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
@@ -744,13 +751,9 @@ impl From<Config> for CommonConfig {
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
-            hawk_server_deletions_enabled,
-            hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            hawk_server_resets_enabled,
-            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
@@ -766,9 +769,8 @@ impl From<Config> for CommonConfig {
             pprof_flame_only: _,
             pprof_profile_only: _,
             enable_pprof_per_batch: _,
-            tokio_threads: _,
+            separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
-            enable_recovery,
         } = value;
 
         assert!(
@@ -802,11 +804,15 @@ impl From<Config> for CommonConfig {
             match_distances_2d_buffer_size,
             enable_reauth,
             enable_reset,
+            enable_recovery,
+            enable_deletion,
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
-            hnsw_param_M,
+            hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_supermatch,
+            hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
             hawk_prf_key,
             max_deletions_per_batch,
@@ -814,19 +820,14 @@ impl From<Config> for CommonConfig {
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
-            hawk_server_deletions_enabled,
-            hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            hawk_server_resets_enabled,
-            hawk_server_recovery_enabled,
             full_scan_side,
             full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
-            enable_recovery,
         }
     }
 }
