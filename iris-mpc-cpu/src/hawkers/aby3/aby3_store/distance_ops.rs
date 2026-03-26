@@ -7,7 +7,7 @@ use ampc_actor_utils::{
         binary::{bit_inject, extract_msb_batch, open_bin},
         fhd_ops::{cross_mul, fhd_greater_than_threshold},
         nhd_ops::{
-            nhd_comparison_nmr, nhd_cross_mul, nhd_greater_than_threshold, nhd_lift_distances,
+            nhd_cross_mul, nhd_greater_than_threshold, nhd_lift_distances,
             nhd_plaintext_is_match,
         },
         ops::{batch_signed_lift_vec, conditionally_select_distance},
@@ -331,8 +331,8 @@ impl DistanceOps for NhdOps {
     }
 
     fn plaintext_less_than(d1: &(u16, u16), d2: &(u16, u16)) -> bool {
-        let nmr1 = nhd_comparison_nmr(d1.0, d1.1);
-        let nmr2 = nhd_comparison_nmr(d2.0, d2.1);
+        let nmr1 = IrisCode::get_nhd_nmr(d1.0, d1.1);
+        let nmr2 = IrisCode::get_nhd_nmr(d2.0, d2.1);
         nmr1 * (d2.1 as i64) < nmr2 * (d1.1 as i64)
     }
 
@@ -341,8 +341,8 @@ impl DistanceOps for NhdOps {
     }
 
     fn plaintext_ordering(d1: &(u16, u16), d2: &(u16, u16)) -> Ordering {
-        let nmr1 = nhd_comparison_nmr(d1.0, d1.1);
-        let nmr2 = nhd_comparison_nmr(d2.0, d2.1);
+        let nmr1 = IrisCode::get_nhd_nmr(d1.0, d1.1);
+        let nmr2 = IrisCode::get_nhd_nmr(d2.0, d2.1);
         (nmr1 * (d2.1 as i64)).cmp(&(nmr2 * (d1.1 as i64)))
     }
 
@@ -353,5 +353,117 @@ impl DistanceOps for NhdOps {
                 a.get_min_nhd_distance_fraction_rotation_aware::<HAWK_MIN_DIST_ROTATIONS>(b)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    /// Reference floating-point NHD, parameterized by (hd, md) where hd is the
+    /// Hamming distance and md is the mask dot product.
+    fn reference_nhd(hd: u16, md: u16) -> f64 {
+        if md == 0 {
+            return f64::INFINITY;
+        }
+        let cd = md as f64 - 2.0 * hd as f64;
+        let md = md as f64;
+        0.45 - (0.45 - (md - cd) / (2.0 * md)) * (md / 16384.0 + 0.45)
+    }
+
+    /// Verify that NhdOps::plaintext_less_than agrees with the floating-point
+    /// reference NHD for a range of (hd, md) pairs.  The original bug passed
+    /// the Hamming distance to a function that expected the code dot-product,
+    /// which inverted the ordering.
+    #[test]
+    fn test_nhd_plaintext_less_than_agrees_with_reference() {
+        let cases: Vec<(u16, u16)> = vec![
+            (100, 500),
+            (200, 500),
+            (300, 500),
+            (150, 1000),
+            (400, 1000),
+            (3000, 8000),
+            (4000, 8000),
+            (0, 100),
+            (50, 100),
+        ];
+
+        for (i, d1) in cases.iter().enumerate() {
+            for d2 in cases.iter().skip(i + 1) {
+                let ref1 = reference_nhd(d1.0, d1.1);
+                let ref2 = reference_nhd(d2.0, d2.1);
+
+                // Skip pairs where the reference values are too close to compare
+                if (ref1 - ref2).abs() < 1e-12 {
+                    continue;
+                }
+
+                let expected = ref1 < ref2;
+                let actual = NhdOps::plaintext_less_than(d1, d2);
+                assert_eq!(
+                    actual, expected,
+                    "plaintext_less_than({:?}, {:?}): got {}, expected {} (ref nhd: {:.6} vs {:.6})",
+                    d1, d2, actual, expected, ref1, ref2
+                );
+
+                // Also check the reverse direction
+                let expected_rev = ref2 < ref1;
+                let actual_rev = NhdOps::plaintext_less_than(d2, d1);
+                assert_eq!(
+                    actual_rev, expected_rev,
+                    "plaintext_less_than({:?}, {:?}): got {}, expected {} (ref nhd: {:.6} vs {:.6})",
+                    d2, d1, actual_rev, expected_rev, ref2, ref1
+                );
+            }
+        }
+    }
+
+    /// Verify that NhdOps::plaintext_ordering is consistent with the
+    /// floating-point reference NHD.
+    #[test]
+    fn test_nhd_plaintext_ordering_agrees_with_reference() {
+        let cases: Vec<(u16, u16)> = vec![
+            (100, 500),
+            (300, 500),
+            (150, 1000),
+            (400, 1000),
+            (3000, 8000),
+            (4000, 8000),
+        ];
+
+        for (i, d1) in cases.iter().enumerate() {
+            for d2 in cases.iter().skip(i + 1) {
+                let ref1 = reference_nhd(d1.0, d1.1);
+                let ref2 = reference_nhd(d2.0, d2.1);
+
+                let expected = ref1.partial_cmp(&ref2).unwrap();
+                let actual = NhdOps::plaintext_ordering(d1, d2);
+
+                assert_eq!(
+                    actual, expected,
+                    "plaintext_ordering({:?}, {:?}): got {:?}, expected {:?} (ref nhd: {:.6} vs {:.6})",
+                    d1, d2, actual, expected, ref1, ref2
+                );
+            }
+        }
+    }
+
+    /// Sanity check: a clearly better match (lower FHD ratio with same mask)
+    /// must compare as less-than a clearly worse match.
+    #[test]
+    fn test_nhd_good_match_less_than_bad_match() {
+        let good = (100u16, 500u16); // FHD = 0.20
+        let bad = (300u16, 500u16);  // FHD = 0.60
+        assert!(
+            NhdOps::plaintext_less_than(&good, &bad),
+            "A good match (hd/md = {}/{}) must be less than a bad match (hd/md = {}/{})",
+            good.0, good.1, bad.0, bad.1,
+        );
+        assert_eq!(
+            NhdOps::plaintext_ordering(&good, &bad),
+            Ordering::Less,
+        );
     }
 }
