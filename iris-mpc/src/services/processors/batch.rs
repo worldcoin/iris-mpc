@@ -1127,10 +1127,15 @@ impl<'a> BatchProcessor<'a> {
         &self,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+            ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!(
+                "Missing receipt handle"
+            ))
+        })?;
         self.client
             .delete_message()
             .queue_url(&self.config.requests_queue_url)
-            .receipt_handle(sqs_message.receipt_handle.as_ref().unwrap())
+            .receipt_handle(receipt_handle)
             .send()
             .await
             .map_err(ReceiveRequestError::from)?;
