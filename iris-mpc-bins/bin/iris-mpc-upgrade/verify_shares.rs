@@ -29,8 +29,19 @@ struct Args {
     #[arg(long, env = "PARTY2_DB_URL")]
     party2_db_url: String,
 
+    /// Schema name shared by all parties. Overridden per-party by
+    /// --party{0,1,2}-schema if provided.
     #[arg(long, env = "SCHEMA")]
     schema: String,
+
+    #[arg(long, env = "PARTY0_SCHEMA")]
+    party0_schema: Option<String>,
+
+    #[arg(long, env = "PARTY1_SCHEMA")]
+    party1_schema: Option<String>,
+
+    #[arg(long, env = "PARTY2_SCHEMA")]
+    party2_schema: Option<String>,
 
     /// Output file for the per-row hash list (one hex hash per line).
     #[arg(long, default_value = "iris_hashes.txt")]
@@ -51,10 +62,14 @@ async fn main() -> Result<()> {
     tracing::warn!("*** Only use with local/staging environments and synthetic test data. ***");
 
     tracing::info!("Connecting to party databases…");
+    let s0 = args.party0_schema.as_deref().unwrap_or(&args.schema);
+    let s1 = args.party1_schema.as_deref().unwrap_or(&args.schema);
+    let s2 = args.party2_schema.as_deref().unwrap_or(&args.schema);
+
     let stores = tokio::try_join!(
-        connect(&args.party0_db_url, &args.schema),
-        connect(&args.party1_db_url, &args.schema),
-        connect(&args.party2_db_url, &args.schema),
+        connect(&args.party0_db_url, s0),
+        connect(&args.party1_db_url, s1),
+        connect(&args.party2_db_url, s2),
     )?;
     let stores = [stores.0, stores.1, stores.2];
 
