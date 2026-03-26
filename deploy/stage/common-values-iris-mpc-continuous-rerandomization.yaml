@@ -14,10 +14,30 @@ serviceAccount:
   create: true
   name: "iris-mpc-continuous-rerandomization"
 
+datadog:
+  enabled: true
+
 ports:
   - containerPort: 3000
     name: health
     protocol: TCP
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: health
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 20
+  failureThreshold: 4
+  httpGet:
+    path: /health
+    port: health
 
 podSecurityContext:
   runAsUser: 65534
