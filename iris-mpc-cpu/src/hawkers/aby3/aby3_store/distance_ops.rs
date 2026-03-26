@@ -7,8 +7,7 @@ use ampc_actor_utils::{
         binary::{bit_inject, extract_msb_batch, open_bin},
         fhd_ops::{cross_mul, fhd_greater_than_threshold},
         nhd_ops::{
-            nhd_cross_mul, nhd_greater_than_threshold, nhd_lift_distances,
-            nhd_plaintext_is_match,
+            nhd_cross_mul, nhd_greater_than_threshold, nhd_lift_distances, nhd_plaintext_is_match,
         },
         ops::{batch_signed_lift_vec, conditionally_select_distance},
         shuffle::random_shuffle_batch,
@@ -455,15 +454,15 @@ mod tests {
     #[test]
     fn test_nhd_good_match_less_than_bad_match() {
         let good = (100u16, 500u16); // FHD = 0.20
-        let bad = (300u16, 500u16);  // FHD = 0.60
+        let bad = (300u16, 500u16); // FHD = 0.60
         assert!(
             NhdOps::plaintext_less_than(&good, &bad),
             "A good match (hd/md = {}/{}) must be less than a bad match (hd/md = {}/{})",
-            good.0, good.1, bad.0, bad.1,
+            good.0,
+            good.1,
+            bad.0,
+            bad.1,
         );
-        assert_eq!(
-            NhdOps::plaintext_ordering(&good, &bad),
-            Ordering::Less,
-        );
+        assert_eq!(NhdOps::plaintext_ordering(&good, &bad), Ordering::Less,);
     }
 }
