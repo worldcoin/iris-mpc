@@ -2879,6 +2879,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "axum 0.7.7",
  "base64",
  "bincode",
  "bytemuck",
@@ -2919,6 +2920,7 @@ dependencies = [
  "axum 0.7.7",
  "base64",
  "blake3",
+ "bytemuck",
  "chrono",
  "clap",
  "clap_builder",
@@ -3132,9 +3134,13 @@ dependencies = [
  "iris-mpc-common",
  "itertools 0.13.0",
  "rand 0.8.5",
+ "reqwest",
+ "serde_json",
  "sqlx",
  "tokio",
+ "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3145,12 +3151,18 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-serialize",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
  "axum 0.7.7",
+ "base64",
  "blake3",
  "bytemuck",
  "clap",
  "criterion",
+ "dotenvy",
  "eyre",
+ "futures",
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
@@ -3160,9 +3172,12 @@ dependencies = [
  "rayon",
  "serde",
  "serde-big-array",
+ "serde_json",
  "sha2",
+ "sqlx",
  "thiserror 1.0.65",
  "tokio",
+ "tokio-util",
  "tonic",
  "tonic-build",
  "tracing",
@@ -4471,7 +4486,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.35",
- "socket2 0.6.0",
+ "socket2 0.5.7",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -4508,7 +4523,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.7",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -6539,7 +6554,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

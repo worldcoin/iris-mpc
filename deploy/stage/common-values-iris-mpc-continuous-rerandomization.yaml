@@ -1,0 +1,67 @@
+image: "ghcr.io/worldcoin/rerandomization-protocol:0bbe0c379e32ba7312d357ac56f295abcd96da08"
+replicaCount: 0
+
+environment: stage
+
+command: ["/bin/rerandomize-db"]
+args:
+  - "rerandomize-continuous"
+
+strategy:
+  type: Recreate
+
+serviceAccount:
+  create: true
+  name: "iris-mpc-continuous-rerandomization"
+
+datadog:
+  enabled: true
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: health
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 20
+  failureThreshold: 4
+  httpGet:
+    path: /health
+    port: health
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: 3.5
+    memory: 12Gi
+  requests:
+    cpu: 3.5
+    memory: 12Gi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: "continuous_rerandomization"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "continuousDbRerandomization"
+    effect: "NoSchedule"
+
+concurrencyPolicy: Replace

@@ -1,0 +1,70 @@
+name: Continuous Rerand E2E Tests
+
+on:
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  rerand-e2e:
+    timeout-minutes: 30
+    runs-on:
+      labels: ubuntu-22.04-16core
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62
+        with:
+          files_yaml: |
+            src:
+              - Dockerfile*
+              - Cargo.lock
+              - Cargo.toml
+              - deny.toml
+              - rust-toolchain.toml
+              - iris-*/**
+              - iris-mpc-upgrade/**
+              - iris-mpc-store/**
+              - iris-mpc-common/**
+              - docs/specs/rerandomization.md
+              - migrations/**
+              - scripts/**
+              - iris-mpc-bins/bin/iris-mpc-upgrade/run-rerand-e2e-tests.sh
+              - iris-mpc-bins/bin/iris-mpc-upgrade/docker-compose.rand.yaml
+              - .github/workflows/continuous-rerand-e2e-tests.yaml
+
+      - name: Cache Rust build
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
+        id: cache-rust
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
+
+      - name: Install protobuf compiler
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          if command -v protoc > /dev/null; then
+            echo "protoc already installed: $(command -v protoc)"
+          else
+            sudo apt-get update
+            sudo apt-get install -y protobuf-compiler
+          fi
+
+      - name: Run rerandomization e2e tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          bash iris-mpc-bins/bin/iris-mpc-upgrade/run-rerand-e2e-tests.sh
