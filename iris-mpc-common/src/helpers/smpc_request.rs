@@ -392,16 +392,9 @@ pub use explicit_sns_batching::*;
 mod explicit_sns_batching {
     use super::*;
 
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub struct BatchItem {
-        pub id: String,
-        #[serde(flatten)]
-        pub request: RequestPayload,
-    }
-
     #[derive(Serialize, Deserialize, Debug)]
     pub struct CompactBatchRequest {
-        pub items: Vec<BatchItem>,
+        pub items: Vec<RequestPayload>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -439,16 +432,12 @@ mod explicit_sns_batching {
         Base64DecodeError,
     }
 
-    impl BatchItem {
-        /// Get the message type string for this item
-        pub fn message_type(&self) -> &'static str {
-            self.request.message_type()
-        }
-
-        /// Convert to SQSMessage for compatibility with existing processor code
-        pub fn into_sqs_message(self) -> Result<SQSMessage, serde_json::Error> {
+    impl RequestPayload {
+        /// Convert to SQSMessage for compatibility with existing processor code.
+        /// The msg_id is provided externally (e.g., from SNS message ID + index).
+        pub fn into_sqs_message(self, msg_id: String) -> Result<SQSMessage, serde_json::Error> {
             let message_type = self.message_type().to_string();
-            let body = match self.request {
+            let body = match self {
                 RequestPayload::Uniqueness(req) => serde_json::to_string(&req)?,
                 RequestPayload::IdentityDeletion(req) => serde_json::to_string(&req)?,
                 RequestPayload::Reauthorization(req) => serde_json::to_string(&req)?,
@@ -468,7 +457,7 @@ mod explicit_sns_batching {
             }
 
             Ok(SQSMessage {
-                message_id: self.id,
+                message_id: msg_id,
                 message: body,
                 message_attributes,
                 // Unused fields - empty placeholders

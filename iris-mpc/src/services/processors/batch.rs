@@ -521,17 +521,18 @@ impl<'a> BatchProcessor<'a> {
         let total_messages = batch.items.len();
         let mut errors: Vec<(String, ReceiveRequestError)> = Vec::new();
 
-        for item in batch.items {
-            let msg_id = item.id.clone();
+        for (idx, item) in batch.items.into_iter().enumerate() {
+            // combine with the SQS message id to ensure unique ids across service client restarts
+            let msg_id = format!("{}:{}", &message.message_id, idx);
             let request_type = item.message_type();
 
             // Convert to SQSMessage for compatibility with existing process_message_
-            let msg = match item.into_sqs_message() {
+            let msg = match item.into_sqs_message(msg_id.clone()) {
                 Ok(m) => m,
                 Err(e) => {
                     errors.push((
                         msg_id,
-                        ReceiveRequestError::json_parse_error("BatchItem", e),
+                        ReceiveRequestError::json_parse_error("RequestPayload", e),
                     ));
                     continue;
                 }

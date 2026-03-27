@@ -308,23 +308,14 @@ impl ServiceClient {
     #[cfg(feature = "explicit-sns-batching")]
     async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
         use crate::aws::types::SnsMessageInfo;
-        use iris_mpc_common::helpers::smpc_request::{
-            BatchItem, CompactBatchRequest, CompressedBatchPayload,
-        };
-        use std::sync::atomic::{AtomicU64, Ordering};
+        use iris_mpc_common::helpers::smpc_request::{CompactBatchRequest, CompressedBatchPayload};
 
-        static MESSAGE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        // Convert requests to compact BatchItems
-        let items: Vec<BatchItem> = batch_requests
+        // Convert requests to RequestPayload items (IDs are assigned server-side)
+        let items: Vec<smpc_request::RequestPayload> = batch_requests
             .iter()
             .map(|request| {
-                let message_id = MESSAGE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let payload = typeset::RequestPayload::from(request);
-                BatchItem {
-                    id: message_id.to_string(),
-                    request: payload.to_smpc_request(),
-                }
+                payload.to_smpc_request()
             })
             .collect();
 
