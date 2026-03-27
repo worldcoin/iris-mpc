@@ -4,9 +4,11 @@ use super::{
 };
 use crate::{
     execution::hawk_main::{
-        insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, StoreId, LEFT, RIGHT,
-        STORE_IDS,
+        insert::insert,
+        iris_worker::{IrisWorkerPool, QueryId},
+        scheduler::parallelize,
+        search::search_single_query_no_match_count,
+        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -120,6 +122,7 @@ impl Handle {
                 vector_ids,
                 queries,
                 vector_ids_to_persist,
+                irises_to_cache,
             } => {
                 Self::log_info(format!(
                     "Hawk Job :: processing batch-id={}; batch-size={}",
@@ -127,14 +130,17 @@ impl Handle {
                     vector_ids.len(),
                 ));
 
-                let queries = JobRequest::numa_realloc(
-                    queries,
-                    [
-                        actor.workers_handle(StoreId::Left),
-                        actor.workers_handle(StoreId::Right),
-                    ],
-                )
-                .await;
+                // Cache all batch irises in both worker pools before search.
+                // Both pools need all irises (mirror queries cross eyes).
+                let all_to_cache: Vec<_> = irises_to_cache[LEFT]
+                    .iter()
+                    .chain(irises_to_cache[RIGHT].iter())
+                    .cloned()
+                    .collect();
+                futures::try_join!(
+                    actor.worker_pools[LEFT].cache_queries(all_to_cache.clone()),
+                    actor.worker_pools[RIGHT].cache_queries(all_to_cache),
+                )?;
 
                 // Use all sessions per iris side to search for insertion indices per
                 // batch, number configured by `args.request_parallelism`.
@@ -158,7 +164,7 @@ impl Handle {
                             for queries_batch in queries_with_ids.chunks(n_sessions) {
                                 let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
                                     |((query, id), session)| {
-                                        let query = query.clone();
+                                        let query = *query;
                                         let searcher = searcher.clone();
                                         let session = session.clone();
                                         let identifier = (*id, side);
@@ -229,6 +235,17 @@ impl Handle {
                     });
                 }
 
+                // Evict cached queries now that the batch is fully processed.
+                let all_query_ids: Vec<QueryId> = irises_to_cache[LEFT]
+                    .iter()
+                    .chain(irises_to_cache[RIGHT].iter())
+                    .map(|(qid, _)| *qid)
+                    .collect();
+                futures::try_join!(
+                    actor.worker_pools[LEFT].evict_queries(all_query_ids.clone()),
+                    actor.worker_pools[RIGHT].evict_queries(all_query_ids),
+                )?;
+
                 metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
                 metrics::gauge!("genesis_batch_size").set(vector_ids.len() as f64);
 
@@ -272,7 +289,18 @@ impl Handle {
 
                                     // TODO remove any prior versions of this vector id from graph
 
-                                    let query = Aby3Query::new(&vector.get_vector_or_empty(&vector_id).await);
+                                    // Fetch the iris from the store and cache it in the
+                                    // session's worker pool before search.
+                                    let query_id = QueryId::new();
+                                    let iris = vector.get_vector_or_empty(&vector_id).await;
+                                    {
+                                        let store = session.aby3_store.read().await;
+                                        store
+                                            .workers
+                                            .cache_queries(vec![(query_id, iris)])
+                                            .await?;
+                                    }
+                                    let query = Aby3Query::new(query_id);
                                     let insert_plan = search_single_query_no_match_count(
                                         session.clone(),
                                         query,
@@ -289,6 +317,12 @@ impl Handle {
 
                                         insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?
                                     };
+
+                                    // Evict the cached query now that search + insert are done.
+                                    {
+                                        let store = session.aby3_store.read().await;
+                                        store.workers.evict_queries(vec![query_id]).await?;
+                                    }
 
                                     Ok((connect_plan, vector_id))
                                 }
