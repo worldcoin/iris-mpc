@@ -9,7 +9,7 @@ use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
-        hawk_main::iris_worker,
+        hawk_main::iris_worker::{self, IrisWorkerPool, LocalIrisWorkerPool},
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
@@ -20,7 +20,7 @@ use crate::{
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::mpc::NetworkType,
-    protocol::shared_iris::GaloisRingSharedIris,
+    protocol::shared_iris::{ArcIris, GaloisRingSharedIris},
     shares::{RingElement, Share},
     utils::serialization::{
         graph::{read_graph_from_file, GraphFormat},
@@ -77,7 +77,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .into_iter()
         .zip(storages.into_iter())
         .map(|(session, storage)| {
-            let workers = iris_worker::init_workers(0, storage.clone(), true);
+            let pool = iris_worker::init_workers(0, storage.clone(), true);
+            let workers = LocalIrisWorkerPool::new(pool, storage.clone());
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 storage,
                 session,
@@ -95,7 +96,8 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .into_iter()
         .map(|session| {
             let storage = Aby3Store::<FhdOps>::new_storage(None).to_arc();
-            let workers = iris_worker::init_workers(0, storage.clone(), true);
+            let pool = iris_worker::init_workers(0, storage.clone(), true);
+            let workers = LocalIrisWorkerPool::new(pool, storage.clone());
 
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 storage.clone(),
@@ -132,18 +134,27 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
 }
 
 /// Returns the distance between two vectors inserted into Aby3Store.
+///
+/// Caches the second vector as a query (with a fresh QueryId), then uses
+/// `eval_distance_batch` to compute the distance via the worker pool.
 pub async fn eval_vector_distance(
     store: &mut Aby3Store,
     vector1: &Aby3VectorRef,
     vector2: &Aby3VectorRef,
 ) -> Result<<Aby3Store as VectorStore>::DistanceRef> {
-    let point1 = store.storage.get_vector_or_empty(vector1).await;
-    let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
-    point2.code.preprocess_iris_code_query_share();
-    point2.mask.preprocess_mask_code_query_share();
-    let pairs = vec![Some((point1.clone(), Arc::new(point2)))];
-    let dist = store.eval_pairwise_distances(pairs).await?;
-    Ok(dist[0])
+    use crate::execution::hawk_main::iris_worker::QueryId;
+
+    // Cache the second vector's iris as a query so the worker pool can
+    // preprocess + rotate it.
+    let iris2 = store.storage.get_vector_or_empty(vector2).await;
+    let query_id = QueryId::new();
+    store.workers.cache_queries(vec![(query_id, iris2)]).await?;
+    let query = Aby3Query::new(query_id);
+
+    // Compute distance against vector1 through the store's eval_distance_batch.
+    let distances = store.eval_distance_batch(&query, &[*vector1]).await?;
+    store.workers.evict_queries(vec![query_id]).await?;
+    Ok(distances[0])
 }
 
 // TODO Since GraphMem no longer caches distances, this function is now just a
@@ -327,13 +338,23 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     for store in local_stores.iter() {
         let role = get_owner_index(store).await?;
         let mut rng_searcher = rng_searcher.clone();
-        let queries = (0..database_size)
-            .map(|id| Aby3Query::new_from_raw(shared_irises[id][role].clone()))
-            .collect::<Vec<_>>();
+        // Create lightweight query handles and cache the iris data.
+        let query_irises: Vec<(iris_worker::QueryId, ArcIris)> = (0..database_size)
+            .map(|id| {
+                let qid = iris_worker::QueryId::new();
+                (qid, Arc::new(shared_irises[id][role].clone()))
+            })
+            .collect();
+        let queries: Vec<Aby3Query> = query_irises
+            .iter()
+            .map(|(qid, _)| Aby3Query::new(*qid))
+            .collect();
         let store = store.clone();
         let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> =
             tokio::spawn(async move {
                 let mut store_lock = store.lock().await;
+                // Cache all irises in the worker pool.
+                store_lock.workers.cache_queries(query_irises).await?;
                 let mut graph_store = GraphMem::new();
                 let searcher = HnswSearcher::new_with_test_parameters();
                 // insert queries

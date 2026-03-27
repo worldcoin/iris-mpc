@@ -6,10 +6,9 @@ use crate::{
     execution::hawk_main::{scheduler::parallelize, VecRotations},
     hawkers::aby3::aby3_store::Aby3Query,
     hnsw::VectorStore,
-    protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
-use itertools::{izip, Itertools};
+use itertools::izip;
 use std::{collections::BTreeMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -56,8 +55,7 @@ async fn per_session(
     tx: UnboundedSender<IsMatch>,
 ) -> Result<()> {
     // Enumerate the pairs of requests.
-    // These are unordered pairs: if we do (i, j) we skip (j, i).
-    let pairs = batch
+    let pairs: Vec<IsMatch> = batch
         .tasks
         .into_iter()
         .flat_map(|task| {
@@ -67,23 +65,21 @@ async fn per_session(
                 earlier_request,
             })
         })
-        .collect_vec();
+        .collect();
 
-    // Compare the rotated and processed irises of one request, to the centered unprocessed iris of the other request.
-    let query_pairs: Vec<Option<(ArcIris, ArcIris)>> = pairs
+    // Compare the rotated+preprocessed iris of one request to the centered iris of the other.
+    let query_pairs: Vec<Option<(_, _)>> = pairs
         .iter()
         .map(|pair| {
-            let iris1_proc =
-                &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].iris_proc;
-            let iris2 = &search_queries[batch.i_eye][pair.earlier_request]
+            let spec_a = search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation];
+            let id_b = search_queries[batch.i_eye][pair.earlier_request]
                 .center()
-                .iris;
-            Some((iris1_proc.clone(), iris2.clone()))
+                .query_id;
+            Some((spec_a, id_b))
         })
-        .collect_vec();
+        .collect();
 
     let mut store = session.aby3_store.write().await;
-
     let distances = store.eval_pairwise_distances(query_pairs).await?;
     let is_matches = store.is_match_batch(&distances).await?;
 
@@ -155,6 +151,7 @@ mod tests {
 
         let batch_size = 3;
         let request = make_request_intra_match(batch_size, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
         let search_queries = &request.queries(Orientation::Normal);
 
         let result = intra_batch_is_match(&sessions, search_queries).await?;

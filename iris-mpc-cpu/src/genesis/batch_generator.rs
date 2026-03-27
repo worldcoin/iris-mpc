@@ -1,11 +1,12 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
-    execution::hawk_main::{BothEyes, LEFT, RIGHT},
+    execution::hawk_main::{iris_worker::QueryId, BothEyes, LEFT, RIGHT},
     hawkers::aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
+    protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
-use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
+use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive, sync::Arc};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "Batch-Generator";
@@ -27,6 +28,10 @@ pub struct Batch {
 
     /// Iris data for persistence.
     pub vector_ids_to_persist: Vec<VectorId>,
+
+    /// Irises to cache in worker pools before search, per eye [LEFT, RIGHT].
+    /// Each entry pairs a QueryId with the raw iris data.
+    pub irises_to_cache: BothEyes<Vec<(QueryId, ArcIris)>>,
 }
 
 /// Constructor.
@@ -37,6 +42,7 @@ impl Batch {
         left_queries: Vec<Aby3Query>,
         right_queries: Vec<Aby3Query>,
         vector_ids_to_persist: Vec<VectorId>,
+        irises_to_cache: BothEyes<Vec<(QueryId, ArcIris)>>,
     ) -> Self {
         Self {
             batch_id,
@@ -44,6 +50,7 @@ impl Batch {
             left_queries,
             right_queries,
             vector_ids_to_persist,
+            irises_to_cache,
         }
     }
 }
@@ -305,18 +312,30 @@ impl BatchIterator for BatchGenerator {
 
         self.batch_count += 1;
 
-        let left_queries = imem_iris_stores[LEFT]
+        // Fetch irises from both stores and pair with fresh QueryIds.
+        let left_irises = imem_iris_stores[LEFT]
             .get_vectors_or_empty(vector_ids.iter())
-            .await
-            .iter()
-            .map(Aby3Query::new)
+            .await;
+        let right_irises = imem_iris_stores[RIGHT]
+            .get_vectors_or_empty(vector_ids.iter())
+            .await;
+
+        let left_cache: Vec<(QueryId, ArcIris)> = left_irises
+            .into_iter()
+            .map(|iris| (QueryId::new(), Arc::clone(&iris)))
+            .collect();
+        let right_cache: Vec<(QueryId, ArcIris)> = right_irises
+            .into_iter()
+            .map(|iris| (QueryId::new(), Arc::clone(&iris)))
             .collect();
 
-        let right_queries = imem_iris_stores[RIGHT]
-            .get_vectors_or_empty(vector_ids.iter())
-            .await
+        let left_queries = left_cache
             .iter()
-            .map(Aby3Query::new)
+            .map(|(qid, _)| Aby3Query::new(*qid))
+            .collect();
+        let right_queries = right_cache
+            .iter()
+            .map(|(qid, _)| Aby3Query::new(*qid))
             .collect();
 
         Ok(Some(Batch::new(
@@ -325,6 +344,7 @@ impl BatchIterator for BatchGenerator {
             left_queries,
             right_queries,
             vector_ids_for_persistence.clone(),
+            [left_cache, right_cache],
         )))
     }
 }
