@@ -271,4 +271,106 @@ mod tests {
         // Assert
         assert!(!is_valid, "The iris share should be invalid");
     }
+
+    #[cfg(all(test, feature = "explicit-sns-batching"))]
+    mod compressed_batch_tests {
+        use iris_mpc_common::helpers::smpc_request::{
+            CompactBatchRequest, CompressedBatchPayload, IdentityDeletionRequest, RequestPayload,
+            UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        };
+
+        #[test]
+        fn test_compact_batch_compression_round_trip() {
+            // Create a batch with multiple item types
+            let items = vec![
+                RequestPayload::Uniqueness(UniquenessRequest {
+                    signup_id: "user123".to_string(),
+                    s3_key: "path/to/data".to_string(),
+                    or_rule_serial_ids: None,
+                    skip_persistence: None,
+                    full_face_mirror_attacks_detection_enabled: Some(true),
+                    disable_anonymized_stats: None,
+                }),
+                RequestPayload::IdentityDeletion(IdentityDeletionRequest { serial_id: 42 }),
+            ];
+
+            let batch = CompactBatchRequest { items };
+
+            // Compress
+            let compressed = batch.compress().expect("compression should succeed");
+
+            // Wrap in payload (as it would be sent over the wire)
+            let payload = CompressedBatchPayload { data: compressed };
+            let wire_json = serde_json::to_string(&payload).unwrap();
+
+            // Deserialize from wire format
+            let parsed_payload: CompressedBatchPayload = serde_json::from_str(&wire_json).unwrap();
+
+            // Decompress
+            let decompressed = CompactBatchRequest::decompress(&parsed_payload.data)
+                .expect("decompression should succeed");
+
+            // Verify
+            assert_eq!(decompressed.items.len(), 2);
+
+            assert_eq!(
+                decompressed.items[0].message_type(),
+                UNIQUENESS_MESSAGE_TYPE
+            );
+
+            assert_eq!(
+                decompressed.items[1].message_type(),
+                IDENTITY_DELETION_MESSAGE_TYPE
+            );
+
+            // Verify into_sqs_message conversion works
+            let sqs_msg = decompressed.items[0]
+                .clone()
+                .into_sqs_message("req-001".to_string())
+                .unwrap();
+            assert_eq!(sqs_msg.message_id, "req-001");
+            let msg_type_attr = sqs_msg.message_attributes.get("message_type").unwrap();
+            assert_eq!(msg_type_attr.string_value(), Some(UNIQUENESS_MESSAGE_TYPE));
+        }
+
+        #[test]
+        fn test_compression_size_reduction() {
+            // Create a batch of 100 uniqueness requests
+            let items: Vec<RequestPayload> = (0..100)
+                .map(|i| {
+                    RequestPayload::Uniqueness(UniquenessRequest {
+                        signup_id: format!("user-{}", i),
+                        s3_key: format!("path/to/data/{}", i),
+                        or_rule_serial_ids: None,
+                        skip_persistence: None,
+                        full_face_mirror_attacks_detection_enabled: Some(true),
+                        disable_anonymized_stats: None,
+                    })
+                })
+                .collect();
+
+            let batch = CompactBatchRequest { items };
+
+            // Get uncompressed JSON size
+            let json = serde_json::to_string(&batch).unwrap();
+            let json_size = json.len();
+
+            // Get compressed size
+            let compressed = batch.compress().unwrap();
+            let compressed_size = compressed.len();
+
+            println!("JSON size: {} bytes", json_size);
+            println!("Compressed size: {} bytes", compressed_size);
+            println!(
+                "Compression ratio: {:.1}%",
+                (compressed_size as f64 / json_size as f64) * 100.0
+            );
+
+            // Compressed should be significantly smaller
+            assert!(
+                compressed_size < json_size / 2,
+                "Compression should achieve at least 50% reduction"
+            );
+        }
+    }
 }
