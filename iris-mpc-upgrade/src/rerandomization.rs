@@ -89,10 +89,22 @@ fn randomize_galois_ring_coefs(coefs: &mut [u16], xof: &mut blake3::OutputReader
     }
 }
 
+/// Which pair(s) of parties disagree during reconstruction.
+#[derive(Debug)]
+pub struct ReconstructionMismatch {
+    pub pairs_01_vs_12: bool,
+    pub pairs_01_vs_02: bool,
+}
+
 /// Reconstruct the plaintext from 3 Shamir shares using Lagrange interpolation.
-/// Verifies consistency by reconstructing from all 3 pairs (0-1, 1-2, 0-2) and
-/// asserting they agree.
-pub fn reconstruct_shares(share0: &[u16], share1: &[u16], share2: &[u16]) -> Vec<u16> {
+///
+/// Returns `Ok(plaintext)` when all 3 pair-wise reconstructions agree, or
+/// `Err(mismatch)` indicating which pairs diverge.
+pub fn try_reconstruct_shares(
+    share0: &[u16],
+    share1: &[u16],
+    share2: &[u16],
+) -> Result<Vec<u16>, ReconstructionMismatch> {
     let lag_01 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID1);
     let lag_10 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID1, PartyID::ID0);
     let lag_02 = ShamirGaloisRingShare::deg_1_lagrange_polys_at_zero(PartyID::ID0, PartyID::ID2);
@@ -133,9 +145,23 @@ pub fn reconstruct_shares(share0: &[u16], share1: &[u16], share2: &[u16]) -> Vec
         })
         .collect_vec();
 
-    assert_eq!(recon01, recon12);
-    assert_eq!(recon01, recon02);
-    recon01
+    let mismatch_01_12 = recon01 != recon12;
+    let mismatch_01_02 = recon01 != recon02;
+    if mismatch_01_12 || mismatch_01_02 {
+        return Err(ReconstructionMismatch {
+            pairs_01_vs_12: mismatch_01_12,
+            pairs_01_vs_02: mismatch_01_02,
+        });
+    }
+    Ok(recon01)
+}
+
+/// Reconstruct the plaintext from 3 Shamir shares using Lagrange interpolation.
+/// Verifies consistency by reconstructing from all 3 pairs (0-1, 1-2, 0-2) and
+/// asserting they agree.
+pub fn reconstruct_shares(share0: &[u16], share1: &[u16], share2: &[u16]) -> Vec<u16> {
+    try_reconstruct_shares(share0, share1, share2)
+        .expect("Reconstruction mismatch: shares are inconsistent across party pairs")
 }
 
 #[cfg(test)]
