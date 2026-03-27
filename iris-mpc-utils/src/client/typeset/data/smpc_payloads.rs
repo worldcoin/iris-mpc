@@ -4,17 +4,34 @@ use iris_mpc_common::helpers::{smpc_request, smpc_response};
 
 use crate::{aws::types::SqsMessageInfo, client::typeset::Request};
 
-/// Enumeration over request messages enqueued upon system ingress queue.
-#[derive(Debug, Clone)]
+// both iris-mpc-common and iris-mpc-utils need this enumeration. But
+// iris_mpc_utils::RequestPayload also needs to implement From<Request>, which
+// has to exist in the module that the enum was defined in).
+// Also, iris-mpc-common probably shouldn't import anything from iris-mpc-utils.
+// To deal with this, define the duplicate type here, in iris-mpc-utils
 #[allow(clippy::large_enum_variant)]
 pub enum RequestPayload {
+    Uniqueness(smpc_request::UniquenessRequest),
     IdentityDeletion(smpc_request::IdentityDeletionRequest),
     Reauthorization(smpc_request::ReAuthRequest),
     ResetCheck(smpc_request::IdentityMatchCheckRequest),
     RecoveryCheck(smpc_request::IdentityMatchCheckRequest),
     ResetUpdate(smpc_request::IdentityUpdateRequest),
     RecoveryUpdate(smpc_request::IdentityUpdateRequest),
-    Uniqueness(smpc_request::UniquenessRequest),
+}
+
+impl RequestPayload {
+    pub fn to_smpc_request(self) -> smpc_request::RequestPayload {
+        match self {
+            Self::Uniqueness(x) => smpc_request::RequestPayload::Uniqueness(x),
+            Self::IdentityDeletion(x) => smpc_request::RequestPayload::IdentityDeletion(x),
+            Self::Reauthorization(x) => smpc_request::RequestPayload::Reauthorization(x),
+            Self::ResetCheck(x) => smpc_request::RequestPayload::ResetCheck(x),
+            Self::RecoveryCheck(x) => smpc_request::RequestPayload::RecoveryCheck(x),
+            Self::ResetUpdate(x) => smpc_request::RequestPayload::ResetUpdate(x),
+            Self::RecoveryUpdate(x) => smpc_request::RequestPayload::RecoveryUpdate(x),
+        }
+    }
 }
 
 /// Enumeration over response messages dequeued from system egress queue.

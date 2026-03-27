@@ -40,4 +40,4 @@ ampc-server-utils.workspace = true
 default = []
 # enable the BatchMessage sqs_request type. used by the client to circumvent
 # batching logic by uploading the desired batches directly.
-explicit-sns-batching = []
+explicit-sns-batching = ["iris-mpc-common/explicit-sns-batching"]

@@ -127,11 +127,6 @@ pub struct UniquenessRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CircuitBreakerRequest {}
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct BatchRequest {
-    pub messages: Vec<SQSMessage>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityDeletionRequest {
     pub serial_id: u32,
@@ -194,6 +189,10 @@ pub enum ReceiveRequestError {
     BatchPollingTimeout(i32),
     #[error("Failed to parse shares: {0}")]
     FailedToProcessIrisShares(Report),
+
+    #[cfg(feature = "explicit-sns-batching")]
+    #[error("Failed to decompress batch: {0}")]
+    BatchDecompressionError(String),
 }
 
 impl From<SdkError<ReceiveMessageError>> for ReceiveRequestError {
@@ -345,4 +344,140 @@ pub fn validate_iris_share(
         .into_bytes();
 
     Ok(hash == sha256_as_hex_string(stringified_share))
+}
+
+// this was moved from iris-mpc-utils so that the server could deserialize
+// a Vec<RequestPayload> (with some other fields added)
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "message_type")]
+pub enum RequestPayload {
+    #[serde(rename = "uniqueness")]
+    Uniqueness(UniquenessRequest),
+    #[serde(rename = "identity_deletion")]
+    IdentityDeletion(IdentityDeletionRequest),
+    #[serde(rename = "reauth")]
+    Reauthorization(ReAuthRequest),
+    #[serde(rename = "reset_check")]
+    ResetCheck(IdentityMatchCheckRequest),
+    #[serde(rename = "recovery_check")]
+    RecoveryCheck(IdentityMatchCheckRequest),
+    #[serde(rename = "reset_update")]
+    ResetUpdate(IdentityUpdateRequest),
+    #[serde(rename = "recovery_update")]
+    RecoveryUpdate(IdentityUpdateRequest),
+}
+
+impl RequestPayload {
+    /// Get the message type string for this request
+    pub fn message_type(&self) -> &'static str {
+        match self {
+            Self::Uniqueness(_) => UNIQUENESS_MESSAGE_TYPE,
+            Self::IdentityDeletion(_) => IDENTITY_DELETION_MESSAGE_TYPE,
+            Self::Reauthorization(_) => REAUTH_MESSAGE_TYPE,
+            Self::ResetCheck(_) => RESET_CHECK_MESSAGE_TYPE,
+            Self::RecoveryCheck(_) => RECOVERY_CHECK_MESSAGE_TYPE,
+            Self::ResetUpdate(_) => RESET_UPDATE_MESSAGE_TYPE,
+            Self::RecoveryUpdate(_) => RECOVERY_UPDATE_MESSAGE_TYPE,
+        }
+    }
+}
+
+#[cfg(feature = "explicit-sns-batching")]
+pub use explicit_sns_batching::*;
+
+// Compact batch types for efficient wire format
+// Uses tagged enum + zstd compression for ~95% size reduction vs full SQSMessage
+#[cfg(feature = "explicit-sns-batching")]
+mod explicit_sns_batching {
+    use super::*;
+
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    pub struct BatchItem {
+        pub id: String,
+        #[serde(flatten)]
+        pub request: RequestPayload,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct CompactBatchRequest {
+        pub items: Vec<BatchItem>,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    pub struct CompressedBatchPayload {
+        /// Base64-encoded zstd-compressed JSON of CompactBatchRequest
+        pub data: String,
+    }
+
+    impl CompactBatchRequest {
+        /// Compress the batch into a base64-encoded zstd payload
+        pub fn compress(&self) -> Result<String, BatchCompressionError> {
+            let json_bytes = serde_json::to_vec(self)?;
+            let compressed = zstd::encode_all(json_bytes.as_slice(), 3)?;
+            Ok(STANDARD.encode(&compressed))
+        }
+
+        /// Decompress from a base64-encoded zstd payload
+        pub fn decompress(payload: &str) -> Result<Self, BatchCompressionError> {
+            let compressed = STANDARD
+                .decode(payload)
+                .map_err(|_| BatchCompressionError::Base64DecodeError)?;
+            let json_bytes = zstd::decode_all(compressed.as_slice())?;
+            let batch = serde_json::from_slice(&json_bytes)?;
+            Ok(batch)
+        }
+    }
+
+    #[derive(Error, Debug)]
+    pub enum BatchCompressionError {
+        #[error("Failed to serialize batch: {0}")]
+        SerializationError(#[from] serde_json::Error),
+        #[error("Failed to compress/decompress: {0}")]
+        CompressionError(#[from] std::io::Error),
+        #[error("Failed to decode base64")]
+        Base64DecodeError,
+    }
+
+    impl BatchItem {
+        /// Get the message type string for this item
+        pub fn message_type(&self) -> &'static str {
+            self.request.message_type()
+        }
+
+        /// Convert to SQSMessage for compatibility with existing processor code
+        pub fn into_sqs_message(self) -> Result<SQSMessage, serde_json::Error> {
+            let message_type = self.message_type().to_string();
+            let body = match self.request {
+                RequestPayload::Uniqueness(req) => serde_json::to_string(&req)?,
+                RequestPayload::IdentityDeletion(req) => serde_json::to_string(&req)?,
+                RequestPayload::Reauthorization(req) => serde_json::to_string(&req)?,
+                RequestPayload::ResetCheck(req) => serde_json::to_string(&req)?,
+                RequestPayload::RecoveryCheck(req) => serde_json::to_string(&req)?,
+                RequestPayload::ResetUpdate(req) => serde_json::to_string(&req)?,
+                RequestPayload::RecoveryUpdate(req) => serde_json::to_string(&req)?,
+            };
+
+            let mut message_attributes = HashMap::new();
+            if let Ok(attr) = MessageAttributeValue::builder()
+                .data_type("String")
+                .string_value(message_type)
+                .build()
+            {
+                message_attributes.insert("message_type".to_string(), attr);
+            }
+
+            Ok(SQSMessage {
+                message_id: self.id,
+                message: body,
+                message_attributes,
+                // Unused fields - empty placeholders
+                notification_type: String::new(),
+                sequence_number: String::new(),
+                topic_arn: String::new(),
+                timestamp: String::new(),
+                unsubscribe_url: String::new(),
+            })
+        }
+    }
 }

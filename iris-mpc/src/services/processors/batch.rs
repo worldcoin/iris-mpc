@@ -20,7 +20,9 @@ use iris_mpc_common::helpers::aws::{
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 #[cfg(feature = "explicit-sns-batching")]
-use iris_mpc_common::helpers::smpc_request::{BatchRequest, BATCH_MESSAGE_TYPE};
+use iris_mpc_common::helpers::smpc_request::{
+    CompactBatchRequest, CompressedBatchPayload, BATCH_MESSAGE_TYPE,
+};
 use iris_mpc_common::helpers::smpc_request::{
     IdentityDeletionRequest, IdentityMatchCheckRequest, IdentityUpdateRequest, ReAuthRequest,
     SQSMessage, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -426,16 +428,17 @@ impl<'a> BatchProcessor<'a> {
 
         self.delete_message(&sqs_message).await?;
 
-        let res = match request_type {
-            #[cfg(feature = "explicit-sns-batching")]
-            BATCH_MESSAGE_TYPE => self.process_batch_message(&message, batch_metadata).await,
-            _ => {
-                self.process_message_(&message, request_type, batch_metadata)
-                    .await
-            }
-        };
+        #[cfg(feature = "explicit-sns-batching")]
+        if request_type == BATCH_MESSAGE_TYPE {
+            self.process_batch_message(&message, batch_metadata).await?;
+            self.msg_counter += 1;
+            return Ok(());
+        }
+
+        self.process_message_(&message, request_type, batch_metadata)
+            .await?;
         self.msg_counter += 1;
-        res
+        Ok(())
     }
 
     async fn process_message_(
@@ -446,17 +449,17 @@ impl<'a> BatchProcessor<'a> {
     ) -> Result<(), ReceiveRequestError> {
         match request_type {
             IDENTITY_DELETION_MESSAGE_TYPE => {
-                self.process_identity_deletion(&message, batch_metadata)
+                self.process_identity_deletion(message, batch_metadata)
                     .await
             }
             UNIQUENESS_MESSAGE_TYPE => {
-                self.process_uniqueness_request(&message, batch_metadata)
+                self.process_uniqueness_request(message, batch_metadata)
                     .await
             }
-            REAUTH_MESSAGE_TYPE => self.process_reauth_request(&message, batch_metadata).await,
+            REAUTH_MESSAGE_TYPE => self.process_reauth_request(message, batch_metadata).await,
             RECOVERY_CHECK_MESSAGE_TYPE => {
                 self.process_identity_match_check_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RECOVERY_CHECK_MESSAGE_TYPE,
                     self.config.enable_recovery,
@@ -465,7 +468,7 @@ impl<'a> BatchProcessor<'a> {
             }
             RESET_CHECK_MESSAGE_TYPE => {
                 self.process_identity_match_check_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RESET_CHECK_MESSAGE_TYPE,
                     self.config.enable_reset,
@@ -474,7 +477,7 @@ impl<'a> BatchProcessor<'a> {
             }
             RECOVERY_UPDATE_MESSAGE_TYPE => {
                 self.process_identity_update_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RECOVERY_UPDATE_MESSAGE_TYPE,
                     self.config.enable_recovery,
@@ -483,7 +486,7 @@ impl<'a> BatchProcessor<'a> {
             }
             RESET_UPDATE_MESSAGE_TYPE => {
                 self.process_identity_update_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RESET_UPDATE_MESSAGE_TYPE,
                     self.config.enable_reset,
@@ -503,22 +506,51 @@ impl<'a> BatchProcessor<'a> {
         message: &SQSMessage,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
-        let _sns_message_id = message.message_id.clone();
-        let batch_request: BatchRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Batch request", e))?;
+        let sns_message_id = message.message_id.clone();
+
+        // Parse the compressed payload wrapper
+        let payload: CompressedBatchPayload = serde_json::from_str(&message.message)
+            .map_err(|e| ReceiveRequestError::json_parse_error("Compressed batch payload", e))?;
+
+        // Decompress and parse the batch
+        let batch = CompactBatchRequest::decompress(&payload.data)
+            .map_err(|e| ReceiveRequestError::BatchDecompressionError(e.to_string()))?;
+
         let _ = message; // don't accidentally use it in the below loop
 
-        for msg in batch_request.messages {
-            let request_type = msg
-                .message_attributes
-                .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
-                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
-                .string_value()
-                .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
+        let total_messages = batch.items.len();
+        let mut errors: Vec<(String, ReceiveRequestError)> = Vec::new();
 
-            self.process_message_(&msg, request_type, batch_metadata.clone())
-                .await?;
+        for item in batch.items {
+            let msg_id = item.id.clone();
+            let request_type = item.message_type();
+
+            // Convert to SQSMessage for compatibility with existing process_message_
+            let msg = match item.into_sqs_message() {
+                Ok(m) => m,
+                Err(e) => {
+                    errors.push((
+                        msg_id,
+                        ReceiveRequestError::json_parse_error("BatchItem", e),
+                    ));
+                    continue;
+                }
+            };
+
+            if let Err(e) = self
+                .process_message_(&msg, request_type, batch_metadata.clone())
+                .await
+            {
+                errors.push((msg_id, e));
+            }
         }
+
+        tracing::info!(
+            "Processed batch {}: {}/{} messages successful",
+            sns_message_id,
+            total_messages - errors.len(),
+            total_messages
+        );
 
         Ok(())
     }

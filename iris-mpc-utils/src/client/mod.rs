@@ -308,49 +308,45 @@ impl ServiceClient {
     #[cfg(feature = "explicit-sns-batching")]
     async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
         use crate::aws::types::SnsMessageInfo;
-        use aws_sdk_sns::types::MessageAttributeValue;
-        use iris_mpc_common::helpers::smpc_request::{BatchRequest, SQSMessage};
-        use iris_mpc_common::helpers::smpc_response::SMPC_MESSAGE_TYPE_ATTRIBUTE;
-        use std::collections::HashMap;
+        use iris_mpc_common::helpers::smpc_request::{
+            BatchItem, CompactBatchRequest, CompressedBatchPayload,
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
 
-        // Convert requests to SQSMessage with message_id as the index
-        let sqs_messages: Vec<SQSMessage> = batch_requests
+        static MESSAGE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        // Convert requests to compact BatchItems
+        let items: Vec<BatchItem> = batch_requests
             .iter()
-            .enumerate()
-            .map(|(idx, request)| {
-                let sns_info = SnsMessageInfo::from(request);
-                let mut message_attributes = HashMap::new();
-                message_attributes.insert(
-                    SMPC_MESSAGE_TYPE_ATTRIBUTE.to_string(),
-                    MessageAttributeValue::builder()
-                        .data_type("String")
-                        .string_value(sns_info.kind())
-                        .build()
-                        .unwrap(),
-                );
-                SQSMessage {
-                    notification_type: "Notification".to_string(),
-                    message_id: idx.to_string(),
-                    sequence_number: String::new(),
-                    topic_arn: String::new(),
-                    message: sns_info.body().to_string(),
-                    timestamp: String::new(),
-                    unsubscribe_url: String::new(),
-                    message_attributes,
+            .map(|request| {
+                let message_id = MESSAGE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let payload = typeset::RequestPayload::from(request);
+                BatchItem {
+                    id: message_id.to_string(),
+                    request: payload.to_smpc_request(),
                 }
             })
             .collect();
 
-        let batch_message = BatchRequest {
-            messages: sqs_messages,
+        let compact_batch = CompactBatchRequest { items };
+
+        // Compress the batch
+        let compressed_data = match compact_batch.compress() {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::error!("Failed to compress batch: {}", e);
+                self.state.error_bits.set_sns_publish_error();
+                return Vec::new();
+            }
         };
 
-        // Publish the batch as a single SNS message
-        let batch_sns_info = SnsMessageInfo::new(
-            "enrollment",
-            smpc_request::BATCH_MESSAGE_TYPE,
-            &batch_message,
-        );
+        let payload = CompressedBatchPayload {
+            data: compressed_data,
+        };
+
+        // Publish the compressed batch as a single SNS message
+        let batch_sns_info =
+            SnsMessageInfo::new("enrollment", smpc_request::BATCH_MESSAGE_TYPE, &payload);
 
         let res = self.aws_client.sns_publish_json(batch_sns_info).await;
         let published_idxs: Vec<usize> = if res.is_ok() {

@@ -14,7 +14,7 @@ SEARCH_DIRS=(
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [-e ENV] [-i IRIS_SHARES] [TOML_FILE]
+Usage: $(basename "$0") [-b] [-e ENV] [-i IRIS_SHARES] [TOML_FILE]
 
 Run the HNSW service client.
 
