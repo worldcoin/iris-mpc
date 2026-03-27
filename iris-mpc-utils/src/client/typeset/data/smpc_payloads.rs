@@ -6,9 +6,9 @@ use crate::{aws::types::SqsMessageInfo, client::typeset::Request};
 
 // both iris-mpc-common and iris-mpc-utils need this enumeration. But
 // iris_mpc_utils::RequestPayload also needs to implement From<Request>, which
-// has to exist in the module that the enum was defined in).
+// has to exist in this module.
 // Also, iris-mpc-common probably shouldn't import anything from iris-mpc-utils.
-// To deal with this, define the duplicate type here, in iris-mpc-utils
+// To deal with this, define the duplicate type here and add a conversion function
 #[allow(clippy::large_enum_variant)]
 pub enum RequestPayload {
     Uniqueness(smpc_request::UniquenessRequest),

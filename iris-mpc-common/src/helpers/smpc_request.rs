@@ -347,7 +347,7 @@ pub fn validate_iris_share(
 }
 
 // this was moved from iris-mpc-utils so that the server could deserialize
-// a Vec<RequestPayload> (with some other fields added)
+// a Vec<RequestPayload>
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "message_type")]
@@ -369,7 +369,6 @@ pub enum RequestPayload {
 }
 
 impl RequestPayload {
-    /// Get the message type string for this request
     pub fn message_type(&self) -> &'static str {
         match self {
             Self::Uniqueness(_) => UNIQUENESS_MESSAGE_TYPE,

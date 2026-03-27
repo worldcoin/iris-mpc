@@ -310,7 +310,7 @@ impl ServiceClient {
         use crate::aws::types::SnsMessageInfo;
         use iris_mpc_common::helpers::smpc_request::{CompactBatchRequest, CompressedBatchPayload};
 
-        // Convert requests to RequestPayload items (IDs are assigned server-side)
+        // Convert requests to RequestPayload items
         let items: Vec<smpc_request::RequestPayload> = batch_requests
             .iter()
             .map(|request| {
