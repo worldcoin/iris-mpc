@@ -544,6 +544,29 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
         background_tasks.spawn(async move { spawn_healthcheck_server(healthcheck_port).await });
     background_tasks.check_tasks();
 
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_for_signal = cancel.clone();
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install CTRL+C handler");
+        }
+        tracing::info!("Received shutdown signal, requesting graceful rerand shutdown…");
+        cancel_for_signal.cancel();
+    });
+
     let sdk_config = aws_config::from_env().load().await;
     tracing::info!(
         region = ?sdk_config.region(),
@@ -565,8 +588,16 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
         PostgresClient::new(&config.db_url, &config.schema_name, AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
 
-    continuous_rerand::run_continuous_rerand(&config, &s3_client, &sm_client, &store, None).await?;
+    continuous_rerand::run_continuous_rerand(
+        &config,
+        &s3_client,
+        &sm_client,
+        &store,
+        Some(&cancel),
+    )
+    .await?;
 
+    tracing::info!("Continuous rerand shut down gracefully");
     background_tasks.abort_and_wait_for_finish().await;
     Ok(())
 }
