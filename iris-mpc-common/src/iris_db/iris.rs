@@ -484,7 +484,7 @@ impl IrisCode {
         min_distance
     }
 
-    fn get_nhd_nmr(hd: u16, md: u16) -> i64 {
+    pub fn get_nhd_nmr(hd: u16, md: u16) -> i64 {
         md as i64 * (20_i64 * hd as i64 - 9 * md as i64) + 147456_i64 * hd as i64
     }
 
