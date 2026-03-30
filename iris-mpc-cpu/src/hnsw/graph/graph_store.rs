@@ -349,6 +349,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         Ok(())
     }
 
+    // todo: consider removing the filter on version_id now that it is not part of the key
     pub async fn get_links(
         &mut self,
         base: &<V as VectorStore>::VectorRef,
@@ -404,9 +405,9 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         sqlx::query(&format!(
             "
             INSERT INTO {table} (graph_id, serial_id, version_id, layer, links)
-            VALUES ($1, $2, $3, $4, $5) ON CONFLICT (graph_id, serial_id, version_id, layer)
+            VALUES ($1, $2, $3, $4, $5) ON CONFLICT (graph_id, serial_id, layer)
             DO UPDATE SET
-            links = EXCLUDED.links
+            links = EXCLUDED.links, version_id = EXCLUDED.version_id
             "
         ))
         .bind(self.graph_id())
@@ -445,8 +446,8 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         sqlx::query(&format!(
             "INSERT INTO {table} (graph_id, serial_id, version_id, layer, links)
          SELECT $1, * FROM UNNEST($2::int8[], $3::int4[], $4::int2[], $5::bytea[])
-         ON CONFLICT (graph_id, serial_id, version_id, layer)
-         DO UPDATE SET links = EXCLUDED.links"
+         ON CONFLICT (graph_id, serial_id, layer)
+         DO UPDATE SET links = EXCLUDED.links, version_id = EXCLUDED.version_id"
         ))
         .bind(graph_id) // $1: Single ID for the whole batch
         .bind(&serial_ids) // $2: Array of BIGINT
