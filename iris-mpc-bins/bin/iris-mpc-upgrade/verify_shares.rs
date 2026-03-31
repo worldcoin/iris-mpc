@@ -10,6 +10,8 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::rerandomization::{try_reconstruct_shares, ReconstructionMismatch};
 
+type ShareComponent<'a> = (&'a str, &'a [u16], &'a [u16], &'a [u16]);
+
 #[derive(Parser)]
 #[command(
     name = "verify-shares",
@@ -132,8 +134,7 @@ async fn main() -> Result<()> {
 
     let mut overall_hasher = blake3::Hasher::new();
     let mut out = std::io::BufWriter::new(std::fs::File::create(&args.output)?);
-    let mut failures_out =
-        std::io::BufWriter::new(std::fs::File::create(&args.failures_output)?);
+    let mut failures_out = std::io::BufWriter::new(std::fs::File::create(&args.failures_output)?);
 
     let mut verified = 0u64;
     let mut failed = 0u64;
@@ -147,7 +148,7 @@ async fn main() -> Result<()> {
         )?;
         let (r0, r1, r2) = rows;
 
-        let components: [(&str, &[u16], &[u16], &[u16]); 4] = [
+        let components: [ShareComponent; 4] = [
             ("left_code", r0.left_code(), r1.left_code(), r2.left_code()),
             ("left_mask", r0.left_mask(), r1.left_mask(), r2.left_mask()),
             (
