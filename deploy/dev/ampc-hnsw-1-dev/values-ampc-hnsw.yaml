@@ -1,6 +1,6 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1024779"
+    value: "1020843"
 
   - name: GENESIS_BATCH_SIZE
     value: "static:48"
@@ -75,8 +75,14 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_minfhd"
+    value: "_cpu1M"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "_gpu1M"
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
