@@ -52,6 +52,15 @@ use tokio::{
 pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
 
+#[cfg(target_os = "linux")]
+fn emit_malloc_metrics() {
+    let info = unsafe { libc::mallinfo2() };
+    metrics::gauge!("malloc_arena_bytes").set(info.arena as f64);
+    metrics::gauge!("malloc_mmap_bytes").set(info.hblkhd as f64);
+    metrics::gauge!("malloc_in_use_bytes").set(info.uordblks as f64);
+    metrics::gauge!("malloc_free_bytes").set(info.fordblks as f64);
+}
+
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
 pub struct ExecutionArgs {
@@ -747,6 +756,9 @@ async fn exec_indexation(
 
             metrics::histogram!("genesis_batch_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
                 .record(now.elapsed().as_secs_f64());
+
+            #[cfg(target_os = "linux")]
+            emit_malloc_metrics();
 
             #[cfg(feature = "phase_trace")]
             iris_mpc_cpu::execution::hawk_main::phase_tracer::flush(batch.batch_id as u32);

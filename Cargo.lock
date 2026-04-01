@@ -3184,6 +3184,7 @@ dependencies = [
  "iris-mpc-cpu",
  "iris-mpc-store",
  "itertools 0.13.0",
+ "libc",
  "metrics",
  "pprof",
  "rand 0.8.5",
