@@ -36,6 +36,27 @@ env:
       fieldRef:
         fieldPath: metadata.annotations['loadtest/run-id']
 
+  # Genesis pprof settings
+  - name: SMPC__GENESIS_PPROF_ENABLED
+    value: "true"
+
+  - name: SMPC__GENESIS_PPROF_S3_BUCKET
+    value: "wf-smpcv2-dev-hnsw-performance-reports"
+
+  - name: SMPC__GENESIS_PPROF_PREFIX
+    value: "dev/genesis"
+
+  - name: SMPC__GENESIS_PPROF_FREQUENCY
+    value: "49"
+
+  - name: SMPC__GENESIS_PPROF_FLAME_ONLY
+    value: "true"
+
+  - name: SMPC__GENESIS_PPROF_RUN_ID
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.annotations['loadtest/run-id']
+
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
