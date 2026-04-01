@@ -25,6 +25,7 @@ use iris_mpc_common::iris_db::iris::IrisCode;
 use rand_distr::{Distribution, Standard};
 
 use iris_mpc_common::iris_db::iris::Threshold;
+use tracing::instrument;
 
 use crate::{
     hawkers::aby3::aby3_store::DistanceFn,
@@ -71,6 +72,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     ) -> Result<Vec<Share<Self::Ring>>>;
 
     /// Compares pairs of distances, returning secret-shared bits.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn oblivious_cross_compare(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
@@ -84,6 +86,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     }
 
     /// Compares pairs of distances and opens the result (d1 < d2 for each pair).
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn cross_compare(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
@@ -98,6 +101,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     }
 
     /// Compares pairs of distances, returning lifted Ring-typed shares.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn oblivious_cross_compare_lifted(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
@@ -113,6 +117,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     }
 
     /// Computes the minimum of each pair of distances.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn min_of_pair_batch(
         session: &mut Session,
         distances: &[DistancePair<Self::Ring>],
@@ -163,6 +168,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     /// If there are two or more minimum distances in the batch, then the AND of the one with the greatest index will be 1.
     /// To see that, take such a minimum distance `dj`. For any `di = dj`, `i < j`, which means that `bij = 0` and `bji = 1`.
     /// Thus, only one row of the above table will have all 1s and the AND of that row will indicate the minimum distance in the batch.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn min_round_robin_batch(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],
@@ -195,6 +201,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
     ) -> Result<Vec<Share<Bit>>>;
 
     /// Checks if distances are less than or equal to the given threshold.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn lte_and_open(
         session: &mut Session,
         distances: &[DistanceShare<Self::Ring>],

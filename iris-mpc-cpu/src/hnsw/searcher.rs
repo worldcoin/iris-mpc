@@ -1300,6 +1300,7 @@ impl HnswSearcher {
     /// This is used in the top layer of the HNSW graph to hide relations between queries and the entry point.
     ///
     /// `vectors` should be pre-filtered for only valid entries.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn linear_search_min_distance<V: VectorStore>(
         store: &mut V,
         query: &V::QueryRef,
@@ -1316,6 +1317,7 @@ impl HnswSearcher {
     /// Evaluate as a batch the distances between the unvisited neighbors of a given node at a given
     /// graph level with the query, marking unvisited neighbors as visited in the supplied
     /// hashset.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_node<V: VectorStore>(
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
@@ -1349,6 +1351,8 @@ impl HnswSearcher {
     /// *at least* `l` unvisited neighbors have been visited, or until all
     /// elements of `nodes` are opened.  If `limit` is `None`, then all elements
     /// of `nodes` will be opened.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    #[allow(clippy::type_complexity)]
     async fn open_nodes_batch<V: VectorStore>(
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
@@ -1396,6 +1400,7 @@ impl HnswSearcher {
     /// the `params` field of `self`. In the original specification of HNSW this uses a specified
     /// value for `ef` at layer 0 only, and `ef = 1` (greedy search) for all higher layers.
     #[allow(non_snake_case)]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn search<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
@@ -1432,7 +1437,7 @@ impl HnswSearcher {
 
     /// Insert `query` into the HNSW index represented by `store` and `graph`.
     /// Return a `V::VectorRef` representing the inserted vector.
-    #[instrument(level = "trace", skip_all, target = "searcher::cpu_time")]
+    #[instrument(level = "trace", skip_all, target = "searcher::network")]
     pub async fn insert<V: VectorStoreMut, N: Neighborhood<V>>(
         &self,
         store: &mut V,
@@ -1471,7 +1476,7 @@ impl HnswSearcher {
     /// This step is handled internally.
     #[instrument(
         level = "trace",
-        target = "searcher::cpu_time",
+        target = "searcher::network",
         skip(self, store, graph, query)
     )]
     #[allow(non_snake_case)]
