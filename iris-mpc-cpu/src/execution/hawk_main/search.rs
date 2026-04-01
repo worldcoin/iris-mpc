@@ -18,10 +18,10 @@ use crate::{
 };
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
-use tracing::instrument;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tracing::instrument;
 
 pub type SearchQueries<const ROTMASK: u32> =
     Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROTMASK>>>>;

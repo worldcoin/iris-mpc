@@ -8,9 +8,9 @@ use crate::{
 use eyre::Result;
 use futures::future::JoinAll;
 use itertools::{izip, Itertools};
-use tracing::instrument;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
+use tracing::instrument;
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn is_match_batch(

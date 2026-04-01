@@ -10,9 +10,9 @@ use crate::{
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
-use tracing::instrument;
 use std::{collections::BTreeMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tracing::instrument;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct IntraMatch {
