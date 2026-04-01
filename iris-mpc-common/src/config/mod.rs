@@ -282,6 +282,25 @@ pub struct Config {
     #[serde(default = "default_pprof_per_batch_enabled")]
     pub enable_pprof_per_batch: bool,
 
+    // ---- genesis pprof settings ----
+    #[serde(default)]
+    pub genesis_pprof_enabled: bool,
+
+    #[serde(default = "default_pprof_frequency")]
+    pub genesis_pprof_frequency: i32,
+
+    #[serde(default = "default_pprof_s3_bucket")]
+    pub genesis_pprof_s3_bucket: String,
+
+    #[serde(default = "default_genesis_pprof_prefix")]
+    pub genesis_pprof_prefix: String,
+
+    #[serde(default)]
+    pub genesis_pprof_run_id: Option<String>,
+
+    #[serde(default)]
+    pub genesis_pprof_flame_only: bool,
+
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
 
@@ -477,6 +496,10 @@ fn default_pprof_idle_interval_sec() -> u64 {
 
 fn default_pprof_per_batch_enabled() -> bool {
     false
+}
+
+fn default_genesis_pprof_prefix() -> String {
+    "genesis/pprof".to_string()
 }
 
 fn default_separate_tokio_cores_per_node() -> Option<usize> {
@@ -769,6 +792,12 @@ impl From<Config> for CommonConfig {
             pprof_flame_only: _,
             pprof_profile_only: _,
             enable_pprof_per_batch: _,
+            genesis_pprof_enabled: _,
+            genesis_pprof_frequency: _,
+            genesis_pprof_s3_bucket: _,
+            genesis_pprof_prefix: _,
+            genesis_pprof_run_id: _,
+            genesis_pprof_flame_only: _,
             separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
         } = value;

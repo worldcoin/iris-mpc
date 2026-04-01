@@ -1,6 +1,11 @@
 schema_name = "SMPC"
 environment = "dev"
 party_id = 0
+genesis_pprof_enabled = false
+genesis_pprof_s3_bucket = "wf-smpcv2-dev-hnsw-performance-reports"
+genesis_pprof_prefix = "test/genesis"
+genesis_pprof_frequency = 999
+genesis_pprof_flame_only = true
 requests_queue_url = "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/smpcv2-0-dev.fifo"
 results_topic_arn = "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo"
 kms_key_arns = '["arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000002"]'

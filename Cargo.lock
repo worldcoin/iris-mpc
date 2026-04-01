@@ -3185,6 +3185,7 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "metrics",
+ "pprof",
  "rand 0.8.5",
  "serde",
  "serde_json",

@@ -14,7 +14,7 @@ use eyre::{bail, eyre, Report, Result};
 
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
-    helpers::{smpc_request, sync::Modification},
+    helpers::{smpc_request, sqs_s3_helper::upload_file_to_s3, sync::Modification},
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
@@ -145,6 +145,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         ctx,
         shutdown_handler,
         mut task_monitor_bg,
+        aws_s3_client,
         aws_rds_client,
         imem_iris_stores,
         mut hawk_handle,
@@ -186,6 +187,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         &tx_results,
         task_monitor_bg,
         &shutdown_handler,
+        &aws_s3_client,
     )
     .await?;
     log_info(String::from("Indexation complete."));
@@ -236,6 +238,7 @@ async fn exec_setup(
     ExecutionContextInfo,
     Arc<ShutdownHandler>,
     TaskMonitor,
+    S3Client,
     RDSClient,
     Arc<BothEyes<Aby3SharedIrisesRef>>,
     GenesisHawkHandle,
@@ -421,6 +424,7 @@ async fn exec_setup(
         ),
         shutdown_handler,
         task_monitor_bg,
+        aws_s3_client,
         aws_rds_client,
         imem_iris_stores,
         hawk_handle,
@@ -582,6 +586,7 @@ async fn exec_indexation(
     tx_results: &Sender<JobResult>,
     mut task_monitor_bg: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
+    s3_client: &S3Client,
 ) -> Result<()> {
     log_info(format!(
         "Starting indexation: last_indexed_id={}, max_indexation_id={}",
@@ -638,6 +643,20 @@ async fn exec_indexation(
             task_monitor_bg.check_tasks();
             last_indexed_id = batch.id_end();
 
+            // Start per-batch pprof guard if enabled.
+            let mut pprof_guard = None;
+            let pprof_freq = ctx.config.genesis_pprof_frequency.clamp(1, 1000);
+            let pprof_start = Instant::now();
+            if ctx.config.genesis_pprof_enabled {
+                match pprof::ProfilerGuardBuilder::default()
+                    .frequency(pprof_freq)
+                    .build()
+                {
+                    Ok(g) => pprof_guard = Some(g),
+                    Err(e) => tracing::warn!("genesis pprof guard init failed: {:?}", e),
+                }
+            }
+
             // Submit batch to Hawk handle for indexation.
             let request = JobRequest::new_batch_indexation(&batch);
             let result_future = hawk_handle.submit_request(request).await;
@@ -668,6 +687,63 @@ async fn exec_indexation(
 
             // Store current results thread "done" signal channel for future synchronization.
             persist_ch.replace(done_rx);
+
+            // Stop pprof, serialize artifacts synchronously, then upload.
+            let pprof_artifacts = pprof_guard.take().and_then(|guard| {
+                let dur_secs = pprof_start.elapsed().as_secs();
+                let report = match guard.report().build() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!("genesis pprof report build failed: {:?}", e);
+                        return None;
+                    }
+                };
+
+                let mut svg = Vec::new();
+                let svg_data = report.flamegraph(&mut svg).ok().and_then(|_| {
+                    if svg.is_empty() { None } else { Some(svg) }
+                });
+
+                let pprof_data = if !ctx.config.genesis_pprof_flame_only {
+                    report.pprof().ok().and_then(|profile| {
+                        let mut buf = Vec::new();
+                        pprof::protos::Message::encode(&profile, &mut buf)
+                            .ok()
+                            .map(|_| buf)
+                    })
+                } else {
+                    None
+                };
+
+                Some((dur_secs, svg_data, pprof_data))
+            });
+
+            if let Some((dur_secs, svg_data, pprof_data)) = pprof_artifacts {
+                let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
+                let party = format!("party{}", ctx.config.party_id);
+                let bucket = &ctx.config.genesis_pprof_s3_bucket;
+                let prefix = &ctx.config.genesis_pprof_prefix;
+                let run_id = ctx
+                    .config
+                    .genesis_pprof_run_id
+                    .as_deref()
+                    .unwrap_or("default");
+
+                if let Some(svg) = &svg_data {
+                    let key = format!(
+                        "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.flame.svg",
+                        prefix, run_id, party, ts, batch.batch_id, dur_secs, pprof_freq
+                    );
+                    let _ = upload_file_to_s3(bucket, &key, s3_client.clone(), svg).await;
+                }
+                if let Some(buf) = &pprof_data {
+                    let key = format!(
+                        "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.profile.pprof",
+                        prefix, run_id, party, ts, batch.batch_id, dur_secs, pprof_freq
+                    );
+                    let _ = upload_file_to_s3(bucket, &key, s3_client.clone(), buf).await;
+                }
+            }
 
             metrics::histogram!("genesis_batch_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
                 .record(now.elapsed().as_secs_f64());
