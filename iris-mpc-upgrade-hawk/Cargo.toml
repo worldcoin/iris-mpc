@@ -36,3 +36,4 @@ serial_test = "3.2.0"
 [features]
 default = []
 db_dependent = []
+phase_trace = ["iris-mpc-cpu/phase_trace"]

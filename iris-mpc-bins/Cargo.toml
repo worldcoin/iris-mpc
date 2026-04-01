@@ -14,7 +14,7 @@ helpers = [
   "dep:aws-sdk-secretsmanager",
   "dep:reqwest",
 ]
-phase_trace = ["iris-mpc-cpu/phase_trace"]
+phase_trace = ["iris-mpc-cpu/phase_trace", "iris-mpc-upgrade-hawk/phase_trace"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }

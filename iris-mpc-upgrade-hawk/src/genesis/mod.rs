@@ -154,6 +154,10 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     ) = exec_setup(&args, &config).await?;
 
     log_info(String::from("Setup complete."));
+
+    #[cfg(feature = "phase_trace")]
+    iris_mpc_cpu::execution::hawk_main::phase_tracer::init(config.party_id as u32);
+
     log_info(format!(
         "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}",
         args.max_indexation_id,
@@ -667,6 +671,10 @@ async fn exec_indexation(
 
             metrics::histogram!("genesis_batch_total_duration", "synced" => if is_sync_batch { "true" } else { "false" })
                 .record(now.elapsed().as_secs_f64());
+
+            #[cfg(feature = "phase_trace")]
+            iris_mpc_cpu::execution::hawk_main::phase_tracer::flush(batch.batch_id as u32);
+
             log_info(format!(
                 "Indexing new batch: {} :: time {:?}s",
                 batch,
