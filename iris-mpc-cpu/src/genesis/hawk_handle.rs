@@ -156,7 +156,11 @@ impl Handle {
 
                             // Process queries in a logical insertion batch for this side
                             for queries_batch in queries_with_ids.chunks(n_sessions) {
-                                let search_jobs = izip!(queries_batch.iter(), sessions.iter().enumerate()).map(
+                                let search_jobs = izip!(
+                                    queries_batch.iter(),
+                                    sessions.iter().enumerate()
+                                )
+                                .map(
                                     #[allow(unused_variables)]
                                     |((query, id), (i_session, session))| {
                                         let query = query.clone();
@@ -173,7 +177,9 @@ impl Handle {
                                             );
                                             #[cfg(feature = "phase_trace")]
                                             {
-                                                use crate::execution::hawk_main::phase_tracer::{SessionContext, SESSION_CTX};
+                                                use crate::execution::hawk_main::phase_tracer::{
+                                                    SessionContext, SESSION_CTX,
+                                                };
                                                 let ctx = SessionContext {
                                                     i_eye,
                                                     i_session,

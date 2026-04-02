@@ -1048,7 +1048,9 @@ impl HnswSearcher {
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
-            let nbhd: Vec<_> = graph.get_links(&init_nodes[open_idx], lc).await
+            let nbhd: Vec<_> = graph
+                .get_links(&init_nodes[open_idx], lc)
+                .await
                 .iter()
                 .filter(|x| !init_nodes.contains(x))
                 .cloned()
