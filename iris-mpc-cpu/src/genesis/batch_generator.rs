@@ -1,12 +1,15 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
-    execution::hawk_main::{iris_worker::QueryId, BothEyes, LEFT, RIGHT},
-    hawkers::aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
+    execution::hawk_main::{
+        iris_worker::{IrisWorkerPool, QueryId},
+        BothEyes, LEFT, RIGHT,
+    },
+    hawkers::aby3::aby3_store::{Aby3Query, VectorIdRegistryRef},
     protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
-use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive, sync::Arc};
+use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "Batch-Generator";
@@ -131,7 +134,8 @@ pub trait BatchIterator {
     /// # Arguments
     ///
     /// * `last_indexed_id` - Last Iris serial identifier indexed.
-    /// * `iris_stores` - In memory cache of Iris shares data.
+    /// * `registries` - VectorId registries (metadata only, one per eye).
+    /// * `worker_pools` - Worker pools for fetching iris data.
     ///
     /// # Returns
     ///
@@ -140,7 +144,8 @@ pub trait BatchIterator {
     fn next_batch(
         &mut self,
         last_indexed_id: IrisSerialId,
-        iris_stores: &BothEyes<Aby3SharedIrisesRef>,
+        registries: &BothEyes<VectorIdRegistryRef>,
+        worker_pools: &BothEyes<impl IrisWorkerPool>,
     ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
 }
 
@@ -280,7 +285,8 @@ impl BatchIterator for BatchGenerator {
     async fn next_batch(
         &mut self,
         last_indexed_id: IrisSerialId,
-        imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
+        registries: &BothEyes<VectorIdRegistryRef>,
+        worker_pools: &BothEyes<impl IrisWorkerPool>,
     ) -> Result<Option<Batch>, IndexationError> {
         let (identifiers, identifiers_for_indexation) = match self.next_identifiers(last_indexed_id)
         {
@@ -293,8 +299,8 @@ impl BatchIterator for BatchGenerator {
                 return Ok(None);
             }
         };
-        // Set vector identifiers - assumes left/right store equivalence.
-        let vector_ids: Vec<VectorId> = imem_iris_stores[LEFT]
+        // Set vector identifiers - assumes left/right registry equivalence.
+        let vector_ids: Vec<VectorId> = registries[LEFT]
             .get_vector_ids(&identifiers)
             .await
             .into_iter()
@@ -302,7 +308,7 @@ impl BatchIterator for BatchGenerator {
             .map(|(id_opt, serial_id)| id_opt.ok_or(IndexationError::MissingSerialId(serial_id)))
             .collect::<Result<Vec<_>, IndexationError>>()?;
 
-        let vector_ids_for_persistence: Vec<VectorId> = imem_iris_stores[LEFT]
+        let vector_ids_for_persistence: Vec<VectorId> = registries[LEFT]
             .get_vector_ids(&identifiers_for_indexation)
             .await
             .into_iter()
@@ -312,21 +318,20 @@ impl BatchIterator for BatchGenerator {
 
         self.batch_count += 1;
 
-        // Fetch irises from both stores and pair with fresh QueryIds.
-        let left_irises = imem_iris_stores[LEFT]
-            .get_vectors_or_empty(vector_ids.iter())
-            .await;
-        let right_irises = imem_iris_stores[RIGHT]
-            .get_vectors_or_empty(vector_ids.iter())
-            .await;
+        // Fetch irises from workers and pair with fresh QueryIds.
+        let (left_irises, right_irises) = futures::try_join!(
+            worker_pools[LEFT].fetch_irises(vector_ids.clone()),
+            worker_pools[RIGHT].fetch_irises(vector_ids.clone()),
+        )
+        .map_err(|e| IndexationError::FetchIrises(e.to_string()))?;
 
-        let left_cache: Vec<(QueryId, ArcIris)> = left_irises
+        let left_cache: Vec<_> = left_irises
             .into_iter()
-            .map(|iris| (QueryId::new(), Arc::clone(&iris)))
+            .map(|iris| (QueryId::new(), iris))
             .collect();
-        let right_cache: Vec<(QueryId, ArcIris)> = right_irises
+        let right_cache: Vec<_> = right_irises
             .into_iter()
-            .map(|iris| (QueryId::new(), Arc::clone(&iris)))
+            .map(|iris| (QueryId::new(), iris))
             .collect();
 
         let left_queries = left_cache
@@ -411,7 +416,7 @@ fn log_info(msg: String) {
 mod tests {
     use super::*;
     use crate::{
-        execution::hawk_main::StoreId,
+        execution::hawk_main::{iris_worker::LocalIrisWorkerPool, StoreId},
         hawkers::{
             aby3::test_utils::setup_aby3_shared_iris_stores_with_preloaded_db,
             plaintext_store::PlaintextStore,
@@ -481,17 +486,29 @@ mod tests {
         }
     }
 
-    // Returns a test imem Iris store.
-    fn get_iris_imem_stores() -> (BothEyes<Aby3SharedIrisesRef>, usize) {
+    // Returns test registries and worker pools.
+    fn get_test_stores() -> (
+        BothEyes<VectorIdRegistryRef>,
+        BothEyes<LocalIrisWorkerPool>,
+        usize,
+    ) {
         let mut rng = AesRng::seed_from_u64(RNG_SEED);
-        let iris_stores: BothEyes<Aby3SharedIrisesRef> =
-            [StoreId::Left, StoreId::Right].map(|_| {
-                let plaintext_store = PlaintextStore::new_random(&mut rng, SIZE_OF_IRIS_DB);
-                setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
-                    .remove(PARTY_ID)
-            });
-
-        (iris_stores, SIZE_OF_IRIS_DB)
+        let iris_stores: BothEyes<_> = [StoreId::Left, StoreId::Right].map(|_| {
+            let plaintext_store = PlaintextStore::new_random(&mut rng, SIZE_OF_IRIS_DB);
+            setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
+                .remove(PARTY_ID)
+        });
+        let registries = [LEFT, RIGHT].map(|side| {
+            iris_stores[side]
+                .data
+                .try_read()
+                .unwrap()
+                .to_registry()
+                .to_arc()
+        });
+        let worker_pools =
+            [LEFT, RIGHT].map(|side| LocalIrisWorkerPool::new_local(iris_stores[side].clone()));
+        (registries, worker_pools, SIZE_OF_IRIS_DB)
     }
 
     // Returns a random ordered set of last indexed identifiers.
@@ -619,10 +636,13 @@ mod tests {
     #[tokio::test]
     async fn test_next_batch_1() -> Result<()> {
         let mut generator = BatchGenerator::new_1();
-        let (iris_stores, _) = get_iris_imem_stores();
+        let (registries, workers, _) = get_test_stores();
         let mut last_indexed_id = 0 as IrisSerialId;
 
-        while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
+        while let Some(batch) = generator
+            .next_batch(last_indexed_id, &registries, &workers)
+            .await?
+        {
             assert_eq!(batch.size(), 10);
             last_indexed_id += batch.size() as IrisSerialId;
         }
@@ -636,10 +656,13 @@ mod tests {
     async fn test_next_batch_2() -> Result<()> {
         let mut batch_id = 0;
         let mut generator = BatchGenerator::new_2();
-        let (iris_stores, _) = get_iris_imem_stores();
+        let (registries, workers, _) = get_test_stores();
         let mut last_indexed_id = 0 as IrisSerialId;
 
-        while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
+        while let Some(batch) = generator
+            .next_batch(last_indexed_id, &registries, &workers)
+            .await?
+        {
             assert_eq!(batch.size(), 1);
             batch_id = batch.batch_id;
             last_indexed_id = batch.id_end();
@@ -653,10 +676,13 @@ mod tests {
     async fn test_exclusions() -> Result<()> {
         let mut batches = Vec::new();
         let mut generator = BatchGenerator::new_4();
-        let (iris_stores, _) = get_iris_imem_stores();
+        let (registries, workers, _) = get_test_stores();
         let mut last_indexed_id = 0 as IrisSerialId;
 
-        while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
+        while let Some(batch) = generator
+            .next_batch(last_indexed_id, &registries, &workers)
+            .await?
+        {
             batches.push(batch.serial_ids());
             last_indexed_id = batch.id_end();
         }

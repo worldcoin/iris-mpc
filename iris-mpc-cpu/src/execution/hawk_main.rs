@@ -565,6 +565,14 @@ impl HawkActor {
         self.registry[store_id as usize].clone()
     }
 
+    pub fn registries(&self) -> BothEyes<VectorIdRegistryRef> {
+        self.registry.clone()
+    }
+
+    pub fn worker_pool(&self, store_id: StoreId) -> iris_worker::LocalIrisWorkerPool {
+        self.worker_pools[store_id as usize].clone()
+    }
+
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
     }

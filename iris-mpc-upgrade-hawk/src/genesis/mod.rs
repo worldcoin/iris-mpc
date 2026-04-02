@@ -20,7 +20,10 @@ use iris_mpc_common::{
 };
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
+    execution::hawk_main::{
+        iris_worker::LocalIrisWorkerPool, BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT,
+        RIGHT,
+    },
     genesis::{
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
@@ -33,7 +36,7 @@ use iris_mpc_cpu::{
         utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
         JobRequest, JobResult,
     },
-    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
+    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
@@ -146,7 +149,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         shutdown_handler,
         mut task_monitor_bg,
         aws_rds_client,
-        imem_iris_stores,
+        _imem_iris_stores,
+        registries,
+        worker_pools,
         mut hawk_handle,
         tx_results,
         graph_store,
@@ -177,7 +182,8 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     // Phase 2: indexation.
     exec_indexation(
         &ctx,
-        &imem_iris_stores,
+        &registries,
+        &worker_pools,
         hawk_handle,
         &tx_results,
         task_monitor_bg,
@@ -234,6 +240,8 @@ async fn exec_setup(
     TaskMonitor,
     RDSClient,
     Arc<BothEyes<Aby3SharedIrisesRef>>,
+    BothEyes<VectorIdRegistryRef>,
+    BothEyes<LocalIrisWorkerPool>,
     GenesisHawkHandle,
     Sender<JobResult>,
     Arc<GraphPg<Aby3Store>>,
@@ -384,11 +392,18 @@ async fn exec_setup(
         // return Ok(());
     }
 
-    // Set in memory Iris stores.
+    // Set in memory Iris stores (still needed for DB persistence thread).
     let imem_iris_stores = Arc::new([
         hawk_actor.iris_store(StoreId::Left),
         hawk_actor.iris_store(StoreId::Right),
     ]);
+
+    // Extract registries and worker pools before moving hawk_actor into handle.
+    let registries = hawk_actor.registries();
+    let worker_pools = [
+        hawk_actor.worker_pool(StoreId::Left),
+        hawk_actor.worker_pool(StoreId::Right),
+    ];
 
     // Set Hawk handle.
     let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
@@ -419,6 +434,8 @@ async fn exec_setup(
         task_monitor_bg,
         aws_rds_client,
         imem_iris_stores,
+        registries,
+        worker_pools,
         hawk_handle,
         tx_results,
         graph_store_arc,
@@ -573,7 +590,8 @@ async fn exec_delta(
 ///
 async fn exec_indexation(
     ctx: &ExecutionContextInfo,
-    imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
+    registries: &BothEyes<VectorIdRegistryRef>,
+    worker_pools: &BothEyes<LocalIrisWorkerPool>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     mut task_monitor_bg: TaskMonitor,
@@ -619,7 +637,7 @@ async fn exec_indexation(
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
         let mut last_indexed_id = ctx.last_indexed_id;
         while let Some(batch) = batch_generator
-            .next_batch(last_indexed_id, imem_iris_stores)
+            .next_batch(last_indexed_id, registries, worker_pools)
             .await?
         {
             // Coordinator: escape on shutdown.
