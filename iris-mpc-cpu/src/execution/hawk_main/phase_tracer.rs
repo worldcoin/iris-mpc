@@ -85,13 +85,13 @@ pub fn init(party_id: u32) {
     tracing::info!("Phase tracer enabled");
 }
 
-fn tracer() -> &'static PhaseTracer {
-    TRACER.get().expect("phase tracer not initialized")
+fn tracer() -> Option<&'static PhaseTracer> {
+    TRACER.get()
 }
 
 /// Flush all collected events to a JSON file for the given batch.
 pub fn flush(batch: u32) {
-    let tracer = tracer();
+    let Some(tracer) = tracer() else { return };
     let mut events = Vec::new();
     while let Ok(ev) = tracer.rx.try_recv() {
         events.push(ev);
@@ -146,8 +146,9 @@ impl Drop for PhaseGuard {
 }
 
 /// Begin a traced phase. Returns a guard that emits the end event on drop.
-pub fn phase_begin(name: &'static str, args: Option<serde_json::Value>) -> PhaseGuard {
-    let tracer = tracer();
+/// Returns None if the tracer is not initialized (e.g. non-primary party in tests).
+pub fn phase_begin(name: &'static str, args: Option<serde_json::Value>) -> Option<PhaseGuard> {
+    let tracer = tracer()?;
     let tid = SESSION_CTX
         .try_with(|ctx| ctx.tid())
         .unwrap_or_else(|_| "no_session".to_string());
@@ -163,11 +164,11 @@ pub fn phase_begin(name: &'static str, args: Option<serde_json::Value>) -> Phase
         args,
     });
 
-    PhaseGuard {
+    Some(PhaseGuard {
         name,
         tid,
         tx: &tracer.tx,
         pid: tracer.party_id,
         start_time: tracer.start_time,
-    }
+    })
 }

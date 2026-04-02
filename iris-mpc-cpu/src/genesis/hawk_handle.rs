@@ -156,20 +156,35 @@ impl Handle {
 
                             // Process queries in a logical insertion batch for this side
                             for queries_batch in queries_with_ids.chunks(n_sessions) {
-                                let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
-                                    |((query, id), session)| {
+                                let search_jobs = izip!(queries_batch.iter(), sessions.iter().enumerate()).map(
+                                    #[allow(unused_variables)]
+                                    |((query, id), (i_session, session))| {
                                         let query = query.clone();
                                         let searcher = searcher.clone();
                                         let session = session.clone();
                                         let identifier = (*id, side);
+                                        let i_eye = side as usize;
                                         async move {
-                                            search_single_query_no_match_count(
+                                            let inner = search_single_query_no_match_count(
                                                 session,
                                                 query,
                                                 &searcher,
                                                 &identifier,
-                                            )
-                                            .await
+                                            );
+                                            #[cfg(feature = "phase_trace")]
+                                            {
+                                                use crate::execution::hawk_main::phase_tracer::{SessionContext, SESSION_CTX};
+                                                let ctx = SessionContext {
+                                                    i_eye,
+                                                    i_session,
+                                                    orient: 'G', // Genesis
+                                                };
+                                                SESSION_CTX.scope(ctx, inner).await
+                                            }
+                                            #[cfg(not(feature = "phase_trace"))]
+                                            {
+                                                inner.await
+                                            }
                                         }
                                     },
                                 );
@@ -273,13 +288,24 @@ impl Handle {
                                     // TODO remove any prior versions of this vector id from graph
 
                                     let query = Aby3Query::new(&vector.get_vector_or_empty(&vector_id).await);
-                                    let insert_plan = search_single_query_no_match_count(
+                                    let inner = search_single_query_no_match_count(
                                         session.clone(),
                                         query,
                                         &searcher,
                                         &identifier,
-                                    )
-                                    .await?;
+                                    );
+                                    #[cfg(feature = "phase_trace")]
+                                    let insert_plan = {
+                                        use crate::execution::hawk_main::phase_tracer::{SessionContext, SESSION_CTX};
+                                        let ctx = SessionContext {
+                                            i_eye: side as usize,
+                                            i_session: 0,
+                                            orient: 'M', // Modification
+                                        };
+                                        SESSION_CTX.scope(ctx, inner).await?
+                                    };
+                                    #[cfg(not(feature = "phase_trace"))]
+                                    let insert_plan = inner.await?;
                                     let plans = vec![Some(insert_plan)];
                                     let ids = vec![Some(vector_id)];
 
