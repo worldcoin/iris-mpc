@@ -4,7 +4,7 @@ hnsw_prf_seed = 42
 
 [irises]
 option = "Random"
-number = 100000
+number = 1000
 seed = 42
 output_path = "data/store.ndjson"
 
@@ -20,4 +20,4 @@ M = 256
 [output]
 base_directory = "data/"
 filename_stem = "graph"
-checkpoints = { Values = [1, 10, 100, 1000, 10000, 100000] }
+checkpoints = { Values = [1, 10, 100, 1000] }
