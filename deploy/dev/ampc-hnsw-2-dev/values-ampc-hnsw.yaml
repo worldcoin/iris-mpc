@@ -11,6 +11,9 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
+  - name: MALLOC_MMAP_THRESHOLD
+    value: "33554432"
+
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
