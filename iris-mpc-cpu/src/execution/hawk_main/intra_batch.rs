@@ -12,6 +12,7 @@ use eyre::Result;
 use itertools::{izip, Itertools};
 use std::{collections::BTreeMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tracing::instrument;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct IntraMatch {
@@ -19,6 +20,7 @@ pub struct IntraMatch {
     pub is_match: BothEyes<bool>,
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRotations<Aby3Query>>>>,
@@ -49,6 +51,7 @@ pub async fn intra_batch_is_match(
     Ok(res)
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_session(
     search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
     session: &HawkSession,
