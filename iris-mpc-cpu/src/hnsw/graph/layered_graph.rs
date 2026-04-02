@@ -226,9 +226,9 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         self.entry_points = vec![EntryPoint { point, layer }];
     }
 
-    pub async fn get_links(&self, base: &V, lc: usize) -> Vec<V> {
+    pub async fn get_links(&self, base: &V, lc: usize) -> &[V] {
         let layer = &self.layers[lc];
-        layer.get_links(base).unwrap_or_default()
+        layer.get_links(base).unwrap_or(&[])
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
@@ -388,8 +388,8 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    pub fn get_links(&self, from: &V) -> Option<Vec<V>> {
-        self.links.get(from).cloned()
+    pub fn get_links(&self, from: &V) -> Option<&[V]> {
+        self.links.get(from).map(|v| v.as_slice())
     }
 
     pub fn set_links(&mut self, from: V, links: Vec<V>) {
