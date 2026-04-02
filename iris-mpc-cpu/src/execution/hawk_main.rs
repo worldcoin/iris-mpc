@@ -569,6 +569,15 @@ impl HawkActor {
         self.registry.clone()
     }
 
+    /// Re-derive registries from iris_store. Call after external data
+    /// loading (e.g. genesis) that populates iris_store directly.
+    pub async fn refresh_registries(&mut self) {
+        self.registry = [
+            self.iris_store[LEFT].read().await.to_registry().to_arc(),
+            self.iris_store[RIGHT].read().await.to_registry().to_arc(),
+        ];
+    }
+
     pub fn worker_pool(&self, store_id: StoreId) -> iris_worker::LocalIrisWorkerPool {
         self.worker_pools[store_id as usize].clone()
     }
