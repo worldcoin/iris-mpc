@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-genesis:1d49f2918b06f6331e2f94f5b27b1359b5e21a15-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-genesis:1d49f2919849bec206f5289386a3a062d304a7c1-arm64"
 
 environment: dev
 replicaCount: 1
