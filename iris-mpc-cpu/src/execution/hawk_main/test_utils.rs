@@ -59,10 +59,16 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
         actor.iris_store[LEFT].write().await,
         actor.iris_store[RIGHT].write().await,
     ];
+    let mut registries = [
+        actor.registry[LEFT].write().await,
+        actor.registry[RIGHT].write().await,
+    ];
     for (share, _mirror) in shares {
         iris_stores[LEFT].append(Arc::new(share.clone()));
+        registries[LEFT].append(());
         // TODO: Different share.
         iris_stores[RIGHT].append(Arc::new(share.clone()));
+        registries[RIGHT].append(());
     }
     Ok(())
 }

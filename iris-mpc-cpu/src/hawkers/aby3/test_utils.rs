@@ -78,8 +78,9 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .zip(storages.into_iter())
         .map(|(session, storage)| {
             let workers = LocalIrisWorkerPool::new_local(storage.clone());
+            let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
-                storage,
+                registry,
                 session,
                 workers,
                 plain_store.distance_fn,
@@ -96,8 +97,9 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .map(|session| {
             let storage = Aby3Store::<FhdOps>::new_storage(None).to_arc();
             let workers = LocalIrisWorkerPool::new_local(storage.clone());
+            let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
-                storage,
+                registry,
                 session,
                 workers,
                 TEST_DISTANCE_FN,

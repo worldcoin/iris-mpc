@@ -80,7 +80,7 @@ use crate::{
     hawkers::{
         aby3::aby3_store::{
             Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
-            Aby3VectorRef, DistanceFn, DistanceOps, FhdOps,
+            Aby3VectorRef, DistanceFn, DistanceOps, FhdOps, VectorIdRegistryRef,
         },
         shared_irises::SharedIrises,
     },
@@ -315,7 +315,12 @@ pub struct HawkActor {
     /// A size used by the start-up loader.
     loader_db_size: usize,
     /// In-memory storage for the secret-shared iris codes for both left and right eyes.
+    /// Used by workers for distance computation and by external mutation paths (deletions).
     iris_store: BothEyes<Aby3SharedIrisesRef>,
+    /// Metadata-only VectorId registries (one per eye).
+    /// Tracks presence, versions, and checksums without iris data.
+    /// Passed to `Aby3Store` sessions; kept in sync with `iris_store`.
+    registry: BothEyes<VectorIdRegistryRef>,
     /// In-memory HNSW graphs for both left and right eyes.
     graph_store: BothEyes<GraphRef>,
     /// Shared worker pools with query caches (one per eye). Cloned into each
@@ -515,6 +520,10 @@ impl HawkActor {
         let networking = build_network_handle(network_args, shutdown_ct).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
+        let registry = [
+            iris_store[LEFT].read().await.to_registry().to_arc(),
+            iris_store[RIGHT].read().await.to_registry().to_arc(),
+        ];
         let workers_handle = [LEFT, RIGHT]
             .map(|side| iris_worker::init_workers(side, iris_store[side].clone(), args.numa));
         let worker_pools = [LEFT, RIGHT].map(|side| {
@@ -530,6 +539,7 @@ impl HawkActor {
             prf_key: None,
             loader_db_size: 0,
             iris_store,
+            registry,
             graph_store,
             anon_stats_store: None,
             networking,
@@ -646,7 +656,7 @@ impl HawkActor {
         mut network_session: NetworkSession,
         hnsw_prf_key: &Arc<[u8; 16]>,
     ) -> impl Future<Output = Result<HawkSession>> {
-        let storage = self.iris_store(store_id);
+        let registry = self.registry[store_id as usize].clone();
         let graph_store = self.graph_store(store_id);
         let workers = self.worker_pools[store_id as usize].clone();
         let hnsw_prf_key = hnsw_prf_key.clone();
@@ -655,7 +665,7 @@ impl HawkActor {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
             let aby3_store = Aby3Store::new(
-                storage,
+                registry,
                 Session {
                     network_session,
                     prf,

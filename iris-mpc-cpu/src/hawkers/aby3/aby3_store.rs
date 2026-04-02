@@ -63,6 +63,13 @@ pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
 pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 
+/// Metadata-only VectorId registry — `SharedIrisesRef<()>`.
+///
+/// Tracks VectorId presence, versions, and checksums without holding iris
+/// data.  `Aby3Store` uses this instead of `Aby3SharedIrisesRef` to
+/// enforce that all iris data reads go through `IrisWorkerPool`.
+pub type VectorIdRegistryRef = SharedIrisesRef<()>;
+
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
 /// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`) and `W`
@@ -73,8 +80,9 @@ pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
 pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
-    /// Reference to the shared irises
-    pub storage: Aby3SharedIrisesRef,
+    /// VectorId registry — tracks presence, versions, and checksums.
+    /// Does **not** hold iris data; all iris reads go through `workers`.
+    pub registry: VectorIdRegistryRef,
 
     /// Session for the SMPC operations
     pub session: Session,
@@ -93,13 +101,13 @@ where
     VecShare<D::Ring>: Transpose64,
 {
     pub fn new(
-        storage: Aby3SharedIrisesRef,
+        registry: VectorIdRegistryRef,
         session: Session,
         workers: W,
         distance_fn: DistanceFn,
     ) -> Self {
         Self {
-            storage,
+            registry,
             session,
             distance_fn,
             workers,
@@ -166,17 +174,19 @@ where
     }
 
     pub async fn checksum(&self) -> u64 {
-        self.storage.checksum().await
+        self.registry.checksum().await
     }
 
-    /// Fetch a stored vector's iris and cache it as a query.
+    /// Fetch a stored vector's iris from the worker pool and cache it as a query.
     /// Returns a query handle (center rotation, non-mirrored).
     pub async fn cache_query_from_store(
         &self,
         vector: &<Self as VectorStore>::VectorRef,
     ) -> Result<Aby3Query> {
-        let iris = self.storage.get_vector_or_empty(vector).await;
-        self.workers.cache_iris(iris).await
+        let irises = self.workers.fetch_irises(vec![*vector]).await?;
+        self.workers
+            .cache_iris(irises.into_iter().next().unwrap())
+            .await
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
@@ -576,7 +586,7 @@ where
     type DistanceRef = Aby3DistanceRef<D::Ring>;
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        let irises = self.storage.get_vectors_or_empty(&vectors).await;
+        let irises = self.workers.fetch_irises(vectors).await.unwrap();
         let to_cache: Vec<_> = irises
             .into_iter()
             .map(|iris| (QueryId::new(), iris))
@@ -590,8 +600,8 @@ where
         &mut self,
         mut vectors: Vec<Self::VectorRef>,
     ) -> Vec<Self::VectorRef> {
-        let storage = self.storage.read().await;
-        vectors.retain(|v| storage.contains(v));
+        let registry = self.registry.read().await;
+        vectors.retain(|v| registry.contains(v));
         vectors
     }
 
@@ -718,13 +728,14 @@ where
     VecShare<D::Ring>: Transpose64,
 {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        // Atomically allocate the next ID under a write lock, then insert
-        // the iris at that ID. This avoids a TOCTOU race between peeking
-        // next_id and the actual insert.
+        // Allocate next ID and register it in the registry (metadata only).
         let vector_id = {
-            let mut store = self.storage.data.write().await;
-            store.allocate_next_id()
+            let mut reg = self.registry.write().await;
+            let id = reg.allocate_next_id();
+            reg.insert(id, ());
+            id
         };
+        // Insert the actual iris data into the worker's store.
         self.workers
             .insert_irises(vec![(query.query_id, vector_id)])
             .await
@@ -737,6 +748,9 @@ where
         vector_ref: &Self::VectorRef,
         query: &Self::QueryRef,
     ) -> Result<Self::VectorRef> {
+        // Register in the metadata registry.
+        self.registry.write().await.insert(*vector_ref, ());
+        // Insert the actual iris data into the worker's store.
         self.workers
             .insert_irises(vec![(query.query_id, *vector_ref)])
             .await?;
@@ -858,8 +872,9 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.read().await.get_points(),
-                premade_v.storage.read().await.get_points()
+                v_from_scratch.checksum().await,
+                premade_v.checksum().await,
+                "Registry checksum mismatch: from-scratch vs premade"
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();
@@ -988,7 +1003,9 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for iris in player_irises.iter() {
-                player_inserts.push(store_lock.storage.append(iris).await);
+                let query = store_lock.workers.cache_iris(iris.clone()).await?;
+                let vid = store_lock.insert(&query).await;
+                player_inserts.push(vid);
             }
             aby3_inserts.push(player_inserts);
         }

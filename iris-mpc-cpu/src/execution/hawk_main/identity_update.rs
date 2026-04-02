@@ -85,12 +85,17 @@ pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) 
         hawk_actor.iris_store[LEFT].write().await,
         hawk_actor.iris_store[RIGHT].write().await,
     ];
+    let mut registries = [
+        hawk_actor.registry[LEFT].write().await,
+        hawk_actor.registry[RIGHT].write().await,
+    ];
 
     let del_ids = request.deletion_ids(&stores[LEFT]);
 
     for del_id in del_ids {
-        for store in &mut stores {
+        for (store, reg) in stores.iter_mut().zip(registries.iter_mut()) {
             store.update(del_id, dummy.clone());
+            reg.update(del_id, ());
         }
     }
     Ok(())

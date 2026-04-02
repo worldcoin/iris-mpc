@@ -37,8 +37,10 @@ impl<I: Clone> SharedIrises<I> {
         let next_id = points_map.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
 
         let mut points = vec![None; next_id as usize];
+        let mut set_hash = SetHash::default();
         for (v, iris) in points_map.into_iter() {
             points[v.serial_id() as usize] = Some((v.version_id(), iris));
+            set_hash.add_unordered(v);
         }
 
         SharedIrises {
@@ -46,7 +48,7 @@ impl<I: Clone> SharedIrises<I> {
             size,
             next_id,
             empty_iris,
-            set_hash: SetHash::default(),
+            set_hash,
         }
     }
 
@@ -168,6 +170,25 @@ impl<I: Clone> SharedIrises<I> {
     pub fn to_arc(self) -> SharedIrisesRef<I> {
         SharedIrisesRef {
             data: Arc::new(RwLock::new(self)),
+        }
+    }
+
+    /// Create a metadata-only registry from this store.
+    ///
+    /// Preserves all VectorId presence, version, and checksum data but
+    /// strips the per-entry iris payload.  Used by `Aby3Store` which
+    /// accesses iris data exclusively through the worker pool trait.
+    pub fn to_registry(&self) -> SharedIrises<()> {
+        SharedIrises {
+            points: self
+                .points
+                .iter()
+                .map(|opt| opt.as_ref().map(|(v, _)| (*v, ())))
+                .collect(),
+            size: self.size,
+            next_id: self.next_id,
+            empty_iris: (),
+            set_hash: self.set_hash.clone(),
         }
     }
 

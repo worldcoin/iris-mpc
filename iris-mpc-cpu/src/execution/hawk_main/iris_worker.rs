@@ -596,10 +596,12 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     ) -> impl Future<Output = Result<Vec<Vec<RingElement<u16>>>>> + Send;
 
     /// Fetch iris data from the worker's store by vector ID.
-    fn fetch_irises(
-        &self,
-        ids: Vec<VectorId>,
-    ) -> impl Future<Output = Result<Vec<(VectorId, ArcIris)>>> + Send;
+    ///
+    /// Returns one `ArcIris` per input ID in the same order.  Missing
+    /// entries produce the store's default empty iris (which yields
+    /// max-distance in dot products).
+    fn fetch_irises(&self, ids: Vec<VectorId>)
+        -> impl Future<Output = Result<Vec<ArcIris>>> + Send;
 
     /// Insert a cached iris into the worker's persistent store.
     ///
@@ -867,17 +869,14 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
     fn fetch_irises(
         &self,
         ids: Vec<VectorId>,
-    ) -> impl Future<Output = Result<Vec<(VectorId, ArcIris)>>> + Send {
+    ) -> impl Future<Output = Result<Vec<ArcIris>>> + Send {
         let iris_store = self.iris_store.clone();
         async move {
             let store = iris_store.data.read().await;
-            let mut results = Vec::with_capacity(ids.len());
-            for id in ids {
-                if let Some(iris) = store.get_vector(&id) {
-                    results.push((id, iris.clone()));
-                }
-            }
-            Ok(results)
+            Ok(ids
+                .iter()
+                .map(|id| store.get_vector_or_empty(id).clone())
+                .collect())
         }
     }
 
