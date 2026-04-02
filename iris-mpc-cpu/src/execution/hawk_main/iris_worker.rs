@@ -19,10 +19,7 @@ use iris_mpc_common::vector_id::VectorId;
 use itertools::{izip, Itertools};
 use std::{
     iter,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::{Arc, Mutex},
     time::Instant,
 };
 use tokio::sync::oneshot;
@@ -99,8 +96,9 @@ enum IrisTask {
 pub struct IrisPoolHandle {
     /// Senders for each worker thread's task channel.
     workers: Arc<[Sender<IrisTask>]>,
-    /// A counter used for round-robin task distribution.
-    next_counter: Arc<AtomicU64>,
+    /// Counter for round-robin task distribution. Protected by mutex to allow
+    /// contiguous reservation of worker slots for a single dispatch.
+    next_counter: Arc<Mutex<usize>>,
     /// Latency metric for dot_product_batch (used with Simple distance).
     metric_dot_product_batch_latency: FastHistogram,
     /// Latency metric for rotation_aware_dot_product_batch (used with MinRotation distance).
@@ -164,43 +162,59 @@ impl IrisPoolHandle {
         result
     }
 
-    /// Maximum size of batches for rotation aware dot product batch tasks.
-    const ROT_AWARE_BATCH_CHUNK_SIZE: usize = 128;
+    /// Minimum chunk size for rotation aware dot product batch tasks.
+    const MIN_CHUNK_SIZE: usize = 128;
+
+    /// Compute chunk size: at least MIN_CHUNK_SIZE, but large enough that the
+    /// number of chunks doesn't exceed the worker count (avoids wraparound).
+    fn chunk_size(&self, batch_len: usize) -> usize {
+        let n_workers = self.workers.len();
+        batch_len.div_ceil(n_workers).max(Self::MIN_CHUNK_SIZE)
+    }
 
     /// Number of chunks a batch is split into for rotation aware dot product
     /// batch evaluation.
     #[inline(always)]
-    fn n_batch_chunks(batch_len: usize) -> usize {
-        batch_len.div_ceil(Self::ROT_AWARE_BATCH_CHUNK_SIZE)
+    fn n_batch_chunks(&self, batch_len: usize) -> usize {
+        batch_len.div_ceil(self.chunk_size(batch_len))
     }
 
     /// Dispatch a batch of rotation aware dot product evaluations, splitting
-    /// into tasks over chunks of maximum size `ROT_AWARE_BATCH_CHUNK_SIZE`.
-    ///
-    /// Response channels are appended to `responses` for caller to await.
+    /// into tasks over chunks. Chunk size is chosen to avoid wraparound on the
+    /// worker pool. Worker slots are reserved contiguously under a lock so that
+    /// concurrent dispatches don't interleave.
     #[inline(always)]
     fn dispatch_rotation_dot_product_batch(
-        &mut self,
+        &self,
         query: ArcIris,
         vector_ids: Arc<[VectorId]>,
         responses: &mut Vec<oneshot::Receiver<Vec<RingElement<u16>>>>,
     ) -> Result<()> {
-        for (i, _) in vector_ids
-            .chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE)
-            .enumerate()
-        {
-            let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
-            let end = (start + Self::ROT_AWARE_BATCH_CHUNK_SIZE).min(vector_ids.len());
+        let chunk_size = self.chunk_size(vector_ids.len());
+        let n_chunks = vector_ids.len().div_ceil(chunk_size);
+        let n_workers = self.workers.len();
+
+        // Reserve a contiguous block of worker slots under the lock, then send
+        // all chunks before releasing. This prevents interleaving with
+        // concurrent dispatches from other sessions.
+        let mut counter = self.next_counter.lock().unwrap();
+        let start_worker = *counter;
+        for i in 0..n_chunks {
+            let range_start = i * chunk_size;
+            let range_end = (range_start + chunk_size).min(vector_ids.len());
             let (tx, rx) = oneshot::channel();
             let task = IrisTask::RotationAwareDotProductBatch {
                 query: query.clone(),
                 vector_ids: vector_ids.clone(),
-                range: start..end,
+                range: range_start..range_end,
                 rsp: tx,
             };
-            self.get_next_worker().send(task)?;
+            let worker_idx = (start_worker + i) % n_workers;
+            self.workers[worker_idx].send(task)?;
             responses.push(rx);
         }
+        *counter = start_worker + n_chunks;
+        drop(counter);
 
         Ok(())
     }
@@ -228,7 +242,7 @@ impl IrisPoolHandle {
         let start = Instant::now();
 
         let shared_ids: Arc<[VectorId]> = Arc::from(vector_ids);
-        let mut responses = Vec::with_capacity(Self::n_batch_chunks(shared_ids.len()));
+        let mut responses = Vec::with_capacity(self.n_batch_chunks(shared_ids.len()));
         self.dispatch_rotation_dot_product_batch(query, shared_ids, &mut responses)?;
 
         let results = futures::future::try_join_all(responses).await?;
@@ -254,7 +268,7 @@ impl IrisPoolHandle {
         let chunk_batch_indices = batches
             .iter()
             .enumerate()
-            .flat_map(|(batch_idx, (_, vids))| vec![batch_idx; Self::n_batch_chunks(vids.len())])
+            .flat_map(|(batch_idx, (_, vids))| vec![batch_idx; self.n_batch_chunks(vids.len())])
             .collect_vec();
         let n_chunks = chunk_batch_indices.len();
 
@@ -353,9 +367,9 @@ impl IrisPoolHandle {
     }
 
     fn get_next_worker(&self) -> &Sender<IrisTask> {
-        // fetch_add() wraps around on overflow
-        let idx = self.next_counter.fetch_add(1, Ordering::Relaxed) as usize;
-        let idx = idx % self.workers.len();
+        let mut counter = self.next_counter.lock().unwrap();
+        let idx = *counter % self.workers.len();
+        *counter += 1;
         &self.workers[idx]
     }
 
@@ -391,7 +405,7 @@ pub fn init_workers(
 
     IrisPoolHandle {
         workers: channels.into(),
-        next_counter: Arc::new(AtomicU64::new(0)),
+        next_counter: Arc::new(Mutex::new(0)),
         metric_dot_product_batch_latency: FastHistogram::new(
             "iris_worker.dot_product_batch_latency",
         ),
