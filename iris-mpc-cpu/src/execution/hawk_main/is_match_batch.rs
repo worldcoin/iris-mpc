@@ -10,7 +10,9 @@ use futures::future::JoinAll;
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
+use tracing::instrument;
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn is_match_batch(
     search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
     vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
@@ -29,6 +31,7 @@ pub async fn is_match_batch(
     Ok([out_l?, out_r?])
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_side(
     queries: &VecRequests<VecRotations<Aby3Query>>,
     missing_vector_ids: VecRequests<VecEdges<VectorId>>,
@@ -88,6 +91,7 @@ async fn per_side(
     Ok(results)
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_session(
     tasks: VecRequests<(Aby3Query, Arc<VecEdges<VectorId>>)>,
     session: HawkSession,
@@ -102,6 +106,7 @@ async fn per_session(
     Ok(out)
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_query(
     query: Aby3Query,
     vector_ids: &[VectorId],

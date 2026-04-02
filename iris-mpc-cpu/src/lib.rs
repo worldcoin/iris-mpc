@@ -1,3 +1,5 @@
+// necessary for the `phase_trace!` and `tracing` macros which create a guard that needs to live until the end of the scope
+#![recursion_limit = "256"]
 #![deny(
     clippy::iter_over_hash_type,
     reason = "In MPC protocols, this can be dangerous as the iteration order is not guaranteed to be in sync between the parties due to HashMap randomization."

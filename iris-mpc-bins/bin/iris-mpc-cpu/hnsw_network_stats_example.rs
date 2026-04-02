@@ -1,3 +1,6 @@
+// necessary for the `phase_trace!` and `tracing` macros which create a guard that needs to live until the end of the scope
+#![recursion_limit = "256"]
+
 use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::db::IrisDB;

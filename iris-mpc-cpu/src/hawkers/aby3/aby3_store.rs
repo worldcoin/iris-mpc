@@ -157,6 +157,7 @@ where
     }
 
     /// Converts u16 additive sharing (from trick_dot output) to Ring-typed replicated sharing.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn gr_to_lifted_distances(
         &mut self,
         ds_and_ts: Vec<RingElement<u16>>,
@@ -402,6 +403,7 @@ where
         D::min_round_robin_batch(&mut self.session, &flattened_distances, res_len).await
     }
 
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn compact_neighborhood_batch(
         &mut self,
         base_nodes: &[Aby3VectorRef],
@@ -561,6 +563,7 @@ where
     }
 
     /// Check whether a batch of distances are matches at the given threshold.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn is_match_at(
         &mut self,
         distances: &[DistanceShare<D::Ring>],
@@ -657,6 +660,7 @@ where
         self.oblivious_argmin_distance(distances).await
     }
 
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         Ok(D::lte_and_open(
             &mut self.session,
@@ -696,6 +700,7 @@ where
         self.is_match_at(distances, Threshold::Match).await
     }
 
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn compact_neighborhood(
         &mut self,
         base_node: Self::VectorRef,
