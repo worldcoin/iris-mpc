@@ -20,8 +20,10 @@ use crate::{
 };
 
 use super::{
-    scheduler::parallelize, tests::batch_of_party, HawkActor, HawkArgs, HawkRequest, VectorId,
-    LEFT, RIGHT,
+    iris_worker::{IrisWorkerPool, QueryId},
+    scheduler::parallelize,
+    tests::batch_of_party,
+    HawkActor, HawkArgs, HawkRequest, VectorId, LEFT, RIGHT,
 };
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
@@ -55,20 +57,24 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
     let db_size = 5;
     let shares = make_iris_share(db_size, actor.party_id);
 
-    let mut iris_stores = [
-        actor.iris_store[LEFT].write().await,
-        actor.iris_store[RIGHT].write().await,
-    ];
-    let mut registries = [
-        actor.registry[LEFT].write().await,
-        actor.registry[RIGHT].write().await,
-    ];
     for (share, _mirror) in shares {
-        iris_stores[LEFT].append(Arc::new(share.clone()));
-        registries[LEFT].append(());
-        // TODO: Different share.
-        iris_stores[RIGHT].append(Arc::new(share.clone()));
-        registries[RIGHT].append(());
+        let iris = Arc::new(share);
+        for side in [LEFT, RIGHT] {
+            let qid = QueryId::new();
+            actor.worker_pools[side]
+                .cache_queries(vec![(qid, iris.clone())])
+                .await?;
+            let vector_id = {
+                let mut reg = actor.registry[side].write().await;
+                let id = reg.allocate_next_id();
+                reg.insert(id, ());
+                id
+            };
+            actor.worker_pools[side]
+                .insert_irises(vec![(qid, vector_id)])
+                .await?;
+            actor.worker_pools[side].evict_queries(vec![qid]).await?;
+        }
     }
     Ok(())
 }
