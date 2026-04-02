@@ -108,6 +108,9 @@ env:
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
 
+  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
+    value: "32"
+
   - name: SMPC__DISABLE_PERSISTENCE
     value: "true"
 
