@@ -268,12 +268,12 @@ impl Handle {
                 let jobs_per_side =
                     izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
                         let sessions = sessions_side.clone();
-                        let vector = actor.iris_store(side);
+                        let registry = actor.registry(side);
                         let modification = modification.clone();
                         let searcher = actor.searcher();
 
                         async move {
-                            let vector_id_ = vector.get_vector_id(serial_id).await;
+                            let vector_id_ = registry.get_vector_id(serial_id).await;
 
                             let session =
                                 sessions.first().ok_or_eyre("Sessions for side are empty")?;
@@ -289,15 +289,17 @@ impl Handle {
 
                                     // TODO remove any prior versions of this vector id from graph
 
-                                    // Fetch the iris from the store and cache it in the
-                                    // session's worker pool before search.
+                                    // Fetch the iris from the worker pool and cache it before search.
                                     let query_id = QueryId::new();
-                                    let iris = vector.get_vector_or_empty(&vector_id).await;
+                                    let irises = {
+                                        let store = session.aby3_store.read().await;
+                                        store.workers.fetch_irises(vec![vector_id]).await?
+                                    };
                                     {
                                         let store = session.aby3_store.read().await;
                                         store
                                             .workers
-                                            .cache_queries(vec![(query_id, iris)])
+                                            .cache_queries(vec![(query_id, irises.into_iter().next().unwrap())])
                                             .await?;
                                     }
                                     let query = Aby3Query::new(query_id);

@@ -561,6 +561,10 @@ impl HawkActor {
         self.iris_store[store_id as usize].clone()
     }
 
+    pub fn registry(&self, store_id: StoreId) -> VectorIdRegistryRef {
+        self.registry[store_id as usize].clone()
+    }
+
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
     }
