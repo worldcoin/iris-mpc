@@ -398,8 +398,13 @@ async fn exec_setup(
         hawk_actor.iris_store(StoreId::Right),
     ]);
 
-    // Extract registries and worker pools before moving hawk_actor into handle.
-    let registries = hawk_actor.registries();
+    // Re-derive registries from iris_store AFTER data loading so they
+    // reflect the genesis-loaded VectorIds. The registries created at
+    // HawkActor construction were from an empty store.
+    let registries = [
+        imem_iris_stores[LEFT].read().await.to_registry().to_arc(),
+        imem_iris_stores[RIGHT].read().await.to_registry().to_arc(),
+    ];
     let worker_pools = [
         hawk_actor.worker_pool(StoreId::Left),
         hawk_actor.worker_pool(StoreId::Right),
