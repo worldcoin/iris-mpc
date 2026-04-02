@@ -1,6 +1,6 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1119544"
+    value: "1119928"
 
   - name: GENESIS_BATCH_SIZE
     value: "static:48"
@@ -10,10 +10,6 @@ env:
 
   - name: RUST_BACKTRACE
     value: "full"
-
-  - name: MALLOC_MMAP_THRESHOLD
-    value: "33554432"
-
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
