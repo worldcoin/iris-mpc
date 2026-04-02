@@ -19,7 +19,10 @@ use iris_mpc_common::vector_id::VectorId;
 use itertools::{izip, Itertools};
 use std::{
     iter,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::Instant,
 };
 use tokio::sync::oneshot;
@@ -96,9 +99,9 @@ enum IrisTask {
 pub struct IrisPoolHandle {
     /// Senders for each worker thread's task channel.
     workers: Arc<[Sender<IrisTask>]>,
-    /// Counter for round-robin task distribution. Protected by mutex to allow
-    /// contiguous reservation of worker slots for a single dispatch.
-    next_counter: Arc<Mutex<usize>>,
+    /// Counter for round-robin task distribution. Contiguous blocks of worker
+    /// slots are reserved atomically via fetch_add(n_chunks).
+    next_counter: Arc<AtomicUsize>,
     /// Latency metric for dot_product_batch (used with Simple distance).
     metric_dot_product_batch_latency: FastHistogram,
     /// Latency metric for rotation_aware_dot_product_batch (used with MinRotation distance).
@@ -194,11 +197,8 @@ impl IrisPoolHandle {
         let n_chunks = vector_ids.len().div_ceil(chunk_size);
         let n_workers = self.workers.len();
 
-        // Reserve a contiguous block of worker slots under the lock, then send
-        // all chunks before releasing. This prevents interleaving with
-        // concurrent dispatches from other sessions.
-        let mut counter = self.next_counter.lock().unwrap();
-        let start_worker = *counter;
+        // Reserve a contiguous block of worker slots atomically.
+        let start_worker = self.next_counter.fetch_add(n_chunks, Ordering::Relaxed);
         for i in 0..n_chunks {
             let range_start = i * chunk_size;
             let range_end = (range_start + chunk_size).min(vector_ids.len());
@@ -213,8 +213,6 @@ impl IrisPoolHandle {
             self.workers[worker_idx].send(task)?;
             responses.push(rx);
         }
-        *counter = start_worker + n_chunks;
-        drop(counter);
 
         Ok(())
     }
@@ -367,10 +365,8 @@ impl IrisPoolHandle {
     }
 
     fn get_next_worker(&self) -> &Sender<IrisTask> {
-        let mut counter = self.next_counter.lock().unwrap();
-        let idx = *counter % self.workers.len();
-        *counter += 1;
-        &self.workers[idx]
+        let idx = self.next_counter.fetch_add(1, Ordering::Relaxed);
+        &self.workers[idx % self.workers.len()]
     }
 
     /// Get the worker responsible for store mutations.
@@ -405,7 +401,7 @@ pub fn init_workers(
 
     IrisPoolHandle {
         workers: channels.into(),
-        next_counter: Arc::new(Mutex::new(0)),
+        next_counter: Arc::new(AtomicUsize::new(0)),
         metric_dot_product_batch_latency: FastHistogram::new(
             "iris_worker.dot_product_batch_latency",
         ),
