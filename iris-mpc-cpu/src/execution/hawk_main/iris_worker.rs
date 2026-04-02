@@ -64,7 +64,8 @@ enum IrisTask {
     /// Computes the rotation-aware dot product between a query and a batch of database irises.
     RotationAwareDotProductBatch {
         query: ArcIris,
-        vector_ids: Vec<VectorId>,
+        vector_ids: Arc<[VectorId]>,
+        range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
     /// Computes the pairwise distance for pairs of irises in the Galois Ring.
@@ -181,14 +182,17 @@ impl IrisPoolHandle {
     fn dispatch_rotation_dot_product_batch(
         &mut self,
         query: ArcIris,
-        vector_ids: Vec<VectorId>,
+        vector_ids: Arc<[VectorId]>,
         responses: &mut Vec<oneshot::Receiver<Vec<RingElement<u16>>>>,
     ) -> Result<()> {
-        for chunk in vector_ids.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE) {
+        for (i, _) in vector_ids.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
+            let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
+            let end = (start + Self::ROT_AWARE_BATCH_CHUNK_SIZE).min(vector_ids.len());
             let (tx, rx) = oneshot::channel();
             let task = IrisTask::RotationAwareDotProductBatch {
                 query: query.clone(),
-                vector_ids: chunk.to_vec(),
+                vector_ids: vector_ids.clone(),
+                range: start..end,
                 rsp: tx,
             };
             self.get_next_worker().send(task)?;
@@ -204,7 +208,7 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let mut responses = Vec::with_capacity(pairs.len());
         for (query, id) in pairs {
-            self.dispatch_rotation_dot_product_batch(query, vec![id], &mut responses)?;
+            self.dispatch_rotation_dot_product_batch(query, Arc::from([id]), &mut responses)?;
         }
 
         let results = futures::future::try_join_all(responses).await?;
@@ -220,8 +224,9 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        let mut responses = Vec::with_capacity(Self::n_batch_chunks(vector_ids.len()));
-        self.dispatch_rotation_dot_product_batch(query, vector_ids, &mut responses)?;
+        let shared_ids: Arc<[VectorId]> = Arc::from(vector_ids);
+        let mut responses = Vec::with_capacity(Self::n_batch_chunks(shared_ids.len()));
+        self.dispatch_rotation_dot_product_batch(query, shared_ids, &mut responses)?;
 
         let results = futures::future::try_join_all(responses).await?;
         let results = results.into_iter().flatten().collect();
@@ -259,7 +264,8 @@ impl IrisPoolHandle {
         // Dispatch dot product batches
         let mut responses = Vec::with_capacity(n_chunks);
         for (query, vector_ids) in batches {
-            self.dispatch_rotation_dot_product_batch(query, vector_ids, &mut responses)?;
+            let shared_ids: Arc<[VectorId]> = Arc::from(vector_ids);
+            self.dispatch_rotation_dot_product_batch(query, shared_ids, &mut responses)?;
         }
 
         // Reassemble results by batch
@@ -277,14 +283,18 @@ impl IrisPoolHandle {
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let mut responses = Vec::with_capacity(vector_ids.len() / per_worker);
+        let shared_ids: Arc<[VectorId]> = Arc::from(vector_ids);
+        let mut responses = Vec::with_capacity(shared_ids.len() / per_worker);
         // Does not call `dispatch_rotation_dot_product_batch` because chunking
         // is controlled dynamically.
-        for vector_id_chunk in vector_ids.chunks(per_worker) {
+        for (i, _) in shared_ids.chunks(per_worker).enumerate() {
+            let start = i * per_worker;
+            let end = (start + per_worker).min(shared_ids.len());
             let (tx, rx) = oneshot::channel();
             let task = IrisTask::RotationAwareDotProductBatch {
                 query: query.clone(),
-                vector_ids: vector_id_chunk.to_vec(),
+                vector_ids: shared_ids.clone(),
+                range: start..end,
                 rsp: tx,
             };
             self.get_next_worker().send(task)?;
@@ -451,10 +461,11 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             IrisTask::RotationAwareDotProductBatch {
                 query,
                 vector_ids,
+                range,
                 rsp,
             } => {
                 let store = iris_store.data.blocking_read();
-                let targets = vector_ids.iter().map(|v| store.get_vector(v));
+                let targets = vector_ids[range].iter().map(|v| store.get_vector(v));
                 let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_DIST_ROTATIONS, _>(
                     &query, targets,
                 );
