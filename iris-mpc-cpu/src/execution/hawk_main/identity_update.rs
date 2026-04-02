@@ -37,8 +37,8 @@ pub async fn search_to_identity_update(
     let start = Instant::now();
 
     let (updates, id_update_cache) = {
-        let store = hawk_actor.iris_store[LEFT].read().await;
-        request.identity_updates(&store)
+        let reg = hawk_actor.registry[LEFT].read().await;
+        request.identity_updates(&reg)
     };
     // Cache identity update irises in the worker pools.
     futures::try_join!(
@@ -90,7 +90,7 @@ pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) 
         hawk_actor.registry[RIGHT].write().await,
     ];
 
-    let del_ids = request.deletion_ids(&stores[LEFT]);
+    let del_ids = request.deletion_ids(&registries[LEFT]);
 
     for del_id in del_ids {
         for (store, reg) in stores.iter_mut().zip(registries.iter_mut()) {

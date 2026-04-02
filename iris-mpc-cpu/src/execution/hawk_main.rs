@@ -566,7 +566,7 @@ impl HawkActor {
     }
 
     pub async fn db_size(&self) -> usize {
-        self.iris_store[LEFT].read().await.db_size()
+        self.registry[LEFT].read().await.db_size()
     }
 
     /// Initialize the shared PRF key for HNSW graph insertion layer selection.
@@ -701,7 +701,7 @@ impl HawkActor {
             // Compute would-be VectorIds without mutating the store or graph,
             // so that downstream result derivation (merged_results / inserted_id)
             // still sees the correct serial IDs.
-            let mut next_serial_id = self.iris_store[LEFT].read().await.next_id;
+            let mut next_serial_id = self.registry[LEFT].read().await.next_id;
             return Ok(plans
                 .into_iter()
                 .zip(insertion_ids.iter())
@@ -1231,9 +1231,9 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
-    fn request_types(
+    fn request_types<I: Clone>(
         &self,
-        iris_store: &Aby3SharedIrises,
+        registry: &SharedIrises<I>,
         orient: Orientation,
     ) -> VecRequests<RequestType> {
         use RequestType::*;
@@ -1259,7 +1259,7 @@ impl HawkRequest {
                         .reauth_target_indices
                         .get(request_id)
                         .map(|&idx| {
-                            let target_id = iris_store.from_0_indices(&[idx])[0];
+                            let target_id = registry.from_0_indices(&[idx])[0];
                             (target_id, or_rule)
                         })
                 } else {
@@ -1320,12 +1320,12 @@ impl HawkRequest {
             .collect()
     }
 
-    fn luc_ids(&self, iris_store: &Aby3SharedIrises) -> VecRequests<Vec<VectorId>> {
-        let luc_lookback_ids = iris_store.last_vector_ids(self.batch.luc_lookback_records);
+    fn luc_ids<I: Clone>(&self, registry: &SharedIrises<I>) -> VecRequests<Vec<VectorId>> {
+        let luc_lookback_ids = registry.last_vector_ids(self.batch.luc_lookback_records);
 
         izip!(&self.batch.or_rule_indices, &self.batch.request_types)
             .map(|(or_rule_idx, request_type)| {
-                let mut or_rule_ids = iris_store.from_0_indices(or_rule_idx);
+                let mut or_rule_ids = registry.from_0_indices(or_rule_idx);
 
                 let lookback =
                     request_type != REAUTH_MESSAGE_TYPE && request_type != RESET_CHECK_MESSAGE_TYPE;
@@ -1338,9 +1338,9 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn identity_updates(
+    fn identity_updates<I: Clone>(
         &self,
-        iris_store: &Aby3SharedIrises,
+        registry: &SharedIrises<I>,
     ) -> (
         IdentityUpdateRequests,
         BothEyes<Vec<(iris_worker::QueryId, ArcIris)>>,
@@ -1371,7 +1371,7 @@ impl HawkRequest {
         });
         (
             IdentityUpdateRequests {
-                vector_ids: iris_store.from_0_indices(&self.batch.identity_update_indices),
+                vector_ids: registry.from_0_indices(&self.batch.identity_update_indices),
                 request_ids: Arc::new(self.batch.identity_update_request_ids.clone()),
                 queries: Arc::new(queries),
             },
@@ -1379,8 +1379,8 @@ impl HawkRequest {
         )
     }
 
-    fn deletion_ids(&self, iris_store: &Aby3SharedIrises) -> Vec<VectorId> {
-        iris_store.from_0_indices(&self.batch.deletion_requests_indices)
+    fn deletion_ids<I: Clone>(&self, registry: &SharedIrises<I>) -> Vec<VectorId> {
+        registry.from_0_indices(&self.batch.deletion_requests_indices)
     }
 }
 
@@ -1809,13 +1809,10 @@ impl HawkHandle {
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
-                // Choice of LEFT store here is arbitrary, because it's only used for VectorId bookkeeping.
-                // The two sides are in sync w.r.t stored vector ids.
-                let store = hawk_actor.iris_store[LEFT].read().await;
-                (
-                    request.luc_ids(&store),
-                    request.request_types(&store, orient),
-                )
+                // Choice of LEFT registry is arbitrary — both sides are in sync
+                // w.r.t. stored vector ids.
+                let reg = hawk_actor.registry[LEFT].read().await;
+                (request.luc_ids(&reg), request.request_types(&reg, orient))
             };
 
             // Job that computes intra-batch matches. Note that it is awaited later, allowing it
