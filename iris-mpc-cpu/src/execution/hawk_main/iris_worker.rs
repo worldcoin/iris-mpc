@@ -6,7 +6,7 @@ use crate::{
             galois_ring_pairwise_distance, non_existent_distance, pairwise_distance,
             rotation_aware_pairwise_distance, rotation_aware_pairwise_distance_rowmajor,
         },
-        shared_iris::ArcIris,
+        shared_iris::{ArcIris, GaloisRingSharedIris},
     },
     shares::RingElement,
 };
@@ -632,6 +632,14 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     /// Evict cached queries, freeing memory.
     fn evict_queries(&self, query_ids: Vec<QueryId>) -> impl Future<Output = Result<()>> + Send;
 
+    /// Delete irises by replacing them with party-specific dummy sentinels
+    /// that produce max-distance in dot products.
+    fn delete_irises(
+        &self,
+        party_id: usize,
+        ids: Vec<VectorId>,
+    ) -> impl Future<Output = Result<()>> + Send;
+
     /// Cache a single iris and return a query handle (center rotation, non-mirrored).
     fn cache_iris(&self, iris: ArcIris) -> impl Future<Output = Result<QuerySpec>> + Send {
         let this = self.clone();
@@ -968,6 +976,22 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             let mut cache = query_cache.write().unwrap();
             for qid in query_ids {
                 cache.remove(&qid);
+            }
+            Ok(())
+        }
+    }
+
+    fn delete_irises(
+        &self,
+        party_id: usize,
+        ids: Vec<VectorId>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let iris_store = self.iris_store.clone();
+        async move {
+            let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
+            let mut store = iris_store.data.write().await;
+            for id in ids {
+                store.update(id, dummy.clone());
             }
             Ok(())
         }

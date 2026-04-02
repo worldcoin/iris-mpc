@@ -1,17 +1,14 @@
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
 use super::{
     rot::CENTER_ONLY_MASK,
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
-use crate::{
-    execution::hawk_main::{
-        iris_worker::{IrisWorkerPool, QueryId},
-        search::SearchIds,
-        NEIGHBORHOOD_MODE,
-    },
-    protocol::shared_iris::GaloisRingSharedIris,
+use crate::execution::hawk_main::{
+    iris_worker::{IrisWorkerPool, QueryId},
+    search::SearchIds,
+    NEIGHBORHOOD_MODE,
 };
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
@@ -79,22 +76,28 @@ pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) 
         return Ok(());
     }
 
-    let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(hawk_actor.party_id));
+    let del_ids = {
+        let reg = hawk_actor.registry[LEFT].read().await;
+        request.deletion_ids(&reg)
+    };
 
-    let mut stores = [
-        hawk_actor.iris_store[LEFT].write().await,
-        hawk_actor.iris_store[RIGHT].write().await,
-    ];
+    if del_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Workers write party-specific dummy sentinels at the deleted VectorIds.
+    futures::try_join!(
+        hawk_actor.worker_pools[LEFT].delete_irises(hawk_actor.party_id, del_ids.clone()),
+        hawk_actor.worker_pools[RIGHT].delete_irises(hawk_actor.party_id, del_ids.clone()),
+    )?;
+
+    // Update registries (metadata only — version bump + checksum).
     let mut registries = [
         hawk_actor.registry[LEFT].write().await,
         hawk_actor.registry[RIGHT].write().await,
     ];
-
-    let del_ids = request.deletion_ids(&registries[LEFT]);
-
     for del_id in del_ids {
-        for (store, reg) in stores.iter_mut().zip(registries.iter_mut()) {
-            store.update(del_id, dummy.clone());
+        for reg in registries.iter_mut() {
             reg.update(del_id, ());
         }
     }
