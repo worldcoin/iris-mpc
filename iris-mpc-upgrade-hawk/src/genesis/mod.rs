@@ -590,7 +590,7 @@ async fn exec_delta(
                     config,
                     imem_graph_stores,
                     s3_client,
-                    ctx.last_indexed_id,
+                    ctx.last_indexed_id, // no irises were indexed
                     *max_modification_persist_id,
                     tx_results,
                     &mut hawk_handle,
@@ -741,7 +741,7 @@ async fn exec_indexation(
                     imem_graph_stores,
                     s3_client,
                     last_indexed_id,
-                    ctx.max_modification_indexed_id,
+                    ctx.max_modification_indexed_id, // no modifications were indexed
                     tx_results,
                     &mut hawk_handle,
                 )
@@ -821,7 +821,7 @@ async fn exec_indexation(
                     imem_graph_stores,
                     s3_client,
                     last_indexed_id,
-                    ctx.max_modification_indexed_id,
+                    ctx.max_modification_indexed_id, // no modifications were indexed
                     tx_results,
                     &mut hawk_handle,
                 )

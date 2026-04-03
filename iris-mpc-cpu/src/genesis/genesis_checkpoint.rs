@@ -77,13 +77,6 @@ pub async fn upload_genesis_checkpoint(
         last_indexed_modification_id,
     };
 
-    /*    // Persist metadata to database
-        let mut graph_tx = graph_store.tx().await?;
-        set_latest_checkpoint(&mut graph_tx.tx, &metadata).await?;
-        set_last_indexed_iris_id(&mut graph_tx.tx, last_indexed_iris_id).await?;
-        set_last_indexed_modification_id(&mut graph_tx.tx, last_indexed_modification_id).await?;
-        graph_tx.tx.commit().await?;
-    */
     tracing::info!(
         "S3 graph checkpoint created successfully: s3_key={}, duration={:?}",
         s3_key,

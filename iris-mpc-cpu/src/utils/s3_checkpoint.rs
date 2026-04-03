@@ -184,7 +184,8 @@ pub async fn download_graph(
         .await?;
     let total_size = head
         .content_length()
-        .ok_or_else(|| eyre!("Missing content length"))? as usize;
+        .ok_or_else(|| eyre!("Missing content length"))?
+        .try_into()?;
 
     let mut final_data = BytesMut::zeroed(total_size);
     let semaphore = Arc::new(Semaphore::new(download_parallelism));
