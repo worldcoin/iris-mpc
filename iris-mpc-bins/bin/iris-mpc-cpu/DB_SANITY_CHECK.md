@@ -45,8 +45,8 @@ db-sanity-check \
 # Start infra
 docker compose -f docker-compose.dev.yaml up -d
 
-# Seed DBs (requires store.ndjson — generate with generate-benchmark-data first)
-cargo run --release -p iris-mpc-bins --bin generate-benchmark-data -- --size 1000
+# Seed DBs (requires store.ndjson — generate with construct_graph_ptxt first)
+cd iris-mpc-bins && cargo run --release --bin construct-graph-ptxt -- --job-spec resources/iris-mpc-cpu/construct_graph_ptxt_benchmark.toml
 cargo run --release -p iris-mpc-bins --bin init-test-dbs -- \
   --source iris-mpc-bins/data/store.ndjson \
   --db-url-party1 "postgres://postgres:postgres@localhost:5432/SMPC_dev_0" \

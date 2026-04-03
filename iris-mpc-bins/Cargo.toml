@@ -124,10 +124,6 @@ path = "bin/iris-mpc-common/e2e_input_transform.rs"
 # ---------------------
 
 [[bin]]
-name = "generate-benchmark-data"
-path = "bin/iris-mpc-cpu/generate_benchmark_data.rs"
-
-[[bin]]
 name = "graph-mem-cli"
 path = "bin/iris-mpc-cpu/graph_mem_cli.rs"
 
