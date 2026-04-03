@@ -11,7 +11,7 @@ env:
         key: DATABASE_AURORA_URL
         name: application
   - name: SCHEMA_NAME
-    value: SMPC_stage_0
+    value: SMPC_rerand_test_0
   - name: ENVIRONMENT
     value: stage
   - name: RERAND_S3_BUCKET
