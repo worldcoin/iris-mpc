@@ -481,7 +481,12 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     use iris_mpc_common::helpers::numactl;
 
     let numa_nodes = numactl::get_numa_nodes();
-    let node = numa_nodes[shard_index % numa_nodes.len()];
+    // Flip the NUMA node assignment: left eye (0) → NUMA node 1, right eye (1) →
+    // NUMA node 0. This reverses the default mapping to test whether the
+    // opposite NUMA topology improves performance.
+    let flipped_index = (numa_nodes.len() - 1 - shard_index % numa_nodes.len())
+        % numa_nodes.len();
+    let node = numa_nodes[flipped_index];
 
     let cpu_ids = numactl::get_cores_for_node(node);
 
