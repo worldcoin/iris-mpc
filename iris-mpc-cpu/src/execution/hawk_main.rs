@@ -400,7 +400,7 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
-type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
+pub type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 
 /// A container for state required to perform parallel MPC operations.
@@ -1047,7 +1047,7 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
     pub async fn load_graph_store(
-        self,
+        mut self,
         graph_store: &GraphStore,
         parallelism: usize,
     ) -> Result<()> {
@@ -1073,7 +1073,7 @@ impl<'a> GraphLoader<'a> {
         let graph_left = graph_left.expect("Could not load left graph");
         let graph_right = graph_right.expect("Could not load right graph");
 
-        let GraphLoader(mut graphs) = self;
+        let graphs = &mut self.0;
         *graphs[LEFT] = graph_left;
         *graphs[RIGHT] = graph_right;
         tracing::info!(
@@ -1081,6 +1081,14 @@ impl<'a> GraphLoader<'a> {
             now.elapsed()
         );
         Ok(())
+    }
+
+    /// Loads graphs from S3 checkpoint data.
+    pub fn load_graphs_from_checkpoint(mut self, graphs: BothEyes<GraphMem<VectorId>>) {
+        let [left, right] = graphs;
+        let dest_graphs = &mut self.0;
+        *dest_graphs[LEFT] = left;
+        *dest_graphs[RIGHT] = right;
     }
 }
 

@@ -1,0 +1,293 @@
+//! S3 Graph Checkpoint Module
+//!
+//! This module provides functionality for storing and loading graph checkpoints
+//! needed by genesis and hawk.
+
+use std::{fmt::Display, str::FromStr, sync::Arc, time::Duration};
+
+use aws_sdk_s3::{
+    types::{ChecksumAlgorithm, ChecksumMode, CompletedMultipartUpload, CompletedPart},
+    Client as S3Client,
+};
+use bytes::{Bytes, BytesMut};
+use eyre::{eyre, Result};
+use tokio::{sync::Semaphore, task::JoinSet, time::sleep};
+
+use crate::{
+    execution::hawk_main::BothEyes,
+    hnsw::{graph::layered_graph::GraphMem, vector_store::Ref},
+};
+
+pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100MB chunks
+pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 10;
+
+/// Uploads checkpoint data to S3.
+pub async fn upload_graph(
+    s3_client: &S3Client,
+    bucket: &str,
+    key: &str,
+    data: &[u8],
+    chunk_size: usize,
+    upload_parallelism: usize,
+) -> Result<()> {
+    tracing::info!(
+        "Uploading graph checkpoint to S3: bucket={}, key={}, size={}",
+        bucket,
+        key,
+        data.len()
+    );
+
+    let semaphore = Arc::new(Semaphore::new(upload_parallelism));
+
+    // 1. Initiate Multipart Upload
+    let multipart_res = s3_client
+        .create_multipart_upload()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .map_err(|e| eyre!("Failed to initiate: {:?}", e))?;
+
+    let upload_id = multipart_res
+        .upload_id()
+        .ok_or_else(|| eyre!("S3 did not return an upload ID"))?;
+    let mut join_set = JoinSet::new();
+
+    // 2. Spawn Workers for Chunks
+    for (i, chunk) in data.chunks(chunk_size).enumerate() {
+        let part_number = (i + 1) as i32;
+        let client = s3_client.clone();
+        let bucket = bucket.to_string();
+        let key = key.to_string();
+        let upload_id = upload_id.to_string();
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+
+        // Slicing doesn't copy; but we convert to Vec for the SDK body
+        let body = chunk.to_vec();
+
+        join_set.spawn(async move {
+            let mut attempts = 0;
+            let max_retries = 3;
+
+            loop {
+                match client
+                    .upload_part()
+                    .bucket(&bucket)
+                    .key(&key)
+                    .upload_id(&upload_id)
+                    .part_number(part_number)
+                    .body(body.clone().into())
+                    .checksum_algorithm(ChecksumAlgorithm::Sha256)
+                    .send()
+                    .await
+                {
+                    Ok(res) => {
+                        let checksum = res
+                            .checksum_sha256()
+                            .ok_or_else(|| eyre!("S3 didn't return part checksum"))?;
+
+                        drop(permit); // Release slot for next chunk
+                        return Ok(CompletedPart::builder()
+                            .e_tag(res.e_tag().unwrap_or_default())
+                            .part_number(part_number)
+                            .checksum_sha256(checksum) // <-- pass it back
+                            .build());
+                    }
+                    Err(_e) if attempts < max_retries => {
+                        attempts += 1;
+                        tracing::warn!("Retry {} for part {}", attempts, part_number);
+                        sleep(Duration::from_secs(2)).await;
+                    }
+                    Err(e) => {
+                        drop(permit);
+                        return Err(eyre!("Part {} failed: {:?}", part_number, e));
+                    }
+                }
+            }
+        });
+    }
+
+    // 3. Collect & Sort ETags
+    let mut completed_parts = Vec::new();
+    let mut error: Option<eyre::Report> = None;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(part)) => completed_parts.push(part),
+            Ok(Err(e)) => {
+                error.replace(e);
+                break;
+            }
+            Err(e) => {
+                error.replace(eyre!("Join error: {:?}", e));
+                break;
+            }
+        }
+    }
+
+    if let Some(e) = error {
+        join_set.abort_all();
+        let _ = s3_client
+            .abort_multipart_upload()
+            .bucket(bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .send()
+            .await;
+        return Err(e);
+    }
+
+    completed_parts.sort_by_key(|p| p.part_number);
+
+    // 4. Complete Upload
+    s3_client
+        .complete_multipart_upload()
+        .bucket(bucket)
+        .key(key)
+        .upload_id(upload_id)
+        .multipart_upload(
+            CompletedMultipartUpload::builder()
+                .set_parts(Some(completed_parts))
+                .build(),
+        )
+        .send()
+        .await
+        .map_err(|e| eyre!("Failed to complete upload: {:?}", e))?;
+
+    tracing::info!("Successfully uploaded graph checkpoint to S3: key={}", key);
+
+    Ok(())
+}
+
+/// Downloads the graph from s3
+pub async fn download_graph(
+    s3_client: &S3Client,
+    bucket: &str,
+    key: &str,
+    chunk_size: usize,
+    download_parallelism: usize,
+) -> Result<Bytes> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use sha2::{Digest, Sha256};
+
+    tracing::info!(
+        "Downloading graph checkpoint from S3: bucket={}, key={}",
+        bucket,
+        key
+    );
+
+    // 1. Get object metadata to find total size
+    let head = s3_client
+        .head_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await?;
+    let total_size = head
+        .content_length()
+        .ok_or_else(|| eyre!("Missing content length"))? as usize;
+
+    let mut final_data = BytesMut::zeroed(total_size);
+    let semaphore = Arc::new(Semaphore::new(download_parallelism));
+    let mut join_set = JoinSet::new();
+
+    tracing::info!("Starting parallel download: {} bytes", total_size);
+
+    // 2. Spawn range-request workers
+    for start in (0..total_size).step_by(chunk_size) {
+        let end = std::cmp::min(start + chunk_size - 1, total_size - 1);
+        let client = s3_client.clone();
+        let (b, k) = (bucket.to_string(), key.to_string());
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+
+        join_set.spawn(async move {
+            let mut attempts = 0;
+            let range = format!("bytes={}-{}", start, end);
+
+            loop {
+                let res = client
+                    .get_object()
+                    .bucket(&b)
+                    .key(&k)
+                    .range(&range)
+                    .checksum_mode(ChecksumMode::Enabled) // Validates this specific range
+                    .send()
+                    .await;
+
+                match res {
+                    Ok(output) => {
+                        let checksum = output
+                            .checksum_sha256()
+                            .map(|x| x.to_string())
+                            .ok_or_else(|| eyre!("S3 did not return checksum"))?;
+
+                        let data = output
+                            .body
+                            .collect()
+                            .await
+                            .map_err(|e| eyre!("Body collect error: {:?}", e))?;
+
+                        drop(permit);
+                        let data = data.into_bytes();
+                        let computed_checksum = STANDARD.encode(Sha256::digest(&data));
+                        if computed_checksum != checksum {
+                            return Err(eyre!("Checksum mismatch"));
+                        }
+                        return Ok((start, data));
+                    }
+                    Err(_e) if attempts < 3 => {
+                        attempts += 1;
+                        tracing::warn!("Retry {} for range {}", attempts, range);
+                        sleep(Duration::from_secs(2)).await;
+                    }
+                    Err(e) => {
+                        drop(permit);
+                        return Err(eyre!("Range {} failed: {:?}", range, e));
+                    }
+                }
+            }
+        });
+    }
+
+    // 3. Assemble the pieces
+    // Note: We use the start index to write into the correct slice of the buffer
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok((offset, chunk_data))) => {
+                let len = chunk_data.len();
+                final_data[offset..offset + len].copy_from_slice(&chunk_data);
+            }
+            Ok(Err(e)) => {
+                join_set.abort_all();
+                return Err(e);
+            }
+            Err(e) => {
+                join_set.abort_all();
+                return Err(eyre!("Join error: {:?}", e));
+            }
+        }
+    }
+
+    tracing::info!(
+        "Successfully downloaded graph checkpoint from S3: key={}, size={}",
+        key,
+        final_data.len()
+    );
+
+    Ok(final_data.freeze())
+}
+
+/// serialize a graph for s3 upload
+pub fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
+    both_eyes: &BothEyes<&GraphMem<T>>,
+) -> Result<Vec<u8>> {
+    let data = bincode::serialize(&both_eyes)?;
+    Ok(data)
+}
+
+/// deserialize graph retrievevd from s3
+pub fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
+    data: &[u8],
+) -> Result<BothEyes<GraphMem<T>>> {
+    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
+    Ok(graphs)
+}

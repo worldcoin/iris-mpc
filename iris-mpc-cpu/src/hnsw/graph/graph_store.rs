@@ -23,6 +23,14 @@ pub struct RowLinks {
     layer: i16,
 }
 
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
+pub struct GenesisGraphCheckpointRow {
+    pub id: i64,
+    pub s3_key: String,
+    pub last_indexed_iris_id: i64,
+    pub last_indexed_modification_id: i64,
+}
+
 pub struct GraphPg<V: VectorStore> {
     pool: sqlx::PgPool,
     schema_name: String,
@@ -139,6 +147,54 @@ impl<V: VectorStore> GraphPg<V> {
         .await?;
 
         Ok(())
+    }
+
+    /// Inserts a new genesis graph checkpoint metadata snapshot.
+    pub async fn insert_genesis_graph_checkpoint(
+        tx: &mut Transaction<'_, Postgres>,
+        s3_key: &str,
+        last_indexed_iris_id: i64,
+        last_indexed_modification_id: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO genesis_graph_checkpoint (
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id
+            )
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(s3_key)
+        .bind(last_indexed_iris_id)
+        .bind(last_indexed_modification_id)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Returns the most recently created genesis graph checkpoint snapshot.
+    pub async fn get_latest_genesis_graph_checkpoint(
+        &self,
+    ) -> Result<Option<GenesisGraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id
+            FROM genesis_graph_checkpoint
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
     }
 
     /// Copies the `hawk_graph_entry` and `hawk_graph_links` tables to backup tables with a `_backup` suffix in the same schema.
