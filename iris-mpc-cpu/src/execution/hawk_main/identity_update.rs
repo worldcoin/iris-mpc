@@ -1,13 +1,14 @@
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
 use super::{
     rot::CENTER_ONLY_MASK,
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
-use crate::{
-    execution::hawk_main::{search::SearchIds, NEIGHBORHOOD_MODE},
-    protocol::shared_iris::GaloisRingSharedIris,
+use crate::execution::hawk_main::{
+    iris_worker::{IrisWorkerPool, QueryId},
+    search::SearchIds,
+    NEIGHBORHOOD_MODE,
 };
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
@@ -21,6 +22,8 @@ pub struct IdentityUpdateRequests {
 pub struct IdentityUpdatePlan {
     pub vector_ids: Vec<VectorId>,
     pub search_results: SearchResults<{ CENTER_ONLY_MASK }>,
+    /// QueryIds from identity update irises, for eviction after batch processing.
+    pub cached_query_ids: Vec<QueryId>,
 }
 
 pub async fn search_to_identity_update(
@@ -30,10 +33,15 @@ pub async fn search_to_identity_update(
 ) -> Result<IdentityUpdatePlan> {
     let start = Instant::now();
 
-    let updates = {
-        let store = hawk_actor.iris_store[LEFT].read().await;
-        request.identity_updates(&store)
+    let (updates, id_update_cache) = {
+        let reg = hawk_actor.registry[LEFT].read().await;
+        request.identity_updates(&reg)
     };
+    // Cache identity update irises in the worker pools.
+    futures::try_join!(
+        hawk_actor.worker_pools[LEFT].cache_queries(id_update_cache[LEFT].clone()),
+        hawk_actor.worker_pools[RIGHT].cache_queries(id_update_cache[RIGHT].clone()),
+    )?;
 
     let search_params = SearchParams::new_no_match(hawk_actor.searcher());
 
@@ -47,10 +55,18 @@ pub async fn search_to_identity_update(
     )
     .await?;
 
+    // Collect all identity update query IDs for eviction.
+    let cached_query_ids: Vec<QueryId> = id_update_cache[LEFT]
+        .iter()
+        .chain(id_update_cache[RIGHT].iter())
+        .map(|(qid, _)| *qid)
+        .collect();
+
     metrics::histogram!("search_to_identity_update_duration").record(start.elapsed().as_secs_f64());
     Ok(IdentityUpdatePlan {
         vector_ids: updates.vector_ids,
         search_results,
+        cached_query_ids,
     })
 }
 
@@ -60,18 +76,29 @@ pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) 
         return Ok(());
     }
 
-    let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(hawk_actor.party_id));
+    let del_ids = {
+        let reg = hawk_actor.registry[LEFT].read().await;
+        request.deletion_ids(&reg)
+    };
 
-    let mut stores = [
-        hawk_actor.iris_store[LEFT].write().await,
-        hawk_actor.iris_store[RIGHT].write().await,
+    if del_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Workers write party-specific dummy sentinels at the deleted VectorIds.
+    futures::try_join!(
+        hawk_actor.worker_pools[LEFT].delete_irises(hawk_actor.party_id, del_ids.clone()),
+        hawk_actor.worker_pools[RIGHT].delete_irises(hawk_actor.party_id, del_ids.clone()),
+    )?;
+
+    // Update registries (metadata only — version bump + checksum).
+    let mut registries = [
+        hawk_actor.registry[LEFT].write().await,
+        hawk_actor.registry[RIGHT].write().await,
     ];
-
-    let del_ids = request.deletion_ids(&stores[LEFT]);
-
     for del_id in del_ids {
-        for store in &mut stores {
-            store.update(del_id, dummy.clone());
+        for reg in registries.iter_mut() {
+            reg.update(del_id, ());
         }
     }
     Ok(())

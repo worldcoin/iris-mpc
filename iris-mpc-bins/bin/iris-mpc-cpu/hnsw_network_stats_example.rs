@@ -5,11 +5,8 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_cpu::{
-    execution::local::generate_local_identities,
-    hawkers::aby3::{
-        aby3_store::Aby3Query,
-        test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
-    },
+    execution::{hawk_main::iris_worker::IrisWorkerPool, local::generate_local_identities},
+    hawkers::aby3::test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
     hnsw::{metrics::network::NetworkFormatter, HnswSearcher, SortedNeighborhood},
     protocol::shared_iris::GaloisRingSharedIris,
 };
@@ -64,7 +61,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for (vector_store, graph_store) in vectors_graphs.into_iter() {
         let player_index = get_owner_index(&vector_store).await?;
-        let query = Aby3Query::new_from_raw(raw_query[player_index].clone());
+        let iris = std::sync::Arc::new(raw_query[player_index].clone());
+        let query = vector_store.lock().await.workers.cache_iris(iris).await?;
         let searcher = searcher.clone();
         let mut rng = rng.clone();
 
