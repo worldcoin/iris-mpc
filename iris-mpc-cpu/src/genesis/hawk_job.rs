@@ -3,6 +3,7 @@ use crate::{
     execution::hawk_main::{
         iris_worker::IrisPoolHandle, BothEyes, HawkMutation, VecRequests, LEFT, RIGHT,
     },
+    genesis::genesis_checkpoint::GenesisCheckpointState,
     hawkers::aby3::aby3_store::Aby3Query,
 };
 use eyre::Result;
@@ -155,6 +156,10 @@ pub enum JobResult {
         connect_plans: HawkMutation,
         done_tx: sync::oneshot::Sender<()>,
     },
+    S3Checkpoint {
+        checkpoint_state: GenesisCheckpointState,
+        done_tx: sync::oneshot::Sender<()>,
+    },
     Sync {
         /// Whether the shutdown states of different nodes' Sync jobs
         /// were mismatched.
@@ -198,6 +203,16 @@ impl JobResult {
             done_tx,
         }
     }
+
+    pub fn new_s3_checkpoint(
+        checkpoint_state: GenesisCheckpointState,
+        done_tx: sync::oneshot::Sender<()>,
+    ) -> Self {
+        Self::S3Checkpoint {
+            checkpoint_state,
+            done_tx,
+        }
+    }
 }
 
 /// Trait: fmt::Display.
@@ -227,6 +242,16 @@ impl fmt::Display for JobResult {
             }
             JobResult::Sync { mismatched } => {
                 write!(f, "mismatched={}", mismatched)
+            }
+            JobResult::S3Checkpoint {
+                checkpoint_state, ..
+            } => {
+                write!(
+                    f,
+                    "iris-id={}, modification-id={}",
+                    checkpoint_state.last_indexed_iris_id,
+                    checkpoint_state.last_indexed_modification_id
+                )
             }
         }
     }
