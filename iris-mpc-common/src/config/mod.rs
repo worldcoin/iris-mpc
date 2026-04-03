@@ -494,7 +494,7 @@ fn default_sns_retry_max_attempts() -> u32 {
 }
 
 fn default_graph_checkpoint_bucket_name() -> String {
-     // override in prod via env
+    // override in prod via env
     "wf-smpcv2-dev-hnsw-checkpoint".to_string()
 }
 

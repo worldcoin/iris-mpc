@@ -575,6 +575,12 @@ async fn exec_delta(
             let _ = shutdown_handler.wait_for_pending_batches_completion().await;
             log_info(String::from("All delta modifications have been processed"));
 
+            log_info(format!("Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
+            let mut graph_tx = graph_store.tx().await?;
+            set_last_indexed_modification_id(&mut graph_tx.tx, *max_modification_persist_id)
+                .await?;
+            graph_tx.tx.commit().await?;
+
             // Create S3 checkpoint if modifications were applied
             if !modifications.is_empty() {
                 log_info(String::from(
@@ -591,13 +597,6 @@ async fn exec_delta(
                 )
                 .await?;
                 log_info(String::from("S3 checkpoint created after delta"));
-            } else {
-                // Just update the modification id if no modifications
-                log_info(format!("Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
-                let mut graph_tx = graph_store.tx().await?;
-                set_last_indexed_modification_id(&mut graph_tx.tx, *max_modification_persist_id)
-                    .await?;
-                graph_tx.tx.commit().await?;
             }
 
             Ok(hawk_handle)
