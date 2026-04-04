@@ -82,13 +82,24 @@ pub async fn upload_graph(
                     .await
                 {
                     Ok(res) => {
+                        let etag = res.e_tag().map(|s| s.to_string());
                         let checksum = res
                             .checksum_sha256()
                             .ok_or_else(|| eyre!("S3 didn't return part checksum"))?;
+                        tracing::info!(
+                            "part {} uploaded: e_tag={:?}, checksum_sha256={:?}",
+                            part_number,
+                            etag,
+                            checksum
+                        );
+
+                        let etag = etag.ok_or_else(|| {
+                            eyre!("s3 didn't return ETag for part {}", part_number)
+                        })?;
 
                         drop(permit); // Release slot for next chunk
                         return Ok(CompletedPart::builder()
-                            .e_tag(res.e_tag().unwrap_or_default())
+                            .e_tag(etag)
                             .part_number(part_number)
                             .checksum_sha256(checksum) // <-- pass it back
                             .build());
