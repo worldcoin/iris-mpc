@@ -98,10 +98,12 @@ pub async fn upload_graph(
                         })?;
 
                         drop(permit); // Release slot for next chunk
+                        // Note: We intentionally omit checksum_sha256 from CompletedPart
+                        // for LocalStack compatibility. The checksum is still validated
+                        // during upload via checksum_algorithm(ChecksumAlgorithm::Sha256).
                         return Ok(CompletedPart::builder()
                             .e_tag(etag)
                             .part_number(part_number)
-                            .checksum_sha256(checksum) // <-- pass it back
                             .build());
                     }
                     Err(_e) if attempts < max_retries => {
