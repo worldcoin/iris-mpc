@@ -3077,6 +3077,7 @@ dependencies = [
  "tracing-forest",
  "tracing-subscriber",
  "tracing-test",
+ "uuid",
 ]
 
 [[package]]

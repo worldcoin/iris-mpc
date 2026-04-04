@@ -207,7 +207,7 @@ pub async fn download_graph(
         key
     );
 
-    // 1. Get object metadata to find total size
+    // Get object metadata to find total size
     let head = s3_client
         .head_object()
         .bucket(bucket)
@@ -225,7 +225,7 @@ pub async fn download_graph(
 
     tracing::info!("Starting parallel download: {} bytes", total_size);
 
-    // 2. Spawn range-request workers
+    // Spawn range-request workers
     for start in (0..total_size).step_by(chunk_size) {
         let end = std::cmp::min(start + chunk_size - 1, total_size - 1);
         let client = s3_client.clone();
@@ -281,7 +281,7 @@ pub async fn download_graph(
         });
     }
 
-    // 3. Assemble the pieces
+    // Assemble the pieces
     // Note: We use the start index to write into the correct slice of the buffer
     while let Some(result) = join_set.join_next().await {
         match result {

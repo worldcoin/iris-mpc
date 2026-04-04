@@ -53,11 +53,10 @@ pub async fn upload_genesis_checkpoint(
         start.elapsed()
     );
 
-    let s3_key = generate_checkpoint_key(
-        &config.environment,
+    let s3_key = format!(
+        "genesis/{}/checkpoint_{}.bin",
         config.party_id,
-        last_indexed_iris_id,
-        last_indexed_modification_id,
+        uuid::Uuid::new_v4()
     );
 
     let bucket = &config.graph_checkpoint_bucket_name;
@@ -166,32 +165,4 @@ pub async fn save_checkpoint_state(
     .map_err(|e| eyre!("Failed to persist checkpoint state: {:?}", e))?;
 
     Ok(())
-}
-
-/// Generates an S3 key for a graph checkpoint.
-fn generate_checkpoint_key(
-    environment: &str,
-    party_id: usize,
-    last_indexed_iris_id: IrisSerialId,
-    // 0 means None
-    last_indexed_modification_id: i64,
-) -> String {
-    format!(
-        "genesis/{}/checkpoint_{}_{}_{}.bin",
-        environment, party_id, last_indexed_iris_id, last_indexed_modification_id
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_generate_checkpoint_key() {
-        let key = generate_checkpoint_key("prod", 0, 1000000, 0);
-        assert_eq!(key, "genesis/prod/checkpoint_0_1000000_0.bin");
-
-        let key2 = generate_checkpoint_key("dev", 1, 500, 2);
-        assert_eq!(key2, "genesis/dev/checkpoint_1_500_2.bin");
-    }
 }
