@@ -25,6 +25,8 @@ pub struct GenesisCheckpointState {
     pub last_indexed_iris_id: IrisSerialId,
     /// Last modification ID included in this checkpoint
     pub last_indexed_modification_id: i64,
+    /// BLAKE3 hash of the checkpoint data for integrity verification
+    pub blake3_hash: String,
 }
 
 /// Creates an S3 graph checkpoint.
@@ -53,6 +55,15 @@ pub async fn upload_genesis_checkpoint(
         start.elapsed()
     );
 
+    // Compute BLAKE3 hash before upload
+    let hash_start = Instant::now();
+    let blake3_hash = blake3::hash(&data).to_hex().to_string();
+    tracing::info!(
+        "Computed BLAKE3 hash: {} in {:?}",
+        blake3_hash,
+        hash_start.elapsed()
+    );
+
     let s3_key = format!(
         "genesis/{}/checkpoint_{}.bin",
         config.party_id,
@@ -60,20 +71,13 @@ pub async fn upload_genesis_checkpoint(
     );
 
     let bucket = &config.graph_checkpoint_bucket_name;
-    upload_graph(
-        s3_client,
-        bucket,
-        &s3_key,
-        &data,
-        DEFAULT_CHECKPOINT_CHUNK_SIZE,
-        DEFAULT_CHECKPOINT_PARALLELISM,
-    )
-    .await?;
+    upload_graph(s3_client, bucket, &s3_key, &data).await?;
 
     let checkpoint = GenesisCheckpointState {
         s3_key: s3_key.clone(),
         last_indexed_iris_id,
         last_indexed_modification_id,
+        blake3_hash,
     };
 
     tracing::info!(
@@ -95,14 +99,19 @@ pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
     state: GenesisCheckpointState,
 ) -> Result<BothEyes<GraphMem<T>>> {
     let bucket = &config.graph_checkpoint_bucket_name;
-    let binary_graph = download_graph(
-        s3_client,
-        bucket,
-        &state.s3_key,
-        DEFAULT_CHECKPOINT_CHUNK_SIZE,
-        DEFAULT_CHECKPOINT_PARALLELISM,
-    )
-    .await?;
+    let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
+
+    // Verify BLAKE3 hash after download
+    let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();
+    if computed_hash != state.blake3_hash {
+        return Err(eyre!(
+            "BLAKE3 hash mismatch: expected {}, got {}",
+            state.blake3_hash,
+            computed_hash
+        ));
+    }
+    tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
+
     let graphs = deserialize_both_eyes(&binary_graph)?;
     Ok(graphs)
 }
@@ -127,6 +136,7 @@ pub async fn get_latest_checkpoint_state(
                 s3_key: row.s3_key,
                 last_indexed_iris_id: iris_id,
                 last_indexed_modification_id: row.last_indexed_modification_id,
+                blake3_hash: row.blake3_hash,
             })
         })
         .transpose()?;
@@ -160,6 +170,7 @@ pub async fn save_checkpoint_state(
         &state.s3_key,
         i64::from(state.last_indexed_iris_id),
         state.last_indexed_modification_id,
+        &state.blake3_hash,
     )
     .await
     .map_err(|e| eyre!("Failed to persist checkpoint state: {:?}", e))?;

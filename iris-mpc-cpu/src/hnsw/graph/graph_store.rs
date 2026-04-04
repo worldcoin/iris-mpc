@@ -29,6 +29,7 @@ pub struct GenesisGraphCheckpointRow {
     pub s3_key: String,
     pub last_indexed_iris_id: i64,
     pub last_indexed_modification_id: i64,
+    pub blake3_hash: String,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -155,20 +156,23 @@ impl<V: VectorStore> GraphPg<V> {
         s3_key: &str,
         last_indexed_iris_id: i64,
         last_indexed_modification_id: i64,
+        blake3_hash: &str,
     ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO genesis_graph_checkpoint (
                 s3_key,
                 last_indexed_iris_id,
-                last_indexed_modification_id
+                last_indexed_modification_id,
+                blake3_hash
             )
-            VALUES ($1, $2, $3)
+            VALUES ($1, $2, $3, $4)
             "#,
         )
         .bind(s3_key)
         .bind(last_indexed_iris_id)
         .bind(last_indexed_modification_id)
+        .bind(blake3_hash)
         .execute(tx.deref_mut())
         .await?;
 
@@ -185,7 +189,8 @@ impl<V: VectorStore> GraphPg<V> {
                 id,
                 s3_key,
                 last_indexed_iris_id,
-                last_indexed_modification_id
+                last_indexed_modification_id,
+                blake3_hash
             FROM genesis_graph_checkpoint
             ORDER BY id DESC
             LIMIT 1

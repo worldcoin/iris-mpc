@@ -6,7 +6,7 @@
 use std::{fmt::Display, str::FromStr, sync::Arc, time::Duration};
 
 use aws_sdk_s3::{
-    types::{ChecksumAlgorithm, ChecksumMode, CompletedMultipartUpload, CompletedPart},
+    types::{CompletedMultipartUpload, CompletedPart},
     Client as S3Client,
 };
 use bytes::{Bytes, BytesMut};
@@ -18,7 +18,7 @@ use crate::{
     hnsw::{graph::layered_graph::GraphMem, vector_store::Ref},
 };
 
-pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100MB chunks
+pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100 MB chunks
 pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 10;
 const MULTIPART_THRESHOLD: usize = 5 * 1024 * 1024; // 5MB - S3 multipart minimum part size
 
@@ -29,8 +29,6 @@ pub async fn upload_graph(
     bucket: &str,
     key: &str,
     data: &[u8],
-    chunk_size: usize,
-    upload_parallelism: usize,
 ) -> Result<()> {
     tracing::info!(
         "Uploading graph checkpoint to S3: bucket={}, key={}, size={}",
@@ -38,6 +36,9 @@ pub async fn upload_graph(
         key,
         data.len()
     );
+
+    let chunk_size = DEFAULT_CHECKPOINT_CHUNK_SIZE;
+    let upload_parallelism = DEFAULT_CHECKPOINT_PARALLELISM;
 
     if data.len() < MULTIPART_THRESHOLD {
         return upload_graph_simple(s3_client, bucket, key, data).await;
@@ -96,30 +97,18 @@ pub async fn upload_graph(
                     .upload_id(&upload_id)
                     .part_number(part_number)
                     .body(body.clone().into())
-                    .checksum_algorithm(ChecksumAlgorithm::Sha256)
                     .send()
                     .await
                 {
                     Ok(res) => {
                         let etag = res.e_tag().map(|s| s.to_string());
-                        let checksum = res
-                            .checksum_sha256()
-                            .ok_or_else(|| eyre!("S3 didn't return part checksum"))?;
-                        tracing::info!(
-                            "part {} uploaded: e_tag={:?}, checksum_sha256={:?}",
-                            part_number,
-                            etag,
-                            checksum
-                        );
+                        tracing::info!("part {} uploaded: e_tag={:?}", part_number, etag);
 
                         let etag = etag.ok_or_else(|| {
                             eyre!("s3 didn't return ETag for part {}", part_number)
                         })?;
 
-                        drop(permit); // Release slot for next chunk
-                                      // Note: We intentionally omit checksum_sha256 from CompletedPart
-                                      // for LocalStack compatibility. The checksum is still validated
-                                      // during upload via checksum_algorithm(ChecksumAlgorithm::Sha256).
+                        drop(permit);
                         return Ok(CompletedPart::builder()
                             .e_tag(etag)
                             .part_number(part_number)
@@ -191,21 +180,15 @@ pub async fn upload_graph(
 }
 
 /// Downloads the graph from s3
-pub async fn download_graph(
-    s3_client: &S3Client,
-    bucket: &str,
-    key: &str,
-    chunk_size: usize,
-    download_parallelism: usize,
-) -> Result<Bytes> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-    use sha2::{Digest, Sha256};
-
+pub async fn download_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Result<Bytes> {
     tracing::info!(
         "Downloading graph checkpoint from S3: bucket={}, key={}",
         bucket,
         key
     );
+
+    let chunk_size = DEFAULT_CHECKPOINT_CHUNK_SIZE;
+    let download_parallelism = DEFAULT_CHECKPOINT_PARALLELISM;
 
     // Get object metadata to find total size
     let head = s3_client
@@ -242,17 +225,11 @@ pub async fn download_graph(
                     .bucket(&b)
                     .key(&k)
                     .range(&range)
-                    .checksum_mode(ChecksumMode::Enabled) // Validates this specific range
                     .send()
                     .await;
 
                 match res {
                     Ok(output) => {
-                        let checksum = output
-                            .checksum_sha256()
-                            .map(|x| x.to_string())
-                            .ok_or_else(|| eyre!("S3 did not return checksum"))?;
-
                         let data = output
                             .body
                             .collect()
@@ -260,12 +237,7 @@ pub async fn download_graph(
                             .map_err(|e| eyre!("Body collect error: {:?}", e))?;
 
                         drop(permit);
-                        let data = data.into_bytes();
-                        let computed_checksum = STANDARD.encode(Sha256::digest(&data));
-                        if computed_checksum != checksum {
-                            return Err(eyre!("Checksum mismatch"));
-                        }
-                        return Ok((start, data));
+                        return Ok((start, data.into_bytes()));
                     }
                     Err(_e) if attempts < 3 => {
                         attempts += 1;
@@ -282,7 +254,6 @@ pub async fn download_graph(
     }
 
     // Assemble the pieces
-    // Note: We use the start index to write into the correct slice of the buffer
     while let Some(result) = join_set.join_next().await {
         match result {
             Ok(Ok((offset, chunk_data))) => {
@@ -348,16 +319,11 @@ async fn upload_graph_simple(
             .bucket(bucket)
             .key(key)
             .body(data.to_vec().into())
-            .checksum_algorithm(ChecksumAlgorithm::Sha256)
             .send()
             .await
         {
             Ok(res) => {
-                tracing::info!(
-                    "Simple PUT upload completed: e_tag={:?}, checksum_sha256={:?}",
-                    res.e_tag(),
-                    res.checksum_sha256()
-                );
+                tracing::info!("Simple PUT upload completed: e_tag={:?}", res.e_tag());
                 return Ok(());
             }
             Err(_e) if attempts < max_retries => {
