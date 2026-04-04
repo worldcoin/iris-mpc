@@ -484,8 +484,7 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     // Flip the NUMA node assignment: left eye (0) → NUMA node 1, right eye (1) →
     // NUMA node 0. This reverses the default mapping to test whether the
     // opposite NUMA topology improves performance.
-    let flipped_index = (numa_nodes.len() - 1 - shard_index % numa_nodes.len())
-        % numa_nodes.len();
+    let flipped_index = (numa_nodes.len() - 1 - shard_index % numa_nodes.len()) % numa_nodes.len();
     let node = numa_nodes[flipped_index];
 
     let cpu_ids = numactl::get_cores_for_node(node);
