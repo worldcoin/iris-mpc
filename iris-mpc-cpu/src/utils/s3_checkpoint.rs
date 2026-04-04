@@ -20,8 +20,10 @@ use crate::{
 
 pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100MB chunks
 pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 10;
+const MULTIPART_THRESHOLD: usize = 5 * 1024 * 1024; // 5MB - S3 multipart minimum part size
 
 /// Uploads checkpoint data to S3.
+/// Uses simple PUT for files under 5MB, multipart upload for larger files.
 pub async fn upload_graph(
     s3_client: &S3Client,
     bucket: &str,
@@ -37,9 +39,14 @@ pub async fn upload_graph(
         data.len()
     );
 
+    if data.len() < MULTIPART_THRESHOLD {
+        return upload_graph_simple(s3_client, bucket, key, data).await;
+    }
+
+    let mut join_set = JoinSet::new();
     let semaphore = Arc::new(Semaphore::new(upload_parallelism));
 
-    // 1. Initiate Multipart Upload
+    // Initiate Multipart Upload
     let multipart_res = s3_client
         .create_multipart_upload()
         .bucket(bucket)
@@ -51,18 +58,30 @@ pub async fn upload_graph(
     let upload_id = multipart_res
         .upload_id()
         .ok_or_else(|| eyre!("S3 did not return an upload ID"))?;
-    let mut join_set = JoinSet::new();
 
-    // 2. Spawn Workers for Chunks
-    for (i, chunk) in data.chunks(chunk_size).enumerate() {
+    // Build chunks, merging last chunk if it's under 5MB (S3 minimum part size)
+    let chunk_size = std::cmp::max(chunk_size, MULTIPART_THRESHOLD);
+    let mut chunks: Vec<&[u8]> = data.chunks(chunk_size).collect();
+    if chunks.len() >= 2 {
+        if let Some(last) = chunks.last() {
+            if last.len() < MULTIPART_THRESHOLD {
+                // Merge last two chunks by adjusting the second-to-last to include the remainder
+                let last_two_start = (chunks.len() - 2) * chunk_size;
+                chunks.pop();
+                chunks.pop();
+                chunks.push(&data[last_two_start..]);
+            }
+        }
+    }
+
+    // Spawn Workers for Chunks
+    for (i, chunk) in chunks.into_iter().enumerate() {
         let part_number = (i + 1) as i32;
         let client = s3_client.clone();
         let bucket = bucket.to_string();
         let key = key.to_string();
         let upload_id = upload_id.to_string();
         let permit = semaphore.clone().acquire_owned().await.unwrap();
-
-        // Slicing doesn't copy; but we convert to Vec for the SDK body
         let body = chunk.to_vec();
 
         join_set.spawn(async move {
@@ -98,9 +117,9 @@ pub async fn upload_graph(
                         })?;
 
                         drop(permit); // Release slot for next chunk
-                        // Note: We intentionally omit checksum_sha256 from CompletedPart
-                        // for LocalStack compatibility. The checksum is still validated
-                        // during upload via checksum_algorithm(ChecksumAlgorithm::Sha256).
+                                      // Note: We intentionally omit checksum_sha256 from CompletedPart
+                                      // for LocalStack compatibility. The checksum is still validated
+                                      // during upload via checksum_algorithm(ChecksumAlgorithm::Sha256).
                         return Ok(CompletedPart::builder()
                             .e_tag(etag)
                             .part_number(part_number)
@@ -120,7 +139,7 @@ pub async fn upload_graph(
         });
     }
 
-    // 3. Collect & Sort ETags
+    // Collect & Sort ETags
     let mut completed_parts = Vec::new();
     let mut error: Option<eyre::Report> = None;
     while let Some(result) = join_set.join_next().await {
@@ -151,7 +170,7 @@ pub async fn upload_graph(
 
     completed_parts.sort_by_key(|p| p.part_number);
 
-    // 4. Complete Upload
+    // Complete Upload
     s3_client
         .complete_multipart_upload()
         .bucket(bucket)
@@ -304,4 +323,51 @@ pub fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
 ) -> Result<BothEyes<GraphMem<T>>> {
     let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
     Ok(graphs)
+}
+
+/// Simple PUT upload for small files (under 5MB).
+async fn upload_graph_simple(
+    s3_client: &S3Client,
+    bucket: &str,
+    key: &str,
+    data: &[u8],
+) -> Result<()> {
+    tracing::info!(
+        "Using simple PUT upload for small file: bucket={}, key={}, size={}",
+        bucket,
+        key,
+        data.len()
+    );
+
+    let mut attempts = 0;
+    let max_retries = 3;
+
+    loop {
+        match s3_client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(data.to_vec().into())
+            .checksum_algorithm(ChecksumAlgorithm::Sha256)
+            .send()
+            .await
+        {
+            Ok(res) => {
+                tracing::info!(
+                    "Simple PUT upload completed: e_tag={:?}, checksum_sha256={:?}",
+                    res.e_tag(),
+                    res.checksum_sha256()
+                );
+                return Ok(());
+            }
+            Err(_e) if attempts < max_retries => {
+                attempts += 1;
+                tracing::warn!("Retry {} for simple PUT upload", attempts);
+                sleep(Duration::from_secs(2)).await;
+            }
+            Err(e) => {
+                return Err(eyre!("Simple PUT upload failed: {:?}", e));
+            }
+        }
+    }
 }
