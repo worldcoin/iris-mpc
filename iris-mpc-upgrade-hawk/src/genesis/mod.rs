@@ -1222,7 +1222,6 @@ async fn get_results_thread(
                 // synchronizes peers instead
                 JobResult::BatchIndexation {
                     batch_id,
-                    connect_plans,
                     last_serial_id,
                     vector_ids_to_persist,
                     done_tx,
@@ -1266,10 +1265,7 @@ async fn get_results_thread(
                             &codes_and_masks,
                         )
                         .await?;
-                    connect_plans.persist(&mut graph_tx).await?;
-                    log_info(format!(
-                        "Job Results :: Persisted graph updates: batch-id={batch_id}"
-                    ));
+
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
                     db_tx.commit().await?;
@@ -1286,7 +1282,6 @@ async fn get_results_thread(
                 }
                 JobResult::Modification {
                     modification_id,
-                    connect_plans,
                     vector_id_to_persist,
                     done_tx,
                 } => {
@@ -1320,10 +1315,6 @@ async fn get_results_thread(
                             &iris_data,
                         )
                         .await?;
-                    connect_plans.persist(&mut graph_tx).await?;
-                    log_info(format!(
-                        "Job Results :: Persisted graph updates: modification-id={modification_id}"
-                    ));
 
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;

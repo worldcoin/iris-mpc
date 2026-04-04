@@ -1,8 +1,6 @@
 use super::Batch;
 use crate::{
-    execution::hawk_main::{
-        iris_worker::IrisPoolHandle, BothEyes, HawkMutation, VecRequests, LEFT, RIGHT,
-    },
+    execution::hawk_main::{iris_worker::IrisPoolHandle, BothEyes, VecRequests, LEFT, RIGHT},
     genesis::genesis_checkpoint::GenesisCheckpointState,
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -130,9 +128,6 @@ pub enum JobResult {
         /// Unique sequential job identifier.
         batch_id: usize,
 
-        /// Connect plans for updating HNSW graph in DB.
-        connect_plans: HawkMutation,
-
         /// Set of Iris identifiers being indexed.
         vector_ids: Vec<IrisVectorId>,
 
@@ -152,8 +147,6 @@ pub enum JobResult {
         /// Vector id for persistence.
         vector_id_to_persist: IrisVectorId,
 
-        /// Connect plans for updating HNSW graph in DB.
-        connect_plans: HawkMutation,
         done_tx: sync::oneshot::Sender<()>,
     },
     S3Checkpoint {
@@ -172,7 +165,6 @@ impl JobResult {
     pub(crate) fn new_batch_result(
         batch_id: usize,
         vector_ids: Vec<IrisVectorId>,
-        connect_plans: HawkMutation,
         vector_ids_to_persist: Vec<IrisVectorId>,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
@@ -180,7 +172,6 @@ impl JobResult {
         let last_serial_id = vector_ids_to_persist.last().unwrap().serial_id();
 
         Self::BatchIndexation {
-            connect_plans,
             batch_id,
             vector_ids,
             vector_ids_to_persist,
@@ -192,13 +183,11 @@ impl JobResult {
 
     pub(crate) fn new_modification_result(
         modification_id: i64,
-        connect_plans: HawkMutation,
         vector_id_to_persist: IrisVectorId,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         Self::Modification {
             modification_id,
-            connect_plans,
             vector_id_to_persist,
             done_tx,
         }
