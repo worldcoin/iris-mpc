@@ -1458,18 +1458,12 @@ async fn init_graph_from_stores(
 
     // Try to load graph from S3 checkpoint first
     match get_latest_checkpoint_state(&graph_store).await {
-        Ok(Some(state)) => match download_genesis_checkpoint(s3_client, config, state).await {
-            Ok(both_eyes) => {
-                graph_loader.load_graphs_from_checkpoint(both_eyes);
-                return Ok(());
-            }
-            Err(e) => {
-                log_warn(format!(
-                    "Failed to load from S3 checkpoint: {:?}, falling back to PostgreSQL",
-                    e
-                ));
-            }
-        },
+        Ok(Some(state)) => {
+            // Checkpoint exists - must successfully load it or fail
+            let both_eyes = download_genesis_checkpoint(s3_client, config, state).await?;
+            graph_loader.load_graphs_from_checkpoint(both_eyes);
+            return Ok(());
+        }
         Ok(None) => {
             log_info(String::from(
                 "No S3 checkpoint found, loading from PostgreSQL",
