@@ -1586,6 +1586,13 @@ async fn validate_consistency_of_stores(
         bail!(msg);
     }
 
+    // if there is no checkpoint, then fall back to validating the consistency of the graph store.
+    let last_checkpoint = get_latest_checkpoint_state(&graph_store).await?;
+    if last_checkpoint.is_some() {
+        // this was already validated in exec_setup().
+        return Ok(());
+    }
+
     // ensure the graph store is consistent with the last persisted_indexed_id
     let mut tx = graph_store.tx().await.unwrap();
     let last_indexed_id_in_graph_left = {
