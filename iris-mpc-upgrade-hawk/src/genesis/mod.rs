@@ -741,7 +741,7 @@ async fn exec_indexation(
                     imem_graph_stores,
                     s3_client,
                     last_indexed_id,
-                    ctx.max_modification_indexed_id, // no modifications were indexed
+                    ctx.max_modification_persist_id, // preserve current modification state
                     tx_results,
                     &mut hawk_handle,
                 )
@@ -821,7 +821,7 @@ async fn exec_indexation(
                     imem_graph_stores,
                     s3_client,
                     last_indexed_id,
-                    ctx.max_modification_indexed_id, // no modifications were indexed
+                    ctx.max_modification_persist_id, // preserve current modification state
                     tx_results,
                     &mut hawk_handle,
                 )
@@ -1331,10 +1331,8 @@ async fn get_results_thread(
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 },
                 JobResult::S3Checkpoint{checkpoint_state, done_tx} => {
-                    let  graph_tx = graph_store_bg.tx().await?;
-                    let mut db_tx = graph_tx.tx;
-                    save_checkpoint_state(&mut db_tx, &checkpoint_state).await?;
-                    db_tx.commit().await?;
+                    let graph_tx = graph_store_bg.tx().await?;
+                    save_checkpoint_state(graph_tx, &checkpoint_state).await?;
                     let _ = done_tx.send(());
                 },
                 JobResult::Sync { .. } => unreachable!(),

@@ -4,14 +4,16 @@ use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
 use iris_mpc_common::{config::Config, IrisSerialId};
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
-    hawkers::aby3::aby3_store::Aby3Store,
     hnsw::{
-        graph::{graph_store::GraphPg, layered_graph::GraphMem},
+        graph::{
+            graph_store::{self, GraphPg},
+            layered_graph::GraphMem,
+        },
         vector_store::Ref,
+        VectorStore,
     },
     utils::s3_checkpoint::*,
 };
@@ -117,8 +119,8 @@ pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
 }
 
 /// Gets the latest checkpoint from genesis_graph_checkpoint table.
-pub async fn get_latest_checkpoint_state(
-    graph_store: &GraphPg<Aby3Store>,
+pub async fn get_latest_checkpoint_state<V: VectorStore>(
+    graph_store: &GraphPg<V>,
 ) -> Result<Option<GenesisCheckpointState>> {
     tracing::info!("Retrieving latest graph checkpoint metadata from genesis_graph_checkpoint");
 
@@ -155,8 +157,8 @@ pub async fn get_latest_checkpoint_state(
 }
 
 /// stores checkpoint in genesis_graph_checkpoint table.
-pub async fn save_checkpoint_state(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn save_checkpoint_state<V: VectorStore>(
+    tx: graph_store::GraphTx<'_, V>,
     state: &GenesisCheckpointState,
 ) -> Result<()> {
     tracing::info!(
@@ -165,8 +167,9 @@ pub async fn save_checkpoint_state(
         state.last_indexed_iris_id,
     );
 
-    GraphPg::<Aby3Store>::insert_genesis_graph_checkpoint(
-        tx,
+    let mut tx = tx.tx;
+    GraphPg::<V>::insert_genesis_graph_checkpoint(
+        &mut tx,
         &state.s3_key,
         i64::from(state.last_indexed_iris_id),
         state.last_indexed_modification_id,
@@ -174,6 +177,6 @@ pub async fn save_checkpoint_state(
     )
     .await
     .map_err(|e| eyre!("Failed to persist checkpoint state: {:?}", e))?;
-
+    tx.commit().await?;
     Ok(())
 }

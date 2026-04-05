@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{
     modifications::{self, ModificationInput},
+    s3_deletions::get_aws_clients,
     GaloisRingSharedIrisPair, HawkConfigs,
 };
 use eyre::{bail, Result};
@@ -13,7 +14,10 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId},
-    genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
+    genesis::{
+        genesis_checkpoint::{download_genesis_checkpoint, get_latest_checkpoint_state},
+        state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
+    },
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
 };
@@ -89,6 +93,43 @@ impl MpcNodes {
             });
         }
         join_set.join_all().await;
+    }
+
+    /// Asserts that the S3 checkpoint graphs match the expected graphs for all nodes.
+    /// This should be used instead of `assert_hnsw_graphs` when genesis uses S3 checkpoints.
+    pub async fn assert_s3_checkpoint_graphs(
+        &self,
+        configs: &HawkConfigs,
+        expected_graphs: &BothEyes<GraphMem<PlaintextVectorRef>>,
+    ) -> Result<()> {
+        for (i, (node, config)) in self.nodes.iter().zip(configs.iter()).enumerate() {
+            // Get AWS clients for this config
+            let aws_clients = get_aws_clients(config).await?;
+
+            // Get the latest checkpoint state from postgres
+            let checkpoint_state = get_latest_checkpoint_state(&node.cpu_stores.graph)
+                .await?
+                .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
+
+            // Download the graphs from S3
+            let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> =
+                download_genesis_checkpoint(&aws_clients.s3_client, config, checkpoint_state)
+                    .await?;
+
+            // Compare graphs
+            assert_eq!(
+                s3_graphs[0], expected_graphs[0],
+                "Left graph mismatch for node {}",
+                i
+            );
+            assert_eq!(
+                s3_graphs[1], expected_graphs[1],
+                "Right graph mismatch for node {}",
+                i
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -206,6 +247,11 @@ impl MpcNode {
             unset_last_indexed_iris_id(&mut tx).await?;
             unset_last_indexed_modification_id(&mut tx).await?;
 
+            // clear genesis graph checkpoint table
+            sqlx::query("DELETE FROM genesis_graph_checkpoint")
+                .execute(&mut *tx)
+                .await?;
+
             tx.commit().await?;
         }
 
@@ -261,8 +307,6 @@ pub struct DbAssertions {
     pub num_modifications: Option<usize>,
     pub last_indexed_iris_id: Option<IrisSerialId>,
     pub last_indexed_modification_id: Option<i64>,
-    pub layer_0_size: Option<usize>,
-    pub hnsw_graphs: Option<BothEyes<GraphMem<PlaintextVectorRef>>>,
 }
 
 impl DbAssertions {
@@ -292,16 +336,6 @@ impl DbAssertions {
 
     pub fn assert_last_indexed_modification_id(mut self, id: i64) -> Self {
         self.last_indexed_modification_id = Some(id);
-        self
-    }
-
-    pub fn assert_hnsw_layer_0_size(mut self, size: usize) -> Self {
-        self.layer_0_size = Some(size);
-        self
-    }
-
-    pub fn assert_hnsw_graphs(mut self, graphs: BothEyes<GraphMem<PlaintextVectorRef>>) -> Self {
-        self.hnsw_graphs = Some(graphs);
         self
     }
 
@@ -346,40 +380,6 @@ impl DbAssertions {
                 store_last_indexed_modification_id,
                 last_indexed_modification_id
             );
-        }
-
-        if self.layer_0_size.is_some() || self.hnsw_graphs.is_some() {
-            let store_graph_left = {
-                let mut graph_tx = stores.graph.tx().await.unwrap();
-                graph_tx
-                    .with_graph(StoreId::Left)
-                    .load_to_mem(stores.graph.pool(), 2)
-                    .await
-            }
-            .expect("Could not load left graph");
-
-            let store_graph_right = {
-                let mut graph_tx = stores.graph.tx().await.unwrap();
-                graph_tx
-                    .with_graph(StoreId::Right)
-                    .load_to_mem(stores.graph.pool(), 2)
-                    .await
-            }
-            .expect("Could not load right graph");
-
-            if let Some(layer_0_size) = self.layer_0_size {
-                let store_layer_0_size_left =
-                    store_graph_left.get_layers().first().unwrap().links.len();
-                let store_layer_0_size_right =
-                    store_graph_right.get_layers().first().unwrap().links.len();
-                assert_eq!(store_layer_0_size_left, layer_0_size);
-                assert_eq!(store_layer_0_size_right, layer_0_size);
-            }
-
-            if let Some(hnsw_graphs) = &self.hnsw_graphs {
-                assert_eq!(store_graph_left, hnsw_graphs[0]);
-                assert_eq!(store_graph_right, hnsw_graphs[1]);
-            }
         }
 
         Ok(())

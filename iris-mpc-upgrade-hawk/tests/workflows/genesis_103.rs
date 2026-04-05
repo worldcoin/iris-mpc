@@ -88,12 +88,15 @@ impl TestRun for Test {
             .assert_vector_ids(plaintext_genesis::get_vector_ids(&expected.dst_db.irises))
             .assert_num_modifications(0)
             .assert_last_indexed_iris_id(100)
-            .assert_last_indexed_modification_id(2)
-            .assert_hnsw_layer_0_size(MAX_INDEXATION_ID)
-            .assert_hnsw_graphs(expected.dst_db.graphs);
+            .assert_last_indexed_modification_id(2);
 
         let nodes = MpcNodes::new(&self.configs).await;
         nodes.apply_assertions(gpu_asserts, cpu_asserts).await;
+
+        // Assert S3 checkpoint graphs (genesis now stores graphs in S3)
+        nodes
+            .assert_s3_checkpoint_graphs(&self.configs, &expected.dst_db.graphs)
+            .await?;
 
         Ok(())
     }

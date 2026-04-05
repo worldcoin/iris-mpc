@@ -5,7 +5,7 @@ use crate::{
     utils::{
         genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
         modifications::{
-            self, ModificationInput,
+            ModificationInput,
             ModificationType::{Reauth, ResetUpdate},
         },
         mpc_node::{DbAssertions, MpcNode, MpcNodes},
@@ -93,13 +93,6 @@ impl TestRun for Test {
             .await
             .expect("Stage 2 of plaintext genesis execution failed");
 
-        // Number of modifications on already-indexed irises which are processed by genesis delta
-        let num_updating_modifications =
-            modifications::modifications_extension_updates(&[], &MODIFICATIONS)
-                .into_iter()
-                .filter(|serial_id| *serial_id <= 50)
-                .count();
-
         // Assert databases
         let gpu_asserts = DbAssertions::new()
             .assert_num_irises(MAX_INDEXATION_ID)
@@ -110,12 +103,15 @@ impl TestRun for Test {
             .assert_vector_ids(plaintext_genesis::get_vector_ids(&expected.dst_db.irises))
             .assert_num_modifications(0)
             .assert_last_indexed_iris_id(100)
-            .assert_last_indexed_modification_id(2)
-            .assert_hnsw_layer_0_size(MAX_INDEXATION_ID + num_updating_modifications)
-            .assert_hnsw_graphs(expected.dst_db.graphs);
+            .assert_last_indexed_modification_id(2);
 
         let nodes = MpcNodes::new(&self.configs).await;
         nodes.apply_assertions(gpu_asserts, cpu_asserts).await;
+
+        // Assert S3 checkpoint graphs (genesis now stores graphs in S3)
+        nodes
+            .assert_s3_checkpoint_graphs(&self.configs, &expected.dst_db.graphs)
+            .await?;
 
         Ok(())
     }
