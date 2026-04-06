@@ -302,7 +302,8 @@ async fn exec_setup(
     // ensure that the graph loaded from the checkpoint is consistent with the other peers.
     // sync_state will be compared among peers. if the checkpoint matches the sync state
     // and the sync states all match, then everything is consistent.
-    if let Some(graph_checkpoint) = get_latest_checkpoint_state(&graph_store_arc).await? {
+    let graph_checkpoint = get_latest_checkpoint_state(&graph_store_arc).await?;
+    if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
         let checkpoint_state = (
             graph_checkpoint.last_indexed_iris_id,
             graph_checkpoint.last_indexed_modification_id,
@@ -381,6 +382,11 @@ async fn exec_setup(
     )
     .await?;
     log_info(String::from("Store consistency checks OK"));
+
+    // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
+    if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
+        cleanup_old_checkpoints(config, &aws_s3_client, graph_checkpoint, &graph_store_arc).await?;
+    }
 
     // Initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;

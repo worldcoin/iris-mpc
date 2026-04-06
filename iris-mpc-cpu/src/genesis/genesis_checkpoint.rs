@@ -183,3 +183,24 @@ pub async fn save_checkpoint_state<V: VectorStore>(
     tx.commit().await?;
     Ok(())
 }
+
+pub async fn cleanup_old_checkpoints<V: VectorStore>(
+    config: &Config,
+    s3_client: &S3Client,
+    current_state: &GenesisCheckpointState,
+    graph_store: &GraphPg<V>,
+) -> Result<()> {
+    let old_checkpoints = graph_store
+        .get_old_genesis_graph_checkpoints(&current_state.s3_key)
+        .await?;
+    for checkpoint in old_checkpoints {
+        delete_graph(
+            s3_client,
+            &config.graph_checkpoint_bucket_name,
+            &current_state.s3_key,
+        )
+        .await?;
+        graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
+    }
+    Ok(())
+}

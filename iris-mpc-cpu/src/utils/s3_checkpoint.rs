@@ -280,6 +280,21 @@ pub async fn download_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Re
     Ok(final_data.freeze())
 }
 
+pub async fn delete_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Result<()> {
+    tracing::info!("Deleting graph checkpoint: bucket={}, key={}", bucket, key,);
+    s3_client
+        .delete_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to delete graph from S3: {:?}", e);
+            e
+        })?;
+    Ok(())
+}
+
 /// serialize a graph for s3 upload
 pub fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
     both_eyes: &BothEyes<&GraphMem<T>>,

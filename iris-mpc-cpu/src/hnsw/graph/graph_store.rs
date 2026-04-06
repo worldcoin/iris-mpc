@@ -201,6 +201,45 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(row)
     }
 
+    pub async fn get_old_genesis_graph_checkpoints(
+        &self,
+        s3_key: &str,
+    ) -> Result<Vec<GenesisGraphCheckpointRow>> {
+        let rows = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                blake3_hash
+            FROM genesis_graph_checkpoint
+            WHERE s3_key <> $1
+            "#,
+        )
+        .bind(s3_key)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to fetch old genesis checkpoints: {e}"))?;
+        Ok(rows)
+    }
+
+    pub async fn delete_genesis_checkpoint(&self, to_delete: i64) -> Result<()> {
+        let _ = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            DELETE *
+            FROM genesis_graph_checkpoint
+            WHERE id = $1
+            "#,
+        )
+        .bind(to_delete)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to delete genesis checkpoint: {e}"))?;
+
+        Ok(())
+    }
+
     /// Copies the `hawk_graph_entry` and `hawk_graph_links` tables to backup tables with a `_backup` suffix in the same schema.
     ///
     /// - Drops the backup tables (`hawk_graph_entry_backup`, `hawk_graph_links_backup`) if they exist.
