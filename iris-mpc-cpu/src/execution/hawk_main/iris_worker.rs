@@ -4,7 +4,9 @@ use crate::{
     protocol::{
         ops::{
             galois_ring_pairwise_distance, non_existent_distance, pairwise_distance,
+            prerotate_query, rotation_aware_distance_prerotated,
             rotation_aware_pairwise_distance, rotation_aware_pairwise_distance_rowmajor,
+            PrerotatedQueryRowMajor,
         },
         shared_iris::ArcIris,
     },
@@ -64,6 +66,13 @@ enum IrisTask {
     /// Computes the rotation-aware dot product between a query and a batch of database irises.
     RotationAwareDotProductBatch {
         query: ArcIris,
+        vector_ids: Arc<[VectorId]>,
+        range: std::ops::Range<usize>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
+    /// Rotation-aware dot product with pre-computed prerotated query (shared via Arc).
+    RotationAwareDotProductPrerotated {
+        prerotated: Arc<PrerotatedQueryRowMajor>,
         vector_ids: Arc<[VectorId]>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -286,16 +295,15 @@ impl IrisPoolHandle {
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
+        let prerotated = Arc::new(prerotate_query::<HAWK_MIN_DIST_ROTATIONS>(&query));
         let shared_ids: Arc<[VectorId]> = Arc::from(vector_ids);
         let mut responses = Vec::with_capacity(shared_ids.len() / per_worker);
-        // Does not call `dispatch_rotation_dot_product_batch` because chunking
-        // is controlled dynamically.
         for (i, _) in shared_ids.chunks(per_worker).enumerate() {
             let start = i * per_worker;
             let end = (start + per_worker).min(shared_ids.len());
             let (tx, rx) = oneshot::channel();
-            let task = IrisTask::RotationAwareDotProductBatch {
-                query: query.clone(),
+            let task = IrisTask::RotationAwareDotProductPrerotated {
+                prerotated: prerotated.clone(),
                 vector_ids: shared_ids.clone(),
                 range: start..end,
                 rsp: tx,
@@ -471,6 +479,20 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 let targets = vector_ids[range].iter().map(|v| store.get_vector(v));
                 let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_DIST_ROTATIONS, _>(
                     &query, targets,
+                );
+                let _ = rsp.send(result);
+            }
+
+            IrisTask::RotationAwareDotProductPrerotated {
+                prerotated,
+                vector_ids,
+                range,
+                rsp,
+            } => {
+                let store = iris_store.data.blocking_read();
+                let targets = vector_ids[range].iter().map(|v| store.get_vector(v));
+                let result = rotation_aware_distance_prerotated::<HAWK_MIN_DIST_ROTATIONS, _>(
+                    &prerotated, targets,
                 );
                 let _ = rsp.send(result);
             }

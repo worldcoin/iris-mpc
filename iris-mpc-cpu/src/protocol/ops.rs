@@ -121,11 +121,12 @@ where
 
 /// Row-major prerotated query for L1 cache efficiency.
 /// Layout: [row0_rot0..rot30][row1_rot0..rot30]...
+#[derive(Debug)]
 pub struct PrerotatedQueryRowMajor {
     /// code: 16 rows × 31 rotations × 800 elements = 396,800 u16s (~793KB)
-    code_data: Vec<u16>,
+    pub(crate) code_data: Vec<u16>,
     /// mask: 8 rows × 31 rotations × 800 elements = 198,400 u16s (~397KB)
-    mask_data: Vec<u16>,
+    pub(crate) mask_data: Vec<u16>,
 }
 
 impl PrerotatedQueryRowMajor {
@@ -210,27 +211,37 @@ impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
             }
         }
     }
-
-    /// Get all rotations of a code row (contiguous in memory, at most 50KB)
-    #[inline]
-    fn code_row_rotations(&self, row_idx: usize) -> &[u16] {
-        let start = row_idx * ROTATIONS * Self::ROW_SIZE;
-        let end = start + ROTATIONS * Self::ROW_SIZE;
-        &self.storage.code_data[start..end]
-    }
-
-    /// Get all rotations of a mask row (contiguous in memory, at most 50KB)
-    #[inline]
-    fn mask_row_rotations(&self, row_idx: usize) -> &[u16] {
-        let start = row_idx * ROTATIONS * Self::ROW_SIZE;
-        let end = start + ROTATIONS * Self::ROW_SIZE;
-        &self.storage.mask_data[start..end]
-    }
 }
 
 // Thread-local storage for reusable prerotated query buffers
 thread_local! {
     static PREROTATED_BUFFER: std::cell::RefCell<Option<PrerotatedQueryRowMajor>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Precompute rotated query data into a new buffer.
+/// Call once at dispatch time, then share via Arc across workers.
+pub fn prerotate_query<const ROTATIONS: usize>(query: &ArcIris) -> PrerotatedQueryRowMajor {
+    let mut buffer = PrerotatedQueryRowMajor::new_buffer();
+    let mut view = PrerotatedQueryRowMajorView::<ROTATIONS> {
+        storage: &mut buffer,
+    };
+    view.fill(query);
+    buffer
+}
+
+/// Rotation-aware distance using a pre-computed prerotated buffer (no fill step).
+/// Uses the Arc'd buffer directly — no copy to thread-local.
+pub fn rotation_aware_distance_prerotated<'a, const ROTATIONS: usize, I>(
+    prerotated: &PrerotatedQueryRowMajor,
+    targets: I,
+) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    let target_count = targets.len();
+    let mut additive_shares = vec![RingElement(0u16); 2 * ROTATIONS * target_count];
+    rotation_aware_inner::<ROTATIONS, _>(prerotated, targets, &mut additive_shares);
+    additive_shares
 }
 
 /// Row-major rotation-aware distance - processes row-by-row for L1 cache efficiency.
@@ -252,7 +263,7 @@ where
             storage: borrowed.get_or_insert_with(PrerotatedQueryRowMajor::new_buffer),
         };
         prerotated.fill(query);
-        rotation_aware_inner(&prerotated, targets, &mut additive_shares);
+        rotation_aware_inner::<ROTATIONS, _>(prerotated.storage, targets, &mut additive_shares);
     });
 
     additive_shares
@@ -261,7 +272,7 @@ where
 /// Inner implementation that works with a borrowed prerotated buffer.
 #[inline(never)]
 fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
-    prerotated: &PrerotatedQueryRowMajorView<ROTATIONS>,
+    prerotated: &PrerotatedQueryRowMajor,
     targets: I,
     additive_shares: &mut [RingElement<u16>],
 ) where
@@ -273,9 +284,11 @@ fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
 
     let targets: Vec<_> = targets.collect();
 
-    // Process row-by-row: all 31 rotations of one row stay in L1
+    // Process row-by-row: all ROTATIONS rotations of one row stay in L1
     for row_idx in 0..CODE_ROWS {
-        let query_rows = prerotated.code_row_rotations(row_idx); // 50KB, fits in L1
+        let start = row_idx * ROTATIONS * ROW_SIZE;
+        let end = start + ROTATIONS * ROW_SIZE;
+        let query_rows = &prerotated.code_data[start..end];
 
         for (target_idx, target_opt) in targets.iter().enumerate() {
             if let Some(target) = target_opt {
@@ -294,7 +307,9 @@ fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
 
     // Process mask rows - accumulate first, multiply by 2 later
     for row_idx in 0..MASK_ROWS {
-        let query_rows = prerotated.mask_row_rotations(row_idx);
+        let start = row_idx * ROTATIONS * ROW_SIZE;
+        let end = start + ROTATIONS * ROW_SIZE;
+        let query_rows = &prerotated.mask_data[start..end];
 
         for (target_idx, target_opt) in targets.iter().enumerate() {
             if let Some(target) = target_opt {

@@ -677,6 +677,7 @@ pub fn bench_worker_pool(c: &mut Criterion) {
                     BatchSize::SmallInput,
                 )
             });
+
         }
     }
 
