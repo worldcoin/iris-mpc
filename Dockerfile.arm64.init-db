@@ -65,7 +65,7 @@ RUN update-ca-certificates
 COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/init-single-db /bin/init-single-db
 COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/graph-mem-cli /bin/graph-mem-cli
 
-COPY scripts/tools/init-single-db.sh /bin/entrypoint.sh
+COPY scripts/tools/init-single-db2.sh /bin/entrypoint.sh
 RUN chmod +x /bin/entrypoint.sh
 
 USER 65534
