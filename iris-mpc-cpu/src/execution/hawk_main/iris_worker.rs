@@ -185,7 +185,10 @@ impl IrisPoolHandle {
         vector_ids: Arc<[VectorId]>,
         responses: &mut Vec<oneshot::Receiver<Vec<RingElement<u16>>>>,
     ) -> Result<()> {
-        for (i, _) in vector_ids.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
+        for (i, _) in vector_ids
+            .chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE)
+            .enumerate()
+        {
             let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
             let end = (start + Self::ROT_AWARE_BATCH_CHUNK_SIZE).min(vector_ids.len());
             let (tx, rx) = oneshot::channel();
