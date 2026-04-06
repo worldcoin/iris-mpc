@@ -1,9 +1,9 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1119928"
+    value: "1120408"
 
   - name: GENESIS_BATCH_SIZE
-    value: "static:48"
+    value: "static:96"
 
   - name: RUST_LOG
     value: "info"
@@ -108,7 +108,7 @@ env:
     value: "32"
 
   - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
-    value: "32"
+    value: "16"
 
   - name: SMPC__DISABLE_PERSISTENCE
     value: "true"
