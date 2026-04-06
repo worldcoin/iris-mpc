@@ -39,17 +39,15 @@ pub async fn upload_genesis_checkpoint(
     last_indexed_iris_id: IrisSerialId,
     last_indexed_modification_id: i64,
 ) -> Result<GenesisCheckpointState> {
+    let start = Instant::now();
     tracing::info!(
         "Creating S3 graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}",
         last_indexed_iris_id,
         last_indexed_modification_id
     );
 
-    let start = Instant::now();
-
     let left_graph = graph_mem[LEFT].read().await;
     let right_graph = graph_mem[RIGHT].read().await;
-
     let data = serialize_both_eyes(&[&*left_graph, &*right_graph])?;
     tracing::info!(
         "Serialized graphs to {} bytes in {:?}",
@@ -88,7 +86,7 @@ pub async fn upload_genesis_checkpoint(
         start.elapsed()
     );
 
-    metrics::histogram!("genesis_checkpoint_duration").record(start.elapsed().as_secs_f64());
+    metrics::histogram!("genesis_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
     metrics::gauge!("genesis_checkpoint_size_bytes").set(data.len() as f64);
     metrics::gauge!("genesis_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
 
@@ -100,8 +98,13 @@ pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
     config: &Config,
     state: GenesisCheckpointState,
 ) -> Result<BothEyes<GraphMem<T>>> {
+    let start = Instant::now();
+
     let bucket = &config.graph_checkpoint_bucket_name;
     let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
+
+    metrics::histogram!("genesis_checkpoint_download_duration")
+        .record(start.elapsed().as_secs_f64());
 
     // Verify BLAKE3 hash after download
     let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();

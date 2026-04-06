@@ -1083,7 +1083,6 @@ impl<'a> GraphLoader<'a> {
         Ok(())
     }
 
-    /// Loads graphs from S3 checkpoint data.
     pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
         let [left, right] = graphs;
         let GraphLoader(mut dest_graphs) = self;

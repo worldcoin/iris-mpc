@@ -96,27 +96,20 @@ impl MpcNodes {
     }
 
     /// Asserts that the S3 checkpoint graphs match the expected graphs for all nodes.
-    /// This should be used instead of `assert_hnsw_graphs` when genesis uses S3 checkpoints.
     pub async fn assert_s3_checkpoint_graphs(
         &self,
         configs: &HawkConfigs,
         expected_graphs: &BothEyes<GraphMem<PlaintextVectorRef>>,
     ) -> Result<()> {
         for (i, (node, config)) in self.nodes.iter().zip(configs.iter()).enumerate() {
-            // Get AWS clients for this config
             let aws_clients = get_aws_clients(config).await?;
-
-            // Get the latest checkpoint state from postgres
             let checkpoint_state = get_latest_checkpoint_state(&node.cpu_stores.graph)
                 .await?
                 .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
-
-            // Download the graphs from S3
             let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> =
                 download_genesis_checkpoint(&aws_clients.s3_client, config, checkpoint_state)
                     .await?;
 
-            // Compare graphs
             assert_eq!(
                 s3_graphs[0], expected_graphs[0],
                 "Left graph mismatch for node {}",

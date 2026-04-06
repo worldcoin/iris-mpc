@@ -150,7 +150,6 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
-    /// Inserts a new genesis graph checkpoint metadata snapshot.
     pub async fn insert_genesis_graph_checkpoint(
         tx: &mut Transaction<'_, Postgres>,
         s3_key: &str,
@@ -179,7 +178,7 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
-    /// Returns the most recently created genesis graph checkpoint snapshot.
+    /// Returns the most recent genesis graph checkpoint
     pub async fn get_latest_genesis_graph_checkpoint(
         &self,
     ) -> Result<Option<GenesisGraphCheckpointRow>> {

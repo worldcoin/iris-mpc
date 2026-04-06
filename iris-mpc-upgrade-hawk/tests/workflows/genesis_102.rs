@@ -70,7 +70,6 @@ impl TestRun for Test {
         let nodes = MpcNodes::new(&self.configs).await;
         nodes.apply_assertions(gpu_asserts, cpu_asserts).await;
 
-        // Assert S3 checkpoint graphs (genesis now stores graphs in S3)
         // Full graph comparison implicitly verifies layer_0_size
         nodes
             .assert_s3_checkpoint_graphs(&self.configs, &expected.dst_db.graphs)
