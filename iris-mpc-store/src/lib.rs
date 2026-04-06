@@ -561,21 +561,24 @@ WHERE id = $1;
 
         let rows = sqlx::query_as::<_, StoredModification>(
             r#"
-            SELECT
-                id,
-                serial_id,
-                request_type,
-                s3_url,
-                status,
-                persisted,
-                result_message_body,
-                graph_mutation
-            FROM modifications
-            WHERE id > $1
-              AND request_type = ANY($2)
-              AND persisted = true
-              AND status = 'COMPLETED'
-              AND serial_id <= $3
+            SELECT * FROM (
+                SELECT DISTINCT ON (serial_id)
+                    id,
+                    serial_id,
+                    request_type,
+                    s3_url,
+                    status,
+                    persisted,
+                    result_message_body,
+                    graph_mutation
+                FROM modifications
+                WHERE id > $1
+                  AND request_type = ANY($2)
+                  AND persisted = true
+                  AND status = 'COMPLETED'
+                  AND serial_id <= $3
+                ORDER BY serial_id, id DESC
+            ) deduped
             ORDER BY id ASC
             "#,
         )
