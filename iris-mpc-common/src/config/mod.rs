@@ -688,7 +688,6 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
-    graph_checkpoint_bucket_name: String,
     graph_checkpoint_frequency: usize,
 }
 
@@ -788,7 +787,7 @@ impl From<Config> for CommonConfig {
             enable_pprof_per_batch: _,
             separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
-            graph_checkpoint_bucket_name,
+            graph_checkpoint_bucket_name: _,
             graph_checkpoint_frequency,
         } = value;
 
@@ -847,7 +846,6 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
-            graph_checkpoint_bucket_name,
             graph_checkpoint_frequency,
         }
     }
