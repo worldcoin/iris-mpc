@@ -21,6 +21,9 @@ env:
   - name: SMPC__PPROF_S3_BUCKET
     value: "wf-smpcv2-dev-hnsw-performance-reports"
 
+  - name: "SMPC__GRAPH_CHECKPOINT_BUCKET_NAME"
+    value: "wf-smpcv2-dev-hnsw-performance-reports"
+
   - name: SMPC__PPROF_PREFIX
     value: "dev/hnsw"
 
