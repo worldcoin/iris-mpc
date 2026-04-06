@@ -38,7 +38,6 @@ rstest = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "*"
-sha2.workspace = true
 siphasher = "1"
 socket2 = { version = "0.6.0", features = ["all"] }
 static_assertions.workspace = true

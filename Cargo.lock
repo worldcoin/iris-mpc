@@ -3061,7 +3061,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
- "sha2",
  "siphasher",
  "socket2 0.6.0",
  "sqlx",

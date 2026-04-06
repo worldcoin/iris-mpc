@@ -803,13 +803,6 @@ async fn exec_indexation(
     }
     .await;
 
-    // Get last indexed ID for final checkpoint (need to recompute since async block consumed local var)
-    let final_last_indexed_id = if ctx.last_indexed_id < ctx.args.max_indexation_id {
-        ctx.args.max_indexation_id
-    } else {
-        ctx.last_indexed_id
-    };
-
     // Process main loop result:
     match res {
         // Success.
@@ -817,10 +810,10 @@ async fn exec_indexation(
             let wait_start = Instant::now();
 
             // Create final checkpoint if any irises were indexed since last checkpoint
-            if irises_since_checkpoint > 0 || last_checkpoint_id < final_last_indexed_id {
+            if irises_since_checkpoint > 0 || last_checkpoint_id < last_indexed_id {
                 log_info(format!(
                     "Creating final checkpoint: irises_since_last={}, last_indexed_id={}",
-                    irises_since_checkpoint, final_last_indexed_id
+                    irises_since_checkpoint, last_indexed_id
                 ));
                 upload_and_sync_genesis_checkpoint(
                     config,
@@ -834,7 +827,7 @@ async fn exec_indexation(
                 .await?;
                 log_info(format!(
                     "Final checkpoint created at iris_id={}",
-                    final_last_indexed_id
+                    last_indexed_id
                 ));
             } else if let Some(rx) = persist_ch.take() {
                 hawk_handle.sync_peers(false, Some(rx)).await?;
@@ -1637,8 +1630,8 @@ async fn upload_and_sync_genesis_checkpoint(
         Ok(r) => r,
         Err(e) => {
             log_error(format!(
-                "failed to upload genesis checkpoint for last_indexed_id: {}",
-                last_indexed_id
+                "failed to upload genesis checkpoint for last_indexed_id: {}: {}",
+                last_indexed_id, e
             ));
             bail!(e);
         }

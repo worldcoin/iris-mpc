@@ -28,7 +28,7 @@ pub async fn upload_graph(
     s3_client: &S3Client,
     bucket: &str,
     key: &str,
-    data: &[u8],
+    data: Bytes,
 ) -> Result<()> {
     tracing::info!(
         "Uploading graph checkpoint to S3: bucket={}, key={}, size={}",
@@ -61,29 +61,40 @@ pub async fn upload_graph(
         .ok_or_else(|| eyre!("S3 did not return an upload ID"))?;
 
     // Build chunks, merging last chunk if it's under 5MB (S3 minimum part size)
+    let data_len = data.len();
     let chunk_size = std::cmp::max(chunk_size, MULTIPART_THRESHOLD);
-    let mut chunks: Vec<&[u8]> = data.chunks(chunk_size).collect();
+    let mut chunks: Vec<(usize, usize)> = (0..data_len)
+        .step_by(chunk_size)
+        .map(|start| {
+            let end = (start + chunk_size).min(data_len);
+            (start, end)
+        })
+        .collect();
     if chunks.len() >= 2 {
-        if let Some(last) = chunks.last() {
-            if last.len() < MULTIPART_THRESHOLD {
+        if let Some((last_start, last_end)) = chunks.last().copied() {
+            if last_end - last_start < MULTIPART_THRESHOLD {
                 // Merge last two chunks by adjusting the second-to-last to include the remainder
-                let last_two_start = (chunks.len() - 2) * chunk_size;
+                let last_two_start = chunks[chunks.len() - 2].0;
                 chunks.pop();
                 chunks.pop();
-                chunks.push(&data[last_two_start..]);
+                chunks.push((last_two_start, data_len));
             }
         }
     }
 
     // Spawn Workers for Chunks
-    for (i, chunk) in chunks.into_iter().enumerate() {
+    for (i, (start, end)) in chunks.into_iter().enumerate() {
         let part_number = (i + 1) as i32;
         let client = s3_client.clone();
         let bucket = bucket.to_string();
         let key = key.to_string();
         let upload_id = upload_id.to_string();
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
-        let body = chunk.to_vec();
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| eyre!("failed to acquire semaphore: {}", e))?;
+        let body = data.slice(start..end);
 
         join_set.spawn(async move {
             let mut attempts = 0;
@@ -213,7 +224,11 @@ pub async fn download_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Re
         let end = std::cmp::min(start + chunk_size - 1, total_size - 1);
         let client = s3_client.clone();
         let (b, k) = (bucket.to_string(), key.to_string());
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| eyre!("failed to acquire semaphore: {e}"))?;
 
         join_set.spawn(async move {
             let mut attempts = 0;
@@ -298,9 +313,9 @@ pub async fn delete_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Resu
 /// serialize a graph for s3 upload
 pub fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
     both_eyes: &BothEyes<&GraphMem<T>>,
-) -> Result<Vec<u8>> {
+) -> Result<Bytes> {
     let data = bincode::serialize(&both_eyes)?;
-    Ok(data)
+    Ok(Bytes::from(data))
 }
 
 /// deserialize graph retrievevd from s3
@@ -316,7 +331,7 @@ async fn upload_graph_simple(
     s3_client: &S3Client,
     bucket: &str,
     key: &str,
-    data: &[u8],
+    data: Bytes,
 ) -> Result<()> {
     tracing::info!(
         "Using simple PUT upload for small file: bucket={}, key={}, size={}",

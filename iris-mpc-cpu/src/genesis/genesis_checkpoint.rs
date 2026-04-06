@@ -49,9 +49,10 @@ pub async fn upload_genesis_checkpoint(
     let left_graph = graph_mem[LEFT].read().await;
     let right_graph = graph_mem[RIGHT].read().await;
     let data = serialize_both_eyes(&[&*left_graph, &*right_graph])?;
+    let data_len = data.len();
     tracing::info!(
         "Serialized graphs to {} bytes in {:?}",
-        data.len(),
+        data_len,
         start.elapsed()
     );
 
@@ -71,7 +72,7 @@ pub async fn upload_genesis_checkpoint(
     );
 
     let bucket = &config.graph_checkpoint_bucket_name;
-    upload_graph(s3_client, bucket, &s3_key, &data).await?;
+    upload_graph(s3_client, bucket, &s3_key, data).await?;
 
     let checkpoint = GenesisCheckpointState {
         s3_key: s3_key.clone(),
@@ -87,7 +88,7 @@ pub async fn upload_genesis_checkpoint(
     );
 
     metrics::histogram!("genesis_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
-    metrics::gauge!("genesis_checkpoint_size_bytes").set(data.len() as f64);
+    metrics::gauge!("genesis_checkpoint_size_bytes").set(data_len as f64);
     metrics::gauge!("genesis_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
 
     Ok(checkpoint)
@@ -193,11 +194,12 @@ pub async fn cleanup_old_checkpoints<V: VectorStore>(
     let old_checkpoints = graph_store
         .get_old_genesis_graph_checkpoints(&current_state.s3_key)
         .await?;
+    let _ = current_state.s3_key;
     for checkpoint in old_checkpoints {
         delete_graph(
             s3_client,
             &config.graph_checkpoint_bucket_name,
-            &current_state.s3_key,
+            &checkpoint.s3_key,
         )
         .await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
