@@ -1253,4 +1253,263 @@ mod tests {
         let node = leaf("x", 42, 7);
         assert_eq!(SortBy::Messages.key(&node), 7);
     }
+
+    // -----------------------------------------------------------------------
+    // NetworkFormatter integration tests (via tracing_forest::capture)
+    // -----------------------------------------------------------------------
+
+    /// Capture tracing trees from a closure that emits spans/events.
+    async fn capture_trees<F: std::future::Future<Output = ()>>(
+        f: F,
+    ) -> Vec<tracing_forest::tree::Tree> {
+        tracing_forest::capture().build().on(f).await
+    }
+
+    #[tokio::test]
+    async fn fmt_accumulates_single_span() {
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("my_func").entered();
+            tracing::info!(bytes = 100, messages = 2, "send");
+        })
+        .await;
+
+        let formatter = NetworkFormatter::new();
+        for tree in &trees {
+            formatter.fmt(tree).unwrap();
+        }
+
+        let snapshot = formatter.snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].name, "my_func");
+        assert_eq!(snapshot[0].direct_bytes, 100);
+        assert_eq!(snapshot[0].direct_messages, 2);
+    }
+
+    #[tokio::test]
+    async fn fmt_accumulates_across_multiple_calls() {
+        let formatter = NetworkFormatter::new();
+
+        // First call
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("func_a").entered();
+            tracing::info!(bytes = 50, messages = 1, "send");
+        })
+        .await;
+        for tree in &trees {
+            formatter.fmt(tree).unwrap();
+        }
+
+        // Second call — same function name, stats should sum
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("func_a").entered();
+            tracing::info!(bytes = 30, messages = 2, "send");
+        })
+        .await;
+        for tree in &trees {
+            formatter.fmt(tree).unwrap();
+        }
+
+        let snapshot = formatter.snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].direct_bytes, 80);
+        assert_eq!(snapshot[0].direct_messages, 3);
+    }
+
+    #[tokio::test]
+    async fn fmt_nested_spans_produce_children() {
+        let trees = capture_trees(async {
+            let _outer = tracing::info_span!("outer").entered();
+            {
+                let _inner = tracing::info_span!("inner").entered();
+                tracing::info!(bytes = 200, messages = 5, "send");
+            }
+        })
+        .await;
+
+        let formatter = NetworkFormatter::new();
+        for tree in &trees {
+            formatter.fmt(tree).unwrap();
+        }
+
+        let snapshot = formatter.snapshot();
+        assert_eq!(snapshot.len(), 1);
+        let outer = &snapshot[0];
+        assert_eq!(outer.name, "outer");
+        assert_eq!(outer.direct_bytes, 0);
+        assert_eq!(outer.children.len(), 1);
+
+        let inner = &outer.children[0];
+        assert_eq!(inner.name, "inner");
+        assert_eq!(inner.direct_bytes, 200);
+        assert_eq!(inner.direct_messages, 5);
+    }
+
+    #[tokio::test]
+    async fn fmt_tracing_output_disabled_returns_empty() {
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("f").entered();
+            tracing::info!(bytes = 10, messages = 1, "send");
+        })
+        .await;
+
+        let formatter = NetworkFormatter::new(); // tracing_output defaults false
+        let result = formatter.fmt(&trees[0]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fmt_tracing_output_enabled_returns_nonempty() {
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("my_span").entered();
+            tracing::info!(bytes = 10, messages = 1, "send");
+        })
+        .await;
+
+        let formatter = NetworkFormatter::new().with_tracing_output(true);
+        let result = formatter.fmt(&trees[0]).unwrap();
+        assert!(!result.is_empty());
+        assert!(result.contains("my_span"));
+    }
+
+    #[tokio::test]
+    async fn reset_clears_accumulator() {
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("f").entered();
+            tracing::info!(bytes = 100, messages = 1, "send");
+        })
+        .await;
+
+        let formatter = NetworkFormatter::new();
+        formatter.fmt(&trees[0]).unwrap();
+        assert!(!formatter.snapshot().is_empty());
+
+        formatter.reset();
+        assert!(formatter.snapshot().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Output format tests (tree table, flat table, JSON, CSV)
+    // -----------------------------------------------------------------------
+
+    /// Feed a known tree into the formatter for output format tests.
+    async fn formatter_with_data() -> NetworkFormatter {
+        let formatter = NetworkFormatter::new();
+
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("search").entered();
+            tracing::info!(bytes = 100, messages = 10, "send");
+            {
+                let _inner = tracing::info_span!("compare").entered();
+                tracing::info!(bytes = 50, messages = 5, "send");
+            }
+        })
+        .await;
+        for tree in &trees {
+            formatter.fmt(tree).unwrap();
+        }
+
+        let trees = capture_trees(async {
+            let _span = tracing::info_span!("insert").entered();
+            tracing::info!(bytes = 200, messages = 20, "send");
+        })
+        .await;
+        for tree in &trees {
+            formatter.fmt(tree).unwrap();
+        }
+
+        formatter
+    }
+
+    #[tokio::test]
+    async fn format_tree_table_contains_expected_sections() {
+        let formatter = formatter_with_data().await;
+        let table = formatter.format_tree_table(SortBy::Bytes);
+
+        assert!(table.contains("Per-function breakdown"));
+        assert!(table.contains("function"));
+        assert!(table.contains("direct bytes"));
+        assert!(table.contains("total bytes"));
+        assert!(table.contains("TOTAL"));
+        assert!(table.contains("search"));
+        assert!(table.contains("compare"));
+        assert!(table.contains("insert"));
+    }
+
+    #[tokio::test]
+    async fn format_flat_table_contains_expected_sections() {
+        let formatter = formatter_with_data().await;
+        let table = formatter.format_flat_table(SortBy::Bytes);
+
+        assert!(table.contains("Flat per-function totals"));
+        assert!(table.contains("function"));
+        assert!(table.contains("bytes"));
+        assert!(table.contains("TOTAL"));
+        assert!(table.contains("search"));
+        assert!(table.contains("insert"));
+    }
+
+    #[tokio::test]
+    async fn to_json_has_correct_structure() {
+        let formatter = formatter_with_data().await;
+        let json = formatter.to_json(SortBy::Bytes);
+
+        assert!(json["total_bytes"].as_u64().unwrap() > 0);
+        assert!(json["total_messages"].as_u64().unwrap() > 0);
+        assert!(json["functions"].is_array());
+
+        let functions = json["functions"].as_array().unwrap();
+        assert!(!functions.is_empty());
+
+        // Each function node has expected keys
+        let first = &functions[0];
+        assert!(first["name"].is_string());
+        assert!(first["direct_bytes"].is_u64());
+        assert!(first["total_bytes"].is_u64());
+        assert!(first["total_messages"].is_u64());
+    }
+
+    #[tokio::test]
+    async fn to_json_totals_match_snapshot() {
+        let formatter = formatter_with_data().await;
+        let json = formatter.to_json(SortBy::Bytes);
+
+        let snapshot = formatter.snapshot();
+        let expected_bytes: u64 = snapshot.iter().map(|r| r.total_bytes()).sum();
+        let expected_msgs: u64 = snapshot.iter().map(|r| r.total_messages()).sum();
+
+        assert_eq!(json["total_bytes"].as_u64().unwrap(), expected_bytes);
+        assert_eq!(json["total_messages"].as_u64().unwrap(), expected_msgs);
+    }
+
+    #[tokio::test]
+    async fn to_flat_csv_is_parseable() {
+        let formatter = formatter_with_data().await;
+        let csv = formatter.to_flat_csv(SortBy::Bytes);
+
+        let lines: Vec<&str> = csv.lines().collect();
+        // header + at least one data row + TOTAL row
+        assert!(lines.len() >= 3);
+        assert_eq!(lines[0], "function,bytes,messages,pct_bytes,pct_messages");
+        assert!(lines.last().unwrap().starts_with("TOTAL,"));
+    }
+
+    #[tokio::test]
+    async fn to_flat_csv_total_row_sums_correctly() {
+        let formatter = formatter_with_data().await;
+        let csv = formatter.to_flat_csv(SortBy::Bytes);
+
+        let total_line = csv.lines().last().unwrap();
+        let parts: Vec<&str> = total_line.split(',').collect();
+        assert_eq!(parts[0], "TOTAL");
+
+        let total_bytes: u64 = parts[1].parse().unwrap();
+        let total_messages: u64 = parts[2].parse().unwrap();
+
+        let snapshot = formatter.snapshot();
+        let expected_bytes: u64 = snapshot.iter().map(|r| r.total_bytes()).sum();
+        let expected_msgs: u64 = snapshot.iter().map(|r| r.total_messages()).sum();
+
+        assert_eq!(total_bytes, expected_bytes);
+        assert_eq!(total_messages, expected_msgs);
+    }
 }
