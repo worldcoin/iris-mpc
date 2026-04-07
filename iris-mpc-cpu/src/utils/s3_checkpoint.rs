@@ -113,7 +113,7 @@ pub async fn upload_graph(
                 {
                     Ok(res) => {
                         let etag = res.e_tag().map(|s| s.to_string());
-                        tracing::info!("part {} uploaded: e_tag={:?}", part_number, etag);
+                        tracing::debug!("part {} uploaded: e_tag={:?}", part_number, etag);
 
                         let etag = etag.ok_or_else(|| {
                             eyre!("s3 didn't return ETag for part {}", part_number)
@@ -207,7 +207,15 @@ pub async fn download_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Re
         .bucket(bucket)
         .key(key)
         .send()
-        .await?;
+        .await
+        .map_err(|e| {
+            eyre!(
+                "failed to get s3 checkpoint metadata  for bucket {}:, key: {}, error: {}",
+                bucket,
+                key,
+                e
+            )
+        })?;
     let total_size = head
         .content_length()
         .ok_or_else(|| eyre!("Missing content length"))?
