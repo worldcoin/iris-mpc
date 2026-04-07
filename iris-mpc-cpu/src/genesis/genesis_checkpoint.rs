@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr, time::Instant};
+use std::time::Instant;
 
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
@@ -9,10 +9,9 @@ use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
     hnsw::{
         graph::{
-            graph_store::{self, GraphPg},
+            graph_store::GraphPg,
             layered_graph::GraphMem,
         },
-        vector_store::Ref,
         VectorStore,
     },
     utils::s3_checkpoint::*,
@@ -90,16 +89,16 @@ pub async fn upload_genesis_checkpoint(
     metrics::histogram!("genesis_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
     metrics::gauge!("genesis_checkpoint_size_bytes").set(data_len as f64);
     metrics::gauge!("genesis_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
-    metrics::gauge!("genesis_checkpoint_last_modification_id").set(last_modification_id as f64);
+    metrics::gauge!("genesis_checkpoint_last_modification_id").set(last_indexed_modification_id as f64);
 
     Ok(checkpoint)
 }
 
-pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
+pub async fn download_genesis_checkpoint(
     s3_client: &S3Client,
     config: &Config,
     state: GenesisCheckpointState,
-) -> Result<BothEyes<GraphMem<T>>> {
+) -> Result<BothEyes<GraphMem<iris_mpc_common::IrisVectorId>>> {
     let start = Instant::now();
 
     let bucket = &config.graph_checkpoint_bucket_name;
