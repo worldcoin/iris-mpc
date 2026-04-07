@@ -287,15 +287,6 @@ impl StatsTreeNode {
         }
     }
 
-    /// Recursively sort children by total_bytes descending.
-    fn sort_recursive(&mut self) {
-        for child in &mut self.children {
-            child.sort_recursive();
-        }
-        self.children
-            .sort_by_key(|c| std::cmp::Reverse(c.total_bytes()));
-    }
-
     /// Total bytes (direct + all descendants).
     pub fn total_bytes(&self) -> u64 {
         self.direct_bytes + self.children.iter().map(|c| c.total_bytes()).sum::<u64>()
@@ -469,12 +460,7 @@ impl NetworkFormatter {
     /// Returns accumulated stats as a forest of `StatsTreeNode` roots.
     pub fn snapshot(&self) -> Vec<StatsTreeNode> {
         let map = self.accumulator.lock().unwrap_or_else(|e| e.into_inner());
-        let mut roots: Vec<StatsTreeNode> = map.values().cloned().collect();
-        for root in &mut roots {
-            root.sort_recursive();
-        }
-        roots.sort_by_key(|b| std::cmp::Reverse(b.total_bytes()));
-        roots
+        map.values().cloned().collect()
     }
 
     /// Resets accumulated stats.
