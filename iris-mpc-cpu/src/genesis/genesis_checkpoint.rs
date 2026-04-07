@@ -2,14 +2,14 @@ use std::time::Instant;
 
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
-use iris_mpc_common::{config::Config, IrisSerialId};
+use iris_mpc_common::IrisSerialId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
     hnsw::{
         graph::{
-            graph_store::GraphPg,
+            graph_store::{self, GraphPg},
             layered_graph::GraphMem,
         },
         VectorStore,
@@ -32,7 +32,8 @@ pub struct GenesisCheckpointState {
 
 /// Creates an S3 graph checkpoint.
 pub async fn upload_genesis_checkpoint(
-    config: &Config,
+    bucket: &str,
+    party_id: usize,
     graph_mem: &BothEyes<GraphRef>,
     s3_client: &S3Client,
     last_indexed_iris_id: IrisSerialId,
@@ -66,11 +67,10 @@ pub async fn upload_genesis_checkpoint(
 
     let s3_key = format!(
         "genesis/{}/checkpoint_{}.bin",
-        config.party_id,
+        party_id,
         uuid::Uuid::new_v4()
     );
 
-    let bucket = &config.graph_checkpoint_bucket_name;
     upload_graph(s3_client, bucket, &s3_key, data).await?;
 
     let checkpoint = GenesisCheckpointState {
@@ -89,19 +89,19 @@ pub async fn upload_genesis_checkpoint(
     metrics::histogram!("genesis_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
     metrics::gauge!("genesis_checkpoint_size_bytes").set(data_len as f64);
     metrics::gauge!("genesis_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
-    metrics::gauge!("genesis_checkpoint_last_modification_id").set(last_indexed_modification_id as f64);
+    metrics::gauge!("genesis_checkpoint_last_modification_id")
+        .set(last_indexed_modification_id as f64);
 
     Ok(checkpoint)
 }
 
 pub async fn download_genesis_checkpoint(
     s3_client: &S3Client,
-    config: &Config,
+    bucket: &str,
     state: GenesisCheckpointState,
 ) -> Result<BothEyes<GraphMem<iris_mpc_common::IrisVectorId>>> {
     let start = Instant::now();
 
-    let bucket = &config.graph_checkpoint_bucket_name;
     let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
 
     metrics::histogram!("genesis_checkpoint_download_duration")
@@ -186,7 +186,7 @@ pub async fn save_checkpoint_state<V: VectorStore>(
 }
 
 pub async fn cleanup_old_checkpoints<V: VectorStore>(
-    config: &Config,
+    bucket: &str,
     s3_client: &S3Client,
     current_state: &GenesisCheckpointState,
     graph_store: &GraphPg<V>,
@@ -195,12 +195,7 @@ pub async fn cleanup_old_checkpoints<V: VectorStore>(
         .get_genesis_graph_checkpoints_excluding(&current_state.s3_key)
         .await?;
     for checkpoint in old_checkpoints {
-        delete_graph(
-            s3_client,
-            &config.graph_checkpoint_bucket_name,
-            &checkpoint.s3_key,
-        )
-        .await?;
+        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
     }
     Ok(())

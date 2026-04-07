@@ -66,6 +66,12 @@ pub struct ExecutionArgs {
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_snapshot: bool,
+
+    // S3 bucket name for storing graph checkpoints.
+    checkpoint_bucket: String,
+
+    // Number of irises to index between checkpoints.
+    checkpoint_frequency: usize,
 }
 
 /// Constructor.
@@ -74,11 +80,15 @@ impl ExecutionArgs {
         batch_size_config: BatchSizeConfig,
         max_indexation_id: IrisSerialId,
         perform_snapshot: bool,
+        checkpoint_bucket: String,
+        checkpoint_frequency: usize,
     ) -> Self {
         Self {
             batch_size_config,
             max_indexation_id,
             perform_snapshot,
+            checkpoint_bucket,
+            checkpoint_frequency,
         }
     }
 }
@@ -183,7 +193,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     // Phase 2: indexation.
     exec_indexation(
-        &config,
         &ctx,
         &aws_s3_client,
         &imem_iris_stores,
@@ -385,7 +394,13 @@ async fn exec_setup(
 
     // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        cleanup_old_checkpoints(config, &aws_s3_client, graph_checkpoint, &graph_store_arc).await?;
+        cleanup_old_checkpoints(
+            &args.checkpoint_bucket,
+            &aws_s3_client,
+            graph_checkpoint,
+            &graph_store_arc,
+        )
+        .await?;
     }
 
     // Initialise HNSW graph from previously indexed.
@@ -393,6 +408,7 @@ async fn exec_setup(
     hawk_actor.sync_peers().await?;
     init_graph_from_stores(
         config,
+        &args.checkpoint_bucket,
         &iris_store,
         graph_store_arc.clone(),
         &mut hawk_actor,
@@ -593,7 +609,8 @@ async fn exec_delta(
                     "Creating S3 checkpoint after delta modifications...",
                 ));
                 upload_and_sync_genesis_checkpoint(
-                    config,
+                    &ctx.args.checkpoint_bucket,
+                    ctx.config.party_id,
                     imem_graph_stores,
                     s3_client,
                     ctx.last_indexed_id, // no irises were indexed
@@ -630,7 +647,6 @@ async fn exec_delta(
 ///
 /// # Arguments
 ///
-/// * `config` - Application configuration.
 /// * `ctx` - Execution context information.
 /// * `s3_client` - AWS S3 client for checkpoint uploads.
 /// * `imem_iris_stores` - In-memory iris shares for indexation queries.
@@ -643,7 +659,6 @@ async fn exec_delta(
 ///
 #[allow(clippy::too_many_arguments)]
 async fn exec_indexation(
-    config: &Config,
     ctx: &ExecutionContextInfo,
     s3_client: &S3Client,
     imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
@@ -684,7 +699,7 @@ async fn exec_indexation(
     let mut persist_ch: Option<oneshot::Receiver<()>> = None;
 
     // Checkpoint tracking
-    let checkpoint_frequency = config.graph_checkpoint_frequency;
+    let checkpoint_frequency = ctx.args.checkpoint_frequency;
     let mut last_checkpoint_id = ctx.last_indexed_id;
     let mut irises_since_checkpoint: usize = 0;
     let mut last_indexed_id = ctx.last_indexed_id;
@@ -743,7 +758,8 @@ async fn exec_indexation(
                     irises_since_checkpoint, last_indexed_id
                 ));
                 upload_and_sync_genesis_checkpoint(
-                    config,
+                    &ctx.args.checkpoint_bucket,
+                    ctx.config.party_id,
                     imem_graph_stores,
                     s3_client,
                     last_indexed_id,
@@ -816,7 +832,8 @@ async fn exec_indexation(
                     irises_since_checkpoint, last_indexed_id
                 ));
                 upload_and_sync_genesis_checkpoint(
-                    config,
+                    &ctx.args.checkpoint_bucket,
+                    ctx.config.party_id,
                     imem_graph_stores,
                     s3_client,
                     last_indexed_id,
@@ -1393,15 +1410,17 @@ async fn get_sync_result(
 ///
 /// # Arguments
 ///
-/// * `iris_store` - Iris PostgreSQL store provider.
 /// * `config` - Application configuration instance.
+/// * `checkpoint_bucket` - S3 bucket name for graph checkpoints.
+/// * `iris_store` - Iris PostgreSQL store provider.
 /// * `graph_store` - Graph PostgreSQL store provider.
 /// * `hawk_actor` - Hawk actor managing graph access & indexation.
 /// * `s3_client` - AWS S3 client for checkpoint loading.
-/// * `max_index` - Optional maximum index to load (inclusive). If None, loads all data.
+/// * `max_indexation_id` - Maximum index to load (inclusive).
 ///
 async fn init_graph_from_stores(
     config: &Config,
+    checkpoint_bucket: &str,
     iris_store: &IrisStore,
     graph_store: Arc<GraphPg<Aby3Store>>,
     hawk_actor: &mut HawkActor,
@@ -1457,7 +1476,8 @@ async fn init_graph_from_stores(
     match get_latest_checkpoint_state(&graph_store).await {
         Ok(Some(state)) => {
             // Checkpoint exists - must successfully load it or fail
-            let both_eyes = download_genesis_checkpoint(s3_client, config, state).await?;
+            let both_eyes =
+                download_genesis_checkpoint(s3_client, checkpoint_bucket, state).await?;
             graph_loader.load_graphs_from_checkpoint(both_eyes);
             return Ok(());
         }
@@ -1610,7 +1630,8 @@ async fn validate_consistency_of_stores(
 
 /// Uploads a genesis checkpoint, sends the result, and synchronizes peers.
 async fn upload_and_sync_genesis_checkpoint(
-    config: &Config,
+    checkpoint_bucket: &str,
+    party_id: usize,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     s3_client: &S3Client,
     last_indexed_id: u32,
@@ -1619,7 +1640,8 @@ async fn upload_and_sync_genesis_checkpoint(
     hawk_handle: &mut GenesisHawkHandle,
 ) -> Result<()> {
     let checkpoint_state = match upload_genesis_checkpoint(
-        config,
+        checkpoint_bucket,
+        party_id,
         imem_graph_stores,
         s3_client,
         last_indexed_id,

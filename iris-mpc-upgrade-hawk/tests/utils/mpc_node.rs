@@ -107,7 +107,7 @@ impl MpcNodes {
                 .await?
                 .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
             let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> =
-                download_genesis_checkpoint(&aws_clients.s3_client, config, checkpoint_state)
+                download_genesis_checkpoint(&aws_clients.s3_client, &config.graph_checkpoint_bucket_name, checkpoint_state)
                     .await?;
 
             assert_eq!(
