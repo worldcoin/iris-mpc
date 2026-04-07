@@ -1,0 +1,29 @@
+[irises]
+option = "NdjsonFile"
+path = "data/store.ndjson"
+limit = 1000
+selection = "All"
+
+[graph]
+path = "data/graph_1000.dat"
+format = "Raw"
+
+[searcher]
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[searcher.params]
+option = "Standard"
+ef_constr = 320
+ef_search = 256
+M = 256
+
+# communication_stats-specific settings
+batch_size = 5
+num_batches = 1
+request_parallelism = 2
+connection_parallelism = 2
+sort_by = "Bytes"       # "Bytes" or "Messages"
+tracing = false
+output = "output.txt"
+json_output = "tree.json"
+csv_output = "flat.csv"

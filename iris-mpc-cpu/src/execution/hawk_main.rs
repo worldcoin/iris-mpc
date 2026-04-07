@@ -535,6 +535,16 @@ impl HawkActor {
         self.anon_stats_store = store;
     }
 
+    /// Replaces the network handle used by this actor to create MPC sessions.
+    /// Returns the previous handle. Useful for benchmarks that need to wrap
+    /// the networking layer with counting.
+    pub fn replace_networking(
+        &mut self,
+        networking: Box<dyn NetworkHandle>,
+    ) -> Box<dyn NetworkHandle> {
+        std::mem::replace(&mut self.networking, networking)
+    }
+
     pub fn searcher(&self) -> Arc<HnswSearcher> {
         self.searcher.clone()
     }
