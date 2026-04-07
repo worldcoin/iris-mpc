@@ -190,10 +190,10 @@ fn get_network_tree(tree: &Tree) -> NetworkTree {
             let mut messages = 0;
             for field in event.fields().iter() {
                 if field.key() == "bytes" {
-                    bytes = field.value().parse().unwrap();
+                    bytes = field.value().parse().unwrap_or(0);
                 }
                 if field.key() == "messages" {
-                    messages = field.value().parse().unwrap();
+                    messages = field.value().parse().unwrap_or(0);
                 }
             }
             NetworkTree::Event(NetworkEvent {
