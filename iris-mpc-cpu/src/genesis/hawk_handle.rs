@@ -271,12 +271,10 @@ impl Handle {
                                     let plans = vec![Some(insert_plan)];
                                     let ids = vec![Some(vector_id)];
 
-                                    let connect_plan = {
-                                        let mut store = session.aby3_store.write().await;
-                                        let mut graph = session.graph_store.write().await;
-
-                                        insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?
-                                    };
+                                    let mut store = session.aby3_store.write().await;
+                                    let mut graph = session.graph_store.write().await;
+                                    let connect_plan =
+                                        insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?;
 
                                     Ok((connect_plan, vector_id))
                                 }
