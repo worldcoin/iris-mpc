@@ -90,6 +90,7 @@ pub async fn upload_genesis_checkpoint(
     metrics::histogram!("genesis_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
     metrics::gauge!("genesis_checkpoint_size_bytes").set(data_len as f64);
     metrics::gauge!("genesis_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
+    metrics::gauge!("genesis_checkpoint_last_modification_id").set(last_modification_id as f64);
 
     Ok(checkpoint)
 }
@@ -147,7 +148,7 @@ pub async fn get_latest_checkpoint_state<V: VectorStore>(
         })
         .transpose()?;
 
-    if let Some(ref m) = metadata {
+    if let Some(m) = &metadata {
         tracing::info!(
             "Found existing checkpoint: s3_key={}, last_indexed_iris_id={}",
             m.s3_key,
@@ -192,9 +193,8 @@ pub async fn cleanup_old_checkpoints<V: VectorStore>(
     graph_store: &GraphPg<V>,
 ) -> Result<()> {
     let old_checkpoints = graph_store
-        .get_old_genesis_graph_checkpoints(&current_state.s3_key)
+        .get_genesis_graph_checkpoints_excluding(&current_state.s3_key)
         .await?;
-    let _ = current_state.s3_key;
     for checkpoint in old_checkpoints {
         delete_graph(
             s3_client,

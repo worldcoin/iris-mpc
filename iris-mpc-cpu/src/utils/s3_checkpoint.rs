@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100 MB chunks
-pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 10;
+pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 32;
 const MULTIPART_THRESHOLD: usize = 5 * 1024 * 1024; // 5MB - S3 multipart minimum part size
 
 /// Uploads checkpoint data to S3.

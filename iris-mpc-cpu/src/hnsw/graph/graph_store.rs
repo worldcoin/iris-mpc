@@ -201,7 +201,9 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(row)
     }
 
-    pub async fn get_old_genesis_graph_checkpoints(
+    /// Returns all genesis graph checkpoints with a different S3 key than the one provided.
+    /// This is used to find checkpoints that should be deleted after a new checkpoint is created.
+    pub async fn get_genesis_graph_checkpoints_excluding(
         &self,
         s3_key: &str,
     ) -> Result<Vec<GenesisGraphCheckpointRow>> {
@@ -220,17 +222,17 @@ impl<V: VectorStore> GraphPg<V> {
         .bind(s3_key)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| eyre!("Failed to fetch old genesis checkpoints: {e}"))?;
+        .map_err(|e| eyre!("Failed to fetch genesis checkpoints: {e}"))?;
         Ok(rows)
     }
 
-    pub async fn delete_genesis_checkpoint(&self, to_delete: i64) -> Result<()> {
+    pub async fn delete_genesis_checkpoint(&self, id: i64) -> Result<()> {
         let _ = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
             r#"
             DELETE FROM genesis_graph_checkpoint WHERE id = $1
             "#,
         )
-        .bind(to_delete)
+        .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| eyre!("Failed to delete genesis checkpoint: {e}"))?;
