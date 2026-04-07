@@ -467,7 +467,7 @@ impl NetworkFormatter {
 
     /// Returns accumulated stats as a forest of `StatsTreeNode` roots.
     pub fn snapshot(&self) -> Vec<StatsTreeNode> {
-        let map = self.accumulator.lock().unwrap();
+        let map = self.accumulator.lock().unwrap_or_else(|e| e.into_inner());
         let mut roots: Vec<StatsTreeNode> = map.values().cloned().collect();
         for root in &mut roots {
             root.sort_recursive();
@@ -478,7 +478,10 @@ impl NetworkFormatter {
 
     /// Resets accumulated stats.
     pub fn reset(&self) {
-        self.accumulator.lock().unwrap().clear();
+        self.accumulator
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -487,7 +490,10 @@ impl Formatter for NetworkFormatter {
 
     fn fmt(&self, tree: &Tree) -> Result<String, fmt::Error> {
         // Accumulate stats from the raw tree (cheap — no dedup/sort/format)
-        accumulate_tree_into(tree, &mut self.accumulator.lock().unwrap());
+        accumulate_tree_into(
+            tree,
+            &mut self.accumulator.lock().unwrap_or_else(|e| e.into_inner()),
+        );
 
         if !self.tracing_output {
             return Ok(String::new());
