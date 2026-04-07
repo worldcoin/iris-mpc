@@ -277,11 +277,12 @@ impl StatsTreeNode {
         match pos {
             Some(i) => &mut self.children[i],
             None => {
+                let last_index = self.children.len();
                 self.children.push(StatsTreeNode {
                     name: name.to_string(),
                     ..Default::default()
                 });
-                self.children.last_mut().unwrap()
+                &mut self.children[last_index]
             }
         }
     }
