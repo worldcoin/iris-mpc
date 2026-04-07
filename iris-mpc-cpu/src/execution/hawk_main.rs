@@ -538,6 +538,8 @@ impl HawkActor {
     /// Replaces the network handle used by this actor to create MPC sessions.
     /// Returns the previous handle. Useful for benchmarks that need to wrap
     /// the networking layer with counting.
+    /// For safety, call it before creating any sessions, and do not call it concurrently with session creation.
+    #[cfg(feature = "networking_metrics")]
     pub fn replace_networking(
         &mut self,
         networking: Box<dyn NetworkHandle>,

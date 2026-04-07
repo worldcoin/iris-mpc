@@ -15,6 +15,7 @@ helpers = [
   "dep:reqwest",
 ]
 phase_trace = ["iris-mpc-cpu/phase_trace"]
+networking_metrics = ["iris-mpc-cpu/networking_metrics"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
@@ -140,6 +141,7 @@ path = "bin/iris-mpc-cpu/hnsw_algorithm_metrics.rs"
 [[bin]]
 name = "communication-stats"
 path = "bin/iris-mpc-cpu/communication_stats.rs"
+required-features = ["networking_metrics"]
 
 [[bin]]
 name = "init-test-dbs"

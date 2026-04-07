@@ -1,17 +1,36 @@
 //! Measures communication cost (bytes and messages) of the hawk_main workflow
 //! on a pre-built HNSW graph.
 //!
-//! This binary follows the full hawk_main flow: HawkActor -> HawkHandle ->
-//! submit_batch_query, exercising all MPC communication (eval_distance_batch,
-//! less_than_batch, is_match_batch, etc.) across both eyes, rotations, and
-//! parallel sessions.
+//! ## Call structure
 //!
-//! Usage:
-//!   1. Generate benchmark data first if iris-mpc-bins/data/ is not populated:
-//!      cargo run --release -p iris-mpc-bins --bin construct-graph-ptxt -- --job-spec resources/iris-mpc-cpu/construct_graph_ptxt.toml
-//!  
+//! 1. Load plaintext irises and graph from disk.
+//! 2. Secret-share iris data across 3 parties; clone the graph for each.
+//! 3. Allocate local TCP addresses and spawn a `HawkActor` per party.
+//! 4. Swap each actor's `NetworkHandle` with a `CountingNetworkHandle` wrapper
+//!    (via `replace_networking`) to intercept all MPC traffic.
+//! 5. Promote each actor into a `HawkHandle` (connects networking).
+//! 6. For each batch:
+//!    a. Generate query shares and call `submit_batch_query` on every party.
+//!    b. Collect results and report matches/insertions.
+//!    c. Print per-function communication breakdown (hierarchical + flat).
+//!    d. Optionally write results to text, JSON, and CSV files.
+//!
+//! ## Usage
+//!
+//! This binary requires the `networking_metrics` feature:
+//!
+//!   1. Generate benchmark data first if `iris-mpc-bins/data/` is not populated:
+//!      ```sh
+//!      cargo run --release -p iris-mpc-bins --bin construct-graph-ptxt -- \
+//!          --job-spec resources/iris-mpc-cpu/construct_graph_ptxt.toml
+//!      ```
+//!
 //!   2. Run this binary:
-//!      cargo run --release -p iris-mpc-bins --bin communication-stats -- --job-spec resources/iris-mpc-cpu/communication_stats.toml
+//!      ```sh
+//!      cargo run --release -p iris-mpc-bins --features networking_metrics \
+//!          --bin communication-stats -- \
+//!          --job-spec resources/iris-mpc-cpu/communication_stats.toml
+//!      ```
 //!
 //!   Make sure that the configuration files have same overlapping parameters and paths.
 
