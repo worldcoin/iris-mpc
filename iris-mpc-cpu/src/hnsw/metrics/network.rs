@@ -964,3 +964,126 @@ impl NetworkFormatter {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // BytesDisplay
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bytes_display_zero() {
+        assert_eq!(format!("{}", BytesDisplay(0.0)), "0 B");
+    }
+
+    #[test]
+    fn bytes_display_small() {
+        assert_eq!(format!("{}", BytesDisplay(42.0)), "42 B");
+    }
+
+    #[test]
+    fn bytes_display_boundary_999() {
+        assert_eq!(format!("{}", BytesDisplay(999.0)), "999 B");
+    }
+
+    #[test]
+    fn bytes_display_one_kb() {
+        // 1000 bytes → 1.00 kB (< 10, so 2 decimal places)
+        assert_eq!(format!("{}", BytesDisplay(1000.0)), "1.00 kB");
+    }
+
+    #[test]
+    fn bytes_display_mid_kb() {
+        // 5500 → 5.50 kB
+        assert_eq!(format!("{}", BytesDisplay(5500.0)), "5.50 kB");
+    }
+
+    #[test]
+    fn bytes_display_tens_kb() {
+        // 45_000 → 45.0 kB
+        assert_eq!(format!("{}", BytesDisplay(45_000.0)), "45.0 kB");
+    }
+
+    #[test]
+    fn bytes_display_hundreds_kb() {
+        // 500_000 → 500 kB
+        assert_eq!(format!("{}", BytesDisplay(500_000.0)), "500 kB");
+    }
+
+    #[test]
+    fn bytes_display_one_mb() {
+        assert_eq!(format!("{}", BytesDisplay(1_000_000.0)), "1.00 MB");
+    }
+
+    #[test]
+    fn bytes_display_one_gb() {
+        assert_eq!(format!("{}", BytesDisplay(1_000_000_000.0)), "1.00 GB");
+    }
+
+    #[test]
+    fn bytes_display_large_gb() {
+        // > 999 GB wraps to TB-scale but code prints as GB
+        assert_eq!(format!("{}", BytesDisplay(5_000_000_000_000.0)), "5000 GB");
+    }
+
+    // -----------------------------------------------------------------------
+    // format_bytes (wrapper)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_bytes_delegates_to_display() {
+        assert_eq!(format_bytes(2048), "2.05 kB");
+    }
+
+    // -----------------------------------------------------------------------
+    // pad_right / display_width
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pad_right_shorter_string() {
+        assert_eq!(pad_right("hi", 6), "hi    ");
+    }
+
+    #[test]
+    fn pad_right_exact_width() {
+        assert_eq!(pad_right("hello", 5), "hello");
+    }
+
+    #[test]
+    fn pad_right_longer_string() {
+        assert_eq!(pad_right("toolong", 3), "toolong");
+    }
+
+    #[test]
+    fn display_width_ascii() {
+        assert_eq!(display_width("hello"), 5);
+    }
+
+    #[test]
+    fn display_width_empty() {
+        assert_eq!(display_width(""), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // to_percentage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_percentage_normal() {
+        let pct = to_percentage(25, 100);
+        assert!((pct - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn to_percentage_zero_total() {
+        assert!((to_percentage(10, 0) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn to_percentage_full() {
+        let pct = to_percentage(100, 100);
+        assert!((pct - 100.0).abs() < f64::EPSILON);
+    }
+}
