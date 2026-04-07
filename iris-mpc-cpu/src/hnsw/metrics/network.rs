@@ -225,7 +225,7 @@ fn get_network_tree(tree: &Tree) -> NetworkTree {
             }
             let mut nodes: Vec<NetworkTree> = nodes_map.into_values().collect();
             // Sort nodes by the product of messages and calls in descending order
-            nodes.sort_by_key(|node| -(node.messages() as i64 * node.calls() as i64));
+            nodes.sort_by_key(|node| std::cmp::Reverse(node.messages() * node.calls()));
             NetworkTree::Span(NetworkSpan {
                 name: span.name().to_owned(),
                 fields: span.fields().to_vec(),
