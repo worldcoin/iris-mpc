@@ -1086,4 +1086,171 @@ mod tests {
         let pct = to_percentage(100, 100);
         assert!((pct - 100.0).abs() < f64::EPSILON);
     }
+
+    // -----------------------------------------------------------------------
+    // StatsTreeNode helpers
+    // -----------------------------------------------------------------------
+
+    /// Build a leaf StatsTreeNode (no children).
+    fn leaf(name: &str, bytes: u64, messages: u64) -> StatsTreeNode {
+        StatsTreeNode {
+            name: name.to_string(),
+            direct_bytes: bytes,
+            direct_messages: messages,
+            children: vec![],
+        }
+    }
+
+    /// Build a branch StatsTreeNode with given children and zero direct stats.
+    fn branch(name: &str, children: Vec<StatsTreeNode>) -> StatsTreeNode {
+        StatsTreeNode {
+            name: name.to_string(),
+            direct_bytes: 0,
+            direct_messages: 0,
+            children,
+        }
+    }
+
+    #[test]
+    fn stats_tree_node_leaf_totals() {
+        let node = leaf("f", 100, 5);
+        assert_eq!(node.total_bytes(), 100);
+        assert_eq!(node.total_messages(), 5);
+    }
+
+    #[test]
+    fn stats_tree_node_totals_include_children() {
+        let node = StatsTreeNode {
+            name: "parent".to_string(),
+            direct_bytes: 10,
+            direct_messages: 1,
+            children: vec![leaf("a", 20, 2), leaf("b", 30, 3)],
+        };
+        assert_eq!(node.total_bytes(), 60);
+        assert_eq!(node.total_messages(), 6);
+    }
+
+    #[test]
+    fn stats_tree_node_nested_totals() {
+        let inner = StatsTreeNode {
+            name: "mid".to_string(),
+            direct_bytes: 5,
+            direct_messages: 1,
+            children: vec![leaf("leaf", 10, 2)],
+        };
+        let root = StatsTreeNode {
+            name: "root".to_string(),
+            direct_bytes: 1,
+            direct_messages: 1,
+            children: vec![inner],
+        };
+        // root: 1 + mid(5 + leaf(10)) = 16
+        assert_eq!(root.total_bytes(), 16);
+        assert_eq!(root.total_messages(), 4);
+    }
+
+    #[test]
+    fn child_mut_creates_new_child() {
+        let mut node = leaf("parent", 0, 0);
+        assert!(node.children.is_empty());
+        let child = node.child_mut("new_child");
+        child.direct_bytes = 42;
+        assert_eq!(node.children.len(), 1);
+        assert_eq!(node.children[0].name, "new_child");
+        assert_eq!(node.children[0].direct_bytes, 42);
+    }
+
+    #[test]
+    fn child_mut_returns_existing_child() {
+        let mut node = StatsTreeNode {
+            name: "parent".to_string(),
+            direct_bytes: 0,
+            direct_messages: 0,
+            children: vec![leaf("existing", 10, 1)],
+        };
+        let child = node.child_mut("existing");
+        child.direct_bytes += 5;
+        assert_eq!(node.children.len(), 1);
+        assert_eq!(node.children[0].direct_bytes, 15);
+    }
+
+    #[test]
+    fn sort_roots_by_bytes_descending() {
+        let mut roots = vec![leaf("small", 10, 100), leaf("big", 1000, 1)];
+        StatsTreeNode::sort_roots(&mut roots, SortBy::Bytes);
+        assert_eq!(roots[0].name, "big");
+        assert_eq!(roots[1].name, "small");
+    }
+
+    #[test]
+    fn sort_roots_by_messages_descending() {
+        let mut roots = vec![leaf("few_msgs", 1000, 1), leaf("many_msgs", 10, 100)];
+        StatsTreeNode::sort_roots(&mut roots, SortBy::Messages);
+        assert_eq!(roots[0].name, "many_msgs");
+        assert_eq!(roots[1].name, "few_msgs");
+    }
+
+    #[test]
+    fn sort_roots_recurses_into_children() {
+        let mut roots = vec![StatsTreeNode {
+            name: "parent".to_string(),
+            direct_bytes: 0,
+            direct_messages: 0,
+            children: vec![leaf("child_small", 1, 0), leaf("child_big", 100, 0)],
+        }];
+        StatsTreeNode::sort_roots(&mut roots, SortBy::Bytes);
+        assert_eq!(roots[0].children[0].name, "child_big");
+        assert_eq!(roots[0].children[1].name, "child_small");
+    }
+
+    #[test]
+    fn flatten_all_sums_across_call_sites() {
+        // "compare" appears under two different parents
+        let roots = vec![
+            branch("search", vec![leaf("compare", 100, 10)]),
+            branch("insert", vec![leaf("compare", 200, 20)]),
+        ];
+        let flat = StatsTreeNode::flatten_all(&roots);
+        let compare = flat.get("compare").expect("compare should be present");
+        assert_eq!(compare.total_bytes, 300);
+        assert_eq!(compare.total_messages, 30);
+    }
+
+    #[test]
+    fn flatten_all_removes_zero_byte_entries() {
+        let roots = vec![branch("root", vec![leaf("zero_fn", 0, 5)])];
+        let flat = StatsTreeNode::flatten_all(&roots);
+        assert!(!flat.contains_key("zero_fn"));
+        assert!(!flat.contains_key("root"));
+    }
+
+    #[test]
+    fn flatten_all_includes_parent_totals() {
+        let roots = vec![StatsTreeNode {
+            name: "parent".to_string(),
+            direct_bytes: 10,
+            direct_messages: 1,
+            children: vec![leaf("child", 20, 2)],
+        }];
+        let flat = StatsTreeNode::flatten_all(&roots);
+        let parent = flat.get("parent").expect("parent should be present");
+        // parent total_bytes = 10 (direct) + 20 (child) = 30
+        assert_eq!(parent.total_bytes, 30);
+    }
+
+    // -----------------------------------------------------------------------
+    // SortBy
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sort_by_key_bytes() {
+        let node = leaf("x", 42, 7);
+        assert_eq!(SortBy::Bytes.key(&node), 42);
+    }
+
+    #[test]
+    fn sort_by_key_messages() {
+        let node = leaf("x", 42, 7);
+        assert_eq!(SortBy::Messages.key(&node), 7);
+    }
 }
