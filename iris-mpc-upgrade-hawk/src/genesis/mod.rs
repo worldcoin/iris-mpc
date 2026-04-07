@@ -388,6 +388,7 @@ async fn exec_setup(
         graph_store_arc.clone(),
         args.max_indexation_id,
         last_indexed_id,
+        graph_checkpoint.is_some(),
     )
     .await?;
     log_info(String::from("Store consistency checks OK"));
@@ -415,6 +416,7 @@ async fn exec_setup(
         &aws_s3_client,
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
+        graph_checkpoint,
     )
     .await?;
     task_monitor_bg.check_tasks();
@@ -651,8 +653,7 @@ async fn exec_delta(
 /// * `s3_client` - AWS S3 client for checkpoint uploads.
 /// * `imem_iris_stores` - In-memory iris shares for indexation queries.
 /// * `imem_graph_stores` - In-memory graph stores for checkpoints.
-/// * `graph_store` - Graph PostgreSQL store provider.
-/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
+/// * `hawk_handle` - Hawk handle managing indexation & search over an HNSW graph.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 /// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
 /// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
@@ -780,7 +781,7 @@ async fn exec_indexation(
             };
 
             // Periodically synchronize batch persistence between nodes.
-            // should take no time if a checkpoint was just uploaded
+            // Skip sync if a checkpoint was just uploaded (checkpoint upload already syncs).
             let is_sync_batch =
                 (batch.batch_id % PERSIST_DELAY) == PERSIST_DELAY - 1 && !checkpoint_uploaded;
             if is_sync_batch {
@@ -1416,7 +1417,9 @@ async fn get_sync_result(
 /// * `graph_store` - Graph PostgreSQL store provider.
 /// * `hawk_actor` - Hawk actor managing graph access & indexation.
 /// * `s3_client` - AWS S3 client for checkpoint loading.
+/// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
 /// * `max_indexation_id` - Maximum index to load (inclusive).
+/// * `checkpoint` - Optional checkpoint state to load from S3 instead of PostgreSQL.
 ///
 async fn init_graph_from_stores(
     config: &Config,
@@ -1427,6 +1430,7 @@ async fn init_graph_from_stores(
     s3_client: &S3Client,
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
+    checkpoint: Option<GenesisCheckpointState>,
 ) -> Result<()> {
     log_info(String::from("⚓️ ANCHOR: Load the database"));
 
@@ -1473,26 +1477,15 @@ async fn init_graph_from_stores(
     iris_loader.wait_completion().await?;
 
     // Try to load graph from S3 checkpoint first
-    match get_latest_checkpoint_state(&graph_store).await {
-        Ok(Some(state)) => {
-            // Checkpoint exists - must successfully load it or fail
-            let both_eyes =
-                download_genesis_checkpoint(s3_client, checkpoint_bucket, state).await?;
-            graph_loader.load_graphs_from_checkpoint(both_eyes);
-            return Ok(());
-        }
-        Ok(None) => {
-            log_info(String::from(
-                "No S3 checkpoint found, loading from PostgreSQL",
-            ));
-        }
-        Err(e) => {
-            log_warn(format!(
-                "Failed to fetch S3 checkpoint state: {:?}, falling back to PostgreSQL",
-                e
-            ));
-        }
-    };
+    if let Some(state) = checkpoint {
+        let both_eyes =
+            download_genesis_checkpoint(s3_client, checkpoint_bucket, state).await?;
+        graph_loader.load_graphs_from_checkpoint(both_eyes);
+        return Ok(());
+    }
+    log_info(String::from(
+        "No S3 checkpoint found, loading from PostgreSQL",
+    ));
 
     graph_loader
         .load_graph_store(&graph_store, graph_db_parallelism)
@@ -1557,8 +1550,10 @@ fn validate_config(config: &Config) -> Result<()> {
 ///
 /// * `config` - Application configuration instance.
 /// * `iris_store` - Iris PostgreSQL store provider.
+/// * `graph_store` - Graph PostgreSQL store provider.
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
+/// * `checkpoint_available` - Whether an S3 checkpoint is available (skips graph store validation).
 ///
 async fn validate_consistency_of_stores(
     config: &Config,
@@ -1566,6 +1561,7 @@ async fn validate_consistency_of_stores(
     graph_store: Arc<GraphPg<Aby3Store>>,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
+    checkpoint_available: bool,
 ) -> Result<()> {
     // Bail if last indexed id exceeds max indexation id
     if last_indexed_id > max_indexation_id {
@@ -1597,10 +1593,8 @@ async fn validate_consistency_of_stores(
         bail!(msg);
     }
 
-    // if there is no checkpoint, then fall back to validating the consistency of the graph store.
-    let last_checkpoint = get_latest_checkpoint_state(&graph_store).await?;
-    if last_checkpoint.is_some() {
-        // this was already validated in exec_setup().
+    // if there is a checkpoint, skip graph store validation (already validated in exec_setup).
+    if checkpoint_available {
         return Ok(());
     }
 
