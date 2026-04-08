@@ -757,9 +757,10 @@ async fn exec_indexation(
                     metrics::histogram!("genesis_persist_wait_duration")
                         .record(wait_start.elapsed().as_secs_f64());
                 }
-                // Store current results thread "done" signal channel for future synchronization.
-                persist_ch.replace(done_rx);
             }
+
+            // Store current results thread "done" signal channel for future synchronization.
+            persist_ch.replace(done_rx);
 
             metrics::histogram!("genesis_batch_total_duration",
                 "synced" => if is_sync_batch { "true" } else { "false" },
