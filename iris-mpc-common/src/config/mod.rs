@@ -495,7 +495,6 @@ fn default_graph_checkpoint_bucket_name() -> String {
     "wf-smpcv2-dev-hnsw-checkpoint".to_string()
 }
 
-
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();

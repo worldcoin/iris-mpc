@@ -1396,6 +1396,7 @@ async fn get_sync_result(
 /// * `max_indexation_id` - Maximum index to load (inclusive).
 /// * `checkpoint` - Optional checkpoint state to load from S3 instead of PostgreSQL.
 ///
+#[allow(clippy::too_many_arguments)]
 async fn init_graph_from_stores(
     config: &Config,
     checkpoint_bucket: &str,
@@ -1597,6 +1598,7 @@ async fn validate_consistency_of_stores(
 }
 
 /// Uploads a genesis checkpoint, sends the result, and synchronizes peers.
+#[allow(clippy::too_many_arguments)]
 async fn upload_and_sync_genesis_checkpoint(
     checkpoint_bucket: &str,
     party_id: usize,
