@@ -751,35 +751,6 @@ async fn exec_indexation(
             let (done_rx, result) = result;
             tx_results.send(result).await?;
 
-            // Periodic checkpoint based on snapshot_frequency
-            // do this while the results thread runs in the background, processing the current result
-            let checkpoint_uploaded = if irises_since_checkpoint >= checkpoint_frequency {
-                log_info(format!(
-                    "Creating periodic checkpoint: irises_since_last={}, last_indexed_id={}",
-                    irises_since_checkpoint, last_indexed_id
-                ));
-                upload_and_sync_genesis_checkpoint(
-                    &ctx.args.checkpoint_bucket,
-                    ctx.config.party_id,
-                    imem_graph_stores,
-                    s3_client,
-                    last_indexed_id,
-                    ctx.max_modification_persist_id, // preserve current modification state
-                    tx_results,
-                    &mut hawk_handle,
-                )
-                .await?;
-                irises_since_checkpoint = 0;
-                last_checkpoint_id = last_indexed_id;
-                log_info(format!(
-                    "Periodic checkpoint uploaded for iris_id={}",
-                    last_indexed_id
-                ));
-                true
-            } else {
-                false
-            };
-
             // Periodically synchronize batch persistence between nodes.
             let is_sync_batch = (batch.batch_id % PERSIST_DELAY) == PERSIST_DELAY - 1;
             if is_sync_batch {
@@ -796,7 +767,6 @@ async fn exec_indexation(
 
             metrics::histogram!("genesis_batch_total_duration",
                 "synced" => if is_sync_batch { "true" } else { "false" },
-                "checkpoint" => if checkpoint_uploaded { "true" } else { "false" }
             )
             .record(now.elapsed().as_secs_f64());
             log_info(format!(
@@ -804,6 +774,25 @@ async fn exec_indexation(
                 batch,
                 now.elapsed().as_secs_f64(),
             ));
+
+            // Periodic checkpoint based on snapshot_frequency
+            // do this while the results thread runs in the background, processing the current result
+            if irises_since_checkpoint >= checkpoint_frequency {
+                upload_and_sync_genesis_checkpoint(
+                    &ctx.args.checkpoint_bucket,
+                    ctx.config.party_id,
+                    imem_graph_stores,
+                    s3_client,
+                    last_indexed_id,
+                    ctx.max_modification_persist_id, // preserve current modification state
+                    tx_results,
+                    &mut hawk_handle,
+                )
+                .await?;
+                irises_since_checkpoint = 0;
+                last_checkpoint_id = last_indexed_id;
+            };
+
             now = Instant::now();
         }
         Ok(())
