@@ -8,6 +8,9 @@ env:
   - name: SMPC__GRAPH_CHECKPOINT_FREQUENCY
     value: "10000"
 
+  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
+    value: "48"
+
   - name: RUST_LOG
     value: "info"
 
