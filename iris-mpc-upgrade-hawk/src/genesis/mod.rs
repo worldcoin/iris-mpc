@@ -781,9 +781,7 @@ async fn exec_indexation(
             };
 
             // Periodically synchronize batch persistence between nodes.
-            // Skip sync if a checkpoint was just uploaded (checkpoint upload already syncs).
-            let is_sync_batch =
-                (batch.batch_id % PERSIST_DELAY) == PERSIST_DELAY - 1 && !checkpoint_uploaded;
+            let is_sync_batch = (batch.batch_id % PERSIST_DELAY) == PERSIST_DELAY - 1;
             if is_sync_batch {
                 if let Some(prev_done_rx) = persist_ch.take() {
                     let wait_start = Instant::now();
@@ -792,14 +790,6 @@ async fn exec_indexation(
                     metrics::histogram!("genesis_persist_wait_duration")
                         .record(wait_start.elapsed().as_secs_f64());
                 }
-            }
-
-            // if this branch runs, the current result would have been persisted already
-            // because the s3 checkpoint takes so long
-            if checkpoint_uploaded {
-                // just sent a new job. dont need this one anymore
-                let _ = persist_ch.take();
-            } else {
                 // Store current results thread "done" signal channel for future synchronization.
                 persist_ch.replace(done_rx);
             }
@@ -1478,8 +1468,7 @@ async fn init_graph_from_stores(
 
     // Try to load graph from S3 checkpoint first
     if let Some(state) = checkpoint {
-        let both_eyes =
-            download_genesis_checkpoint(s3_client, checkpoint_bucket, state).await?;
+        let both_eyes = download_genesis_checkpoint(s3_client, checkpoint_bucket, state).await?;
         graph_loader.load_graphs_from_checkpoint(both_eyes);
         return Ok(());
     }
