@@ -192,10 +192,14 @@ pub async fn cleanup_old_checkpoints<V: VectorStore>(
     current_state: &GenesisCheckpointState,
     graph_store: &GraphPg<V>,
 ) -> Result<()> {
-    let old_checkpoints = graph_store
-        .get_genesis_graph_checkpoints_excluding(&current_state.s3_key)
-        .await?;
+    let mut all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    // descending order
+    all_checkpoints.sort_by(|a, b| b.id.cmp(&a.id));
+    // keep the most 2 recent in case one party fails to upload. this allows
+    // all parties to roll back to a common state.
+    let old_checkpoints = all_checkpoints.into_iter().skip(2);
     for checkpoint in old_checkpoints {
+        assert!(checkpoint.s3_key != current_state.s3_key);
         delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
     }

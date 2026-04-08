@@ -388,13 +388,16 @@ async fn exec_setup(
 
     // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        cleanup_old_checkpoints(
+        if let Err(e) = cleanup_old_checkpoints(
             &config.graph_checkpoint_bucket_name,
             &aws_s3_client,
             graph_checkpoint,
             &graph_store_arc,
         )
-        .await?;
+        .await
+        {
+            log_warn(format!("failed to clean up old s3 checkpoints: {e}"));
+        }
     }
 
     // Initialise HNSW graph from previously indexed.
