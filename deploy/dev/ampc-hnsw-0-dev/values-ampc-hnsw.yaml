@@ -1,11 +1,11 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1590000"
+    value: "1530000"
 
   - name: GENESIS_BATCH_SIZE
     value: "static:96"
 
-  - name: SMPC__GRAPH_CHECKPOINT_FREQUENCY
+  - name: GENESIS_CHECKPOINT_FREQUENCY
     value: "10000"
 
   - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
