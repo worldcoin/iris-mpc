@@ -202,7 +202,7 @@ impl DistanceMinimalRotation {
             phase_trace!("dot_product", "n_vectors" => vectors.len());
             let res = store
                 .workers
-                .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
+                .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors)
                 .await?;
             metrics::histogram!("eval_distance_dot_product_duration")
                 .record(dot_start.elapsed().as_secs_f64());

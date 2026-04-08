@@ -226,9 +226,9 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         self.entry_points = vec![EntryPoint { point, layer }];
     }
 
-    pub async fn get_links(&self, base: &V, lc: usize) -> Vec<V> {
+    pub async fn get_links(&self, base: &V, lc: usize) -> &[V] {
         let layer = &self.layers[lc];
-        layer.get_links(base).unwrap_or_default()
+        layer.get_links(base).unwrap_or(&[])
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
@@ -388,17 +388,24 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    pub fn get_links(&self, from: &V) -> Option<Vec<V>> {
-        self.links.get(from).cloned()
+    pub fn get_links(&self, from: &V) -> Option<&[V]> {
+        self.links.get(from).map(|v| v.as_slice())
     }
 
     pub fn set_links(&mut self, from: V, links: Vec<V>) {
-        self.set_hash.add_unordered((&from, &links));
-
-        let previous = self.links.insert(from.clone(), links);
-
-        if let Some(previous) = previous {
-            self.set_hash.remove((&from, &previous))
+        use std::collections::hash_map::Entry;
+        match self.links.entry(from) {
+            Entry::Occupied(mut e) => {
+                self.set_hash.remove((e.key(), e.get()));
+                let existing = e.get_mut();
+                existing.clear();
+                existing.extend(links);
+                self.set_hash.add_unordered((e.key(), e.get()));
+            }
+            Entry::Vacant(e) => {
+                self.set_hash.add_unordered((e.key(), &links));
+                e.insert(links);
+            }
         }
     }
 
