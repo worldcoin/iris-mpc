@@ -59,36 +59,32 @@ const DEFAULT_REGION: &str = "eu-north-1";
 #[derive(Debug, Clone)]
 pub struct ExecutionArgs {
     // Serial identifier of maximum indexed Iris.
-    max_indexation_id: IrisSerialId,
+    pub max_indexation_id: IrisSerialId,
 
     // Batch size configuration (static or dynamic with cap).
-    batch_size_config: BatchSizeConfig,
+    pub batch_size_config: BatchSizeConfig,
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
-    perform_snapshot: bool,
+    pub perform_snapshot: bool,
 
     // S3 bucket name for storing graph checkpoints.
-    checkpoint_bucket: String,
+    pub checkpoint_bucket: String,
 
     // Number of irises to index between checkpoints.
-    checkpoint_frequency: usize,
+    pub checkpoint_frequency: usize,
 }
 
-/// Constructor.
 impl ExecutionArgs {
-    pub fn new(
-        batch_size_config: BatchSizeConfig,
-        max_indexation_id: IrisSerialId,
+    pub fn from_plaintext_args(
+        args: iris_mpc_cpu::genesis::plaintext::GenesisArgs,
         perform_snapshot: bool,
-        checkpoint_bucket: String,
-        checkpoint_frequency: usize,
     ) -> Self {
         Self {
-            batch_size_config,
-            max_indexation_id,
+            max_indexation_id: args.max_indexation_id,
+            batch_size_config: args.batch_size_config,
             perform_snapshot,
-            checkpoint_bucket,
-            checkpoint_frequency,
+            checkpoint_bucket: "wf-smpcv2-dev-hnsw-checkpoint".into(),
+            checkpoint_frequency: args.checkpoint_frequency,
         }
     }
 }

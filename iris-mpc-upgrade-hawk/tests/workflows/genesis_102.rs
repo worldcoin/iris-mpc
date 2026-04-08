@@ -32,13 +32,9 @@ impl TestRun for Test {
         let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let args = genesis_args;
+            let args = genesis_args.clone();
             join_set.spawn(async move {
-                exec_genesis(
-                    ExecutionArgs::new(args.batch_size_config, args.max_indexation_id, false),
-                    config,
-                )
-                .await
+                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
             });
         }
         join_runners!(join_set);

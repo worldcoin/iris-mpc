@@ -174,11 +174,11 @@ fn parse_args() -> Result<ExecutionArgs> {
         )
     })?;
 
-    Ok(ExecutionArgs::new(
+    Ok(ExecutionArgs {
         batch_size_config,
         max_indexation_id,
         perform_snapshot,
         checkpoint_bucket,
         checkpoint_frequency,
-    ))
+    })
 }

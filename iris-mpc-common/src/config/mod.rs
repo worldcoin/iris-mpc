@@ -308,9 +308,6 @@ pub struct Config {
 
     #[serde(default = "default_graph_checkpoint_bucket_name")]
     pub graph_checkpoint_bucket_name: String,
-
-    #[serde(default = "default_graph_checkpoint_frequency")]
-    pub graph_checkpoint_frequency: usize,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -498,9 +495,6 @@ fn default_graph_checkpoint_bucket_name() -> String {
     "wf-smpcv2-dev-hnsw-checkpoint".to_string()
 }
 
-fn default_graph_checkpoint_frequency() -> usize {
-    100_000
-}
 
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
@@ -688,7 +682,6 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
-    graph_checkpoint_frequency: usize,
 }
 
 impl CommonConfig {
@@ -788,7 +781,6 @@ impl From<Config> for CommonConfig {
             separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
             graph_checkpoint_bucket_name: _,
-            graph_checkpoint_frequency,
         } = value;
 
         assert!(
@@ -846,7 +838,6 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
-            graph_checkpoint_frequency,
         }
     }
 }

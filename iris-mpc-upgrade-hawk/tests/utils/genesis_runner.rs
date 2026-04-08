@@ -22,6 +22,7 @@ pub const MAX_INDEXATION_ID: usize = 100;
 pub const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     max_indexation_id: MAX_INDEXATION_ID as u32,
     batch_size_config: BatchSizeConfig::Static { size: 1 },
+    checkpoint_frequency: 100_000,
 };
 
 pub fn get_node_configs() -> [Config; 3] {

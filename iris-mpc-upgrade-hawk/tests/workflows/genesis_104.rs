@@ -47,9 +47,10 @@ impl TestRun for Test {
         let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config;
+            let mut args = genesis_args.clone();
+            args.max_indexation_id = 50;
             join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::new(batch_size_config, 50, false), config).await
+                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
             });
         }
         join_runners!(join_set);
@@ -63,9 +64,10 @@ impl TestRun for Test {
         // Execute genesis - second run indexing up to 100
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config;
+            let mut args = genesis_args.clone();
+            args.max_indexation_id = 100;
             join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::new(batch_size_config, 100, false), config).await
+                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
             });
         }
         join_runners!(join_set);
