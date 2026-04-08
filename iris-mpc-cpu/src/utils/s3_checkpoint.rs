@@ -3,7 +3,7 @@
 //! This module provides functionality for storing and loading graph checkpoints
 //! needed by genesis and hawk.
 
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::{fmt::Display, str::FromStr, sync::Arc, time::Duration};
 
 use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart},
@@ -11,13 +11,11 @@ use aws_sdk_s3::{
 };
 use bytes::{Bytes, BytesMut};
 use eyre::{eyre, Result};
-use iris_mpc_common::IrisVectorId;
 use tokio::{sync::Semaphore, task::JoinSet, time::sleep};
 
 use crate::{
     execution::hawk_main::BothEyes,
-    hnsw::graph::layered_graph::GraphMem,
-    utils::serialization::graph::{read_graph_pair, write_graph_pair_current, ALL_CONCRETE_GRAPH_FORMATS},
+    hnsw::{graph::layered_graph::GraphMem, vector_store::Ref},
 };
 
 pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100 MB chunks
@@ -320,40 +318,20 @@ pub async fn delete_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Resu
     Ok(())
 }
 
-/// Serialize a graph pair for S3 upload using the stable GraphV3 format.
-pub fn serialize_both_eyes(
-    both_eyes: &BothEyes<&GraphMem<IrisVectorId>>,
+/// serialize a graph for s3 upload
+pub fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
+    both_eyes: &BothEyes<&GraphMem<T>>,
 ) -> Result<Bytes> {
-    let data: [GraphMem<IrisVectorId>; 2] = [both_eyes[0].clone(), both_eyes[1].clone()];
-    let mut buffer = Vec::new();
-    write_graph_pair_current(&mut buffer, data)?;
-    Ok(Bytes::from(buffer))
+    let data = bincode::serialize(&both_eyes)?;
+    Ok(Bytes::from(data))
 }
 
-/// Deserialize graph pair retrieved from S3.
-/// Tries the current stable format first, then falls back to older formats with a warning.
-pub fn deserialize_both_eyes(
+/// deserialize graph retrievevd from s3
+pub fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
     data: &[u8],
-) -> Result<BothEyes<GraphMem<IrisVectorId>>> {
-    // Try current format first (GraphV3)
-    let mut cursor = Cursor::new(data);
-    if let Ok(graphs) = read_graph_pair(&mut cursor, ALL_CONCRETE_GRAPH_FORMATS[0]) {
-        return Ok(graphs);
-    }
-
-    // Fallback to older formats with warning
-    for format in &ALL_CONCRETE_GRAPH_FORMATS[1..] {
-        let mut cursor = Cursor::new(data);
-        if let Ok(graphs) = read_graph_pair(&mut cursor, *format) {
-            tracing::warn!(
-                "S3 checkpoint deserialized using legacy format {:?}. Consider re-uploading with current format.",
-                format
-            );
-            return Ok(graphs);
-        }
-    }
-
-    Err(eyre!("Unable to deserialize graph pair from S3 checkpoint using any known format"))
+) -> Result<BothEyes<GraphMem<T>>> {
+    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
+    Ok(graphs)
 }
 
 /// Simple PUT upload for small files (under 5MB).

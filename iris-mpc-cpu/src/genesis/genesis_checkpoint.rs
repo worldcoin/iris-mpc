@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{fmt::Display, str::FromStr, time::Instant};
 
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
@@ -12,6 +12,7 @@ use crate::{
             graph_store::{self, GraphPg},
             layered_graph::GraphMem,
         },
+        vector_store::Ref,
         VectorStore,
     },
     utils::s3_checkpoint::*,
@@ -95,11 +96,11 @@ pub async fn upload_genesis_checkpoint(
     Ok(checkpoint)
 }
 
-pub async fn download_genesis_checkpoint(
+pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
     s3_client: &S3Client,
     bucket: &str,
     state: GenesisCheckpointState,
-) -> Result<BothEyes<GraphMem<iris_mpc_common::IrisVectorId>>> {
+) -> Result<BothEyes<GraphMem<T>>> {
     let start = Instant::now();
 
     let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
