@@ -67,14 +67,12 @@ pub struct ExecutionArgs {
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     pub perform_snapshot: bool,
 
-    // S3 bucket name for storing graph checkpoints.
-    pub checkpoint_bucket: String,
-
     // Number of irises to index between checkpoints.
     pub checkpoint_frequency: usize,
 }
 
 impl ExecutionArgs {
+    // this is for integration tests
     pub fn from_plaintext_args(
         args: iris_mpc_cpu::genesis::plaintext::GenesisArgs,
         perform_snapshot: bool,
@@ -83,7 +81,6 @@ impl ExecutionArgs {
             max_indexation_id: args.max_indexation_id,
             batch_size_config: args.batch_size_config,
             perform_snapshot,
-            checkpoint_bucket: "wf-smpcv2-dev-hnsw-checkpoint".into(),
             checkpoint_frequency: args.checkpoint_frequency,
         }
     }
@@ -392,7 +389,7 @@ async fn exec_setup(
     // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
         cleanup_old_checkpoints(
-            &args.checkpoint_bucket,
+            &config.graph_checkpoint_bucket_name,
             &aws_s3_client,
             graph_checkpoint,
             &graph_store_arc,
@@ -405,7 +402,7 @@ async fn exec_setup(
     hawk_actor.sync_peers().await?;
     init_graph_from_stores(
         config,
-        &args.checkpoint_bucket,
+        &config.graph_checkpoint_bucket_name,
         &iris_store,
         graph_store_arc.clone(),
         &mut hawk_actor,
@@ -607,7 +604,7 @@ async fn exec_delta(
                     "Creating S3 checkpoint after delta modifications...",
                 ));
                 upload_and_sync_genesis_checkpoint(
-                    &ctx.args.checkpoint_bucket,
+                    &config.graph_checkpoint_bucket_name,
                     ctx.config.party_id,
                     imem_graph_stores,
                     s3_client,
@@ -775,7 +772,7 @@ async fn exec_indexation(
             // do this while the results thread runs in the background, processing the current result
             if irises_since_checkpoint >= checkpoint_frequency {
                 upload_and_sync_genesis_checkpoint(
-                    &ctx.args.checkpoint_bucket,
+                    &ctx.config.graph_checkpoint_bucket_name,
                     ctx.config.party_id,
                     imem_graph_stores,
                     s3_client,
@@ -808,7 +805,7 @@ async fn exec_indexation(
                     irises_since_checkpoint, last_indexed_id
                 ));
                 upload_and_sync_genesis_checkpoint(
-                    &ctx.args.checkpoint_bucket,
+                    &ctx.config.graph_checkpoint_bucket_name,
                     ctx.config.party_id,
                     imem_graph_stores,
                     s3_client,

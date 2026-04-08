@@ -28,10 +28,6 @@ struct Args {
     #[clap(long("use-backup-as-source"))]
     use_backup_as_source: Option<String>,
 
-    /// S3 bucket name for storing graph checkpoints.
-    #[clap(long("checkpoint-bucket"))]
-    checkpoint_bucket: Option<String>,
-
     /// Number of irises to index between checkpoints.
     #[clap(long("checkpoint-frequency"))]
     checkpoint_frequency: Option<String>,
@@ -153,11 +149,6 @@ fn parse_args() -> Result<ExecutionArgs> {
         };
     };
 
-    // Arg: checkpoint bucket (required).
-    let checkpoint_bucket = args
-        .checkpoint_bucket
-        .ok_or_else(|| eyre::eyre!("--checkpoint-bucket argument is required."))?;
-
     // Arg: checkpoint frequency (required).
     let checkpoint_frequency_arg = args
         .checkpoint_frequency
@@ -178,7 +169,6 @@ fn parse_args() -> Result<ExecutionArgs> {
         batch_size_config,
         max_indexation_id,
         perform_snapshot,
-        checkpoint_bucket,
         checkpoint_frequency,
     })
 }
