@@ -42,21 +42,18 @@ use ampc_actor_utils::execution::{player::Identity, session::NetworkSession};
 use async_trait::async_trait;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::{
-    galois_engine::degree4::preprocess_iris_message_shares,
-    helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
-    iris_db::db::IrisDB,
-    job::{BatchMetadata, BatchQuery, IrisQueryBatchEntries, JobSubmissionHandle},
-    vector_id::VectorId,
-};
+use iris_mpc_common::{job::JobSubmissionHandle, vector_id::VectorId};
 use iris_mpc_cpu::{
     execution::{
-        hawk_main::{HawkActor, HawkArgs, HawkHandle, HawkOps},
+        hawk_main::{
+            test_utils::{batch_of_party, make_batch, make_iris_share_with_seed},
+            HawkActor, HawkArgs, HawkHandle, HawkOps,
+        },
         local::get_free_local_addresses,
     },
     hawkers::{aby3::aby3_store::Aby3Store, plaintext_store::PlaintextStore},
     hnsw::{
-        metrics::network::{NetworkFormatter, SortBy},
+        metrics::network_tree::{NetworkFormatter, SortBy},
         GraphMem,
     },
     network::mpc::{NetworkHandle, NetworkValue, Networking},
@@ -67,7 +64,7 @@ use iris_mpc_cpu::{
         serialization::load_toml,
     },
 };
-use itertools::{izip, Itertools};
+use itertools::izip;
 use serde::Deserialize;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -229,107 +226,6 @@ fn build_party_iris_stores(plain_store: &PlaintextStore) -> Vec<BothEyes<Aby3Sha
             [store_left, store_right]
         })
         .collect()
-}
-
-// ---------------------------------------------------------------------------
-// Batch construction (replicates the test logic from hawk_main::tests)
-// ---------------------------------------------------------------------------
-
-fn make_batch(batch_size: usize) -> BatchQuery {
-    let mut batch = BatchQuery {
-        luc_lookback_records: 2,
-        ..BatchQuery::default()
-    };
-    for i in 0..batch_size {
-        batch.push_matching_request(
-            format!("sns_{i}"),
-            format!("request_{i}"),
-            UNIQUENESS_MESSAGE_TYPE,
-            BatchMetadata::default(),
-            vec![],
-            false,
-        );
-    }
-    batch
-}
-
-fn receive_batch_shares(
-    shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
-) -> [IrisQueryBatchEntries; 4] {
-    let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
-    for (share, mirrored_share) in shares_with_mirror.iter().cloned() {
-        let one = preprocess_iris_message_shares(
-            share.code,
-            share.mask,
-            mirrored_share.code,
-            mirrored_share.mask,
-        )
-        .unwrap();
-        out[0].code.push(one.code);
-        out[0].mask.push(one.mask);
-        out[1].code.extend(one.code_rotated);
-        out[1].mask.extend(one.mask_rotated);
-        out[2].code.extend(one.code_interpolated.clone());
-        out[2].mask.extend(one.mask_interpolated.clone());
-        out[3].code.extend(one.code_mirrored);
-        out[3].mask.extend(one.mask_mirrored);
-    }
-    out
-}
-
-fn batch_of_party(
-    batch: &BatchQuery,
-    shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
-) -> BatchQuery {
-    let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
-        receive_batch_shares(shares_with_mirror);
-    let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
-        receive_batch_shares(shares_with_mirror);
-
-    BatchQuery {
-        left_iris_requests,
-        right_iris_requests,
-        left_iris_rotated_requests,
-        right_iris_rotated_requests,
-        left_iris_interpolated_requests,
-        right_iris_interpolated_requests,
-        left_mirrored_iris_interpolated_requests,
-        right_mirrored_iris_interpolated_requests,
-        ..batch.clone()
-    }
-}
-
-fn generate_query_shares(
-    batch_size: usize,
-) -> Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>> {
-    use aes_prng::AesRng;
-    use rand::SeedableRng;
-
-    let iris_rng = &mut AesRng::seed_from_u64(42_u64);
-    let irises = IrisDB::new_random_rng(batch_size, iris_rng)
-        .db
-        .into_iter()
-        .map(|iris| {
-            (
-                GaloisRingSharedIris::generate_shares_locally(iris_rng, iris.clone()),
-                GaloisRingSharedIris::generate_mirrored_shares_locally(iris_rng, iris),
-            )
-        })
-        .collect_vec();
-
-    (0..N_PARTIES)
-        .map(|party_index| {
-            irises
-                .iter()
-                .map(|(iris, iris_mirrored)| {
-                    (
-                        iris[party_index].clone(),
-                        iris_mirrored[party_index].clone(),
-                    )
-                })
-                .collect_vec()
-        })
-        .collect_vec()
 }
 
 // ---------------------------------------------------------------------------
@@ -499,7 +395,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing::info!("All HawkActors started and connected.");
 
     // 5. Generate query shares
-    let query_shares = generate_query_shares(config.batch_size);
+    let query_shares: Vec<_> = (0..N_PARTIES)
+        .map(|party_id| make_iris_share_with_seed(config.batch_size, party_id, 42))
+        .collect();
 
     // 6. Submit batches and measure communication
     for batch_idx in 0..config.num_batches {
