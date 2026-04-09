@@ -30,6 +30,10 @@ env:
   - name: "SMPC__GRAPH_CHECKPOINT_BUCKET_NAME"
     value: "wf-smpcv2-dev-hnsw-checkpoint"
 
+  - name: "SMPC__GRAPH_CHECKPOINT_BUCKET_REGION"
+    value: "eu-central-1"
+
+
   - name: SMPC__PPROF_PREFIX
     value: "dev/hnsw"
 
