@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    fs::File,
+    io::{BufWriter, Write},
+    path::PathBuf,
+};
 
 use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
@@ -13,6 +17,7 @@ use crate::{
     utils::serialization::{
         graph::GraphFormat,
         iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
+        types::iris_base64::write_to_iris_ndjson,
     },
 };
 
@@ -28,6 +33,9 @@ pub enum IrisesConfig {
 
         /// Optional deterministic seed to use for generation
         seed: Option<u64>,
+
+        /// Optional path to write the generated iris codes as ndjson
+        output_path: Option<PathBuf>,
     },
 
     /// Load iris codes from an NDJSON file.
@@ -47,7 +55,11 @@ pub enum IrisesConfig {
 /// Returns the store and an RNG for use in later steps.
 pub async fn load_irises(config: IrisesConfig) -> Result<Vec<IrisCode>> {
     let irises = match config {
-        IrisesConfig::Random { number, seed } => {
+        IrisesConfig::Random {
+            number,
+            seed,
+            output_path,
+        } => {
             tracing::info!("Generating {} random iris codes...", number);
             let mut rng: Box<dyn RngCore> = if let Some(seed) = seed {
                 Box::new(StdRng::seed_from_u64(seed))
@@ -55,9 +67,19 @@ pub async fn load_irises(config: IrisesConfig) -> Result<Vec<IrisCode>> {
                 Box::new(rand::thread_rng())
             };
 
-            (0..number)
+            let codes: Vec<_> = (0..number)
                 .map(|_| IrisCode::random_rng(&mut rng))
-                .collect::<Vec<_>>()
+                .collect();
+
+            if let Some(path) = output_path {
+                tracing::info!("Writing generated iris codes to {}", path.display());
+                let file = File::create(&path)?;
+                let mut writer = BufWriter::new(file);
+                write_to_iris_ndjson(&mut writer, codes.iter().map(|c| c.into()))?;
+                writer.flush()?;
+            }
+
+            codes
         }
         IrisesConfig::NdjsonFile {
             path,

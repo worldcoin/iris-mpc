@@ -232,9 +232,9 @@ fn bench_gr_primitives(c: &mut Criterion) {
 }
 
 /// To run this benchmark, you need to generate the data first by running the
-/// following commands:
+/// following commands from iris-mpc-bins:
 ///
-/// cargo run --release -p iris-mpc-bins --bin generate-benchmark-data
+/// cargo run --release --bin construct-graph-ptxt -- --job-spec resources/iris-mpc-cpu/construct_graph_ptxt_benchmark.toml
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);

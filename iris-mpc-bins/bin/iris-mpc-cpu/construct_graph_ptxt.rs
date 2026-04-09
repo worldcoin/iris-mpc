@@ -222,7 +222,7 @@ async fn build_graph<D: DistanceOps>(
                 )
                 .await?;
 
-                let filename = format!("{filename_stem}-{i_end}.dat");
+                let filename = format!("{filename_stem}_{i_end}.dat");
                 let output_path = base_directory.join(filename.clone());
 
                 tracing::info!("Persisting HNSW graph to file: {filename}");
