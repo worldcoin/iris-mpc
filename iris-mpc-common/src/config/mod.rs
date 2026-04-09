@@ -501,10 +501,6 @@ fn default_graph_checkpoint_bucket_region() -> String {
     "eu-north-1".to_string()
 }
 
-fn default_graph_checkpoint_bucket_region() -> String {
-    "eu-north-1".to_string()
-}
-
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
