@@ -7,6 +7,7 @@ use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
+    primitives::ByteStream,
     Client as S3Client,
 };
 use chrono::Utc;
@@ -268,6 +269,16 @@ async fn exec_setup(
         (iris_store, (hnsw_iris_store, graph_store)),
     ) = get_service_clients(config).await?;
     log_info(String::from("Service clients instantiated"));
+
+    // Verify checkpoint S3 access before any mutations to fail fast on misconfiguration.
+    verify_s3_checkpoint_access(
+        &checkpoint_s3_client,
+        &config.graph_checkpoint_bucket_name,
+        config.party_id,
+    )
+    .await?;
+    log_info(String::from("Checkpoint S3 bucket access verified"));
+
     let graph_store_arc = Arc::new(graph_store);
 
     // Set serial identifier of last indexed Iris.
@@ -1085,6 +1096,57 @@ async fn get_hawk_actor(
         shutdown_handler.get_network_cancellation_token(),
     )
     .await
+}
+
+/// Verifies that the S3 client has read, write, and delete access to the
+/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
+/// deletes it. This catches misconfigured buckets/regions/IAM before any
+/// mutations occur.
+async fn verify_s3_checkpoint_access(
+    s3_client: &S3Client,
+    bucket: &str,
+    party_id: usize,
+) -> Result<()> {
+    let key = format!("genesis/{party_id}/_access_check");
+    let body = b"access_check";
+
+    // Write
+    s3_client
+        .put_object()
+        .bucket(bucket)
+        .key(&key)
+        .body(ByteStream::from_static(body))
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
+
+    // Read
+    let resp = s3_client
+        .get_object()
+        .bucket(bucket)
+        .key(&key)
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
+    let data = resp
+        .body
+        .collect()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
+    if data.into_bytes().as_ref() != body {
+        bail!("S3 checkpoint bucket read check returned unexpected content");
+    }
+
+    // Delete
+    s3_client
+        .delete_object()
+        .bucket(bucket)
+        .key(&key)
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket delete check failed: {e}"))?;
+
+    Ok(())
 }
 
 /// Returns service clients used downstream.
