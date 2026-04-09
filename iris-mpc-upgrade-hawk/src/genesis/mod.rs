@@ -391,6 +391,23 @@ async fn exec_setup(
     .await?;
     log_info(String::from("Store consistency checks OK"));
 
+    init_graph_from_stores(
+        config,
+        &config.graph_checkpoint_bucket_name,
+        &iris_store,
+        graph_store_arc.clone(),
+        &mut hawk_actor,
+        &aws_s3_client,
+        Arc::clone(&shutdown_handler),
+        args.max_indexation_id as usize,
+        graph_checkpoint.clone(),
+    )
+    .await?;
+    task_monitor_bg.check_tasks();
+    log_info(String::from("HNSW graph initialised from store"));
+
+    // do this after obtaining the graph from s3. that way if for some reason it isn't there,
+    // the old checkpoints could still be found;
     // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
         if let Err(e) = cleanup_checkpoints(
@@ -404,21 +421,6 @@ async fn exec_setup(
             log_warn(format!("failed to clean up old s3 checkpoints: {e}"));
         }
     }
-
-    init_graph_from_stores(
-        config,
-        &config.graph_checkpoint_bucket_name,
-        &iris_store,
-        graph_store_arc.clone(),
-        &mut hawk_actor,
-        &aws_s3_client,
-        Arc::clone(&shutdown_handler),
-        args.max_indexation_id as usize,
-        graph_checkpoint,
-    )
-    .await?;
-    task_monitor_bg.check_tasks();
-    log_info(String::from("HNSW graph initialised from store"));
 
     // Coordinator: await network state = ready.
     set_node_ready(is_ready_flag);

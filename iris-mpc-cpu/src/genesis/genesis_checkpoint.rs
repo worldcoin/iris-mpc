@@ -200,6 +200,7 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     current_state: &GenesisCheckpointState,
     graph_store: &GraphPg<V>,
 ) -> Result<()> {
+    tracing::info!("cleaning up old genesis graph checkpoints");
     let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
     if !all_checkpoints
         .iter()
