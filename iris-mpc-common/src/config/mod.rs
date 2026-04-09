@@ -305,6 +305,9 @@ pub struct Config {
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
+
+    #[serde(default = "default_graph_checkpoint_bucket_name")]
+    pub graph_checkpoint_bucket_name: String,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -485,6 +488,11 @@ fn default_separate_tokio_cores_per_node() -> Option<usize> {
 
 fn default_sns_retry_max_attempts() -> u32 {
     5
+}
+
+fn default_graph_checkpoint_bucket_name() -> String {
+    // override in prod via env
+    "wf-smpcv2-dev-hnsw-checkpoint".to_string()
 }
 
 impl Config {
@@ -771,6 +779,7 @@ impl From<Config> for CommonConfig {
             enable_pprof_per_batch: _,
             separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
+            graph_checkpoint_bucket_name: _,
         } = value;
 
         assert!(

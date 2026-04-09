@@ -29,13 +29,9 @@ impl TestRun for Test {
         let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let args = genesis_args;
+            let args = genesis_args.clone();
             join_set.spawn(async move {
-                exec_genesis(
-                    ExecutionArgs::new(args.batch_size_config, args.max_indexation_id, false),
-                    config,
-                )
-                .await
+                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
             });
         }
         join_runners!(join_set);
@@ -61,11 +57,13 @@ impl TestRun for Test {
             .assert_num_irises(MAX_INDEXATION_ID)
             .assert_num_modifications(0)
             .assert_last_indexed_iris_id(100)
-            .assert_last_indexed_modification_id(0)
-            .assert_hnsw_graphs(expected.dst_db.graphs);
+            .assert_last_indexed_modification_id(0);
 
         let nodes = MpcNodes::new(&self.configs).await;
         nodes.apply_assertions(gpu_asserts, cpu_asserts).await;
+        nodes
+            .assert_s3_checkpoint_graphs(&self.configs, &expected.dst_db.graphs)
+            .await?;
 
         Ok(())
     }
