@@ -499,7 +499,6 @@ fn default_graph_checkpoint_bucket_name() -> String {
 }
 
 fn default_graph_checkpoint_bucket_region() -> String {
-    // override in prod via env
     "eu-north-1".to_string()
 }
 
