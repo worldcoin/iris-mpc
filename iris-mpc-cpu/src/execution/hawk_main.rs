@@ -400,7 +400,7 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
-type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
+pub type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 
 /// A container for state required to perform parallel MPC operations.
@@ -1093,6 +1093,13 @@ impl<'a> GraphLoader<'a> {
             now.elapsed()
         );
         Ok(())
+    }
+
+    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
+        let [left, right] = graphs;
+        let GraphLoader(mut dest_graphs) = self;
+        *dest_graphs[LEFT] = left;
+        *dest_graphs[RIGHT] = right;
     }
 }
 

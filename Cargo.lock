@@ -3023,6 +3023,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-s3",
  "backon",
+ "base64",
  "bincode",
  "blake3",
  "bytemuck",
@@ -3067,6 +3068,7 @@ dependencies = [
  "tracing-forest",
  "tracing-subscriber",
  "tracing-test",
+ "uuid",
 ]
 
 [[package]]
