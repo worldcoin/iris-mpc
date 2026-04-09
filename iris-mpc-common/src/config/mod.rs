@@ -308,6 +308,9 @@ pub struct Config {
 
     #[serde(default = "default_graph_checkpoint_bucket_name")]
     pub graph_checkpoint_bucket_name: String,
+
+    #[serde(default = "default_graph_checkpoint_bucket_region")]
+    pub graph_checkpoint_bucket_region: String,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -493,6 +496,11 @@ fn default_sns_retry_max_attempts() -> u32 {
 fn default_graph_checkpoint_bucket_name() -> String {
     // override in prod via env
     "wf-smpcv2-dev-hnsw-checkpoint".to_string()
+}
+
+fn default_graph_checkpoint_bucket_region() -> String {
+    // override in prod via env
+    "eu-north-1".to_string()
 }
 
 impl Config {
@@ -780,6 +788,7 @@ impl From<Config> for CommonConfig {
             separate_tokio_cores_per_node: _,
             sns_retry_max_attempts: _,
             graph_checkpoint_bucket_name: _,
+            graph_checkpoint_bucket_region: _,
         } = value;
 
         assert!(
