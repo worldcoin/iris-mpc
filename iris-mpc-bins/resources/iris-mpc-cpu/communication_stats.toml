@@ -1,3 +1,14 @@
+# communication_stats-specific settings
+batch_size = 5
+num_batches = 2
+request_parallelism = 2
+connection_parallelism = 2
+sort_by = "Bytes"       # "Bytes" or "Messages"
+tracing = false
+output = "output_fhd_1000.txt"
+json_output = "tree_fhd_1000.json"
+csv_output = "flat_fhd_1000.csv"
+
 [irises]
 option = "NdjsonFile"
 path = "data/store.ndjson"
@@ -16,14 +27,3 @@ option = "Standard"
 ef_constr = 320
 ef_search = 256
 M = 256
-
-# communication_stats-specific settings
-batch_size = 5
-num_batches = 1
-request_parallelism = 2
-connection_parallelism = 2
-sort_by = "Bytes"       # "Bytes" or "Messages"
-tracing = false
-output = "output.txt"
-json_output = "tree.json"
-csv_output = "flat.csv"
