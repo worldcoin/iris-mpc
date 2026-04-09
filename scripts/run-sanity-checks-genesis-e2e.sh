@@ -55,6 +55,7 @@ for test_id in "${TESTS[@]}"; do
             --gpu-schema "SMPC_dev_${party_id}" \
             --seed "$SEED" \
             --exclusions-s3-uri "$EXCLUSIONS_S3_URI" \
+            --checkpoint-s3-bucket "wf-smpcv2-dev-hnsw-checkpoint" \
             --output-dir "$output_dir" \
             > "$log_file" 2>&1
         then
@@ -64,6 +65,39 @@ for test_id in "${TESTS[@]}"; do
 
         grep "^=== Summary" "$log_file"
     done
+
+    # Cross-party checkpoint consistency: blake3 hashes and metadata must match.
+    base_dir="$REPO_ROOT/sanity-check/genesis_${test_id}"
+    hashes=()
+    iris_ids=()
+    mod_ids=()
+    for party_id in "${PARTIES[@]}"; do
+        stats_file="$base_dir/party${party_id}/stats.json"
+        h=$(python3 -c "import json; d=json.load(open('$stats_file')); print(d.get('checkpoint_blake3_hash',''))")
+        i=$(python3 -c "import json; d=json.load(open('$stats_file')); print(d.get('checkpoint_last_indexed_iris_id',''))")
+        m=$(python3 -c "import json; d=json.load(open('$stats_file')); print(d.get('checkpoint_last_indexed_modification_id',''))")
+        hashes+=("$h")
+        iris_ids+=("$i")
+        mod_ids+=("$m")
+        log "  Party ${party_id} checkpoint: blake3=${h} iris_id=${i} mod_id=${m}"
+    done
+    if [[ "${hashes[0]}" != "" ]]; then
+        if [[ "${hashes[0]}" == "${hashes[1]}" && "${hashes[1]}" == "${hashes[2]}" ]]; then
+            log "  Cross-party checkpoint blake3 hashes match: ${hashes[0]}"
+        else
+            fail "Cross-party checkpoint blake3 mismatch: ${hashes[*]}"
+        fi
+        if [[ "${iris_ids[0]}" == "${iris_ids[1]}" && "${iris_ids[1]}" == "${iris_ids[2]}" ]]; then
+            log "  Cross-party checkpoint last_indexed_iris_id match: ${iris_ids[0]}"
+        else
+            fail "Cross-party checkpoint last_indexed_iris_id mismatch: ${iris_ids[*]}"
+        fi
+        if [[ "${mod_ids[0]}" == "${mod_ids[1]}" && "${mod_ids[1]}" == "${mod_ids[2]}" ]]; then
+            log "  Cross-party checkpoint last_indexed_modification_id match: ${mod_ids[0]}"
+        else
+            fail "Cross-party checkpoint last_indexed_modification_id mismatch: ${mod_ids[*]}"
+        fi
+    fi
 
     log "Genesis ${test_id}: all parties passed"
 done
