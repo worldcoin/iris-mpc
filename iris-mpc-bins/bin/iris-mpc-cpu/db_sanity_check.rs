@@ -126,7 +126,7 @@ struct Args {
     /// S3 key for a specific graph checkpoint. If omitted when
     /// --checkpoint-s3-bucket is set, the latest checkpoint is auto-discovered
     /// from the genesis_graph_checkpoint DB table.
-    #[arg(long)]
+    #[arg(long, requires = "checkpoint_s3_bucket")]
     checkpoint_s3_key: Option<String>,
 }
 
@@ -241,28 +241,41 @@ async fn main() -> Result<()> {
                 download_genesis_checkpoint(&s3_client, bucket, checkpoint_state.clone()).await?;
             rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
-            // Check 0a: checkpoint metadata consistency
+            // Check 0a: checkpoint metadata vs persistent_state genesis watermarks
             rpt!(rpt, "--- Check 0a: Checkpoint metadata validation ---");
-            let db_max_iris_id = hnsw_store.get_max_serial_id().await?;
-            let cp_iris_ok = checkpoint_state.last_indexed_iris_id as usize == db_max_iris_id;
-            let detail = if cp_iris_ok {
-                format!(
-                    "Checkpoint last_indexed_iris_id={} matches DB max serial ID",
-                    checkpoint_state.last_indexed_iris_id
-                )
-            } else {
-                format!(
-                    "Checkpoint last_indexed_iris_id={} != DB max serial ID={}",
-                    checkpoint_state.last_indexed_iris_id, db_max_iris_id
-                )
-            };
-            rpt!(rpt, "  {detail}");
-            checks.push(CheckResult::new(
-                "0a",
-                "Checkpoint metadata",
-                cp_iris_ok,
-                detail,
-            ));
+            let ps_iris_id: Option<u32> = graph_pg
+                .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
+                .await?;
+            let ps_mod_id: Option<i64> = graph_pg
+                .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
+                .await?;
+
+            let iris_ok = ps_iris_id
+                .map(|ps| ps == checkpoint_state.last_indexed_iris_id)
+                .unwrap_or(false);
+            let mod_ok = ps_mod_id
+                .map(|ps| ps == checkpoint_state.last_indexed_modification_id)
+                .unwrap_or(false);
+            let cp_ok = iris_ok && mod_ok;
+
+            let detail = format!(
+                "checkpoint(iris_id={}, mod_id={}) vs persistent_state(iris_id={}, mod_id={})",
+                checkpoint_state.last_indexed_iris_id,
+                checkpoint_state.last_indexed_modification_id,
+                ps_iris_id
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "not set".into()),
+                ps_mod_id
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "not set".into()),
+            );
+            rpt!(
+                rpt,
+                "  [{}] {}",
+                if cp_ok { "OK" } else { "MISMATCH" },
+                detail
+            );
+            checks.push(CheckResult::new("0a", "Checkpoint metadata", cp_ok, detail));
 
             stats.add("checkpoint_s3_key", &checkpoint_state.s3_key);
             stats.add(
