@@ -20,11 +20,12 @@ use iris_mpc_common::{
 };
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
-    execution::hawk_main::{
-        BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT,
+    execution::{
+        hawk_main::{BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
+        session::Session,
     },
-    genesis::genesis_checkpoint::*,
     genesis::{
+        genesis_checkpoint::*,
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
@@ -301,25 +302,6 @@ async fn exec_setup(
         max_modification_id,
     ));
 
-    // ensure that the graph loaded from the checkpoint is consistent with the other peers.
-    // sync_state will be compared among peers. if the checkpoint matches the sync state
-    // and the sync states all match, then everything is consistent.
-    let graph_checkpoint = get_latest_checkpoint_state(&graph_store_arc).await?;
-    if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        let checkpoint_state = (
-            graph_checkpoint.last_indexed_iris_id,
-            graph_checkpoint.last_indexed_modification_id,
-        );
-        let db_state = (last_indexed_id, last_indexed_modification_id);
-        if checkpoint_state != db_state {
-            bail!(
-                "graph checkpoint does not match the database state. checkpoint: {:?}, db: {:?}",
-                checkpoint_state,
-                db_state
-            );
-        }
-    }
-
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
         args.batch_size_config,
@@ -374,6 +356,27 @@ async fn exec_setup(
         bail!("Shutdown")
     }
 
+    // Initialise HNSW graph from previously indexed.
+    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
+    hawk_actor.sync_peers().await?;
+
+    // Initialise HNSW graph from previously indexed.
+    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
+    hawk_actor.sync_peers().await?;
+
+    let graph_checkpoint = checkpoint_sync_protocol(&mut hawk_actor, &graph_store_arc).await?;
+
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        maybe_rollback_iris_db(
+            cp,
+            &graph_store_arc,
+            &iris_store,
+            last_indexed_id,
+            last_indexed_modification_id,
+        )
+        .await?;
+    }
+
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
         config,
@@ -388,7 +391,7 @@ async fn exec_setup(
 
     // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        if let Err(e) = cleanup_old_checkpoints(
+        if let Err(e) = cleanup_checkpoints(
             &config.graph_checkpoint_bucket_name,
             &aws_s3_client,
             graph_checkpoint,
@@ -400,9 +403,6 @@ async fn exec_setup(
         }
     }
 
-    // Initialise HNSW graph from previously indexed.
-    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
-    hawk_actor.sync_peers().await?;
     init_graph_from_stores(
         config,
         &config.graph_checkpoint_bucket_name,
@@ -1634,5 +1634,119 @@ async fn upload_and_sync_genesis_checkpoint(
     let result = JobResult::new_s3_checkpoint(checkpoint_state, tx);
     tx_results.send(result).await?;
     hawk_handle.sync_peers(false, Some(done_rx)).await?;
+    Ok(())
+}
+
+// find the most recent checkpoint which all parties have.
+// if no checkpoint exists, return None.
+// on mismatch, return error.
+async fn checkpoint_sync_protocol(
+    hawk_handle: &mut HawkActor,
+    graph_store: &GraphPg<Aby3Store>,
+) -> Result<Option<GenesisCheckpointState>> {
+    let sessions = hawk_handle.new_sessions().await?;
+    let mut lock = sessions[0][0].aby3_store.write().await;
+    let session = &mut lock.session;
+
+    async fn sync_graph_checkpoints(
+        session: &mut Session,
+        checkpoint_id: usize,
+        checkpoint_hash: &str,
+    ) -> Result<(Vec<usize>, bool)> {
+        let checkpoint_ids =
+            ampc_actor_utils::sync::exchange_checkpoint_id(session, checkpoint_id).await?;
+        let hash = blake3::Hash::from_hex(checkpoint_hash.as_bytes())?;
+        let hashes_match =
+            ampc_actor_utils::sync::sync_on_job_hash(session, hash.as_bytes()).await?;
+        Ok((checkpoint_ids, hashes_match))
+    }
+
+    // descending order
+    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    let (our_id, our_hash) = all_checkpoints
+        .first()
+        .cloned()
+        .map(|x| (x.id, x.blake3_hash))
+        .unwrap_or_default();
+
+    // sync_graph_checkpoints always returns a vec of length 3
+    let (all_ids, hashes_match) =
+        sync_graph_checkpoints(session, our_id as usize, &our_hash).await?;
+    let min_id = all_ids.iter().min().expect("should never empty");
+
+    if *min_id == 0 {
+        if hashes_match {
+            return Ok(None);
+        } else {
+            bail!("could not agree on a checkpoint (1). missing checkpoint");
+        }
+    }
+
+    let (our_id, our_hash) = all_checkpoints
+        .iter()
+        .find(|x| x.id as usize == *min_id)
+        .map(|x| (x.id, x.blake3_hash.clone()))
+        .unwrap_or_default();
+
+    // we could skip a sync step here under certainn conditions but the logic would be more complicated.
+
+    let (all_ids, hashes_match) =
+        sync_graph_checkpoints(session, our_id as usize, &our_hash).await?;
+    let min_id = all_ids.iter().min().expect("should never be empty");
+
+    if *min_id == 0 {
+        if hashes_match {
+            unreachable!();
+        } else {
+            bail!("could not agree on a checkpoint (2). missing checkpoint");
+        }
+    }
+
+    if *min_id != our_id as usize {
+        bail!(
+            "could not agree on checkpoint (id mismatch. min: {}, ours: {})",
+            min_id,
+            our_id
+        );
+    } else if !hashes_match {
+        bail!(
+            "could not agree on checkpoint (hash mismatch for id {})",
+            min_id
+        );
+    }
+
+    let r = all_checkpoints
+        .iter()
+        .find(|x| x.id == our_id)
+        .expect("checkpoint should exist");
+    let cp_state: GenesisCheckpointState = r.clone().try_into()?;
+    Ok(Some(cp_state))
+}
+
+async fn maybe_rollback_iris_db(
+    graph_checkpoint: &GenesisCheckpointState,
+    graph_store: &GraphPg<Aby3Store>,
+    iris_store: &IrisStore,
+    last_indexed_id: IrisSerialId,
+    last_indexed_modification_id: i64,
+) -> Result<()> {
+    if last_indexed_modification_id != graph_checkpoint.last_indexed_modification_id {
+        bail!("mismatch between db and s3 checkpoint for last_indexed_modification_id");
+    }
+
+    if last_indexed_id < graph_checkpoint.last_indexed_iris_id {
+        bail!("s3 checkpoint is ahead of iris db");
+    }
+
+    if last_indexed_id > graph_checkpoint.last_indexed_iris_id {
+        tracing::info!("S3 checkpoint is behind the iris db. rolling back the iris db");
+        let graph_tx = graph_store.tx().await?;
+        let mut tx = graph_tx.tx;
+        set_last_indexed_iris_id(&mut tx, graph_checkpoint.last_indexed_iris_id).await?;
+        iris_store
+            .rollback_tx(&mut tx, graph_checkpoint.last_indexed_iris_id as usize)
+            .await?;
+        tx.commit().await?;
+    }
     Ok(())
 }

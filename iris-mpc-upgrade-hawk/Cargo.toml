@@ -11,6 +11,7 @@ repository.workspace = true
 aws-config.workspace = true
 aws-sdk-rds.workspace = true
 aws-sdk-s3.workspace = true
+blake3.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -28,6 +29,7 @@ chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }
 ampc-server-utils.workspace = true
+ampc-actor-utils.workspace = true
 
 [dev-dependencies]
 thiserror.workspace = true

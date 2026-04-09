@@ -26,7 +26,7 @@ use itertools::Itertools;
 use tokio::task::JoinSet;
 
 // these constants were copied from genesis because genesis requires using an Aby3Store while the tests use a PlainTextStore
-mod constants {
+pub mod constants {
     /// Domain for persistent state store entry for last indexed id
     pub const STATE_DOMAIN: &str = "genesis";
     // Key for persistent state store entry for last indexed iris id
@@ -210,6 +210,61 @@ impl MpcNode {
     pub async fn persist_modification(&self, id: i64) -> Result<()> {
         let mut tx = self.gpu_stores.iris.tx().await?;
         db_ops::persist_modification(&mut tx, id).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Insert additional irises into the CPU iris store and update the persistent state
+    /// to indicate those irises were indexed. This simulates a scenario where the CPU
+    /// database thinks it indexed more irises than what's in the S3 checkpoint.
+    pub async fn insert_extra_irises_into_cpu_store(
+        &self,
+        starting_id: usize,
+        count: usize,
+    ) -> Result<()> {
+        use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+
+        // Create dummy iris data
+        let dummy_code = vec![0u16; IRIS_CODE_LENGTH];
+        let dummy_mask = vec![0u16; MASK_CODE_LENGTH];
+
+        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<IrisVectorId>) = (200..=count + 200)
+            .map(|i| {
+                let iris_id = (starting_id + i);
+                (
+                    StoredIrisRef {
+                        id: iris_id as i64,
+                        left_code: &dummy_code,
+                        left_mask: &dummy_mask,
+                        right_code: &dummy_code,
+                        right_mask: &dummy_mask,
+                    },
+                    IrisVectorId::new(iris_id as u32, 500),
+                )
+            })
+            .collect();
+
+        // Get a transaction from the graph store (which gives us access to postgres tx)
+        let graph_tx = self.cpu_stores.graph.tx().await?;
+        let mut tx = graph_tx.tx;
+
+        // Insert irises into CPU store
+        self.cpu_stores
+            .iris
+            .insert_copy_irises(&mut tx, &vector_ids, &irises)
+            .await?;
+
+        // Update the persistent state to indicate we indexed these irises
+        let new_last_indexed_id = (starting_id + count) as u32;
+        GraphStore::<PlaintextStore>::set_persistent_state(
+            &mut tx,
+            constants::STATE_DOMAIN,
+            constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
+            &new_last_indexed_id,
+        )
+        .await?;
+
         tx.commit().await?;
 
         Ok(())

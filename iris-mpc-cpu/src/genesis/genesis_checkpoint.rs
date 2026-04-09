@@ -1,7 +1,7 @@
 use std::{fmt::Display, str::FromStr, time::Instant};
 
 use aws_sdk_s3::Client as S3Client;
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use iris_mpc_common::IrisSerialId;
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,7 @@ use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
     hnsw::{
         graph::{
-            graph_store::{self, GraphPg},
+            graph_store::{self, GenesisGraphCheckpointRow, GraphPg},
             layered_graph::GraphMem,
         },
         vector_store::Ref,
@@ -29,6 +29,26 @@ pub struct GenesisCheckpointState {
     pub last_indexed_modification_id: i64,
     /// BLAKE3 hash of the checkpoint data for integrity verification
     pub blake3_hash: String,
+}
+
+impl TryFrom<GenesisGraphCheckpointRow> for GenesisCheckpointState {
+    type Error = eyre::Error;
+    fn try_from(value: GenesisGraphCheckpointRow) -> Result<Self, Self::Error> {
+        let last_indexed_iris_id: IrisSerialId =
+            value.last_indexed_iris_id.try_into().map_err(|_| {
+                eyre!(
+                    "Invalid last_indexed_iris_id for checkpoint: {}",
+                    value.last_indexed_iris_id
+                )
+            })?;
+
+        Ok(Self {
+            s3_key: value.s3_key,
+            last_indexed_iris_id,
+            last_indexed_modification_id: value.last_indexed_modification_id,
+            blake3_hash: value.blake3_hash,
+        })
+    }
 }
 
 /// Creates an S3 graph checkpoint.
@@ -130,23 +150,7 @@ pub async fn get_latest_checkpoint_state<V: VectorStore>(
     tracing::info!("Retrieving latest graph checkpoint metadata from genesis_graph_checkpoint");
 
     let row = graph_store.get_latest_genesis_graph_checkpoint().await?;
-    let metadata = row
-        .map(|row| -> Result<GenesisCheckpointState> {
-            let iris_id: IrisSerialId = row.last_indexed_iris_id.try_into().map_err(|_| {
-                eyre!(
-                    "Invalid last_indexed_iris_id for checkpoint: {}",
-                    row.last_indexed_iris_id
-                )
-            })?;
-
-            Ok(GenesisCheckpointState {
-                s3_key: row.s3_key,
-                last_indexed_iris_id: iris_id,
-                last_indexed_modification_id: row.last_indexed_modification_id,
-                blake3_hash: row.blake3_hash,
-            })
-        })
-        .transpose()?;
+    let metadata: Option<GenesisCheckpointState> = row.map(|row| row.try_into()).transpose()?;
 
     if let Some(m) = &metadata {
         tracing::info!(
@@ -186,22 +190,44 @@ pub async fn save_checkpoint_state<V: VectorStore>(
     Ok(())
 }
 
-pub async fn cleanup_old_checkpoints<V: VectorStore>(
+/// DANGER: requires that the 3 parties have
+/// reached consensus on a common checkpoint.
+/// if the parties have not reached agreement, then
+/// calling this function could make rollback impossible
+pub async fn cleanup_checkpoints<V: VectorStore>(
     bucket: &str,
     s3_client: &S3Client,
     current_state: &GenesisCheckpointState,
     graph_store: &GraphPg<V>,
 ) -> Result<()> {
-    let mut all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    // descending order
-    all_checkpoints.sort_by(|a, b| b.id.cmp(&a.id));
-    // keep the most 2 recent in case one party fails to upload. this allows
-    // all parties to roll back to a common state.
-    let old_checkpoints = all_checkpoints.into_iter().skip(2);
-    for checkpoint in old_checkpoints {
-        assert!(checkpoint.s3_key != current_state.s3_key);
+    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    if !all_checkpoints
+        .iter()
+        .any(|x| x.s3_key == current_state.s3_key)
+    {
+        bail!("current checkpoint not found in the db");
+    }
+    for checkpoint in all_checkpoints
+        .into_iter()
+        .filter(|x| x.s3_key != current_state.s3_key)
+    {
         delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_blake3_hash_to_string() {
+        let bytes = b"ABCDEFGHIJKLMNOP";
+        let hash1 = blake3::hash(bytes);
+        let hash_str1 = hash1.to_hex().to_string();
+
+        // now go back
+        let hash2 = blake3::Hash::from_hex(hash_str1.as_bytes()).unwrap();
+        assert_eq!(hash1.as_bytes(), hash2.as_bytes());
+    }
 }

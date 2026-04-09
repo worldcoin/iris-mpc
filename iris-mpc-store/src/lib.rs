@@ -450,13 +450,20 @@ WHERE id = $1;
 
     pub async fn rollback(&self, db_len: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-
-        sqlx::query("DELETE FROM irises WHERE id > $1")
-            .bind(db_len as i64)
-            .execute(&mut *tx)
-            .await?;
-
+        self.rollback_tx(&mut tx, db_len).await?;
         tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn rollback_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        last_indexed_id: usize,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM irises WHERE id > $1")
+            .bind(last_indexed_id as i64)
+            .execute(tx.deref_mut())
+            .await?;
         Ok(())
     }
 
