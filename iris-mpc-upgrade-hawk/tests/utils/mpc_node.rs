@@ -225,13 +225,12 @@ impl MpcNode {
     ) -> Result<()> {
         use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 
-        // Create dummy iris data
         let dummy_code = vec![0u16; IRIS_CODE_LENGTH];
         let dummy_mask = vec![0u16; MASK_CODE_LENGTH];
 
-        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<IrisVectorId>) = (200..=count + 200)
+        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<IrisVectorId>) = (1..=count)
             .map(|i| {
-                let iris_id = (starting_id + i);
+                let iris_id = starting_id + i;
                 (
                     StoredIrisRef {
                         id: iris_id as i64,
@@ -245,17 +244,14 @@ impl MpcNode {
             })
             .collect();
 
-        // Get a transaction from the graph store (which gives us access to postgres tx)
         let graph_tx = self.cpu_stores.graph.tx().await?;
         let mut tx = graph_tx.tx;
 
-        // Insert irises into CPU store
         self.cpu_stores
             .iris
             .insert_copy_irises(&mut tx, &vector_ids, &irises)
             .await?;
 
-        // Update the persistent state to indicate we indexed these irises
         let new_last_indexed_id = (starting_id + count) as u32;
         GraphStore::<PlaintextStore>::set_persistent_state(
             &mut tx,
@@ -266,7 +262,6 @@ impl MpcNode {
         .await?;
 
         tx.commit().await?;
-
         Ok(())
     }
 

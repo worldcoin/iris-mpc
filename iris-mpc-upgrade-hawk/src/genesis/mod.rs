@@ -360,10 +360,6 @@ async fn exec_setup(
     let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
     hawk_actor.sync_peers().await?;
 
-    // Initialise HNSW graph from previously indexed.
-    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
-    hawk_actor.sync_peers().await?;
-
     let graph_checkpoint = checkpoint_sync_protocol(&mut hawk_actor, &graph_store_arc).await?;
 
     if let Some(cp) = graph_checkpoint.as_ref() {
@@ -376,6 +372,12 @@ async fn exec_setup(
         )
         .await?;
     }
+
+    // update if the iris db was rolled back
+    let last_indexed_id = graph_checkpoint
+        .as_ref()
+        .map(|x| x.last_indexed_iris_id)
+        .unwrap_or(last_indexed_id);
 
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
@@ -1655,7 +1657,8 @@ async fn checkpoint_sync_protocol(
     ) -> Result<(Vec<usize>, bool)> {
         let checkpoint_ids =
             ampc_actor_utils::sync::exchange_checkpoint_id(session, checkpoint_id).await?;
-        let hash = blake3::Hash::from_hex(checkpoint_hash.as_bytes())?;
+        let hash = blake3::Hash::from_hex(checkpoint_hash.as_bytes())
+            .unwrap_or(blake3::Hash::from([0_u8; 32]));
         let hashes_match =
             ampc_actor_utils::sync::sync_on_job_hash(session, hash.as_bytes()).await?;
         Ok((checkpoint_ids, hashes_match))
