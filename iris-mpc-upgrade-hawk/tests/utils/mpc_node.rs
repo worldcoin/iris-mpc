@@ -95,6 +95,14 @@ impl MpcNodes {
         join_set.join_all().await;
     }
 
+    /// Deletes the genesis graph checkpoint from the CPU store for a specific party.
+    /// This simulates a scenario where one node loses its checkpoint, testing the
+    /// graph rollback and recovery functionality when a minority party is missing its
+    /// checkpoint but the majority still have a valid one.
+    pub async fn delete_checkpoint_for_party(&self, party_id: usize) -> Result<()> {
+        self.nodes[party_id].delete_cpu_checkpoint().await
+    }
+
     /// Asserts that the S3 checkpoint graphs match the expected graphs for all nodes.
     pub async fn assert_s3_checkpoint_graphs(
         &self,
@@ -261,6 +269,20 @@ impl MpcNode {
         )
         .await?;
 
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Deletes the genesis graph checkpoint from this node's CPU store only.
+    /// After deletion, the node's genesis will treat the next run as if it has no prior
+    /// checkpoint, exercising the graph rollback path where the majority (other parties)
+    /// have a valid checkpoint and the lone missing party must recover from it.
+    pub async fn delete_cpu_checkpoint(&self) -> Result<()> {
+        let graph_tx = self.cpu_stores.graph.tx().await?;
+        let mut tx = graph_tx.tx;
+        sqlx::query("DELETE FROM genesis_graph_checkpoint")
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
