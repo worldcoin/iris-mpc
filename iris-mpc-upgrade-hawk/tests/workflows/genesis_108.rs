@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use crate::{
     join_runners,
     utils::{
         genesis_runner::{self, DEFAULT_GENESIS_ARGS, NUM_GPU_IRISES_INIT},
-        mpc_node::{DbAssertions, MpcNode, MpcNodes},
+        mpc_node::{DbAssertions, MpcNodes},
         plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
     },
 };
@@ -25,10 +23,6 @@ impl Test {
         Self {
             configs: genesis_runner::get_node_configs(),
         }
-    }
-
-    async fn get_nodes(&self) -> impl Iterator<Item = Arc<MpcNode>> {
-        MpcNodes::new(&self.configs).await.into_iter()
     }
 }
 

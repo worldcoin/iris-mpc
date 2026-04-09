@@ -273,17 +273,14 @@ impl MpcNode {
         Ok(())
     }
 
-    /// Deletes the genesis graph checkpoint from this node's CPU store only.
-    /// After deletion, the node's genesis will treat the next run as if it has no prior
-    /// checkpoint, exercising the graph rollback path where the majority (other parties)
-    /// have a valid checkpoint and the lone missing party must recover from it.
+    /// Deletes the most recent  genesis graph checkpoint from this node's CPU store only.
     pub async fn delete_cpu_checkpoint(&self) -> Result<()> {
-        let graph_tx = self.cpu_stores.graph.tx().await?;
-        let mut tx = graph_tx.tx;
-        sqlx::query("DELETE FROM genesis_graph_checkpoint")
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
+        sqlx::query(
+            "DELETE FROM genesis_graph_checkpoint 
+         WHERE id = (SELECT id FROM genesis_graph_checkpoint ORDER BY id DESC LIMIT 1)",
+        )
+        .execute(self.cpu_stores.graph.pool())
+        .await?;
         Ok(())
     }
 
