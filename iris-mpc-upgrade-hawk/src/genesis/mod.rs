@@ -7,6 +7,7 @@ use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
+    primitives::ByteStream,
     Client as S3Client,
 };
 use chrono::Utc;
@@ -151,7 +152,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         ctx,
         shutdown_handler,
         mut task_monitor_bg,
-        aws_s3_client,
+        checkpoint_s3_client,
         aws_rds_client,
         imem_iris_stores,
         imem_graph_stores,
@@ -174,7 +175,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         &config,
         &ctx,
         graph_store.clone(),
-        &aws_s3_client,
+        &checkpoint_s3_client,
         &imem_graph_stores,
         hawk_handle,
         &tx_results,
@@ -187,7 +188,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     // Phase 2: indexation.
     exec_indexation(
         &ctx,
-        &aws_s3_client,
+        &checkpoint_s3_client,
         &imem_iris_stores,
         &imem_graph_stores,
         hawk_handle,
@@ -263,9 +264,21 @@ async fn exec_setup(
     let mut task_monitor_bg = TaskMonitor::new();
 
     // Set service clients.
-    let ((aws_s3_client, aws_rds_client), (iris_store, (hnsw_iris_store, graph_store))) =
-        get_service_clients(config).await?;
+    let (
+        (aws_s3_client, checkpoint_s3_client, aws_rds_client),
+        (iris_store, (hnsw_iris_store, graph_store)),
+    ) = get_service_clients(config).await?;
     log_info(String::from("Service clients instantiated"));
+
+    // Verify checkpoint S3 access before any mutations to fail fast on misconfiguration.
+    verify_s3_checkpoint_access(
+        &checkpoint_s3_client,
+        &config.graph_checkpoint_bucket_name,
+        config.party_id,
+    )
+    .await?;
+    log_info(String::from("Checkpoint S3 bucket access verified"));
+
     let graph_store_arc = Arc::new(graph_store);
 
     // Set serial identifier of last indexed Iris.
@@ -390,7 +403,7 @@ async fn exec_setup(
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
         if let Err(e) = cleanup_old_checkpoints(
             &config.graph_checkpoint_bucket_name,
-            &aws_s3_client,
+            &checkpoint_s3_client,
             graph_checkpoint,
             &graph_store_arc,
         )
@@ -409,7 +422,7 @@ async fn exec_setup(
         &iris_store,
         graph_store_arc.clone(),
         &mut hawk_actor,
-        &aws_s3_client,
+        &checkpoint_s3_client,
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
         graph_checkpoint,
@@ -474,7 +487,7 @@ async fn exec_setup(
         ),
         shutdown_handler,
         task_monitor_bg,
-        aws_s3_client,
+        checkpoint_s3_client,
         aws_rds_client,
         imem_iris_stores,
         imem_graph_stores,
@@ -1085,6 +1098,57 @@ async fn get_hawk_actor(
     .await
 }
 
+/// Verifies that the S3 client has read, write, and delete access to the
+/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
+/// deletes it. This catches misconfigured buckets/regions/IAM before any
+/// mutations occur.
+async fn verify_s3_checkpoint_access(
+    s3_client: &S3Client,
+    bucket: &str,
+    party_id: usize,
+) -> Result<()> {
+    let key = format!("genesis/{party_id}/_access_check");
+    let body = b"access_check";
+
+    // Write
+    s3_client
+        .put_object()
+        .bucket(bucket)
+        .key(&key)
+        .body(ByteStream::from_static(body))
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
+
+    // Read
+    let resp = s3_client
+        .get_object()
+        .bucket(bucket)
+        .key(&key)
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
+    let data = resp
+        .body
+        .collect()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
+    if data.into_bytes().as_ref() != body {
+        bail!("S3 checkpoint bucket read check returned unexpected content");
+    }
+
+    // Delete
+    s3_client
+        .delete_object()
+        .bucket(bucket)
+        .key(&key)
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket delete check failed: {e}"))?;
+
+    Ok(())
+}
+
 /// Returns service clients used downstream.
 ///
 /// # Arguments
@@ -1095,31 +1159,48 @@ async fn get_service_clients(
     config: &Config,
 ) -> Result<
     (
-        (S3Client, RDSClient),
+        (S3Client, S3Client, RDSClient),
         (IrisStore, (IrisStore, GraphPg<Aby3Store>)),
     ),
     Report,
 > {
-    /// Returns an S3 client with retry configuration.
-    async fn get_aws_clients(config: &Config) -> Result<(S3Client, RDSClient)> {
-        let region = config
+    /// Returns S3 clients and an RDS client.
+    ///
+    /// Two S3 clients are constructed so the graph-checkpoint bucket can
+    /// live in a different AWS region than the iris-snapshot bucket.
+    async fn get_aws_clients(config: &Config) -> Result<(S3Client, S3Client, RDSClient)> {
+        let default_region = config
             .clone()
             .aws
             .and_then(|aws| aws.region)
             .unwrap_or_else(|| DEFAULT_REGION.to_owned());
-        let region_provider = Region::new(region);
-        let shared_config = aws_config::from_env().region(region_provider).load().await;
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
         let retry_config = RetryConfig::standard().with_max_attempts(5);
+
+        // S3 client for general AWS operations (iris snapshots, deletions)
+        let region_provider = Region::new(default_region);
+        let shared_config = aws_config::from_env().region(region_provider).load().await;
         let s3_config = S3ConfigBuilder::from(&shared_config)
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();
+        let aws_s3_client = S3Client::from_conf(s3_config);
 
-        Ok((
-            S3Client::from_conf(s3_config),
-            RDSClient::new(&shared_config),
-        ))
+        // S3 client for graph checkpoint operations (may be in a different region)
+        let checkpoint_region = Region::new(config.graph_checkpoint_bucket_region.clone());
+        let checkpoint_shared_config = aws_config::from_env()
+            .region(checkpoint_region)
+            .load()
+            .await;
+        let checkpoint_s3_config = S3ConfigBuilder::from(&checkpoint_shared_config)
+            .force_path_style(force_path_style)
+            .retry_config(retry_config.clone())
+            .build();
+        let checkpoint_s3_client = S3Client::from_conf(checkpoint_s3_config);
+
+        let rds_client = RDSClient::new(&shared_config);
+
+        Ok((aws_s3_client, checkpoint_s3_client, rds_client))
     }
 
     /// Returns initialized PostgreSQL clients for both Iris share & HNSW graph stores.
