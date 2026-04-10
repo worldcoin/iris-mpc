@@ -21,9 +21,8 @@ use iris_mpc_common::{
 };
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
-    execution::{
-        hawk_main::{BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
-        session::Session,
+    execution::hawk_main::{
+        BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT,
     },
     genesis::{
         genesis_checkpoint::*,
@@ -1759,10 +1758,10 @@ async fn checkpoint_sync_protocol(
     loop {
         let hash = get_hash(&mut our_idx, &all_checkpoints);
         let current_hashes =
-            ampc_actor_utils::sync::exchange_graph_hashes(session, hash.as_bytes().clone()).await?;
+            ampc_actor_utils::sync::exchange_graph_hashes(session, *hash.as_bytes()).await?;
 
         // If any party has run out of checkpoints, sync has failed.
-        if current_hashes.iter().any(|h| *h == default_hash) {
+        if current_hashes.contains(&default_hash) {
             return Ok(None);
         }
 
@@ -1780,7 +1779,7 @@ async fn checkpoint_sync_protocol(
                     .map(|h| *h.as_bytes() == *neighbor_hash)
                     .unwrap_or(false)
             }) {
-                if earliest_found_idx.map_or(true, |best| idx > best) {
+                if earliest_found_idx.is_none_or(|best| idx > best) {
                     earliest_found_idx = Some(idx);
                 }
             }
@@ -1793,9 +1792,9 @@ async fn checkpoint_sync_protocol(
 
         let hash = get_hash(&mut our_idx, &all_checkpoints);
         let current_hashes =
-            ampc_actor_utils::sync::exchange_graph_hashes(session, hash.as_bytes().clone()).await?;
+            ampc_actor_utils::sync::exchange_graph_hashes(session, *hash.as_bytes()).await?;
 
-        if current_hashes.iter().any(|h| *h == default_hash) {
+        if current_hashes.contains(&default_hash) {
             return Ok(None);
         }
 
@@ -1808,7 +1807,7 @@ async fn checkpoint_sync_protocol(
 
     // agreement was found
     let cp = all_checkpoints[our_idx].clone();
-    return Ok(Some(GenesisCheckpointState::try_from(cp)?));
+    Ok(Some(GenesisCheckpointState::try_from(cp)?))
 }
 
 async fn maybe_rollback_iris_db(
