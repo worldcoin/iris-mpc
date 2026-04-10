@@ -82,8 +82,14 @@ env:
   - name: SMPC__MIN_1D_JOB_SIZE
     value: "65536"
 
+  - name: SMPC__MIN_1D_JOB_SIZE_MIRROR
+    value: "16384"
+
   - name: SMPC__MIN_2D_JOB_SIZE
     value: "1024"
+
+  - name: SMPC__MIN_2D_JOB_SIZE_MIRROR
+    value: "256"
 
   - name: SMPC__MIN_1D_JOB_SIZE_REAUTH
     value: "1000"
@@ -102,7 +108,6 @@ env:
 
   - name: SMPC__TLS__ROOT_CERTS
     value: '["/usr/local/share/ca-certificates/ca_smpcv2_party_prod_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_prod_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_prod_2.crt"]'
-
 
 nodeSelector:
   kubernetes.io/arch: amd64
