@@ -31,7 +31,7 @@ env:
     value: "wf-smpcv2-dev-hnsw-checkpoint"
 
   - name: "SMPC__GRAPH_CHECKPOINT_BUCKET_REGION"
-    value: "eu-north-1"
+    value: "eu-central-1"
 
 
   - name: SMPC__PPROF_PREFIX
