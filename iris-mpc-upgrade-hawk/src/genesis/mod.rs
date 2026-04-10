@@ -39,7 +39,7 @@ use iris_mpc_cpu::{
         JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
-    hnsw::graph::graph_store::GraphPg,
+    hnsw::graph::graph_store::{GenesisGraphCheckpointRow, GraphPg},
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
@@ -1732,81 +1732,83 @@ async fn checkpoint_sync_protocol(
     let sessions = hawk_handle.new_sessions().await?;
     let mut lock = sessions[0][0].aby3_store.write().await;
     let session = &mut lock.session;
+    let default_hash = [0u8; 32];
 
-    async fn sync_graph_checkpoints(
-        session: &mut Session,
-        checkpoint_id: usize,
-        checkpoint_hash: &str,
-    ) -> Result<(Vec<usize>, bool)> {
-        let checkpoint_ids =
-            ampc_actor_utils::sync::exchange_checkpoint_id(session, checkpoint_id).await?;
-        let hash = blake3::Hash::from_hex(checkpoint_hash.as_bytes())
-            .unwrap_or(blake3::Hash::from([0_u8; 32]));
-        let hashes_match =
-            ampc_actor_utils::sync::sync_on_job_hash(session, hash.as_bytes()).await?;
-        Ok((checkpoint_ids, hashes_match))
-    }
+    let get_hash = |idx: &mut usize, all_checkpoints: &[GenesisGraphCheckpointRow]| {
+        loop {
+            match all_checkpoints.get(*idx) {
+                Some(x) => match blake3::Hash::from_hex(x.blake3_hash.as_bytes()) {
+                    Ok(hash) => return hash,
+                    // if a hash fails to parse, may as well try the next checkpoint
+                    Err(e) => {
+                        tracing::warn!("hash of s3 graph checkpoint failed to parse: {}", e);
+                        *idx += 1
+                    }
+                },
+                None => return blake3::Hash::from(default_hash),
+            }
+        }
+    };
 
     // descending order
     let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    let (our_id, our_hash) = all_checkpoints
-        .first()
-        .cloned()
-        .map(|x| (x.id, x.blake3_hash))
-        .unwrap_or_default();
+    // Index into `all_checkpoints` (descending order) that we are currently proposing.
+    let mut our_idx = 0usize;
 
-    // sync_graph_checkpoints always returns a vec of length 3
-    let (all_ids, hashes_match) =
-        sync_graph_checkpoints(session, our_id as usize, &our_hash).await?;
-    let min_id = all_ids.iter().min().expect("should never empty");
+    // loop until our_idx exhausts all_checkpoints
+    loop {
+        let hash = get_hash(&mut our_idx, &all_checkpoints);
+        let current_hashes =
+            ampc_actor_utils::sync::exchange_graph_hashes(session, hash.as_bytes().clone()).await?;
 
-    if *min_id == 0 {
-        if hashes_match {
+        // If any party has run out of checkpoints, sync has failed.
+        if current_hashes.iter().any(|h| *h == default_hash) {
             return Ok(None);
-        } else {
-            bail!("could not agree on a checkpoint (1). missing checkpoint");
         }
-    }
 
-    let (our_id, our_hash) = all_checkpoints
-        .iter()
-        .find(|x| x.id as usize == *min_id)
-        .map(|x| (x.id, x.blake3_hash.clone()))
-        .unwrap_or_default();
-
-    // we could skip a sync step here under certainn conditions but the logic would be more complicated.
-
-    let (all_ids, hashes_match) =
-        sync_graph_checkpoints(session, our_id as usize, &our_hash).await?;
-    let min_id = all_ids.iter().min().expect("should never be empty");
-
-    if *min_id == 0 {
-        if hashes_match {
-            unreachable!();
-        } else {
-            bail!("could not agree on a checkpoint (2). missing checkpoint");
+        // If all parties agree on the same hash, return the corresponding checkpoint.
+        if current_hashes.iter().all(|h| *h == current_hashes[0]) {
+            break;
         }
+
+        // hashes do not match. next round is to exchange the earliest hash
+        // of the previous list, which the party has
+        let mut earliest_found_idx: Option<usize> = None;
+        for neighbor_hash in current_hashes.iter() {
+            if let Some(idx) = all_checkpoints.iter().position(|cp| {
+                blake3::Hash::from_hex(cp.blake3_hash.as_bytes())
+                    .map(|h| *h.as_bytes() == *neighbor_hash)
+                    .unwrap_or(false)
+            }) {
+                if earliest_found_idx.map_or(true, |best| idx > best) {
+                    earliest_found_idx = Some(idx);
+                }
+            }
+        }
+
+        our_idx = match earliest_found_idx {
+            Some(idx) if idx > our_idx => idx,
+            _ => our_idx,
+        };
+
+        let hash = get_hash(&mut our_idx, &all_checkpoints);
+        let current_hashes =
+            ampc_actor_utils::sync::exchange_graph_hashes(session, hash.as_bytes().clone()).await?;
+
+        if current_hashes.iter().any(|h| *h == default_hash) {
+            return Ok(None);
+        }
+
+        if current_hashes.iter().all(|h| *h == current_hashes[0]) {
+            break;
+        }
+
+        our_idx += 1;
     }
 
-    if *min_id != our_id as usize {
-        bail!(
-            "could not agree on checkpoint (id mismatch. min: {}, ours: {})",
-            min_id,
-            our_id
-        );
-    } else if !hashes_match {
-        bail!(
-            "could not agree on checkpoint (hash mismatch for id {})",
-            min_id
-        );
-    }
-
-    let r = all_checkpoints
-        .iter()
-        .find(|x| x.id == our_id)
-        .expect("checkpoint should exist");
-    let cp_state: GenesisCheckpointState = r.clone().try_into()?;
-    Ok(Some(cp_state))
+    // agreement was found
+    let cp = all_checkpoints[our_idx].clone();
+    return Ok(Some(GenesisCheckpointState::try_from(cp)?));
 }
 
 async fn maybe_rollback_iris_db(
