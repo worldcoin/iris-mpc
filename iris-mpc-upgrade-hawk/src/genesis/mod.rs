@@ -1150,7 +1150,7 @@ async fn verify_s3_checkpoint_access(
         .send()
         .await
     {
-        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
+        log_warn(format!("S3 checkpoint bucket delete check failed: {e}"));
     }
 
     Ok(())
