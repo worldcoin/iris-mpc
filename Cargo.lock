@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=5b1abce9c6a6e533f025962826a79f20bc02d051#5b1abce9c6a6e533f025962826a79f20bc02d051"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=56588b880303fbc19cbacef83a00cb83c5f248d9#56588b880303fbc19cbacef83a00cb83c5f248d9"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=5b1abce9c6a6e533f025962826a79f20bc02d051#5b1abce9c6a6e533f025962826a79f20bc02d051"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=56588b880303fbc19cbacef83a00cb83c5f248d9#56588b880303fbc19cbacef83a00cb83c5f248d9"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -137,7 +137,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=5b1abce9c6a6e533f025962826a79f20bc02d051#5b1abce9c6a6e533f025962826a79f20bc02d051"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=56588b880303fbc19cbacef83a00cb83c5f248d9#56588b880303fbc19cbacef83a00cb83c5f248d9"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -152,7 +152,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=5b1abce9c6a6e533f025962826a79f20bc02d051#5b1abce9c6a6e533f025962826a79f20bc02d051"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=56588b880303fbc19cbacef83a00cb83c5f248d9#56588b880303fbc19cbacef83a00cb83c5f248d9"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -3339,7 +3339,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -3858,9 +3858,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.20.2"
+version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1261fe7e33c73b354eab43b1273a57c8f967d0391e80353e51f764ac02cf6775"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "oorandom"
@@ -4317,7 +4317,7 @@ checksum = "0c1318b19085f08681016926435853bbf7858f9c082d0999b80550ff5d9abe15"
 dependencies = [
  "bytes",
  "heck",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -4350,7 +4350,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9552f850d5f0964a4e4d0bf306459ac29323ddfbae05e35a7c0d35cb0803cc5"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn",
