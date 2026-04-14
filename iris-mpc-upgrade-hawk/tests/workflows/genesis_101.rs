@@ -90,4 +90,9 @@ impl TestRun for Test {
     async fn setup_assert(&mut self) -> Result<()> {
         genesis_runner::base_genesis_e2e_init_assertions(&self.configs, 0).await
     }
+
+    async fn teardown(&mut self) -> Result<()> {
+        let nodes = MpcNodes::new(&self.configs).await;
+        nodes.cleanup_s3_checkpoints(&self.configs).await
+    }
 }

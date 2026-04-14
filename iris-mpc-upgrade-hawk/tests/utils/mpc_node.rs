@@ -20,13 +20,14 @@ use iris_mpc_cpu::{
     },
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
+    utils::s3_checkpoint::delete_graph,
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use tokio::task::JoinSet;
 
 // these constants were copied from genesis because genesis requires using an Aby3Store while the tests use a PlainTextStore
-mod constants {
+pub mod constants {
     /// Domain for persistent state store entry for last indexed id
     pub const STATE_DOMAIN: &str = "genesis";
     // Key for persistent state store entry for last indexed iris id
@@ -95,6 +96,14 @@ impl MpcNodes {
         join_set.join_all().await;
     }
 
+    /// Deletes the genesis graph checkpoint from the CPU store for a specific party.
+    /// This simulates a scenario where one node loses its checkpoint, testing the
+    /// graph rollback and recovery functionality when a minority party is missing its
+    /// checkpoint but the majority still have a valid one.
+    pub async fn delete_checkpoint_for_party(&self, party_id: usize) -> Result<()> {
+        self.nodes[party_id].delete_cpu_checkpoint().await
+    }
+
     /// Asserts that the S3 checkpoint graphs match the expected graphs for all nodes.
     pub async fn assert_s3_checkpoint_graphs(
         &self,
@@ -125,6 +134,44 @@ impl MpcNodes {
             );
         }
 
+        Ok(())
+    }
+
+    /// Cleans up all S3 checkpoints for all nodes.
+    /// This should be called during test teardown to prevent leftover checkpoints
+    /// from interfering with subsequent test runs.
+    pub async fn cleanup_s3_checkpoints(&self, configs: &HawkConfigs) -> Result<()> {
+        for (node, config) in self.nodes.iter().zip(configs.iter()) {
+            let checkpoints = node
+                .cpu_stores
+                .graph
+                .get_genesis_graph_checkpoints()
+                .await?;
+            if checkpoints.is_empty() {
+                continue;
+            }
+
+            let aws_clients = get_aws_clients(config).await?;
+            let bucket = &config.graph_checkpoint_bucket_name;
+
+            for checkpoint in checkpoints {
+                tracing::info!(
+                    "Teardown: deleting S3 checkpoint: bucket={}, key={}",
+                    bucket,
+                    checkpoint.s3_key
+                );
+                if let Err(e) =
+                    delete_graph(&aws_clients.s3_client, bucket, &checkpoint.s3_key).await
+                {
+                    tracing::warn!(
+                        "Failed to delete S3 checkpoint {}: {:?}",
+                        checkpoint.s3_key,
+                        e
+                    );
+                    // Continue deleting other checkpoints even if one fails
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -212,6 +259,67 @@ impl MpcNode {
         db_ops::persist_modification(&mut tx, id).await?;
         tx.commit().await?;
 
+        Ok(())
+    }
+
+    /// Insert additional irises into the CPU iris store and update the persistent state
+    /// to indicate those irises were indexed. This simulates a scenario where the CPU
+    /// database thinks it indexed more irises than what's in the S3 checkpoint.
+    pub async fn insert_extra_irises_into_cpu_store(
+        &self,
+        starting_id: usize,
+        count: usize,
+    ) -> Result<()> {
+        use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+
+        let dummy_code = vec![0u16; IRIS_CODE_LENGTH];
+        let dummy_mask = vec![0u16; MASK_CODE_LENGTH];
+
+        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<IrisVectorId>) = (1..=count)
+            .map(|i| {
+                let iris_id = starting_id + i;
+                (
+                    StoredIrisRef {
+                        id: iris_id as i64,
+                        left_code: &dummy_code,
+                        left_mask: &dummy_mask,
+                        right_code: &dummy_code,
+                        right_mask: &dummy_mask,
+                    },
+                    IrisVectorId::new(iris_id as u32, 500),
+                )
+            })
+            .collect();
+
+        let graph_tx = self.cpu_stores.graph.tx().await?;
+        let mut tx = graph_tx.tx;
+
+        self.cpu_stores
+            .iris
+            .insert_copy_irises(&mut tx, &vector_ids, &irises)
+            .await?;
+
+        let new_last_indexed_id = (starting_id + count) as u32;
+        GraphStore::<PlaintextStore>::set_persistent_state(
+            &mut tx,
+            constants::STATE_DOMAIN,
+            constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
+            &new_last_indexed_id,
+        )
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Deletes the most recent  genesis graph checkpoint from this node's CPU store only.
+    pub async fn delete_cpu_checkpoint(&self) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM genesis_graph_checkpoint 
+         WHERE id = (SELECT id FROM genesis_graph_checkpoint ORDER BY id DESC LIMIT 1)",
+        )
+        .execute(self.cpu_stores.graph.pool())
+        .await?;
         Ok(())
     }
 

@@ -1,7 +1,8 @@
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
-    BatchSyncSharedState, TaskMonitor,
+    start_coordination_server_with_extra_routes, try_get_endpoint_other_nodes,
+    wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, ServerCoordinationConfig,
+    TaskMonitor,
 };
 use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
@@ -10,6 +11,7 @@ use aws_sdk_s3::{
     primitives::ByteStream,
     Client as S3Client,
 };
+use axum::{routing::get, Router};
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 
@@ -24,8 +26,8 @@ use iris_mpc_cpu::{
     execution::hawk_main::{
         BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT,
     },
-    genesis::genesis_checkpoint::*,
     genesis::{
+        genesis_checkpoint::*,
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
@@ -42,6 +44,7 @@ use iris_mpc_cpu::{
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -55,6 +58,11 @@ use tokio::{
 
 pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
+
+// types for the graph checkpoint sync
+pub type Blake3Hash = [u8; 32];
+pub type GraphCheckpointHashes = [Blake3Hash; 10];
+const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
 
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
@@ -314,25 +322,6 @@ async fn exec_setup(
         max_modification_id,
     ));
 
-    // ensure that the graph loaded from the checkpoint is consistent with the other peers.
-    // sync_state will be compared among peers. if the checkpoint matches the sync state
-    // and the sync states all match, then everything is consistent.
-    let graph_checkpoint = get_latest_checkpoint_state(&graph_store_arc).await?;
-    if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        let checkpoint_state = (
-            graph_checkpoint.last_indexed_iris_id,
-            graph_checkpoint.last_indexed_modification_id,
-        );
-        let db_state = (last_indexed_id, last_indexed_modification_id);
-        if checkpoint_state != db_state {
-            bail!(
-                "graph checkpoint does not match the database state. checkpoint: {:?}, db: {:?}",
-                checkpoint_state,
-                db_state
-            );
-        }
-    }
-
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
         args.batch_size_config,
@@ -346,6 +335,8 @@ async fn exec_setup(
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
 
+    let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store_arc).await?;
+
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
@@ -353,13 +344,20 @@ async fn exec_setup(
         .server_coordination
         .clone()
         .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
+
     // Coordinator: await server start.
-    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+    let extra_routes = Router::new().route(
+        GRAPH_CHECKPOINT_ROUTE,
+        get(move || async move { serde_json::to_string(&hashes).unwrap() }),
+    );
+
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         server_coord_config,
         &mut task_monitor_bg,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state),
+        Some(extra_routes),
     )
     .await;
     task_monitor_bg.check_tasks();
@@ -387,6 +385,42 @@ async fn exec_setup(
         bail!("Shutdown")
     }
 
+    let graph_checkpoint = get_common_checkpoint(config, hashes, graph_checkpoints).await?;
+    log_info(format!("common graph checkpoint: {:?}", graph_checkpoint));
+
+    // don't roll anything back if the checkpoint can not be found
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        if !s3_key_exists(
+            &checkpoint_s3_client,
+            &config.graph_checkpoint_bucket_name,
+            &cp.s3_key,
+        )
+        .await?
+        {
+            bail!("s3 checkpoint not found on AWS");
+        }
+    }
+
+    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
+    hawk_actor.sync_peers().await?;
+
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        maybe_rollback_iris_db(
+            cp,
+            &graph_store_arc,
+            &iris_store,
+            last_indexed_id,
+            last_indexed_modification_id,
+        )
+        .await?;
+    }
+
+    // update if the iris db was rolled back
+    let last_indexed_id = graph_checkpoint
+        .as_ref()
+        .map(|x| x.last_indexed_iris_id)
+        .unwrap_or(last_indexed_id);
+
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
         config,
@@ -399,9 +433,27 @@ async fn exec_setup(
     .await?;
     log_info(String::from("Store consistency checks OK"));
 
+    // Initialise HNSW graph from previously indexed.
+    init_graph_from_stores(
+        config,
+        &config.graph_checkpoint_bucket_name,
+        &iris_store,
+        graph_store_arc.clone(),
+        &mut hawk_actor,
+        &aws_s3_client,
+        Arc::clone(&shutdown_handler),
+        args.max_indexation_id as usize,
+        graph_checkpoint.clone(),
+    )
+    .await?;
+    task_monitor_bg.check_tasks();
+    log_info(String::from("HNSW graph initialised from store"));
+
+    // do this after obtaining the graph from s3. that way if for some reason it isn't there,
+    // the old checkpoints could still be found;
     // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        if let Err(e) = cleanup_old_checkpoints(
+        if let Err(e) = cleanup_checkpoints(
             &config.graph_checkpoint_bucket_name,
             &checkpoint_s3_client,
             graph_checkpoint,
@@ -412,24 +464,6 @@ async fn exec_setup(
             log_warn(format!("failed to clean up old s3 checkpoints: {e}"));
         }
     }
-
-    // Initialise HNSW graph from previously indexed.
-    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
-    hawk_actor.sync_peers().await?;
-    init_graph_from_stores(
-        config,
-        &config.graph_checkpoint_bucket_name,
-        &iris_store,
-        graph_store_arc.clone(),
-        &mut hawk_actor,
-        &checkpoint_s3_client,
-        Arc::clone(&shutdown_handler),
-        args.max_indexation_id as usize,
-        graph_checkpoint,
-    )
-    .await?;
-    task_monitor_bg.check_tasks();
-    log_info(String::from("HNSW graph initialised from store"));
 
     // Coordinator: await network state = ready.
     set_node_ready(is_ready_flag);
@@ -1149,6 +1183,33 @@ async fn verify_s3_checkpoint_access(
     Ok(())
 }
 
+/// Checks whether a given key exists in an S3 bucket using a `HeadObject`
+/// request. Returns `true` if the key is present, `false` if it does not
+/// exist (HTTP 404 / `NoSuchKey`), or an error for any other failure.
+///
+/// # Arguments
+///
+/// * `s3_client` - Authenticated S3 client.
+/// * `bucket`    - Name of the S3 bucket to query.
+/// * `key`       - Object key to check for existence.
+async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Result<bool> {
+    match s3_client.head_object().bucket(bucket).key(key).send().await {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            // `head_object` returns a 404 when the key does not exist.
+            // The SDK surfaces this as a `NotFound` service error.
+            if e.as_service_error()
+                .map(|se| se.is_not_found())
+                .unwrap_or(false)
+            {
+                Ok(false)
+            } else {
+                Err(eyre!("S3 head_object failed for s3://{bucket}/{key}: {e}"))
+            }
+        }
+    }
+}
+
 /// Returns service clients used downstream.
 ///
 /// # Arguments
@@ -1679,6 +1740,64 @@ async fn validate_consistency_of_stores(
     Ok(())
 }
 
+async fn get_common_checkpoint(
+    config: &Config,
+    my_checkpoint_hashes: GraphCheckpointHashes,
+    my_checkpoints: Vec<GenesisCheckpointState>,
+) -> Result<Option<GenesisCheckpointState>> {
+    let server_coord_config = config
+        .server_coordination
+        .as_ref()
+        .ok_or(eyre!("Missing server coordination config"))?;
+    let others_hashes = get_others_graph_hashes(server_coord_config).await?;
+    if others_hashes.len() != 2 {
+        bail!("invalid number of parties");
+    }
+    find_common_checkpoint(my_checkpoint_hashes, my_checkpoints, others_hashes)
+}
+
+/// Pure subset logic for [`get_common_checkpoint`].
+/// Finds the first checkpoint whose hash appears in all parties'
+/// hash lists (mine + the X `others_hashes`).  Zero hashes are ignored
+/// because they represent empty slots in a [`GraphCheckpointHashes`] array.
+fn find_common_checkpoint(
+    my_checkpoint_hashes: GraphCheckpointHashes,
+    my_checkpoints: Vec<GenesisCheckpointState>,
+    others_hashes: Vec<GraphCheckpointHashes>,
+) -> Result<Option<GenesisCheckpointState>> {
+    let default_hash: Blake3Hash = [0; _];
+    let mut common_set: HashMap<Blake3Hash, usize> = HashMap::new();
+    for &hash in my_checkpoint_hashes.iter() {
+        if hash == default_hash {
+            continue;
+        }
+        common_set.insert(hash, 1);
+    }
+
+    for cp in others_hashes.iter() {
+        for hash in cp {
+            if hash == &default_hash {
+                continue;
+            }
+            if let Some(count) = common_set.get_mut(hash) {
+                *count += 1;
+            }
+        }
+    }
+
+    common_set.retain(|_k, count| *count == others_hashes.len() + 1);
+    for (idx, hash) in my_checkpoint_hashes.iter().enumerate() {
+        if common_set.contains_key(hash) {
+            let r = my_checkpoints.get(idx).cloned();
+            if r.is_none() {
+                bail!("unreachable condition in get_common_checkpoint()");
+            }
+            return Ok(r);
+        }
+    }
+    Ok(None)
+}
+
 /// Uploads a genesis checkpoint, sends the result, and synchronizes peers.
 #[allow(clippy::too_many_arguments)]
 async fn upload_and_sync_genesis_checkpoint(
@@ -1716,4 +1835,210 @@ async fn upload_and_sync_genesis_checkpoint(
     tx_results.send(result).await?;
     hawk_handle.sync_peers(false, Some(done_rx)).await?;
     Ok(())
+}
+
+async fn get_most_recent_checkpoints(
+    graph_store: &GraphPg<Aby3Store>,
+) -> Result<(Vec<GenesisCheckpointState>, GraphCheckpointHashes)> {
+    let mut hashes: GraphCheckpointHashes = [[0; _]; _];
+    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    let expected_len = all_checkpoints.len();
+    let checkpoints: Vec<GenesisCheckpointState> = all_checkpoints
+        .into_iter()
+        .take(hashes.len())
+        .map(|x| x.try_into())
+        .filter_map(Result::ok)
+        .collect();
+    if checkpoints.len() != expected_len {
+        log_warn("some genesis checkpoints failed to convert to GenesisCheckpointState".into());
+    }
+    let all_hashes: Vec<_> = checkpoints
+        .iter()
+        .map(|x| blake3::Hash::from_hex(x.blake3_hash.as_bytes()))
+        .filter_map(Result::ok)
+        .collect();
+    if all_hashes.len() != checkpoints.len() {
+        log_warn("some checkpoint hashes failed to parse".into());
+    }
+    for (src, dest) in all_hashes
+        .into_iter()
+        .take(hashes.len())
+        .zip(hashes.iter_mut())
+    {
+        dest.copy_from_slice(src.as_bytes());
+    }
+    Ok((checkpoints, hashes))
+}
+
+async fn maybe_rollback_iris_db(
+    graph_checkpoint: &GenesisCheckpointState,
+    graph_store: &GraphPg<Aby3Store>,
+    iris_store: &IrisStore,
+    last_indexed_id: IrisSerialId,
+    last_indexed_modification_id: i64,
+) -> Result<()> {
+    if last_indexed_modification_id != graph_checkpoint.last_indexed_modification_id {
+        bail!("mismatch between db and s3 checkpoint for last_indexed_modification_id");
+    }
+
+    if last_indexed_id < graph_checkpoint.last_indexed_iris_id {
+        bail!("s3 checkpoint is ahead of iris db");
+    }
+
+    if last_indexed_id > graph_checkpoint.last_indexed_iris_id {
+        log_info("S3 checkpoint is behind the iris db. rolling back the iris db".into());
+        let graph_tx = graph_store.tx().await?;
+        let mut tx = graph_tx.tx;
+        set_last_indexed_iris_id(&mut tx, graph_checkpoint.last_indexed_iris_id).await?;
+        iris_store
+            .rollback_tx(&mut tx, graph_checkpoint.last_indexed_iris_id as usize)
+            .await?;
+        tx.commit().await?;
+    }
+    Ok(())
+}
+
+pub async fn get_others_graph_hashes(
+    config: &ServerCoordinationConfig,
+) -> Result<Vec<GraphCheckpointHashes>> {
+    tracing::info!("⚓️ ANCHOR: Syncing latest graph checkpoints");
+
+    let connected_and_ready = try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ROUTE).await?;
+
+    let response_texts_futs: Vec<_> = connected_and_ready
+        .into_iter()
+        .map(|resp| resp.json())
+        .collect();
+    let graph_checkpoints: Vec<GraphCheckpointHashes> =
+        futures::future::try_join_all(response_texts_futs).await?;
+
+    Ok(graph_checkpoints)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// Build a `Blake3Hash` where every byte is `b`.
+    fn h(b: u8) -> Blake3Hash {
+        [b; 32]
+    }
+
+    /// Build a `GraphCheckpointHashes` ([Blake3Hash; 10]) from up to 3 hashes.
+    /// Remaining slots are filled with the zero hash (treated as "empty").
+    fn hashes(slots: &[Blake3Hash]) -> GraphCheckpointHashes {
+        assert!(slots.len() <= 3, "test helper: use at most 3 slots");
+        let mut arr: GraphCheckpointHashes = [[0u8; 32]; 10];
+        for (i, &slot) in slots.iter().enumerate() {
+            arr[i] = slot;
+        }
+        arr
+    }
+
+    fn checkpoint(label: &str) -> GenesisCheckpointState {
+        GenesisCheckpointState {
+            s3_key: label.to_string(),
+            last_indexed_iris_id: 0,
+            last_indexed_modification_id: 0,
+            blake3_hash: label.to_string(),
+        }
+    }
+
+    // ── tests ─────────────────────────────────────────────────────────────────
+
+    /// All three parties share hash A → returns the corresponding checkpoint.
+    #[test]
+    fn all_three_agree_returns_checkpoint() {
+        let a = h(0x01);
+        let my_hashes = hashes(&[a]);
+        let my_cps = vec![checkpoint("cp_a")];
+        let others = vec![hashes(&[a]), hashes(&[a])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert_eq!(result.unwrap().s3_key, "cp_a");
+    }
+
+    /// Only my party and one other share hash A; the third has a different
+    /// hash → no common checkpoint among all three.
+    #[test]
+    fn only_two_parties_agree_returns_none() {
+        let a = h(0x01);
+        let b = h(0x02);
+        let my_hashes = hashes(&[a]);
+        let my_cps = vec![checkpoint("cp_a")];
+        let others = vec![hashes(&[a]), hashes(&[b])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert!(result.is_none());
+    }
+
+    /// All three parties have completely disjoint hashes → None.
+    #[test]
+    fn no_overlap_returns_none() {
+        let my_hashes = hashes(&[h(0x01)]);
+        let my_cps = vec![checkpoint("cp_a")];
+        let others = vec![hashes(&[h(0x02)]), hashes(&[h(0x03)])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert!(result.is_none());
+    }
+
+    /// Zero hashes are treated as empty slots and must not be counted as a
+    /// common checkpoint even when all three parties "share" them.
+    #[test]
+    fn zero_hashes_are_skipped() {
+        let zero = h(0x00);
+        let my_hashes = hashes(&[zero]);
+        let my_cps = vec![checkpoint("cp_zero")];
+        let others = vec![hashes(&[zero]), hashes(&[zero])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert!(result.is_none());
+    }
+
+    /// When multiple hashes are common, the one that appears *first* in my
+    /// list is returned (order is determined by my_checkpoint_hashes, not the
+    /// HashMap iteration order).
+    #[test]
+    fn first_matching_hash_in_my_list_wins() {
+        let a = h(0x01);
+        let b = h(0x02);
+        let my_hashes = hashes(&[a, b]);
+        let my_cps = vec![checkpoint("cp_a"), checkpoint("cp_b")];
+        let others = vec![hashes(&[a, b]), hashes(&[a, b])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert_eq!(result.unwrap().s3_key, "cp_a");
+    }
+
+    /// When the first hash in my list is not common but a later one is,
+    /// the later checkpoint is returned.
+    #[test]
+    fn second_hash_matches_when_first_does_not() {
+        let a = h(0x01);
+        let b = h(0x02);
+        // Only `b` is shared by all three parties.
+        let my_hashes = hashes(&[a, b]);
+        let my_cps = vec![checkpoint("cp_a"), checkpoint("cp_b")];
+        let others = vec![hashes(&[b]), hashes(&[b])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert_eq!(result.unwrap().s3_key, "cp_b");
+    }
+
+    /// If a hash is common but `my_checkpoints` does not contain a checkpoint
+    /// at that index, the function must return an error (the "unreachable"
+    /// guard).
+    #[test]
+    fn missing_checkpoint_for_matching_hash_returns_error() {
+        let a = h(0x01);
+        let my_hashes = hashes(&[a]);
+        let my_cps = vec![]; // intentionally empty — no checkpoint at index 0
+        let others = vec![hashes(&[a]), hashes(&[a])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others);
+        assert!(result.is_err());
+    }
 }
