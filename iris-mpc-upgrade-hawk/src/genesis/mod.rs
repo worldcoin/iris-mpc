@@ -397,7 +397,11 @@ async fn exec_setup(
         )
         .await?
         {
-            bail!("s3 checkpoint not found on AWS");
+            bail!(
+                "s3 checkpoint not found on AWS: s3://{}/{}",
+                config.graph_checkpoint_bucket_name,
+                cp.s3_key
+            );
         }
     }
 
@@ -1880,11 +1884,14 @@ async fn maybe_rollback_iris_db(
     last_indexed_modification_id: i64,
 ) -> Result<()> {
     if last_indexed_modification_id != graph_checkpoint.last_indexed_modification_id {
-        bail!("mismatch between db and s3 checkpoint for last_indexed_modification_id");
+        bail!("mismatch between db and s3 checkpoint for last_indexed_modification_id: db={}, checkpoint={}",
+            last_indexed_modification_id, graph_checkpoint.last_indexed_modification_id);
     }
 
     if last_indexed_id < graph_checkpoint.last_indexed_iris_id {
-        bail!("s3 checkpoint is ahead of iris db");
+        bail!("s3 checkpoint is ahead of iris db: db_last_indexed_iris_id={}, checkpoint_last_indexed_iris_id={}",
+            last_indexed_id,
+            graph_checkpoint.last_indexed_iris_id);
     }
 
     if last_indexed_id > graph_checkpoint.last_indexed_iris_id {

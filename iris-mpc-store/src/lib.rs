@@ -448,9 +448,9 @@ WHERE id = $1;
         Ok(())
     }
 
-    pub async fn rollback(&self, db_len: usize) -> Result<()> {
+    pub async fn rollback(&self, last_indexed_id: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        self.rollback_tx(&mut tx, db_len).await?;
+        self.rollback_tx(&mut tx, last_indexed_id).await?;
         tx.commit().await?;
         Ok(())
     }
