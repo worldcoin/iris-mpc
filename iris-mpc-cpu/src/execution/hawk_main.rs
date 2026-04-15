@@ -72,7 +72,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK, VecRotationSupport},
+            rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
@@ -85,9 +85,11 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        GraphMem, HnswSearcher, VectorStore, graph::graph_store, searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint}
+        graph::graph_store,
+        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint},
+        GraphMem, HnswSearcher, VectorStore,
     },
-    network::mpc::{NetworkHandle, NetworkHandleArgs, build_network_handle},
+    network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
