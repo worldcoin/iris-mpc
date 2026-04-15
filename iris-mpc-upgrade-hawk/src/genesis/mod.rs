@@ -147,6 +147,11 @@ impl ExecutionContextInfo {
 /// * `config` - Process configuration instance.
 ///
 pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
+    log_info(format!(
+        "running genesis with \n {:?} \n {:?}",
+        args, config
+    ));
+
     // Phase 0: setup.
     let (
         ctx,
@@ -1138,13 +1143,15 @@ async fn verify_s3_checkpoint_access(
     }
 
     // Delete
-    s3_client
+    if let Err(e) = s3_client
         .delete_object()
         .bucket(bucket)
         .key(&key)
         .send()
         .await
-        .map_err(|e| eyre!("S3 checkpoint bucket delete check failed: {e}"))?;
+    {
+        log_warn(format!("S3 checkpoint bucket delete check failed: {e}"));
+    }
 
     Ok(())
 }
@@ -1169,36 +1176,63 @@ async fn get_service_clients(
     /// Two S3 clients are constructed so the graph-checkpoint bucket can
     /// live in a different AWS region than the iris-snapshot bucket.
     async fn get_aws_clients(config: &Config) -> Result<(S3Client, S3Client, RDSClient)> {
-        let default_region = config
-            .clone()
-            .aws
-            .and_then(|aws| aws.region)
-            .unwrap_or_else(|| DEFAULT_REGION.to_owned());
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
         let retry_config = RetryConfig::standard().with_max_attempts(5);
 
+        let config_region = config.aws.clone().and_then(|aws| aws.region);
+        let region_name = config_region
+            .clone()
+            .unwrap_or_else(|| DEFAULT_REGION.to_owned());
+
+        log_info(format!(
+            "AWS client init: environment={}, config.aws.region={:?}, \
+             effective_region={}, force_path_style={}, max_retry_attempts=5",
+            config.environment, config_region, region_name, force_path_style,
+        ));
+
+        let region = Region::new(region_name.clone());
+        let sdk_config = aws_config::from_env().region(region).load().await;
+
+        log_info(format!(
+            "Default S3 client: region={}, endpoint={:?}",
+            region_name,
+            sdk_config.endpoint_url(),
+        ));
+
         // S3 client for general AWS operations (iris snapshots, deletions)
-        let region_provider = Region::new(default_region);
-        let shared_config = aws_config::from_env().region(region_provider).load().await;
-        let s3_config = S3ConfigBuilder::from(&shared_config)
+        let s3_config = S3ConfigBuilder::from(&sdk_config)
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();
         let aws_s3_client = S3Client::from_conf(s3_config);
 
+        // RDS client using general AWS configuration
+        log_info(format!(
+            "RDS client: region={}, endpoint={:?}",
+            region_name,
+            sdk_config.endpoint_url(),
+        ));
+        let rds_client = RDSClient::new(&sdk_config);
+
         // S3 client for graph checkpoint operations (may be in a different region)
-        let checkpoint_region = Region::new(config.graph_checkpoint_bucket_region.clone());
-        let checkpoint_shared_config = aws_config::from_env()
+        let checkpoint_region_name = config.graph_checkpoint_bucket_region.clone();
+        let checkpoint_region = Region::new(checkpoint_region_name.clone());
+        let checkpoint_sdk_config = aws_config::from_env()
             .region(checkpoint_region)
             .load()
             .await;
-        let checkpoint_s3_config = S3ConfigBuilder::from(&checkpoint_shared_config)
+
+        log_info(format!(
+            "Checkpoint S3 client: region={}, endpoint={:?}",
+            checkpoint_region_name,
+            checkpoint_sdk_config.endpoint_url(),
+        ));
+
+        let checkpoint_s3_config = S3ConfigBuilder::from(&checkpoint_sdk_config)
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();
         let checkpoint_s3_client = S3Client::from_conf(checkpoint_s3_config);
-
-        let rds_client = RDSClient::new(&shared_config);
 
         Ok((aws_s3_client, checkpoint_s3_client, rds_client))
     }
