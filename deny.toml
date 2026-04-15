@@ -32,6 +32,7 @@ ignore = [
     # bincode is no longer maintained, but it's considered finalized by the authors; we can switch to a maintained alternative at some point
     { id = "RUSTSEC-2025-0141", reason = "stable even if no longer maintained" },
     { id = "RUSTSEC-2026-0002", reason = "waiting for aws-sdk-s3 to bump this dependency" },
+    { id = "RUSTSEC-2026-0097", reason = "transitive rand 0.9.2 via metrics/statrs/tower crates; UB requires a custom log::Log logger calling rand::rng(), but iris-mpc uses tracing — drop once upstream bumps rand to >=0.9.3" },
 ]
 
 [sources]
