@@ -197,9 +197,13 @@ impl HawkSession {
 
         let decode_u16 = |msg| match msg {
             Ok(NetworkValue::RingElement16(elem)) => Ok(elem.0),
-            other => {
-                tracing::error!("Unexpected message format: {:?}", other);
+            Ok(other) => {
+                tracing::error!("Unexpected message variant in sync: {:?}", other);
                 Err(eyre!("Could not deserialize sync result"))
+            }
+            Err(e) => {
+                tracing::error!("Network receive error in sync: {e}");
+                Err(e)
             }
         };
 
@@ -268,7 +272,7 @@ impl HawkSession {
         let prev_error = (prev & 0xFF) as u8 == SYNC_ERROR;
         let next_error = (next & 0xFF) as u8 == SYNC_ERROR;
         if my_error || prev_error || next_error {
-            bail!("results thread terminated before persistence completed");
+            bail!("Results thread terminated before persistence completed");
         }
 
         // Compare shutdown flags
@@ -292,9 +296,13 @@ impl HawkSession {
 
             let decode = |msg| match msg {
                 Ok(NetworkValue::PrfCheck(c)) => Ok(c),
-                other => {
-                    tracing::error!("Unexpected message format: {:?}", other);
+                Ok(other) => {
+                    tracing::error!("Unexpected message variant in PRF check: {:?}", other);
                     Err(eyre!("Could not deserialize PrfCheck"))
+                }
+                Err(e) => {
+                    tracing::error!("Network receive error in PRF check: {e}");
+                    Err(e)
                 }
             };
             let prev_share = decode(net.receive_prev().await)?;
@@ -341,9 +349,13 @@ impl HawkSession {
 
             let decode = |msg| match msg {
                 Ok(NetworkValue::StateChecksum(c)) => Ok(c),
-                other => {
-                    tracing::error!("Unexpected message format: {:?}", other);
-                    Err(eyre!("Could not deserialize StateChecksum"))
+                Ok(other) => {
+                    tracing::error!("Unexpected message variant in state check: {:?}", other);
+                    Err(eyre!("Could not deserialize state checksum"))
+                }
+                Err(e) => {
+                    tracing::error!("Network receive error in state check: {e}");
+                    Err(e)
                 }
             };
             let prev = decode(net.receive_prev().await)?;
