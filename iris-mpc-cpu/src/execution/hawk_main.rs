@@ -72,7 +72,7 @@ use crate::{
         hawk_main::{
             insert::InsertPlanV,
             iris_worker::IrisPoolHandle,
-            rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
+            rot::{ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK, VecRotationSupport},
             search::SearchIds,
         },
         session::{NetworkSession, Session, SessionId},
@@ -85,11 +85,9 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::graph_store,
-        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint},
-        GraphMem, HnswSearcher, VectorStore,
+        GraphMem, HnswSearcher, VectorStore, graph::graph_store, searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint}
     },
-    network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
+    network::mpc::{NetworkHandle, NetworkHandleArgs, build_network_handle},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
@@ -427,7 +425,10 @@ pub type SearchResult = (
 /// A list of matches paired with a saturation flag.
 #[derive(Debug, Clone, Default)]
 pub struct SaturableMatches {
-    pub results: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    pub results: Vec<(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )>,
     /// True if more matches likely exist.
     /// This is detected when most or all `ef` search results are matches. See saturation_margin to make it more sensitive.
     pub saturated: bool,

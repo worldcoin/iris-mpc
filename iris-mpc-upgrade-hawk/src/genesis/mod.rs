@@ -22,7 +22,7 @@ use iris_mpc_common::{
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
-        BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT,
+        BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
     },
     genesis::genesis_checkpoint::*,
     genesis::{
@@ -251,7 +251,7 @@ async fn exec_setup(
     Arc<BothEyes<GraphRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
-    Arc<GraphPg<Aby3Store>>,
+    Arc<GraphPg<Aby3Store<HawkOps>>>,
     IrisStore,
 )> {
     // Bail if config is invalid.
@@ -513,7 +513,7 @@ async fn exec_setup(
 async fn exec_delta(
     config: &Config,
     ctx: &ExecutionContextInfo,
-    graph_store: Arc<GraphPg<Aby3Store>>,
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     s3_client: &S3Client,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     mut hawk_handle: GenesisHawkHandle,
@@ -942,7 +942,9 @@ async fn exec_snapshot(
 ///
 /// * `graph_store` - Arc-wrapped HNSW graph store instance.
 #[allow(dead_code)]
-async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<(), IndexationError> {
+async fn exec_database_backup(
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
+) -> Result<(), IndexationError> {
     log_info(String::from("Graph table data snapshot begins"));
     let now = Instant::now();
     graph_store
@@ -978,7 +980,7 @@ async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<()
 #[allow(dead_code)]
 pub async fn exec_use_backup_as_source(
     last_indexed_id: u32,
-    graph_store_arc: &Arc<GraphPg<Aby3Store>>,
+    graph_store_arc: &Arc<GraphPg<Aby3Store<HawkOps>>>,
     hnsw_iris_store: &IrisStore,
     iris_store: &IrisStore,
 ) -> Result<()> {
@@ -1160,7 +1162,7 @@ async fn get_service_clients(
 ) -> Result<
     (
         (S3Client, S3Client, RDSClient),
-        (IrisStore, (IrisStore, GraphPg<Aby3Store>)),
+        (IrisStore, (IrisStore, GraphPg<Aby3Store<HawkOps>>)),
     ),
     Report,
 > {
@@ -1206,7 +1208,7 @@ async fn get_service_clients(
     /// Returns initialized PostgreSQL clients for both Iris share & HNSW graph stores.
     async fn get_pgres_clients(
         config: &Config,
-    ) -> Result<(IrisStore, (IrisStore, GraphPg<Aby3Store>)), Report> {
+    ) -> Result<(IrisStore, (IrisStore, GraphPg<Aby3Store<HawkOps>>)), Report> {
         async fn get_mpc_iris_store_client(config: &Config) -> Result<IrisStore, Report> {
             let db_schema = format!(
                 "{}{}_{}_{}",
@@ -1232,7 +1234,7 @@ async fn get_service_clients(
 
         async fn get_hnsw_store_clients(
             config: &Config,
-        ) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
+        ) -> Result<(IrisStore, GraphPg<Aby3Store<HawkOps>>), Report> {
             let db_schema = format!(
                 "{}{}_{}_{}",
                 config.schema_name,
@@ -1281,7 +1283,7 @@ async fn get_service_clients(
 async fn get_results_thread(
     imem_iris_stores: Arc<BothEyes<Aby3SharedIrisesRef>>,
     hnsw_iris_store: IrisStore,
-    graph_store: Arc<GraphPg<Aby3Store>>,
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<Sender<JobResult>> {
@@ -1483,7 +1485,7 @@ async fn init_graph_from_stores(
     config: &Config,
     checkpoint_bucket: &str,
     iris_store: &IrisStore,
-    graph_store: Arc<GraphPg<Aby3Store>>,
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     hawk_actor: &mut HawkActor,
     s3_client: &S3Client,
     shutdown_handler: Arc<ShutdownHandler>,
@@ -1615,7 +1617,7 @@ fn validate_config(config: &Config) -> Result<()> {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    graph_store: Arc<GraphPg<Aby3Store>>,
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
     checkpoint_available: bool,
