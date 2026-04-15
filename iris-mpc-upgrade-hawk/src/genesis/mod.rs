@@ -63,6 +63,7 @@ const DEFAULT_REGION: &str = "eu-north-1";
 pub type Blake3Hash = [u8; 32];
 pub type GraphCheckpointHashes = [Blake3Hash; 10];
 const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
+const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
@@ -362,10 +363,6 @@ async fn exec_setup(
     .await;
     task_monitor_bg.check_tasks();
 
-    let server_coord_config = &config
-        .server_coordination
-        .clone()
-        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await network state = UNREADY.
     wait_for_others_unready(server_coord_config, &verified_peers, &my_uuid).await?;
     log_info(String::from("Network status = UNREADY"));
@@ -1912,7 +1909,8 @@ pub async fn get_others_graph_hashes(
 ) -> Result<Vec<GraphCheckpointHashes>> {
     tracing::info!("⚓️ ANCHOR: Syncing latest graph checkpoints");
 
-    let connected_and_ready = try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ROUTE).await?;
+    let connected_and_ready =
+        try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ENDPOINT).await?;
 
     let response_texts_futs: Vec<_> = connected_and_ready
         .into_iter()
