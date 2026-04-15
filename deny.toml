@@ -32,6 +32,9 @@ ignore = [
     # bincode is no longer maintained, but it's considered finalized by the authors; we can switch to a maintained alternative at some point
     { id = "RUSTSEC-2025-0141", reason = "stable even if no longer maintained" },
     { id = "RUSTSEC-2026-0002", reason = "waiting for aws-sdk-s3 to bump this dependency" },
+    { id = "RUSTSEC-2026-0097", reason = "transitive rand 0.9.2 via metrics/statrs/tower crates; UB requires a custom log::Log logger calling rand::rng(), but iris-mpc uses tracing — drop once upstream bumps rand to a safe version" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.101.7 / 0.103.10 pulled transitively through aws-config 1.5.x; bug silently accepts URI name constraints instead of rejecting them — only exploitable via CA misissuance of URI-constrained certs, and our TLS usage targets AWS endpoints where this isn't used. Fix requires bumping aws-config to drop the legacy rustls 0.21 chain (0.103.x fix is >=0.103.12, 0.101.x has no fix). Drop once aws-config is bumped." },
+    { id = "RUSTSEC-2026-0099", reason = "same rustls-webpki 0.101.7 / 0.103.10 chain as RUSTSEC-2026-0098; sibling bug accepts DNS name constraints for wildcard-asserting certs. Same misissuance-required exploit model, same AWS-TLS-only attack surface, same fix path (bump aws-config off the legacy rustls 0.21 chain)." },
 ]
 
 [sources]
