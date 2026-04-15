@@ -17,6 +17,12 @@ export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_REGION=us-east-1
 
+# db-sanity-check reads these to decide S3-checkpoint mode, bucket region, and
+# force-path-style. Values mirror what genesis reads from the same env vars.
+export SMPC__ENVIRONMENT=dev
+export SMPC__GRAPH_CHECKPOINT_BUCKET_NAME=wf-smpcv2-dev-hnsw-checkpoint
+export SMPC__GRAPH_CHECKPOINT_BUCKET_REGION=us-east-1
+
 log()  { echo "$(date +%Y-%m-%dT%H:%M:%S) [INFO] $*"; }
 fail() { echo "$(date +%Y-%m-%dT%H:%M:%S) [FAIL] $*" >&2; exit 1; }
 
@@ -55,8 +61,6 @@ for test_id in "${TESTS[@]}"; do
             --gpu-schema "SMPC_dev_${party_id}" \
             --seed "$SEED" \
             --exclusions-s3-uri "$EXCLUSIONS_S3_URI" \
-            --checkpoint-s3-bucket "wf-smpcv2-dev-hnsw-checkpoint" \
-            --force-path-style \
             --output-dir "$output_dir" \
             > "$log_file" 2>&1
         then

@@ -30,6 +30,7 @@ base64.workspace = true
 cudarc.workspace = true
 chrono.workspace = true
 clap.workspace = true
+config = { version = "0.15.19", default-features = false }
 csv = "*"
 data-encoding.workspace = true
 dotenvy.workspace = true

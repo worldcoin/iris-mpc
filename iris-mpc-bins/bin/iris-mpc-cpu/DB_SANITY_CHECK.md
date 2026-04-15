@@ -2,9 +2,22 @@
 
 Read-only validation of a single MPC party's Postgres database state. Checks HNSW graph structure, persistent state consistency, and cross-schema (HNSW vs GPU) alignment.
 
-The graph can be loaded either from the Postgres `hawk_graph_links` table (default) or from an S3 genesis checkpoint (pass `--checkpoint-s3-bucket`). S3 mode adds an extra check (0a) that validates checkpoint metadata against the `persistent_state` watermarks.
+The graph can be loaded either from the Postgres `hawk_graph_links` table or from an S3 genesis checkpoint. Mode is controlled by the `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` environment variable — non-empty enables S3-checkpoint mode, empty falls back to Postgres. S3 mode adds check 0a which validates checkpoint metadata against the `persistent_state` watermarks.
 
-## Usage
+## Configuration
+
+### Environment variables (same contract as `iris-mpc-upgrade-hawk`)
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `SMPC__ENVIRONMENT` | `""` | Controls `force_path_style` (true unless `prod` or `stage`). |
+| `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` | `wf-smpcv2-dev-hnsw-checkpoint` | Enables S3-checkpoint mode when non-empty. Set to `""` to disable and fall back to Postgres-links mode. |
+| `SMPC__GRAPH_CHECKPOINT_BUCKET_REGION` | `eu-north-1` | Region for the checkpoint bucket; may differ from the ambient AWS region (used for iris/exclusion buckets). |
+| `AWS_REGION` / `AWS_ENDPOINT_URL` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | — | Standard AWS config — consumed by `aws_config::from_env()` for the non-checkpoint S3 client (exclusions download, output upload) and as the base for the checkpoint client. |
+
+These mirror the fields `iris-mpc-common::config::Config` reads, so a deployment that already sets them for genesis gets the same values here without CLI changes.
+
+### Usage
 
 ```bash
 db-sanity-check \
@@ -15,10 +28,7 @@ db-sanity-check \
   --seed <SEED> \
   [--m <M>] \
   [--exclusions-s3-uri <S3_URI>] \
-  [--checkpoint-s3-bucket <BUCKET>] \
   [--checkpoint-s3-key <KEY>] \
-  [--checkpoint-s3-region <REGION>] \
-  [--force-path-style] \
   [--output-dir <DIR>] \
   [--s3-output <S3_URI>]
 ```
@@ -35,10 +45,7 @@ db-sanity-check \
 | `--m` | | no | `256` | HNSW M parameter for degree bound checks |
 | `--layer-probability` | | no | `1/M` | Layer probability q for geometric distribution check |
 | `--exclusions-s3-uri` | | no | | S3 URI to JSON exclusions file with `{"deleted_serial_ids": [...]}` (e.g. `s3://bucket/path/deleted_serial_ids.json`) |
-| `--checkpoint-s3-bucket` | | no | | Enable S3 checkpoint mode. Bucket holding genesis graph checkpoints. When set, the graph is downloaded from S3 instead of loaded from `hawk_graph_links`. |
-| `--checkpoint-s3-key` | | no | | Specific checkpoint key. Requires `--checkpoint-s3-bucket`. If omitted, the latest checkpoint is auto-discovered via the `genesis_graph_checkpoint` DB table. |
-| `--checkpoint-s3-region` | | no | ambient | Region override for the checkpoint bucket. Required when the checkpoint bucket lives in a different region from iris/exclusions buckets. Requires `--checkpoint-s3-bucket`. |
-| `--force-path-style` | | no | `false` | Force path-style S3 addressing (required for LocalStack; must stay `false` in production — prod S3 uses virtual-hosted style). |
+| `--checkpoint-s3-key` | | no | | Specific checkpoint S3 key. Only meaningful when S3 mode is enabled (see env table). If omitted, the latest checkpoint is auto-discovered via the `genesis_graph_checkpoint` DB table. |
 | `--output-dir` | | no | `.` | Directory for JSON output files |
 | `--s3-output` | | no | | S3 URI to upload output files to (e.g. `s3://bucket/prefix/`) |
 
@@ -107,18 +114,20 @@ db-sanity-check \
 ### With S3 checkpoint (post-genesis validation)
 
 ```bash
+export SMPC__ENVIRONMENT=prod
+export SMPC__GRAPH_CHECKPOINT_BUCKET_NAME=wf-smpcv2-prod-hnsw-checkpoint
+export SMPC__GRAPH_CHECKPOINT_BUCKET_REGION=us-east-1
+
 db-sanity-check \
   --hnsw-db-url "postgres://user:pass@hnsw-rds-host:5432/mydb" \
   --gpu-db-url "postgres://user:pass@gpu-rds-host:5432/mydb" \
   --hnsw-schema SMPC_hnsw_prod_0 \
   --gpu-schema SMPC_gpu_prod_0 \
   --seed 42 \
-  --checkpoint-s3-bucket wf-smpcv2-prod-hnsw-checkpoint \
-  --checkpoint-s3-region us-east-1 \
   --output-dir /tmp/sanity-check
 ```
 
-Omit `--checkpoint-s3-key` to auto-discover the latest checkpoint from the `genesis_graph_checkpoint` table. For LocalStack e2e tests, add `--force-path-style`.
+The latest checkpoint is auto-discovered from the `genesis_graph_checkpoint` table; pass `--checkpoint-s3-key` to pin a specific one. LocalStack e2e runs set `SMPC__ENVIRONMENT=dev` (path-style enabled); see `scripts/run-sanity-checks-genesis-e2e.sh`. To disable S3 mode entirely and load from Postgres links, set `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME=""`.
 
 ## Checks
 
@@ -140,7 +149,7 @@ Omit `--checkpoint-s3-key` to auto-discover the latest checkpoint from the `gene
 | 3c | Byte-identical shares for sampled IDs (random sample of ~1k + up to 100 recent modification serial IDs; pending iris-code-updating modifications excluded) | Cross-schema |
 
 ### Check behavior under S3 checkpoint mode
-- **0a** validates that the checkpoint's `last_indexed_iris_id` and `last_indexed_modification_id` match the party's `persistent_state` watermarks. Runs only when `--checkpoint-s3-bucket` is set.
+- **0a** validates that the checkpoint's `last_indexed_iris_id` and `last_indexed_modification_id` match the party's `persistent_state` watermarks. Runs only when `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` is non-empty.
 - **1a–1j, 1i** consume the S3 in-memory graph. Check 1b (node coverage) still compares against the *current* `irises` table, so irises added after the checkpoint will appear as uncovered — expected, and surfaced more directly by check 0a.
 - **2b** reads the max serial ID from the in-memory `GraphMem` layer 0 instead of `hawk_graph_links`, since the links table is not the source of truth when the graph was loaded from S3.
 - **2a, 3c** are source-independent (backed by `persistent_state` and `irises` tables).

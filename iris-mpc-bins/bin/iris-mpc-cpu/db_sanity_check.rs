@@ -1,6 +1,7 @@
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
+    config::{ENV_PROD, ENV_STAGE},
     helpers::smpc_request::{
         REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
     },
@@ -121,23 +122,63 @@ struct Args {
     /// S3 URI to upload output files to (e.g. s3://bucket/prefix/)
     #[arg(long)]
     s3_output: Option<String>,
-    /// S3 bucket for graph checkpoints. When provided, the graph is loaded from
-    /// an S3 checkpoint instead of from the Postgres links table.
+    /// S3 key for a specific graph checkpoint. When set, overrides
+    /// auto-discovery from the `genesis_graph_checkpoint` DB table. Only used
+    /// when S3 mode is enabled (see `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` env).
     #[arg(long)]
-    checkpoint_s3_bucket: Option<String>,
-    /// S3 key for a specific graph checkpoint. If omitted when
-    /// --checkpoint-s3-bucket is set, the latest checkpoint is auto-discovered
-    /// from the genesis_graph_checkpoint DB table.
-    #[arg(long, requires = "checkpoint_s3_bucket")]
     checkpoint_s3_key: Option<String>,
-    /// AWS region for the graph-checkpoint bucket. If omitted, the region is
-    /// inherited from the ambient AWS config (env / profile).
-    #[arg(long, requires = "checkpoint_s3_bucket")]
-    checkpoint_s3_region: Option<String>,
-    /// Force path-style S3 addressing (required for LocalStack). Must be left
-    /// false in production (prod S3 uses virtual-hosted style).
-    #[arg(long, default_value_t = false)]
-    force_path_style: bool,
+}
+
+/// Subset of `iris_mpc_common::config::Config` that the sanity check reads
+/// from the environment (variables prefixed `SMPC__`, separator `__`). Field
+/// names / defaults mirror the full Config so deployments that already set
+/// these values for genesis get the same behavior here.
+///
+/// - `environment`: controls `force_path_style` (true except in prod/stage).
+/// - `graph_checkpoint_bucket_name`: empty string disables S3-checkpoint mode
+///   and falls back to loading the graph from the Postgres links table.
+/// - `graph_checkpoint_bucket_region`: region for the checkpoint bucket; may
+///   differ from the ambient AWS region.
+#[derive(Debug, Clone, Deserialize)]
+struct SanityCheckConfig {
+    #[serde(default)]
+    environment: String,
+    #[serde(default = "default_graph_checkpoint_bucket_name")]
+    graph_checkpoint_bucket_name: String,
+    #[serde(default = "default_graph_checkpoint_bucket_region")]
+    graph_checkpoint_bucket_region: String,
+}
+
+fn default_graph_checkpoint_bucket_name() -> String {
+    "wf-smpcv2-dev-hnsw-checkpoint".to_string()
+}
+
+fn default_graph_checkpoint_bucket_region() -> String {
+    "eu-north-1".to_string()
+}
+
+impl SanityCheckConfig {
+    fn load() -> Result<Self> {
+        let cfg: Self = config::Config::builder()
+            .add_source(
+                config::Environment::with_prefix("SMPC")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?
+            .try_deserialize()?;
+        Ok(cfg)
+    }
+
+    /// LocalStack / dev need path-style; prod and stage use virtual-hosted.
+    fn force_path_style(&self) -> bool {
+        self.environment != ENV_PROD && self.environment != ENV_STAGE
+    }
+
+    /// Empty bucket name disables S3-checkpoint mode.
+    fn s3_checkpoint_enabled(&self) -> bool {
+        !self.graph_checkpoint_bucket_name.is_empty()
+    }
 }
 
 #[derive(Deserialize)]
@@ -199,6 +240,7 @@ impl Stats {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+    let config = SanityCheckConfig::load()?;
 
     let mut rpt = Report::new();
 
@@ -209,6 +251,14 @@ async fn main() -> Result<()> {
         args.hnsw_schema,
         args.gpu_schema,
         args.m
+    );
+    rpt!(
+        rpt,
+        "environment={:?} checkpoint_bucket={:?} checkpoint_region={:?} force_path_style={}",
+        config.environment,
+        config.graph_checkpoint_bucket_name,
+        config.graph_checkpoint_bucket_region,
+        config.force_path_style(),
     );
     rpt!(rpt);
 
@@ -225,16 +275,15 @@ async fn main() -> Result<()> {
 
     let raw_exclusions: Option<Vec<u32>> = match &args.exclusions_s3_uri {
         Some(uri) => {
-            let parsed = download_exclusions_from_s3(uri, args.force_path_style).await?;
+            let parsed = download_exclusions_from_s3(uri, config.force_path_style()).await?;
             Some(parsed.deleted_serial_ids)
         }
         None => None,
     };
 
     // --- Optional: load graph from S3 checkpoint ---
-    let s3_graphs: Option<BothEyes<GraphMem<VectorId>>> = if let Some(bucket) =
-        &args.checkpoint_s3_bucket
-    {
+    let s3_graphs: Option<BothEyes<GraphMem<VectorId>>> = if config.s3_checkpoint_enabled() {
+        let bucket = config.graph_checkpoint_bucket_name.as_str();
         rpt!(rpt, "--- Loading graph from S3 checkpoint ---");
         let checkpoint_state = load_checkpoint_state(
             &graph_pg,
@@ -244,9 +293,11 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-        let s3_client =
-            build_checkpoint_s3_client(args.checkpoint_s3_region.as_deref(), args.force_path_style)
-                .await;
+        let s3_client = build_checkpoint_s3_client(
+            &config.graph_checkpoint_bucket_region,
+            config.force_path_style(),
+        )
+        .await;
 
         rpt!(
             rpt,
@@ -395,7 +446,7 @@ async fn main() -> Result<()> {
     output_files.push(report_path);
 
     if let Some(s3_uri) = &args.s3_output {
-        upload_to_s3(s3_uri, &output_files, args.force_path_style).await?;
+        upload_to_s3(s3_uri, &output_files, config.force_path_style()).await?;
     }
 
     if fail_count > 0 {
@@ -1319,14 +1370,8 @@ fn build_s3_client(config: &aws_config::SdkConfig, force_path_style: bool) -> aw
 /// Build an S3 client for the graph-checkpoint bucket, allowing the region to
 /// differ from the ambient default (genesis writes checkpoints into a bucket
 /// that may live in a different region from the iris/exclusions buckets).
-async fn build_checkpoint_s3_client(
-    region: Option<&str>,
-    force_path_style: bool,
-) -> aws_sdk_s3::Client {
-    let mut loader = aws_config::from_env();
-    if let Some(r) = region {
-        loader = loader.region(aws_sdk_s3::config::Region::new(r.to_owned()));
-    }
+async fn build_checkpoint_s3_client(region: &str, force_path_style: bool) -> aws_sdk_s3::Client {
+    let loader = aws_config::from_env().region(aws_sdk_s3::config::Region::new(region.to_owned()));
     let config = loader.load().await;
     build_s3_client(&config, force_path_style)
 }

@@ -2923,6 +2923,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "config",
  "csv",
  "cudarc",
  "data-encoding",
