@@ -427,7 +427,10 @@ pub type SearchResult = (
 /// A list of matches paired with a saturation flag.
 #[derive(Debug, Clone, Default)]
 pub struct SaturableMatches {
-    pub results: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    pub results: Vec<(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )>,
     /// True if more matches likely exist.
     /// This is detected when most or all `ef` search results are matches. See saturation_margin to make it more sensitive.
     pub saturated: bool,
