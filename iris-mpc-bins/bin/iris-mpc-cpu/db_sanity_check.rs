@@ -1,6 +1,7 @@
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
+    config::{ENV_PROD, ENV_STAGE},
     helpers::smpc_request::{
         REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
     },
@@ -8,7 +9,10 @@ use iris_mpc_common::{
     vector_id::VectorId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::StoreId,
+    execution::hawk_main::{BothEyes, StoreId, LEFT, RIGHT},
+    genesis::genesis_checkpoint::{
+        download_genesis_checkpoint, get_latest_checkpoint_state, GenesisCheckpointState,
+    },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::{
         graph::{graph_store::GraphPg, layered_graph::GraphMem},
@@ -118,6 +122,63 @@ struct Args {
     /// S3 URI to upload output files to (e.g. s3://bucket/prefix/)
     #[arg(long)]
     s3_output: Option<String>,
+    /// S3 key for a specific graph checkpoint. When set, overrides
+    /// auto-discovery from the `genesis_graph_checkpoint` DB table. Only used
+    /// when S3 mode is enabled (see `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` env).
+    #[arg(long)]
+    checkpoint_s3_key: Option<String>,
+}
+
+/// Subset of `iris_mpc_common::config::Config` that the sanity check reads
+/// from the environment (variables prefixed `SMPC__`, separator `__`). Field
+/// names / defaults mirror the full Config so deployments that already set
+/// these values for genesis get the same behavior here.
+///
+/// - `environment`: controls `force_path_style` (true except in prod/stage).
+/// - `graph_checkpoint_bucket_name`: empty string disables S3-checkpoint mode
+///   and falls back to loading the graph from the Postgres links table.
+/// - `graph_checkpoint_bucket_region`: region for the checkpoint bucket; may
+///   differ from the ambient AWS region.
+#[derive(Debug, Clone, Deserialize)]
+struct SanityCheckConfig {
+    #[serde(default)]
+    environment: String,
+    #[serde(default = "default_graph_checkpoint_bucket_name")]
+    graph_checkpoint_bucket_name: String,
+    #[serde(default = "default_graph_checkpoint_bucket_region")]
+    graph_checkpoint_bucket_region: String,
+}
+
+fn default_graph_checkpoint_bucket_name() -> String {
+    "wf-smpcv2-dev-hnsw-checkpoint".to_string()
+}
+
+fn default_graph_checkpoint_bucket_region() -> String {
+    "eu-north-1".to_string()
+}
+
+impl SanityCheckConfig {
+    fn load() -> Result<Self> {
+        let cfg: Self = config::Config::builder()
+            .add_source(
+                config::Environment::with_prefix("SMPC")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?
+            .try_deserialize()?;
+        Ok(cfg)
+    }
+
+    /// LocalStack / dev need path-style; prod and stage use virtual-hosted.
+    fn force_path_style(&self) -> bool {
+        self.environment != ENV_PROD && self.environment != ENV_STAGE
+    }
+
+    /// Empty bucket name disables S3-checkpoint mode.
+    fn s3_checkpoint_enabled(&self) -> bool {
+        !self.graph_checkpoint_bucket_name.is_empty()
+    }
 }
 
 #[derive(Deserialize)]
@@ -179,6 +240,7 @@ impl Stats {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+    let config = SanityCheckConfig::load()?;
 
     let mut rpt = Report::new();
 
@@ -189,6 +251,14 @@ async fn main() -> Result<()> {
         args.hnsw_schema,
         args.gpu_schema,
         args.m
+    );
+    rpt!(
+        rpt,
+        "environment={:?} checkpoint_bucket={:?} checkpoint_region={:?} force_path_style={}",
+        config.environment,
+        config.graph_checkpoint_bucket_name,
+        config.graph_checkpoint_bucket_region,
+        config.force_path_style(),
     );
     rpt!(rpt);
 
@@ -205,10 +275,90 @@ async fn main() -> Result<()> {
 
     let raw_exclusions: Option<Vec<u32>> = match &args.exclusions_s3_uri {
         Some(uri) => {
-            let parsed = download_exclusions_from_s3(uri).await?;
+            let parsed = download_exclusions_from_s3(uri, config.force_path_style()).await?;
             Some(parsed.deleted_serial_ids)
         }
         None => None,
+    };
+
+    // --- Optional: load graph from S3 checkpoint ---
+    let s3_graphs: Option<BothEyes<GraphMem<VectorId>>> = if config.s3_checkpoint_enabled() {
+        let bucket = config.graph_checkpoint_bucket_name.as_str();
+        rpt!(rpt, "--- Loading graph from S3 checkpoint ---");
+        let checkpoint_state = load_checkpoint_state(
+            &graph_pg,
+            args.checkpoint_s3_key.as_deref(),
+            bucket,
+            &mut rpt,
+        )
+        .await?;
+
+        let s3_client = build_checkpoint_s3_client(
+            &config.graph_checkpoint_bucket_region,
+            config.force_path_style(),
+        )
+        .await;
+
+        rpt!(
+            rpt,
+            "  Downloading checkpoint: s3://{}/{}",
+            bucket,
+            checkpoint_state.s3_key
+        );
+        let graphs: BothEyes<GraphMem<VectorId>> =
+            download_genesis_checkpoint(&s3_client, bucket, &checkpoint_state).await?;
+        rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
+
+        // Check 0a: checkpoint metadata vs persistent_state genesis watermarks
+        rpt!(rpt, "--- Check 0a: Checkpoint metadata validation ---");
+        let ps_iris_id: Option<u32> = graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
+            .await?;
+        let ps_mod_id: Option<i64> = graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
+            .await?;
+
+        let iris_ok = ps_iris_id
+            .map(|ps| ps == checkpoint_state.last_indexed_iris_id)
+            .unwrap_or(false);
+        let mod_ok = ps_mod_id
+            .map(|ps| ps == checkpoint_state.last_indexed_modification_id)
+            .unwrap_or(false);
+        let cp_ok = iris_ok && mod_ok;
+
+        let detail = format!(
+            "checkpoint(iris_id={}, mod_id={}) vs persistent_state(iris_id={}, mod_id={})",
+            checkpoint_state.last_indexed_iris_id,
+            checkpoint_state.last_indexed_modification_id,
+            ps_iris_id
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "not set".into()),
+            ps_mod_id
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "not set".into()),
+        );
+        rpt!(
+            rpt,
+            "  [{}] {}",
+            if cp_ok { "OK" } else { "MISMATCH" },
+            detail
+        );
+        checks.push(CheckResult::new("0a", "Checkpoint metadata", cp_ok, detail));
+
+        stats.add("checkpoint_s3_key", &checkpoint_state.s3_key);
+        stats.add(
+            "checkpoint_last_indexed_iris_id",
+            checkpoint_state.last_indexed_iris_id.to_string(),
+        );
+        stats.add(
+            "checkpoint_last_indexed_modification_id",
+            checkpoint_state.last_indexed_modification_id.to_string(),
+        );
+        stats.add("checkpoint_blake3_hash", &checkpoint_state.blake3_hash);
+
+        Some(graphs)
+    } else {
+        None
     };
 
     rpt!(rpt, "--- Collecting iris IDs ---");
@@ -234,6 +384,7 @@ async fn main() -> Result<()> {
     let layer_probability = args.layer_probability.unwrap_or((args.m as f64).recip());
     run_graph_checks(
         &graph_pg,
+        s3_graphs.as_ref(),
         &iris_ids,
         &exclusions,
         args.m,
@@ -247,8 +398,14 @@ async fn main() -> Result<()> {
 
     rpt!(rpt, "--- Check 2: Persistent state consistency ---");
     let iris_max = hnsw_store.get_max_serial_id().await?;
-    let last_mod_id =
-        run_persistent_state_checks(&graph_pg, iris_max, &mut checks, &mut stats).await?;
+    let last_mod_id = run_persistent_state_checks(
+        &graph_pg,
+        iris_max,
+        s3_graphs.as_ref(),
+        &mut checks,
+        &mut stats,
+    )
+    .await?;
 
     rpt!(
         rpt,
@@ -289,7 +446,7 @@ async fn main() -> Result<()> {
     output_files.push(report_path);
 
     if let Some(s3_uri) = &args.s3_output {
-        upload_to_s3(s3_uri, &output_files).await?;
+        upload_to_s3(s3_uri, &output_files, config.force_path_style()).await?;
     }
 
     if fail_count > 0 {
@@ -321,6 +478,7 @@ async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i6
 #[allow(clippy::too_many_arguments)]
 async fn run_graph_checks(
     graph_pg: &GraphPg<Aby3Store>,
+    s3_graphs: Option<&BothEyes<GraphMem<VectorId>>>,
     iris_ids: &HashSet<i64>,
     exclusions: &Option<HashSet<u32>>,
     m: usize,
@@ -330,25 +488,46 @@ async fn run_graph_checks(
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> Result<()> {
-    // Load one graph at a time to halve peak memory.
     let mut l0_id_sets: Vec<(&str, HashSet<u32>)> = Vec::new();
-    for (eye, store_id) in [("left", StoreId::Left), ("right", StoreId::Right)] {
-        rpt!(rpt, "  Loading {eye} graph...");
-        let graph = load_graph(graph_pg, store_id).await?;
-        let l0_ids = check_single_graph(
-            eye,
-            &graph,
-            iris_ids,
-            exclusions,
-            m,
-            layer_probability,
-            checks,
-            degree_hist,
-            stats,
-            rpt,
-        );
-        drop(graph);
-        l0_id_sets.push((eye, l0_ids));
+
+    if let Some(graphs) = s3_graphs {
+        // Graphs already loaded from S3 checkpoint.
+        for (eye, idx) in [("left", LEFT), ("right", RIGHT)] {
+            rpt!(rpt, "  Checking {eye} graph (from S3 checkpoint)...");
+            let l0_ids = check_single_graph(
+                eye,
+                &graphs[idx],
+                iris_ids,
+                exclusions,
+                m,
+                layer_probability,
+                checks,
+                degree_hist,
+                stats,
+                rpt,
+            );
+            l0_id_sets.push((eye, l0_ids));
+        }
+    } else {
+        // Load one graph at a time from Postgres to halve peak memory.
+        for (eye, store_id) in [("left", StoreId::Left), ("right", StoreId::Right)] {
+            rpt!(rpt, "  Loading {eye} graph...");
+            let graph = load_graph(graph_pg, store_id).await?;
+            let l0_ids = check_single_graph(
+                eye,
+                &graph,
+                iris_ids,
+                exclusions,
+                m,
+                layer_probability,
+                checks,
+                degree_hist,
+                stats,
+                rpt,
+            );
+            drop(graph);
+            l0_id_sets.push((eye, l0_ids));
+        }
     }
 
     // -- 1i: Left/Right graph sync --
@@ -720,6 +899,56 @@ async fn load_graph(
     ops.load_to_mem(graph_pg.pool(), 4).await
 }
 
+/// Resolve checkpoint state: use explicit S3 key (looked up from DB) or
+/// auto-discover the latest checkpoint from the genesis_graph_checkpoint table.
+async fn load_checkpoint_state(
+    graph_pg: &GraphPg<Aby3Store>,
+    explicit_key: Option<&str>,
+    bucket: &str,
+    rpt: &mut Report,
+) -> Result<GenesisCheckpointState> {
+    if let Some(key) = explicit_key {
+        rpt!(
+            rpt,
+            "  Using explicit checkpoint key: s3://{}/{}",
+            bucket,
+            key
+        );
+        // Look up the matching row from DB so we have the blake3 hash for verification.
+        let row = graph_pg
+            .get_genesis_graph_checkpoint_by_key(key)
+            .await?
+            .ok_or_else(|| eyre::eyre!("No checkpoint row found in DB for S3 key: {}", key))?;
+        Ok(GenesisCheckpointState {
+            s3_key: row.s3_key,
+            last_indexed_iris_id: row.last_indexed_iris_id.try_into().map_err(|_| {
+                eyre::eyre!("Invalid last_indexed_iris_id: {}", row.last_indexed_iris_id)
+            })?,
+            last_indexed_modification_id: row.last_indexed_modification_id,
+            blake3_hash: row.blake3_hash,
+        })
+    } else {
+        rpt!(rpt, "  Auto-discovering latest checkpoint from DB...");
+        let state = get_latest_checkpoint_state(graph_pg).await?;
+        match state {
+            Some(s) => {
+                rpt!(
+                    rpt,
+                    "  Found checkpoint: s3://{}/{} (iris_id={}, mod_id={})",
+                    bucket,
+                    s.s3_key,
+                    s.last_indexed_iris_id,
+                    s.last_indexed_modification_id
+                );
+                Ok(s)
+            }
+            None => Err(eyre::eyre!(
+                "No checkpoint found in genesis_graph_checkpoint table"
+            )),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Check 2: Persistent state consistency
 // ---------------------------------------------------------------------------
@@ -727,14 +956,26 @@ async fn load_graph(
 async fn run_persistent_state_checks(
     graph_pg: &GraphPg<Aby3Store>,
     iris_max_serial_id: usize,
+    s3_graphs: Option<&BothEyes<GraphMem<VectorId>>>,
     checks: &mut Vec<CheckResult>,
     stats: &mut Stats,
 ) -> Result<Option<i64>> {
     let last_indexed: Option<u32> = graph_pg
         .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
         .await?;
-    let left_max = get_graph_max_serial_id(graph_pg, StoreId::Left).await?;
-    let right_max = get_graph_max_serial_id(graph_pg, StoreId::Right).await?;
+    // When the graph is loaded from an S3 checkpoint, the Postgres links table
+    // is not the source of truth for the graph, so read the max serial id from
+    // the in-memory graphs instead.
+    let (left_max, right_max) = match s3_graphs {
+        Some(graphs) => (
+            graph_mem_max_serial_id(&graphs[LEFT]),
+            graph_mem_max_serial_id(&graphs[RIGHT]),
+        ),
+        None => (
+            get_graph_max_serial_id(graph_pg, StoreId::Left).await?,
+            get_graph_max_serial_id(graph_pg, StoreId::Right).await?,
+        ),
+    };
 
     // 2a: last_indexed_iris_id matches irises table max serial ID
     match last_indexed {
@@ -790,6 +1031,24 @@ async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreI
     let mut tx = graph_pg.tx().await?;
     let mut ops = tx.with_graph(store_id);
     ops.get_max_serial_id().await
+}
+
+/// Returns the maximum serial_id across all nodes in layer 0 of an in-memory
+/// graph, or 0 if the graph is empty. Matches the semantics of
+/// `GraphOps::get_max_serial_id`, which returns 0 when the links table is empty.
+fn graph_mem_max_serial_id(graph: &GraphMem<VectorId>) -> i64 {
+    graph
+        .layers
+        .first()
+        .and_then(|layer| {
+            layer
+                .get_links_map()
+                .keys()
+                .map(|vec_id| vec_id.serial_id())
+                .max()
+        })
+        .map(|id| id as i64)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,20 +1358,34 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
     Ok((bucket.to_string(), prefix.to_string()))
 }
 
-fn build_s3_client(config: &aws_config::SdkConfig) -> aws_sdk_s3::Client {
+fn build_s3_client(config: &aws_config::SdkConfig, force_path_style: bool) -> aws_sdk_s3::Client {
+    let retry_config = aws_config::retry::RetryConfig::standard().with_max_attempts(5);
     let s3_config = aws_sdk_s3::config::Builder::from(config)
-        .force_path_style(true)
+        .force_path_style(force_path_style)
+        .retry_config(retry_config)
         .build();
     aws_sdk_s3::Client::from_conf(s3_config)
 }
 
-async fn download_exclusions_from_s3(s3_uri: &str) -> Result<ExclusionsFile> {
+/// Build an S3 client for the graph-checkpoint bucket, allowing the region to
+/// differ from the ambient default (genesis writes checkpoints into a bucket
+/// that may live in a different region from the iris/exclusions buckets).
+async fn build_checkpoint_s3_client(region: &str, force_path_style: bool) -> aws_sdk_s3::Client {
+    let loader = aws_config::from_env().region(aws_sdk_s3::config::Region::new(region.to_owned()));
+    let config = loader.load().await;
+    build_s3_client(&config, force_path_style)
+}
+
+async fn download_exclusions_from_s3(
+    s3_uri: &str,
+    force_path_style: bool,
+) -> Result<ExclusionsFile> {
     let (bucket, key) = parse_s3_uri(s3_uri)?;
     eyre::ensure!(!key.is_empty(), "S3 URI must include an object key");
     println!("Downloading exclusions from s3://{bucket}/{key}");
 
     let config = aws_config::from_env().load().await;
-    let client = build_s3_client(&config);
+    let client = build_s3_client(&config, force_path_style);
 
     let response = client.get_object().bucket(&bucket).key(&key).send().await?;
     let body = response.body.collect().await?;
@@ -1125,12 +1398,12 @@ async fn download_exclusions_from_s3(s3_uri: &str) -> Result<ExclusionsFile> {
     Ok(exclusions)
 }
 
-async fn upload_to_s3(s3_uri: &str, files: &[PathBuf]) -> Result<()> {
+async fn upload_to_s3(s3_uri: &str, files: &[PathBuf], force_path_style: bool) -> Result<()> {
     let (bucket, prefix) = parse_s3_uri(s3_uri)?;
     println!("--- Uploading to S3: s3://{bucket}/{prefix} ---");
 
     let config = aws_config::from_env().load().await;
-    let client = build_s3_client(&config);
+    let client = build_s3_client(&config, force_path_style);
 
     for path in files {
         let file_name = path

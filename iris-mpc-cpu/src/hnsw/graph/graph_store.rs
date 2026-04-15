@@ -201,6 +201,30 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(row)
     }
 
+    /// Returns a genesis graph checkpoint by its S3 key.
+    pub async fn get_genesis_graph_checkpoint_by_key(
+        &self,
+        s3_key: &str,
+    ) -> Result<Option<GenesisGraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                blake3_hash
+            FROM genesis_graph_checkpoint
+            WHERE s3_key = $1
+            "#,
+        )
+        .bind(s3_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
     /// Returns all genesis graph checkpoints
     pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GenesisGraphCheckpointRow>> {
         let rows = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
