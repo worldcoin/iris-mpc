@@ -56,6 +56,7 @@ for test_id in "${TESTS[@]}"; do
             --seed "$SEED" \
             --exclusions-s3-uri "$EXCLUSIONS_S3_URI" \
             --checkpoint-s3-bucket "wf-smpcv2-dev-hnsw-checkpoint" \
+            --force-path-style \
             --output-dir "$output_dir" \
             > "$log_file" 2>&1
         then

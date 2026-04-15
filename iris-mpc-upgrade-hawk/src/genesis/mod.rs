@@ -1455,7 +1455,7 @@ async fn init_graph_from_stores(
 
     // Try to load graph from S3 checkpoint first
     if let Some(state) = checkpoint {
-        let both_eyes = download_genesis_checkpoint(s3_client, checkpoint_bucket, state).await?;
+        let both_eyes = download_genesis_checkpoint(s3_client, checkpoint_bucket, &state).await?;
         graph_loader.load_graphs_from_checkpoint(both_eyes);
         return Ok(());
     }
