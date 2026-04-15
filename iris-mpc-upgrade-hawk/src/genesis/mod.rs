@@ -666,6 +666,7 @@ async fn exec_delta(
                 )
                 .await?;
                 log_info(String::from("S3 checkpoint created after delta"));
+                hawk_handle.sync_peers(false, None).await?;
             }
 
             Ok(hawk_handle)
@@ -871,6 +872,7 @@ async fn exec_indexation(
                     "Final checkpoint created at iris_id={}",
                     last_indexed_id
                 ));
+                hawk_handle.sync_peers(false, None).await?;
             } else if let Some(rx) = persist_ch.take() {
                 hawk_handle.sync_peers(false, Some(rx)).await?;
             }
