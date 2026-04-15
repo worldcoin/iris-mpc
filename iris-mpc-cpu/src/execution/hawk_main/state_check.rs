@@ -207,6 +207,14 @@ impl HawkSession {
         // parties are ready. A party is ready when persistence completes (DONE)
         // or the results thread crashes (ERROR).
         // this step is combined with an exchange of the shutdown flag
+        //
+        // Receives are retried independently of sends to handle inter-party
+        // timing drift — e.g. when one party finishes an S3 checkpoint upload
+        // well before the others and enters this loop first.  Retrying only
+        // the receive avoids filling the peer's mpsc channel with duplicate
+        // sends.
+        // TODO: upstream `ampc-common` should expose typed network errors so
+        // we can distinguish timeouts from permanent failures here.
         let shutdown: u16 = if shutdown_flag { 1 } else { 0 } << 8;
         let mut prev;
         let mut next;
@@ -214,13 +222,38 @@ impl HawkSession {
             let my_status = sync_status.load(Ordering::Relaxed);
             let msg = NetworkValue::RingElement16(RingElement(my_status as u16 | shutdown));
 
-            let mut store = session.aby3_store.write().await;
-            let net = &mut store.session.network_session;
-            net.send_prev(msg.clone()).await?;
-            net.send_next(msg).await?;
-            prev = decode_u16(net.receive_prev().await)?;
-            next = decode_u16(net.receive_next().await)?;
-            drop(store);
+            {
+                let mut store = session.aby3_store.write().await;
+                let net = &mut store.session.network_session;
+                net.send_prev(msg.clone()).await?;
+                net.send_next(msg).await?;
+            }
+
+            prev = loop {
+                let mut store = session.aby3_store.write().await;
+                let net = &mut store.session.network_session;
+                match decode_u16(net.receive_prev().await) {
+                    Ok(val) => break val,
+                    Err(e) => {
+                        tracing::warn!("Retrying sync receive_prev after error: {e}");
+                        drop(store);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            };
+
+            next = loop {
+                let mut store = session.aby3_store.write().await;
+                let net = &mut store.session.network_session;
+                match decode_u16(net.receive_next().await) {
+                    Ok(val) => break val,
+                    Err(e) => {
+                        tracing::warn!("Retrying sync receive_next after error: {e}");
+                        drop(store);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            };
 
             let ready = my_status >= SYNC_DONE;
             if ready && (prev & 0xFF) as u8 >= SYNC_DONE && (next & 0xFF) as u8 >= SYNC_DONE {
