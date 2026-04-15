@@ -44,7 +44,7 @@ use iris_mpc_cpu::{
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -440,7 +440,7 @@ async fn exec_setup(
         &iris_store,
         graph_store_arc.clone(),
         &mut hawk_actor,
-        &aws_s3_client,
+        &checkpoint_s3_client,
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
         graph_checkpoint.clone(),
@@ -1775,12 +1775,15 @@ fn find_common_checkpoint(
     }
 
     for cp in others_hashes.iter() {
+        let mut dedup = HashSet::new();
         for hash in cp {
             if hash == &default_hash {
                 continue;
             }
-            if let Some(count) = common_set.get_mut(hash) {
-                *count += 1;
+            if dedup.insert(hash) {
+                if let Some(count) = common_set.get_mut(hash) {
+                    *count += 1;
+                }
             }
         }
     }
@@ -1840,34 +1843,33 @@ async fn upload_and_sync_genesis_checkpoint(
 async fn get_most_recent_checkpoints(
     graph_store: &GraphPg<Aby3Store>,
 ) -> Result<(Vec<GenesisCheckpointState>, GraphCheckpointHashes)> {
-    let mut hashes: GraphCheckpointHashes = [[0; _]; _];
-    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    let expected_len = all_checkpoints.len();
-    let checkpoints: Vec<GenesisCheckpointState> = all_checkpoints
+    let mut output_hashes: GraphCheckpointHashes = [[0; _]; _];
+    let db_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    let db_checkpoints_len = db_checkpoints.len();
+    let checkpoints: Vec<GenesisCheckpointState> = db_checkpoints
         .into_iter()
-        .take(hashes.len())
         .map(|x| x.try_into())
         .filter_map(Result::ok)
         .collect();
-    if checkpoints.len() != expected_len {
-        log_warn("some genesis checkpoints failed to convert to GenesisCheckpointState".into());
+    if checkpoints.len() != db_checkpoints_len {
+        log_warn("failed to convert some GenesisCheckpointRow to GenesisCheckpointState".into());
     }
-    let all_hashes: Vec<_> = checkpoints
+    let hashes: Vec<_> = checkpoints
         .iter()
         .map(|x| blake3::Hash::from_hex(x.blake3_hash.as_bytes()))
         .filter_map(Result::ok)
         .collect();
-    if all_hashes.len() != checkpoints.len() {
+    if hashes.len() != checkpoints.len() {
         log_warn("some checkpoint hashes failed to parse".into());
     }
-    for (src, dest) in all_hashes
+    for (src, dest) in hashes
         .into_iter()
-        .take(hashes.len())
-        .zip(hashes.iter_mut())
+        .take(output_hashes.len())
+        .zip(output_hashes.iter_mut())
     {
         dest.copy_from_slice(src.as_bytes());
     }
-    Ok((checkpoints, hashes))
+    Ok((checkpoints, output_hashes))
 }
 
 async fn maybe_rollback_iris_db(
