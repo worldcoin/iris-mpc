@@ -38,7 +38,7 @@ pub async fn get_common_checkpoint(
     find_common_checkpoint(my_checkpoint_hashes, my_checkpoints, others_hashes)
 }
 
-/// Pure subset logic for [`get_common_checkpoint`].
+/// subset logic for [`get_common_checkpoint`].
 /// Finds the first checkpoint whose hash appears in all parties'
 /// hash lists (mine + the X `others_hashes`).  Zero hashes are ignored
 /// because they represent empty slots in a [`GraphCheckpointHashes`] array.
@@ -47,32 +47,23 @@ pub fn find_common_checkpoint(
     my_checkpoints: Vec<GenesisCheckpointState>,
     others_hashes: Vec<GraphCheckpointHashes>,
 ) -> Result<Option<GenesisCheckpointState>> {
+    // using a naive O(n^2) algorithm because the hash lists are length  10 and
+    // there are 3 parties, and this code is called infrequently.
+
     let default_hash: Blake3Hash = [0; 32];
-    let mut common_set: HashMap<Blake3Hash, usize> = HashMap::new();
-    for &hash in my_checkpoint_hashes.iter() {
-        if hash == default_hash {
+    for (idx, hash) in my_checkpoint_hashes.iter().enumerate() {
+        if *hash == default_hash {
             continue;
         }
-        common_set.insert(hash, 1);
-    }
-
-    for cp in others_hashes.iter() {
-        let mut dedup = HashSet::new();
-        for hash in cp {
-            if hash == &default_hash {
-                continue;
-            }
-            if dedup.insert(hash) {
-                if let Some(count) = common_set.get_mut(hash) {
-                    *count += 1;
-                }
+        // Check if this hash is in all of the others_hashes lists
+        let mut found_in_all = true;
+        for other_hashes in &others_hashes {
+            if !other_hashes.contains(hash) {
+                found_in_all = false;
+                break;
             }
         }
-    }
-
-    common_set.retain(|_k, count| *count == others_hashes.len() + 1);
-    for (idx, hash) in my_checkpoint_hashes.iter().enumerate() {
-        if common_set.contains_key(hash) {
+        if found_in_all {
             let r = my_checkpoints.get(idx).cloned();
             if r.is_none() {
                 bail!("unreachable condition in get_common_checkpoint()");
