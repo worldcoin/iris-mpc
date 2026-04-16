@@ -5,8 +5,7 @@ use super::{
 use crate::{
     execution::hawk_main::{
         insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, StoreId, LEFT, RIGHT,
-        STORE_IDS,
+        BothEyes, HawkActor, HawkSession, StoreId, LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -19,12 +18,18 @@ use std::{
         atomic::{AtomicU8, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{self, mpsc, oneshot};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "Hawk-Handle";
+
+/// Maximum time to wait for all parties to complete the sync_peers exchange.
+/// This bounds the retry loop inside `HawkSession::sync_peers` so that
+/// persistent failures (crashed peer, broken connection) surface as errors
+/// rather than hanging indefinitely.
+const SYNC_PEERS_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
@@ -218,16 +223,6 @@ impl Handle {
                 // Convert the results into SingleHawkMutation format
                 let [left_plans, right_plans] = results;
                 assert_eq!(left_plans.len(), right_plans.len());
-                let mut mutations = Vec::new();
-
-                for (left_plan, right_plan) in izip!(left_plans, right_plans) {
-                    // Genesis doesn't use modification keys or request indices
-                    mutations.push(SingleHawkMutation {
-                        plans: [left_plan, right_plan],
-                        modification_key: None,
-                        request_index: None,
-                    });
-                }
 
                 metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
                 metrics::gauge!("genesis_batch_size").set(vector_ids.len() as f64);
@@ -237,7 +232,6 @@ impl Handle {
                     JobResult::new_batch_result(
                         batch_id,
                         vector_ids,
-                        HawkMutation(mutations),
                         vector_ids_to_persist,
                         done_tx,
                     ),
@@ -283,12 +277,10 @@ impl Handle {
                                     let plans = vec![Some(insert_plan)];
                                     let ids = vec![Some(vector_id)];
 
-                                    let connect_plan = {
-                                        let mut store = session.aby3_store.write().await;
-                                        let mut graph = session.graph_store.write().await;
-
-                                        insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?
-                                    };
+                                    let mut store = session.aby3_store.write().await;
+                                    let mut graph = session.graph_store.write().await;
+                                    let connect_plan =
+                                        insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?;
 
                                     Ok((connect_plan, vector_id))
                                 }
@@ -315,35 +307,18 @@ impl Handle {
 
                 // Convert the results into SingleHawkMutation format
                 let [left_plans_and_vector, right_plans_and_vector] = results;
-                let left_plans = left_plans_and_vector.0;
-                let right_plans = right_plans_and_vector.0;
                 let left_vector = left_plans_and_vector.1;
                 let right_vector = right_plans_and_vector.1;
 
                 assert_eq!(left_vector.version_id(), right_vector.version_id());
                 assert_eq!(left_vector.serial_id(), right_vector.serial_id());
 
-                let mut mutations = Vec::new();
-
-                for (left_plan, right_plan) in izip!(left_plans, right_plans) {
-                    // Genesis doesn't use modification keys or request indices
-                    mutations.push(SingleHawkMutation {
-                        plans: [left_plan, right_plan],
-                        modification_key: None,
-                        request_index: None,
-                    });
-                }
                 metrics::histogram!("genesis_modification_duration")
                     .record(now.elapsed().as_secs_f64());
 
                 Ok((
                     done_rx,
-                    JobResult::new_modification_result(
-                        modification.id,
-                        HawkMutation(mutations),
-                        left_vector,
-                        done_tx,
-                    ),
+                    JobResult::new_modification_result(modification.id, left_vector, done_tx),
                 ))
             }
             JobRequest::Sync {
@@ -351,7 +326,12 @@ impl Handle {
                 sync_status,
             } => {
                 let _ = done_tx;
-                let mismatched = HawkSession::sync_peers(shutdown, sync_status, sessions).await?;
+                let mismatched = tokio::time::timeout(
+                    SYNC_PEERS_TIMEOUT,
+                    HawkSession::sync_peers(shutdown, sync_status, sessions),
+                )
+                .await
+                .map_err(|_| eyre!("sync_peers timed out after {SYNC_PEERS_TIMEOUT:?}"))??;
                 Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }

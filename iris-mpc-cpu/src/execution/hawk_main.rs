@@ -400,7 +400,7 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
-type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
+pub type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 
 /// A container for state required to perform parallel MPC operations.
@@ -427,7 +427,10 @@ pub type SearchResult = (
 /// A list of matches paired with a saturation flag.
 #[derive(Debug, Clone, Default)]
 pub struct SaturableMatches {
-    pub results: Vec<(Aby3VectorRef, Aby3DistanceRef)>,
+    pub results: Vec<(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )>,
     /// True if more matches likely exist.
     /// This is detected when most or all `ef` search results are matches. See saturation_margin to make it more sensitive.
     pub saturated: bool,
@@ -1093,6 +1096,13 @@ impl<'a> GraphLoader<'a> {
             now.elapsed()
         );
         Ok(())
+    }
+
+    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
+        let [left, right] = graphs;
+        let GraphLoader(mut dest_graphs) = self;
+        *dest_graphs[LEFT] = left;
+        *dest_graphs[RIGHT] = right;
     }
 }
 

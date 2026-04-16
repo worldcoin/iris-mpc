@@ -23,6 +23,15 @@ pub struct RowLinks {
     layer: i16,
 }
 
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
+pub struct GenesisGraphCheckpointRow {
+    pub id: i64,
+    pub s3_key: String,
+    pub last_indexed_iris_id: i64,
+    pub last_indexed_modification_id: i64,
+    pub blake3_hash: String,
+}
+
 pub struct GraphPg<V: VectorStore> {
     pool: sqlx::PgPool,
     schema_name: String,
@@ -137,6 +146,114 @@ impl<V: VectorStore> GraphPg<V> {
         .bind(key)
         .execute(tx.deref_mut())
         .await?;
+
+        Ok(())
+    }
+
+    pub async fn insert_genesis_graph_checkpoint(
+        tx: &mut Transaction<'_, Postgres>,
+        s3_key: &str,
+        last_indexed_iris_id: i64,
+        last_indexed_modification_id: i64,
+        blake3_hash: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO genesis_graph_checkpoint (
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                blake3_hash
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(s3_key)
+        .bind(last_indexed_iris_id)
+        .bind(last_indexed_modification_id)
+        .bind(blake3_hash)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Returns the most recent genesis graph checkpoint
+    pub async fn get_latest_genesis_graph_checkpoint(
+        &self,
+    ) -> Result<Option<GenesisGraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                blake3_hash
+            FROM genesis_graph_checkpoint
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    /// Returns a genesis graph checkpoint by its S3 key.
+    pub async fn get_genesis_graph_checkpoint_by_key(
+        &self,
+        s3_key: &str,
+    ) -> Result<Option<GenesisGraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                blake3_hash
+            FROM genesis_graph_checkpoint
+            WHERE s3_key = $1
+            "#,
+        )
+        .bind(s3_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    /// Returns all genesis graph checkpoints
+    pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GenesisGraphCheckpointRow>> {
+        let rows = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                blake3_hash
+            FROM genesis_graph_checkpoint
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to fetch genesis checkpoints: {e}"))?;
+        Ok(rows)
+    }
+
+    pub async fn delete_genesis_checkpoint(&self, id: i64) -> Result<()> {
+        let _ = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+            r#"
+            DELETE FROM genesis_graph_checkpoint WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to delete genesis checkpoint: {e}"))?;
 
         Ok(())
     }

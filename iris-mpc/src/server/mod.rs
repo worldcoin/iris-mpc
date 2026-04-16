@@ -33,7 +33,7 @@ use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::execution::hawk_main::{
-    GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
+    GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps, ServerJobResult,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -233,7 +233,7 @@ fn process_config(config: &Config) {
 
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
-async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
+async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store<HawkOps>>), Report> {
     let hawk_schema_name = format!(
         "{}{}_{}_{}",
         config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
@@ -488,7 +488,7 @@ async fn init_hawk_actor(
 async fn load_database(
     config: &Config,
     iris_store: &Store,
-    graph_store: &GraphPg<Aby3Store>,
+    graph_store: &GraphPg<Aby3Store<HawkOps>>,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
@@ -554,7 +554,7 @@ async fn load_database(
 async fn start_results_thread(
     config: &Config,
     iris_store: &Store,
-    graph_store: GraphPg<Aby3Store>,
+    graph_store: GraphPg<Aby3Store<HawkOps>>,
     aws_clients: &AwsClients,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,

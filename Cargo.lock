@@ -2916,6 +2916,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "config",
  "csv",
  "cudarc",
  "data-encoding",
@@ -3023,6 +3024,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-s3",
  "backon",
+ "base64",
  "bincode",
  "blake3",
  "bytemuck",
@@ -3067,6 +3069,7 @@ dependencies = [
  "tracing-forest",
  "tracing-subscriber",
  "tracing-test",
+ "uuid",
 ]
 
 [[package]]
