@@ -5,19 +5,21 @@ use std::sync::Arc;
 
 use aws_sdk_s3::Client as S3Client;
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::execution::hawk_main::{BothEyes, GraphRef, HawkOps};
-use iris_mpc_cpu::genesis::genesis_checkpoint::{upload_genesis_checkpoint, GenesisCheckpointState};
-use iris_mpc_cpu::genesis::state_accessor::set_last_indexed_iris_id;
-use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_common::IrisSerialId;
+use iris_mpc_cpu::execution::hawk_main::{BothEyes, GraphRef, HawkOps};
+use iris_mpc_cpu::genesis::genesis_checkpoint::{
+    upload_genesis_checkpoint, GenesisCheckpointState,
+};
+use iris_mpc_cpu::genesis::state_accessor::set_last_indexed_iris_id;
+use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
+use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::Store as IrisStore;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
 use super::{
-    Blake3Hash, GraphCheckpointHashes, GRAPH_CHECKPOINT_ENDPOINT, JobResult, GenesisHawkHandle,
-    log_error, log_info, log_warn,
+    log_error, log_info, log_warn, Blake3Hash, GenesisHawkHandle, GraphCheckpointHashes, JobResult,
+    GRAPH_CHECKPOINT_ENDPOINT,
 };
 
 pub async fn get_common_checkpoint(
