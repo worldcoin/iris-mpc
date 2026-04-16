@@ -1882,23 +1882,21 @@ async fn get_most_recent_checkpoints(
 ) -> Result<(Vec<GenesisCheckpointState>, GraphCheckpointHashes)> {
     let mut output_hashes: GraphCheckpointHashes = [[0; _]; _];
     let db_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    let db_checkpoints_len = db_checkpoints.len();
-    let checkpoints: Vec<GenesisCheckpointState> = db_checkpoints
-        .into_iter()
-        .map(|x| x.try_into())
-        .filter_map(Result::ok)
-        .collect();
-    if checkpoints.len() != db_checkpoints_len {
-        log_warn("failed to convert some GenesisCheckpointRow to GenesisCheckpointState".into());
+    let mut valid_tuples = vec![];
+    for db_cp in db_checkpoints {
+        let genesis_cp_state: Result<GenesisCheckpointState> = db_cp.try_into();
+        if let Ok(genesis_cp_state) = genesis_cp_state {
+            if let Ok(hash) = blake3::Hash::from_hex(genesis_cp_state.blake3_hash.as_bytes()) {
+                valid_tuples.push((genesis_cp_state, hash));
+            } else {
+                log_warn("checkpoint hashe failed to parse".into());
+            }
+        } else {
+            log_warn("failed to convert GenesisCheckpointRow to GenesisCheckpointState".into());
+        }
     }
-    let hashes: Vec<_> = checkpoints
-        .iter()
-        .map(|x| blake3::Hash::from_hex(x.blake3_hash.as_bytes()))
-        .filter_map(Result::ok)
-        .collect();
-    if hashes.len() != checkpoints.len() {
-        log_warn("some checkpoint hashes failed to parse".into());
-    }
+    let (checkpoints, hashes): (Vec<GenesisCheckpointState>, Vec<blake3::Hash>) =
+        valid_tuples.into_iter().unzip();
     for (src, dest) in hashes
         .into_iter()
         .take(output_hashes.len())
