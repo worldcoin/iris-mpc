@@ -538,6 +538,18 @@ impl HawkActor {
         self.anon_stats_store = store;
     }
 
+    /// Replaces the network handle used by this actor to create MPC sessions.
+    /// Returns the previous handle. Useful for benchmarks that need to wrap
+    /// the networking layer with counting.
+    /// For safety, call it before creating any sessions, and do not call it concurrently with session creation.
+    #[cfg(feature = "networking_metrics")]
+    pub fn replace_networking(
+        &mut self,
+        networking: Box<dyn NetworkHandle>,
+    ) -> Box<dyn NetworkHandle> {
+        std::mem::replace(&mut self.networking, networking)
+    }
+
     pub fn searcher(&self) -> Arc<HnswSearcher> {
         self.searcher.clone()
     }
@@ -2105,7 +2117,6 @@ pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     HawkHandle::new(hawk_actor).await
 }
 
-#[cfg(test)]
 pub mod test_utils;
 
 #[cfg(test)]
@@ -2118,10 +2129,7 @@ mod tests {
     use aes_prng::AesRng;
     use futures::future::JoinAll;
     use iris_mpc_common::{
-        galois_engine::degree4::preprocess_iris_message_shares,
-        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
-        iris_db::db::IrisDB,
-        job::{BatchMetadata, IrisQueryBatchEntries},
+        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
     };
     use rand::SeedableRng;
     use std::{ops::Not, time::Duration};
@@ -2304,60 +2312,7 @@ mod tests {
         Ok(())
     }
 
-    /// Prepare shares in the same format as `receive_batch()`.
-    fn receive_batch_shares(
-        shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
-    ) -> [IrisQueryBatchEntries; 4] {
-        let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
-        for (share, mirrored_share) in shares_with_mirror.iter().cloned() {
-            let one = preprocess_iris_message_shares(
-                share.code,
-                share.mask,
-                mirrored_share.code,
-                mirrored_share.mask,
-            )
-            .unwrap();
-            out[0].code.push(one.code);
-            out[0].mask.push(one.mask);
-            out[1].code.extend(one.code_rotated);
-            out[1].mask.extend(one.mask_rotated);
-            out[2].code.extend(one.code_interpolated.clone());
-            out[2].mask.extend(one.mask_interpolated.clone());
-            out[3].code.extend(one.code_mirrored);
-            out[3].mask.extend(one.mask_mirrored);
-        }
-        out
-    }
-
-    // Prepare a batch for a particular party, setting their shares.
-    pub fn batch_of_party(
-        batch: &BatchQuery,
-        shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
-    ) -> BatchQuery {
-        // TODO: different test irises for each eye.
-
-        let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
-            receive_batch_shares(shares_with_mirror);
-        let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
-            receive_batch_shares(shares_with_mirror);
-
-        BatchQuery {
-            // Iris shares.
-            left_iris_requests,
-            right_iris_requests,
-            // All rotations.
-            left_iris_rotated_requests,
-            right_iris_rotated_requests,
-            // All rotations, preprocessed.
-            left_iris_interpolated_requests,
-            right_iris_interpolated_requests,
-            // All rotations, preprocessed, mirrored.
-            left_mirrored_iris_interpolated_requests,
-            right_mirrored_iris_interpolated_requests,
-            // Details common to all parties.
-            ..batch.clone()
-        }
-    }
+    use super::test_utils::batch_of_party;
 
     fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
         // Ignore the actual secret shares because they are different for each party.
