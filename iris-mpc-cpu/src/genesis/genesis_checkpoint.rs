@@ -119,7 +119,7 @@ pub async fn upload_genesis_checkpoint(
 pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
     s3_client: &S3Client,
     bucket: &str,
-    state: GenesisCheckpointState,
+    state: &GenesisCheckpointState,
 ) -> Result<BothEyes<GraphMem<T>>> {
     let start = Instant::now();
 

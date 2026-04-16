@@ -15,9 +15,11 @@ helpers = [
   "dep:reqwest",
 ]
 phase_trace = ["iris-mpc-cpu/phase_trace"]
+networking_metrics = ["iris-mpc-cpu/networking_metrics"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+async-trait.workspace = true
 async_from = "0.2.0"
 axum.workspace = true
 aws-config = { workspace = true }
@@ -30,6 +32,7 @@ base64.workspace = true
 cudarc.workspace = true
 chrono.workspace = true
 clap.workspace = true
+config = { version = "0.15.19", default-features = false }
 csv = "*"
 data-encoding.workspace = true
 dotenvy.workspace = true
@@ -50,6 +53,7 @@ sqlx.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
+ampc-actor-utils.workspace = true
 ampc-anon-stats.workspace = true
 ampc-server-utils.workspace = true
 tonic = "0.12.3"
@@ -136,8 +140,9 @@ name = "hnsw_algorithm_metrics"
 path = "bin/iris-mpc-cpu/hnsw_algorithm_metrics.rs"
 
 [[bin]]
-name = "hnsw_network_stats_example"
-path = "bin/iris-mpc-cpu/hnsw_network_stats_example.rs"
+name = "communication-stats"
+path = "bin/iris-mpc-cpu/communication_stats.rs"
+required-features = ["networking_metrics"]
 
 [[bin]]
 name = "init-test-dbs"
@@ -146,10 +151,6 @@ path = "bin/iris-mpc-cpu/init_test_dbs.rs"
 [[bin]]
 name = "init-single-db"
 path = "bin/iris-mpc-cpu/init_single_db.rs"
-
-[[bin]]
-name = "local_hnsw"
-path = "bin/iris-mpc-cpu/local_hnsw.rs"
 
 [[bin]]
 name = "generate_ideal_neighborhoods"

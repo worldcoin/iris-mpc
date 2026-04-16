@@ -1,5 +1,8 @@
 use super::utils::{self, errors::IndexationError};
-use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
+use crate::{
+    execution::hawk_main::HawkOps, hawkers::aby3::aby3_store::Aby3Store,
+    hnsw::graph::graph_store::GraphPg,
+};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
@@ -139,7 +142,7 @@ pub async fn get_iris_modifications(
 /// The serial id of last iris to have been indexed, or 0 if none has been recorded.
 ///
 pub async fn get_last_indexed_iris_id(
-    graph_store: Arc<GraphPg<Aby3Store>>,
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
 ) -> Result<IrisSerialId> {
     get_state_element(graph_store, STATE_KEY_LAST_INDEXED_IRIS_ID).await
 }
@@ -154,13 +157,15 @@ pub async fn get_last_indexed_iris_id(
 ///
 /// The modification id of the last indexed modification, or 0 if none has been recorded.
 ///
-pub async fn get_last_indexed_modification_id(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<i64> {
+pub async fn get_last_indexed_modification_id(
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
+) -> Result<i64> {
     get_state_element(graph_store, STATE_KEY_LAST_INDEXED_MODIFICATION_ID).await
 }
 
 /// Gets a state element value from remote store.
 async fn get_state_element<T: DeserializeOwned + Default>(
-    graph_store: Arc<GraphPg<Aby3Store>>,
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     key: &str,
 ) -> Result<T> {
     utils::log_info(
@@ -305,7 +310,10 @@ mod tests {
         get_last_indexed_iris_id, get_last_indexed_modification_id, set_last_indexed_iris_id,
         set_last_indexed_modification_id, unset_last_indexed_iris_id,
     };
-    use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
+    use crate::{
+        execution::hawk_main::HawkOps, hawkers::aby3::aby3_store::Aby3Store,
+        hnsw::graph::graph_store::GraphPg,
+    };
     use eyre::Result;
     use iris_mpc_common::postgres::{AccessMode, PostgresClient, PostgresSchemaName};
     use iris_mpc_store::{
@@ -322,7 +330,7 @@ mod tests {
     // Returns a set of test resources.
     async fn get_resources() -> Result<(
         IrisStore,
-        Arc<GraphPg<Aby3Store>>,
+        Arc<GraphPg<Aby3Store<HawkOps>>>,
         PostgresClient,
         PostgresSchemaName,
     )> {

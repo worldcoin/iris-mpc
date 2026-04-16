@@ -191,15 +191,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
-name = "ansiterm"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ab587f5395da16dd2e6939adf53dede583221b320cadfb94e02b5b7b9bf24cc"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "anstream"
 version = "0.6.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2907,8 +2898,10 @@ name = "iris-mpc-bins"
 version = "0.1.0"
 dependencies = [
  "aes-prng",
+ "ampc-actor-utils",
  "ampc-anon-stats",
  "ampc-server-utils",
+ "async-trait",
  "async_from",
  "aws-config",
  "aws-sdk-kms",
@@ -2923,6 +2916,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "config",
  "csv",
  "cudarc",
  "data-encoding",
@@ -3026,7 +3020,6 @@ dependencies = [
  "ampc-anon-stats",
  "ampc-secret-sharing",
  "ampc-server-utils",
- "ansiterm",
  "async-channel",
  "async-trait",
  "aws-sdk-s3",
