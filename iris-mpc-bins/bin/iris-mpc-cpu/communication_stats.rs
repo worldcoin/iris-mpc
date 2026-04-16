@@ -197,7 +197,9 @@ impl NetworkHandle for DummyNetHandle {
 type Aby3SharedIrises = iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3SharedIrises;
 type BothEyes<T> = [T; 2];
 
-fn build_party_iris_stores(plain_store: &PlaintextStore) -> Vec<BothEyes<Aby3SharedIrises>> {
+fn build_party_iris_stores(
+    plain_store: &PlaintextStore<HawkOps>,
+) -> Vec<BothEyes<Aby3SharedIrises>> {
     use aes_prng::AesRng;
     use rand::SeedableRng;
 
