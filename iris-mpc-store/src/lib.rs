@@ -450,7 +450,8 @@ WHERE id = $1;
 
     pub async fn delete_irises_after_id(&self, last_indexed_id: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        self.delete_irises_after_id_tx(&mut tx, last_indexed_id).await?;
+        self.delete_irises_after_id_tx(&mut tx, last_indexed_id)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
