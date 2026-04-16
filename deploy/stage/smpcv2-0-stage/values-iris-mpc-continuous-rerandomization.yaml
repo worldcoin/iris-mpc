@@ -1,0 +1,26 @@
+env:
+  - name: SMPC__SERVICE__SERVICE_NAME
+    value: iris-mpc-continuous-rerandomization-0
+  - name: AWS_REGION
+    value: eu-north-1
+  - name: PARTY_ID
+    value: "0"
+  - name: DB_URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  - name: SCHEMA_NAME
+    value: SMPC_stage_0
+  - name: ENVIRONMENT
+    value: stage
+  - name: RERAND_S3_BUCKET
+    value: wf-smpcv2-stage-continuous-rerandomization
+  - name: CHUNK_SIZE
+    value: "2000"
+  - name: CHUNK_DELAY_SECS
+    value: "1"
+  - name: SAFETY_BUFFER_IDS
+    value: "0"
+  - name: S3_POLL_INTERVAL_MS
+    value: "2000"

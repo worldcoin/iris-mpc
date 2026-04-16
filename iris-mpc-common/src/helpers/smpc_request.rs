@@ -188,6 +188,9 @@ pub enum ReceiveRequestError {
     BatchPollingTimeout(i32),
     #[error("Failed to parse shares: {0}")]
     FailedToProcessIrisShares(Report),
+
+    #[error("Failed to mark request as deleted: {0}")]
+    FailedToMarkRequestAsDeleted(Report),
 }
 
 impl From<SdkError<ReceiveMessageError>> for ReceiveRequestError {

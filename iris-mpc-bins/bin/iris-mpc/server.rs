@@ -9,7 +9,8 @@ use ampc_server_utils::batch_sync::{
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
     init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready, TaskMonitor,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
+    TaskMonitor,
 };
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -63,6 +64,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_gpu::server::ServerActor;
 use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::rerand as rerand_store;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -258,11 +260,13 @@ async fn server_main(config: Config) -> Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
+    let rerand_state = rerand_store::build_rerand_sync_state(&store.pool).await?;
     let my_state = SyncState {
         db_len: store_len as u64,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
+        rerand_state,
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -270,12 +274,44 @@ async fn server_main(config: Config) -> Result<()> {
     let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
         panic!("Server coordination config must be provided for healthcheck server");
     });
-    let (is_ready_flag, verified_peers, uuid) = start_coordination_server(
+    let rerand_watermark_route = {
+        let pool = store.pool.clone();
+        axum::Router::new().route(
+            "/rerand-watermark",
+            axum::routing::get(move || {
+                let pool = pool.clone();
+                async move {
+                    let wm = rerand_store::get_applied_watermark_from_pool(&pool).await;
+                    match wm {
+                        Ok(Some((epoch, chunk))) => (
+                            axum::http::StatusCode::OK,
+                            serde_json::to_string(&serde_json::json!({
+                                "epoch": epoch,
+                                "max_applied_chunk": chunk,
+                            }))
+                            .unwrap(),
+                        ),
+                        Ok(None) => (axum::http::StatusCode::OK, "null".to_string()),
+                        Err(e) => {
+                            tracing::warn!("rerand-watermark query failed: {:?}", e);
+                            (
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("DB error: {}", e),
+                            )
+                        }
+                    }
+                }
+            }),
+        )
+    };
+
+    let (is_ready_flag, verified_peers, uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
+        Some(rerand_watermark_route),
     )
     .await;
 
@@ -334,7 +370,7 @@ async fn server_main(config: Config) -> Result<()> {
             None,
             &aws_clients,
             &shares_encryption_key_pair,
-            sync_result,
+            sync_result.clone(),
         )
         .await?;
     }
@@ -353,99 +389,140 @@ async fn server_main(config: Config) -> Result<()> {
         }
     }
 
-    if download_shutdown_handler.is_shutting_down() {
-        tracing::warn!("Shutting down has been triggered");
-        return Ok(());
+    // --- Coordinated rerand freeze with watermark convergence ---
+    {
+        eyre::ensure!(
+            server_coord_config.node_hostnames.len() == server_coord_config.healthcheck_ports.len(),
+            "node_hostnames ({}) and healthcheck_ports ({}) must have the same length",
+            server_coord_config.node_hostnames.len(),
+            server_coord_config.healthcheck_ports.len(),
+        );
+        let peer_addrs: Vec<(&str, usize)> = server_coord_config
+            .node_hostnames
+            .iter()
+            .zip(server_coord_config.healthcheck_ports.iter())
+            .enumerate()
+            .filter(|(i, _)| *i != config.party_id)
+            .map(|(_, (h, p))| -> eyre::Result<_> { Ok((h.as_str(), p.parse::<usize>()?)) })
+            .collect::<eyre::Result<Vec<_>>>()?;
+        rerand_store::freeze_and_verify_watermarks(&store.pool, &peer_addrs).await?;
     }
+    // Worker is now frozen with verified equal watermarks.
+    // Everything from here until freeze release must be wrapped so that
+    // errors always release the freeze.
+    let freeze_pool = store.pool.clone();
 
-    // refetch store_len in case we rolled back
-    let store_len = store.count_irises().await?;
-    tracing::info!("Database store length after sync: {}", store_len);
+    let frozen_result = async {
+        let rerand_lock_conn = rerand_store::acquire_apply_lock(&store.pool).await?;
 
-    let runtime_handle = tokio::runtime::Handle::current();
-    let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
-        let schema = config.get_anon_stats_db_schema();
-        let anon_client =
-            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client).await?;
-        Some((anon_store, runtime_handle.clone()))
-    } else {
-        tracing::warn!("No database URL configured for anon stats; skipping DB persistence");
-        None
-    };
-    let anon_stats_writer_for_actor = anon_stats_writer.clone();
+        if download_shutdown_handler.is_shutting_down() {
+            rerand_store::release_apply_lock(rerand_lock_conn).await?;
+            return Ok::<_, eyre::Report>(None);
+        }
 
-    let (tx, rx) = oneshot::channel();
-    let config_clone = config.clone();
-    background_tasks.spawn_blocking(move || {
-        let config = config_clone;
-        // --------------------------------------------------------------------------
-        // ANCHOR: Load the database
-        // --------------------------------------------------------------------------
-        tracing::info!("⚓️ ANCHOR: Starting server actor");
-        match ServerActor::new(
-            config.party_id,
-            chacha_seeds,
-            8,
-            config.max_db_size,
-            config.max_batch_size,
-            config.match_distances_buffer_size,
-            config.match_distances_buffer_size_extra_percent,
-            config.return_partial_results,
-            config.disable_persistence,
-            config.enable_debug_timing,
-            config.full_scan_side,
-            config.full_scan_side_switching_enabled,
-            anon_stats_writer_for_actor,
-        ) {
-            Ok((mut actor, handle)) => {
-                tracing::info!("⚓️ ANCHOR: Load the database");
-                let res = if config.fake_db_size > 0 {
-                    // TODO: does this even still work, since we do not page-lock the memory here?
-                    actor.fake_db(config.fake_db_size);
-                    Ok(())
-                } else {
-                    tracing::info!(
-                        "Initialize iris db: Loading from DB (parallelism: {})",
-                        parallelism
-                    );
-                    let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+        let startup_result = async {
+            let store_len = store.count_irises().await?;
+            tracing::info!("Database store length after sync: {}", store_len);
 
-                    tokio::runtime::Handle::current().block_on(async {
-                        load_iris_db(
-                            &mut actor,
-                            &store,
-                            store_len,
-                            parallelism,
-                            None,
-                            &config,
-                            download_shutdown_handler,
-                        )
-                        .await
-                    })
-                };
+            let runtime_handle = tokio::runtime::Handle::current();
+            let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
+                let schema = config.get_anon_stats_db_schema();
+                let anon_client =
+                    AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+                let anon_store = AnonStatsStore::new(&anon_client).await?;
+                Some((anon_store, runtime_handle.clone()))
+            } else {
+                tracing::warn!(
+                    "No database URL configured for anon stats; skipping DB persistence"
+                );
+                None
+            };
+            let anon_stats_writer_for_actor = anon_stats_writer.clone();
 
-                match res {
-                    Ok(_) => {
-                        tx.send(Ok((handle, store))).unwrap();
+            let (tx, rx) = oneshot::channel();
+            let config_clone = config.clone();
+            background_tasks.spawn_blocking(move || {
+                let config = config_clone;
+                tracing::info!("⚓️ ANCHOR: Starting server actor");
+                match ServerActor::new(
+                    config.party_id,
+                    chacha_seeds,
+                    8,
+                    config.max_db_size,
+                    config.max_batch_size,
+                    config.match_distances_buffer_size,
+                    config.match_distances_buffer_size_extra_percent,
+                    config.return_partial_results,
+                    config.disable_persistence,
+                    config.enable_debug_timing,
+                    config.full_scan_side,
+                    config.full_scan_side_switching_enabled,
+                    anon_stats_writer_for_actor,
+                ) {
+                    Ok((mut actor, handle)) => {
+                        tracing::info!("⚓️ ANCHOR: Load the database");
+                        let res = if config.fake_db_size > 0 {
+                            actor.fake_db(config.fake_db_size);
+                            Ok(())
+                        } else {
+                            tracing::info!(
+                                "Initialize iris db: Loading from DB (parallelism: {})",
+                                parallelism
+                            );
+                            let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+
+                            tokio::runtime::Handle::current().block_on(async {
+                                load_iris_db(
+                                    &mut actor,
+                                    &store,
+                                    store_len,
+                                    parallelism,
+                                    None,
+                                    &config,
+                                    download_shutdown_handler,
+                                )
+                                .await
+                            })
+                        };
+
+                        match res {
+                            Ok(_) => {
+                                tx.send(Ok((handle, store))).unwrap();
+                            }
+                            Err(e) => {
+                                tx.send(Err(e)).unwrap();
+                                return Ok(());
+                            }
+                        }
+
+                        actor.run(); // forever
                     }
                     Err(e) => {
                         tx.send(Err(e)).unwrap();
                         return Ok(());
                     }
-                }
+                };
+                Ok(())
+            });
 
-                actor.run(); // forever
-            }
-            Err(e) => {
-                tx.send(Err(e)).unwrap();
-                return Ok(());
-            }
-        };
-        Ok(())
-    });
+            let startup_result = rx.await;
+            let (handle, store) = startup_result??;
+            Ok::<_, eyre::Report>((handle, store))
+        }
+        .await;
 
-    let (mut handle, store) = rx.await??;
+        rerand_store::release_apply_lock(rerand_lock_conn).await?;
+        Ok(Some(startup_result))
+    }
+    .await;
+
+    // Always release freeze, even on error.
+    rerand_store::release_rerand_freeze(&freeze_pool).await?;
+
+    let (mut handle, store) = match frozen_result? {
+        None => return Ok(()),
+        Some(r) => r?,
+    };
 
     background_tasks.check_tasks();
 
@@ -743,6 +820,10 @@ async fn server_main(config: Config) -> Result<()> {
                 .into_group_map();
 
             let mut tx = store_bg.tx().await?;
+
+            if !config_bg.disable_persistence {
+                iris_mpc_store::rerand::acquire_modify_lock(&mut tx).await?;
+            }
 
             store_bg
                 .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())

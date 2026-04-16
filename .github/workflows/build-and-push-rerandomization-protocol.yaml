@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "fix/add-cacerts-to-rerandom-binary"
+      - "ps/cont-rerand"
     paths:
       - Dockerfile.shares-re-randomization
       - iris-mpc-upgrade/**

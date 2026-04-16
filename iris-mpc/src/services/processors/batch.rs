@@ -422,8 +422,6 @@ impl<'a> BatchProcessor<'a> {
             .string_value()
             .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
-        self.delete_message(&sqs_message).await?;
-
         let res = match request_type {
             IDENTITY_DELETION_MESSAGE_TYPE => {
                 self.process_identity_deletion(&message, batch_metadata)
@@ -435,6 +433,13 @@ impl<'a> BatchProcessor<'a> {
             }
             REAUTH_MESSAGE_TYPE => self.process_reauth_request(&message, batch_metadata).await,
             RECOVERY_CHECK_MESSAGE_TYPE => {
+                if !self.config.enable_recovery {
+                    metrics::counter!("request.skipped", "type" => "recovery_check").increment(1);
+                    tracing::warn!("Recovery checks are disabled, skipping recovery check request");
+                    self.delete_message(&sqs_message).await?;
+                    self.msg_counter += 1;
+                    return Ok(());
+                }
                 self.process_identity_match_check_request(
                     &message,
                     batch_metadata,
@@ -444,6 +449,13 @@ impl<'a> BatchProcessor<'a> {
                 .await
             }
             RESET_CHECK_MESSAGE_TYPE => {
+                if !self.config.enable_reset {
+                    metrics::counter!("request.skipped", "type" => "reset_check").increment(1);
+                    tracing::warn!("Resets are disabled, skipping reset request");
+                    self.delete_message(&sqs_message).await?;
+                    self.msg_counter += 1;
+                    return Ok(());
+                }
                 self.process_identity_match_check_request(
                     &message,
                     batch_metadata,
@@ -472,12 +484,19 @@ impl<'a> BatchProcessor<'a> {
             }
             _ => {
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
-                Ok(())
+                self.delete_message(&sqs_message).await?;
+                self.msg_counter += 1;
+                return Ok(());
             }
         };
 
+        // Only delete from SQS after the message has been successfully
+        // processed and the modification row is durably persisted. If we
+        // crash before this point, SQS will redeliver the message.
+        res?;
+        self.delete_message(&sqs_message).await?;
         self.msg_counter += 1;
-        res
+        Ok(())
     }
 
     async fn process_identity_deletion(
@@ -1108,10 +1127,13 @@ impl<'a> BatchProcessor<'a> {
         &self,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+            ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!("Missing receipt handle"))
+        })?;
         self.client
             .delete_message()
             .queue_url(&self.config.requests_queue_url)
-            .receipt_handle(sqs_message.receipt_handle.as_ref().unwrap())
+            .receipt_handle(receipt_handle)
             .send()
             .await
             .map_err(ReceiveRequestError::from)?;
