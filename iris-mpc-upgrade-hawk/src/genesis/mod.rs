@@ -461,7 +461,7 @@ async fn exec_setup(
 
     // do this after obtaining the graph from s3. that way if for some reason it isn't there,
     // the old checkpoints could still be found;
-    // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
+    // if the peers are consistent and stores are consistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
         if let Err(e) = cleanup_checkpoints(
             &config.graph_checkpoint_bucket_name,

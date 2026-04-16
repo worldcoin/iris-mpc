@@ -326,7 +326,7 @@ impl MpcNode {
     async fn clear_all_tables(&self) -> Result<()> {
         for stores in [&self.gpu_stores, &self.cpu_stores] {
             // delete irises
-            stores.iris.rollback(0).await?;
+            stores.iris.delete_irises_after_id(0).await?;
 
             let mut graph_tx = stores.graph.tx().await?;
 

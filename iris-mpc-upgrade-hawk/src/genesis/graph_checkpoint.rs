@@ -1,6 +1,5 @@
 use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
 use eyre::{bail, eyre, Result};
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use aws_sdk_s3::Client as S3Client;
@@ -125,7 +124,7 @@ pub async fn get_most_recent_checkpoints(
             if let Ok(hash) = blake3::Hash::from_hex(genesis_cp_state.blake3_hash.as_bytes()) {
                 valid_tuples.push((genesis_cp_state, hash));
             } else {
-                log_warn("checkpoint hashe failed to parse".into());
+                log_warn("checkpoint hash failed to parse".into());
             }
         } else {
             log_warn("failed to convert GenesisCheckpointRow to GenesisCheckpointState".into());

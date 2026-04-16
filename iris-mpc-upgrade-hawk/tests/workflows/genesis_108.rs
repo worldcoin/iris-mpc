@@ -37,7 +37,7 @@ impl TestRun for Test {
     // The third genesis run must therefore exercise the graph-rollback path:
     //   - Parties 1 and 2 still have their checkpoint entries and agree on a hash.
     //   - Party 0 has the previous entry and contributes an old hash.
-    //   - All parties have the old hash so they all roll baack to that one.
+    //   - All parties have the old hash so they all roll back to that one.
     async fn exec(&mut self) -> Result<()> {
         let genesis_args = DEFAULT_GENESIS_ARGS;
 
