@@ -36,10 +36,8 @@ impl TestRun for Test {
     //
     // The third genesis run must therefore exercise the graph-rollback path:
     //   - Parties 1 and 2 still have their checkpoint entries and agree on a hash.
-    //   - Party 0 has no entry and contributes a null hash to the consensus protocol.
-    //   - The majority (parties 1 & 2) win the consensus → party 0 downloads and loads
-    //     the S3 checkpoint graph instead of rebuilding from scratch.
-    //   - All parties then continue indexing irises 51-75 on top of the recovered graph.
+    //   - Party 0 has the previous entry and contributes an old hash.
+    //   - All parties have the old hash so they all roll baack to that one.
     async fn exec(&mut self) -> Result<()> {
         let genesis_args = DEFAULT_GENESIS_ARGS;
 
