@@ -167,7 +167,7 @@ pub async fn maybe_rollback_iris_db(
         let mut tx = graph_tx.tx;
         set_last_indexed_iris_id(&mut tx, graph_checkpoint.last_indexed_iris_id).await?;
         iris_store
-            .rollback_tx(&mut tx, graph_checkpoint.last_indexed_iris_id as usize)
+            .delete_irises_after_id_tx(&mut tx, graph_checkpoint.last_indexed_iris_id as usize)
             .await?;
         tx.commit().await?;
     }

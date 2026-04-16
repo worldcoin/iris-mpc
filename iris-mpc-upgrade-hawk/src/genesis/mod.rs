@@ -1044,7 +1044,9 @@ pub async fn exec_use_backup_as_source(
 
     // Step 2: Remove all iris data except that is larger than the last indexed id.
     now = Instant::now();
-    hnsw_iris_store.rollback(last_indexed_id as usize).await?;
+    hnsw_iris_store
+        .delete_irises_after_id(last_indexed_id as usize)
+        .await?;
     log_info(format!(
         "Removing all iris data except that larger than last indexed id: {}:: time {:?}s",
         last_indexed_id,
