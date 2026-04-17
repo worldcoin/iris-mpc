@@ -330,7 +330,11 @@ fn default_processing_timeout_secs() -> u64 {
 }
 
 fn default_max_batch_size() -> usize {
-    64
+    if cfg!(feature = "explicit-sns-batching") {
+        1
+    } else {
+        64
+    }
 }
 
 fn default_predefined_batch_sizes() -> Vec<usize> {
