@@ -5,6 +5,9 @@ env:
   - name: GENESIS_BATCH_SIZE
     value: "static:96"
 
+  - name: GENESIS_CHECKPOINT_FREQUENCY
+    value: "10000"
+
   - name: RUST_LOG
     value: "info"
 
