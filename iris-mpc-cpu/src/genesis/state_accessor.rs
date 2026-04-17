@@ -1,4 +1,4 @@
-use super::utils::{self, errors::IndexationError};
+use super::utils::errors::IndexationError;
 use crate::{
     execution::hawk_main::HawkOps, hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -11,8 +11,6 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::{fmt::Debug, sync::Arc};
 
-// Component name for logging purposes.
-const COMPONENT: &str = "State-Accessor";
 
 /// Domain for persistent state store entry for last indexed id
 const STATE_DOMAIN: &str = "genesis";

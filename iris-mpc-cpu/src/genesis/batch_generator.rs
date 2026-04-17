@@ -1,4 +1,4 @@
-use super::utils::{self, errors::IndexationError};
+use super::utils::errors::IndexationError;
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
     hawkers::aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
@@ -7,8 +7,6 @@ use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
-/// Component name for logging purposes.
-const COMPONENT: &str = "Batch-Generator";
 
 /// A batch for upstream indexation.
 #[derive(Debug)]

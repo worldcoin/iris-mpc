@@ -1,6 +1,5 @@
 use super::{
     hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING},
-    utils,
 };
 use crate::{
     execution::hawk_main::{
@@ -22,8 +21,6 @@ use std::{
 };
 use tokio::sync::{self, mpsc, oneshot};
 
-// Component name for logging purposes.
-const COMPONENT: &str = "Hawk-Handle";
 
 /// Maximum time to wait for all parties to complete the sync_peers exchange.
 /// This bounds the retry loop inside `HawkSession::sync_peers` so that

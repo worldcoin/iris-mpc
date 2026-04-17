@@ -9,8 +9,6 @@ use iris_mpc_cpu::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 
-/// Component name for logging purposes.
-const COMPONENT: &str = "SystemState-PgresIrises";
 
 /// Number of MPC parties.
 const N_PARTIES: usize = 3;
