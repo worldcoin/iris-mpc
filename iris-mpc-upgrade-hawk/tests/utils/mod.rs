@@ -1,7 +1,6 @@
 pub mod constants;
 pub mod genesis_runner;
 pub mod irises;
-mod logger;
 pub mod modifications;
 pub mod mpc_node;
 pub mod plaintext_genesis;

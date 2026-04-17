@@ -22,7 +22,7 @@ macro_rules! run_test {
     ($count:expr, $idx:expr) => {{
         // Initialize tracing to capture debug logs
         tracing_subscriber::fmt()
-            .with_env_filter(format!("iris_mpc_cpu={RUST_LOG},iris_mpc_common={RUST_LOG},iris_mpc_upgrade_hawk={RUST_LOG}"))
+            .with_env_filter(format!("iris_mpc_cpu={RUST_LOG},iris_mpc_common={RUST_LOG},iris_mpc_upgrade_hawk={RUST_LOG},ampc_actor_utils={RUST_LOG},ampc_server_utils={RUST_LOG},{}={RUST_LOG}", env!("CARGO_CRATE_NAME")))
             .try_init()
             .ok(); // ignore error if already initialized
 
@@ -122,14 +122,6 @@ fn test_hnsw_genesis_106() -> Result<()> {
     Ok(())
 }
 
-/// HNSW-Genesis-107
-///   Tests the iris ID rollback functionality.
-///   against:
-///     a known set of 100 Iris shares;
-///     simulates a scenario where the CPU database has more irises than the S3 checkpoint;
-///   asserts:
-///     rollback removes extra irises from CPU database;
-///     genesis continues to index correctly after rollback;
 #[test]
 #[serial]
 #[ignore = "requires external setup"]
@@ -145,5 +137,14 @@ fn test_hnsw_genesis_107() -> Result<()> {
 fn test_hnsw_genesis_108() -> Result<()> {
     use workflows::genesis_108::Test;
     run_test!(108, 1)?;
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_hnsw_genesis_109() -> Result<()> {
+    use workflows::genesis_109::Test;
+    run_test!(109, 1)?;
     Ok(())
 }

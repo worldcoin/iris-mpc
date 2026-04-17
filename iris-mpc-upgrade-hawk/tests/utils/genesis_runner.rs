@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use eyre::Result;
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs, BatchSizeConfig};
+use iris_mpc_cpu::genesis::{
+    get_iris_deletions, plaintext::GenesisArgs, BatchSizeConfig, PruningMode,
+};
 use itertools::izip;
 use rand::{thread_rng, Rng};
 use tokio::task::JoinSet;
@@ -23,6 +25,7 @@ pub const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     max_indexation_id: MAX_INDEXATION_ID as u32,
     batch_size_config: BatchSizeConfig::Static { size: 1 },
     checkpoint_frequency: 100_000,
+    pruning_mode: PruningMode::OlderNonArchival,
 };
 
 pub fn get_node_configs() -> [Config; 3] {
