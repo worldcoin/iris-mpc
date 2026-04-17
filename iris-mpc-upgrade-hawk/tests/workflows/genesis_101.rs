@@ -1,11 +1,9 @@
-use crate::{
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-        mpc_node::{DbAssertions, MpcNodes},
-        plaintext_genesis::PlaintextGenesis,
-        HawkConfigs, TestRun, TestRunContextInfo,
-    },
-    workflows::join_runners,
+use crate::join_runners;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+    mpc_node::{DbAssertions, MpcNodes},
+    plaintext_genesis::PlaintextGenesis,
+    HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
@@ -47,7 +45,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         // Execute genesis - second run indexing up to 100
         let mut join_set = JoinSet::new();
@@ -68,7 +66,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         Ok(())
     }

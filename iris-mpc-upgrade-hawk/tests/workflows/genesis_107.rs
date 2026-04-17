@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use crate::{
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-        mpc_node::{DbAssertions, MpcNode, MpcNodes},
-        plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
-    },
-    workflows::join_runners,
+use crate::join_runners;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+    mpc_node::{DbAssertions, MpcNode, MpcNodes},
+    plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
@@ -57,7 +55,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         // Insert 10 additional irises into the CPU database and update persistent state
         // This simulates a scenario where the CPU database thinks it indexed more irises
@@ -69,7 +67,7 @@ impl TestRun for Test {
                     .await
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         // Execute genesis - second run indexing up to 100
         // The rollback functionality should:
@@ -95,7 +93,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         Ok(())
     }

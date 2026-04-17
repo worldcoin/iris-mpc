@@ -1,10 +1,8 @@
-use crate::{
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, NUM_GPU_IRISES_INIT},
-        mpc_node::{DbAssertions, MpcNodes},
-        plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
-    },
-    workflows::join_runners,
+use crate::join_runners;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, NUM_GPU_IRISES_INIT},
+    mpc_node::{DbAssertions, MpcNodes},
+    plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
@@ -61,7 +59,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         // Run 2: index irises 26-50.
         let mut join_set = JoinSet::new();
@@ -82,7 +80,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         // Corrupt party 0's state: delete its genesis graph checkpoint from the CPU store.
         // Parties 1 and 2 are untouched - they retain their checkpoint entries pointing to
@@ -113,7 +111,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         Ok(())
     }

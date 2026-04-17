@@ -1,16 +1,14 @@
 use std::sync::Arc;
 
-use crate::{
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-        modifications::{
-            ModificationInput,
-            ModificationType::{Reauth, ResetUpdate, Uniqueness},
-        },
-        mpc_node::{DbAssertions, MpcNode, MpcNodes},
-        plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
+use crate::join_runners;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+    modifications::{
+        ModificationInput,
+        ModificationType::{Reauth, ResetUpdate, Uniqueness},
     },
-    workflows::join_runners,
+    mpc_node::{DbAssertions, MpcNode, MpcNodes},
+    plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
@@ -47,7 +45,7 @@ impl TestRun for Test {
         for node in self.get_nodes().await {
             join_set.spawn(async move { node.apply_modifications(&[], &MODIFICATIONS).await });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
@@ -67,7 +65,7 @@ impl TestRun for Test {
                 r
             });
         }
-        join_runners(join_set).await?;
+        join_runners!(join_set);
 
         Ok(())
     }
