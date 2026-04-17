@@ -15,8 +15,8 @@ struct Args {
     /// Batch size configuration (required).
     ///
     /// Format:
-    ///   - static:<size>                           (e.g., "static:100")
-    ///   - dynamic:cap=<cap>,error_rate=<rate>     (e.g., "dynamic:cap=500,error_rate=128")
+    ///   - `static:<size>`                           (e.g., `"static:100"`)
+    ///   - `dynamic:cap=<cap>,error_rate=<rate>`     (e.g., `"dynamic:cap=500,error_rate=128"`)
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
 
