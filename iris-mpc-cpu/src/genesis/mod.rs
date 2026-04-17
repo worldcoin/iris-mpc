@@ -10,6 +10,7 @@ pub mod utils;
 
 pub use batch_generator::{Batch, BatchGenerator, BatchIterator, BatchSize};
 pub use batch_size_config::BatchSizeConfig;
+pub use genesis_checkpoint::PruningMode;
 pub use hawk_handle::Handle;
 pub use hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING};
 pub use state_accessor::{

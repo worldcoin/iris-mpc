@@ -137,6 +137,19 @@ impl MpcNodes {
         Ok(())
     }
 
+    pub async fn get_num_checkpoints(&self) -> Result<Vec<usize>> {
+        let mut r = vec![];
+        for node in self.nodes.iter() {
+            let checkpoints = node
+                .cpu_stores
+                .graph
+                .get_genesis_graph_checkpoints()
+                .await?;
+            r.push(checkpoints.len());
+        }
+        Ok(r)
+    }
+
     /// Cleans up all S3 checkpoints for all nodes.
     /// This should be called during test teardown to prevent leftover checkpoints
     /// from interfering with subsequent test runs.
