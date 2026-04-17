@@ -11,10 +11,7 @@ macro_rules! assert_checkpoints {
     ($expected:expr, $configs:expr) => {{
         let checkpoints = MpcNodes::new(&$configs).await.get_num_checkpoints().await?;
         for num_cp in checkpoints {
-            assert_eq!(
-                num_cp,
-                $expected
-            );
+            assert_eq!(num_cp, $expected);
         }
     }};
 }
@@ -40,6 +37,7 @@ impl TestRun for Test {
         args.pruning_mode = PruningMode::OlderNonArchival;
 
         run_genesis!(self, args);
+        // should have 3 checkpoints: 10, 20, and 25
         assert_checkpoints!(3, self.configs.clone());
 
         // Run 2: index irises 26-50.
@@ -49,6 +47,7 @@ impl TestRun for Test {
         args.pruning_mode = PruningMode::None;
 
         run_genesis!(self, args);
+        // should have 4 checkpoints: 10, 20, 25, and 50
         assert_checkpoints!(4, self.configs.clone());
 
         // Run 3: index irises 51-75.
@@ -58,6 +57,7 @@ impl TestRun for Test {
         args.pruning_mode = PruningMode::OlderNonArchival;
 
         run_genesis!(self, args);
+        // should have 3 checkpoints: 25, 50, and 75 (pruned 10 and 20)
         assert_checkpoints!(3, self.configs.clone());
 
         // Run 4: index irises 76-100
@@ -66,7 +66,7 @@ impl TestRun for Test {
         args.checkpoint_frequency = 50;
         args.pruning_mode = PruningMode::AllOlder;
 
-        run_genesis!(self, args);i
+        run_genesis!(self, args);
         // pruned all but the most recent when the test began, then added a checkpoint
         assert_checkpoints!(2, self.configs.clone());
 
