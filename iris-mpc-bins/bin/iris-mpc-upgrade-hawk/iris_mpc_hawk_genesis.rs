@@ -3,7 +3,7 @@ use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
 };
-use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig};
+use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig, PruningMode};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -31,6 +31,15 @@ struct Args {
     /// Number of irises to index between checkpoints.
     #[clap(long("checkpoint-frequency"))]
     checkpoint_frequency: Option<String>,
+
+    /// Pruning mode for old checkpoints after loading a common checkpoint.
+    ///
+    /// Accepted values:
+    ///   - none                 — do not prune any checkpoints
+    ///   - older-non-archival   — prune older non-archival checkpoints (default)
+    ///   - all-older            — prune all older checkpoints
+    #[clap(long("pruning-mode"))]
+    pruning_mode: Option<String>,
 }
 
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
@@ -165,10 +174,21 @@ fn parse_args() -> Result<ExecutionArgs> {
         )
     })?;
 
+    // Arg: pruning mode (optional, defaults to OlderNonArchival).
+    let pruning_mode = if let Some(mode_str) = args.pruning_mode.as_ref() {
+        mode_str.parse::<PruningMode>().map_err(|e| {
+            eprintln!("Error: --pruning-mode argument invalid: {}", e);
+            e
+        })?
+    } else {
+        PruningMode::OlderNonArchival
+    };
+
     Ok(ExecutionArgs {
         batch_size_config,
         max_indexation_id,
         perform_snapshot,
         checkpoint_frequency,
+        pruning_mode,
     })
 }

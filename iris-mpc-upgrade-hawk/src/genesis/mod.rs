@@ -20,7 +20,7 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
-pub use iris_mpc_cpu::genesis::BatchSizeConfig;
+pub use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
 use iris_mpc_cpu::{
     execution::hawk_main::{
         BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
@@ -83,6 +83,9 @@ pub struct ExecutionArgs {
 
     // Number of irises to index between checkpoints.
     pub checkpoint_frequency: usize,
+
+    // Controls which older checkpoints are pruned after loading a common checkpoint.
+    pub pruning_mode: PruningMode,
 }
 
 impl ExecutionArgs {
@@ -96,6 +99,7 @@ impl ExecutionArgs {
             batch_size_config: args.batch_size_config,
             perform_snapshot,
             checkpoint_frequency: args.checkpoint_frequency,
+            pruning_mode: PruningMode::OlderNonArchival,
         }
     }
 }
@@ -468,6 +472,7 @@ async fn exec_setup(
             &checkpoint_s3_client,
             graph_checkpoint,
             &graph_store_arc,
+            args.pruning_mode,
         )
         .await
         {
@@ -670,6 +675,7 @@ async fn exec_delta(
                     s3_client,
                     ctx.last_indexed_id, // no irises were indexed
                     *max_modification_persist_id,
+                    true, // is_archival: delta checkpoint is the final state
                     tx_results,
                     &mut hawk_handle,
                 )
@@ -754,7 +760,6 @@ async fn exec_indexation(
 
     // Checkpoint tracking
     let checkpoint_frequency = ctx.args.checkpoint_frequency;
-    let mut last_checkpoint_id = ctx.last_indexed_id;
     let mut irises_since_checkpoint: usize = 0;
     let mut last_indexed_id = ctx.last_indexed_id;
 
@@ -839,12 +844,12 @@ async fn exec_indexation(
                     s3_client,
                     last_indexed_id,
                     ctx.max_modification_persist_id, // preserve current modification state
+                    false, // is_archival: periodic checkpoints are not archival
                     tx_results,
                     &mut hawk_handle,
                 )
                 .await?;
                 irises_since_checkpoint = 0;
-                last_checkpoint_id = last_indexed_id;
             };
 
             now = Instant::now();
@@ -859,11 +864,13 @@ async fn exec_indexation(
         Ok(_) => {
             let wait_start = Instant::now();
 
-            // Create final checkpoint if any irises were indexed since last checkpoint
-            if irises_since_checkpoint > 0 || last_checkpoint_id < last_indexed_id {
+            // Create final archival checkpoint if any irises were indexed this run.
+            // This runs unconditionally (regardless of periodic checkpoints) to ensure
+            // the last checkpoint recorded for a run is always archival.
+            if last_indexed_id > ctx.last_indexed_id {
                 log_info(format!(
-                    "Creating final checkpoint: irises_since_last={}, last_indexed_id={}",
-                    irises_since_checkpoint, last_indexed_id
+                    "Creating final archival checkpoint: last_indexed_id={}",
+                    last_indexed_id
                 ));
                 upload_and_sync_genesis_checkpoint(
                     &ctx.config.graph_checkpoint_bucket_name,
@@ -872,12 +879,13 @@ async fn exec_indexation(
                     s3_client,
                     last_indexed_id,
                     ctx.max_modification_persist_id, // preserve current modification state
+                    true, // is_archival: final checkpoint is always archival
                     tx_results,
                     &mut hawk_handle,
                 )
                 .await?;
                 log_info(format!(
-                    "Final checkpoint created at iris_id={}",
+                    "Final archival checkpoint created at iris_id={}",
                     last_indexed_id
                 ));
             } else if let Some(rx) = persist_ch.take() {

@@ -30,6 +30,7 @@ pub struct GenesisGraphCheckpointRow {
     pub last_indexed_iris_id: i64,
     pub last_indexed_modification_id: i64,
     pub blake3_hash: String,
+    pub is_archival: bool,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -156,6 +157,7 @@ impl<V: VectorStore> GraphPg<V> {
         last_indexed_iris_id: i64,
         last_indexed_modification_id: i64,
         blake3_hash: &str,
+        is_archival: bool,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -163,15 +165,17 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
-                blake3_hash
+                blake3_hash,
+                is_archival
             )
-            VALUES ($1, $2, $3, $4)
+            VALUES ($1, $2, $3, $4, $5)
             "#,
         )
         .bind(s3_key)
         .bind(last_indexed_iris_id)
         .bind(last_indexed_modification_id)
         .bind(blake3_hash)
+        .bind(is_archival)
         .execute(tx.deref_mut())
         .await?;
 
@@ -189,7 +193,8 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
-                blake3_hash
+                blake3_hash,
+                is_archival
             FROM genesis_graph_checkpoint
             ORDER BY id DESC
             LIMIT 1
@@ -213,7 +218,8 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
-                blake3_hash
+                blake3_hash,
+                is_archival
             FROM genesis_graph_checkpoint
             WHERE s3_key = $1
             "#,
@@ -234,7 +240,8 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
-                blake3_hash
+                blake3_hash,
+                is_archival
             FROM genesis_graph_checkpoint
             ORDER BY id DESC
             "#,

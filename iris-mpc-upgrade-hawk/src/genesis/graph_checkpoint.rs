@@ -82,6 +82,7 @@ pub async fn upload_and_sync_genesis_checkpoint(
     s3_client: &S3Client,
     last_indexed_id: u32,
     max_modification_indexed_id: i64,
+    is_archival: bool,
     tx_results: &Sender<JobResult>,
     hawk_handle: &mut GenesisHawkHandle,
 ) -> Result<()> {
@@ -92,6 +93,7 @@ pub async fn upload_and_sync_genesis_checkpoint(
         s3_client,
         last_indexed_id,
         max_modification_indexed_id,
+        is_archival,
     )
     .await
     {
@@ -219,6 +221,7 @@ mod tests {
             last_indexed_iris_id: 0,
             last_indexed_modification_id: 0,
             blake3_hash: label.to_string(),
+            is_archival: false,
         }
     }
 
