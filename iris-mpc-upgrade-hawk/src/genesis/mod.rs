@@ -753,6 +753,11 @@ async fn exec_indexation(
 
     // Checkpoint tracking
     let checkpoint_frequency = ctx.args.checkpoint_frequency;
+    // Maximum height at which an intermediate checkpoint would be run, to avoid redundancy with final checkpoint
+    let max_intermediate_checkpoint_height = ctx
+        .args
+        .max_indexation_id
+        .saturating_sub(checkpoint_frequency as u32 / 10);
     let mut irises_since_checkpoint: usize = 0;
     let mut last_indexed_id = ctx.last_indexed_id;
 
@@ -825,9 +830,10 @@ async fn exec_indexation(
                 now.elapsed().as_secs_f64(),
             );
 
-            // Periodic checkpoint based on snapshot_frequency
-            // do this while the results thread runs in the background, processing the current result
-            if irises_since_checkpoint >= checkpoint_frequency {
+            // Periodic checkpoint based on snapshot_frequency.  Skipped if close to end of indexation.
+            if irises_since_checkpoint >= checkpoint_frequency
+                && last_indexed_id <= max_intermediate_checkpoint_height
+            {
                 upload_and_sync_genesis_checkpoint(
                     &ctx.config.graph_checkpoint_bucket_name,
                     ctx.config.party_id,
