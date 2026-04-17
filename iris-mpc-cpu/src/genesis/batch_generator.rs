@@ -1,4 +1,4 @@
-use super::utils::{self, errors::IndexationError};
+use super::utils::errors::IndexationError;
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
     hawkers::aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
@@ -6,9 +6,6 @@ use crate::{
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
-
-/// Component name for logging purposes.
-const COMPONENT: &str = "Batch-Generator";
 
 /// A batch for upstream indexation.
 #[derive(Debug)]
@@ -155,10 +152,12 @@ pub enum BatchSize {
 impl BatchSize {
     #[allow(non_snake_case)]
     pub fn new_dynamic(error_correction: usize, hnsw_M: usize, cap: usize) -> Self {
-        log_info(format!(
+        tracing::info!(
             "Creating dynamic batch size: error-correction={}, hnsw-M={}, cap={}",
-            error_correction, hnsw_M, cap
-        ));
+            error_correction,
+            hnsw_M,
+            cap
+        );
         BatchSize::Dynamic {
             error_correction,
             hnsw_M,
@@ -167,7 +166,7 @@ impl BatchSize {
     }
 
     pub fn new_static(size: usize) -> Self {
-        log_info(format!("Creating static batch size: size={}", size));
+        tracing::info!("Creating static batch size: size={}", size);
         BatchSize::Static(size)
     }
 }
@@ -231,10 +230,10 @@ impl BatchGenerator {
     ) -> Option<(Vec<IrisSerialId>, Vec<IrisSerialId>)> {
         // Escape if exhausted.
         if self.range_iter.peek().is_none() {
-            log_info(format!(
+            tracing::info!(
                 "Exhausted range iterator: last-indexed-id={}",
                 last_indexed_id
-            ));
+            );
             return None;
         }
 
@@ -250,7 +249,7 @@ impl BatchGenerator {
             if !self.exclusions.contains(&next_id) {
                 identifiers.push(next_id);
             } else {
-                log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
+                tracing::info!("Excluding deletion :: iris-serial-id={}", next_id);
             }
         }
 
@@ -279,10 +278,7 @@ impl BatchIterator for BatchGenerator {
         {
             Some(pair) => pair,
             None => {
-                log_info(format!(
-                    "Exhausted identifiers: last-indexed-id={}",
-                    last_indexed_id
-                ));
+                tracing::info!("Exhausted identifiers: last-indexed-id={}", last_indexed_id);
                 return Ok(None);
             }
         };
@@ -358,10 +354,11 @@ impl BatchSize {
     fn next_max(&self, last_indexed_id: IrisSerialId) -> usize {
         match self {
             BatchSize::Static(size) => {
-                log_info(format!(
+                tracing::info!(
                     "Calculated batch size: last-indexed-id={} :: size={}",
-                    last_indexed_id, size
-                ));
+                    last_indexed_id,
+                    size
+                );
                 *size
             }
             BatchSize::Dynamic {
@@ -371,20 +368,15 @@ impl BatchSize {
             } => {
                 let dynamic_size = Self::get_dynamic_size(last_indexed_id, *r, *M);
                 let batch_size = dynamic_size.min(*cap);
-                log_info(format!(
+                tracing::info!(
                     "Calculated batch size: last-indexed-id={} :: size={} (formula: min(N/(Mr-1)+1, cap), where N={}, M={}, r={}, cap={}, uncapped={})",
                     last_indexed_id, batch_size, last_indexed_id, M, r, cap, dynamic_size
-                ));
+                );
 
                 batch_size
             }
         }
     }
-}
-
-// Helper: component logging.
-fn log_info(msg: String) {
-    utils::log_info(COMPONENT, msg);
 }
 
 #[cfg(test)]

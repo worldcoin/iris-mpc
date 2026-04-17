@@ -3,7 +3,7 @@ use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
 };
-use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig, PruningMode};
+use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -15,8 +15,8 @@ struct Args {
     /// Batch size configuration (required).
     ///
     /// Format:
-    ///   - static:<size>                           (e.g., "static:100")
-    ///   - dynamic:cap=<cap>,error_rate=<rate>     (e.g., "dynamic:cap=500,error_rate=128")
+    ///   - `static:<size>`                           (e.g., `"static:100"`)
+    ///   - `dynamic:cap=<cap>,error_rate=<rate>`     (e.g., `"dynamic:cap=500,error_rate=128"`)
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
 
@@ -81,11 +81,11 @@ fn main() -> Result<()> {
         // Invoke main.
         match exec(args, config).await {
             Ok(_) => {
-                log_info("Server", "Exited normally".to_string());
+                tracing::info!("Exited normally");
                 Ok(())
             }
             Err(err) => {
-                log_error("Server", format!("Server exited with error: {:?}", err));
+                tracing::error!("Server exited with error: {:?}", err);
                 Err(err)
             }
         }

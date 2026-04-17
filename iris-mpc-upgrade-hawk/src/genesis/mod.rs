@@ -35,8 +35,8 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
-        JobRequest, JobResult,
+        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
+        JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
@@ -164,10 +164,7 @@ impl ExecutionContextInfo {
 /// * `config` - Process configuration instance.
 ///
 pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
-    log_info(format!(
-        "running genesis with \n {:?} \n {:?}",
-        args, config
-    ));
+    tracing::info!("running genesis with \n {:?} \n {:?}", args, config);
 
     // Phase 0: setup.
     let (
@@ -184,13 +181,13 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         hnsw_iris_store,
     ) = exec_setup(&args, &config).await?;
 
-    log_info(String::from("Setup complete."));
-    log_info(format!(
+    tracing::info!("Setup complete.");
+    tracing::info!(
         "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}",
         args.max_indexation_id,
         args.batch_size_config,
         args.perform_snapshot,
-    ));
+    );
 
     // Phase 1: apply delta.
     hawk_handle = exec_delta(
@@ -205,7 +202,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         &shutdown_handler,
     )
     .await?;
-    log_info(String::from("Delta complete."));
+    tracing::info!("Delta complete.");
 
     // Phase 2: indexation.
     exec_indexation(
@@ -219,14 +216,14 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         &shutdown_handler,
     )
     .await?;
-    log_info(String::from("Indexation complete."));
+    tracing::info!("Indexation complete.");
 
     // Phase 3: snapshot.
     if !args.perform_snapshot {
-        log_info(String::from("Snapshot skipped."));
+        tracing::info!("Snapshot skipped.");
     } else {
         exec_snapshot(&ctx, &aws_rds_client).await?;
-        log_info(String::from("Snapshot complete."));
+        tracing::info!("Snapshot complete.");
     };
 
     // Clear modifications from the HNSW iris store
@@ -236,16 +233,13 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         .clear_modifications_table(&mut tx)
         .await
         .map_err(|err| {
-            eyre!(log_error(format!(
-                "Failed to clear modifications: {:?}",
-                err
-            )))
+            let msg = format!("Failed to clear modifications: {:?}", err);
+            tracing::error!("{}", msg);
+            eyre!(msg)
         })?;
     tx.commit().await?;
 
-    log_info(String::from(
-        "Cleared modifications from the HNSW iris store",
-    ));
+    tracing::info!("Cleared modifications from the HNSW iris store");
 
     // trigger manual shutdown to ensure the health check services terminate
     shutdown_handler.trigger_manual_shutdown();
@@ -290,7 +284,7 @@ async fn exec_setup(
         (aws_s3_client, checkpoint_s3_client, aws_rds_client),
         (iris_store, (hnsw_iris_store, graph_store)),
     ) = get_service_clients(config).await?;
-    log_info(String::from("Service clients instantiated"));
+    tracing::info!("Service clients instantiated");
 
     // Verify checkpoint S3 access before any mutations to fail fast on misconfiguration.
     verify_s3_checkpoint_access(
@@ -299,42 +293,42 @@ async fn exec_setup(
         config.party_id,
     )
     .await?;
-    log_info(String::from("Checkpoint S3 bucket access verified"));
+    tracing::info!("Checkpoint S3 bucket access verified");
 
     let graph_store_arc = Arc::new(graph_store);
 
     // Set serial identifier of last indexed Iris.
     let last_indexed_id = get_last_indexed_iris_id(graph_store_arc.clone()).await?;
-    log_info(format!(
+    tracing::info!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,
-    ));
+    );
 
     // Set Iris serial identifiers marked for deletion and thus excluded from indexation.
     let excluded_serial_ids =
         get_iris_deletions(config, &aws_s3_client, args.max_indexation_id).await?;
-    log_info(format!(
+    tracing::info!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
-    ));
+    );
 
     // Set modifications that have occurred since last indexation.
     let last_indexed_modification_id =
         get_last_indexed_modification_id(graph_store_arc.clone()).await?;
-    log_info(format!(
+    tracing::info!(
         "Identifier of last modification to have been indexed = {}",
         last_indexed_modification_id,
-    ));
+    );
     // This is the largest modification id that has been completed by the node.
     let (modifications, max_modification_id_to_persist) =
         get_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id).await?;
     let max_modification_id = modifications.last().map_or(0, |m| m.id);
-    log_info(format!(
+    tracing::info!(
         "Modifications to be applied count = {}. Max modification id completed = {}, Max modification to be performed = {}",
         modifications.len(),
         max_modification_id_to_persist,
         max_modification_id,
-    ));
+    );
 
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
@@ -347,7 +341,7 @@ async fn exec_setup(
         modifications.clone(),
     );
     let my_state = get_sync_state(config, genesis_config).await?;
-    log_info(String::from("Synchronization state initialised"));
+    tracing::info!("Synchronization state initialised");
 
     let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store_arc).await?;
 
@@ -378,25 +372,25 @@ async fn exec_setup(
 
     // Coordinator: await network state = UNREADY.
     wait_for_others_unready(server_coord_config, &verified_peers, &my_uuid).await?;
-    log_info(String::from("Network status = UNREADY"));
+    tracing::info!("Network status = UNREADY");
     // Coordinator: await network state = HEALTHY.
     init_heartbeat_task(server_coord_config, &mut task_monitor_bg, &shutdown_handler).await?;
     task_monitor_bg.check_tasks();
-    log_info(String::from("Network status = HEALTHY"));
+    tracing::info!("Network status = HEALTHY");
 
     // Coordinator: await network state = SYNCHRONIZED.
     let sync_result = get_sync_result(config, &my_state).await?;
     sync_result.check_synced_state()?;
-    log_info(String::from("Synchronization checks passed"));
+    tracing::info!("Synchronization checks passed");
 
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
-        log_warn(String::from("Shutting down has been triggered"));
+        tracing::warn!("Shutting down has been triggered");
         bail!("Shutdown")
     }
 
     let graph_checkpoint = get_common_checkpoint(config, hashes, graph_checkpoints).await?;
-    log_info(format!("common graph checkpoint: {:?}", graph_checkpoint));
+    tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
 
     // don't roll anything back if the checkpoint can not be found
     if let Some(cp) = graph_checkpoint.as_ref() {
@@ -445,7 +439,7 @@ async fn exec_setup(
         graph_checkpoint.is_some(),
     )
     .await?;
-    log_info(String::from("Store consistency checks OK"));
+    tracing::info!("Store consistency checks OK");
 
     // Initialise HNSW graph from previously indexed.
     init_graph_from_stores(
@@ -461,7 +455,7 @@ async fn exec_setup(
     )
     .await?;
     task_monitor_bg.check_tasks();
-    log_info(String::from("HNSW graph initialised from store"));
+    tracing::info!("HNSW graph initialised from store");
 
     // do this after obtaining the graph from s3. that way if for some reason it isn't there,
     // the old checkpoints could still be found;
@@ -476,7 +470,7 @@ async fn exec_setup(
         )
         .await
         {
-            log_warn(format!("failed to clean up old s3 checkpoints: {e}"));
+            tracing::warn!("failed to clean up old s3 checkpoints: {e}");
         }
     }
 
@@ -488,11 +482,11 @@ async fn exec_setup(
         r = wait_for_others_ready(server_coord_config) => r
     }?;
     task_monitor_bg.check_tasks();
-    log_info(String::from("Network status = READY"));
+    tracing::info!("Network status = READY");
 
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
-        log_warn(String::from("Shutting down has been triggered"));
+        tracing::warn!("Shutting down has been triggered");
         bail!("Shutdown")
         // return Ok(());
     }
@@ -511,7 +505,7 @@ async fn exec_setup(
 
     // Set Hawk handle.
     let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
-    log_info(String::from("Hawk handle initialised"));
+    tracing::info!("Hawk handle initialised");
 
     // Set thread for persisting indexing results to DB.
     let tx_results = get_results_thread(
@@ -579,14 +573,14 @@ async fn exec_delta(
 
     let res: Result<()> = async {
         if modifications.is_empty() {
-            log_info(String::from("Delta has no modifications to apply."));
+            tracing::info!("Delta has no modifications to apply.");
             return Ok(());
         }
-        log_info(format!(
+        tracing::info!(
             "Applying modifications: count={} :: max-id={}",
             modifications.len(),
             max_modification_indexed_id
-        ));
+        );
 
         metrics::gauge!("genesis_number_modifications").set(modifications.len() as f64);
         metrics::gauge!("genesis_max_modification_id").set(*max_modification_indexed_id as f64);
@@ -596,16 +590,16 @@ async fn exec_delta(
         let end = modifications.len().saturating_sub(1);
         let mut now = Instant::now();
         for (idx, modification) in modifications.iter().enumerate() {
-            log_info(format!(
+            tracing::info!(
                 "Applying modification: type={} id={}, serial_id={:?}",
                 modification.request_type, modification.id, modification.serial_id
-            ));
+            );
             if modification.request_type == smpc_request::IDENTITY_DELETION_MESSAGE_TYPE {
                 if ctx.config.environment != ENV_PROD {
-                    log_info(format!(
+                    tracing::info!(
                         "Modification is a deletion: serial_id={:?} and it is not production therefore skipping",
                         modification.serial_id
-                    ));
+                    );
                     continue;
                 }else {
                     bail!(eyre!(
@@ -621,10 +615,11 @@ async fn exec_delta(
             let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
-                    eyre!(log_error(format!(
+                    tracing::error!(
                         "HawkActor processing timeout: {:?}",
                         err
-                    )))
+                    );
+                    eyre!("HawkActor processing timeout: {:?}", err)
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
@@ -651,13 +646,11 @@ async fn exec_delta(
     match res {
         // Success.
         Ok(_) => {
-            log_info(String::from(
-                "Waiting for last delta modifications to be processed...",
-            ));
+            tracing::info!("Waiting for last delta modifications to be processed...");
             let _ = shutdown_handler.wait_for_pending_batches_completion().await;
-            log_info(String::from("All delta modifications have been processed"));
+            tracing::info!("All delta modifications have been processed");
 
-            log_info(format!("Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
+            tracing::info!("Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id);
             let mut graph_tx = graph_store.tx().await?;
             set_last_indexed_modification_id(&mut graph_tx.tx, *max_modification_persist_id)
                 .await?;
@@ -665,9 +658,7 @@ async fn exec_delta(
 
             // Create S3 checkpoint if modifications were applied
             if !modifications.is_empty() {
-                log_info(String::from(
-                    "Creating S3 checkpoint after delta modifications...",
-                ));
+                tracing::info!("Creating S3 checkpoint after delta modifications...");
                 upload_and_sync_genesis_checkpoint(
                     &config.graph_checkpoint_bucket_name,
                     ctx.config.party_id,
@@ -680,20 +671,20 @@ async fn exec_delta(
                     &mut hawk_handle,
                 )
                 .await?;
-                log_info(String::from("S3 checkpoint created after delta"));
+                tracing::info!("S3 checkpoint created after delta");
             }
 
             Ok(hawk_handle)
         }
         // Error.
         Err(err) => {
-            log_error(format!(
+            tracing::error!(
                 "HawkActor processing error while applying delta modifications: {:?}",
                 err
-            ));
+            );
 
             // Clean up & shutdown.
-            log_info(String::from("Initiating shutdown"));
+            tracing::info!("Initiating shutdown");
             drop(hawk_handle);
             task_monitor_bg.abort_all();
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -728,10 +719,11 @@ async fn exec_indexation(
     mut task_monitor_bg: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<()> {
-    log_info(format!(
+    tracing::info!(
         "Starting indexation: last_indexed_id={}, max_indexation_id={}",
-        ctx.last_indexed_id, ctx.args.max_indexation_id
-    ));
+        ctx.last_indexed_id,
+        ctx.args.max_indexation_id
+    );
 
     // Set batch size from config.
     let batch_size = ctx
@@ -740,11 +732,12 @@ async fn exec_indexation(
         .compute_batch_size(ctx.config.hnsw_param_m);
 
     if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
-        log_warn(format!(
+        tracing::warn!(
             "Last indexed id {} is greater than max indexation id {}. \
                  No indexation will be performed.",
-            ctx.last_indexed_id, ctx.args.max_indexation_id
-        ));
+            ctx.last_indexed_id,
+            ctx.args.max_indexation_id
+        );
     }
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
@@ -753,7 +746,7 @@ async fn exec_indexation(
         batch_size,
         ctx.excluded_serial_ids.clone(),
     );
-    log_info(format!("Batch generator instantiated: {}", batch_generator));
+    tracing::info!("Batch generator instantiated: {}", batch_generator);
 
     // Set indexation result.
     let mut persist_ch: Option<oneshot::Receiver<()>> = None;
@@ -764,11 +757,11 @@ async fn exec_indexation(
     let mut last_indexed_id = ctx.last_indexed_id;
 
     let res: Result<()> = async {
-        log_info(String::from("Entering main indexation loop"));
-        log_info(format!(
+        tracing::info!("Entering main indexation loop");
+        tracing::info!(
             "Checkpoint frequency: {} irises per checkpoint",
             checkpoint_frequency
-        ));
+        );
 
         // Housekeeping.
         let mut now = Instant::now();
@@ -784,7 +777,7 @@ async fn exec_indexation(
             let shutdown = shutdown_handler.is_shutting_down();
             let mismatch = hawk_handle.sync_peers(shutdown, None).await?;
             if shutdown || mismatch {
-                log_warn(String::from("Shutting down has been triggered"));
+                tracing::warn!("Shutting down has been triggered");
                 break;
             }
 
@@ -799,10 +792,8 @@ async fn exec_indexation(
             let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
-                    eyre!(log_error(format!(
-                        "HawkActor processing timeout: {:?}",
-                        err
-                    )))
+                    tracing::error!("HawkActor processing timeout: {:?}", err);
+                    eyre!("HawkActor processing timeout: {:?}", err)
                 })??;
 
             // Send results to processing thread responsible for persisting to database.
@@ -828,11 +819,11 @@ async fn exec_indexation(
                 "synced" => if is_sync_batch { "true" } else { "false" },
             )
             .record(now.elapsed().as_secs_f64());
-            log_info(format!(
+            tracing::info!(
                 "Indexing new batch: {} :: time {:?}s",
                 batch,
                 now.elapsed().as_secs_f64(),
-            ));
+            );
 
             // Periodic checkpoint based on snapshot_frequency
             // do this while the results thread runs in the background, processing the current result
@@ -868,10 +859,10 @@ async fn exec_indexation(
             // This runs unconditionally (regardless of periodic checkpoints) to ensure
             // the last checkpoint recorded for a run is always archival.
             if last_indexed_id > ctx.last_indexed_id {
-                log_info(format!(
+                tracing::info!(
                     "Creating final archival checkpoint: last_indexed_id={}",
                     last_indexed_id
-                ));
+                );
                 upload_and_sync_genesis_checkpoint(
                     &ctx.config.graph_checkpoint_bucket_name,
                     ctx.config.party_id,
@@ -884,28 +875,25 @@ async fn exec_indexation(
                     &mut hawk_handle,
                 )
                 .await?;
-                log_info(format!(
+                tracing::info!(
                     "Final archival checkpoint created at iris_id={}",
                     last_indexed_id
-                ));
+                );
             } else if let Some(rx) = persist_ch.take() {
                 hawk_handle.sync_peers(false, Some(rx)).await?;
             }
             metrics::histogram!("genesis_persist_wait_duration")
                 .record(wait_start.elapsed().as_secs_f64());
 
-            log_info(String::from(
-                "All batches have been processed, \
-                 shutting down...",
-            ));
+            tracing::info!("All batches have been processed, shutting down...");
 
             Ok(())
         }
         Err(err) => {
-            log_error(format!("HawkActor processing error: {:?}", err));
+            tracing::error!("HawkActor processing error: {:?}", err);
 
             // Clean up & shutdown.
-            log_info(String::from("Initiating shutdown"));
+            tracing::info!("Initiating shutdown");
             drop(hawk_handle);
             task_monitor_bg.abort_all();
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -927,7 +915,7 @@ async fn exec_snapshot(
     ctx: &ExecutionContextInfo,
     aws_rds_client: &RDSClient,
 ) -> Result<(), IndexationError> {
-    log_info(String::from("Db snapshot begins"));
+    tracing::info!("Db snapshot begins");
 
     // Set snapshot ID.
     let unix_timestamp = Utc::now().timestamp();
@@ -964,11 +952,11 @@ async fn exec_snapshot(
         .ok_or(IndexationError::AwsRdsClusterIdNotFound)?;
 
     // Create cluster snapshot.
-    log_info(format!(
+    tracing::info!(
         "Creating RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
         cluster_id,
         snapshot_id.clone()
-    ));
+    );
     aws_rds_client
         .create_db_cluster_snapshot()
         .db_cluster_identifier(cluster_id)
@@ -976,13 +964,14 @@ async fn exec_snapshot(
         .send()
         .await
         .map_err(|err| {
-            log_error(format!("Failed to create db snapshot: {}", err));
+            tracing::error!("Failed to create db snapshot: {}", err);
             IndexationError::AwsRdsCreateSnapshotFailure(err.to_string())
         })?;
-    log_info(format!(
+    tracing::info!(
         "Created RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
-        cluster_id, snapshot_id
-    ));
+        cluster_id,
+        snapshot_id
+    );
 
     Ok(())
 }
@@ -997,19 +986,19 @@ async fn exec_snapshot(
 async fn exec_database_backup(
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
 ) -> Result<(), IndexationError> {
-    log_info(String::from("Graph table data snapshot begins"));
+    tracing::info!("Graph table data snapshot begins");
     let now = Instant::now();
     graph_store
         .backup_hawk_graph_tables()
         .await
         .map_err(|err| {
-            log_error(format!("Failed to copy table data: {}", err));
+            tracing::error!("Failed to copy table data: {}", err);
             IndexationError::DatabaseCopyFailure(err.to_string())
         })?;
-    log_info(format!(
+    tracing::info!(
         "Graph table data snapshot ended - time taken is {:?}s",
         now.elapsed().as_secs_f64()
-    ));
+    );
 
     Ok(())
 }
@@ -1036,30 +1025,28 @@ pub async fn exec_use_backup_as_source(
     hnsw_iris_store: &IrisStore,
     iris_store: &IrisStore,
 ) -> Result<()> {
-    log_info(String::from(
-        "Restoring graph tables from backup as user_backup_as_source is set",
-    ));
+    tracing::info!("Restoring graph tables from backup as user_backup_as_source is set");
 
     // Step 1: Restore graph tables from backup.
     let mut now = Instant::now();
     graph_store_arc
         .restore_hawk_graph_tables_from_backup()
         .await?;
-    log_info(format!(
+    tracing::info!(
         "Graph tables restored from backup :: time {:?}s",
         now.elapsed().as_secs_f64()
-    ));
+    );
 
     // Step 2: Remove all iris data except that is larger than the last indexed id.
     now = Instant::now();
     hnsw_iris_store
         .delete_irises_after_id(last_indexed_id as usize)
         .await?;
-    log_info(format!(
+    tracing::info!(
         "Removing all iris data except that larger than last indexed id: {}:: time {:?}s",
         last_indexed_id,
         now.elapsed().as_secs_f64()
-    ));
+    );
 
     // Step 3: Use modifications table created during the last Genesis run to override the iris data in the HNSW iris store.
     // In the case that HNSW performed some modification that GPU did not, we would need to override the iris data
@@ -1069,14 +1056,15 @@ pub async fn exec_use_backup_as_source(
         .get_persisted_modifications_after_id(0, max_hnsw_serial_id as u32)
         .await?;
     if !hnsw_mods.is_empty() {
-        log_info(format!("Restoring {} iris modifications", hnsw_mods.len()));
+        tracing::info!("Restoring {} iris modifications", hnsw_mods.len());
         let mut tx = hnsw_iris_store.tx().await?;
         for modification in &hnsw_mods {
             if let Some(serial_id) = modification.serial_id {
-                log_info(format!(
+                tracing::info!(
                     "Restoring iris modification: id={}, serial_id={:?}",
-                    modification.id, modification.serial_id
-                ));
+                    modification.id,
+                    modification.serial_id
+                );
 
                 let iris = iris_store.get_iris_data_by_id(serial_id).await?;
                 let iris_ref = iris_mpc_store::StoredIrisRef {
@@ -1093,10 +1081,10 @@ pub async fn exec_use_backup_as_source(
         }
         tx.commit().await?;
     }
-    log_info(format!(
+    tracing::info!(
         "Restoring iris data from modifications table in HNSW iris store :: time {:?}s",
         now.elapsed().as_secs_f64()
-    ));
+    );
 
     Ok(())
 }
@@ -1142,10 +1130,11 @@ async fn get_hawk_actor(
         numa: config.hawk_numa,
     };
 
-    log_info(format!(
+    tracing::info!(
         "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
-        hawk_args.party_index, node_addresses
-    ));
+        hawk_args.party_index,
+        node_addresses
+    );
 
     HawkActor::from_cli(
         &hawk_args,
@@ -1201,7 +1190,7 @@ async fn verify_s3_checkpoint_access(
         .send()
         .await
     {
-        log_warn(format!("S3 checkpoint bucket delete check failed: {e}"));
+        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
     }
 
     Ok(())
@@ -1262,20 +1251,23 @@ async fn get_service_clients(
             .clone()
             .unwrap_or_else(|| DEFAULT_REGION.to_owned());
 
-        log_info(format!(
+        tracing::info!(
             "AWS client init: environment={}, config.aws.region={:?}, \
              effective_region={}, force_path_style={}, max_retry_attempts=5",
-            config.environment, config_region, region_name, force_path_style,
-        ));
+            config.environment,
+            config_region,
+            region_name,
+            force_path_style,
+        );
 
         let region = Region::new(region_name.clone());
         let sdk_config = aws_config::from_env().region(region).load().await;
 
-        log_info(format!(
+        tracing::info!(
             "Default S3 client: region={}, endpoint={:?}",
             region_name,
             sdk_config.endpoint_url(),
-        ));
+        );
 
         // S3 client for general AWS operations (iris snapshots, deletions)
         let s3_config = S3ConfigBuilder::from(&sdk_config)
@@ -1285,11 +1277,11 @@ async fn get_service_clients(
         let aws_s3_client = S3Client::from_conf(s3_config);
 
         // RDS client using general AWS configuration
-        log_info(format!(
+        tracing::info!(
             "RDS client: region={}, endpoint={:?}",
             region_name,
             sdk_config.endpoint_url(),
-        ));
+        );
         let rds_client = RDSClient::new(&sdk_config);
 
         // S3 client for graph checkpoint operations (may be in a different region)
@@ -1300,11 +1292,11 @@ async fn get_service_clients(
             .load()
             .await;
 
-        log_info(format!(
+        tracing::info!(
             "Checkpoint S3 client: region={}, endpoint={:?}",
             checkpoint_region_name,
             checkpoint_sdk_config.endpoint_url(),
-        ));
+        );
 
         let checkpoint_s3_config = S3ConfigBuilder::from(&checkpoint_sdk_config)
             .force_path_style(force_path_style)
@@ -1331,10 +1323,11 @@ async fn get_service_clients(
                 .database
                 .as_ref()
                 .ok_or(eyre!("Missing database config"))?;
-            log_info(format!(
+            tracing::info!(
                 "Creating new iris store from: {:?}, schema: {}",
-                db_config, db_schema
-            ));
+                db_config,
+                db_schema
+            );
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadOnly)
                     .await?;
@@ -1356,10 +1349,11 @@ async fn get_service_clients(
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-            log_info(format!(
+            tracing::info!(
                 "Creating new graph store from: {:?}, schema: {}",
-                db_config, db_schema
-            ));
+                db_config,
+                db_schema
+            );
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
                     .await?;
@@ -1413,7 +1407,7 @@ async fn get_results_thread(
                     done_tx,
                     ..
                 } => {
-                    log_info(format!("Job Results :: Received: batch-id={batch_id}"));
+                    tracing::info!("Job Results :: Received: batch-id={batch_id}");
                     // get iris shares to persist
                     let start = Instant::now();
                     let left_store = &imem_iris_stores_bg[LEFT];
@@ -1455,13 +1449,13 @@ async fn get_results_thread(
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
                     db_tx.commit().await?;
-                    log_info(format!(
+                    tracing::info!(
                         "Job Results :: Persisted last indexed id: batch-id={batch_id}"
-                    ));
+                    );
 
-                    log_info(format!(
+                    tracing::info!(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
-                    ));
+                    );
                     metrics::gauge!("genesis_batch_indexation_complete").set(last_serial_id);
                     metrics::histogram!("genesis_batch_persist_duration").record(start.elapsed().as_secs_f64());
                     let _ = done_tx.send(());
@@ -1471,10 +1465,10 @@ async fn get_results_thread(
                     vector_id_to_persist,
                     done_tx,
                 } => {
-                    log_info(format!(
+                    tracing::info!(
                         "Job Results :: Received: modification-id={modification_id} for serial-id={}",
                         vector_id_to_persist.serial_id()
-                    ));
+                    );
                     // get iris shares to persist
                     let left_store = &imem_iris_stores_bg[LEFT];
                     let right_store = &imem_iris_stores_bg[RIGHT];
@@ -1505,13 +1499,13 @@ async fn get_results_thread(
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
                     db_tx.commit().await?;
-                    log_info(format!(
+                    tracing::info!(
                         "Job Results :: Persisted last indexed modification id: modification_id={modification_id}"
-                    ));
+                    );
 
-                    log_info(format!(
+                    tracing::info!(
                         "Job Results :: Persisted to dB: modification_id={modification_id}"
-                    ));
+                    );
 
                     let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
@@ -1602,7 +1596,7 @@ async fn init_graph_from_stores(
     max_indexation_id: usize,
     checkpoint: Option<GenesisCheckpointState>,
 ) -> Result<()> {
-    log_info(String::from("⚓️ ANCHOR: Load the database"));
+    tracing::info!("⚓️ ANCHOR: Load the database");
 
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
@@ -1620,10 +1614,11 @@ async fn init_graph_from_stores(
             "HNSW GENESIS :: Server :: Missing graph database config"
         ))?
         .load_parallelism;
-    log_info(format!(
+    tracing::info!(
         "Initialize db: Loading from DB with parallelism. iris: {}, graph: {})",
-        iris_db_parallelism, graph_db_parallelism
-    ));
+        iris_db_parallelism,
+        graph_db_parallelism
+    );
 
     // -------------------------------------------------------------------
     // Get total number of irises and apply max_index limit if specified
@@ -1652,9 +1647,7 @@ async fn init_graph_from_stores(
         graph_loader.load_graphs_from_checkpoint(both_eyes);
         return Ok(());
     }
-    log_info(String::from(
-        "No S3 checkpoint found, loading from PostgreSQL",
-    ));
+    tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
 
     graph_loader
         .load_graph_store(&graph_store, graph_db_parallelism)
@@ -1680,21 +1673,6 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     shutdown_handler
 }
 
-/// Helper: logs & returns an error message.
-fn log_error(msg: String) -> String {
-    utils::log_error("Server", msg)
-}
-
-/// Helper: logs & returns an information message.
-fn log_info(msg: String) -> String {
-    utils::log_info("Server", msg)
-}
-
-/// Helper: logs & returns a warning message.
-fn log_warn(msg: String) -> String {
-    utils::log_warn("Server", msg)
-}
-
 /// Validates application config.
 ///
 /// # Arguments
@@ -1704,10 +1682,9 @@ fn log_warn(msg: String) -> String {
 fn validate_config(config: &Config) -> Result<()> {
     // Validate CPU db config.
     if config.cpu_database.is_none() {
-        bail!(
-            "{}",
-            log_error(String::from("Missing CPU dB config settings"))
-        );
+        let msg = "Missing CPU dB config settings";
+        tracing::error!("{}", msg);
+        bail!(msg);
     }
 
     Ok(())
@@ -1734,31 +1711,34 @@ async fn validate_consistency_of_stores(
 ) -> Result<()> {
     // Bail if last indexed id exceeds max indexation id
     if last_indexed_id > max_indexation_id {
-        let msg = log_error(format!(
+        let msg = format!(
             "Last indexed id {} exceeds max indexation id {}",
             last_indexed_id, max_indexation_id
-        ));
+        );
+        tracing::error!("{}", msg);
         bail!(msg);
     }
 
     // Bail if current Iris store length exceeds maximum constraint - should never occur.
     let store_len = iris_store.count_irises().await?;
     if store_len > config.max_db_size {
-        let msg = log_error(format!(
+        let msg = format!(
             "Database size {} exceeds maximum allowed {}",
             store_len, config.max_db_size
-        ));
+        );
+        tracing::error!("{}", msg);
         bail!(msg);
     }
-    log_info(format!("Size of the database after init: {}", store_len));
+    tracing::info!("Size of the database after init: {}", store_len);
 
     // Bail if max indexation id exceeds max id in the database
     let max_db_id = iris_store.get_max_serial_id().await?;
     if max_indexation_id as usize > max_db_id {
-        let msg = log_error(format!(
+        let msg = format!(
             "Max indexation id {} exceeds max database id {}",
             max_indexation_id, max_db_id
-        ));
+        );
+        tracing::error!("{}", msg);
         bail!(msg);
     }
 
@@ -1780,11 +1760,11 @@ async fn validate_consistency_of_stores(
     if last_indexed_id_in_graph_left != last_indexed_id
         || last_indexed_id_in_graph_right != last_indexed_id
     {
-        let msg = log_error(format!(
-            "Last indexed id in graph store does not match last indexed id: \
-             left={} :: right={} :: expected={}",
+        let msg = format!(
+            "Last indexed id in graph store does not match last indexed id: left={} :: right={} :: expected={}",
             last_indexed_id_in_graph_left, last_indexed_id_in_graph_right, last_indexed_id
-        ));
+        );
+        tracing::error!("{}", msg);
         bail!(msg);
     }
 
