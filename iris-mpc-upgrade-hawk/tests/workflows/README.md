@@ -206,4 +206,4 @@ Post-conditions:
 - After Run 1: 3 genesis graph checkpoints exist (created at irises 10, 20, 25)
 - After Run 2: 4 genesis graph checkpoints exist (no pruning with `None` mode keeps previous checkpoints)
 - After Run 3: 3 genesis graph checkpoints exist (pruning mode `OlderNonArchival` removes older non-archival checkpoints)
-- After Run 4: 1 genesis graph checkpoint exists (pruning mode `AllOlder` removes all but the latest checkpoint)
+- After Run 4: 2 genesis graph checkpoint exists (pruning mode `AllOlder` removes all but the latest prior checkpoint)
