@@ -9,7 +9,6 @@ use iris_mpc_cpu::{
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 
-
 /// Number of MPC parties.
 const N_PARTIES: usize = 3;
 

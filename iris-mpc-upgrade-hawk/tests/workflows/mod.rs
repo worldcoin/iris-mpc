@@ -1,3 +1,5 @@
+use tokio::task::JoinSet;
+
 pub mod genesis_100;
 pub mod genesis_101;
 pub mod genesis_102;
@@ -8,17 +10,10 @@ pub mod genesis_106;
 pub mod genesis_107;
 pub mod genesis_108;
 
-#[macro_export]
-macro_rules! join_runners {
-    ($join_set:expr) => {{
-        let res: Result<Vec<_>, eyre::Report> = $join_set.join_all().await.into_iter().collect();
-        if res.is_err() {
-            tracing::error!("join failed at line: {}", line!());
-        } else {
-            tracing::info!("join succeeded at line: {}", line!());
-        }
-        let _ = res?;
-        // allow time to clean up
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    }};
+pub async fn join_runners(join_set: JoinSet<eyre::Result<()>>) -> eyre::Result<()> {
+    let results = join_set.join_all().await;
+    if results.iter().any(|x| x.is_err()) {
+        eyre::bail!("at least one peer returned an error");
+    }
+    Ok(())
 }

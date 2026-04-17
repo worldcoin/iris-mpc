@@ -1,6 +1,4 @@
-use super::{
-    hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING},
-};
+use super::hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING};
 use crate::{
     execution::hawk_main::{
         insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
@@ -20,7 +18,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{self, mpsc, oneshot};
-
 
 /// Maximum time to wait for all parties to complete the sync_peers exchange.
 /// This bounds the retry loop inside `HawkSession::sync_peers` so that

@@ -11,7 +11,6 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::{fmt::Debug, sync::Arc};
 
-
 /// Domain for persistent state store entry for last indexed id
 const STATE_DOMAIN: &str = "genesis";
 

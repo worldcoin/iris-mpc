@@ -1,15 +1,16 @@
 use crate::{
-    join_runners,
     utils::{
         genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
         mpc_node::{DbAssertions, MpcNodes},
         plaintext_genesis::PlaintextGenesis,
         HawkConfigs, TestRun, TestRunContextInfo,
     },
+    workflows::join_runners,
 };
 use eyre::Result;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
+use tracing::{info_span, Instrument};
 
 pub struct Test {
     configs: HawkConfigs,
@@ -29,25 +30,45 @@ impl TestRun for Test {
         // Execute genesis - first run indexing up to 50
         let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
+        for (idx, span, config) in self
+            .configs
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(idx, config)| (idx, info_span!("genesis", idx = idx), config))
+        {
             let mut args = genesis_args.clone();
             args.max_indexation_id = 50;
             join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
+                let r = exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config)
+                    .instrument(span.clone())
+                    .await;
+                tracing::info!(genesis_id = idx, "exec_genesis returned {:?}", r);
+                r
             });
         }
-        join_runners!(join_set);
+        join_runners(join_set).await?;
 
         // Execute genesis - second run indexing up to 100
         let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
+        for (idx, span, config) in self
+            .configs
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(idx, config)| (idx, info_span!("genesis", idx = idx), config))
+        {
             let mut args = genesis_args.clone();
             args.max_indexation_id = 100;
             join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
+                let r = exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config)
+                    .instrument(span.clone())
+                    .await;
+                tracing::info!(genesis_id = idx, "exec_genesis returned {:?}", r);
+                r
             });
         }
-        join_runners!(join_set);
+        join_runners(join_set).await?;
 
         Ok(())
     }

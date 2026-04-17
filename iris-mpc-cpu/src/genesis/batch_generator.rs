@@ -7,7 +7,6 @@ use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
-
 /// A batch for upstream indexation.
 #[derive(Debug)]
 pub struct Batch {

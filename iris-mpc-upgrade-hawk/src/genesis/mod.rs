@@ -35,8 +35,8 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
-        JobRequest, JobResult,
+        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
+        JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
