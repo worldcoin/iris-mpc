@@ -99,7 +99,7 @@ impl ExecutionArgs {
             batch_size_config: args.batch_size_config,
             perform_snapshot,
             checkpoint_frequency: args.checkpoint_frequency,
-            pruning_mode: PruningMode::OlderNonArchival,
+            pruning_mode: args.pruning_mode,
         }
     }
 }
