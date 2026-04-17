@@ -3,7 +3,7 @@ use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
 };
-use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig};
+use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -72,11 +72,11 @@ fn main() -> Result<()> {
         // Invoke main.
         match exec(args, config).await {
             Ok(_) => {
-                log_info("Server", "Exited normally".to_string());
+                tracing::info!("Exited normally");
                 Ok(())
             }
             Err(err) => {
-                log_error("Server", format!("Server exited with error: {:?}", err));
+                tracing::error!("Server exited with error: {:?}", err);
                 Err(err)
             }
         }

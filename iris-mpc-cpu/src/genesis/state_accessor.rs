@@ -49,12 +49,10 @@ pub async fn get_iris_deletions(
     // Set bucket and key based on environment
     let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", config.environment);
     let s3_key = format!("{}_deleted_serial_ids.json", config.environment);
-    utils::log_info(
-        COMPONENT,
-        format!(
-            "Fetching deleted serial ids from S3 bucket: {}, key: {}",
-            s3_bucket, s3_key
-        ),
+    tracing::info!(
+        "Fetching deleted serial ids from S3 bucket: {}, key: {}",
+        s3_bucket,
+        s3_key
     );
 
     // Fetch from S3.
@@ -65,16 +63,13 @@ pub async fn get_iris_deletions(
         .send()
         .await
         .map_err(|err| {
-            utils::log_error(
-                COMPONENT,
-                format!("Failed to download file from S3: {}", err),
-            );
+            tracing::error!("Failed to download file from S3: {}", err);
             IndexationError::AwsS3ObjectDownload
         })?;
 
     // Consume S3 object stream.
     let s3_object_body = s3_response.body.collect().await.map_err(|err| {
-        utils::log_error(COMPONENT, format!("Failed to get object body: {}", err));
+        tracing::error!("Failed to get object body: {}", err);
         IndexationError::AwsS3ObjectDeserialize
     })?;
 
@@ -82,10 +77,7 @@ pub async fn get_iris_deletions(
     let s3_object_bytes = s3_object_body.into_bytes();
     let S3Object { deleted_serial_ids } =
         serde_json::from_slice(&s3_object_bytes).map_err(|err| {
-            utils::log_error(
-                COMPONENT,
-                format!("Failed to deserialize S3 object: {}", err),
-            );
+            tracing::error!("Failed to deserialize S3 object: {}", err);
             IndexationError::AwsS3ObjectDeserialize
         })?;
 
@@ -115,12 +107,10 @@ pub async fn get_iris_modifications(
     from_modification_id: i64,
     to_serial_id: u32,
 ) -> Result<(Vec<Modification>, i64), IndexationError> {
-    utils::log_info(
-        COMPONENT,
-        format!(
-            "Fetching Iris modifications for indexation: from-modification-id={} :: to-serial-id={}",
-            from_modification_id, to_serial_id
-        ),
+    tracing::info!(
+        "Fetching Iris modifications for indexation: from-modification-id={} :: to-serial-id={}",
+        from_modification_id,
+        to_serial_id
     );
 
     let (modifications, max_id) = iris_store
@@ -168,10 +158,7 @@ async fn get_state_element<T: DeserializeOwned + Default>(
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     key: &str,
 ) -> Result<T> {
-    utils::log_info(
-        COMPONENT,
-        format!("Retrieving Genesis indexation state element: key={}", key),
-    );
+    tracing::info!("Retrieving Genesis indexation state element: key={}", key);
 
     let value = graph_store
         .get_persistent_state(STATE_DOMAIN, key)
@@ -223,12 +210,10 @@ async fn set_state_element<T: Serialize + Debug>(
     key: &str,
     value: &T,
 ) -> Result<(), IndexationError> {
-    utils::log_info(
-        COMPONENT,
-        format!(
-            "Persisting Genesis indexation state element: key={} :: value={:?}",
-            key, value
-        ),
+    tracing::info!(
+        "Persisting Genesis indexation state element: key={} :: value={:?}",
+        key,
+        value
     );
 
     GraphPg::<Aby3Store>::set_persistent_state(tx, STATE_DOMAIN, key, &value)
@@ -287,10 +272,7 @@ async fn unset_state_element(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,
 ) -> Result<(), IndexationError> {
-    utils::log_info(
-        COMPONENT,
-        format!("Unsetting Genesis indexation state element: key={}", key),
-    );
+    tracing::info!("Unsetting Genesis indexation state element: key={}", key);
 
     GraphPg::<Aby3Store>::delete_persistent_state(tx, STATE_DOMAIN, key)
         .await

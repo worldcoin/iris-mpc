@@ -62,7 +62,7 @@ impl Handle {
 
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
-        Self::log_info(String::from("Starting State check"));
+        tracing::info!("Starting State check");
         HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         // Process jobs until health check fails or channel closes.
@@ -79,9 +79,7 @@ impl Handle {
                 let stop = health.is_err();
                 let _ = return_channel.send(health.and(job_result));
                 if stop {
-                    Self::log_error(String::from(
-                        "HawkActor is in an inconsistent state, therefore stopping.",
-                    ));
+                    tracing::error!("HawkActor is in an inconsistent state, therefore stopping.");
                     break;
                 }
             }
@@ -126,11 +124,11 @@ impl Handle {
                 queries,
                 vector_ids_to_persist,
             } => {
-                Self::log_info(format!(
+                tracing::info!(
                     "Hawk Job :: processing batch-id={}; batch-size={}",
                     batch_id,
                     vector_ids.len(),
-                ));
+                );
 
                 let queries = JobRequest::numa_realloc(
                     queries,
@@ -285,17 +283,19 @@ impl Handle {
                                     Ok((connect_plan, vector_id))
                                 }
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    let msg = Self::log_error(format!(
+                                    let msg = format!(
                                         "HawkActor does not support deletion of identities: modification: {:?}",
                                         modification
-                                    ));
+                                    );
+                                    tracing::error!("{}", msg);
                                     Err(eyre!(msg))
                                 }
                                 _ => {
-                                    let msg = Self::log_error(format!(
+                                    let msg = format!(
                                         "Invalid modification type received: {:?}",
                                         modification,
-                                    ));
+                                    );
+                                    tracing::error!("{}", msg);
                                     Err(eyre!(msg))
                                 }
                             }
@@ -335,15 +335,6 @@ impl Handle {
                 Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
-    }
-
-    // Helper: component error logging.
-    fn log_error(msg: String) -> String {
-        utils::log_error(COMPONENT, msg)
-    }
-    // Helper: component logging.
-    fn log_info(msg: String) -> String {
-        utils::log_info(COMPONENT, msg)
     }
 
     /// Enqueues a job request for the genesis indexer HNSW processing thread. It returns
