@@ -20,6 +20,12 @@ env:
   - name: SMPC__PPROF_S3_BUCKET
     value: "wf-smpcv2-dev-hnsw-performance-reports"
 
+  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
+    value: "ampc-hnsw-graph-store-node-1-dev-eu-central-1"
+
+  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_REGION
+    value: "eu-central-1"
+
   - name: SMPC__PPROF_PREFIX
     value: "dev/hnsw"
 
@@ -108,7 +114,7 @@ env:
     value: "32"
 
   - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
-    value: "16"
+    value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
     value: "true"
