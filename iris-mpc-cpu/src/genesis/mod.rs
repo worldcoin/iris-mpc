@@ -16,8 +16,4 @@ pub use state_accessor::{
     get_iris_deletions, get_last_indexed_iris_id, get_last_indexed_modification_id,
     set_last_indexed_iris_id, set_last_indexed_modification_id,
 };
-pub use utils::logger;
-pub use utils::{
-    errors::IndexationError,
-    logger::{log_error, log_info, log_warn},
-};
+pub use utils::errors::IndexationError;

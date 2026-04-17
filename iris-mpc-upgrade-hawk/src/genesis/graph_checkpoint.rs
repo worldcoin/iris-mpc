@@ -17,8 +17,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
 use super::{
-    log_error, log_info, log_warn, Blake3Hash, GenesisHawkHandle, GraphCheckpointHashes, JobResult,
-    GRAPH_CHECKPOINT_ENDPOINT,
+    Blake3Hash, GenesisHawkHandle, GraphCheckpointHashes, JobResult, GRAPH_CHECKPOINT_ENDPOINT,
 };
 
 pub async fn get_common_checkpoint(
@@ -97,10 +96,11 @@ pub async fn upload_and_sync_genesis_checkpoint(
     {
         Ok(r) => r,
         Err(e) => {
-            log_error(format!(
+            tracing::error!(
                 "failed to upload genesis checkpoint for last_indexed_id: {}: {}",
-                last_indexed_id, e
-            ));
+                last_indexed_id,
+                e
+            );
             bail!(e);
         }
     };
@@ -124,10 +124,10 @@ pub async fn get_most_recent_checkpoints(
             if let Ok(hash) = blake3::Hash::from_hex(genesis_cp_state.blake3_hash.as_bytes()) {
                 valid_tuples.push((genesis_cp_state, hash));
             } else {
-                log_warn("checkpoint hash failed to parse".into());
+                tracing::warn!("checkpoint hash failed to parse");
             }
         } else {
-            log_warn("failed to convert GenesisCheckpointRow to GenesisCheckpointState".into());
+            tracing::warn!("failed to convert GenesisCheckpointRow to GenesisCheckpointState");
         }
     }
     let (checkpoints, hashes): (Vec<GenesisCheckpointState>, Vec<blake3::Hash>) =
@@ -161,7 +161,7 @@ pub async fn maybe_rollback_iris_db(
     }
 
     if last_indexed_id > graph_checkpoint.last_indexed_iris_id {
-        log_info("S3 checkpoint is behind the iris db. rolling back the iris db".into());
+        tracing::info!("S3 checkpoint is behind the iris db. rolling back the iris db");
         let graph_tx = graph_store.tx().await?;
         let mut tx = graph_tx.tx;
         set_last_indexed_iris_id(&mut tx, graph_checkpoint.last_indexed_iris_id).await?;
