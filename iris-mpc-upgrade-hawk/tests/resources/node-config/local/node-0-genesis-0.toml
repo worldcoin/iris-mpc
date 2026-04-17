@@ -50,6 +50,7 @@ full_scan_side_switching_enabled = true
 batch_polling_timeout_secs = 1
 sqs_long_poll_wait_time = 10
 batch_sync_polling_timeout_secs = 10
+graph_checkpoint_bucket_name = "wf-smpcv2-dev-hnsw-checkpoint"
 
 [server_coordination]
 node_hostnames = '["127.0.0.1", "127.0.0.1", "127.0.0.1"]'

@@ -16,6 +16,7 @@ use ampc_secret_sharing::{
 use eyre::Result;
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
+use tracing::instrument;
 
 /// Builds round-robin comparison pairs from a flattened batch of distance shares.
 ///
@@ -42,6 +43,7 @@ pub(crate) fn build_round_robin_pairs<T: IntRing2k>(
 /// Given round-robin comparison bits, selects the minimum distance in each batch.
 ///
 /// This is the generic core shared by both FHD and NHD round-robin minimum.
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub(crate) async fn select_round_robin_min<T>(
     session: &mut Session,
     distances: &[DistanceShare<T>],

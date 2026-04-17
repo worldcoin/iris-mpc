@@ -27,7 +27,7 @@ mod bench_utils;
 use bench_utils::create_random_sharing;
 
 const DEFAULT_CONNECTION_PARALLELISM: usize = 1;
-const DEFAULT_REQUEST_PARALLELISM: usize = 1;
+const DEFAULT_REQUEST_PARALLELISM: usize = 32;
 
 fn bench_plaintext_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("plaintext_hnsw");
@@ -90,121 +90,151 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
 }
 
 fn bench_hnsw_primitives(c: &mut Criterion) {
-    c.bench_function("lift-cross-mul", |b| {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        b.to_async(&rt).iter(|| async move {
-            let mut rng = AesRng::seed_from_u64(0_u64);
-            let d1 = create_random_sharing(&mut rng, 10_u16);
-            let d2 = create_random_sharing(&mut rng, 10_u16);
-            let t1 = create_random_sharing(&mut rng, 10_u16);
-            let t2 = create_random_sharing(&mut rng, 10_u16);
+    let mut group = c.benchmark_group("hnsw_primitives");
+    group.sample_size(10);
 
-            let sessions = LocalRuntime::mock_sessions_with_tcp(
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let sessions = rt
+        .block_on(async {
+            LocalRuntime::mock_sessions_with_tcp(
                 DEFAULT_CONNECTION_PARALLELISM,
                 DEFAULT_REQUEST_PARALLELISM,
             )
             .await
-            .unwrap();
+        })
+        .unwrap();
 
-            let mut jobs = JoinSet::new();
-            for (index, player_session) in sessions.into_iter().enumerate() {
-                let d1i = d1[index];
-                let d2i = d2[index];
-                let t1i = t1[index];
-                let t2i = t2[index];
-                let player_session = player_session.clone();
-                jobs.spawn(async move {
-                    let mut player_session = player_session.lock().await;
-                    let ds_and_ts =
-                        batch_signed_lift_vec(&mut player_session, vec![d1i, d2i, t1i, t2i])
-                            .await
-                            .unwrap();
-                    cross_compare(
-                        &mut player_session,
-                        &[(
-                            DistanceShare::new(ds_and_ts[0], ds_and_ts[1]),
-                            DistanceShare::new(ds_and_ts[2], ds_and_ts[3]),
-                        )],
-                    )
-                    .await
-                    .unwrap()
-                });
-            }
-            let _outputs = black_box(jobs.join_all().await);
+    let mut rng = AesRng::seed_from_u64(0_u64);
+    let d1 = create_random_sharing(&mut rng, 10_u16);
+    let d2 = create_random_sharing(&mut rng, 10_u16);
+    let t1 = create_random_sharing(&mut rng, 10_u16);
+    let t2 = create_random_sharing(&mut rng, 10_u16);
+
+    group.bench_function("lift-cross-mul", |b| {
+        b.iter(|| {
+            let (d1, d2, t1, t2) = (d1.clone(), d2.clone(), t1.clone(), t2.clone());
+            let sessions = &sessions;
+            rt.block_on(async move {
+                let mut jobs = JoinSet::new();
+                for (index, player_session) in sessions.iter().enumerate() {
+                    let d1i = d1[index % 3];
+                    let d2i = d2[index % 3];
+                    let t1i = t1[index % 3];
+                    let t2i = t2[index % 3];
+                    let player_session = player_session.clone();
+                    jobs.spawn(async move {
+                        let mut player_session = player_session.lock().await;
+                        let ds_and_ts =
+                            batch_signed_lift_vec(&mut player_session, vec![d1i, d2i, t1i, t2i])
+                                .await
+                                .unwrap();
+                        cross_compare(
+                            &mut player_session,
+                            &[(
+                                DistanceShare::new(ds_and_ts[0], ds_and_ts[1]),
+                                DistanceShare::new(ds_and_ts[2], ds_and_ts[3]),
+                            )],
+                        )
+                        .await
+                        .unwrap()
+                    });
+                }
+                let _outputs = black_box(jobs.join_all().await);
+            });
         });
     });
+
+    group.finish();
 }
 
 fn bench_gr_primitives(c: &mut Criterion) {
-    c.bench_function("gr-less-than", |b| {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        b.to_async(&rt).iter(|| async move {
-            let sessions = LocalRuntime::mock_sessions_with_tcp(
+    let mut group = c.benchmark_group("gr_primitives");
+    group.sample_size(10);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let sessions = rt
+        .block_on(async {
+            LocalRuntime::mock_sessions_with_tcp(
                 DEFAULT_CONNECTION_PARALLELISM,
                 DEFAULT_REQUEST_PARALLELISM,
             )
             .await
-            .unwrap();
-            let mut rng = AesRng::seed_from_u64(0);
-            let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
+        })
+        .unwrap();
 
-            let x1 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
-            let y1 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[2].clone());
-            let x2 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
-            let y2 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[3].clone());
+    group.bench_function("gr-less-than", |b| {
+        b.iter(|| {
+            let sessions = &sessions;
+            rt.block_on(async move {
+                let mut rng = AesRng::seed_from_u64(0);
+                let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
-            let mut jobs = JoinSet::new();
-            for (index, player_session) in sessions.iter().enumerate() {
-                let x1 = x1[index].clone();
-                let mut y1 = y1[index].clone();
+                let x1 =
+                    GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
+                let y1 =
+                    GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[2].clone());
+                let x2 =
+                    GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
+                let y2 =
+                    GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[3].clone());
 
-                let x2 = x2[index].clone();
-                let mut y2 = y2[index].clone();
+                let mut jobs = JoinSet::new();
+                for (index, player_session) in sessions.iter().enumerate() {
+                    let x1 = x1[index % 3].clone();
+                    let mut y1 = y1[index % 3].clone();
 
-                let player_session = player_session.clone();
-                jobs.spawn(async move {
-                    let mut player_session = player_session.lock().await;
-                    y1.code.preprocess_iris_code_query_share();
-                    y1.mask.preprocess_mask_code_query_share();
-                    y2.code.preprocess_iris_code_query_share();
-                    y2.mask.preprocess_mask_code_query_share();
-                    let pairs = vec![
-                        Some((Arc::new(x1), Arc::new(y1))),
-                        Some((Arc::new(x2), Arc::new(y2))),
-                    ];
-                    let ds_and_ts = galois_ring_pairwise_distance(pairs);
-                    let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
+                    let x2 = x2[index % 3].clone();
+                    let mut y2 = y2[index % 3].clone();
+
+                    let player_session = player_session.clone();
+                    jobs.spawn(async move {
+                        let mut player_session = player_session.lock().await;
+                        y1.code.preprocess_iris_code_query_share();
+                        y1.mask.preprocess_mask_code_query_share();
+                        y2.code.preprocess_iris_code_query_share();
+                        y2.mask.preprocess_mask_code_query_share();
+                        let pairs = vec![
+                            Some((Arc::new(x1), Arc::new(y1))),
+                            Some((Arc::new(x2), Arc::new(y2))),
+                        ];
+                        let ds_and_ts = galois_ring_pairwise_distance(pairs);
+                        let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
+                            .await
+                            .unwrap();
+                        let ds_and_ts = batch_signed_lift_vec(&mut player_session, ds_and_ts)
+                            .await
+                            .unwrap();
+                        cross_compare(
+                            &mut player_session,
+                            &[(
+                                DistanceShare::new(ds_and_ts[0], ds_and_ts[1]),
+                                DistanceShare::new(ds_and_ts[2], ds_and_ts[3]),
+                            )],
+                        )
                         .await
                         .unwrap();
-                    let ds_and_ts = batch_signed_lift_vec(&mut player_session, ds_and_ts)
-                        .await
-                        .unwrap();
-                    cross_compare(
-                        &mut player_session,
-                        &[(
-                            DistanceShare::new(ds_and_ts[0], ds_and_ts[1]),
-                            DistanceShare::new(ds_and_ts[2], ds_and_ts[3]),
-                        )],
-                    )
-                    .await
-                    .unwrap();
-                });
-            }
-            let _outputs = black_box(jobs.join_all().await);
+                    });
+                }
+                let _outputs = black_box(jobs.join_all().await);
+            });
         });
     });
+
+    group.finish();
 }
 
 /// To run this benchmark, you need to generate the data first by running the
-/// following commands:
+/// following commands from iris-mpc-bins:
 ///
-/// cargo run --release -p iris-mpc-bins --bin generate-benchmark-data
+/// cargo run --release --bin construct-graph-ptxt -- --job-spec resources/iris-mpc-cpu/construct_graph_ptxt_benchmark.toml
 fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("gr_ready_made_hnsw");
     group.sample_size(10);

@@ -105,11 +105,13 @@ pub struct GenesisConfig {
 }
 
 /// Logical CLI arguments for genesis process.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct GenesisArgs {
     pub max_indexation_id: IrisSerialId,
 
     pub batch_size_config: BatchSizeConfig,
+
+    pub checkpoint_frequency: usize,
 }
 
 impl Default for GenesisArgs {
@@ -117,6 +119,7 @@ impl Default for GenesisArgs {
         Self {
             max_indexation_id: 0,
             batch_size_config: BatchSizeConfig::Static { size: 1 },
+            checkpoint_frequency: 100_000,
         }
     }
 }
@@ -429,6 +432,7 @@ mod tests {
                     cap: 1000,
                     error_rate: 128,
                 },
+                ..Default::default()
             },
             s3_deletions: Vec::new(),
         }

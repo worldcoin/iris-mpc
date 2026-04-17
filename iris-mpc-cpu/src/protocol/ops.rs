@@ -353,7 +353,7 @@ mod tests {
     use crate::{
         execution::{
             local::{generate_local_identities, LocalRuntime},
-            session::{Session, SessionHandles},
+            session::Session,
         },
         network::mpc::{NetworkInt, NetworkValue},
         protocol::shared_iris::GaloisRingSharedIris,
@@ -368,7 +368,7 @@ mod tests {
     use rstest::rstest;
     use std::sync::Arc;
     use tokio::task::JoinSet;
-    use tracing::{instrument, trace};
+    use tracing::instrument;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_t_many<T>(session: &mut Session, shares: Vec<Share<T>>) -> Result<Vec<T>>
@@ -455,7 +455,6 @@ mod tests {
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_additive(session: &mut Session, x: Vec<RingElement<u16>>) -> Result<Vec<u16>> {
-        let prev_role = session.prev_identity()?;
         let network = &mut session.network_session;
 
         network
@@ -463,8 +462,6 @@ mod tests {
             .await?;
 
         let message_bytes = NetworkValue::VecRing16(x.clone());
-        trace!(target: "searcher::network", action = "send", party = ?prev_role, bytes = x.len() * size_of::<u16>(), rounds = 0);
-
         network.send_prev(message_bytes).await?;
 
         let reply_0 = network.receive_prev().await;

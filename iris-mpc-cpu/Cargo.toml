@@ -9,11 +9,11 @@ repository.workspace = true
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
-ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-trait = "~0.1"
 aws-sdk-s3.workspace = true
-blake3 = "1"
+base64.workspace = true
+blake3.workspace = true
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
@@ -59,6 +59,7 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
 ] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
+uuid.workspace = true
 backon = { version = "1.4.0", default-features = false, features = [
     "tokio-sleep",
 ] }

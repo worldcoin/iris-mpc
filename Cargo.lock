@@ -78,7 +78,7 @@ checksum = "5c6cb57a04249c6480766f7f7cef5467412af1490f8d1e243141daddada3264f"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=edc8550e918dbb111c758a5883d971d7be10bc1f#edc8550e918dbb111c758a5883d971d7be10bc1f"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7cc2b88bcb06afd2674ac668962f832207462891#7cc2b88bcb06afd2674ac668962f832207462891"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -101,6 +101,7 @@ dependencies = [
  "serde",
  "serde_json",
  "socket2 0.6.0",
+ "thiserror 2.0.16",
  "tokio",
  "tokio-rustls 0.26.2",
  "tokio-util",
@@ -110,7 +111,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=edc8550e918dbb111c758a5883d971d7be10bc1f#edc8550e918dbb111c758a5883d971d7be10bc1f"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7cc2b88bcb06afd2674ac668962f832207462891#7cc2b88bcb06afd2674ac668962f832207462891"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -136,7 +137,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=edc8550e918dbb111c758a5883d971d7be10bc1f#edc8550e918dbb111c758a5883d971d7be10bc1f"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7cc2b88bcb06afd2674ac668962f832207462891#7cc2b88bcb06afd2674ac668962f832207462891"
 dependencies = [
  "aes-prng",
  "bytemuck",
@@ -151,7 +152,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=edc8550e918dbb111c758a5883d971d7be10bc1f#edc8550e918dbb111c758a5883d971d7be10bc1f"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7cc2b88bcb06afd2674ac668962f832207462891#7cc2b88bcb06afd2674ac668962f832207462891"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -188,15 +189,6 @@ name = "anes"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
-
-[[package]]
-name = "ansiterm"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ab587f5395da16dd2e6939adf53dede583221b320cadfb94e02b5b7b9bf24cc"
-dependencies = [
- "winapi",
-]
 
 [[package]]
 name = "anstream"
@@ -2906,8 +2898,10 @@ name = "iris-mpc-bins"
 version = "0.1.0"
 dependencies = [
  "aes-prng",
+ "ampc-actor-utils",
  "ampc-anon-stats",
  "ampc-server-utils",
+ "async-trait",
  "async_from",
  "aws-config",
  "aws-sdk-kms",
@@ -2922,6 +2916,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "config",
  "csv",
  "cudarc",
  "data-encoding",
@@ -3026,11 +3021,11 @@ dependencies = [
  "ampc-anon-stats",
  "ampc-secret-sharing",
  "ampc-server-utils",
- "ansiterm",
  "async-channel",
  "async-trait",
  "aws-sdk-s3",
  "backon",
+ "base64",
  "bincode",
  "blake3",
  "bytemuck",
@@ -3075,6 +3070,7 @@ dependencies = [
  "tracing-forest",
  "tracing-subscriber",
  "tracing-test",
+ "uuid",
 ]
 
 [[package]]
@@ -3178,8 +3174,11 @@ dependencies = [
  "aws-config",
  "aws-sdk-rds",
  "aws-sdk-s3",
+ "axum 0.7.7",
+ "blake3",
  "chrono",
  "eyre",
+ "futures",
  "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",

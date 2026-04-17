@@ -197,9 +197,13 @@ impl HawkSession {
 
         let decode_u16 = |msg| match msg {
             Ok(NetworkValue::RingElement16(elem)) => Ok(elem.0),
-            other => {
-                tracing::error!("Unexpected message format: {:?}", other);
+            Ok(other) => {
+                tracing::error!("Unexpected message variant in sync: {:?}", other);
                 Err(eyre!("Could not deserialize sync result"))
+            }
+            Err(e) => {
+                tracing::error!("Network receive error in sync: {e}");
+                Err(e)
             }
         };
 
@@ -207,6 +211,14 @@ impl HawkSession {
         // parties are ready. A party is ready when persistence completes (DONE)
         // or the results thread crashes (ERROR).
         // this step is combined with an exchange of the shutdown flag
+        //
+        // Receives are retried independently of sends to handle inter-party
+        // timing drift — e.g. when one party finishes an S3 checkpoint upload
+        // well before the others and enters this loop first.  Retrying only
+        // the receive avoids filling the peer's mpsc channel with duplicate
+        // sends.
+        // TODO: upstream `ampc-common` should expose typed network errors so
+        // we can distinguish timeouts from permanent failures here.
         let shutdown: u16 = if shutdown_flag { 1 } else { 0 } << 8;
         let mut prev;
         let mut next;
@@ -214,13 +226,38 @@ impl HawkSession {
             let my_status = sync_status.load(Ordering::Relaxed);
             let msg = NetworkValue::RingElement16(RingElement(my_status as u16 | shutdown));
 
-            let mut store = session.aby3_store.write().await;
-            let net = &mut store.session.network_session;
-            net.send_prev(msg.clone()).await?;
-            net.send_next(msg).await?;
-            prev = decode_u16(net.receive_prev().await)?;
-            next = decode_u16(net.receive_next().await)?;
-            drop(store);
+            {
+                let mut store = session.aby3_store.write().await;
+                let net = &mut store.session.network_session;
+                net.send_prev(msg.clone()).await?;
+                net.send_next(msg).await?;
+            }
+
+            prev = loop {
+                let mut store = session.aby3_store.write().await;
+                let net = &mut store.session.network_session;
+                match decode_u16(net.receive_prev().await) {
+                    Ok(val) => break val,
+                    Err(e) => {
+                        tracing::warn!("Retrying sync receive_prev after error: {e}");
+                        drop(store);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            };
+
+            next = loop {
+                let mut store = session.aby3_store.write().await;
+                let net = &mut store.session.network_session;
+                match decode_u16(net.receive_next().await) {
+                    Ok(val) => break val,
+                    Err(e) => {
+                        tracing::warn!("Retrying sync receive_next after error: {e}");
+                        drop(store);
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            };
 
             let ready = my_status >= SYNC_DONE;
             if ready && (prev & 0xFF) as u8 >= SYNC_DONE && (next & 0xFF) as u8 >= SYNC_DONE {
@@ -235,7 +272,7 @@ impl HawkSession {
         let prev_error = (prev & 0xFF) as u8 == SYNC_ERROR;
         let next_error = (next & 0xFF) as u8 == SYNC_ERROR;
         if my_error || prev_error || next_error {
-            bail!("results thread terminated before persistence completed");
+            bail!("Results thread terminated before persistence completed");
         }
 
         // Compare shutdown flags
@@ -259,9 +296,13 @@ impl HawkSession {
 
             let decode = |msg| match msg {
                 Ok(NetworkValue::PrfCheck(c)) => Ok(c),
-                other => {
-                    tracing::error!("Unexpected message format: {:?}", other);
+                Ok(other) => {
+                    tracing::error!("Unexpected message variant in PRF check: {:?}", other);
                     Err(eyre!("Could not deserialize PrfCheck"))
+                }
+                Err(e) => {
+                    tracing::error!("Network receive error in PRF check: {e}");
+                    Err(e)
                 }
             };
             let prev_share = decode(net.receive_prev().await)?;
@@ -308,9 +349,13 @@ impl HawkSession {
 
             let decode = |msg| match msg {
                 Ok(NetworkValue::StateChecksum(c)) => Ok(c),
-                other => {
-                    tracing::error!("Unexpected message format: {:?}", other);
-                    Err(eyre!("Could not deserialize StateChecksum"))
+                Ok(other) => {
+                    tracing::error!("Unexpected message variant in state check: {:?}", other);
+                    Err(eyre!("Could not deserialize state checksum"))
+                }
+                Err(e) => {
+                    tracing::error!("Network receive error in state check: {e}");
+                    Err(e)
                 }
             };
             let prev = decode(net.receive_prev().await)?;

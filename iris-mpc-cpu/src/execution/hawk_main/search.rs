@@ -9,7 +9,9 @@ use crate::{
         scheduler::{collect_results, parallelize},
         InsertPlanV, StoreId,
     },
-    hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef},
+    hawkers::aby3::aby3_store::{
+        Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, DistanceOps,
+    },
     hnsw::{
         graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
         searcher::{NeighborhoodMode, UpdateEntryPoint},
@@ -21,6 +23,7 @@ use iris_mpc_common::iris_db::iris::Threshold;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tracing::instrument;
 
 pub type SearchQueries<const ROTMASK: u32> =
     Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROTMASK>>>>;
@@ -90,6 +93,7 @@ impl SearchParams {
     }
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn search<const ROTMASK: u32>(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROTMASK>,
@@ -149,6 +153,7 @@ pub async fn search<const ROTMASK: u32>(
     Ok(results)
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
     session: &HawkSession,
     search_queries: &SearchQueries<ROTMASK>,
@@ -217,8 +222,12 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
 ///   statistics. Also used as the saturation trigger: if all `ef` results are below
 ///   this threshold, the query is a potential supermatcher and we re-search with a
 ///   larger `ef` to get a more complete picture.
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_and_extend(
-    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    edges: &[(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )],
     query: &Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
@@ -273,8 +282,12 @@ async fn classify_and_extend(
 }
 
 /// Batch-classify edges at both the match threshold and the anon stats threshold.
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_edges(
-    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    edges: &[(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )],
     aby3_store: &mut Aby3Store<HawkOps>,
     ef: usize,
     saturation_margin: usize,
@@ -380,6 +393,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     })
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_search_query(
     query: Aby3Query,
     search_params: &SearchParams,

@@ -448,15 +448,23 @@ WHERE id = $1;
         Ok(())
     }
 
-    pub async fn rollback(&self, db_len: usize) -> Result<()> {
+    pub async fn delete_irises_after_id(&self, last_indexed_id: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-
-        sqlx::query("DELETE FROM irises WHERE id > $1")
-            .bind(db_len as i64)
-            .execute(&mut *tx)
+        self.delete_irises_after_id_tx(&mut tx, last_indexed_id)
             .await?;
-
         tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_irises_after_id_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        last_indexed_id: usize,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM irises WHERE id > $1")
+            .bind(last_indexed_id as i64)
+            .execute(tx.deref_mut())
+            .await?;
         Ok(())
     }
 
@@ -561,21 +569,24 @@ WHERE id = $1;
 
         let rows = sqlx::query_as::<_, StoredModification>(
             r#"
-            SELECT
-                id,
-                serial_id,
-                request_type,
-                s3_url,
-                status,
-                persisted,
-                result_message_body,
-                graph_mutation
-            FROM modifications
-            WHERE id > $1
-              AND request_type = ANY($2)
-              AND persisted = true
-              AND status = 'COMPLETED'
-              AND serial_id <= $3
+            SELECT * FROM (
+                SELECT DISTINCT ON (serial_id)
+                    id,
+                    serial_id,
+                    request_type,
+                    s3_url,
+                    status,
+                    persisted,
+                    result_message_body,
+                    graph_mutation
+                FROM modifications
+                WHERE id > $1
+                  AND request_type = ANY($2)
+                  AND persisted = true
+                  AND status = 'COMPLETED'
+                  AND serial_id <= $3
+                ORDER BY serial_id, id DESC
+            ) deduped
             ORDER BY id ASC
             "#,
         )
@@ -726,7 +737,7 @@ WHERE id = $1;
         if clear_db_before_init {
             tracing::info!("Cleaning up the db before initializing irises");
             // Cleaning up the db before inserting newly generated irises
-            self.rollback(0).await?;
+            self.delete_irises_after_id(0).await?;
         }
 
         let mut tx = self.tx().await?;
@@ -1047,7 +1058,7 @@ pub mod tests {
         let mut tx = store.tx().await?;
         store.insert_irises(&mut tx, &irises).await?;
         tx.commit().await?;
-        store.rollback(5).await?;
+        store.delete_irises_after_id(5).await?;
 
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 5);
@@ -1666,6 +1677,128 @@ pub mod tests {
         assert_eq!(
             modifications[1].id, 2,
             "Should return modification with ID 2"
+        );
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_persisted_modifications_deduplicates_by_serial_id() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        // Insert 3 modifications with the SAME serial_id (200)
+        // This simulates retries or duplicate processing of the same request
+        let mod1 = store
+            .insert_modification(Some(200), IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?; // id=1
+
+        let mod2 = store
+            .insert_modification(Some(200), IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?; // id=2
+
+        let mod3 = store
+            .insert_modification(Some(200), IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?; // id=3
+
+        // Insert another modification with a different serial_id (100) but lower id
+        // This tests ordering: serial_id=100 should appear before serial_id=200 in final result
+        // because its highest id (4) is lower than serial_id=200's highest id (6)
+        let mod4 = store
+            .insert_modification(
+                Some(100),
+                RESET_UPDATE_MESSAGE_TYPE,
+                Some("http://example.com/reset"),
+            )
+            .await?; // id=4
+
+        // Insert more duplicates for serial_id=200 to ensure we get the highest id
+        let mod5 = store
+            .insert_modification(Some(200), IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?; // id=5
+
+        let mod6 = store
+            .insert_modification(Some(200), IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?; // id=6 - this should be the one returned for serial_id=200
+
+        // Mark all as completed and persisted
+        let mut mod1 = mod1;
+        let mut mod2 = mod2;
+        let mut mod3 = mod3;
+        let mut mod4 = mod4;
+        let mut mod5 = mod5;
+        let mut mod6 = mod6;
+
+        mod1.mark_completed(true, "result1", None, None);
+        mod2.mark_completed(true, "result2", None, None);
+        mod3.mark_completed(true, "result3", None, None);
+        mod4.mark_completed(true, "result4", None, None);
+        mod5.mark_completed(true, "result5", None, None);
+        mod6.mark_completed(true, "result6", None, None);
+
+        let mut tx = store.tx().await?;
+        store
+            .update_modifications(&mut tx, &[&mod1, &mod2, &mod3, &mod4, &mod5, &mod6])
+            .await?;
+        tx.commit().await?;
+
+        // Query all persisted modifications
+        let (modifications, max_id) = store.get_persisted_modifications_after_id(0, 300).await?;
+
+        // Should return exactly 2 modifications (one per unique serial_id)
+        assert_eq!(
+            modifications.len(),
+            2,
+            "Should deduplicate to 2 modifications (one per serial_id)"
+        );
+
+        // Max id should be 6 (the highest id among all persisted+completed)
+        assert_eq!(max_id, Some(6), "Max ID should be 6");
+
+        // Results should be ordered by id ASC
+        // serial_id=100 has highest id=4, serial_id=200 has highest id=6
+        // So order should be: id=4 (serial_id=100), then id=6 (serial_id=200)
+        assert_eq!(
+            modifications[0].id, 4,
+            "First result should be id=4 (serial_id=100)"
+        );
+        assert_eq!(
+            modifications[0].serial_id,
+            Some(100),
+            "First result should have serial_id=100"
+        );
+
+        assert_eq!(
+            modifications[1].id, 6,
+            "Second result should be id=6 (highest id for serial_id=200)"
+        );
+        assert_eq!(
+            modifications[1].serial_id,
+            Some(200),
+            "Second result should have serial_id=200"
+        );
+
+        // Verify that lower ids for serial_id=200 (1, 2, 3, 5) are NOT in the results
+        let returned_ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
+        assert!(
+            !returned_ids.contains(&1),
+            "id=1 should be deduplicated out"
+        );
+        assert!(
+            !returned_ids.contains(&2),
+            "id=2 should be deduplicated out"
+        );
+        assert!(
+            !returned_ids.contains(&3),
+            "id=3 should be deduplicated out"
+        );
+        assert!(
+            !returned_ids.contains(&5),
+            "id=5 should be deduplicated out"
         );
 
         cleanup(&postgres_client, &schema_name).await?;

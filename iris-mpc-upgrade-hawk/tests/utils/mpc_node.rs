@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{
     modifications::{self, ModificationInput},
+    s3_deletions::get_aws_clients,
     GaloisRingSharedIrisPair, HawkConfigs,
 };
 use eyre::{bail, Result};
@@ -13,16 +14,20 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId},
-    genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
+    genesis::{
+        genesis_checkpoint::{download_genesis_checkpoint, get_latest_checkpoint_state},
+        state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
+    },
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
+    utils::s3_checkpoint::delete_graph,
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use tokio::task::JoinSet;
 
 // these constants were copied from genesis because genesis requires using an Aby3Store while the tests use a PlainTextStore
-mod constants {
+pub mod constants {
     /// Domain for persistent state store entry for last indexed id
     pub const STATE_DOMAIN: &str = "genesis";
     // Key for persistent state store entry for last indexed iris id
@@ -89,6 +94,85 @@ impl MpcNodes {
             });
         }
         join_set.join_all().await;
+    }
+
+    /// Deletes the genesis graph checkpoint from the CPU store for a specific party.
+    /// This simulates a scenario where one node loses its checkpoint, testing the
+    /// graph rollback and recovery functionality when a minority party is missing its
+    /// checkpoint but the majority still have a valid one.
+    pub async fn delete_checkpoint_for_party(&self, party_id: usize) -> Result<()> {
+        self.nodes[party_id].delete_cpu_checkpoint().await
+    }
+
+    /// Asserts that the S3 checkpoint graphs match the expected graphs for all nodes.
+    pub async fn assert_s3_checkpoint_graphs(
+        &self,
+        configs: &HawkConfigs,
+        expected_graphs: &BothEyes<GraphMem<PlaintextVectorRef>>,
+    ) -> Result<()> {
+        for (i, (node, config)) in self.nodes.iter().zip(configs.iter()).enumerate() {
+            let aws_clients = get_aws_clients(config).await?;
+            let checkpoint_state = get_latest_checkpoint_state(&node.cpu_stores.graph)
+                .await?
+                .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
+            let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> = download_genesis_checkpoint(
+                &aws_clients.s3_client,
+                &config.graph_checkpoint_bucket_name,
+                &checkpoint_state,
+            )
+            .await?;
+
+            assert_eq!(
+                s3_graphs[0], expected_graphs[0],
+                "Left graph mismatch for node {}",
+                i
+            );
+            assert_eq!(
+                s3_graphs[1], expected_graphs[1],
+                "Right graph mismatch for node {}",
+                i
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Cleans up all S3 checkpoints for all nodes.
+    /// This should be called during test teardown to prevent leftover checkpoints
+    /// from interfering with subsequent test runs.
+    pub async fn cleanup_s3_checkpoints(&self, configs: &HawkConfigs) -> Result<()> {
+        for (node, config) in self.nodes.iter().zip(configs.iter()) {
+            let checkpoints = node
+                .cpu_stores
+                .graph
+                .get_genesis_graph_checkpoints()
+                .await?;
+            if checkpoints.is_empty() {
+                continue;
+            }
+
+            let aws_clients = get_aws_clients(config).await?;
+            let bucket = &config.graph_checkpoint_bucket_name;
+
+            for checkpoint in checkpoints {
+                tracing::info!(
+                    "Teardown: deleting S3 checkpoint: bucket={}, key={}",
+                    bucket,
+                    checkpoint.s3_key
+                );
+                if let Err(e) =
+                    delete_graph(&aws_clients.s3_client, bucket, &checkpoint.s3_key).await
+                {
+                    tracing::warn!(
+                        "Failed to delete S3 checkpoint {}: {:?}",
+                        checkpoint.s3_key,
+                        e
+                    );
+                    // Continue deleting other checkpoints even if one fails
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -178,10 +262,71 @@ impl MpcNode {
         Ok(())
     }
 
+    /// Insert additional irises into the CPU iris store and update the persistent state
+    /// to indicate those irises were indexed. This simulates a scenario where the CPU
+    /// database thinks it indexed more irises than what's in the S3 checkpoint.
+    pub async fn insert_extra_irises_into_cpu_store(
+        &self,
+        starting_id: usize,
+        count: usize,
+    ) -> Result<()> {
+        use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+
+        let dummy_code = vec![0u16; IRIS_CODE_LENGTH];
+        let dummy_mask = vec![0u16; MASK_CODE_LENGTH];
+
+        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<IrisVectorId>) = (1..=count)
+            .map(|i| {
+                let iris_id = starting_id + i;
+                (
+                    StoredIrisRef {
+                        id: iris_id as i64,
+                        left_code: &dummy_code,
+                        left_mask: &dummy_mask,
+                        right_code: &dummy_code,
+                        right_mask: &dummy_mask,
+                    },
+                    IrisVectorId::new(iris_id as u32, 500),
+                )
+            })
+            .collect();
+
+        let graph_tx = self.cpu_stores.graph.tx().await?;
+        let mut tx = graph_tx.tx;
+
+        self.cpu_stores
+            .iris
+            .insert_copy_irises(&mut tx, &vector_ids, &irises)
+            .await?;
+
+        let new_last_indexed_id = (starting_id + count) as u32;
+        GraphStore::<PlaintextStore>::set_persistent_state(
+            &mut tx,
+            constants::STATE_DOMAIN,
+            constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
+            &new_last_indexed_id,
+        )
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Deletes the most recent  genesis graph checkpoint from this node's CPU store only.
+    pub async fn delete_cpu_checkpoint(&self) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM genesis_graph_checkpoint 
+         WHERE id = (SELECT id FROM genesis_graph_checkpoint ORDER BY id DESC LIMIT 1)",
+        )
+        .execute(self.cpu_stores.graph.pool())
+        .await?;
+        Ok(())
+    }
+
     async fn clear_all_tables(&self) -> Result<()> {
         for stores in [&self.gpu_stores, &self.cpu_stores] {
             // delete irises
-            stores.iris.rollback(0).await?;
+            stores.iris.delete_irises_after_id(0).await?;
 
             let mut graph_tx = stores.graph.tx().await?;
 
@@ -205,6 +350,11 @@ impl MpcNode {
             // clear persistent state
             unset_last_indexed_iris_id(&mut tx).await?;
             unset_last_indexed_modification_id(&mut tx).await?;
+
+            // clear genesis graph checkpoint table
+            sqlx::query("DELETE FROM genesis_graph_checkpoint")
+                .execute(&mut *tx)
+                .await?;
 
             tx.commit().await?;
         }
@@ -261,8 +411,6 @@ pub struct DbAssertions {
     pub num_modifications: Option<usize>,
     pub last_indexed_iris_id: Option<IrisSerialId>,
     pub last_indexed_modification_id: Option<i64>,
-    pub layer_0_size: Option<usize>,
-    pub hnsw_graphs: Option<BothEyes<GraphMem<PlaintextVectorRef>>>,
 }
 
 impl DbAssertions {
@@ -292,16 +440,6 @@ impl DbAssertions {
 
     pub fn assert_last_indexed_modification_id(mut self, id: i64) -> Self {
         self.last_indexed_modification_id = Some(id);
-        self
-    }
-
-    pub fn assert_hnsw_layer_0_size(mut self, size: usize) -> Self {
-        self.layer_0_size = Some(size);
-        self
-    }
-
-    pub fn assert_hnsw_graphs(mut self, graphs: BothEyes<GraphMem<PlaintextVectorRef>>) -> Self {
-        self.hnsw_graphs = Some(graphs);
         self
     }
 
@@ -346,40 +484,6 @@ impl DbAssertions {
                 store_last_indexed_modification_id,
                 last_indexed_modification_id
             );
-        }
-
-        if self.layer_0_size.is_some() || self.hnsw_graphs.is_some() {
-            let store_graph_left = {
-                let mut graph_tx = stores.graph.tx().await.unwrap();
-                graph_tx
-                    .with_graph(StoreId::Left)
-                    .load_to_mem(stores.graph.pool(), 2)
-                    .await
-            }
-            .expect("Could not load left graph");
-
-            let store_graph_right = {
-                let mut graph_tx = stores.graph.tx().await.unwrap();
-                graph_tx
-                    .with_graph(StoreId::Right)
-                    .load_to_mem(stores.graph.pool(), 2)
-                    .await
-            }
-            .expect("Could not load right graph");
-
-            if let Some(layer_0_size) = self.layer_0_size {
-                let store_layer_0_size_left =
-                    store_graph_left.get_layers().first().unwrap().links.len();
-                let store_layer_0_size_right =
-                    store_graph_right.get_layers().first().unwrap().links.len();
-                assert_eq!(store_layer_0_size_left, layer_0_size);
-                assert_eq!(store_layer_0_size_right, layer_0_size);
-            }
-
-            if let Some(hnsw_graphs) = &self.hnsw_graphs {
-                assert_eq!(store_graph_left, hnsw_graphs[0]);
-                assert_eq!(store_graph_right, hnsw_graphs[1]);
-            }
         }
 
         Ok(())

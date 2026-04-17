@@ -1,0 +1,234 @@
+use std::{fmt::Display, str::FromStr, time::Instant};
+
+use aws_sdk_s3::Client as S3Client;
+use eyre::{bail, eyre, Result};
+use iris_mpc_common::IrisSerialId;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
+    hnsw::{
+        graph::{
+            graph_store::{self, GenesisGraphCheckpointRow, GraphPg},
+            layered_graph::GraphMem,
+        },
+        vector_store::Ref,
+        VectorStore,
+    },
+    utils::s3_checkpoint::*,
+};
+
+/// Metadata stored in genesis_graph_checkpoint table for graph checkpoints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisCheckpointState {
+    /// S3 key where the checkpoint is stored
+    pub s3_key: String,
+    /// Last iris serial ID included in this checkpoint
+    pub last_indexed_iris_id: IrisSerialId,
+    /// Last modification ID included in this checkpoint
+    pub last_indexed_modification_id: i64,
+    /// BLAKE3 hash of the checkpoint data for integrity verification
+    pub blake3_hash: String,
+}
+
+impl TryFrom<GenesisGraphCheckpointRow> for GenesisCheckpointState {
+    type Error = eyre::Error;
+    fn try_from(value: GenesisGraphCheckpointRow) -> Result<Self, Self::Error> {
+        let last_indexed_iris_id: IrisSerialId =
+            value.last_indexed_iris_id.try_into().map_err(|_| {
+                eyre!(
+                    "Invalid last_indexed_iris_id for checkpoint: {}",
+                    value.last_indexed_iris_id
+                )
+            })?;
+
+        Ok(Self {
+            s3_key: value.s3_key,
+            last_indexed_iris_id,
+            last_indexed_modification_id: value.last_indexed_modification_id,
+            blake3_hash: value.blake3_hash,
+        })
+    }
+}
+
+/// Creates an S3 graph checkpoint.
+pub async fn upload_genesis_checkpoint(
+    bucket: &str,
+    party_id: usize,
+    graph_mem: &BothEyes<GraphRef>,
+    s3_client: &S3Client,
+    last_indexed_iris_id: IrisSerialId,
+    last_indexed_modification_id: i64,
+) -> Result<GenesisCheckpointState> {
+    let start = Instant::now();
+    tracing::info!(
+        "Creating S3 graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}",
+        last_indexed_iris_id,
+        last_indexed_modification_id
+    );
+
+    let left_graph = graph_mem[LEFT].read().await;
+    let right_graph = graph_mem[RIGHT].read().await;
+    let data = serialize_both_eyes(&[&*left_graph, &*right_graph])?;
+    let data_len = data.len();
+    tracing::info!(
+        "Serialized graphs to {} bytes in {:?}",
+        data_len,
+        start.elapsed()
+    );
+
+    // Compute BLAKE3 hash before upload
+    let hash_start = Instant::now();
+    let blake3_hash = blake3::hash(&data).to_hex().to_string();
+    tracing::info!(
+        "Computed BLAKE3 hash: {} in {:?}",
+        blake3_hash,
+        hash_start.elapsed()
+    );
+
+    let s3_key = format!(
+        "genesis/{}/checkpoint_{}.bin",
+        party_id,
+        uuid::Uuid::new_v4()
+    );
+
+    upload_graph(s3_client, bucket, &s3_key, data).await?;
+
+    let checkpoint = GenesisCheckpointState {
+        s3_key: s3_key.clone(),
+        last_indexed_iris_id,
+        last_indexed_modification_id,
+        blake3_hash,
+    };
+
+    tracing::info!(
+        "S3 graph checkpoint created successfully: s3_key={}, duration={:?}",
+        s3_key,
+        start.elapsed()
+    );
+
+    metrics::histogram!("genesis_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
+    metrics::gauge!("genesis_checkpoint_size_bytes").set(data_len as f64);
+    metrics::gauge!("genesis_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
+    metrics::gauge!("genesis_checkpoint_last_modification_id")
+        .set(last_indexed_modification_id as f64);
+
+    Ok(checkpoint)
+}
+
+pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
+    s3_client: &S3Client,
+    bucket: &str,
+    state: &GenesisCheckpointState,
+) -> Result<BothEyes<GraphMem<T>>> {
+    let start = Instant::now();
+
+    let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
+
+    metrics::histogram!("genesis_checkpoint_download_duration")
+        .record(start.elapsed().as_secs_f64());
+
+    // Verify BLAKE3 hash after download
+    let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();
+    if computed_hash != state.blake3_hash {
+        return Err(eyre!(
+            "BLAKE3 hash mismatch: expected {}, got {}",
+            state.blake3_hash,
+            computed_hash
+        ));
+    }
+    tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
+
+    let graphs = deserialize_both_eyes(&binary_graph)?;
+    Ok(graphs)
+}
+
+/// Gets the latest checkpoint from genesis_graph_checkpoint table.
+pub async fn get_latest_checkpoint_state<V: VectorStore>(
+    graph_store: &GraphPg<V>,
+) -> Result<Option<GenesisCheckpointState>> {
+    tracing::info!("Retrieving latest graph checkpoint metadata from genesis_graph_checkpoint");
+
+    let row = graph_store.get_latest_genesis_graph_checkpoint().await?;
+    let metadata: Option<GenesisCheckpointState> = row.map(|row| row.try_into()).transpose()?;
+
+    if let Some(m) = &metadata {
+        tracing::info!(
+            "Found existing checkpoint: s3_key={}, last_indexed_iris_id={}",
+            m.s3_key,
+            m.last_indexed_iris_id,
+        );
+    } else {
+        tracing::info!("No existing checkpoint found");
+    }
+
+    Ok(metadata)
+}
+
+/// stores checkpoint in genesis_graph_checkpoint table.
+pub async fn save_checkpoint_state<V: VectorStore>(
+    tx: graph_store::GraphTx<'_, V>,
+    state: &GenesisCheckpointState,
+) -> Result<()> {
+    tracing::info!(
+        "Persisting graph checkpoint state: s3_key={}, last_indexed_iris_id={}",
+        state.s3_key,
+        state.last_indexed_iris_id,
+    );
+
+    let mut tx = tx.tx;
+    GraphPg::<V>::insert_genesis_graph_checkpoint(
+        &mut tx,
+        &state.s3_key,
+        i64::from(state.last_indexed_iris_id),
+        state.last_indexed_modification_id,
+        &state.blake3_hash,
+    )
+    .await
+    .map_err(|e| eyre!("Failed to persist checkpoint state: {:?}", e))?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// DANGER: requires that the 3 parties have
+/// reached consensus on a common checkpoint.
+/// if the parties have not reached agreement, then
+/// calling this function could make rollback impossible
+pub async fn cleanup_checkpoints<V: VectorStore>(
+    bucket: &str,
+    s3_client: &S3Client,
+    current_state: &GenesisCheckpointState,
+    graph_store: &GraphPg<V>,
+) -> Result<()> {
+    tracing::info!("cleaning up old genesis graph checkpoints");
+    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    if !all_checkpoints
+        .iter()
+        .any(|x| x.s3_key == current_state.s3_key)
+    {
+        bail!("current checkpoint not found in the db");
+    }
+    for checkpoint in all_checkpoints
+        .into_iter()
+        .filter(|x| x.s3_key != current_state.s3_key)
+    {
+        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
+        graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_blake3_hash_to_string() {
+        let bytes = b"ABCDEFGHIJKLMNOP";
+        let hash1 = blake3::hash(bytes);
+        let hash_str1 = hash1.to_hex().to_string();
+
+        // now go back
+        let hash2 = blake3::Hash::from_hex(hash_str1.as_bytes()).unwrap();
+        assert_eq!(hash1.as_bytes(), hash2.as_bytes());
+    }
+}
