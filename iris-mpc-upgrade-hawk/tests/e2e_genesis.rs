@@ -121,3 +121,29 @@ fn test_hnsw_genesis_106() -> Result<()> {
     run_test!(106, 1)?;
     Ok(())
 }
+
+/// HNSW-Genesis-107
+///   Tests the iris ID rollback functionality.
+///   against:
+///     a known set of 100 Iris shares;
+///     simulates a scenario where the CPU database has more irises than the S3 checkpoint;
+///   asserts:
+///     rollback removes extra irises from CPU database;
+///     genesis continues to index correctly after rollback;
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_hnsw_genesis_107() -> Result<()> {
+    use workflows::genesis_107::Test;
+    run_test!(107, 1)?;
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_hnsw_genesis_108() -> Result<()> {
+    use workflows::genesis_108::Test;
+    run_test!(108, 1)?;
+    Ok(())
+}

@@ -1,6 +1,6 @@
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
     BatchSyncSharedState, TaskMonitor,
 };
 use aws_config::retry::RetryConfig;
@@ -10,6 +10,7 @@ use aws_sdk_s3::{
     primitives::ByteStream,
     Client as S3Client,
 };
+use axum::{routing::get, Router};
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 
@@ -24,8 +25,8 @@ use iris_mpc_cpu::{
     execution::hawk_main::{
         BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
     },
-    genesis::genesis_checkpoint::*,
     genesis::{
+        genesis_checkpoint::*,
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
@@ -53,8 +54,20 @@ use tokio::{
     time::timeout,
 };
 
+mod graph_checkpoint;
+pub use graph_checkpoint::{
+    find_common_checkpoint, get_common_checkpoint, get_most_recent_checkpoints,
+    get_others_graph_hashes, maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint,
+};
+
 pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
+
+// types for the graph checkpoint sync
+pub type Blake3Hash = [u8; 32];
+pub type GraphCheckpointHashes = [Blake3Hash; 10];
+const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
+const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
@@ -319,25 +332,6 @@ async fn exec_setup(
         max_modification_id,
     ));
 
-    // ensure that the graph loaded from the checkpoint is consistent with the other peers.
-    // sync_state will be compared among peers. if the checkpoint matches the sync state
-    // and the sync states all match, then everything is consistent.
-    let graph_checkpoint = get_latest_checkpoint_state(&graph_store_arc).await?;
-    if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        let checkpoint_state = (
-            graph_checkpoint.last_indexed_iris_id,
-            graph_checkpoint.last_indexed_modification_id,
-        );
-        let db_state = (last_indexed_id, last_indexed_modification_id);
-        if checkpoint_state != db_state {
-            bail!(
-                "graph checkpoint does not match the database state. checkpoint: {:?}, db: {:?}",
-                checkpoint_state,
-                db_state
-            );
-        }
-    }
-
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
         args.batch_size_config,
@@ -351,6 +345,8 @@ async fn exec_setup(
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
 
+    let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store_arc).await?;
+
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
@@ -358,21 +354,24 @@ async fn exec_setup(
         .server_coordination
         .clone()
         .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
+
     // Coordinator: await server start.
-    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+    let extra_routes = Router::new().route(
+        GRAPH_CHECKPOINT_ROUTE,
+        get(move || async move { serde_json::to_string(&hashes).unwrap() }),
+    );
+
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         server_coord_config,
         &mut task_monitor_bg,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state),
+        Some(extra_routes),
     )
     .await;
     task_monitor_bg.check_tasks();
 
-    let server_coord_config = &config
-        .server_coordination
-        .clone()
-        .unwrap_or_else(|| panic!("Server coordination config is required for server operation"));
     // Coordinator: await network state = UNREADY.
     wait_for_others_unready(server_coord_config, &verified_peers, &my_uuid).await?;
     log_info(String::from("Network status = UNREADY"));
@@ -392,6 +391,46 @@ async fn exec_setup(
         bail!("Shutdown")
     }
 
+    let graph_checkpoint = get_common_checkpoint(config, hashes, graph_checkpoints).await?;
+    log_info(format!("common graph checkpoint: {:?}", graph_checkpoint));
+
+    // don't roll anything back if the checkpoint can not be found
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        if !s3_key_exists(
+            &checkpoint_s3_client,
+            &config.graph_checkpoint_bucket_name,
+            &cp.s3_key,
+        )
+        .await?
+        {
+            bail!(
+                "s3 checkpoint not found on AWS: s3://{}/{}",
+                config.graph_checkpoint_bucket_name,
+                cp.s3_key
+            );
+        }
+    }
+
+    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
+    hawk_actor.sync_peers().await?;
+
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        maybe_rollback_iris_db(
+            cp,
+            &graph_store_arc,
+            &iris_store,
+            last_indexed_id,
+            last_indexed_modification_id,
+        )
+        .await?;
+    }
+
+    // update if the iris db was rolled back
+    let last_indexed_id = graph_checkpoint
+        .as_ref()
+        .map(|x| x.last_indexed_iris_id)
+        .unwrap_or(last_indexed_id);
+
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
         config,
@@ -404,9 +443,27 @@ async fn exec_setup(
     .await?;
     log_info(String::from("Store consistency checks OK"));
 
-    // if the peers are consistent and stores are conistent, then clean up s3 checkpoints
+    // Initialise HNSW graph from previously indexed.
+    init_graph_from_stores(
+        config,
+        &config.graph_checkpoint_bucket_name,
+        &iris_store,
+        graph_store_arc.clone(),
+        &mut hawk_actor,
+        &checkpoint_s3_client,
+        Arc::clone(&shutdown_handler),
+        args.max_indexation_id as usize,
+        graph_checkpoint.clone(),
+    )
+    .await?;
+    task_monitor_bg.check_tasks();
+    log_info(String::from("HNSW graph initialised from store"));
+
+    // do this after obtaining the graph from s3. that way if for some reason it isn't there,
+    // the old checkpoints could still be found;
+    // if the peers are consistent and stores are consistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
-        if let Err(e) = cleanup_old_checkpoints(
+        if let Err(e) = cleanup_checkpoints(
             &config.graph_checkpoint_bucket_name,
             &checkpoint_s3_client,
             graph_checkpoint,
@@ -417,24 +474,6 @@ async fn exec_setup(
             log_warn(format!("failed to clean up old s3 checkpoints: {e}"));
         }
     }
-
-    // Initialise HNSW graph from previously indexed.
-    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
-    hawk_actor.sync_peers().await?;
-    init_graph_from_stores(
-        config,
-        &config.graph_checkpoint_bucket_name,
-        &iris_store,
-        graph_store_arc.clone(),
-        &mut hawk_actor,
-        &checkpoint_s3_client,
-        Arc::clone(&shutdown_handler),
-        args.max_indexation_id as usize,
-        graph_checkpoint,
-    )
-    .await?;
-    task_monitor_bg.check_tasks();
-    log_info(String::from("HNSW graph initialised from store"));
 
     // Coordinator: await network state = ready.
     set_node_ready(is_ready_flag);
@@ -1005,7 +1044,9 @@ pub async fn exec_use_backup_as_source(
 
     // Step 2: Remove all iris data except that is larger than the last indexed id.
     now = Instant::now();
-    hnsw_iris_store.rollback(last_indexed_id as usize).await?;
+    hnsw_iris_store
+        .delete_irises_after_id(last_indexed_id as usize)
+        .await?;
     log_info(format!(
         "Removing all iris data except that larger than last indexed id: {}:: time {:?}s",
         last_indexed_id,
@@ -1156,6 +1197,33 @@ async fn verify_s3_checkpoint_access(
     }
 
     Ok(())
+}
+
+/// Checks whether a given key exists in an S3 bucket using a `HeadObject`
+/// request. Returns `true` if the key is present, `false` if it does not
+/// exist (HTTP 404 / `NoSuchKey`), or an error for any other failure.
+///
+/// # Arguments
+///
+/// * `s3_client` - Authenticated S3 client.
+/// * `bucket`    - Name of the S3 bucket to query.
+/// * `key`       - Object key to check for existence.
+async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Result<bool> {
+    match s3_client.head_object().bucket(bucket).key(key).send().await {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            // `head_object` returns a 404 when the key does not exist.
+            // The SDK surfaces this as a `NotFound` service error.
+            if e.as_service_error()
+                .map(|se| se.is_not_found())
+                .unwrap_or(false)
+            {
+                Ok(false)
+            } else {
+                Err(eyre!("S3 head_object failed for s3://{bucket}/{key}: {e}"))
+            }
+        }
+    }
 }
 
 /// Returns service clients used downstream.
@@ -1712,44 +1780,5 @@ async fn validate_consistency_of_stores(
         bail!(msg);
     }
 
-    Ok(())
-}
-
-/// Uploads a genesis checkpoint, sends the result, and synchronizes peers.
-#[allow(clippy::too_many_arguments)]
-async fn upload_and_sync_genesis_checkpoint(
-    checkpoint_bucket: &str,
-    party_id: usize,
-    imem_graph_stores: &Arc<BothEyes<GraphRef>>,
-    s3_client: &S3Client,
-    last_indexed_id: u32,
-    max_modification_indexed_id: i64,
-    tx_results: &Sender<JobResult>,
-    hawk_handle: &mut GenesisHawkHandle,
-) -> Result<()> {
-    let checkpoint_state = match upload_genesis_checkpoint(
-        checkpoint_bucket,
-        party_id,
-        imem_graph_stores,
-        s3_client,
-        last_indexed_id,
-        max_modification_indexed_id,
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            log_error(format!(
-                "failed to upload genesis checkpoint for last_indexed_id: {}: {}",
-                last_indexed_id, e
-            ));
-            bail!(e);
-        }
-    };
-
-    let (tx, done_rx) = oneshot::channel();
-    let result = JobResult::new_s3_checkpoint(checkpoint_state, tx);
-    tx_results.send(result).await?;
-    hawk_handle.sync_peers(false, Some(done_rx)).await?;
     Ok(())
 }

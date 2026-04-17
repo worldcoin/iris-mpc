@@ -225,7 +225,7 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(row)
     }
 
-    /// Returns all genesis graph checkpoints
+    /// Returns genesis graph checkpoints in descending order
     pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GenesisGraphCheckpointRow>> {
         let rows = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
             r#"
@@ -236,6 +236,7 @@ impl<V: VectorStore> GraphPg<V> {
                 last_indexed_modification_id,
                 blake3_hash
             FROM genesis_graph_checkpoint
+            ORDER BY id DESC
             "#,
         )
         .fetch_all(&self.pool)
