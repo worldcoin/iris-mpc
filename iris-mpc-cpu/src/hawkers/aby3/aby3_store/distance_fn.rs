@@ -161,7 +161,7 @@ impl DistanceMinimalRotation {
             .await?;
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
         store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .oblivious_min_distance_batch::<{ usize::MAX }>(transpose_from_flat(&distances))
             .await
     }
 
@@ -184,7 +184,7 @@ impl DistanceMinimalRotation {
             .await?;
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
         store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .oblivious_min_distance_batch::<{ usize::MAX }>(transpose_from_flat(&distances))
             .await
     }
 
@@ -222,7 +222,7 @@ impl DistanceMinimalRotation {
             let omin_start = std::time::Instant::now();
             phase_trace!("oblivious_min", "n_vectors" => vectors.len());
             let result = store
-                .oblivious_min_distance_batch(transpose_from_flat(&distances))
+                .oblivious_min_distance_batch::<{ usize::MAX }>(transpose_from_flat(&distances))
                 .await;
             metrics::histogram!("eval_distance_oblivious_min_duration")
                 .record(omin_start.elapsed().as_secs_f64());
@@ -270,7 +270,7 @@ impl DistanceMinimalRotation {
         // Process all items in single batched calls
         let distances = store.gr_to_lifted_distances(flattened_ds_and_ts).await?;
         let all_mins = store
-            .oblivious_min_distance_batch(transpose_from_flat(&distances))
+            .oblivious_min_distance_batch::<{ usize::MAX }>(transpose_from_flat(&distances))
             .await?;
 
         // Split results back into per-batch vectors

@@ -36,7 +36,6 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
-use static_assertions::const_assert;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Debug,
@@ -49,10 +48,6 @@ mod distance_fn;
 mod distance_ops;
 pub use distance_fn::DistanceFn;
 pub use distance_ops::{DistanceOps, FhdOps, NhdOps};
-
-/// The number of rotations at which to switch from binary tree to round-robin minimum algorithms.
-const MIN_ROUND_ROBIN_SIZE: usize = 1;
-const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 
 /// Iris to be searcher or inserted into the store.
 ///
@@ -243,14 +238,20 @@ where
     }
 
     /// Obliviously computes the minimum distance of a given distance array.
+    ///
+    /// `MIN_ROUND_ROBIN_SIZE` controls when to switch from the binary pair-min tree
+    /// to the round-robin algorithm: the tree reduces the input until
+    /// `res.len() <= MIN_ROUND_ROBIN_SIZE`, at which point round-robin finishes the job.
+    /// Setting it to `usize::MAX` skips the tree entirely.
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
-    pub async fn oblivious_min_distance(
+    pub async fn oblivious_min_distance<const MIN_ROUND_ROBIN_SIZE: usize>(
         &mut self,
         distances: &[DistanceShare<D::Ring>],
     ) -> Result<DistanceShare<D::Ring>>
     where
         VecShare<D::Ring>: Transpose64,
     {
+        const { assert!(MIN_ROUND_ROBIN_SIZE >= 1) };
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -360,14 +361,20 @@ where
     /// Obliviously computes the minimum distance for each batch of given distances of the same size.
     /// The input `distances` is a 2D matrix with dimensions: (rotations, batch).
     /// `distances[r][i]` corresponds to the rth rotation of the ith item of the batch.
+    ///
+    /// `MIN_ROUND_ROBIN_SIZE` controls when to switch from the binary pair-min tree
+    /// to the round-robin algorithm: the tree reduces the outer dimension until
+    /// `res.len() <= MIN_ROUND_ROBIN_SIZE`, at which point round-robin finishes the job.
+    /// Setting it to `usize::MAX` skips the tree entirely.
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
-    pub(crate) async fn oblivious_min_distance_batch(
+    pub(crate) async fn oblivious_min_distance_batch<const MIN_ROUND_ROBIN_SIZE: usize>(
         &mut self,
         distances: Vec<Vec<DistanceShare<D::Ring>>>,
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
         VecShare<D::Ring>: Transpose64,
     {
+        const { assert!(MIN_ROUND_ROBIN_SIZE >= 1) };
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -1146,7 +1153,7 @@ mod tests {
                         )
                     })
                     .collect_vec();
-                store_lock.oblivious_min_distance(&list).await
+                store_lock.oblivious_min_distance::<1>(&list).await
             });
         }
         let res = jobs
@@ -1287,7 +1294,7 @@ mod tests {
                             .collect_vec()
                     })
                     .collect_vec();
-                store_lock.oblivious_min_distance_batch(list).await
+                store_lock.oblivious_min_distance_batch::<1>(list).await
             });
         }
         let res = jobs
