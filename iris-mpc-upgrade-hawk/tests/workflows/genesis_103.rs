@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::join_runners;
+use crate::run_genesis;
 use crate::utils::{
     genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
     modifications::{
@@ -12,9 +13,7 @@ use crate::utils::{
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
-use tracing::{info_span, Instrument};
 
 pub struct Test {
     configs: HawkConfigs,
@@ -47,25 +46,7 @@ impl TestRun for Test {
         }
         join_runners!(join_set);
 
-        let genesis_args = DEFAULT_GENESIS_ARGS;
-        let mut join_set = JoinSet::new();
-        for (idx, span, config) in self
-            .configs
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(idx, config)| (idx, info_span!("genesis", idx = idx), config))
-        {
-            let args = genesis_args.clone();
-            join_set.spawn(async move {
-                let r = exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config)
-                    .instrument(span.clone())
-                    .await;
-                tracing::info!(genesis_id = idx, "exec_genesis returned {:?}", r);
-                r
-            });
-        }
-        join_runners!(join_set);
+        run_genesis!(self, DEFAULT_GENESIS_ARGS);
 
         Ok(())
     }

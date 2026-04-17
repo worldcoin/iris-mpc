@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::join_runners;
+use crate::run_genesis;
 use crate::utils::{
     genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
     mpc_node::{DbAssertions, MpcNode, MpcNodes},
@@ -8,9 +9,7 @@ use crate::utils::{
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
-use tracing::{info_span, Instrument};
 
 const NUM_EXTRA_IRISES: usize = 10;
 
@@ -36,26 +35,9 @@ impl TestRun for Test {
     // then run genesis again (which should trigger rollback functionality)
     async fn exec(&mut self) -> Result<()> {
         // Execute genesis - first run indexing up to 50
-        let genesis_args = DEFAULT_GENESIS_ARGS;
-        let mut join_set = JoinSet::new();
-        for (idx, span, config) in self
-            .configs
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(idx, config)| (idx, info_span!("genesis", idx = idx), config))
-        {
-            let mut args = genesis_args.clone();
-            args.max_indexation_id = 50;
-            join_set.spawn(async move {
-                let r = exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config)
-                    .instrument(span.clone())
-                    .await;
-                tracing::info!(genesis_id = idx, "exec_genesis returned {:?}", r);
-                r
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 50;
+        run_genesis!(self, args);
 
         // Insert 10 additional irises into the CPU database and update persistent state
         // This simulates a scenario where the CPU database thinks it indexed more irises
@@ -75,25 +57,9 @@ impl TestRun for Test {
         // 2. Delete extra irises from the CPU database
         // 3. Reset last_indexed_iris_id to 50
         // 4. Continue indexing normally from 51 to 100
-        let mut join_set = JoinSet::new();
-        for (idx, span, config) in self
-            .configs
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(idx, config)| (idx, info_span!("genesis", idx = idx), config))
-        {
-            let mut args = genesis_args.clone();
-            args.max_indexation_id = 100;
-            join_set.spawn(async move {
-                let r = exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config)
-                    .instrument(span.clone())
-                    .await;
-                tracing::info!(genesis_id = idx, "exec_genesis returned {:?}", r);
-                r
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 100;
+        run_genesis!(self, args);
 
         Ok(())
     }
