@@ -43,7 +43,7 @@ use tracing::instrument;
 
 mod distance_fn;
 mod distance_ops;
-pub use distance_fn::DistanceFn;
+pub use distance_fn::{DistanceFn, DistanceMode};
 pub use distance_ops::{DistanceOps, FhdOps, NhdOps};
 
 /// The number of rotations at which to switch from binary tree to round-robin minimum algorithms.
@@ -104,12 +104,12 @@ where
         registry: VectorIdRegistryRef,
         session: Session,
         workers: W,
-        distance_fn: DistanceFn,
+        distance_mode: DistanceMode,
     ) -> Self {
         Self {
             registry,
             session,
-            distance_fn,
+            distance_fn: DistanceFn::new(distance_mode),
             workers,
             _phantom: std::marker::PhantomData,
         }

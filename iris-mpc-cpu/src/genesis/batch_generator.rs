@@ -416,7 +416,7 @@ fn log_info(msg: String) {
 mod tests {
     use super::*;
     use crate::{
-        execution::hawk_main::{iris_worker::LocalIrisWorkerPool, StoreId},
+        execution::hawk_main::{iris_worker::LocalIrisWorkerPool, StoreId, HAWK_DISTANCE_MODE},
         hawkers::{
             aby3::test_utils::setup_aby3_shared_iris_stores_with_preloaded_db,
             plaintext_store::PlaintextStore,
@@ -506,8 +506,9 @@ mod tests {
                 .to_registry()
                 .to_arc()
         });
-        let worker_pools =
-            [LEFT, RIGHT].map(|side| LocalIrisWorkerPool::new_local(iris_stores[side].clone()));
+        let worker_pools = [LEFT, RIGHT].map(|side| {
+            LocalIrisWorkerPool::new_local(iris_stores[side].clone(), HAWK_DISTANCE_MODE)
+        });
         (registries, worker_pools, SIZE_OF_IRIS_DB)
     }
 

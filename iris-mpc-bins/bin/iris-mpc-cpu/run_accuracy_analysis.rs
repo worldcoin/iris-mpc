@@ -25,11 +25,11 @@ struct Cli {
 
 async fn run_with_ops<D: DistanceOps>(config: Config, rng: &mut StdRng) -> Result<()> {
     let mut store: PlaintextStore<D> =
-        load_iris_store(config.irises, rng, config.analysis.get_distance_fn()?).await?;
+        load_iris_store(config.irises, rng, config.analysis.get_distance_mode()?).await?;
     println!(
-        "Loaded {} iris codes into PlaintextStore with distance_fn = {:?}.",
+        "Loaded {} iris codes into PlaintextStore with distance_mode = {:?}.",
         store.len(),
-        store.distance_fn
+        store.distance_mode
     );
 
     println!("Initializing graph...");
