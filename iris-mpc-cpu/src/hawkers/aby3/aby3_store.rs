@@ -116,32 +116,16 @@ where
     }
 
     /// Compute pairwise distances between pairs of cached queries.
-    ///
-    /// Uses the store's configured distance function (Simple or MinRotation)
-    /// and the worker pool's `compute_pairwise_distances` method.
-    /// Convention: first QuerySpec = preprocessed, second QueryId = raw (original).
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
     ) -> Result<Vec<DistanceShare<D::Ring>>> {
-        use crate::execution::hawk_main::iris_worker::DistanceMode;
-
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let mode = match self.distance_fn {
-            DistanceFn::Simple => DistanceMode::Simple,
-            DistanceFn::MinRotation => DistanceMode::RotationAware,
-        };
-        let ds_and_ts = self.workers.compute_pairwise_distances(pairs, mode).await?;
-        let distances = self.gr_to_lifted_distances(ds_and_ts).await?;
-        match self.distance_fn {
-            DistanceFn::Simple => Ok(distances),
-            DistanceFn::MinRotation => {
-                self.oblivious_min_distance_batch(distance_fn::transpose_from_flat(&distances))
-                    .await
-            }
-        }
+
+        self.distance_fn.eval_pairwise_distances(self, pairs).await
     }
 
     /// Converts distances from u16 secret shares to Ring-typed distance shares.
