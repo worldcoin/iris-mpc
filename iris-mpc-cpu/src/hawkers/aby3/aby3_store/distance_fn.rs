@@ -1,5 +1,5 @@
 use crate::execution::hawk_main::{
-    iris_worker::{DistanceMode, IrisWorkerPool},
+    iris_worker::{DistanceMode, IrisWorkerPool, QueryId, QuerySpec},
     HAWK_MIN_DIST_ROTATIONS,
 };
 use crate::phase_trace;
@@ -23,6 +23,36 @@ use serde::{Deserialize, Serialize};
 use DistanceFn::{MinRotation, Simple};
 
 impl DistanceFn {
+    /// Compute pairwise distances between pairs of cached queries using the
+    /// worker pool's `compute_pairwise_distances` method.
+    pub async fn eval_pairwise_distances<D: DistanceOps, W: IrisWorkerPool>(
+        self,
+        store: &mut Aby3Store<D, W>,
+        pairs: Vec<Option<(QuerySpec, QueryId)>>,
+    ) -> Result<Vec<DistanceShare<D::Ring>>>
+    where
+        Standard: Distribution<D::Ring>,
+        VecShare<D::Ring>: Transpose64,
+    {
+        let mode = match self {
+            Simple => DistanceMode::Simple,
+            MinRotation => DistanceMode::RotationAware,
+        };
+        let ds_and_ts = store
+            .workers
+            .compute_pairwise_distances(pairs, mode)
+            .await?;
+        let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
+        match self {
+            Simple => Ok(distances),
+            MinRotation => {
+                store
+                    .oblivious_min_distance_batch(transpose_from_flat(&distances))
+                    .await
+            }
+        }
+    }
+
     pub async fn eval_distance_pairs<D: DistanceOps, W: IrisWorkerPool>(
         self,
         store: &mut Aby3Store<D, W>,
