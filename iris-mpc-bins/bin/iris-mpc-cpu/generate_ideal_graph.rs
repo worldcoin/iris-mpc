@@ -86,7 +86,7 @@ async fn run_sanity_check<D: DistanceOps>(
         .expect("last layer should have at least one key");
 
     let mut store = PlaintextStore::<D>::new();
-    store.distance_fn = echoice.distance_fn();
+    store.distance_mode = echoice.distance_mode();
 
     for (i, iris) in irises.into_iter().enumerate() {
         store.insert_with_id(IrisVectorId::from_serial_id((i as u32) + 1), Arc::new(iris));
@@ -118,7 +118,7 @@ async fn run_sanity_check<D: DistanceOps>(
                     let d = D::plaintext_distance(
                         &sample_iris,
                         store.storage.get_vector(n).unwrap(),
-                        store.distance_fn,
+                        store.distance_mode,
                     );
                     matches!(D::plaintext_ordering(&d, &kth_dist), Ordering::Greater)
                 })

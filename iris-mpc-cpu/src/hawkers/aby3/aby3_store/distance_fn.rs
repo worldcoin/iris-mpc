@@ -1,5 +1,5 @@
 use crate::execution::hawk_main::{
-    iris_worker::{DistanceMode, IrisWorkerPool, QueryId, QuerySpec},
+    iris_worker::{IrisWorkerPool, QueryId, QuerySpec},
     HAWK_MIN_DIST_ROTATIONS,
 };
 use crate::phase_trace;
@@ -11,16 +11,33 @@ use ampc_secret_sharing::shares::{
 use clap::ValueEnum;
 use eyre::Result;
 use rand_distr::{Distribution, Standard};
+use serde::{Deserialize, Serialize};
 
+/// The two distance computation strategies.
+///
+/// This is the lightweight source-of-truth enum shared by every component
+/// that cares about the simple-vs-min-rotation distinction.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
-pub enum DistanceFn {
+pub enum DistanceMode {
     Simple,
     MinRotation,
 }
 
-use serde::{Deserialize, Serialize};
-use DistanceFn::{MinRotation, Simple};
+/// MPC distance orchestration: calls the worker pool for dot products,
+/// lifts to ring distances, and (for `MinRotation`) applies oblivious-min.
+#[derive(Debug, Clone, Copy)]
+pub struct DistanceFn {
+    pub mode: DistanceMode,
+}
+
+impl DistanceFn {
+    pub const fn new(mode: DistanceMode) -> Self {
+        Self { mode }
+    }
+}
+
+use DistanceMode::{MinRotation, Simple};
 
 impl DistanceFn {
     /// Compute pairwise distances between pairs of cached queries using the
@@ -34,16 +51,9 @@ impl DistanceFn {
         Standard: Distribution<D::Ring>,
         VecShare<D::Ring>: Transpose64,
     {
-        let mode = match self {
-            Simple => DistanceMode::Simple,
-            MinRotation => DistanceMode::RotationAware,
-        };
-        let ds_and_ts = store
-            .workers
-            .compute_pairwise_distances(pairs, mode)
-            .await?;
+        let ds_and_ts = store.workers.compute_pairwise_distances(pairs).await?;
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        match self {
+        match self.mode {
             Simple => Ok(distances),
             MinRotation => {
                 store
@@ -62,15 +72,11 @@ impl DistanceFn {
         Standard: Distribution<D::Ring>,
         VecShare<D::Ring>: Transpose64,
     {
-        let mode = match self {
-            Simple => DistanceMode::Simple,
-            MinRotation => DistanceMode::RotationAware,
-        };
         let batches = pairs.iter().map(|(q, v)| (*q, vec![*v])).collect();
-        let ds_and_ts_batches = store.workers.compute_dot_products(batches, mode).await?;
+        let ds_and_ts_batches = store.workers.compute_dot_products(batches).await?;
         let ds_and_ts: Vec<_> = ds_and_ts_batches.into_iter().flatten().collect();
         let distances = store.gr_to_lifted_distances(ds_and_ts).await?;
-        match self {
+        match self.mode {
             Simple => Ok(distances),
             MinRotation => {
                 store
@@ -90,15 +96,11 @@ impl DistanceFn {
         Standard: Distribution<D::Ring>,
         VecShare<D::Ring>: Transpose64,
     {
-        let mode = match self {
-            Simple => DistanceMode::Simple,
-            MinRotation => DistanceMode::RotationAware,
-        };
         let dot_start = std::time::Instant::now();
         phase_trace!("dot_product", "n_vectors" => vectors.len());
         let ds_and_ts_batches = store
             .workers
-            .compute_dot_products(vec![(*query, vectors.to_vec())], mode)
+            .compute_dot_products(vec![(*query, vectors.to_vec())])
             .await?;
         let ds_and_ts = ds_and_ts_batches.into_iter().next().unwrap_or_default();
         metrics::histogram!("eval_distance_dot_product_duration")
@@ -110,7 +112,7 @@ impl DistanceFn {
         metrics::histogram!("eval_distance_lift_duration")
             .record(lift_start.elapsed().as_secs_f64());
 
-        match self {
+        match self.mode {
             Simple => Ok(distances),
             MinRotation => {
                 let omin_start = std::time::Instant::now();
@@ -141,19 +143,11 @@ impl DistanceFn {
             return Ok(vec![]);
         }
 
-        let mode = match self {
-            Simple => DistanceMode::Simple,
-            MinRotation => DistanceMode::RotationAware,
-        };
-
         let batch_sizes: Vec<usize> = batches.iter().map(|(_, vids)| vids.len()).collect();
 
         let trait_batches: Vec<_> = batches;
 
-        let ds_and_ts_batches = store
-            .workers
-            .compute_dot_products(trait_batches, mode)
-            .await?;
+        let ds_and_ts_batches = store.workers.compute_dot_products(trait_batches).await?;
 
         // Flatten all batches into a single lift call to minimize MPC round-trips.
         let flattened_ds_and_ts: Vec<_> = ds_and_ts_batches.into_iter().flatten().collect();
@@ -164,7 +158,7 @@ impl DistanceFn {
 
         let distances = store.gr_to_lifted_distances(flattened_ds_and_ts).await?;
 
-        match self {
+        match self.mode {
             Simple => {
                 // Split results back into per-batch vectors.
                 let mut results = Vec::with_capacity(batch_sizes.len());

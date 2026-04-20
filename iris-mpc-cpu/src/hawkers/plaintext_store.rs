@@ -1,8 +1,8 @@
 use crate::{
     hawkers::{
-        aby3::aby3_store::{DistanceFn, DistanceOps, FhdOps},
+        aby3::aby3_store::{DistanceMode, DistanceOps, FhdOps},
         shared_irises::{SharedIrises, SharedIrisesRef},
-        TEST_DISTANCE_FN,
+        TEST_DISTANCE_MODE,
     },
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
@@ -38,7 +38,7 @@ pub type PlaintextSharedIrisesRef = SharedIrisesRef<PlaintextStoredIris>;
 #[serde(bound(serialize = "", deserialize = ""))]
 pub struct PlaintextStore<D = FhdOps> {
     pub storage: PlaintextSharedIrises,
-    pub distance_fn: DistanceFn,
+    pub distance_mode: DistanceMode,
     #[serde(skip)]
     _phantom: PhantomData<D>,
 }
@@ -58,7 +58,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
     pub fn with_storage(storage: PlaintextSharedIrises) -> Self {
         Self {
             storage,
-            distance_fn: TEST_DISTANCE_FN,
+            distance_mode: TEST_DISTANCE_MODE,
             _phantom: PhantomData,
         }
     }
@@ -164,7 +164,7 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
                 vector.serial_id()
             )
         })?;
-        let distance = D::plaintext_distance(vector_code, query, self.distance_fn);
+        let distance = D::plaintext_distance(vector_code, query, self.distance_mode);
         Ok(distance)
     }
 
@@ -221,7 +221,7 @@ impl<D: DistanceOps> VectorStoreMut for PlaintextStore<D> {
 #[derive(Debug)]
 pub struct SharedPlaintextStore<D = FhdOps> {
     pub storage: PlaintextSharedIrisesRef,
-    pub distance_fn: DistanceFn,
+    pub distance_mode: DistanceMode,
     _phantom: PhantomData<D>,
 }
 
@@ -230,7 +230,7 @@ impl<D> Clone for SharedPlaintextStore<D> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
-            distance_fn: self.distance_fn,
+            distance_mode: self.distance_mode,
             _phantom: PhantomData,
         }
     }
@@ -240,7 +240,7 @@ impl<D: DistanceOps> Default for SharedPlaintextStore<D> {
     fn default() -> Self {
         Self {
             storage: SharedIrises::default().to_arc(),
-            distance_fn: TEST_DISTANCE_FN,
+            distance_mode: TEST_DISTANCE_MODE,
             _phantom: PhantomData,
         }
     }
@@ -264,7 +264,7 @@ impl<D: DistanceOps> From<PlaintextStore<D>> for SharedPlaintextStore<D> {
     fn from(value: PlaintextStore<D>) -> Self {
         Self {
             storage: value.storage.to_arc(),
-            distance_fn: value.distance_fn,
+            distance_mode: value.distance_mode,
             _phantom: PhantomData,
         }
     }
@@ -310,7 +310,7 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
             .collect::<Result<Vec<_>>>()?;
         Ok(vector_codes
             .into_iter()
-            .map(|v| D::plaintext_distance(v, query, self.distance_fn))
+            .map(|v| D::plaintext_distance(v, query, self.distance_mode))
             .collect())
     }
 
@@ -402,7 +402,7 @@ mod tests {
         let d23 = store.eval_distance(&db[2], &ids[3]).await?;
         let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
-        let distance = |a, b| FhdOps::plaintext_distance(a, b, TEST_DISTANCE_FN);
+        let distance = |a, b| FhdOps::plaintext_distance(a, b, TEST_DISTANCE_MODE);
 
         assert_eq!(
             store.less_than(&d01, &d23).await?,

@@ -16,7 +16,7 @@ use crate::{
     hawkers::{
         aby3::aby3_store::{Aby3SharedIrisesRef, Aby3VectorRef},
         plaintext_store::{PlaintextStore, PlaintextVectorRef},
-        TEST_DISTANCE_FN,
+        TEST_DISTANCE_MODE,
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::mpc::NetworkType,
@@ -77,13 +77,14 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .into_iter()
         .zip(storages.into_iter())
         .map(|(session, storage)| {
-            let workers = LocalIrisWorkerPool::new_local(storage.clone());
+            let workers =
+                LocalIrisWorkerPool::new_local(storage.clone(), plain_store.distance_mode);
             let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 registry,
                 session,
                 workers,
-                plain_store.distance_fn,
+                plain_store.distance_mode,
             ))))
         })
         .collect()
@@ -96,13 +97,13 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .into_iter()
         .map(|session| {
             let storage = Aby3Store::<FhdOps>::new_storage(None).to_arc();
-            let workers = LocalIrisWorkerPool::new_local(storage.clone());
+            let workers = LocalIrisWorkerPool::new_local(storage.clone(), TEST_DISTANCE_MODE);
             let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 registry,
                 session,
                 workers,
-                TEST_DISTANCE_FN,
+                TEST_DISTANCE_MODE,
             ))))
         })
         .collect()

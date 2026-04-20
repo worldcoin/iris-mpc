@@ -1,5 +1,6 @@
 use crate::{
     execution::hawk_main::HAWK_MIN_DIST_ROTATIONS,
+    hawkers::aby3::aby3_store::DistanceMode,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
         ops::{
@@ -502,13 +503,6 @@ impl Default for QueryId {
     }
 }
 
-/// Distance computation mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DistanceMode {
-    Simple,
-    RotationAware,
-}
-
 /// Identifies a specific preprocessed variant of a cached query.
 ///
 /// Each cached iris produces 31 rotations × 2 orientations (normal + mirrored).
@@ -592,7 +586,6 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     fn compute_dot_products(
         &self,
         batches: Vec<(QuerySpec, Vec<VectorId>)>,
-        mode: DistanceMode,
     ) -> impl Future<Output = Result<Vec<Vec<RingElement<u16>>>>> + Send;
 
     /// Fetch iris data from the worker's store by vector ID.
@@ -626,7 +619,6 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     fn compute_pairwise_distances(
         &self,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
-        mode: DistanceMode,
     ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send;
 
     /// Evict cached queries, freeing memory.
@@ -690,6 +682,7 @@ pub struct LocalIrisWorkerPool {
     inner: IrisPoolHandle,
     query_cache: Arc<RwLock<HashMap<QueryId, CachedQuery>>>,
     iris_store: SharedIrisesRef<ArcIris>,
+    mode: DistanceMode,
 }
 
 impl Debug for LocalIrisWorkerPool {
@@ -701,19 +694,24 @@ impl Debug for LocalIrisWorkerPool {
 }
 
 impl LocalIrisWorkerPool {
-    pub fn new(inner: IrisPoolHandle, iris_store: SharedIrisesRef<ArcIris>) -> Self {
+    pub fn new(
+        inner: IrisPoolHandle,
+        iris_store: SharedIrisesRef<ArcIris>,
+        mode: DistanceMode,
+    ) -> Self {
         Self {
             inner,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
+            mode,
         }
     }
 
     /// Create a local worker pool for shard 0 with NUMA pinning.
     /// Standard construction for tests, benchmarks, and single-node tools.
-    pub fn new_local(iris_store: SharedIrisesRef<ArcIris>) -> Self {
+    pub fn new_local(iris_store: SharedIrisesRef<ArcIris>, mode: DistanceMode) -> Self {
         let pool = init_workers(0, iris_store.clone(), true);
-        Self::new(pool, iris_store)
+        Self::new(pool, iris_store, mode)
     }
 
     /// Access the underlying `IrisPoolHandle` for operations not on the trait
@@ -832,10 +830,10 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
     fn compute_dot_products(
         &self,
         batches: Vec<(QuerySpec, Vec<VectorId>)>,
-        mode: DistanceMode,
     ) -> impl Future<Output = Result<Vec<Vec<RingElement<u16>>>>> + Send {
         let query_cache = self.query_cache.clone();
         let mut inner = self.inner.clone();
+        let mode = self.mode;
         async move {
             // Look up the correct preprocessed rotation for each batch
             let iris_batches: Vec<(ArcIris, Vec<VectorId>)> = {
@@ -865,7 +863,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     }
                     Ok(results)
                 }
-                DistanceMode::RotationAware => {
+                DistanceMode::MinRotation => {
                     inner
                         .rotation_aware_dot_product_multibatch(iris_batches)
                         .await
@@ -924,10 +922,10 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
     fn compute_pairwise_distances(
         &self,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
-        mode: DistanceMode,
     ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send {
         let query_cache = self.query_cache.clone();
         let inner = self.inner.clone();
+        let mode = self.mode;
         async move {
             // Resolve pairs to ArcIris pairs.
             // First = preprocessed rotation, second = raw (original) iris.
@@ -963,7 +961,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             };
             match mode {
                 DistanceMode::Simple => inner.galois_ring_pairwise_distances(iris_pairs).await,
-                DistanceMode::RotationAware => {
+                DistanceMode::MinRotation => {
                     inner.rotation_aware_pairwise_distances(iris_pairs).await
                 }
             }
