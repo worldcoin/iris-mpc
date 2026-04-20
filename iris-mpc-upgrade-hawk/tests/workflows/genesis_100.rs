@@ -1,15 +1,11 @@
-use crate::{
-    join_runners,
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-        mpc_node::{DbAssertions, MpcNodes},
-        plaintext_genesis::PlaintextGenesis,
-        HawkConfigs, TestRun, TestRunContextInfo,
-    },
+use crate::run_genesis;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+    mpc_node::{DbAssertions, MpcNodes},
+    plaintext_genesis::PlaintextGenesis,
+    HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
-use tokio::task::JoinSet;
 
 pub struct Test {
     configs: HawkConfigs,
@@ -26,15 +22,7 @@ impl Test {
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<()> {
         // Execute genesis
-        let genesis_args = DEFAULT_GENESIS_ARGS;
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let args = genesis_args.clone();
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        run_genesis!(self, DEFAULT_GENESIS_ARGS);
 
         Ok(())
     }
@@ -75,5 +63,10 @@ impl TestRun for Test {
 
     async fn setup_assert(&mut self) -> Result<()> {
         genesis_runner::base_genesis_e2e_init_assertions(&self.configs, 0).await
+    }
+
+    async fn teardown(&mut self) -> Result<()> {
+        let nodes = MpcNodes::new(&self.configs).await;
+        nodes.cleanup_s3_checkpoints(&self.configs).await
     }
 }

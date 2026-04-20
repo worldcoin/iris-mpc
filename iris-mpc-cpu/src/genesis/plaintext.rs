@@ -31,7 +31,7 @@ use crate::{
         insert::{self, InsertPlanV},
         BothEyes, STORE_IDS,
     },
-    genesis::{BatchSize, BatchSizeConfig},
+    genesis::{BatchSize, BatchSizeConfig, PruningMode},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
@@ -112,6 +112,9 @@ pub struct GenesisArgs {
     pub batch_size_config: BatchSizeConfig,
 
     pub checkpoint_frequency: usize,
+
+    // Controls which older checkpoints are pruned after loading a common checkpoint.
+    pub pruning_mode: PruningMode,
 }
 
 impl Default for GenesisArgs {
@@ -120,6 +123,7 @@ impl Default for GenesisArgs {
             max_indexation_id: 0,
             batch_size_config: BatchSizeConfig::Static { size: 1 },
             checkpoint_frequency: 100_000,
+            pruning_mode: PruningMode::OlderNonArchival,
         }
     }
 }

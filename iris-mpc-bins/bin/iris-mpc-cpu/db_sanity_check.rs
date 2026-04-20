@@ -926,6 +926,7 @@ async fn load_checkpoint_state(
             })?,
             last_indexed_modification_id: row.last_indexed_modification_id,
             blake3_hash: row.blake3_hash,
+            is_archival: row.is_archival,
         })
     } else {
         rpt!(rpt, "  Auto-discovering latest checkpoint from DB...");

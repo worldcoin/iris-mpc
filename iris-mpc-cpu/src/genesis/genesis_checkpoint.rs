@@ -1,7 +1,7 @@
 use std::{fmt::Display, str::FromStr, time::Instant};
 
 use aws_sdk_s3::Client as S3Client;
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use iris_mpc_common::IrisSerialId;
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,7 @@ use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
     hnsw::{
         graph::{
-            graph_store::{self, GraphPg},
+            graph_store::{self, GenesisGraphCheckpointRow, GraphPg},
             layered_graph::GraphMem,
         },
         vector_store::Ref,
@@ -17,6 +17,43 @@ use crate::{
     },
     utils::s3_checkpoint::*,
 };
+
+/// Controls which older checkpoints are deleted during cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PruningMode {
+    /// Do not prune any checkpoints.
+    None,
+    /// Prune older checkpoints that are not marked archival (default).
+    OlderNonArchival,
+    /// Prune all older checkpoints regardless of archival flag.
+    AllOlder,
+}
+
+impl Display for PruningMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PruningMode::None => write!(f, "none"),
+            PruningMode::OlderNonArchival => write!(f, "older-non-archival"),
+            PruningMode::AllOlder => write!(f, "all-older"),
+        }
+    }
+}
+
+impl FromStr for PruningMode {
+    type Err = eyre::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "none" => Ok(PruningMode::None),
+            "older-non-archival" => Ok(PruningMode::OlderNonArchival),
+            "all-older" => Ok(PruningMode::AllOlder),
+            _ => Err(eyre!(
+                "invalid pruning mode: '{}', expected one of: none, older-non-archival, all-older",
+                s
+            )),
+        }
+    }
+}
 
 /// Metadata stored in genesis_graph_checkpoint table for graph checkpoints
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +66,29 @@ pub struct GenesisCheckpointState {
     pub last_indexed_modification_id: i64,
     /// BLAKE3 hash of the checkpoint data for integrity verification
     pub blake3_hash: String,
+    /// Whether this checkpoint is archival (i.e. should be retained by pruning).
+    pub is_archival: bool,
+}
+
+impl TryFrom<GenesisGraphCheckpointRow> for GenesisCheckpointState {
+    type Error = eyre::Error;
+    fn try_from(value: GenesisGraphCheckpointRow) -> Result<Self, Self::Error> {
+        let last_indexed_iris_id: IrisSerialId =
+            value.last_indexed_iris_id.try_into().map_err(|_| {
+                eyre!(
+                    "Invalid last_indexed_iris_id for checkpoint: {}",
+                    value.last_indexed_iris_id
+                )
+            })?;
+
+        Ok(Self {
+            s3_key: value.s3_key,
+            last_indexed_iris_id,
+            last_indexed_modification_id: value.last_indexed_modification_id,
+            blake3_hash: value.blake3_hash,
+            is_archival: value.is_archival,
+        })
+    }
 }
 
 /// Creates an S3 graph checkpoint.
@@ -39,12 +99,14 @@ pub async fn upload_genesis_checkpoint(
     s3_client: &S3Client,
     last_indexed_iris_id: IrisSerialId,
     last_indexed_modification_id: i64,
+    is_archival: bool,
 ) -> Result<GenesisCheckpointState> {
     let start = Instant::now();
     tracing::info!(
-        "Creating S3 graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}",
+        "Creating S3 graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}, is_archival={}",
         last_indexed_iris_id,
-        last_indexed_modification_id
+        last_indexed_modification_id,
+        is_archival,
     );
 
     let left_graph = graph_mem[LEFT].read().await;
@@ -79,11 +141,13 @@ pub async fn upload_genesis_checkpoint(
         last_indexed_iris_id,
         last_indexed_modification_id,
         blake3_hash,
+        is_archival,
     };
 
     tracing::info!(
-        "S3 graph checkpoint created successfully: s3_key={}, duration={:?}",
+        "S3 graph checkpoint created successfully: s3_key={}, is_archival={}, duration={:?}",
         s3_key,
+        is_archival,
         start.elapsed()
     );
 
@@ -130,29 +194,14 @@ pub async fn get_latest_checkpoint_state<V: VectorStore>(
     tracing::info!("Retrieving latest graph checkpoint metadata from genesis_graph_checkpoint");
 
     let row = graph_store.get_latest_genesis_graph_checkpoint().await?;
-    let metadata = row
-        .map(|row| -> Result<GenesisCheckpointState> {
-            let iris_id: IrisSerialId = row.last_indexed_iris_id.try_into().map_err(|_| {
-                eyre!(
-                    "Invalid last_indexed_iris_id for checkpoint: {}",
-                    row.last_indexed_iris_id
-                )
-            })?;
-
-            Ok(GenesisCheckpointState {
-                s3_key: row.s3_key,
-                last_indexed_iris_id: iris_id,
-                last_indexed_modification_id: row.last_indexed_modification_id,
-                blake3_hash: row.blake3_hash,
-            })
-        })
-        .transpose()?;
+    let metadata: Option<GenesisCheckpointState> = row.map(|row| row.try_into()).transpose()?;
 
     if let Some(m) = &metadata {
         tracing::info!(
-            "Found existing checkpoint: s3_key={}, last_indexed_iris_id={}",
+            "Found existing checkpoint: s3_key={}, last_indexed_iris_id={}, is_archival={}",
             m.s3_key,
             m.last_indexed_iris_id,
+            m.is_archival,
         );
     } else {
         tracing::info!("No existing checkpoint found");
@@ -167,9 +216,10 @@ pub async fn save_checkpoint_state<V: VectorStore>(
     state: &GenesisCheckpointState,
 ) -> Result<()> {
     tracing::info!(
-        "Persisting graph checkpoint state: s3_key={}, last_indexed_iris_id={}",
+        "Persisting graph checkpoint state: s3_key={}, last_indexed_iris_id={}, is_archival={}",
         state.s3_key,
         state.last_indexed_iris_id,
+        state.is_archival,
     );
 
     let mut tx = tx.tx;
@@ -179,6 +229,7 @@ pub async fn save_checkpoint_state<V: VectorStore>(
         i64::from(state.last_indexed_iris_id),
         state.last_indexed_modification_id,
         &state.blake3_hash,
+        state.is_archival,
     )
     .await
     .map_err(|e| eyre!("Failed to persist checkpoint state: {:?}", e))?;
@@ -186,22 +237,90 @@ pub async fn save_checkpoint_state<V: VectorStore>(
     Ok(())
 }
 
-pub async fn cleanup_old_checkpoints<V: VectorStore>(
+/// DANGER: requires that the 3 parties have
+/// reached consensus on a common checkpoint.
+/// if the parties have not reached agreement, then
+/// calling this function could make rollback impossible
+pub async fn cleanup_checkpoints<V: VectorStore>(
     bucket: &str,
     s3_client: &S3Client,
     current_state: &GenesisCheckpointState,
     graph_store: &GraphPg<V>,
+    pruning_mode: PruningMode,
 ) -> Result<()> {
-    let mut all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    // descending order
-    all_checkpoints.sort_by(|a, b| b.id.cmp(&a.id));
-    // keep the most 2 recent in case one party fails to upload. this allows
-    // all parties to roll back to a common state.
-    let old_checkpoints = all_checkpoints.into_iter().skip(2);
-    for checkpoint in old_checkpoints {
-        assert!(checkpoint.s3_key != current_state.s3_key);
+    tracing::info!(
+        "cleaning up old genesis graph checkpoints (mode: {})",
+        pruning_mode
+    );
+
+    if pruning_mode == PruningMode::None {
+        tracing::info!("pruning mode is 'none', skipping cleanup");
+        return Ok(());
+    }
+
+    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    if !all_checkpoints
+        .iter()
+        .any(|x| x.s3_key == current_state.s3_key)
+    {
+        bail!("current checkpoint not found in the db");
+    }
+
+    for checkpoint in all_checkpoints
+        .into_iter()
+        .filter(|x| x.s3_key != current_state.s3_key)
+        .filter(|x| match pruning_mode {
+            PruningMode::AllOlder => true,
+            PruningMode::OlderNonArchival => !x.is_archival,
+            PruningMode::None => unreachable!(),
+        })
+    {
         delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_blake3_hash_to_string() {
+        let bytes = b"ABCDEFGHIJKLMNOP";
+        let hash1 = blake3::hash(bytes);
+        let hash_str1 = hash1.to_hex().to_string();
+
+        // now go back
+        let hash2 = blake3::Hash::from_hex(hash_str1.as_bytes()).unwrap();
+        assert_eq!(hash1.as_bytes(), hash2.as_bytes());
+    }
+
+    #[test]
+    fn test_pruning_mode_from_str() {
+        use super::PruningMode;
+        use std::str::FromStr;
+
+        assert_eq!(PruningMode::from_str("none").unwrap(), PruningMode::None);
+        assert_eq!(
+            PruningMode::from_str("older-non-archival").unwrap(),
+            PruningMode::OlderNonArchival
+        );
+        assert_eq!(
+            PruningMode::from_str("all-older").unwrap(),
+            PruningMode::AllOlder
+        );
+        assert!(PruningMode::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_pruning_mode_display() {
+        use super::PruningMode;
+
+        assert_eq!(PruningMode::None.to_string(), "none");
+        assert_eq!(
+            PruningMode::OlderNonArchival.to_string(),
+            "older-non-archival"
+        );
+        assert_eq!(PruningMode::AllOlder.to_string(), "all-older");
+    }
 }
