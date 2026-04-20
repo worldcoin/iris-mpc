@@ -185,8 +185,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
         return Err(eyre::eyre!("Database size too large, max. 100,000"));
     }
     let generation_comment =
-        "Please, generate benchmark data with cargo run --release -p iris-mpc-bins --bin \
-                                  generate-benchmark-data.";
+        "Please, generate benchmark data with cargo run --release --bin construct-graph-ptxt -- --job-spec resources/iris-mpc-cpu/construct_graph_ptxt_benchmark.toml. from iris-mpc-bins.";
     let plaintext_vector_store = PlaintextStore::from_ndjson_file(
         Path::new(plainstore_file),
         Some(database_size),

@@ -229,10 +229,10 @@ If you are using `cargo test` with non-standard library paths, you might need [a
 ## CPU Genesis
 1. Create the generated data (this will be generated to the `iris-mpc-bins/data` folder)
 
-- note you can change the value of the benchmark data to generate less data (100 is required for local stack) in `iris-mpc-bins/bin/iris-mpc-cpu/generate_benchmark_data.rs`
+- note you can change the value of the benchmark data to generate less data (100 is required for local stack) in `iris-mpc-bins/resources/iris-mpc-cpu/construct_graph_ptxt_benchmark.toml`
 
 ```bash
-cargo run -p iris-mpc-bins --bin generate-benchmark-data
+cd iris-mpc-bins && cargo run --bin construct-graph-ptxt -- --job-spec resources/iris-mpc-cpu/construct_graph_ptxt_benchmark.toml
 ```
 
 2. Build the hawk genesis binary
