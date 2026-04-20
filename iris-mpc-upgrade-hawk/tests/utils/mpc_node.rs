@@ -109,7 +109,7 @@ impl MpcNodes {
             let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> = download_genesis_checkpoint(
                 &aws_clients.s3_client,
                 &config.graph_checkpoint_bucket_name,
-                checkpoint_state,
+                &checkpoint_state,
             )
             .await?;
 

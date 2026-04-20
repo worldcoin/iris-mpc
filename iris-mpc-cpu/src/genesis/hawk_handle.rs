@@ -21,12 +21,18 @@ use std::{
         atomic::{AtomicU8, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{self, mpsc, oneshot};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "Hawk-Handle";
+
+/// Maximum time to wait for all parties to complete the sync_peers exchange.
+/// This bounds the retry loop inside `HawkSession::sync_peers` so that
+/// persistent failures (crashed peer, broken connection) surface as errors
+/// rather than hanging indefinitely.
+const SYNC_PEERS_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
@@ -357,7 +363,12 @@ impl Handle {
                 sync_status,
             } => {
                 let _ = done_tx;
-                let mismatched = HawkSession::sync_peers(shutdown, sync_status, sessions).await?;
+                let mismatched = tokio::time::timeout(
+                    SYNC_PEERS_TIMEOUT,
+                    HawkSession::sync_peers(shutdown, sync_status, sessions),
+                )
+                .await
+                .map_err(|_| eyre!("sync_peers timed out after {SYNC_PEERS_TIMEOUT:?}"))??;
                 Ok((done_rx, JobResult::Sync { mismatched }))
             }
         }
