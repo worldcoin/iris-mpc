@@ -87,8 +87,8 @@ pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) 
 
     // Workers write party-specific dummy sentinels at the deleted VectorIds.
     futures::try_join!(
-        hawk_actor.worker_pools[LEFT].delete_irises(hawk_actor.party_id, del_ids.clone()),
-        hawk_actor.worker_pools[RIGHT].delete_irises(hawk_actor.party_id, del_ids.clone()),
+        hawk_actor.worker_pools[LEFT].delete_irises(del_ids.clone()),
+        hawk_actor.worker_pools[RIGHT].delete_irises(del_ids.clone()),
     )?;
 
     // Update registries (metadata only — version bump + checksum).

@@ -3,7 +3,7 @@ use ampc_actor_utils::protocol::{fhd_ops::cross_compare, ops::batch_signed_lift_
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
-    execution::{hawk_main::iris_worker::IrisWorkerPool, local::LocalRuntime},
+    execution::{hawk_main::iris_worker::cache_iris, local::LocalRuntime},
     hawkers::{
         aby3::{
             aby3_store::FhdOps,
@@ -252,11 +252,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let player_index = get_owner_index(&vector_store).await.unwrap();
                             let iris = Arc::new(raw_query[player_index].clone());
-                            let query = vector_store
-                                .lock()
-                                .await
-                                .workers
-                                .cache_iris(iris)
+                            let query = cache_iris(&vector_store.lock().await.workers, iris)
                                 .await
                                 .unwrap();
                             let searcher = searcher.clone();
@@ -303,11 +299,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let player_index = get_owner_index(&vector_store).await.unwrap();
                             let iris = Arc::new(raw_query[player_index].clone());
-                            let query = vector_store
-                                .lock()
-                                .await
-                                .workers
-                                .cache_iris(iris)
+                            let query = cache_iris(&vector_store.lock().await.workers, iris)
                                 .await
                                 .unwrap();
                             let searcher = searcher.clone();

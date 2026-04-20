@@ -531,6 +531,7 @@ impl HawkActor {
                 workers_handle[side].clone(),
                 iris_store[side].clone(),
                 HAWK_DISTANCE_MODE,
+                args.party_index,
             )
         });
 

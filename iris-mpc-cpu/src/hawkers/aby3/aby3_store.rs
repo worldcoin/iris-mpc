@@ -169,9 +169,10 @@ where
         vector: &<Self as VectorStore>::VectorRef,
     ) -> Result<Aby3Query> {
         let irises = self.workers.fetch_irises(vec![*vector]).await?;
-        self.workers
-            .cache_iris(irises.into_iter().next().unwrap())
-            .await
+        let iris = irises.into_iter().next().unwrap();
+        let qid = QueryId::new();
+        self.workers.cache_queries(vec![(qid, iris)]).await?;
+        Ok(QuerySpec::new(qid))
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
@@ -754,7 +755,10 @@ mod tests {
     use super::*;
     use crate::{
         execution::{
-            hawk_main::{iris_worker::IrisWorkerPool, scheduler::parallelize},
+            hawk_main::{
+                iris_worker::{cache_iris, cache_irises},
+                scheduler::parallelize,
+            },
             session::SessionHandles,
         },
         hawkers::{
@@ -793,7 +797,7 @@ mod tests {
             let irises: Vec<ArcIris> = (0..database_size)
                 .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
-            let queries = store.lock().await.workers.cache_irises(irises).await?;
+            let queries = cache_irises(&store.lock().await.workers, irises).await?;
             let mut rng = rng.clone();
             let store = store.clone();
             jobs.spawn(async move {
@@ -992,7 +996,7 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for iris in player_irises.iter() {
-                let query = store_lock.workers.cache_iris(iris.clone()).await?;
+                let query = cache_iris(&store_lock.workers, iris.clone()).await?;
                 let vid = store_lock.insert(&query).await;
                 player_inserts.push(vid);
             }
@@ -1365,7 +1369,7 @@ mod tests {
                 .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
             let mut store_lock = store.lock().await;
-            let player_preps = store_lock.workers.cache_irises(irises).await?;
+            let player_preps = cache_irises(&store_lock.workers, irises).await?;
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
             for p in player_preps.iter() {

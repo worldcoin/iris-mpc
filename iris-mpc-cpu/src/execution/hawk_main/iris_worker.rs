@@ -628,39 +628,32 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     fn evict_queries(&self, query_ids: Vec<QueryId>) -> impl Future<Output = Result<()>> + Send;
 
     /// Delete irises by replacing them with party-specific dummy sentinels
-    /// that produce max-distance in dot products.
-    fn delete_irises(
-        &self,
-        party_id: usize,
-        ids: Vec<VectorId>,
-    ) -> impl Future<Output = Result<()>> + Send;
+    /// that produce max-distance in dot products. The party_id is a config
+    /// field on the implementer.
+    fn delete_irises(&self, ids: Vec<VectorId>) -> impl Future<Output = Result<()>> + Send;
+}
 
-    /// Cache a single iris and return a query handle (center rotation, non-mirrored).
-    fn cache_iris(&self, iris: ArcIris) -> impl Future<Output = Result<QuerySpec>> + Send {
-        let this = self.clone();
-        async move {
-            let qid = QueryId::new();
-            this.cache_queries(vec![(qid, iris)]).await?;
-            Ok(QuerySpec::new(qid))
-        }
-    }
+/// Cache a single iris and return a query handle (center rotation, non-mirrored).
+/// Helper used by tests, benches, and example bins — production code paths
+/// manage the cache lifecycle explicitly via `cache_queries` / `evict_queries`.
+pub async fn cache_iris<W: IrisWorkerPool>(pool: &W, iris: ArcIris) -> Result<QuerySpec> {
+    let qid = QueryId::new();
+    pool.cache_queries(vec![(qid, iris)]).await?;
+    Ok(QuerySpec::new(qid))
+}
 
-    /// Cache multiple irises and return query handles in input order.
-    fn cache_irises(
-        &self,
-        irises: Vec<ArcIris>,
-    ) -> impl Future<Output = Result<Vec<QuerySpec>>> + Send {
-        let this = self.clone();
-        async move {
-            let pairs: Vec<_> = irises
-                .into_iter()
-                .map(|iris| (QueryId::new(), iris))
-                .collect();
-            let specs: Vec<_> = pairs.iter().map(|(qid, _)| QuerySpec::new(*qid)).collect();
-            this.cache_queries(pairs).await?;
-            Ok(specs)
-        }
-    }
+/// Cache multiple irises and return query handles in input order.
+pub async fn cache_irises<W: IrisWorkerPool>(
+    pool: &W,
+    irises: Vec<ArcIris>,
+) -> Result<Vec<QuerySpec>> {
+    let pairs: Vec<_> = irises
+        .into_iter()
+        .map(|iris| (QueryId::new(), iris))
+        .collect();
+    let specs: Vec<_> = pairs.iter().map(|(qid, _)| QuerySpec::new(*qid)).collect();
+    pool.cache_queries(pairs).await?;
+    Ok(specs)
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +679,7 @@ pub struct LocalIrisWorkerPool {
     query_cache: Arc<RwLock<HashMap<QueryId, CachedQuery>>>,
     iris_store: SharedIrisesRef<ArcIris>,
     mode: DistanceMode,
+    party_id: usize,
 }
 
 impl Debug for LocalIrisWorkerPool {
@@ -701,20 +695,26 @@ impl LocalIrisWorkerPool {
         inner: IrisPoolHandle,
         iris_store: SharedIrisesRef<ArcIris>,
         mode: DistanceMode,
+        party_id: usize,
     ) -> Self {
         Self {
             inner,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
             mode,
+            party_id,
         }
     }
 
     /// Create a local worker pool for shard 0 with NUMA pinning.
     /// Standard construction for tests, benchmarks, and single-node tools.
-    pub fn new_local(iris_store: SharedIrisesRef<ArcIris>, mode: DistanceMode) -> Self {
+    pub fn new_local(
+        iris_store: SharedIrisesRef<ArcIris>,
+        mode: DistanceMode,
+        party_id: usize,
+    ) -> Self {
         let pool = init_workers(0, iris_store.clone(), true);
-        Self::new(pool, iris_store, mode)
+        Self::new(pool, iris_store, mode, party_id)
     }
 
     /// Access the underlying `IrisPoolHandle` for operations not on the trait
@@ -980,12 +980,9 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         }
     }
 
-    fn delete_irises(
-        &self,
-        party_id: usize,
-        ids: Vec<VectorId>,
-    ) -> impl Future<Output = Result<()>> + Send {
+    fn delete_irises(&self, ids: Vec<VectorId>) -> impl Future<Output = Result<()>> + Send {
         let iris_store = self.iris_store.clone();
+        let party_id = self.party_id;
         async move {
             let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
             let mut store = iris_store.data.write().await;

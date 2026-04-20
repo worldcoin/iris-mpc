@@ -507,7 +507,7 @@ mod tests {
                 .to_arc()
         });
         let worker_pools = [LEFT, RIGHT].map(|side| {
-            LocalIrisWorkerPool::new_local(iris_stores[side].clone(), HAWK_DISTANCE_MODE)
+            LocalIrisWorkerPool::new_local(iris_stores[side].clone(), HAWK_DISTANCE_MODE, PARTY_ID)
         });
         (registries, worker_pools, SIZE_OF_IRIS_DB)
     }
