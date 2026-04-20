@@ -9,7 +9,6 @@ repository.workspace = true
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
-ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-trait = "~0.1"
 aws-sdk-s3.workspace = true

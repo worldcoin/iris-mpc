@@ -9,7 +9,9 @@ use crate::{
         scheduler::{collect_results, parallelize},
         InsertPlanV, StoreId,
     },
-    hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef},
+    hawkers::aby3::aby3_store::{
+        Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, DistanceOps,
+    },
     hnsw::{
         graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
         searcher::{NeighborhoodMode, UpdateEntryPoint},
@@ -222,7 +224,10 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
 ///   larger `ef` to get a more complete picture.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_and_extend(
-    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    edges: &[(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )],
     query: &Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
@@ -279,7 +284,10 @@ async fn classify_and_extend(
 /// Batch-classify edges at both the match threshold and the anon stats threshold.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_edges(
-    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    edges: &[(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )],
     aby3_store: &mut Aby3Store<HawkOps>,
     ef: usize,
     saturation_margin: usize,

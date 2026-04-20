@@ -2,9 +2,10 @@ use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
+    galois_engine::degree4::preprocess_iris_message_shares,
     helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
     iris_db::db::IrisDB,
-    job::{BatchMetadata, BatchQuery},
+    job::{BatchMetadata, BatchQuery, IrisQueryBatchEntries},
 };
 use itertools::Itertools;
 use rand::SeedableRng;
@@ -22,7 +23,6 @@ use crate::{
 use super::{
     iris_worker::{IrisWorkerPool, QueryId},
     scheduler::parallelize,
-    tests::batch_of_party,
     HawkActor, HawkArgs, HawkRequest, VectorId, LEFT, RIGHT,
 };
 
@@ -144,7 +144,6 @@ pub fn make_request_intra_match(batch_size: usize, party_id: usize) -> HawkReque
 /// (same-eye raw iris from Normal queries), mirror detection should find a match.
 /// With the buggy "b" operand (wrong eye from Mirror queries), it won't.
 pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> HawkRequest {
-    use crate::execution::hawk_main::tests::receive_batch_shares;
     let iris_rng = &mut AesRng::seed_from_u64(1337);
 
     let db = IrisDB::new_random_rng(batch_size * 2, iris_rng);
@@ -209,7 +208,7 @@ pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> Ha
     HawkRequest::from(my_batch)
 }
 
-fn make_batch(batch_size: usize) -> BatchQuery {
+pub fn make_batch(batch_size: usize) -> BatchQuery {
     let mut batch = BatchQuery {
         luc_lookback_records: 2,
         ..BatchQuery::default()
@@ -227,12 +226,66 @@ fn make_batch(batch_size: usize) -> BatchQuery {
     batch
 }
 
+pub fn receive_batch_shares(
+    shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+) -> [IrisQueryBatchEntries; 4] {
+    let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
+    for (share, mirrored_share) in shares_with_mirror.iter().cloned() {
+        let one = preprocess_iris_message_shares(
+            share.code,
+            share.mask,
+            mirrored_share.code,
+            mirrored_share.mask,
+        )
+        .unwrap();
+        out[0].code.push(one.code);
+        out[0].mask.push(one.mask);
+        out[1].code.extend(one.code_rotated);
+        out[1].mask.extend(one.mask_rotated);
+        out[2].code.extend(one.code_interpolated.clone());
+        out[2].mask.extend(one.mask_interpolated.clone());
+        out[3].code.extend(one.code_mirrored);
+        out[3].mask.extend(one.mask_mirrored);
+    }
+    out
+}
+
+pub fn batch_of_party(
+    batch: &BatchQuery,
+    shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+) -> BatchQuery {
+    let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
+        receive_batch_shares(shares_with_mirror);
+    let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
+        receive_batch_shares(shares_with_mirror);
+
+    BatchQuery {
+        left_iris_requests,
+        right_iris_requests,
+        left_iris_rotated_requests,
+        right_iris_rotated_requests,
+        left_iris_interpolated_requests,
+        right_iris_interpolated_requests,
+        left_mirrored_iris_interpolated_requests,
+        right_mirrored_iris_interpolated_requests,
+        ..batch.clone()
+    }
+}
+
 // TODO: Simplify and optimize share generation.
-fn make_iris_share(
+pub fn make_iris_share(
     batch_size: usize,
     party_id: usize,
 ) -> Vec<(GaloisRingSharedIris, GaloisRingSharedIris)> {
-    let iris_rng = &mut AesRng::seed_from_u64(1337);
+    make_iris_share_with_seed(batch_size, party_id, 1337)
+}
+
+pub fn make_iris_share_with_seed(
+    batch_size: usize,
+    party_id: usize,
+    seed: u64,
+) -> Vec<(GaloisRingSharedIris, GaloisRingSharedIris)> {
+    let iris_rng = &mut AesRng::seed_from_u64(seed);
 
     // Generate: iris_id -> share
     IrisDB::new_random_rng(batch_size, iris_rng)
