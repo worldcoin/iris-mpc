@@ -5,7 +5,7 @@ use crate::{
     utils::{
         genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
         modifications::{
-            self, ModificationInput,
+            ModificationInput,
             ModificationType::{Reauth, ResetUpdate, Uniqueness},
         },
         mpc_node::{DbAssertions, MpcNode, MpcNodes},
@@ -68,9 +68,10 @@ impl TestRun for Test {
         let genesis_args = DEFAULT_GENESIS_ARGS;
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config;
+            let mut args = genesis_args.clone();
+            args.max_indexation_id = 50;
             join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::new(batch_size_config, 50, false), config).await
+                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
             });
         }
         join_runners!(join_set);
@@ -87,9 +88,10 @@ impl TestRun for Test {
 
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config;
+            let mut args = genesis_args.clone();
+            args.max_indexation_id = 100;
             join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::new(batch_size_config, 100, false), config).await
+                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
             });
         }
         join_runners!(join_set);
@@ -123,15 +125,6 @@ impl TestRun for Test {
             .await
             .expect("Stage 2 of plaintext genesis execution failed");
 
-        // Number of modifications on already-indexed irises which are processed by genesis delta
-        let num_updating_modifications = modifications::modifications_extension_updates(
-            &MODIFICATIONS_START,
-            &MODIFICATIONS_END,
-        )
-        .into_iter()
-        .filter(|serial_id| *serial_id <= 50)
-        .count();
-
         // Assert databases
         let gpu_asserts = DbAssertions::new()
             .assert_num_irises(MAX_INDEXATION_ID)
@@ -142,14 +135,13 @@ impl TestRun for Test {
             .assert_vector_ids(plaintext_genesis::get_vector_ids(&expected.dst_db.irises))
             .assert_num_modifications(0)
             .assert_last_indexed_iris_id(100)
-            .assert_last_indexed_modification_id(8)
-            .assert_hnsw_layer_0_size(
-                MAX_INDEXATION_ID + num_updating_modifications - DELETIONS.len(),
-            )
-            .assert_hnsw_graphs(expected.dst_db.graphs);
+            .assert_last_indexed_modification_id(8);
 
         let nodes = MpcNodes::new(&self.configs).await;
         nodes.apply_assertions(gpu_asserts, cpu_asserts).await;
+        nodes
+            .assert_s3_checkpoint_graphs(&self.configs, &expected.dst_db.graphs)
+            .await?;
 
         Ok(())
     }

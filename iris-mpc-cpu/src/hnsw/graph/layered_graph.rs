@@ -17,7 +17,10 @@ use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::{izip, Itertools};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use serde::{Deserialize, Serialize};
+use serde::{
+    ser::{SerializeMap, SerializeStruct, Serializer},
+    Deserialize, Serialize,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
@@ -361,7 +364,7 @@ impl GraphMem<IrisVectorId> {
     }
 }
 
-#[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Default, Debug, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct Layer<V: Ref + Display + FromStr + Ord> {
     /// Map a base vector to its neighbors.
@@ -369,6 +372,44 @@ pub struct Layer<V: Ref + Display + FromStr + Ord> {
     /// A checksum of the layer's links, used for state verification.
     /// This hash is updated whenever links are modified.
     set_hash: SetHash,
+}
+
+struct SortedLinks<'a, V: Ord> {
+    links: &'a HashMap<V, Vec<V>>,
+}
+
+impl<'a, V> Serialize for SortedLinks<'a, V>
+where
+    V: Serialize + Ord,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut entries: Vec<_> = self.links.iter().collect();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+        let mut map = serializer.serialize_map(Some(entries.len()))?;
+        for (key, value) in entries {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<V> Serialize for Layer<V>
+where
+    V: Ref + Display + FromStr + Ord + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("Layer", 2)?;
+        state.serialize_field("links", &SortedLinks { links: &self.links })?;
+        state.serialize_field("set_hash", &self.set_hash)?;
+        state.end()
+    }
 }
 
 impl<V: Ref + Display + FromStr + Ord> Clone for Layer<V> {
@@ -503,7 +544,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId, IrisVectorId};
 
     use rand::{RngCore, SeedableRng};
 
@@ -615,6 +656,29 @@ mod tests {
         assert_ne!(graph_store, different_graph_store);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_layer_deterministic_serialize_order() {
+        let mut layer_a = super::Layer::new();
+        let mut layer_b = super::Layer::new();
+
+        let v1 = IrisVectorId::from_serial_id(1);
+        let v2 = IrisVectorId::from_serial_id(2);
+        let v3 = IrisVectorId::from_serial_id(3);
+        let v4 = IrisVectorId::from_serial_id(4);
+        let v5 = IrisVectorId::from_serial_id(5);
+
+        layer_a.set_links(v1, vec![v2, v3]);
+        layer_a.set_links(v4, vec![v5]);
+
+        layer_b.set_links(v4, vec![v5]);
+        layer_b.set_links(v1, vec![v2, v3]);
+
+        let bytes_a = bincode::serialize(&layer_a).expect("layer_a serialize");
+        let bytes_b = bincode::serialize(&layer_b).expect("layer_b serialize");
+
+        assert_eq!(bytes_a, bytes_b);
     }
 
     #[tokio::test]

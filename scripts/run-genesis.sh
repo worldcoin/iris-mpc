@@ -16,7 +16,7 @@ if [ -z "${GENESIS_BATCH_SIZE}" ]; then
 fi
 
 echo "Starting genesis with max height: ${GENESIS_MAX_HEIGHT}, batch size: ${GENESIS_BATCH_SIZE}"
-/bin/iris-mpc-hawk-genesis --max-height=${GENESIS_MAX_HEIGHT} --batch-size=${GENESIS_BATCH_SIZE} --perform-snapshot=false
+/bin/iris-mpc-hawk-genesis --max-height=${GENESIS_MAX_HEIGHT} --batch-size=${GENESIS_BATCH_SIZE} --perform-snapshot=false --checkpoint-frequency=100000
 genesis_exit_code=$?
 
 # Check if genesis exited due to a shutdown signal

@@ -1,5 +1,6 @@
 mod batch_generator;
 mod batch_size_config;
+pub mod genesis_checkpoint;
 mod hawk_handle;
 mod hawk_job;
 pub mod plaintext;
