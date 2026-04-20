@@ -16,7 +16,10 @@ use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use futures::future::try_join_all;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::{
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    vector_id::VectorId,
+};
 use itertools::{izip, Itertools};
 use std::{
     collections::HashMap,
@@ -565,11 +568,11 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     ///
     // TODO: Accept a rotation/mirror mask so callers can request only the
     // variants they need. Currently every call generates all 31 rotations ×
-    // 2 orientations (63 variants), but:
+    // 2 orientations (62 variants), but:
     //   - Hawk main only uses HAWK_BASE_ROTATIONS_MASK (3 rotations) × 2
-    //     orientations → 7 out of 63 used
+    //     orientations → 6 out of 62 used
     //   - Genesis and compaction only use CENTER_ROTATION, no mirror → 1 out
-    //     of 63 used
+    //     of 62 used
     // A signature like `cache_queries(queries, rotation_mask: u32, mirror: bool)`
     // would let LocalIrisWorkerPool skip generating + NUMA-reallocating unused
     // variants. This is the main remaining performance gap vs the old design
@@ -723,15 +726,13 @@ impl LocalIrisWorkerPool {
 
 /// Build 31 `ArcIris` rotations from code and mask rotation vecs.
 fn zip_rotations(
-    code_rots: Vec<iris_mpc_common::galois_engine::degree4::GaloisRingIrisCodeShare>,
-    mask_rots: Vec<iris_mpc_common::galois_engine::degree4::GaloisRingTrimmedMaskCodeShare>,
+    code_rots: Vec<GaloisRingIrisCodeShare>,
+    mask_rots: Vec<GaloisRingTrimmedMaskCodeShare>,
 ) -> Vec<ArcIris> {
     code_rots
         .into_iter()
         .zip(mask_rots)
-        .map(|(code, mask)| {
-            Arc::new(crate::protocol::shared_iris::GaloisRingSharedIris { code, mask })
-        })
+        .map(|(code, mask)| Arc::new(GaloisRingSharedIris { code, mask }))
         .collect()
 }
 
@@ -758,7 +759,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
 
             // Preprocess + rotate, collecting all resulting ArcIris values.
             let mut entries: Vec<(QueryId, CachedQuery)> = Vec::with_capacity(new_queries.len());
-            for (query_id, iris) in &new_queries {
+            for (query_id, iris) in new_queries {
                 // --- Normal: preprocess then rotate ---
                 let mut code_proc = iris.code.clone();
                 let mut mask_proc = iris.mask.clone();
@@ -776,9 +777,9 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     zip_rotations(code_mirror.all_rotations(), mask_mirror.all_rotations());
 
                 entries.push((
-                    *query_id,
+                    query_id,
                     CachedQuery {
-                        original: iris.clone(),
+                        original: iris,
                         preprocessed_rotations,
                         mirrored_preprocessed_rotations,
                     },

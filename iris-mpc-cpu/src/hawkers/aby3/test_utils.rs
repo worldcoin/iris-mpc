@@ -350,6 +350,8 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
                         )
                         .await?;
                 }
+                let qids = queries.iter().map(|q| q.query_id).collect();
+                store_lock.workers.evict_queries(qids).await?;
                 Ok((store.clone(), graph_store))
             });
         jobs.push(task);

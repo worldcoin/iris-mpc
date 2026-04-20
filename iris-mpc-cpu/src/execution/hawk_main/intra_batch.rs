@@ -20,12 +20,12 @@ pub struct IntraMatch {
 }
 
 /// `search_queries`: the orientation-specific queries (Normal or Mirror) — used for the "a" operand.
-/// `raw_queries`: always the Normal queries — used for the "b" (raw, same-eye) operand.
+/// `unmirrored_queries`: always the Normal queries — used for the "b" (raw, same-eye) operand.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRotations<Aby3Query>>>>,
-    raw_queries: &Arc<BothEyes<VecRequests<VecRotations<Aby3Query>>>>,
+    unmirrored_queries: &Arc<BothEyes<VecRequests<VecRotations<Aby3Query>>>>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
     let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
@@ -41,9 +41,9 @@ pub async fn intra_batch_is_match(
     let per_session = |batch: Batch| {
         let session = sessions[batch.i_eye][batch.i_session].clone();
         let search_queries = search_queries.clone();
-        let raw_queries = raw_queries.clone();
+        let unmirrored_queries = unmirrored_queries.clone();
         let tx = tx.clone();
-        async move { per_session(&search_queries, &raw_queries, &session, batch, tx).await }
+        async move { per_session(&search_queries, &unmirrored_queries, &session, batch, tx).await }
     };
 
     parallelize(batches.into_iter().map(per_session)).await?;
@@ -57,7 +57,7 @@ pub async fn intra_batch_is_match(
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_session(
     search_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
-    raw_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
+    unmirrored_queries: &BothEyes<VecRequests<VecRotations<Aby3Query>>>,
     session: &HawkSession,
     batch: Batch,
     tx: UnboundedSender<IsMatch>,
@@ -77,13 +77,13 @@ async fn per_session(
 
     // Compare the rotated+preprocessed iris of one request to the centered
     // (raw, same-eye) iris of the other. For mirror orientation, search_queries
-    // carries the opposite eye's mirrored QueryId, so we use raw_queries
+    // carries the opposite eye's mirrored QueryId, so we use unmirrored_queries
     // (always Normal) for the "b" operand to get the correct same-eye iris.
     let query_pairs: Vec<Option<(_, _)>> = pairs
         .iter()
         .map(|pair| {
             let spec_a = search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation];
-            let id_b = raw_queries[batch.i_eye][pair.earlier_request]
+            let id_b = unmirrored_queries[batch.i_eye][pair.earlier_request]
                 .center()
                 .query_id;
             Some((spec_a, id_b))

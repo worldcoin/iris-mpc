@@ -149,7 +149,7 @@ pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> Ha
 
     let db = IrisDB::new_random_rng(batch_size * 2, iris_rng);
     // Use first batch_size irises for left eye, next batch_size for right eye.
-    let left_shares: Vec<_> = db.db[..batch_size]
+    let mut left_shares: Vec<_> = db.db[..batch_size]
         .iter()
         .map(|iris| {
             (
@@ -161,7 +161,7 @@ pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> Ha
             )
         })
         .collect();
-    let right_shares: Vec<_> = db.db[batch_size..]
+    let mut right_shares: Vec<_> = db.db[batch_size..]
         .iter()
         .map(|iris| {
             (
@@ -173,6 +173,19 @@ pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> Ha
             )
         })
         .collect();
+
+    // Request 2 is a mirror attack of request 0:
+    //   request_2.left = mirror(request_0.right)
+    //   request_2.right = mirror(request_0.left)
+    // Each entry is (normal_shares, mirrored_shares) for the same iris. Swapping
+    // the tuple is equivalent to mirroring: (shares(x), shares(mirror(x))) becomes
+    // (shares(mirror(x)), shares(x)). Apply at the shares level so all downstream
+    // derivations (rotated, interpolated, mirrored-interpolated) stay consistent.
+    let n = left_shares.len();
+    let (right_normal_0, right_mirrored_0) = right_shares[0].clone();
+    let (left_normal_0, left_mirrored_0) = left_shares[0].clone();
+    left_shares[n - 1] = (right_mirrored_0, right_normal_0);
+    right_shares[n - 1] = (left_mirrored_0, left_normal_0);
 
     let our_batch = make_batch(batch_size);
 
@@ -181,7 +194,7 @@ pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> Ha
     let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
         receive_batch_shares(&right_shares);
 
-    let mut my_batch = BatchQuery {
+    let my_batch = BatchQuery {
         left_iris_requests,
         right_iris_requests,
         left_iris_rotated_requests,
@@ -192,24 +205,6 @@ pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> Ha
         right_mirrored_iris_interpolated_requests,
         ..our_batch
     };
-
-    // Request 2 is a mirror attack of request 0:
-    //   request_2.left = mirror(request_0.right)
-    //   request_2.right = mirror(request_0.left)
-    // This way, mirror detection computes:
-    //   mirror_preproc(mirror(request_0.left)) = preproc(request_0.left)
-    //   vs raw(request_0.left) → self-match
-    let n = my_batch.left_iris_requests.code.len();
-    let right_code_0 = my_batch.right_iris_requests.code[0].clone();
-    let right_mask_0 = my_batch.right_iris_requests.mask[0].clone();
-    let left_code_0 = my_batch.left_iris_requests.code[0].clone();
-    let left_mask_0 = my_batch.left_iris_requests.mask[0].clone();
-    // request_2.left = mirror(request_0.right)
-    my_batch.left_iris_requests.code[n - 1] = right_code_0.mirrored_code();
-    my_batch.left_iris_requests.mask[n - 1] = right_mask_0.mirrored();
-    // request_2.right = mirror(request_0.left)
-    my_batch.right_iris_requests.code[n - 1] = left_code_0.mirrored_code();
-    my_batch.right_iris_requests.mask[n - 1] = left_mask_0.mirrored();
 
     HawkRequest::from(my_batch)
 }
