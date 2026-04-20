@@ -671,7 +671,7 @@ pub fn bench_worker_pool(c: &mut Criterion) {
                     },
                     |(query, targets)| {
                         let _ = std::hint::black_box(
-                            rt.block_on(pool.bench_batch_dot(chunk_size, query, targets)),
+                            rt.block_on(pool.bench_batch_dot(chunk_size, query, &targets)),
                         );
                     },
                     BatchSize::SmallInput,
