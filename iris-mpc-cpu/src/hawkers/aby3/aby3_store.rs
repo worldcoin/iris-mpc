@@ -1509,4 +1509,130 @@ mod tests {
         }
         parallelize(tasks.into_iter()).await.unwrap();
     }
+
+    /// Deterministically build the same HNSW graph in plaintext (via
+    /// [`PlaintextStore`]) and under 3-party MPC (via [`Aby3Store`]), using
+    /// the same iris data and a shared per-insertion layer sequence, then
+    /// assert the resulting graphs are bit-for-bit identical across all
+    /// four builds.
+    ///
+    /// This is a ground-truth regression test for the MPC HNSW insertion
+    /// path: any divergence between plaintext and MPC `less_than` /
+    /// neighborhood compaction semantics will surface as a graph mismatch.
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_plaintext_vs_mpc_graph_equality() -> Result<()> {
+        let mut rng = AesRng::seed_from_u64(0xA1B2C3D4_u64);
+        let database_size = 128;
+        // Mirror HawkActor's searcher configuration: LinearScan layer mode
+        // with `max_graph_layer = 1` (see hawk_main.rs). Using test-scale
+        // ef/M so the graph actually has a populated layer 1 (entry-point
+        // shelf) at this db size; production ef/M with 128 nodes would
+        // collapse to a single-layer graph and defeat the purpose.
+        //
+        // The layer distribution is explicitly overridden to a denser
+        // geometric (layer_density=4) so that several nodes roll
+        // `insertion_layer > max_graph_layer` and land in the entry-point
+        // set, which is what drives `linear_search_min_distance` /
+        // `oblivious_argmin_distance`. Production uses the default (M),
+        // but at 128 nodes that yields <1 expected entry point and
+        // silently skips the branch we care about.
+        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        searcher.layer_distribution =
+            crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(4);
+        let searcher = searcher;
+
+        // Pre-compute a deterministic insertion-layer sequence shared by all
+        // four builds (1 plaintext + 3 MPC parties). Using a separate RNG
+        // fork (seeded off a clone of the outer RNG) keeps layer generation
+        // decoupled from iris/share randomness.
+        let insertion_layers: Vec<usize> = {
+            let mut layer_rng = AesRng::from_rng(rng.clone())?;
+            (0..database_size)
+                .map(|_| searcher.gen_layer_rng(&mut layer_rng))
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        // Generate the cleartext iris database and matching Galois-ring
+        // shares up front so the plaintext and MPC sides operate on
+        // equivalent data.
+        let cleartext_db = IrisDB::new_random_rng(database_size, &mut rng).db;
+        let shared_irises: Vec<[GaloisRingSharedIris; 3]> = cleartext_db
+            .iter()
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .collect();
+
+        // ── Plaintext build ──
+        let mut plaintext_store = PlaintextStore::<FhdOps>::new();
+        let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
+            let query = Arc::new(iris.clone());
+            searcher
+                .insert::<_, SortedNeighborhood<_>>(
+                    &mut plaintext_store,
+                    &mut plaintext_graph,
+                    &query,
+                    layer,
+                )
+                .await?;
+        }
+
+        // ── MPC builds: spawn one task per party, running concurrently so
+        // their sessions can exchange protocol messages over the local
+        // network. Each party inserts its own share of the same iris in
+        // the same order, consuming the shared insertion-layer sequence.
+        let stores = setup_local_store_aby3_players(NetworkType::Local).await?;
+        let mut jobs = JoinSet::new();
+        for store in stores.into_iter() {
+            let role = get_owner_index(&store).await?;
+            let irises: Vec<ArcIris> = shared_irises
+                .iter()
+                .map(|shares| Arc::new(shares[role].clone()))
+                .collect();
+            let layers = insertion_layers.clone();
+            let searcher = searcher.clone();
+            jobs.spawn(async move {
+                let mut store = store.lock().await;
+                let queries = cache_irises(&store.workers, irises).await?;
+                let mut graph: GraphMem<VectorId> = GraphMem::new();
+                for (query, &layer) in queries.iter().zip(layers.iter()) {
+                    searcher
+                        .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
+                        .await?;
+                }
+                Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
+            });
+        }
+
+        let mut mpc_graphs: Vec<Option<GraphMem<VectorId>>> = (0..3).map(|_| None).collect();
+        while let Some(res) = jobs.join_next().await {
+            let (role, graph) = res??;
+            mpc_graphs[role] = Some(graph);
+        }
+
+        for (role, mpc_graph) in mpc_graphs.into_iter().enumerate() {
+            let mpc_graph = mpc_graph.unwrap_or_else(|| panic!("party {role} did not finish"));
+            assert_eq!(
+                mpc_graph, plaintext_graph,
+                "MPC graph for party {role} differs from plaintext graph",
+            );
+        }
+
+        // Sanity-check that the LinearScan invariants actually held during
+        // the build: a flat two-layer graph with a populated entry-point
+        // shelf. If either fails, the test parameters no longer exercise
+        // the LinearScan path and should be revisited.
+        assert_eq!(
+            plaintext_graph.get_num_layers(),
+            2,
+            "LinearScan graph should have exactly 2 layers (0 and max_graph_layer=1)",
+        );
+        assert!(
+            plaintext_graph.entry_points.len() >= 2,
+            "expected multiple entry points to exercise linear_search_min_distance, got {}",
+            plaintext_graph.entry_points.len(),
+        );
+
+        Ok(())
+    }
 }
