@@ -306,10 +306,11 @@ impl Handle {
                                         insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?;
 
                                     // Evict the cached query now that search + insert are done.
-                                    {
-                                        let store = session.aby3_store.read().await;
-                                        store.workers.evict_queries(vec![query_id]).await?;
-                                    }
+                                    // Use the workers reference from the already-held write guard:
+                                    // the query cache uses its own internal lock, independent of
+                                    // the aby3_store RwLock. Acquiring a second `read()` here would
+                                    // deadlock against the outer `write()` guard.
+                                    store.workers.evict_queries(vec![query_id]).await?;
 
                                     Ok((connect_plan, vector_id))
                                 }
