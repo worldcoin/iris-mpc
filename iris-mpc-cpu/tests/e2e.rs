@@ -17,7 +17,7 @@ use iris_mpc_cpu::{
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{rngs::StdRng, SeedableRng};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
@@ -200,24 +200,32 @@ async fn spawn_three_hawk_nodes(
     Ok((h0?, h1?, h2?))
 }
 
-#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
-#[test]
-fn e2e_test() -> Result<()> {
-    // This test is stack-hungry in release mode; run it on a larger stack to
-    // avoid platform-dependent stack overflows.
+/// Run an async test on a 64 MB stack to avoid platform-dependent stack
+/// overflows in release mode.
+fn run_async_on_big_stack<F, Fut>(name: &'static str, main: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>>,
+{
     std::thread::Builder::new()
-        .name("e2e_test".to_string())
+        .name(name.to_string())
         .stack_size(64 * 1024 * 1024)
-        .spawn(|| {
+        .spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .expect("failed to build tokio runtime");
-            rt.block_on(e2e_test_async())
+            rt.block_on(main())
         })
-        .expect("failed to spawn e2e_test thread")
+        .expect("failed to spawn test thread")
         .join()
-        .expect("e2e_test thread panicked")
+        .expect("test thread panicked")
+}
+
+#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
+#[test]
+fn e2e_test() -> Result<()> {
+    run_async_on_big_stack("e2e_test", e2e_test_async)
 }
 
 async fn e2e_test_async() -> Result<()> {
@@ -352,7 +360,6 @@ impl Expectation {
     }
 }
 
-#[derive(Clone)]
 struct Variant {
     rotation: isize,
     mirror: bool,
@@ -595,21 +602,20 @@ struct Observation {
 fn evaluate_expectation(obs: &Observation) -> Vec<String> {
     use Expectation::*;
     let mut p: Vec<String> = Vec::new();
+    let mut chk = |name: &str, got: bool, want: bool| {
+        if got != want {
+            p.push(format!("{name}={got} (wanted {want})"));
+        }
+    };
     match &obs.expect {
         UniqueInsert { min_index } => {
-            if obs.was_match {
-                p.push("was_match=true (wanted false)".into());
-            }
-            if obs.mirror_attack {
-                p.push("mirror_attack=true (wanted false)".into());
-            }
-            if obs.successful_reauth {
-                p.push("successful_reauth=true (wanted false)".into());
-            }
+            chk("was_match", obs.was_match, false);
+            chk("mirror_attack", obs.mirror_attack, false);
+            chk("successful_reauth", obs.successful_reauth, false);
             if obs.merged_results < *min_index {
                 p.push(format!(
-                    "merged_results={} < min_index={} (wanted a fresh serial_id above all previously-seen indices)",
-                    obs.merged_results, min_index
+                    "merged_results={} < min_index={min_index}",
+                    obs.merged_results
                 ));
             }
             if !obs.match_ids.is_empty() {
@@ -625,25 +631,19 @@ fn evaluate_expectation(obs: &Observation) -> Vec<String> {
         DbMatchAt {
             expected_match_index,
         } => {
-            if !obs.was_match {
-                p.push("was_match=false (wanted true)".into());
-            }
-            if obs.mirror_attack {
-                p.push("mirror_attack=true (wanted false)".into());
-            }
-            if obs.successful_reauth {
-                p.push("successful_reauth=true (wanted false)".into());
-            }
+            chk("was_match", obs.was_match, true);
+            chk("mirror_attack", obs.mirror_attack, false);
+            chk("successful_reauth", obs.successful_reauth, false);
             if obs.merged_results != *expected_match_index {
                 p.push(format!(
-                    "merged_results={} (wanted {})",
-                    obs.merged_results, expected_match_index
+                    "merged_results={} (wanted {expected_match_index})",
+                    obs.merged_results
                 ));
             }
             if !obs.match_ids.contains(expected_match_index) {
                 p.push(format!(
-                    "match_ids={:?} missing expected index {}",
-                    obs.match_ids, expected_match_index
+                    "match_ids={:?} missing expected {expected_match_index}",
+                    obs.match_ids
                 ));
             }
         }
@@ -651,40 +651,30 @@ fn evaluate_expectation(obs: &Observation) -> Vec<String> {
             earlier_request_id,
             earlier_role: _,
         } => {
-            if !obs.was_match {
-                p.push("was_match=false (wanted true — intra-batch match counts as match)".into());
-            }
-            if obs.mirror_attack {
-                p.push("mirror_attack=true (wanted false)".into());
-            }
-            if obs.successful_reauth {
-                p.push("successful_reauth=true (wanted false)".into());
-            }
+            chk("was_match", obs.was_match, true);
+            chk("mirror_attack", obs.mirror_attack, false);
+            chk("successful_reauth", obs.successful_reauth, false);
             if !obs.match_ids.is_empty() {
                 p.push(format!(
-                    "match_ids={:?} (wanted empty — there should be no direct DB match, only intra-batch)",
+                    "match_ids={:?} (wanted empty — no direct DB match expected)",
                     obs.match_ids
                 ));
             }
             if !obs.matched_batch_request_ids.contains(earlier_request_id) {
                 p.push(format!(
-                    "matched_batch_request_ids={:?} missing expected earlier request_id={}",
-                    obs.matched_batch_request_ids, earlier_request_id
+                    "matched_batch_request_ids={:?} missing expected {earlier_request_id}",
+                    obs.matched_batch_request_ids
                 ));
             }
         }
         MirrorAttackDetected {
             expected_mirror_match_index,
         } => {
-            if !obs.mirror_attack {
-                p.push("mirror_attack=false (wanted true)".into());
-            }
-            if obs.successful_reauth {
-                p.push("successful_reauth=true (wanted false)".into());
-            }
+            chk("mirror_attack", obs.mirror_attack, true);
+            chk("successful_reauth", obs.successful_reauth, false);
             if !obs.match_ids.is_empty() {
                 p.push(format!(
-                    "normal match_ids={:?} non-empty (mirror attack requires normal empty)",
+                    "normal match_ids={:?} non-empty (wanted empty)",
                     obs.match_ids
                 ));
             }
@@ -693,27 +683,38 @@ fn evaluate_expectation(obs: &Observation) -> Vec<String> {
                 .contains(expected_mirror_match_index)
             {
                 p.push(format!(
-                    "full_face_mirror_match_ids={:?} missing expected index {}",
-                    obs.full_face_mirror_match_ids, expected_mirror_match_index
+                    "full_face_mirror_match_ids={:?} missing expected {expected_mirror_match_index}",
+                    obs.full_face_mirror_match_ids
                 ));
             }
         }
         ReauthSucceeds { target_index } => {
-            if !obs.successful_reauth {
-                p.push("successful_reauth=false (wanted true)".into());
-            }
-            if obs.mirror_attack {
-                p.push("mirror_attack=true (wanted false)".into());
-            }
+            chk("successful_reauth", obs.successful_reauth, true);
+            chk("mirror_attack", obs.mirror_attack, false);
             if obs.merged_results != *target_index {
                 p.push(format!(
-                    "merged_results={} (wanted reauth target {})",
-                    obs.merged_results, target_index
+                    "merged_results={} (wanted reauth target {target_index})",
+                    obs.merged_results
                 ));
             }
         }
     }
     p
+}
+
+/// Submit `variants` + `deletions` as a single batch and return the per-slot
+/// observations; panics if any expectation is violated.
+async fn submit_and_check(
+    label: &str,
+    variants: &[Variant],
+    deletions: &[u32],
+    h0: &mut HawkHandle,
+    h1: &mut HawkHandle,
+    h2: &mut HawkHandle,
+    rng: &mut StdRng,
+) -> Result<Vec<Observation>> {
+    let results = submit_variants_batch(variants, deletions, h0, h1, h2, rng).await?;
+    Ok(check_expectations(label, variants, &results))
 }
 
 /// Assert every variant's expectation. On any failure, panic once with a
@@ -764,69 +765,38 @@ fn check_expectations(
 
     tracing::info!("=== {} — per-slot observations ===", batch_label);
     for obs in &observations {
-        tracing::info!(
-            "  [{:>2}] {:<18}  was_match={}  reauth_ok={}  mirror_attack={}  merged={:>4}  match_ids={:?}  mirror_match_ids={:?}  intra_batch_ids={:?}  purpose: {}",
-            obs.slot,
-            obs.label,
-            obs.was_match,
-            obs.successful_reauth,
-            obs.mirror_attack,
-            obs.merged_results,
-            obs.match_ids,
-            obs.full_face_mirror_match_ids,
-            obs.matched_batch_request_ids,
-            obs.purpose,
-        );
+        tracing::info!("{}", format_observation_row(obs));
     }
 
-    let mut failures: Vec<String> = Vec::new();
-    for obs in &observations {
-        let problems = evaluate_expectation(obs);
-        if !problems.is_empty() {
-            failures.push(format!(
-                "  slot {:>2} [{}]\n    purpose : {}\n    expected: {}\n    observed: was_match={}, successful_reauth={}, mirror_attack={}, merged_results={}, match_ids={:?}, mirror_match_ids={:?}, matched_batch_request_ids={:?}\n    problems: {}\n    diagnosis: {}",
+    let failures: Vec<String> = observations
+        .iter()
+        .filter_map(|obs| {
+            let problems = evaluate_expectation(obs);
+            if problems.is_empty() {
+                return None;
+            }
+            Some(format!(
+                "  slot {:>2} [{}]\n    purpose : {}\n    expected: {}\n    problems: {}\n    diagnosis: {}",
                 obs.slot,
                 obs.label,
                 obs.purpose,
                 obs.expect.describe(),
-                obs.was_match,
-                obs.successful_reauth,
-                obs.mirror_attack,
-                obs.merged_results,
-                obs.match_ids,
-                obs.full_face_mirror_match_ids,
-                obs.matched_batch_request_ids,
                 problems.join("; "),
                 obs.expect.diagnosis(),
-            ));
-        }
-    }
+            ))
+        })
+        .collect();
 
     if !failures.is_empty() {
         let mut report = format!(
-            "\n\n=== {} FAILED: {} expectation(s) violated ===\n",
+            "\n\n=== {} FAILED: {} expectation(s) violated ===\n{}\n\n--- Full result table for this batch ---\n",
             batch_label,
-            failures.len()
+            failures.len(),
+            failures.join("\n"),
         );
-        for f in &failures {
-            report.push_str(f);
-            report.push('\n');
-        }
-        report.push_str("\n--- Full result table for this batch ---\n");
         for obs in &observations {
-            report.push_str(&format!(
-                "  [{:>2}] {:<18}  was_match={}  reauth_ok={}  mirror_attack={}  merged={:>4}  match_ids={:?}  mirror_match_ids={:?}  intra_batch_ids={:?}  purpose: {}\n",
-                obs.slot,
-                obs.label,
-                obs.was_match,
-                obs.successful_reauth,
-                obs.mirror_attack,
-                obs.merged_results,
-                obs.match_ids,
-                obs.full_face_mirror_match_ids,
-                obs.matched_batch_request_ids,
-                obs.purpose,
-            ));
+            report.push_str(&format_observation_row(obs));
+            report.push('\n');
         }
         panic!("{}", report);
     }
@@ -834,22 +804,26 @@ fn check_expectations(
     observations
 }
 
+fn format_observation_row(obs: &Observation) -> String {
+    format!(
+        "  [{:>2}] {:<18}  was_match={}  reauth_ok={}  mirror_attack={}  merged={:>4}  match_ids={:?}  mirror_match_ids={:?}  intra_batch_ids={:?}  purpose: {}",
+        obs.slot,
+        obs.label,
+        obs.was_match,
+        obs.successful_reauth,
+        obs.mirror_attack,
+        obs.merged_results,
+        obs.match_ids,
+        obs.full_face_mirror_match_ids,
+        obs.matched_batch_request_ids,
+        obs.purpose,
+    )
+}
+
 #[ignore = "Takes long time to run, in CI this is selected in a separate step"]
 #[test]
 fn e2e_uniqueness_test() -> Result<()> {
-    std::thread::Builder::new()
-        .name("e2e_uniqueness_test".to_string())
-        .stack_size(64 * 1024 * 1024)
-        .spawn(|| {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build tokio runtime");
-            rt.block_on(e2e_uniqueness_test_async())
-        })
-        .expect("failed to spawn e2e_uniqueness_test thread")
-        .join()
-        .expect("e2e_uniqueness_test thread panicked")
+    run_async_on_big_stack("e2e_uniqueness_test", e2e_uniqueness_test_async)
 }
 
 async fn e2e_uniqueness_test_async() -> Result<()> {
@@ -905,25 +879,31 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
         ));
     }
     assert_eq!(batch1.len(), 31);
-    tracing::info!(
-        "Batch 1: submitting seed X + {} non-mirror rotation variants",
-        batch1.len() - 1
-    );
-    let results = submit_variants_batch(&batch1, &[], &mut h0, &mut h1, &mut h2, &mut rng).await?;
-    let obs = check_expectations("batch1 (seed + 30 rotations)", &batch1, &results);
+    let obs = submit_and_check(
+        "batch1 (seed + 30 rotations)",
+        &batch1,
+        &[],
+        &mut h0,
+        &mut h1,
+        &mut h2,
+        &mut rng,
+    )
+    .await?;
     let seed_db_index = obs[0].merged_results;
-    tracing::info!(
-        "Batch 1 OK — seed persisted at index {}; 30 rotation variants all blocked intra-batch by slot 0",
-        seed_db_index
-    );
 
     // Batch 2: every rotation/mirror variant matches the stored seed.
     let batch2 = build_batch2_variants(&x_left, &x_right, seed_db_index);
     assert_eq!(batch2.len(), 62);
-    tracing::info!("Batch 2: submitting {} variants", batch2.len());
-    let results = submit_variants_batch(&batch2, &[], &mut h0, &mut h1, &mut h2, &mut rng).await?;
-    check_expectations("batch2 (62 variants)", &batch2, &results);
-    tracing::info!("Batch 2 OK");
+    submit_and_check(
+        "batch2 (62 variants)",
+        &batch2,
+        &[],
+        &mut h0,
+        &mut h1,
+        &mut h2,
+        &mut rng,
+    )
+    .await?;
 
     // Batch 3: reauth X' = X+15, then Y = X+30 and Z = X-15 as uniqueness.
     // Reauth's store mutation lands only after the batch's searches, so Z
@@ -952,16 +932,24 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
         &x_right,
         -15,
         false,
-        format!("batch3 slot 2: Z=X-15 — matches original X at {seed_db_index} (reauth not yet applied)"),
+        format!(
+            "batch3 slot 2: Z=X-15 — matches original X at {seed_db_index} (reauth not yet applied)"
+        ),
         Expectation::DbMatchAt {
             expected_match_index: seed_db_index,
         },
     );
     let batch3 = vec![x_prime, y_b3, z_b3];
-    tracing::info!("Batch 3: submitting [X' reauth, Y=X+30, Z=X-15]");
-    let results = submit_variants_batch(&batch3, &[], &mut h0, &mut h1, &mut h2, &mut rng).await?;
-    check_expectations("batch3 (reauth + Y + Z)", &batch3, &results);
-    tracing::info!("Batch 3 OK — X' has now replaced X at seed idx");
+    submit_and_check(
+        "batch3 (reauth + Y + Z)",
+        &batch3,
+        &[],
+        &mut h0,
+        &mut h1,
+        &mut h2,
+        &mut rng,
+    )
+    .await?;
 
     // Batch 4: DB now holds X' at seed_idx. Y matches X'; Z is out of
     // rotation window vs X' and inserts fresh. Proves reauth displaced X.
@@ -986,14 +974,17 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
         },
     );
     let batch4 = vec![y_b4, z_b4];
-    tracing::info!("Batch 4: submitting [Y=X+30, Z=X-15] post-reauth");
-    let results = submit_variants_batch(&batch4, &[], &mut h0, &mut h1, &mut h2, &mut rng).await?;
-    let batch4_obs = check_expectations("batch4 (post-reauth Y + Z)", &batch4, &results);
+    let batch4_obs = submit_and_check(
+        "batch4 (post-reauth Y + Z)",
+        &batch4,
+        &[],
+        &mut h0,
+        &mut h1,
+        &mut h2,
+        &mut rng,
+    )
+    .await?;
     let z_db_index = batch4_obs[1].merged_results;
-    tracing::info!(
-        "Batch 4 OK — reauth displacement verified; Z inserted at index {}",
-        z_db_index
-    );
 
     // Batch 5: same-batch delete of seed_idx + uniqueness of X'. Deletion
     // acts before search, so X' re-enrolls at a fresh serial.
@@ -1007,19 +998,16 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
             min_index: z_db_index + 1,
         },
     );
-    let batch5 = vec![x_prime_reenroll];
-    let deletions5 = vec![seed_db_index];
-    tracing::info!("Batch 5: submitting [delete({seed_db_index}), uniqueness(X')]");
-    let results =
-        submit_variants_batch(&batch5, &deletions5, &mut h0, &mut h1, &mut h2, &mut rng).await?;
-    let batch5_obs =
-        check_expectations("batch5 (delete + uniqueness re-enroll)", &batch5, &results);
-    tracing::info!(
-        "Batch 5 OK — X' re-enrolled at index {} after deletion cleared the slot",
-        batch5_obs[0].merged_results
-    );
-
-    tracing::info!("e2e_uniqueness_test: all 5 batches passed");
+    submit_and_check(
+        "batch5 (delete + uniqueness re-enroll)",
+        &[x_prime_reenroll],
+        &[seed_db_index],
+        &mut h0,
+        &mut h1,
+        &mut h2,
+        &mut rng,
+    )
+    .await?;
 
     drop(h0);
     drop(h1);
