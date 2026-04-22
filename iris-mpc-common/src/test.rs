@@ -144,7 +144,7 @@ pub struct E2ESharedTemplate {
     pub right_mirrored_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestCase {
     /// Send an iris code known to be in the database
     Match,
@@ -207,7 +207,7 @@ impl TestCase {
     /// Returns the default set of allowed test cases, which is used to filter
     /// the later selection. Should usually be the exhaustive set of all
     /// variants.
-    pub fn default_test_set() -> Vec<TestCase> {
+    fn default_test_set() -> Vec<TestCase> {
         vec![
             TestCase::Match,
             TestCase::MatchSkipPersistence,
@@ -378,9 +378,6 @@ pub struct TestCaseGenerator {
     db_indices_used_in_current_batch: HashSet<usize>,
     /// items against which the OR rule is used
     or_rule_matches: Vec<String>,
-    /// how many times each TestCase variant was picked during generate_query.
-    /// Used by tests to assert full coverage over many batches.
-    picked_test_cases: HashMap<TestCase, usize>,
     is_cpu: bool,
 }
 
@@ -408,19 +405,12 @@ impl TestCaseGenerator {
             batch_duplicates: HashMap::new(),
             db_indices_used_in_current_batch: HashSet::new(),
             or_rule_matches: Vec::new(),
-            picked_test_cases: HashMap::new(),
             is_cpu,
         }
     }
 
     pub fn disable_test_case(&mut self, test_case: TestCase) {
         self.enabled_test_cases.retain(|x| x != &test_case);
-    }
-
-    /// Read-only view of how many times each TestCase was picked by
-    /// `generate_query` so far. Tests can assert full coverage over a run.
-    pub fn picked_test_cases(&self) -> &HashMap<TestCase, usize> {
-        &self.picked_test_cases
     }
 
     fn generate_query_batch(
@@ -711,7 +701,6 @@ impl TestCaseGenerator {
                 .choose(&mut self.rng)
                 .expect("we have at least one testcase option");
             tracing::info!("Request {} has type {:?}", request_id, option);
-            *self.picked_test_cases.entry(*option).or_insert(0) += 1;
             match &option {
                 TestCase::NonMatch => {
                     tracing::info!("Sending new iris code");

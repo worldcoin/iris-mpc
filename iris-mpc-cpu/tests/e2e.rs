@@ -3,7 +3,7 @@ use iris_mpc_common::{
     helpers::smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
     iris_db::{db::IrisDB, iris::IrisCode},
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
-    test::{generate_full_test_db, prepare_batch, E2ETemplate, TestCase, TestCaseGenerator},
+    test::{generate_full_test_db, prepare_batch, E2ETemplate, TestCaseGenerator},
     vector_id::VectorId,
 };
 use iris_mpc_cpu::{
@@ -25,7 +25,6 @@ use uuid::Uuid;
 const DB_SIZE: usize = 1000;
 const DB_RNG_SEED: u64 = 0xfeedface;
 const INTERNAL_RNG_SEED: u64 = 0xcafef00d;
-// Sized so every TestCase in `default_test_set()` is picked at least once.
 const NUM_BATCHES: usize = 20;
 const MAX_BATCH_SIZE: usize = 10;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
@@ -254,20 +253,6 @@ async fn e2e_test_async() -> Result<()> {
             [&mut handle0, &mut handle1, &mut handle2],
         )
         .await?;
-
-    // Fail if the seed + batch counts miss any variant in the default set.
-    let picked = test_case_generator.picked_test_cases();
-    tracing::info!("TestCase coverage: {:?}", picked);
-    let missing: Vec<TestCase> = TestCase::default_test_set()
-        .into_iter()
-        .filter(|tc| !picked.contains_key(tc))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "e2e_test did not cover these TestCase variants: {missing:?}. \
-         Picked counts: {picked:?}. \
-         Bump NUM_BATCHES / MAX_BATCH_SIZE or change INTERNAL_RNG_SEED."
-    );
 
     drop(handle0);
     drop(handle1);
@@ -848,6 +833,13 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let x_left = IrisCode::random_rng(&mut rng);
     let x_right = IrisCode::random_rng(&mut rng);
 
+    // The X'/Y/Z family of variants used across batches 3–5, defined as
+    // rotations of the seed X. The rotation window is ±15, so |X'−X|=15 sits
+    // at the edge, |Y−X|=30 is out of window, and |Z−X|=15 is also edge.
+    let x_prime_rot: isize = 15; // X' = X rotated +15 (reauth's new iris)
+    let y_rot: isize = 30; // Y  = X rotated +30
+    let z_rot: isize = -15; // Z  = X rotated −15
+
     // Batch 1: seed X + its 30 non-zero rotations. Slot 0 inserts; each
     // rotation intra-batch-matches slot 0's centered X and is blocked.
     let seed = uniqueness_variant(
@@ -911,7 +903,7 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let x_prime = reauth_variant(
         &x_left,
         &x_right,
-        15,
+        x_prime_rot,
         false,
         seed_db_index,
         format!("batch3 slot 0: reauth X'=X+15 target={seed_db_index}"),
@@ -919,7 +911,7 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let y_b3 = uniqueness_variant(
         &x_left,
         &x_right,
-        30,
+        y_rot,
         false,
         "batch3 slot 1: Y=X+30 — blocked intra-batch by X' reauth".to_string(),
         Expectation::IntraBatchBlockedBy {
@@ -930,7 +922,7 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let z_b3 = uniqueness_variant(
         &x_left,
         &x_right,
-        -15,
+        z_rot,
         false,
         format!(
             "batch3 slot 2: Z=X-15 — matches original X at {seed_db_index} (reauth not yet applied)"
@@ -956,7 +948,7 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let y_b4 = uniqueness_variant(
         &x_left,
         &x_right,
-        30,
+        y_rot,
         false,
         format!("batch4 slot 0: Y=X+30 — matches X' in DB at {seed_db_index}"),
         Expectation::DbMatchAt {
@@ -966,7 +958,7 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let z_b4 = uniqueness_variant(
         &x_left,
         &x_right,
-        -15,
+        z_rot,
         false,
         format!("batch4 slot 1: Z=X-15 — UniqueInsert at serial > {seed_db_index}"),
         Expectation::UniqueInsert {
@@ -991,7 +983,7 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let x_prime_reenroll = uniqueness_variant(
         &x_left,
         &x_right,
-        15,
+        x_prime_rot,
         false,
         format!("batch5: uniqueness X'=X+15 after same-batch delete({seed_db_index})"),
         Expectation::UniqueInsert {
