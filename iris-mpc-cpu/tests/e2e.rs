@@ -289,10 +289,7 @@ enum Expectation {
     /// Matched a specific stored iris.
     DbMatchAt { expected_match_index: u32 },
     /// Blocked by an earlier mutating slot in the same batch.
-    IntraBatchBlockedBy {
-        earlier_request_id: String,
-        earlier_role: String,
-    },
+    IntraBatchBlockedBy { earlier_request_id: String },
     /// `full_face_mirror_attack_detected` raised, mirror match at the given index.
     MirrorAttackDetected { expected_mirror_match_index: u32 },
     /// Reauth target updated.
@@ -327,11 +324,8 @@ impl Expectation {
             DbMatchAt {
                 expected_match_index,
             } => format!("DbMatch at index {expected_match_index} (match_ids contains it)"),
-            IntraBatchBlockedBy {
-                earlier_role,
-                earlier_request_id,
-            } => format!(
-                "IntraBatchBlocked by earlier slot (role: {earlier_role}; request_id={earlier_request_id}) — match_ids empty, matched_batch_request_ids contains the earlier request_id"
+            IntraBatchBlockedBy { earlier_request_id } => format!(
+                "IntraBatchBlocked — match_ids empty, matched_batch_request_ids contains {earlier_request_id}"
             ),
             MirrorAttackDetected {
                 expected_mirror_match_index,
@@ -632,10 +626,7 @@ fn evaluate_expectation(obs: &Observation) -> Vec<String> {
                 ));
             }
         }
-        IntraBatchBlockedBy {
-            earlier_request_id,
-            earlier_role: _,
-        } => {
+        IntraBatchBlockedBy { earlier_request_id } => {
             chk("was_match", obs.was_match, true);
             chk("mirror_attack", obs.mirror_attack, false);
             chk("successful_reauth", obs.successful_reauth, false);
@@ -866,7 +857,6 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
             format!("batch1: rot={rot:+} non-mirror — blocked intra-batch by slot 0"),
             Expectation::IntraBatchBlockedBy {
                 earlier_request_id: seed_request_id.clone(),
-                earlier_role: "batch1 slot 0 — seed X UniqueInsert".to_string(),
             },
         ));
     }
@@ -881,6 +871,9 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
         &mut rng,
     )
     .await?;
+    // The slot at this index is the "primary" slot for the rest of the
+    // test: batch 3's reauth overwrites the iris stored here, batch 5's
+    // delete replaces it with a dummy, but the serial ID itself is stable.
     let seed_db_index = obs[0].merged_results;
 
     // Batch 2: every rotation/mirror variant matches the stored seed.
@@ -916,7 +909,6 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
         "batch3 slot 1: Y=X+30 — blocked intra-batch by X' reauth".to_string(),
         Expectation::IntraBatchBlockedBy {
             earlier_request_id: x_prime.request_id.clone(),
-            earlier_role: "batch3 slot 0 — X' reauth".to_string(),
         },
     );
     let z_b3 = uniqueness_variant(
@@ -943,8 +935,9 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     )
     .await?;
 
-    // Batch 4: DB now holds X' at seed_idx. Y matches X'; Z is out of
-    // rotation window vs X' and inserts fresh. Proves reauth displaced X.
+    // Batch 4: same (Y, Z) irises as batch 3, but the DB now holds X' at
+    // seed_idx. Y matches X'; Z is out of rotation window vs X' and inserts
+    // fresh. Proves reauth displaced X.
     let y_b4 = uniqueness_variant(
         &x_left,
         &x_right,
@@ -986,6 +979,8 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
         x_prime_rot,
         false,
         format!("batch5: uniqueness X'=X+15 after same-batch delete({seed_db_index})"),
+        // Serials are monotonic and never reused; Z at z_db_index was the
+        // last fresh insert, so anything new here must land above it.
         Expectation::UniqueInsert {
             min_index: z_db_index + 1,
         },
