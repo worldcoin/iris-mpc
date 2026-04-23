@@ -516,8 +516,18 @@ async fn server_main(config: Config) -> Result<()> {
     }
     .await;
 
-    // Always release freeze, even on error.
-    rerand_store::release_rerand_freeze(&freeze_pool).await?;
+    // Always attempt freeze release, but never let its failure undo a
+    // successful startup. `release_rerand_freeze` already retries internally,
+    // and a subsequent startup will re-issue a freeze with a new generation
+    // that the worker re-acknowledges (see `check_and_handle_freeze` generation
+    // change handling).
+    if let Err(e) = rerand_store::release_rerand_freeze(&freeze_pool).await {
+        tracing::error!(
+            "Failed to release rerand freeze after startup: {:?}. \
+             Worker will re-acknowledge on next startup freeze.",
+            e
+        );
+    }
 
     let (mut handle, store) = match frozen_result? {
         None => return Ok(()),

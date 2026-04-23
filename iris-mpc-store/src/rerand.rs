@@ -320,12 +320,21 @@ pub async fn delete_staging_for_old_epochs(
     Ok(result.rows_affected())
 }
 
-/// Delete rerand progress rows for epochs older than `current_epoch`.
+/// Delete rerand progress rows for epochs strictly older than the one
+/// immediately preceding `current_epoch`.
+///
+/// We intentionally keep the rows from the immediately prior epoch so that
+/// `get_applied_watermark_from_pool` does not transiently return `None`
+/// between the end of epoch `E` and the first applied chunk of epoch `E+1`.
+/// A transient `None` here used to cause the cross-party startup watermark
+/// check (`freeze_and_verify_inner`) to spuriously classify this party as
+/// behind any peer still reporting `Some((E, last_chunk))`, producing a
+/// release / re-freeze oscillation during rolling deploys at epoch bumps.
 pub async fn delete_rerand_progress_for_old_epochs(
     pool: &PgPool,
     current_epoch: i32,
 ) -> Result<u64> {
-    let result = sqlx::query("DELETE FROM rerand_progress WHERE epoch < $1")
+    let result = sqlx::query("DELETE FROM rerand_progress WHERE epoch < $1 - 1")
         .bind(current_epoch)
         .execute(pool)
         .await?;
@@ -388,6 +397,25 @@ const FREEZE_POLL: Duration = Duration::from_secs(2);
 
 fn rerand_control_exists(err: &sqlx::Error) -> bool {
     !is_undefined_table_sqlx(err)
+}
+
+/// Strict-less-than comparator for applied watermarks that documents the
+/// intended semantics at the call site and avoids accidentally relying on
+/// `Option<T>`'s derived ordering (which treats `None < Some(_)`).
+///
+/// Semantics:
+/// - `None` means "never applied anything" — this is the legitimate day-0
+///   state before any epoch has completed its first chunk on any party.
+/// - When combined with
+///   [`delete_rerand_progress_for_old_epochs`]'s retain-prior-epoch policy,
+///   `None` should only arise on genuinely fresh deployments, not as a
+///   transient epoch-boundary artifact.
+fn watermark_lt(a: Option<(i32, i32)>, b: Option<(i32, i32)>) -> bool {
+    match (a, b) {
+        (None, Some(_)) => true,
+        (Some(x), Some(y)) => x < y,
+        _ => false,
+    }
 }
 
 /// Request the rerand worker to freeze. Writes a unique `freeze_generation`
@@ -668,11 +696,36 @@ async fn freeze_and_verify_inner(pool: &PgPool, peers: &[(&str, usize)]) -> Resu
             Some(g) => g,
             None => return Ok(()), // pre-migration, no rerand tables
         };
-        wait_for_rerand_frozen(pool, &gen).await?;
+
+        // Bound the ack wait by whatever remains of the outer deadline. The
+        // helper's own `FREEZE_TIMEOUT` resets per call, so without this the
+        // total elapsed time across repeated catchup iterations can exceed the
+        // advertised `FREEZE_TIMEOUT` by a large factor.
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            let _ = release_rerand_freeze(pool).await;
+            eyre::bail!(
+                "Rerand freeze+convergence timeout after {:?}. \
+                 Ensure all rerand workers and main servers are healthy.",
+                FREEZE_TIMEOUT,
+            );
+        }
+        match tokio::time::timeout(remaining, wait_for_rerand_frozen(pool, &gen)).await {
+            Ok(r) => r?,
+            Err(_) => {
+                let _ = release_rerand_freeze(pool).await;
+                eyre::bail!(
+                    "Rerand freeze+convergence timeout after {:?} (ack wait; generation={}). \
+                     Ensure all rerand workers and main servers are healthy.",
+                    FREEZE_TIMEOUT,
+                    gen,
+                );
+            }
+        }
 
         loop {
             if tokio::time::Instant::now() >= deadline {
-                release_rerand_freeze(pool).await?;
+                let _ = release_rerand_freeze(pool).await;
                 eyre::bail!(
                     "Rerand watermark convergence timeout after {:?}. \
                      Ensure all rerand workers and main servers are healthy.",
@@ -689,7 +742,7 @@ async fn freeze_and_verify_inner(pool: &PgPool, peers: &[(&str, usize)]) -> Resu
                 if peer != local {
                     all_equal = false;
                 }
-                if peer > max_wm {
+                if watermark_lt(max_wm, peer) {
                     max_wm = peer;
                 }
             }
@@ -702,7 +755,7 @@ async fn freeze_and_verify_inner(pool: &PgPool, peers: &[(&str, usize)]) -> Resu
                 return Ok(());
             }
 
-            if local < max_wm {
+            if watermark_lt(local, max_wm) {
                 tracing::info!(
                     "Local watermark {:?} behind max {:?}, releasing freeze to catch up",
                     local,
@@ -739,5 +792,34 @@ mod tests {
     #[test]
     fn test_validate_identifier_rejects_injection() {
         assert!(validate_identifier("public; DROP TABLE irises").is_err());
+    }
+
+    #[test]
+    fn test_watermark_lt_both_none_is_false() {
+        assert!(!watermark_lt(None, None));
+    }
+
+    #[test]
+    fn test_watermark_lt_none_lt_some() {
+        assert!(watermark_lt(None, Some((0, 0))));
+    }
+
+    #[test]
+    fn test_watermark_lt_some_not_lt_none() {
+        // Regression guard for the epoch-boundary bug: a local `Some((E, k))`
+        // must not be considered behind a peer reporting `None`, since peers
+        // reporting `None` are strictly at earlier progress than any applied
+        // chunk.
+        assert!(!watermark_lt(Some((0, 0)), None));
+        assert!(!watermark_lt(Some((3, 42)), None));
+    }
+
+    #[test]
+    fn test_watermark_lt_some_some_uses_lexicographic() {
+        assert!(watermark_lt(Some((0, 4)), Some((1, 0))));
+        assert!(watermark_lt(Some((1, 0)), Some((1, 1))));
+        assert!(!watermark_lt(Some((1, 1)), Some((1, 1))));
+        assert!(!watermark_lt(Some((1, 1)), Some((1, 0))));
+        assert!(!watermark_lt(Some((1, 0)), Some((0, 99))));
     }
 }
