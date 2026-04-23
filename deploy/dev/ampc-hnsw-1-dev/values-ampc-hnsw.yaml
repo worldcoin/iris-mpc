@@ -1,18 +1,19 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1700960"
+    value: "1048576"
 
   - name: GENESIS_BATCH_SIZE
-    value: "static:96"
-
-  - name: GENESIS_CHECKPOINT_FREQUENCY
-    value: "10000"
+    value: "dynamic:cap=96,error_rate=128"
 
   - name: RUST_LOG
     value: "info"
 
   - name: RUST_BACKTRACE
     value: "full"
+
+  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
+    value: "32"
+
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
@@ -22,12 +23,6 @@ env:
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
     value: "wf-smpcv2-dev-hnsw-performance-reports"
-
-  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
-    value: "ampc-hnsw-graph-store-node-1-dev-eu-central-1"
-
-  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_REGION
-    value: "eu-central-1"
 
   - name: SMPC__PPROF_PREFIX
     value: "dev/hnsw"
@@ -44,27 +39,6 @@ env:
       fieldRef:
         fieldPath: metadata.annotations['loadtest/run-id']
 
-  # Genesis pprof settings
-  - name: SMPC__GENESIS_PPROF_ENABLED
-    value: "true"
-
-  - name: SMPC__GENESIS_PPROF_S3_BUCKET
-    value: "wf-smpcv2-dev-hnsw-performance-reports"
-
-  - name: SMPC__GENESIS_PPROF_PREFIX
-    value: "dev/genesis"
-
-  - name: SMPC__GENESIS_PPROF_FREQUENCY
-    value: "49"
-
-  - name: SMPC__GENESIS_PPROF_FLAME_ONLY
-    value: "true"
-
-  - name: SMPC__GENESIS_PPROF_RUN_ID
-    valueFrom:
-      fieldRef:
-        fieldPath: metadata.annotations['loadtest/run-id']
-
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
@@ -77,29 +51,17 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
-  - name: SMPC__DATABASE__URL
-    valueFrom:
-      secretKeyRef:
-        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
-        name: application
-
-  - name: SMPC__SCHEMA_NAME
-    value: "genesis"
-
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_cpu1M"
-
-  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
-    value: "_gpu1M"
+    value: "_minfhd"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "4194304"
+    value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "96"
 
   - name: SMPC__PREDEFINED_BATCH_SIZES
-    value: '[16, 32, 64, 96]'
+    value: '[64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]'
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -114,9 +76,6 @@ env:
     value: "64"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "32"
-
-  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
