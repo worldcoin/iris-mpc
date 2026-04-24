@@ -1,9 +1,15 @@
 env:
   - name: GENESIS_MAX_HEIGHT
-    value: "1048576"
+    value: "1750000"
 
   - name: GENESIS_BATCH_SIZE
-    value: "dynamic:cap=96,error_rate=128"
+    value: "static:96"
+
+  - name: GENESIS_CHECKPOINT_FREQUENCY
+    value: "10000"
+
+  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
+    value: "48"
 
   - name: RUST_LOG
     value: "info"
@@ -11,18 +17,22 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
-  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
-    value: "32"
-
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "true"
+    value: "false"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
     value: "wf-smpcv2-dev-hnsw-performance-reports"
+
+  - name: "SMPC__GRAPH_CHECKPOINT_BUCKET_NAME"
+    value: "ampc-hnsw-graph-store-node-2-dev-eu-central-1"
+
+  - name: "SMPC__GRAPH_CHECKPOINT_BUCKET_REGION"
+    value: "eu-central-1"
+
 
   - name: SMPC__PPROF_PREFIX
     value: "dev/hnsw"
@@ -42,6 +52,18 @@ env:
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
+  - name: SMPC__PARTY_ID
+    value: "2"
+
+  - name: SMPC__SCHEMA_NAME
+    value: "genesis"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_cpu1M"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "_gpu1M"
+
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-2"
 
@@ -51,17 +73,17 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
-  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_minfhd"
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
 
   - name: SMPC__MAX_DB_SIZE
-    value: "2000000"
+    value: "2097152"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "96"
-
-  - name: SMPC__PREDEFINED_BATCH_SIZES
-    value: '[64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64]'
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -73,13 +95,22 @@ env:
     value: "96"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "64"
+    value: "96"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "true"
+    value: "false"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
+    value: "512"
+
+  - name: SMPC__N_BUCKETS
+    value: "16"
+
+  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
+    value: "false"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
@@ -233,4 +264,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-  - sg-0f4a0e8452af84495 # smpc2-dev ampc-hnsw pod sg
+    - sg-0f4a0e8452af84495 # smpc2-dev ampc-hnsw pod sg
