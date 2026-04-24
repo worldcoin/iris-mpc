@@ -145,11 +145,14 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
-    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        vectors
+    async fn vectors_as_queries(
+        &mut self,
+        vectors: Vec<Self::VectorRef>,
+    ) -> Result<Vec<Self::QueryRef>> {
+        Ok(vectors
             .iter()
             .map(|id| self.storage.get_vector(id).unwrap().clone())
-            .collect()
+            .collect())
     }
 
     async fn eval_distance(
@@ -275,12 +278,15 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
-    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+    async fn vectors_as_queries(
+        &mut self,
+        vectors: Vec<Self::VectorRef>,
+    ) -> Result<Vec<Self::QueryRef>> {
         let store = self.storage.read().await;
-        vectors
+        Ok(vectors
             .iter()
             .map(|id| store.get_vector(id).unwrap().clone())
-            .collect()
+            .collect())
     }
 
     async fn eval_distance(
@@ -489,7 +495,7 @@ mod tests {
             .into_iter()
         {
             let ids: Vec<_> = ids.into_iter().collect();
-            let queries = shared_vector.vectors_as_queries(ids.clone()).await;
+            let queries = shared_vector.vectors_as_queries(ids.clone()).await?;
 
             let mut jobs = JoinSet::new();
             for query in queries {

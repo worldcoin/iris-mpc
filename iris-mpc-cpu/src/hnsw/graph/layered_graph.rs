@@ -574,8 +574,8 @@ mod tests {
         async fn vectors_as_queries(
             &mut self,
             vectors: Vec<Self::VectorRef>,
-        ) -> Vec<Self::QueryRef> {
-            vectors
+        ) -> Result<Vec<Self::QueryRef>> {
+            Ok(vectors)
         }
 
         async fn eval_distance(

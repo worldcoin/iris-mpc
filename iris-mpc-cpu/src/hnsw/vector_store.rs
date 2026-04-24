@@ -73,7 +73,10 @@ pub trait VectorStore: Debug {
 
     /// Prepare queries from vectors. The query form may include some precomputation
     /// to help comparison to other vectors.
-    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef>;
+    async fn vectors_as_queries(
+        &mut self,
+        vectors: Vec<Self::VectorRef>,
+    ) -> Result<Vec<Self::QueryRef>>;
 
     /// Retain only vectors that are valid and currently usable by other methods.
     async fn only_valid_vectors(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::VectorRef> {
@@ -165,7 +168,7 @@ pub trait VectorStore: Debug {
             return Ok(neighborhood.to_vec());
         }
 
-        let query_ = self.vectors_as_queries(vec![base_node]).await;
+        let query_ = self.vectors_as_queries(vec![base_node]).await?;
         let query = query_
             .first()
             .ok_or_eyre("Unexpected: vectors_as_queries returned empty list of queries")?;

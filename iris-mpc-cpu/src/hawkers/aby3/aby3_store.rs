@@ -1,6 +1,8 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec},
+        hawk_main::iris_worker::{
+            cache_iris, IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec,
+        },
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -169,10 +171,11 @@ where
         vector: &<Self as VectorStore>::VectorRef,
     ) -> Result<Aby3Query> {
         let irises = self.workers.fetch_irises(vec![*vector]).await?;
-        let iris = irises.into_iter().next().unwrap();
-        let qid = QueryId::new();
-        self.workers.cache_queries(vec![(qid, iris)]).await?;
-        Ok(QuerySpec::new(qid))
+        let iris = irises
+            .into_iter()
+            .next()
+            .ok_or_eyre("fetch_irises did not return expected iris or empty default")?;
+        cache_iris(&self.workers, iris).await
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
@@ -399,7 +402,7 @@ where
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
 
-        let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await;
+        let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await?;
         let cached_qids: Vec<QueryId> = base_node_queries.iter().map(|q| q.query_id).collect();
         let batches: Vec<(Aby3Query, Vec<VectorId>)> =
             izip!(base_node_queries, neighborhoods.iter())
@@ -573,15 +576,18 @@ where
     /// Distance represented as a pair of Ring-typed shares.
     type DistanceRef = Aby3DistanceRef<D::Ring>;
 
-    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        let irises = self.workers.fetch_irises(vectors).await.unwrap();
+    async fn vectors_as_queries(
+        &mut self,
+        vectors: Vec<Self::VectorRef>,
+    ) -> Result<Vec<Self::QueryRef>> {
+        let irises = self.workers.fetch_irises(vectors).await?;
         let to_cache: Vec<_> = irises
             .into_iter()
             .map(|iris| (QueryId::new(), iris))
             .collect();
         let query_ids: Vec<QueryId> = to_cache.iter().map(|(qid, _)| *qid).collect();
-        self.workers.cache_queries(to_cache).await.unwrap();
-        query_ids.into_iter().map(Aby3Query::new).collect_vec()
+        self.workers.cache_queries(to_cache).await?;
+        Ok(query_ids.into_iter().map(Aby3Query::new).collect_vec())
     }
 
     async fn only_valid_vectors(
@@ -600,7 +606,8 @@ where
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         let mut d = self.eval_distance_batch(query, &[*vector]).await?;
-        Ok(d.pop().unwrap())
+        d.pop()
+            .ok_or_eyre("eval_distance_batch did not return expected distance")
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
@@ -1467,7 +1474,7 @@ mod tests {
                 let a = VectorId::from_0_index(0);
                 let b = VectorId::from_0_index(1);
 
-                let queries = store.vectors_as_queries(vec![a, b]).await;
+                let queries = store.vectors_as_queries(vec![a, b]).await?;
                 let vectors = vec![a, b, none];
                 let n_vecs = vectors.len();
 
