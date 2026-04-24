@@ -42,4 +42,7 @@ pub enum IndexationError {
 
     #[error("Failed to make a copy of the database: {0}")]
     DatabaseCopyFailure(String),
+
+    #[error("Failed to fetch irises from worker pool: {0}")]
+    FetchIrises(String),
 }

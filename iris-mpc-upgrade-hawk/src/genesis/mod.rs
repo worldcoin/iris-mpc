@@ -23,7 +23,8 @@ use iris_mpc_common::{
 pub use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
 use iris_mpc_cpu::{
     execution::hawk_main::{
-        BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
+        iris_worker::LocalIrisWorkerPool, BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs,
+        HawkOps, StoreId, LEFT, RIGHT,
     },
     genesis::{
         genesis_checkpoint::*,
@@ -38,7 +39,7 @@ use iris_mpc_cpu::{
         BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
         JobResult,
     },
-    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
+    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
@@ -173,7 +174,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         mut task_monitor_bg,
         checkpoint_s3_client,
         aws_rds_client,
-        imem_iris_stores,
+        _imem_iris_stores,
+        registries,
+        worker_pools,
         imem_graph_stores,
         mut hawk_handle,
         tx_results,
@@ -208,7 +211,8 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     exec_indexation(
         &ctx,
         &checkpoint_s3_client,
-        &imem_iris_stores,
+        &registries,
+        &worker_pools,
         &imem_graph_stores,
         hawk_handle,
         &tx_results,
@@ -264,6 +268,8 @@ async fn exec_setup(
     S3Client,
     RDSClient,
     Arc<BothEyes<Aby3SharedIrisesRef>>,
+    BothEyes<VectorIdRegistryRef>,
+    BothEyes<LocalIrisWorkerPool>,
     Arc<BothEyes<GraphRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
@@ -454,6 +460,8 @@ async fn exec_setup(
         graph_checkpoint.clone(),
     )
     .await?;
+    // Refresh HawkActor's internal registries now that iris_store is populated.
+    hawk_actor.refresh_registries().await;
     task_monitor_bg.check_tasks();
     tracing::info!("HNSW graph initialised from store");
 
@@ -491,11 +499,18 @@ async fn exec_setup(
         // return Ok(());
     }
 
-    // Set in memory Iris stores.
+    // Set in memory Iris stores (still needed for DB persistence thread).
     let imem_iris_stores = Arc::new([
         hawk_actor.iris_store(StoreId::Left),
         hawk_actor.iris_store(StoreId::Right),
     ]);
+
+    // Registries were already refreshed above; extract them for exec_indexation.
+    let registries = hawk_actor.registries();
+    let worker_pools = [
+        hawk_actor.worker_pool(StoreId::Left),
+        hawk_actor.worker_pool(StoreId::Right),
+    ];
 
     // Save graph store references for S3 checkpointing
     let imem_graph_stores: Arc<BothEyes<_>> = Arc::new([
@@ -533,6 +548,8 @@ async fn exec_setup(
         checkpoint_s3_client,
         aws_rds_client,
         imem_iris_stores,
+        registries,
+        worker_pools,
         imem_graph_stores,
         hawk_handle,
         tx_results,
@@ -701,7 +718,8 @@ async fn exec_delta(
 ///
 /// * `ctx` - Execution context information.
 /// * `s3_client` - AWS S3 client for checkpoint uploads.
-/// * `imem_iris_stores` - In-memory iris shares for indexation queries.
+/// * `registries` - Per-eye VectorId registries used by the batch generator.
+/// * `worker_pools` - Per-eye worker pools that own iris data and cache queries.
 /// * `imem_graph_stores` - In-memory graph stores for checkpoints.
 /// * `hawk_handle` - Hawk handle managing indexation & search over an HNSW graph.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
@@ -712,7 +730,8 @@ async fn exec_delta(
 async fn exec_indexation(
     ctx: &ExecutionContextInfo,
     s3_client: &S3Client,
-    imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
+    registries: &BothEyes<VectorIdRegistryRef>,
+    worker_pools: &BothEyes<LocalIrisWorkerPool>,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
@@ -775,7 +794,7 @@ async fn exec_indexation(
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
         while let Some(batch) = batch_generator
-            .next_batch(last_indexed_id, imem_iris_stores)
+            .next_batch(last_indexed_id, registries, worker_pools)
             .await?
         {
             // Coordinator: escape on shutdown.

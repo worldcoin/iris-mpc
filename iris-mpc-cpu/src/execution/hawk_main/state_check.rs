@@ -401,8 +401,8 @@ impl HawkSession {
         tracing::warn!("Iris checksums differ — starting binary-search debug protocol");
 
         // ── build prefix sums locally ────────────────────────────────────
-        let storage = session.aby3_store.read().await.storage.clone();
-        let prefix = storage.read().await.prefix_sums();
+        let registry = session.aby3_store.read().await.registry.clone();
+        let prefix = registry.read().await.prefix_sums();
         let my_len = (prefix.len() - 1) as u32;
 
         // ── agree on the global serial-ID range ──────────────────────────
@@ -474,7 +474,7 @@ impl HawkSession {
 
         // ── log findings ─────────────────────────────────────────────────
         let found = search.into_found();
-        let irises = storage.read().await;
+        let irises = registry.read().await;
         tracing::warn!(
             "Iris diff found {} differing serial IDs (cap {MAX_DIFF_SAMPLES}):",
             found.len(),
