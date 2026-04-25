@@ -1,5 +1,6 @@
 use crate::hnsw::{
-    searcher::{ConnectPlanV, LayerMode, UpdateEntryPoint},
+    graph::{GraphMutation, UpdateEntryPoint},
+    searcher::{ConnectPlanV, LayerMode},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
@@ -62,7 +63,7 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
-    let mut connect_plans = vec![None; insert_plans.len()];
+    let mut connect_plans: VecRequests<Option<ConnectPlanV<V>>> = vec![None; insert_plans.len()];
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
 
@@ -99,13 +100,18 @@ pub async fn insert<V: VectorStoreMut>(
         }
     }
 
-    let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
-    for (cp_idx, plan) in izip!(update_idxs, plans) {
-        graph.insert_apply(plan.clone()).await;
-        connect_plans[cp_idx].replace(plan);
-    }
+    let _graph_mutations = searcher.insert_prepare_batch(store, graph, updates).await?;
 
-    Ok(connect_plans)
+    // TODO: Convert GraphMutation to ConnectPlan for now to maintain compatibility
+    // This will be refactored when SingleHawkMutation is updated to use Vec<GraphMutation>
+    todo!("Handle GraphMutation from insert_prepare_batch");
+
+    // for (cp_idx, plan) in izip!(update_idxs, plans) {
+    //     graph.insert_apply(plan.clone()).await;
+    //     connect_plans[cp_idx].replace(plan);
+    // }
+    //
+    // Ok(connect_plans)
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.

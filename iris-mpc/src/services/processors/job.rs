@@ -134,7 +134,6 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize uniqueness result")?;
 
             let modification_key = RequestId(result_event.signup_id);
-            let graph_mutation = hawk_mutation.get_serialized_mutation_by_key(&modification_key);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
@@ -142,7 +141,6 @@ pub async fn process_job_result(
                     !result_event.is_match,
                     &result_string,
                     result_event.serial_id,
-                    graph_mutation,
                 );
 
             Ok(result_string)
@@ -193,11 +191,10 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize reauth result")?;
 
             let modification_key = RequestSerialId(serial_id);
-            let graph_mutation = hawk_mutation.get_serialized_mutation_by_key(&modification_key);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(success, &result_string, None, graph_mutation);
+                .mark_completed(success, &result_string, None);
 
             Ok(result_string)
         })
@@ -213,11 +210,10 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize identity deletion result")?;
 
             let modification_key = RequestSerialId(serial_id);
-            let graph_mutation = hawk_mutation.get_serialized_mutation_by_key(&modification_key);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(true, &result_string, None, graph_mutation);
+                .mark_completed(true, &result_string, None);
 
             Ok(result_string)
         })
@@ -264,7 +260,7 @@ pub async fn process_job_result(
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(false, &result_string, None, None);
+                .mark_completed(false, &result_string, None);
 
             Ok((request_type.clone(), result_string))
         })
@@ -287,7 +283,7 @@ pub async fn process_job_result(
             modifications
                 .get_mut(&RequestSerialId(serial_id))
                 .unwrap()
-                .mark_completed(true, &result_string, None, None);
+                .mark_completed(true, &result_string, None);
             Ok((request_type, result_string))
         })
         .collect::<Result<Vec<(String, String)>>>()?

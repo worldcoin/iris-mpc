@@ -15,7 +15,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
-    hnsw::searcher::{build_layer_updates, ConnectPlan, LayerMode, UpdateEntryPoint},
+    hnsw::{
+        graph::UpdateEntryPoint,
+        searcher::{build_layer_updates, ConnectPlan, LayerMode},
+    },
     protocol::shared_iris::GaloisRingSharedIris,
     utils::constants::N_PARTIES,
 };
