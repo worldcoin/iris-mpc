@@ -119,6 +119,8 @@ pub struct SearcherConfig {
     pub params: SearcherParams,
     pub layer_mode: LayerMode,
     pub layer_distribution: Option<LayerDistribution>,
+    #[serde(default)]
+    pub fixed_layer_search_batch_size: Option<usize>,
 }
 
 impl TryFrom<&SearcherConfig> for HnswSearcher {
@@ -136,7 +138,7 @@ impl TryFrom<&SearcherConfig> for HnswSearcher {
             params,
             layer_mode,
             layer_distribution,
-            fixed_layer_search_batch_size: None,
+            fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
         })
     }
 }

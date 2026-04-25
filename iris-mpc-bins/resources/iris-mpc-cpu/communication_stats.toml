@@ -1,26 +1,28 @@
 # communication_stats-specific settings
+distance_ops = "Fhd"
 batch_size = 5
-num_batches = 2
+num_batches = 3
 request_parallelism = 2
 connection_parallelism = 2
 sort_by = "Bytes"       # "Bytes" or "Messages"
 tracing = false
-output = "output_fhd_1000.txt"
-json_output = "tree_fhd_1000.json"
-csv_output = "flat_fhd_1000.csv"
+output = "output_fhd_100000_fixed_8000.txt"
+json_output = "tree_fhd_100000_fixed_8000.json"
+csv_output = "flat_fhd_100000_fixed_8000.csv"
 
 [irises]
 option = "NdjsonFile"
 path = "data/store.ndjson"
-limit = 1000
+limit = 100000
 selection = "All"
 
 [graph]
-path = "data/graph_1000.dat"
+path = "data/graph-320-256-minfhd_100000.dat"
 format = "Raw"
 
 [searcher]
 layer_mode = { LinearScan = { max_graph_layer = 1 } }
+fixed_layer_search_batch_size = 8000
 
 [searcher.params]
 option = "Standard"
