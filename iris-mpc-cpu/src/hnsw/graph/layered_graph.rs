@@ -171,28 +171,12 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
     }
 
-    /// Applies a `ConnectPlan` to finalize an insertion.
+    /// Applies a `ConnectPlan` (list of graph mutations) to finalize an insertion.
     ///
     /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the plan.
     pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
-        // If required, set vector as new entry point
-        match plan.update_ep {
-            UpdateEntryPoint::False => {}
-            UpdateEntryPoint::SetUnique { layer } => {
-                self.set_unique_entry_point(plan.inserted_vector.clone(), layer)
-                    .await;
-            }
-            UpdateEntryPoint::Append { layer } => {
-                self.add_entry_point(plan.inserted_vector.clone(), layer)
-                    .await;
-            }
-        }
-
-        // Connect the new vector to its neighbors in each layer.
-        for ((v, lc), new_nb) in plan.updates {
-            self.set_links(v, new_nb, lc).await;
-        }
+        self.apply_mutations(plan);
     }
 
     pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
@@ -308,13 +292,12 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].insert_node(id.clone(), neighbors);
                     }
                 }
-                GraphMutation::Compact { ref id, to_remove } => {
-                    // Compact node in each specified layer
-                    for (layer_idx, neighbors_to_remove) in to_remove {
-                        if layer_idx < self.layers.len() {
-                            self.layers[layer_idx].compact_node(id, neighbors_to_remove);
-                        }
-                    }
+                GraphMutation::Compact {
+                    ref id,
+                    layer,
+                    to_remove,
+                } => {
+                    self.layers[layer].compact_node(id, to_remove);
                 }
                 GraphMutation::Overwrite { id, layers } => {
                     // Overwrite node in each specified layer

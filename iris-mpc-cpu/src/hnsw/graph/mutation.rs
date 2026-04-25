@@ -17,8 +17,8 @@ pub enum GraphMutation<Vector: Ord> {
     },
     // Compact a neighborhood.
     Compact {
-        // List of layer, neighbors.
-        to_remove: Vec<(usize, Vec<Vector>)>,
+        to_remove: Vec<Vector>,
+        layer: usize,
         id: Vector,
     },
     // Overwrite a neighborhood. Used by re-randomization.

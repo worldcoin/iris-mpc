@@ -68,7 +68,7 @@ pub async fn insert<V: VectorStoreMut>(
     let m = searcher.params.get_M(0);
 
     let mut update_idxs = vec![];
-    let mut updates: Vec<(_, _, _)> = vec![];
+    let mut insert_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
     for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate() {
         if let Some(InsertPlanV {
             query,
@@ -95,23 +95,33 @@ pub async fn insert<V: VectorStoreMut>(
                 }
             };
 
-            updates.push((inserted.clone(), links, update_ep));
+            // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
+            let layers: Vec<(usize, Vec<V::VectorRef>)> = links
+                .into_iter()
+                .enumerate()
+                .map(|(layer, neighbors)| (layer, neighbors))
+                .collect();
+
+            insert_mutations.push(GraphMutation::InsertNode {
+                id: inserted.clone(),
+                layers,
+                update_ep,
+            });
             inserted_ids.push(inserted);
         }
     }
 
-    let _graph_mutations = searcher.insert_prepare_batch(store, graph, updates).await?;
+    let graph_mutations = searcher
+        .insert_prepare_batch(store, graph, insert_mutations)
+        .await?;
 
-    // TODO: Convert GraphMutation to ConnectPlan for now to maintain compatibility
-    // This will be refactored when SingleHawkMutation is updated to use Vec<GraphMutation>
-    todo!("Handle GraphMutation from insert_prepare_batch");
+    // Apply mutations to the graph and store them as connect plans
+    graph.apply_mutations(graph_mutations.clone());
+    for (cp_idx, mutation) in izip!(update_idxs.iter(), graph_mutations.into_iter()) {
+        connect_plans[*cp_idx].replace(vec![mutation]);
+    }
 
-    // for (cp_idx, plan) in izip!(update_idxs, plans) {
-    //     graph.insert_apply(plan.clone()).await;
-    //     connect_plans[cp_idx].replace(plan);
-    // }
-    //
-    // Ok(connect_plans)
+    Ok(connect_plans)
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
