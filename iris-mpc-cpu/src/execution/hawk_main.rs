@@ -85,8 +85,8 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::{graph_store, UpdateEntryPoint},
-        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode},
+        graph::{graph_store, GraphMutation, UpdateEntryPoint},
+        searcher::{LayerDistribution, NeighborhoodMode},
         GraphMem, HnswSearcher, VectorStore,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -465,14 +465,14 @@ pub struct HawkInsertPlan {
     pub classified: ClassifiedMatches,
 }
 
-/// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
+/// A list of graph mutations to apply to connect a new node into the HNSW graph.
 ///
 /// A `ConnectPlan` is the final output of the insertion preparation phase (`HnswSearcher::insert_prepare_batch`).
 /// Unlike `InsertPlanV`, which specifies the *desired* neighbors for the new node, `ConnectPlan`
 /// represents the full set of atomic graph updates required. This includes not only the new
 /// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
-pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
+pub type ConnectPlan = Vec<GraphMutation<VectorId>>;
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -783,11 +783,11 @@ impl HawkActor {
                             next_serial_id += 1;
                             vid
                         };
-                        crate::hnsw::searcher::ConnectPlan {
-                            inserted_vector,
-                            updates: BTreeMap::new(),
+                        vec![GraphMutation::InsertNode {
+                            id: inserted_vector,
+                            layers: vec![],
                             update_ep: UpdateEntryPoint::False,
-                        }
+                        }]
                     })
                 })
                 .collect_vec());
@@ -1513,7 +1513,12 @@ impl HawkResult {
                 mutation.plans[LEFT]
                     .as_ref()
                     .or(mutation.plans[RIGHT].as_ref())
-                    .map(|plan| plan.inserted_vector)
+                    .and_then(|plan| {
+                        plan.iter().find_map(|m| match m {
+                            GraphMutation::InsertNode { id, .. } => Some(id.clone()),
+                            _ => None,
+                        })
+                    })
             })
     }
 
@@ -1743,28 +1748,51 @@ impl HawkMutation {
             for (side, updates_map, plan_opt) in
                 izip!(STORE_IDS, updates_by_side.iter_mut(), mutation.plans)
             {
-                if let Some(plan) = plan_opt {
+                if let Some(mutations) = plan_opt {
                     let mut graph = graph_tx.with_graph(side);
-                    // Updating entry points sequentially is fine in practice
-                    match plan.update_ep {
-                        UpdateEntryPoint::False => {}
-                        UpdateEntryPoint::SetUnique { layer } => {
-                            graph.set_entry_point(plan.inserted_vector, layer).await?;
-                        }
-                        UpdateEntryPoint::Append { layer } => {
-                            graph.add_entry_point(plan.inserted_vector, layer).await?;
-                        }
-                    }
+                    for graph_mutation in mutations {
+                        match graph_mutation {
+                            GraphMutation::InsertNode {
+                                id,
+                                layers,
+                                update_ep,
+                            } => {
+                                // Updating entry points sequentially is fine in practice
+                                match update_ep {
+                                    UpdateEntryPoint::False => {}
+                                    UpdateEntryPoint::SetUnique { layer } => {
+                                        graph.set_entry_point(id.clone(), layer).await?;
+                                    }
+                                    UpdateEntryPoint::Append { layer } => {
+                                        graph.add_entry_point(id.clone(), layer).await?;
+                                    }
+                                }
 
-                    // Buffer link updates by side
-                    for ((inserted_vector, lc), neighbors) in plan.updates {
-                        let key = (
-                            inserted_vector.serial_id() as i64,
-                            inserted_vector.version_id(),
-                            lc as i16,
-                        );
-                        // Deduplicate: If multiple updates for the same node exist, the last one wins
-                        updates_map.insert(key, neighbors);
+                                // Buffer link updates by side
+                                for (layer, neighbors) in layers {
+                                    let key = (
+                                        id.serial_id() as i64,
+                                        id.version_id(),
+                                        layer as i16,
+                                    );
+                                    // Deduplicate: If multiple updates for the same node exist, the last one wins
+                                    updates_map.insert(key, neighbors);
+                                }
+                            }
+                            GraphMutation::Overwrite { id, layers } => {
+                                for (layer, neighbors) in layers {
+                                    let key = (
+                                        id.serial_id() as i64,
+                                        id.version_id(),
+                                        layer as i16,
+                                    );
+                                    updates_map.insert(key, neighbors);
+                                }
+                            }
+                            GraphMutation::RemoveNode { .. } | GraphMutation::Compact { .. } => {
+                                // TODO: implement RemoveNode and Compact persistence
+                            }
+                        }
                     }
                 }
             }
@@ -2579,10 +2607,7 @@ mod tests {
 #[cfg(feature = "db_dependent")]
 mod tests_db {
     use super::*;
-    use crate::hnsw::{
-        graph::graph_store::test_utils::TestGraphPg, graph::UpdateEntryPoint,
-        searcher::build_layer_updates,
-    };
+    use crate::hnsw::{graph::graph_store::test_utils::TestGraphPg, graph::UpdateEntryPoint};
 
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
@@ -2595,19 +2620,16 @@ mod tests_db {
             vectors
                 .iter()
                 .enumerate()
-                .map(|(i, vector)| ConnectPlan {
-                    inserted_vector: *vector,
-                    updates: build_layer_updates(
-                        *vector,
-                        vec![vectors[side]],
-                        vec![vec![*vector]],
-                        0,
-                    ),
-                    update_ep: if i == side {
-                        UpdateEntryPoint::SetUnique { layer: 0 }
-                    } else {
-                        UpdateEntryPoint::False
-                    },
+                .map(|(i, vector)| {
+                    vec![GraphMutation::InsertNode {
+                        id: *vector,
+                        layers: vec![(0, vec![vectors[side]])],
+                        update_ep: if i == side {
+                            UpdateEntryPoint::SetUnique { layer: 0 }
+                        } else {
+                            UpdateEntryPoint::False
+                        },
+                    }]
                 })
                 .map(Some)
                 .collect_vec()
@@ -2685,15 +2707,15 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::{graph::UpdateEntryPoint, searcher::build_layer_updates};
+    use crate::hnsw::graph::UpdateEntryPoint;
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        ConnectPlan {
-            inserted_vector: vector_id,
-            updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
+        vec![GraphMutation::InsertNode {
+            id: vector_id,
+            layers: vec![(0, vec![vector_id])],
             update_ep: UpdateEntryPoint::False,
-        }
+        }]
     }
 
     #[test]

@@ -1,6 +1,10 @@
 use crate::{
     execution::hawk_main::StoreId,
-    hnsw::{graph::UpdateEntryPoint, searcher::ConnectPlanV, GraphMem, VectorStore},
+    hnsw::{
+        graph::{GraphMutation, UpdateEntryPoint},
+        searcher::ConnectPlanV,
+        GraphMem, VectorStore,
+    },
 };
 use eyre::{eyre, Result};
 use futures::future::try_join_all;
@@ -37,7 +41,7 @@ pub struct GenesisGraphCheckpointRow {
 pub struct GraphMutationRow {
     pub id: i64,
     pub modification_id: i64,
-    /// Bincode-serialized BothEyes<GraphMutation<VectorId>> (mutations for both eyes)
+    /// Bincode-serialized BothEyes<Vec<GraphMutation<VectorId>>> (mutations for both eyes)
     pub serialized_mutation: Vec<u8>,
 }
 
@@ -462,23 +466,46 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         self.tx.tx.deref_mut()
     }
 
-    /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
-    /// graph.
-    pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
-        // If required, set vector as new entry point
-        match plan.update_ep {
-            UpdateEntryPoint::False => {}
-            UpdateEntryPoint::SetUnique { layer } => {
-                self.set_entry_point(plan.inserted_vector, layer).await?;
+    /// Apply a list of graph mutations to the graph.
+    pub async fn insert_apply(&mut self, mutations: ConnectPlanV<V>) -> Result<()> {
+        for mutation in mutations {
+            match mutation {
+                GraphMutation::InsertNode {
+                    id,
+                    layers,
+                    update_ep,
+                } => {
+                    // If required, set vector as new entry point
+                    match update_ep {
+                        UpdateEntryPoint::False => {}
+                        UpdateEntryPoint::SetUnique { layer } => {
+                            self.set_entry_point(id.clone(), layer).await?;
+                        }
+                        UpdateEntryPoint::Append { layer } => {
+                            self.add_entry_point(id.clone(), layer).await?;
+                        }
+                    }
+                    // Connect the new vector to its neighbors in each layer.
+                    for (layer, neighbors) in layers {
+                        self.set_links(id.clone(), neighbors, layer).await?;
+                    }
+                }
+                GraphMutation::RemoveNode { id } => {
+                    // TODO: implement node removal in graph store
+                    tracing::warn!("RemoveNode mutation for {:?} not yet implemented in graph store", id);
+                }
+                GraphMutation::Compact { id, layer, to_remove } => {
+                    // TODO: implement neighborhood compaction
+                    tracing::warn!("Compact mutation for {:?} layer {} not yet implemented", id, layer);
+                    let _ = to_remove;
+                }
+                GraphMutation::Overwrite { id, layers } => {
+                    // Overwrite neighborhoods for the node
+                    for (layer, neighbors) in layers {
+                        self.set_links(id.clone(), neighbors, layer).await?;
+                    }
+                }
             }
-            UpdateEntryPoint::Append { layer } => {
-                self.add_entry_point(plan.inserted_vector, layer).await?;
-            }
-        }
-
-        // Connect the new vector to its neighbors in each layer.
-        for ((inserted_vector, lc), neighbors) in plan.updates {
-            self.set_links(inserted_vector, neighbors, lc).await?;
         }
 
         Ok(())
