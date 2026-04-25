@@ -115,7 +115,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         sync_modifications(
             &config,
             &iris_store,
-            Some(&graph_store),
             &aws_clients,
             &shares_encryption_key_pair,
             sync_result.clone(),

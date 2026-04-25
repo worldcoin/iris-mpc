@@ -9,7 +9,9 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::Neighborhood, metrics::ops_counter::Operation, VectorStore,
+    graph::{neighborhood::Neighborhood, GraphMutation, UpdateEntryPoint},
+    metrics::ops_counter::Operation,
+    VectorStore,
 };
 
 use crate::hnsw::GraphMem;
@@ -319,18 +321,6 @@ pub fn build_layer_updates<V: Clone + Ord>(
     once(((inserted_vector, layer), neighbors.clone()))
         .chain(izip!(neighbors, nb_links).map(|(nb, nb_nbs)| ((nb, layer), nb_nbs)))
         .collect()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UpdateEntryPoint {
-    /// Do not update entry points based on inserted vector
-    False,
-
-    /// Set a new unique entry point
-    SetUnique { layer: usize },
-
-    /// Add a new item to the set of entry points
-    Append { layer: usize },
 }
 
 #[allow(non_snake_case)]
@@ -1568,7 +1558,8 @@ impl HnswSearcher {
         let updates = vec![(inserted_vector, links, update_ep)];
         let mut r = self.insert_prepare_batch(store, graph, updates).await?;
         let first = r.pop();
-        first.ok_or(eyre!("insert_prepare produced no connect plans"))
+        todo!("deal with ConnectPlanV vs GraphMutation")
+        //first.ok_or(eyre!("insert_prepare produced no connect plans"))
     }
 
     /// Prepare connect plans for a batch of graph updates.
@@ -1593,7 +1584,7 @@ impl HnswSearcher {
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
-    ) -> Result<Vec<ConnectPlanV<V>>> {
+    ) -> Result<Vec<GraphMutation<V::VectorRef>>> {
         if updates.is_empty() {
             return Ok(Vec::new());
         }
@@ -1738,7 +1729,13 @@ impl HnswSearcher {
             }
         }
 
-        Ok(output_plans)
+        todo!("Convert ConnectPlanV to Vec<GraphMutation>. GraphMutation::InsertNode already has update_ep field.");
+        // let mut graph_mutations = Vec::new();
+        // for plan in output_plans {
+        //     let mutations = plan_to_graph_mutations(plan);
+        //     graph_mutations.extend(mutations);
+        // }
+        // Ok(graph_mutations)
     }
 
     /// Insert a vector using the search results from `search_to_insert`,

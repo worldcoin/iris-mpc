@@ -331,7 +331,6 @@ async fn server_main(config: Config) -> Result<()> {
         sync_modifications(
             &config,
             &store,
-            None,
             &aws_clients,
             &shares_encryption_key_pair,
             sync_result,
@@ -590,7 +589,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestId(request_ids[i].clone()))
                         .unwrap()
-                        .mark_completed(!result_event.is_match, &result_string, result_event.serial_id, None);
+                        .mark_completed(!result_event.is_match, &result_string, result_event.serial_id);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -657,7 +656,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(success, &result_string, None, None);
+                        .mark_completed(success, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -673,7 +672,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string, None, None);
+                        .mark_completed(true, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -713,7 +712,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestId(request_id))
                         .unwrap()
-                        .mark_completed(false, &result_string, None, None);
+                        .mark_completed(false, &result_string, None);
                     (request_type.clone().to_string(), result_string.clone())
                 })
                 .collect::<Vec<(String, String)>>()
@@ -735,7 +734,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string, None, None);
+                        .mark_completed(true, &result_string, None);
                     (request_type, result_string)
                 })
                 .collect::<Vec<(String, String)>>()

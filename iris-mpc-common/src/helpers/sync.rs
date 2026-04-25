@@ -64,7 +64,8 @@ pub struct Modification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
-    pub graph_mutation: Option<Vec<u8>>,
+    /// References a row in hawk_graph_mutations which stores BothEyes<GraphMutation>
+    pub graph_mutation_id: Option<i64>,
 }
 
 impl PartialEq for Modification {
@@ -75,7 +76,7 @@ impl PartialEq for Modification {
             && self.s3_url == other.s3_url
             && self.status == other.status
             && self.persisted == other.persisted
-        // result_message_body graph_mutation are ignored since they are difference across nodes
+        // result_message_body and graph_mutation_id are ignored since they differ across nodes
     }
 }
 
@@ -83,10 +84,6 @@ impl Eq for Modification {}
 
 impl fmt::Debug for Modification {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let graph_mutation_summary = match &self.graph_mutation {
-            Some(bytes) => format!("Some([{} bytes])", bytes.len()),
-            None => "None".to_string(),
-        };
         let result_message_summary = match &self.result_message_body {
             Some(msg) => format!("Some([{} chars])", msg.chars().count()),
             None => "None".to_string(),
@@ -100,7 +97,7 @@ impl fmt::Debug for Modification {
             .field("status", &self.status)
             .field("persisted", &self.persisted)
             .field("result_message_body", &result_message_summary)
-            .field("graph_mutation", &graph_mutation_summary)
+            .field("graph_mutation_id", &self.graph_mutation_id)
             .finish()
     }
 }
@@ -115,7 +112,6 @@ impl Modification {
         persisted: bool,
         result_message_body: &str,
         updated_serial_id: Option<u32>,
-        graph_mutation: Option<Vec<u8>>,
     ) {
         self.status = ModificationStatus::Completed.to_string();
         self.result_message_body = Some(result_message_body.to_string());
@@ -123,7 +119,6 @@ impl Modification {
         if let Some(serial_id) = updated_serial_id {
             self.serial_id = Some(serial_id as i64);
         }
-        self.graph_mutation = graph_mutation;
     }
 
     /// Updates the node_id field in the SNS message JSON to specified one
@@ -339,10 +334,10 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
         if first.serial_id.is_some() && m.serial_id.is_some() {
             assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
         }
-        if first.graph_mutation.is_some() && m.graph_mutation.is_some() {
+        if first.graph_mutation_id.is_some() && m.graph_mutation_id.is_some() {
             assert_eq!(
-                first.graph_mutation, m.graph_mutation,
-                "Inconsistent graph mutations"
+                first.graph_mutation_id, m.graph_mutation_id,
+                "Inconsistent graph mutation IDs"
             );
         }
     }
@@ -373,7 +368,7 @@ mod tests {
         s3_url: Option<&str>,
         status: ModificationStatus,
         persisted: bool,
-        graph_mutation: Option<Vec<u8>>,
+        graph_mutation_id: Option<i64>,
     ) -> Modification {
         Modification {
             id,
@@ -383,7 +378,7 @@ mod tests {
             status: status.to_string(),
             persisted,
             result_message_body: None,
-            graph_mutation,
+            graph_mutation_id,
         }
     }
 
@@ -940,7 +935,7 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_reauth),
-            graph_mutation: None,
+            graph_mutation_id: None,
         };
 
         // Update the node_id in the serialized message
@@ -987,7 +982,7 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_deletion),
-            graph_mutation: None,
+            graph_mutation_id: None,
         };
 
         // Update the node_id in the serialized message

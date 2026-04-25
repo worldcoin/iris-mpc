@@ -75,7 +75,7 @@ impl From<ModificationInput> for Modification {
             status: value.get_status().to_string(),
             persisted: value.persisted,
             result_message_body: None,
-            graph_mutation: None,
+            graph_mutation_id: None,
         }
     }
 }

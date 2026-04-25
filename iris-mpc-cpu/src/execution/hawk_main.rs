@@ -85,8 +85,8 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::graph_store,
-        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint},
+        graph::{graph_store, UpdateEntryPoint},
+        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode},
         GraphMem, HnswSearcher, VectorStore,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -2420,8 +2420,8 @@ mod tests {
 mod tests_db {
     use super::*;
     use crate::hnsw::{
-        graph::graph_store::test_utils::TestGraphPg,
-        searcher::{build_layer_updates, UpdateEntryPoint},
+        graph::graph_store::test_utils::TestGraphPg, graph::UpdateEntryPoint,
+        searcher::build_layer_updates,
     };
 
     #[tokio::test]
@@ -2525,7 +2525,7 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::{build_layer_updates, UpdateEntryPoint};
+    use crate::hnsw::{graph::UpdateEntryPoint, searcher::build_layer_updates};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
