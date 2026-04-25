@@ -1,6 +1,8 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::IrisPoolHandle,
+        hawk_main::iris_worker::{
+            cache_iris, IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec,
+        },
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -29,11 +31,7 @@ use crate::{
 };
 use ampc_secret_sharing::shares::{vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    iris_db::iris::Threshold,
-    vector_id::VectorId,
-};
+use iris_mpc_common::{iris_db::iris::Threshold, vector_id::VectorId};
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 use static_assertions::const_assert;
@@ -47,62 +45,19 @@ use tracing::instrument;
 
 mod distance_fn;
 mod distance_ops;
-pub use distance_fn::DistanceFn;
+pub use distance_fn::{DistanceFn, DistanceMode};
 pub use distance_ops::{DistanceOps, FhdOps, NhdOps};
 
 /// The number of rotations at which to switch from binary tree to round-robin minimum algorithms.
 const MIN_ROUND_ROBIN_SIZE: usize = 1;
 const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 
-/// Iris to be searcher or inserted into the store.
+/// Lightweight handle referencing a cached query in the `IrisWorkerPool`.
 ///
-/// This is an iris reference along with cached preprocessed version, used for
-/// efficient Galois ring MPC comparison.
-#[derive(Clone, Hash, Eq, PartialEq, Debug)]
-pub struct Aby3Query {
-    /// Iris in the Shamir secret shared form over a Galois ring.
-    pub iris: ArcIris,
-
-    /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub iris_proc: ArcIris,
-}
-
-impl Aby3Query {
-    /// Creates a new query from a secret shared iris. The input iris is preprocessed for
-    /// faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub fn new(iris_ref: &ArcIris) -> Self {
-        let iris = iris_ref.clone();
-
-        let mut preprocessed = (**iris_ref).clone();
-        preprocessed.code.preprocess_iris_code_query_share();
-        preprocessed.mask.preprocess_mask_code_query_share();
-        let iris_proc = Arc::new(preprocessed);
-
-        Self { iris, iris_proc }
-    }
-
-    pub fn new_from_raw(iris: GaloisRingSharedIris) -> Self {
-        let iris = Arc::new(iris);
-        Self::new(&iris)
-    }
-
-    pub fn from_processed(
-        code: &GaloisRingIrisCodeShare,
-        mask: &GaloisRingTrimmedMaskCodeShare,
-        code_proc: &GaloisRingIrisCodeShare,
-        mask_proc: &GaloisRingTrimmedMaskCodeShare,
-    ) -> Self {
-        let iris = Arc::new(GaloisRingSharedIris {
-            code: code.clone(),
-            mask: mask.clone(),
-        });
-        let iris_proc = Arc::new(GaloisRingSharedIris {
-            code: code_proc.clone(),
-            mask: mask_proc.clone(),
-        });
-        Self { iris, iris_proc }
-    }
-}
+/// This is a type alias for `QuerySpec`. The worker pool owns all iris data;
+/// `Aby3Query` is just a `(QueryId, rotation, mirrored)` triple that selects
+/// a specific preprocessed rotation from the cache.
+pub type Aby3Query = QuerySpec;
 
 pub type Aby3VectorRef = VectorId;
 pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
@@ -110,43 +65,69 @@ pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
 pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 
+/// Metadata-only VectorId registry — `SharedIrisesRef<()>`.
+///
+/// Tracks VectorId presence, versions, and checksums without holding iris
+/// data.  `Aby3Store` uses this instead of `Aby3SharedIrisesRef` to
+/// enforce that all iris data reads go through `IrisWorkerPool`.
+pub type VectorIdRegistryRef = SharedIrisesRef<()>;
+
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
+///
+/// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`) and `W`
+/// (worker pool implementation). The default `W = LocalIrisWorkerPool` is the
+/// single-node implementation; future remote implementations will enable
+/// horizontal scaling.
 ///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
-pub struct Aby3Store<D = FhdOps> {
-    /// Reference to the shared irises
-    pub storage: Aby3SharedIrisesRef,
+pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
+    /// VectorId registry — tracks presence, versions, and checksums.
+    /// Does **not** hold iris data; all iris reads go through `workers`.
+    pub registry: VectorIdRegistryRef,
 
     /// Session for the SMPC operations
     pub session: Session,
 
-    /// used to spawn cpu bound tasks on a thread pool
-    pub workers: IrisPoolHandle,
+    /// Worker pool for CPU-bound distance computations.
+    pub workers: W,
 
     distance_fn: distance_fn::DistanceFn,
 
     _phantom: std::marker::PhantomData<D>,
 }
 
-impl<D: DistanceOps> Aby3Store<D>
+impl<D: DistanceOps, W: IrisWorkerPool> Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
 {
     pub fn new(
-        storage: Aby3SharedIrisesRef,
+        registry: VectorIdRegistryRef,
         session: Session,
-        workers: IrisPoolHandle,
-        distance_fn: DistanceFn,
+        workers: W,
+        distance_mode: DistanceMode,
     ) -> Self {
         Self {
-            storage,
+            registry,
             session,
-            distance_fn,
+            distance_fn: DistanceFn::new(distance_mode),
             workers,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Compute pairwise distances between pairs of cached queries.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_pairwise_distances(
+        &mut self,
+        pairs: Vec<Option<(QuerySpec, QueryId)>>,
+    ) -> Result<Vec<DistanceShare<D::Ring>>> {
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
+
+        self.distance_fn.eval_pairwise_distances(self, pairs).await
     }
 
     /// Converts distances from u16 secret shares to Ring-typed distance shares.
@@ -171,23 +152,6 @@ where
         self.lift_distances(dist).await
     }
 
-    /// Computes the dot product of the iris codes and masks of the given pairs of irises.
-    /// The input irises are given in the Shamir secret sharing scheme, while the output distances are additive replicated secret shares used in the ABY3 framework.
-    ///
-    /// Assumes that the first iris of each pair is preprocessed.
-    /// This first iris is usually preprocessed when a related query is created, see [Aby3Query] for more details.
-    #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn eval_pairwise_distances(
-        &mut self,
-        pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<DistanceShare<D::Ring>>> {
-        if pairs.is_empty() {
-            return Ok(vec![]);
-        }
-
-        self.distance_fn.eval_pairwise_distances(self, pairs).await
-    }
-
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
     pub fn new_storage(points: Option<HashMap<VectorId, ArcIris>>) -> Aby3SharedIrises {
         SharedIrises::new(
@@ -197,7 +161,21 @@ where
     }
 
     pub async fn checksum(&self) -> u64 {
-        self.storage.checksum().await
+        self.registry.checksum().await
+    }
+
+    /// Fetch a stored vector's iris from the worker pool and cache it as a query.
+    /// Returns a query handle (center rotation, non-mirrored).
+    pub async fn cache_query_from_store(
+        &self,
+        vector: &<Self as VectorStore>::VectorRef,
+    ) -> Result<Aby3Query> {
+        let irises = self.workers.fetch_irises(vec![*vector]).await?;
+        let iris = irises
+            .into_iter()
+            .next()
+            .ok_or_eyre("fetch_irises did not return expected iris or empty default")?;
+        cache_iris(&self.workers, iris).await
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
@@ -424,7 +402,8 @@ where
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
 
-        let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await;
+        let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await?;
+        let cached_qids: Vec<QueryId> = base_node_queries.iter().map(|q| q.query_id).collect();
         let batches: Vec<(Aby3Query, Vec<VectorId>)> =
             izip!(base_node_queries, neighborhoods.iter())
                 .map(|(q, nbhd)| (q, nbhd.clone()))
@@ -548,6 +527,10 @@ where
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // Evict cached queries from vectors_as_queries now that all
+        // distance computation using them is complete.
+        self.workers.evict_queries(cached_qids).await?;
+
         Ok(compacted_nbhds)
     }
 
@@ -581,7 +564,7 @@ where
     }
 }
 
-impl<D: DistanceOps> VectorStore for Aby3Store<D>
+impl<D: DistanceOps, W: IrisWorkerPool> VectorStore for Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
@@ -593,21 +576,26 @@ where
     /// Distance represented as a pair of Ring-typed shares.
     type DistanceRef = Aby3DistanceRef<D::Ring>;
 
-    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        self.storage
-            .get_vectors_or_empty(&vectors)
-            .await
-            .iter()
-            .map(Aby3Query::new)
-            .collect_vec()
+    async fn vectors_as_queries(
+        &mut self,
+        vectors: Vec<Self::VectorRef>,
+    ) -> Result<Vec<Self::QueryRef>> {
+        let irises = self.workers.fetch_irises(vectors).await?;
+        let to_cache: Vec<_> = irises
+            .into_iter()
+            .map(|iris| (QueryId::new(), iris))
+            .collect();
+        let query_ids: Vec<QueryId> = to_cache.iter().map(|(qid, _)| *qid).collect();
+        self.workers.cache_queries(to_cache).await?;
+        Ok(query_ids.into_iter().map(Aby3Query::new).collect_vec())
     }
 
     async fn only_valid_vectors(
         &mut self,
         mut vectors: Vec<Self::VectorRef>,
     ) -> Vec<Self::VectorRef> {
-        let storage = self.storage.read().await;
-        vectors.retain(|v| storage.contains(v));
+        let registry = self.registry.read().await;
+        vectors.retain(|v| registry.contains(v));
         vectors
     }
 
@@ -618,7 +606,8 @@ where
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         let mut d = self.eval_distance_batch(query, &[*vector]).await?;
-        Ok(d.pop().unwrap())
+        d.pop()
+            .ok_or_eyre("eval_distance_batch did not return expected distance")
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
@@ -730,13 +719,25 @@ where
     }
 }
 
-impl<D: DistanceOps> VectorStoreMut for Aby3Store<D>
+impl<D: DistanceOps, W: IrisWorkerPool> VectorStoreMut for Aby3Store<D, W>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
 {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.append(&query.iris).await
+        // Allocate next ID and register it in the registry (metadata only).
+        let vector_id = {
+            let mut reg = self.registry.write().await;
+            let id = reg.allocate_next_id();
+            reg.insert(id, ());
+            id
+        };
+        // Insert the actual iris data into the worker's store.
+        self.workers
+            .insert_irises(vec![(query.query_id, vector_id)])
+            .await
+            .expect("insert_irises failed: query not cached or store write failed");
+        vector_id
     }
 
     async fn insert_at(
@@ -744,7 +745,13 @@ where
         vector_ref: &Self::VectorRef,
         query: &Self::QueryRef,
     ) -> Result<Self::VectorRef> {
-        Ok(self.storage.insert(*vector_ref, &query.iris).await)
+        // Register in the metadata registry.
+        self.registry.write().await.insert(*vector_ref, ());
+        // Insert the actual iris data into the worker's store.
+        self.workers
+            .insert_irises(vec![(query.query_id, *vector_ref)])
+            .await?;
+        Ok(*vector_ref)
     }
 }
 
@@ -754,7 +761,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        execution::{hawk_main::scheduler::parallelize, session::SessionHandles},
+        execution::{
+            hawk_main::{
+                iris_worker::{cache_iris, cache_irises},
+                scheduler::parallelize,
+            },
+            session::SessionHandles,
+        },
         hawkers::{
             aby3::test_utils::{
                 eval_vector_distance, get_owner_index, lazy_random_setup,
@@ -788,9 +801,10 @@ mod tests {
         let mut jobs = JoinSet::new();
         for store in stores.iter() {
             let player_index = get_owner_index(store).await?;
-            let queries = (0..database_size)
-                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
-                .collect::<Vec<_>>();
+            let irises: Vec<ArcIris> = (0..database_size)
+                .map(|id| Arc::new(shared_irises[id][player_index].clone()))
+                .collect();
+            let queries = cache_irises(&store.lock().await.workers, irises).await?;
             let mut rng = rng.clone();
             let store = store.clone();
             jobs.spawn(async move {
@@ -799,7 +813,6 @@ mod tests {
                 let db = HnswSearcher::new_with_test_parameters();
 
                 let mut inserted = vec![];
-                // insert queries
                 for query in queries.iter() {
                     let insertion_layer = db.gen_layer_rng(&mut rng).unwrap();
                     let inserted_vector = db
@@ -814,11 +827,9 @@ mod tests {
                     inserted.push(inserted_vector)
                 }
                 tracing::debug!("FINISHED INSERTING");
-                // Search for the same codes and find matches.
                 let mut matching_results = vec![];
                 for v in inserted.into_iter() {
-                    let iris = store.storage.get_vector_or_empty(&v).await;
-                    let query = Aby3Query::new(&iris);
+                    let query = store.cache_query_from_store(&v).await.unwrap();
                     let neighbors = db
                         .search::<_, SortedNeighborhood<_>>(&mut *store, &aby3_graph, &query, 1)
                         .await
@@ -861,8 +872,9 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.read().await.get_points(),
-                premade_v.storage.read().await.get_points()
+                v_from_scratch.checksum().await,
+                premade_v.checksum().await,
+                "Registry checksum mismatch: from-scratch vs premade"
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();
@@ -894,8 +906,8 @@ mod tests {
                 let hawk_searcher = hawk_searcher.clone();
                 let v_lock = v.lock().await;
                 let g = g.clone();
-                let q = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                let q = Aby3Query::new(&q);
+                let q = v_lock.cache_query_from_store(&vector_id).await.unwrap();
+                drop(v_lock);
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
@@ -916,8 +928,7 @@ mod tests {
                 let g = g.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let iris = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                    let query = Aby3Query::new(&iris);
+                    let query = v_lock.cache_query_from_store(&vector_id).await.unwrap();
                     let secret_neighbors: SortedNeighborhood<_> = hawk_searcher
                         .search(&mut *v_lock, &g, &query, 1)
                         .await
@@ -986,13 +997,15 @@ mod tests {
         let mut aby3_inserts = vec![];
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
-            let player_preps: Vec<_> = (0..db_dim)
-                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
+            let player_irises: Vec<_> = (0..db_dim)
+                .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
-            for p in player_preps.iter() {
-                player_inserts.push(store_lock.storage.append(&p.iris).await);
+            for iris in player_irises.iter() {
+                let query = cache_iris(&store_lock.workers, iris.clone()).await?;
+                let vid = store_lock.insert(&query).await;
+                player_inserts.push(vid);
             }
             aby3_inserts.push(player_inserts);
         }
@@ -1359,12 +1372,13 @@ mod tests {
         let mut queries = vec![];
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
-            let player_preps: Vec<_> = (0..db_size)
-                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
+            let irises: Vec<ArcIris> = (0..db_size)
+                .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
+            let mut store_lock = store.lock().await;
+            let player_preps = cache_irises(&store_lock.workers, irises).await?;
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
-            let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
                 player_inserts.push(store_lock.insert(p).await);
             }
@@ -1422,13 +1436,9 @@ mod tests {
             for (store, graph) in vectors_and_graphs.iter_mut() {
                 let graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store
-                    .lock()
-                    .await
-                    .storage
-                    .get_vector_or_empty(&vector_id)
-                    .await;
-                let q = Aby3Query::new(&q);
+                let store_lock = store.lock().await;
+                let q = store_lock.cache_query_from_store(&vector_id).await.unwrap();
+                drop(store_lock);
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;
@@ -1464,7 +1474,7 @@ mod tests {
                 let a = VectorId::from_0_index(0);
                 let b = VectorId::from_0_index(1);
 
-                let queries = store.vectors_as_queries(vec![a, b]).await;
+                let queries = store.vectors_as_queries(vec![a, b]).await?;
                 let vectors = vec![a, b, none];
                 let n_vecs = vectors.len();
 
@@ -1505,5 +1515,93 @@ mod tests {
             });
         }
         parallelize(tasks.into_iter()).await.unwrap();
+    }
+
+    /// Build the same HNSW graph in plaintext and under 3-party MPC using a
+    /// shared insertion-layer sequence, then assert bit-for-bit equality.
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_plaintext_vs_mpc_graph_equality() -> Result<()> {
+        let mut rng = AesRng::seed_from_u64(0xA1B2C3D4_u64);
+        let database_size = 256;
+        // LinearScan mirrors HawkActor's searcher (hawk_main.rs). Layer
+        // density bumped to 4 so enough nodes roll onto layer 1 to exercise
+        // `linear_search_min_distance` — default (M) gives <1 expected entry
+        // point at this size and silently skips the branch.
+        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        searcher.layer_distribution =
+            crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(4);
+        let searcher = searcher;
+
+        let insertion_layers: Vec<usize> = {
+            let mut layer_rng = AesRng::from_rng(rng.clone())?;
+            (0..database_size)
+                .map(|_| searcher.gen_layer_rng(&mut layer_rng))
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        let cleartext_db = IrisDB::new_random_rng(database_size, &mut rng).db;
+        let shared_irises: Vec<[GaloisRingSharedIris; 3]> = cleartext_db
+            .iter()
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .collect();
+
+        let mut plaintext_store = PlaintextStore::<FhdOps>::new();
+        let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
+            let query = Arc::new(iris.clone());
+            searcher
+                .insert::<_, SortedNeighborhood<_>>(
+                    &mut plaintext_store,
+                    &mut plaintext_graph,
+                    &query,
+                    layer,
+                )
+                .await?;
+        }
+
+        let stores = setup_local_store_aby3_players(NetworkType::Local).await?;
+        let mut jobs = JoinSet::new();
+        for store in stores.into_iter() {
+            let role = get_owner_index(&store).await?;
+            let irises: Vec<ArcIris> = shared_irises
+                .iter()
+                .map(|shares| Arc::new(shares[role].clone()))
+                .collect();
+            let layers = insertion_layers.clone();
+            let searcher = searcher.clone();
+            jobs.spawn(async move {
+                let mut store = store.lock().await;
+                let queries = cache_irises(&store.workers, irises).await?;
+                let mut graph: GraphMem<VectorId> = GraphMem::new();
+                for (query, &layer) in queries.iter().zip(layers.iter()) {
+                    searcher
+                        .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
+                        .await?;
+                }
+                Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
+            });
+        }
+
+        let mut mpc_graphs: Vec<Option<GraphMem<VectorId>>> = (0..3).map(|_| None).collect();
+        while let Some(res) = jobs.join_next().await {
+            let (role, graph) = res??;
+            mpc_graphs[role] = Some(graph);
+        }
+
+        for (role, mpc_graph) in mpc_graphs.into_iter().enumerate() {
+            let mpc_graph = mpc_graph.unwrap_or_else(|| panic!("party {role} did not finish"));
+            assert_eq!(
+                mpc_graph, plaintext_graph,
+                "MPC graph for party {role} differs from plaintext graph",
+            );
+        }
+
+        // If either assert fails the parameters no longer exercise the
+        // LinearScan path (see layer-density comment above).
+        assert_eq!(plaintext_graph.get_num_layers(), 2);
+        assert!(plaintext_graph.entry_points.len() >= 2);
+
+        Ok(())
     }
 }

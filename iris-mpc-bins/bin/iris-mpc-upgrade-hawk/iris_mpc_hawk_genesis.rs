@@ -45,6 +45,22 @@ struct Args {
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
 /// creates a db snapshot within AWS RDS cluster.
 fn main() -> Result<()> {
+    // Override ptmalloc2's mmap threshold if set. This pins the dynamic
+    // threshold, preventing it from ratcheting up over time.
+    // Default glibc behavior: 128 KB initial, ratchets up to 32 MB.
+    if let Ok(val) = std::env::var("MALLOC_MMAP_THRESHOLD") {
+        if let Ok(bytes) = val.parse::<i32>() {
+            extern "C" {
+                fn mallopt(param: i32, value: i32) -> i32;
+            }
+            const M_MMAP_THRESHOLD: i32 = -3;
+            unsafe {
+                mallopt(M_MMAP_THRESHOLD, bytes);
+            }
+            println!("Set M_MMAP_THRESHOLD to {bytes}");
+        }
+    }
+
     // Set config.
     println!("Initialising config");
     dotenvy::dotenv().ok();

@@ -638,7 +638,7 @@ pub fn bench_worker_pool(c: &mut Criterion) {
         Arc::new(GaloisRingSharedIris::default_for_party(0)),
     )
     .to_arc();
-    let mut pool = init_workers(0, shared_irises, true);
+    let pool = init_workers(0, shared_irises, true);
 
     // similar to numa_realloc
     for (idx, iris) in iris_codes.iter().enumerate() {
