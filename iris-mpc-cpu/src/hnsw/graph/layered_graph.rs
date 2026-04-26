@@ -174,8 +174,69 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     ///
     /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the plan.
-    pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
-        self.apply_mutations(plan);
+    pub fn insert_apply(&mut self, plan: ConnectPlan<V>) {
+        for mutation in plan {
+            match mutation {
+                GraphMutation::RemoveNode { ref id } => {
+                    // Remove node from all layers where it exists
+                    for layer in &mut self.layers {
+                        layer.remove_node(id);
+                    }
+                    // Remove from entry points if present
+                    self.entry_points.retain(|ep| &ep.point != id);
+                }
+                GraphMutation::InsertNode {
+                    id,
+                    layers,
+                    update_ep,
+                } => {
+                    // Handle entry point update
+                    match update_ep {
+                        UpdateEntryPoint::SetUnique { layer } => {
+                            // Ensure we have enough layers
+                            if self.layers.len() < layer + 1 {
+                                self.layers.resize(layer + 1, Layer::new());
+                            }
+                            self.entry_points = vec![EntryPoint {
+                                point: id.clone(),
+                                layer,
+                            }];
+                        }
+                        UpdateEntryPoint::Append { layer } => {
+                            self.entry_points.push(EntryPoint {
+                                point: id.clone(),
+                                layer,
+                            });
+                        }
+                        UpdateEntryPoint::False => {}
+                    }
+
+                    // Insert node into each specified layer
+                    for (layer_idx, neighbors) in layers {
+                        // Ensure we have enough layers
+                        if self.layers.len() < layer_idx + 1 {
+                            self.layers.resize(layer_idx + 1, Layer::new());
+                        }
+                        self.layers[layer_idx].insert_node(id.clone(), neighbors);
+                    }
+                }
+                GraphMutation::Compact {
+                    ref id,
+                    layer,
+                    to_remove,
+                } => {
+                    self.layers[layer].compact_node(id, to_remove);
+                }
+                GraphMutation::Overwrite { id, layers } => {
+                    // Overwrite node in each specified layer
+                    for (layer_idx, neighbors) in layers {
+                        if layer_idx < self.layers.len() {
+                            self.layers[layer_idx].overwrite_node(id.clone(), neighbors);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
@@ -238,76 +299,6 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
         set_hash.checksum()
-    }
-
-    /// Apply a batch of graph mutations to the graph.
-    ///
-    /// Each mutation is dispatched to the appropriate layer(s) based on the layer
-    /// indices contained within the mutation. Entry point updates are handled for
-    /// `InsertNode` mutations.
-    pub fn apply_mutations(&mut self, mutations: Vec<GraphMutation<V>>) {
-        for mutation in mutations {
-            match mutation {
-                GraphMutation::RemoveNode { ref id } => {
-                    // Remove node from all layers where it exists
-                    for layer in &mut self.layers {
-                        layer.remove_node(id);
-                    }
-                    // Remove from entry points if present
-                    self.entry_points.retain(|ep| &ep.point != id);
-                }
-                GraphMutation::InsertNode {
-                    id,
-                    layers,
-                    update_ep,
-                } => {
-                    // Handle entry point update
-                    match update_ep {
-                        UpdateEntryPoint::SetUnique { layer } => {
-                            // Ensure we have enough layers
-                            if self.layers.len() < layer + 1 {
-                                self.layers.resize(layer + 1, Layer::new());
-                            }
-                            self.entry_points = vec![EntryPoint {
-                                point: id.clone(),
-                                layer,
-                            }];
-                        }
-                        UpdateEntryPoint::Append { layer } => {
-                            self.entry_points.push(EntryPoint {
-                                point: id.clone(),
-                                layer,
-                            });
-                        }
-                        UpdateEntryPoint::False => {}
-                    }
-
-                    // Insert node into each specified layer
-                    for (layer_idx, neighbors) in layers {
-                        // Ensure we have enough layers
-                        if self.layers.len() < layer_idx + 1 {
-                            self.layers.resize(layer_idx + 1, Layer::new());
-                        }
-                        self.layers[layer_idx].insert_node(id.clone(), neighbors);
-                    }
-                }
-                GraphMutation::Compact {
-                    ref id,
-                    layer,
-                    to_remove,
-                } => {
-                    self.layers[layer].compact_node(id, to_remove);
-                }
-                GraphMutation::Overwrite { id, layers } => {
-                    // Overwrite node in each specified layer
-                    for (layer_idx, neighbors) in layers {
-                        if layer_idx < self.layers.len() {
-                            self.layers[layer_idx].overwrite_node(id.clone(), neighbors);
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

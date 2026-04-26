@@ -106,7 +106,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                 layers: vec![(0, edges(i))],
                 update_ep,
             }];
-            graph.apply_mutations(mutations);
+            graph.insert_apply(mutations);
         }
     }
 

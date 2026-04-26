@@ -289,7 +289,7 @@ pub struct HnswSearcher {
 }
 
 /// A list of graph mutations representing state updates for insertion of new nodes
-/// into an HNSW hierarchical graph.
+/// into the HNSW graph.
 pub type ConnectPlan<Vector> = Vec<GraphMutation<Vector>>;
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
 
@@ -1600,7 +1600,8 @@ impl HnswSearcher {
             Vec<<V as VectorStore>::VectorRef>,
         > = BTreeMap::new();
 
-        // Map from inserted vector ids to their mutation index
+        // Map from inserted vector ids to their mutation index, so we can
+        // resolve neighbors that are also being inserted in this same batch.
         let mut insert_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
 
         // Process each InsertNode mutation to track neighborhoods
@@ -1725,7 +1726,7 @@ impl HnswSearcher {
         let plan = self
             .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
             .await?;
-        graph.insert_apply(plan).await;
+        graph.insert_apply(plan);
         Ok(())
     }
 
@@ -1985,7 +1986,7 @@ mod tests {
             }];
 
             // Apply the mutations to the graph
-            graph_store.apply_mutations(mutations);
+            graph_store.insert_apply(mutations);
         }
 
         // Create an update for inserting vector id 6
