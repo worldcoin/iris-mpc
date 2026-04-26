@@ -116,7 +116,7 @@ pub async fn insert<V: VectorStoreMut>(
         .await?;
 
     // Apply mutations to the graph and store them as connect plans
-    graph.apply_mutations(graph_mutations.clone());
+    graph.insert_apply(graph_mutations.clone());
     for (cp_idx, mutation) in izip!(update_idxs.iter(), graph_mutations.into_iter()) {
         connect_plans[*cp_idx].replace(vec![mutation]);
     }

@@ -492,11 +492,22 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
                 }
                 GraphMutation::RemoveNode { id } => {
                     // TODO: implement node removal in graph store
-                    tracing::warn!("RemoveNode mutation for {:?} not yet implemented in graph store", id);
+                    tracing::warn!(
+                        "RemoveNode mutation for {:?} not yet implemented in graph store",
+                        id
+                    );
                 }
-                GraphMutation::Compact { id, layer, to_remove } => {
+                GraphMutation::Compact {
+                    id,
+                    layer,
+                    to_remove,
+                } => {
                     // TODO: implement neighborhood compaction
-                    tracing::warn!("Compact mutation for {:?} layer {} not yet implemented", id, layer);
+                    tracing::warn!(
+                        "Compact mutation for {:?} layer {} not yet implemented",
+                        id,
+                        layer
+                    );
                     let _ = to_remove;
                 }
                 GraphMutation::Overwrite { id, layers } => {
@@ -1132,7 +1143,7 @@ mod tests {
                 )
                 .await?;
 
-            graph_mem.insert_apply(plan.clone()).await;
+            graph_mem.insert_apply(plan.clone());
             tx.with_graph(StoreId::Left).insert_apply(plan).await?;
         }
         tx.tx.commit().await?;

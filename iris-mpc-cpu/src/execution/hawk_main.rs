@@ -1739,22 +1739,16 @@ impl HawkMutation {
 
                                 // Buffer link updates by side
                                 for (layer, neighbors) in layers {
-                                    let key = (
-                                        id.serial_id() as i64,
-                                        id.version_id(),
-                                        layer as i16,
-                                    );
+                                    let key =
+                                        (id.serial_id() as i64, id.version_id(), layer as i16);
                                     // Deduplicate: If multiple updates for the same node exist, the last one wins
                                     updates_map.insert(key, neighbors);
                                 }
                             }
                             GraphMutation::Overwrite { id, layers } => {
                                 for (layer, neighbors) in layers {
-                                    let key = (
-                                        id.serial_id() as i64,
-                                        id.version_id(),
-                                        layer as i16,
-                                    );
+                                    let key =
+                                        (id.serial_id() as i64, id.version_id(), layer as i16);
                                     updates_map.insert(key, neighbors);
                                 }
                             }
