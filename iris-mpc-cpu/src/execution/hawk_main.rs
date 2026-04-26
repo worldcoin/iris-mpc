@@ -119,7 +119,10 @@ use iris_mpc_common::{
     },
     vector_id::VectorId,
 };
-use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
+use iris_mpc_common::{
+    helpers::sync::{Modification, ModificationKey},
+    job::RequestIndex,
+};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
@@ -1707,68 +1710,71 @@ impl HawkMutation {
             .find(|mutation| mutation.request_index == Some(req_index))
     }
 
-    pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
+    /// Persist graph mutations to the database.
+    ///
+    /// For each SingleHawkMutation:
+    /// 1. Updates entry points in hawk_graph_entry table
+    /// 2. Serializes the mutation plans and inserts into hawk_graph_mutations table
+    /// 3. Links the modification to the graph_mutation via graph_mutation_id
+    /// 4. Updates last_indexed_modification_id in persistent_state
+    pub async fn persist(
+        self,
+        graph_tx: &mut GraphTx<'_>,
+        modifications: &mut HashMap<ModificationKey, Modification>,
+    ) -> Result<()> {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
-        // Group updates by side: side -> (key -> neighbors)
-        // Key: (serial_id, version_id, layer)
-        let mut updates_by_side: BothEyes<BTreeMap<(i64, i16, i16), Vec<_>>> = Default::default();
+
+        let mut max_modification_id: Option<i64> = None;
 
         for mutation in self.0 {
-            for (side, updates_map, plan_opt) in
-                izip!(STORE_IDS, updates_by_side.iter_mut(), mutation.plans)
-            {
+            // Handle entry point updates (these go to hawk_graph_entry table)
+            for (side, plan_opt) in izip!(STORE_IDS, mutation.plans.iter()) {
                 if let Some(mutations) = plan_opt {
                     let mut graph = graph_tx.with_graph(side);
                     for graph_mutation in mutations {
-                        match graph_mutation {
-                            GraphMutation::InsertNode {
-                                id,
-                                layers,
-                                update_ep,
-                            } => {
-                                // Updating entry points sequentially is fine in practice
-                                match update_ep {
-                                    UpdateEntryPoint::False => {}
-                                    UpdateEntryPoint::SetUnique { layer } => {
-                                        graph.set_entry_point(id.clone(), layer).await?;
-                                    }
-                                    UpdateEntryPoint::Append { layer } => {
-                                        graph.add_entry_point(id.clone(), layer).await?;
-                                    }
+                        if let GraphMutation::InsertNode { id, update_ep, .. } = graph_mutation {
+                            match update_ep {
+                                UpdateEntryPoint::False => {}
+                                UpdateEntryPoint::SetUnique { layer } => {
+                                    graph.set_entry_point(id.clone(), *layer).await?;
                                 }
-
-                                // Buffer link updates by side
-                                for (layer, neighbors) in layers {
-                                    let key =
-                                        (id.serial_id() as i64, id.version_id(), layer as i16);
-                                    // Deduplicate: If multiple updates for the same node exist, the last one wins
-                                    updates_map.insert(key, neighbors);
+                                UpdateEntryPoint::Append { layer } => {
+                                    graph.add_entry_point(id.clone(), *layer).await?;
                                 }
-                            }
-                            GraphMutation::Overwrite { id, layers } => {
-                                for (layer, neighbors) in layers {
-                                    let key =
-                                        (id.serial_id() as i64, id.version_id(), layer as i16);
-                                    updates_map.insert(key, neighbors);
-                                }
-                            }
-                            GraphMutation::RemoveNode { .. } | GraphMutation::Compact { .. } => {
-                                // TODO: implement RemoveNode and Compact persistence
                             }
                         }
                     }
                 }
             }
+
+            // Insert graph mutation into hawk_graph_mutations and link to modification
+            if let Some(ref modification_key) = mutation.modification_key {
+                if let Some(modification) = modifications.get_mut(modification_key) {
+                    // Serialize the plans (BothEyes<Option<ConnectPlan>>)
+                    let serialized = bincode::serialize(&mutation.plans)
+                        .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
+
+                    // Insert into hawk_graph_mutations and get the generated ID
+                    let graph_mutation_id = graph_tx
+                        .insert_hawk_graph_mutation(modification.id, &serialized)
+                        .await?;
+
+                    // Link modification to graph_mutation
+                    modification.graph_mutation_id = Some(graph_mutation_id);
+
+                    // Track max modification_id
+                    max_modification_id = Some(
+                        max_modification_id
+                            .map(|m| m.max(modification.id))
+                            .unwrap_or(modification.id),
+                    );
+                }
+            }
         }
 
-        // Execute one batch per side
-        for (side, batch_updates) in izip!(STORE_IDS, updates_by_side) {
-            if !batch_updates.is_empty() {
-                graph_tx
-                    .with_graph(side)
-                    .batch_set_links(batch_updates)
-                    .await?;
-            }
+        // Update last_indexed_modification_id in persistent_state
+        if let Some(max_id) = max_modification_id {
+            graph_tx.set_last_indexed_modification_id(max_id).await?;
         }
 
         Ok(())
