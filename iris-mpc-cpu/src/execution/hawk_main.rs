@@ -1787,6 +1787,32 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
+        // Invariant: registry is a metadata mirror of iris_store. Anything
+        // that populates iris_store (load_database, genesis, fake_db) must
+        // also refresh the registry; sessions read from registry, not from
+        // iris_store, so drift means search can't see loaded vectors and
+        // fresh inserts allocate VectorIds that collide with the load.
+        // Verify once here before any session work begins.
+        for side in [LEFT, RIGHT] {
+            let iris = hawk_actor.iris_store[side].read().await;
+            let reg = hawk_actor.registry[side].read().await;
+            assert_eq!(
+                reg.next_id, iris.next_id,
+                "registry/iris_store next_id mismatch on side {side}: \
+                 registry={} iris_store={} — call refresh_registries() after \
+                 any path that populates iris_store",
+                reg.next_id, iris.next_id,
+            );
+            assert_eq!(
+                reg.db_size(),
+                iris.db_size(),
+                "registry/iris_store db_size mismatch on side {side}: \
+                 registry={} iris_store={}",
+                reg.db_size(),
+                iris.db_size(),
+            );
+        }
+
         let mut sessions = hawk_actor.new_session_groups().await?;
 
         #[cfg(feature = "phase_trace")]
