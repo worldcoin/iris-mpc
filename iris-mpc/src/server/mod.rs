@@ -2,6 +2,7 @@ use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use aws_sdk_sns::types::MessageAttributeValue;
+use iris_mpc_cpu::hnsw::GraphMem;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -533,10 +534,13 @@ async fn load_database(
         eyre::Result::<()>::Ok(())
     };
 
-    let graph_load_future = graph_loader.load_graph_store(
-        graph_store,
-        config.cpu_database.as_ref().unwrap().load_parallelism,
-    );
+    let graph_load_future: Result<BothEyes<GraphMem<VectorId>>> = async {
+        if let Some(checkpoint_state) = genesis_checkpoint_state {
+            download_genesis_checkpoint(&s3_client, bucket, &checkpoint_state).await
+        } else {
+            Ok([GraphMem::default(), GraphMem::default()])
+        }
+    };
 
     let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
     iris_result.expect("Failed to load iris DB");
