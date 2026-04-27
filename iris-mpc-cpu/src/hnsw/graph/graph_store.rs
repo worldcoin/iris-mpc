@@ -22,6 +22,7 @@ pub struct GenesisGraphCheckpointRow {
     pub last_indexed_iris_id: i64,
     pub last_indexed_modification_id: i64,
     pub blake3_hash: String,
+    pub graph_version: i32,
     pub is_archival: bool,
 }
 
@@ -34,15 +35,6 @@ pub struct GraphMutationRow {
     pub modification_id: i64,
     /// Bincode-serialized BothEyes<Vec<GraphMutation<VectorId>>> (mutations for both eyes)
     pub serialized_mutation: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HawkGraphCheckpointRow {
-    pub id: i64,
-    pub graph_mutation_id: i64,
-    pub s3_key: String,
-    pub blake3_hash: String,
-    pub graph_version: i32,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -205,6 +197,7 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
+                graph_version,
                 blake3_hash,
                 is_archival
             FROM genesis_graph_checkpoint
@@ -230,6 +223,7 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
+                graph_version,
                 blake3_hash,
                 is_archival
             FROM genesis_graph_checkpoint
@@ -252,6 +246,7 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
+                graph_version,
                 blake3_hash,
                 is_archival
             FROM genesis_graph_checkpoint
@@ -283,6 +278,7 @@ impl<V: VectorStore> GraphPg<V> {
     /// Tables backed up:
     /// - `hawk_graph_mutations`
     /// - `persistent_state`
+    /// - `genesis_graph_checkpoint`
     ///
     /// This is a destructive operation for the backup tables: any existing data in them will be lost.
     ///
@@ -290,7 +286,11 @@ impl<V: VectorStore> GraphPg<V> {
     ///     graph_pg.backup_hawk_graph_tables().await?;
     pub async fn backup_hawk_graph_tables(&self) -> Result<()> {
         let schema = &self.schema_name;
-        let tables = ["hawk_graph_mutations", "persistent_state"];
+        let tables = [
+            "hawk_graph_mutations",
+            "persistent_state",
+            "genesis_graph_checkpoint",
+        ];
 
         for table_name in tables {
             let src_table = format!("\"{}\".{}", schema, table_name);
@@ -314,6 +314,7 @@ impl<V: VectorStore> GraphPg<V> {
     /// Tables restored:
     /// - `hawk_graph_mutations`
     /// - `persistent_state`
+    /// - `genesis_graph_checkpoint`
     ///
     /// This is a destructive operation for the main tables: any existing data in them will be lost.
     ///
@@ -321,7 +322,11 @@ impl<V: VectorStore> GraphPg<V> {
     ///     graph_pg.restore_hawk_graph_tables_from_backup().await?;
     pub async fn restore_hawk_graph_tables_from_backup(&self) -> Result<()> {
         let schema = &self.schema_name;
-        let tables = ["hawk_graph_mutations", "persistent_state"];
+        let tables = [
+            "hawk_graph_mutations",
+            "persistent_state",
+            "genesis_graph_checkpoint",
+        ];
 
         for table_name in tables {
             let main_table = format!("\"{}\".{}", schema, table_name);
