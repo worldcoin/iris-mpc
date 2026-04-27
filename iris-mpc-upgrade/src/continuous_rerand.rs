@@ -50,6 +50,13 @@ pub async fn run_continuous_rerand(
         eyre::bail!("s3_poll_interval_ms must be > 0");
     }
 
+    if !config.rerand_enabled {
+        eyre::bail!(
+            "RERAND_ENABLED is false — continuous rerand worker exiting. \
+             Set RERAND_ENABLED=true on the worker (and SMPC__RERAND_ENABLED=true on the server) to enable."
+        );
+    }
+
     let pool = &store.pool;
     let staging_schema = staging_schema_name(&store.schema_name);
     let poll_interval = Duration::from_millis(config.s3_poll_interval_ms);

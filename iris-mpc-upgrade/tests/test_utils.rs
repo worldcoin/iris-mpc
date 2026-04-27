@@ -147,6 +147,7 @@ impl TestEnv {
             safety_buffer_ids: 0,
             s3_poll_interval_ms: 200,
             healthcheck_port: 3020 + party_id as usize,
+            rerand_enabled: true,
         }
     }
 

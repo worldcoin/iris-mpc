@@ -389,6 +389,90 @@ fn is_undefined_table_sqlx(err: &sqlx::Error) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Worker heartbeat: lets the main server detect that a rerand worker is
+// actively running, independently of any config flag. Paired with the
+// server's `rerand_enabled` config flag to catch misconfigs at startup.
+// ---------------------------------------------------------------------------
+
+/// How often the worker writes its heartbeat while alive.
+pub const WORKER_HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long after the last heartbeat we still consider the worker alive.
+/// Must be comfortably larger than `WORKER_HEARTBEAT_WRITE_INTERVAL` to avoid
+/// false "dead" verdicts during transient DB lag or worker restarts.
+pub const WORKER_HEARTBEAT_STALE_AFTER: Duration = Duration::from_secs(60);
+
+fn is_pre_heartbeat_schema(err: &sqlx::Error) -> bool {
+    // 42P01 = undefined_table (rerand_control doesn't exist yet).
+    // 42703 = undefined_column (heartbeat column not yet migrated).
+    if !rerand_control_exists(err) {
+        return true;
+    }
+    if let sqlx::Error::Database(pg) = err {
+        return pg.code().as_deref() == Some("42703");
+    }
+    false
+}
+
+/// Write `NOW()` into `rerand_control.worker_last_heartbeat`.
+///
+/// Silently succeeds when the table or column does not exist yet
+/// (pre-migration); the worker can still run before the server deploys the
+/// heartbeat migration.
+pub async fn write_worker_heartbeat(pool: &PgPool) -> Result<()> {
+    match sqlx::query("UPDATE rerand_control SET worker_last_heartbeat = NOW() WHERE id = 1")
+        .execute(pool)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) if is_pre_heartbeat_schema(&e) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Drive the worker heartbeat in a loop until cancelled.
+///
+/// Writes an immediate heartbeat on entry, then writes one every
+/// `WORKER_HEARTBEAT_WRITE_INTERVAL` until `cancel` is triggered. Errors are
+/// logged but do not terminate the loop — a transient DB outage should not
+/// take the worker down.
+pub async fn run_worker_heartbeat_loop(pool: &PgPool, cancel: tokio_util::sync::CancellationToken) {
+    loop {
+        if let Err(e) = write_worker_heartbeat(pool).await {
+            tracing::warn!("Failed to write rerand worker heartbeat: {:?}", e);
+        }
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            _ = tokio::time::sleep(WORKER_HEARTBEAT_WRITE_INTERVAL) => {}
+        }
+    }
+}
+
+/// Returns `true` iff `rerand_control.worker_last_heartbeat` is set and
+/// younger than `WORKER_HEARTBEAT_STALE_AFTER`.
+///
+/// Returns `false` when the table or column does not exist (pre-migration),
+/// when no heartbeat has ever been written, or when the last heartbeat is
+/// older than the staleness threshold.
+pub async fn is_worker_alive(pool: &PgPool) -> Result<bool> {
+    let stale_secs = WORKER_HEARTBEAT_STALE_AFTER.as_secs() as i64;
+    let row = sqlx::query_as::<_, (Option<bool>,)>(
+        "SELECT worker_last_heartbeat > NOW() - make_interval(secs => $1) \
+         FROM rerand_control WHERE id = 1",
+    )
+    .bind(stale_secs)
+    .fetch_optional(pool)
+    .await;
+
+    match row {
+        Ok(Some((Some(true),))) => Ok(true),
+        Ok(_) => Ok(false),
+        Err(e) if is_pre_heartbeat_schema(&e) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Freeze protocol: coordinated pause of the rerand worker during startup
 // ---------------------------------------------------------------------------
 

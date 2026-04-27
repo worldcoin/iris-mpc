@@ -377,4 +377,10 @@ pub struct RerandomizeContinuousConfig {
 
     #[clap(long, default_value = "3000", env = "HEALTHCHECK_PORT")]
     pub healthcheck_port: usize,
+
+    /// Must match the server's `SMPC__RERAND_ENABLED` setting. The worker
+    /// refuses to start when this is `false` so that an accidentally-deployed
+    /// worker can't run against a server that doesn't expect it.
+    #[clap(long, default_value = "false", env = "RERAND_ENABLED")]
+    pub rerand_enabled: bool,
 }

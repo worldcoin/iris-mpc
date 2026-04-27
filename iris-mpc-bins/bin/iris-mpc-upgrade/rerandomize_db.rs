@@ -588,6 +588,18 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
         PostgresClient::new(&config.db_url, &config.schema_name, AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
 
+    // Publish a DB-side heartbeat so the main server can detect that a rerand
+    // worker is actively running. The main server refuses to start with
+    // `rerand_enabled=false` while this heartbeat is fresh, catching the
+    // dangerous "worker deployed but server says disabled" misconfig.
+    let heartbeat_pool = store.pool.clone();
+    let heartbeat_cancel = cancel.clone();
+    let _heartbeat_abort = background_tasks.spawn(async move {
+        iris_mpc_store::rerand::run_worker_heartbeat_loop(&heartbeat_pool, heartbeat_cancel).await;
+        Ok(())
+    });
+    background_tasks.check_tasks();
+
     continuous_rerand::run_continuous_rerand(
         &config,
         &s3_client,

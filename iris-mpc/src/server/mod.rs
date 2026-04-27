@@ -174,7 +174,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
 
     // --- Coordinated rerand freeze with watermark convergence ---
-    {
+    if config.rerand_enabled {
         let sc = config.server_coordination.as_ref().unwrap();
         eyre::ensure!(
             sc.node_hostnames.len() == sc.healthcheck_ports.len(),
@@ -191,6 +191,20 @@ pub async fn server_main(config: Config) -> Result<()> {
             .map(|(_, (h, p))| -> eyre::Result<_> { Ok((h.as_str(), p.parse::<usize>()?)) })
             .collect::<eyre::Result<Vec<_>>>()?;
         rerand_store::freeze_and_verify_watermarks(&iris_store.pool, &peer_addrs).await?;
+    } else if rerand_store::is_worker_alive(&iris_store.pool).await? {
+        // Worker heartbeat is fresh but this server is configured with rerand
+        // off. Starting up now would skip freeze/watermark coordination and
+        // risk loading a cross-party-inconsistent DB snapshot. Fail closed.
+        eyre::bail!(
+            "rerand_enabled=false in config but the rerand worker is alive \
+             (heartbeat within the last {:?}). Either set SMPC__RERAND_ENABLED=true, \
+             or stop the rerand worker on all parties before restarting this server.",
+            rerand_store::WORKER_HEARTBEAT_STALE_AFTER,
+        );
+    } else {
+        tracing::info!(
+            "rerand_enabled=false and no fresh worker heartbeat — skipping rerand coordination"
+        );
     }
     // Worker is now frozen with verified equal watermarks.
     // Everything from here until freeze release must be wrapped so that

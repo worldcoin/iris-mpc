@@ -255,6 +255,9 @@ pub struct Config {
     #[serde(default)]
     pub enable_modifications_replay: bool,
 
+    #[serde(default)]
+    pub rerand_enabled: bool,
+
     #[serde(default = "default_pprof_s3_bucket")]
     pub pprof_s3_bucket: String,
 
@@ -664,6 +667,7 @@ pub struct CommonConfig {
     max_modifications_lookback: usize,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
+    rerand_enabled: bool,
     sqs_sync_long_poll_seconds: i32,
     schema_name: String,
     hnsw_schema_name_suffix: String,
@@ -750,6 +754,7 @@ impl From<Config> for CommonConfig {
             max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
+            rerand_enabled,
             sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
@@ -819,6 +824,7 @@ impl From<Config> for CommonConfig {
             max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
+            rerand_enabled,
             sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
