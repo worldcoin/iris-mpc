@@ -1738,10 +1738,9 @@ impl HawkMutation {
     /// Persist graph mutations to the database.
     ///
     /// For each SingleHawkMutation:
-    /// 1. Updates entry points in hawk_graph_entry table
-    /// 2. Serializes the mutation plans and inserts into hawk_graph_mutations table
-    /// 3. Links the modification to the graph_mutation via graph_mutation_id
-    /// 4. Updates last_indexed_modification_id in persistent_state
+    /// 1. Serializes the mutation plans and inserts into hawk_graph_mutations table
+    /// 2. Links the modification to the graph_mutation via graph_mutation_id
+    /// 3. Updates last_indexed_modification_id in persistent_state
     pub async fn persist(
         self,
         graph_tx: &mut GraphTx<'_>,
@@ -1753,26 +1752,6 @@ impl HawkMutation {
         let max_modification_id: Option<i64> = modifications.values().map(|x| x.id).max();
 
         for mutation in self.0 {
-            // Handle entry point updates (these go to hawk_graph_entry table)
-            for (side, plan_opt) in izip!(STORE_IDS, mutation.plans.iter()) {
-                if let Some(mutations) = plan_opt {
-                    let mut graph = graph_tx.with_graph(side);
-                    for graph_mutation in mutations {
-                        if let GraphMutation::InsertNode { id, update_ep, .. } = graph_mutation {
-                            match update_ep {
-                                UpdateEntryPoint::False => {}
-                                UpdateEntryPoint::SetUnique { layer } => {
-                                    graph.set_entry_point(id.clone(), *layer).await?;
-                                }
-                                UpdateEntryPoint::Append { layer } => {
-                                    graph.add_entry_point(id.clone(), *layer).await?;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             // Insert graph mutation into hawk_graph_mutations and link to modification
             if let Some(ref modification_key) = mutation.modification_key {
                 if let Some(modification) = modifications.get_mut(modification_key) {

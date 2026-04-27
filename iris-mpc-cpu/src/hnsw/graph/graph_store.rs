@@ -281,7 +281,6 @@ impl<V: VectorStore> GraphPg<V> {
     /// Copies the graph-related tables to backup tables with a `_backup` suffix in the same schema.
     ///
     /// Tables backed up:
-    /// - `hawk_graph_entry`
     /// - `hawk_graph_mutations`
     /// - `persistent_state`
     ///
@@ -291,11 +290,7 @@ impl<V: VectorStore> GraphPg<V> {
     ///     graph_pg.backup_hawk_graph_tables().await?;
     pub async fn backup_hawk_graph_tables(&self) -> Result<()> {
         let schema = &self.schema_name;
-        let tables = [
-            "hawk_graph_entry",
-            "hawk_graph_mutations",
-            "persistent_state",
-        ];
+        let tables = ["hawk_graph_mutations", "persistent_state"];
 
         for table_name in tables {
             let src_table = format!("\"{}\".{}", schema, table_name);
@@ -317,7 +312,6 @@ impl<V: VectorStore> GraphPg<V> {
     /// Restores graph-related tables from their backup tables in the same schema.
     ///
     /// Tables restored:
-    /// - `hawk_graph_entry`
     /// - `hawk_graph_mutations`
     /// - `persistent_state`
     ///
@@ -327,11 +321,7 @@ impl<V: VectorStore> GraphPg<V> {
     ///     graph_pg.restore_hawk_graph_tables_from_backup().await?;
     pub async fn restore_hawk_graph_tables_from_backup(&self) -> Result<()> {
         let schema = &self.schema_name;
-        let tables = [
-            "hawk_graph_entry",
-            "hawk_graph_mutations",
-            "persistent_state",
-        ];
+        let tables = ["hawk_graph_mutations", "persistent_state"];
 
         for table_name in tables {
             let main_table = format!("\"{}\".{}", schema, table_name);
@@ -487,107 +477,14 @@ pub struct GraphOps<'a, 'b, V> {
     graph_id: StoreId,
 }
 
+// todo sw: perhaps delete these too
 impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
-    fn entry_table(&self) -> String {
-        format!("\"{}\".hawk_graph_entry", self.tx.schema_name)
-    }
-
     fn graph_id(&self) -> i16 {
         self.graph_id as i16
     }
 
     fn tx(&mut self) -> &mut PgConnection {
         self.tx.tx.deref_mut()
-    }
-
-    pub async fn get_entry_point(&mut self) -> Result<Option<(V::VectorRef, usize)>> {
-        Ok(self
-            .get_entry_points()
-            .await?
-            .and_then(|(mut points, layer)| points.pop().map(|p| (p, layer))))
-    }
-
-    pub async fn get_entry_points(&mut self) -> Result<Option<(Vec<V::VectorRef>, usize)>> {
-        let table = self.entry_table();
-        let rows = sqlx::query(&format!(
-            "SELECT serial_id, version_id, layer FROM {table} WHERE graph_id = $1"
-        ))
-        .bind(self.graph_id())
-        .fetch_all(self.tx())
-        .await
-        .map_err(|e| eyre!("Failed to fetch entry point: {e}"))?;
-
-        if rows.is_empty() {
-            Ok(None)
-        } else {
-            // ensure all entrypoints are on the same layer
-            let mut expected_layer = None;
-            let mut points = Vec::with_capacity(rows.len());
-            for row in rows {
-                let serial_id = row.get::<i64, &str>("serial_id") as u32;
-                let version_id: i16 = row.get("version_id");
-                let row_layer = row.get::<i16, &str>("layer") as usize;
-
-                if expected_layer.is_none() {
-                    expected_layer.replace(row_layer);
-                }
-
-                // if this fails, then add_entry_point() was used incorrectly.
-                assert_eq!(Some(row_layer), expected_layer);
-
-                points.push(VectorId::new(serial_id, version_id));
-            }
-
-            Ok(Some((points, expected_layer.unwrap())))
-        }
-    }
-
-    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
-        let table = self.entry_table();
-
-        sqlx::query(&format!("DELETE FROM {table} WHERE graph_id = $1"))
-            .bind(self.graph_id())
-            .execute(self.tx())
-            .await
-            .map_err(|e| eyre!("Failed to clear entry points: {e}"))?;
-
-        self.add_entry_point(point, layer).await?;
-
-        Ok(())
-    }
-
-    pub async fn add_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
-        let table = self.entry_table();
-
-        // insert the point into the table
-        sqlx::query(&format!(
-            "
-                INSERT INTO {table} (graph_id, serial_id, version_id, layer)
-                VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, serial_id, layer)
-                DO UPDATE SET version_id = EXCLUDED.version_id
-                "
-        ))
-        .bind(self.graph_id())
-        .bind(point.serial_id() as i64)
-        .bind(point.version_id())
-        .bind(layer as i16)
-        .execute(self.tx())
-        .await
-        .map_err(|e| eyre!("Failed to insert entry point: {e}"))?;
-
-        Ok(())
-    }
-
-    /// Ensures that graph_entry table is empty. For testing only.
-    pub async fn clear_tables(&mut self) -> Result<()> {
-        let entry_table = self.entry_table();
-
-        sqlx::query(&format!("DELETE FROM {entry_table} WHERE graph_id = $1"))
-            .bind(self.graph_id())
-            .execute(self.tx())
-            .await?;
-
-        Ok(())
     }
 }
 
