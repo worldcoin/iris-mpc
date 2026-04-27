@@ -595,6 +595,37 @@ impl HawkActor {
         ];
     }
 
+    /// Assert that `registry` is a consistent metadata mirror of `iris_store`
+    /// for both eyes. Sessions read from `registry`, so any drift means
+    /// search loses visibility into stored vectors and fresh inserts
+    /// allocate VectorIds that collide with existing graph nodes.
+    ///
+    /// O(1) per side. Safe to call at quiescent points — between batches,
+    /// after `load_database`, after `apply_deletions`. NOT safe to call
+    /// mid-batch, as registry/iris_store are mutated in sequence and may
+    /// disagree briefly.
+    pub async fn assert_registry_consistency(&self) {
+        for side in [LEFT, RIGHT] {
+            let iris = self.iris_store[side].read().await;
+            let reg = self.registry[side].read().await;
+            assert_eq!(
+                reg.next_id, iris.next_id,
+                "registry/iris_store next_id mismatch on side {side}: \
+                 registry={} iris_store={} — call refresh_registries() after \
+                 any path that populates iris_store",
+                reg.next_id, iris.next_id,
+            );
+            assert_eq!(
+                reg.db_size(),
+                iris.db_size(),
+                "registry/iris_store db_size mismatch on side {side}: \
+                 registry={} iris_store={}",
+                reg.db_size(),
+                iris.db_size(),
+            );
+        }
+    }
+
     pub fn worker_pool(&self, store_id: StoreId) -> iris_worker::LocalIrisWorkerPool {
         self.worker_pools[store_id as usize].clone()
     }
@@ -1792,26 +1823,9 @@ impl HawkHandle {
         // also refresh the registry; sessions read from registry, not from
         // iris_store, so drift means search can't see loaded vectors and
         // fresh inserts allocate VectorIds that collide with the load.
-        // Verify once here before any session work begins.
-        for side in [LEFT, RIGHT] {
-            let iris = hawk_actor.iris_store[side].read().await;
-            let reg = hawk_actor.registry[side].read().await;
-            assert_eq!(
-                reg.next_id, iris.next_id,
-                "registry/iris_store next_id mismatch on side {side}: \
-                 registry={} iris_store={} — call refresh_registries() after \
-                 any path that populates iris_store",
-                reg.next_id, iris.next_id,
-            );
-            assert_eq!(
-                reg.db_size(),
-                iris.db_size(),
-                "registry/iris_store db_size mismatch on side {side}: \
-                 registry={} iris_store={}",
-                reg.db_size(),
-                iris.db_size(),
-            );
-        }
+        // Verify before any session work begins, and again at the start of
+        // every batch (see `handle_job`).
+        hawk_actor.assert_registry_consistency().await;
 
         let mut sessions = hawk_actor.new_session_groups().await?;
 
@@ -1867,6 +1881,12 @@ impl HawkHandle {
             "Processing a Hawk job ({} queries)",
             request.batch.request_ids.len()
         );
+
+        // Catch any registry/iris_store drift introduced by the previous
+        // batch (or any other path) before we run another batch on top of an
+        // inconsistent state. Runs between batches when no concurrent writes
+        // are in flight; cheap (O(1) per side, two read-locks).
+        hawk_actor.assert_registry_consistency().await;
 
         // Cache all queries in both worker pools. cache_queries handles the full
         // pipeline: NUMA realloc → mirror → preprocess → all_rotations.
