@@ -1755,7 +1755,8 @@ impl HawkMutation {
     ) -> Result<()> {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
 
-        let mut max_modification_id: Option<i64> = None;
+        // for persistent_state
+        let max_modification_id: Option<i64> = modifications.values().map(|x| x.id).max();
 
         for mutation in self.0 {
             // Handle entry point updates (these go to hawk_graph_entry table)
@@ -1792,13 +1793,6 @@ impl HawkMutation {
 
                     // Link modification to graph_mutation
                     modification.graph_mutation_id = Some(graph_mutation_id);
-
-                    // Track max modification_id
-                    max_modification_id = Some(
-                        max_modification_id
-                            .map(|m| m.max(modification.id))
-                            .unwrap_or(modification.id),
-                    );
                 }
             }
         }
