@@ -1112,20 +1112,14 @@ impl<'a> GraphLoader<'a> {
         let now = Instant::now();
 
         // Spawn two independent transactions and load each graph in parallel.
-        let (graph_left, graph_right) = join!(
+        let (graph_left, graph_right): (Result<GraphMem<VectorId>>, Result<GraphMem<VectorId>>) = join!(
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx
-                    .with_graph(StoreId::Left)
-                    .load_to_mem(graph_store.pool(), parallelism)
-                    .await
+                todo!("update to new design")
             },
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx
-                    .with_graph(StoreId::Right)
-                    .load_to_mem(graph_store.pool(), parallelism)
-                    .await
+                todo!("update to new design")
             }
         );
         let graph_left = graph_left.expect("Could not load left graph");
