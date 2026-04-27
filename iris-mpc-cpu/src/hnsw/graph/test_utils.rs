@@ -88,7 +88,8 @@ impl DbContext {
             for (idx, (pt, links)) in layer.links.into_iter().enumerate() {
                 {
                     let mut graph_ops = graph_tx.with_graph(side);
-                    graph_ops.set_links(pt, links, lc).await?;
+                    // graph_ops.set_links(pt, links, lc).await?;
+                    todo!("update to new design")
                 }
 
                 if (idx % 1000) == 999 {
@@ -144,7 +145,8 @@ impl DbContext {
         let mut graph_tx = self.graph_pg.tx().await?;
         let mut graph_ops = graph_tx.with_graph(side);
 
-        graph_ops.load_to_mem(self.graph_pg.pool(), 2).await
+        //graph_ops.load_to_mem(self.graph_pg.pool(), 2).await
+        todo!("update to new design")
     }
 
     /// helper function to get a `BothEyes<GraphMem>`
@@ -333,7 +335,8 @@ impl DbContext {
                     .await?;
             }
             let links = links.edge_ids();
-            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            //graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            todo!("update to new design");
         }
 
         tx.tx.commit().await?;

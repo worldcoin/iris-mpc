@@ -898,7 +898,7 @@ async fn load_graph(
 ) -> Result<GraphMem<VectorId>> {
     let mut tx = graph_pg.tx().await?;
     let mut ops = tx.with_graph(store_id);
-    ops.load_to_mem(graph_pg.pool(), 4).await
+    todo!() //ops.load_to_mem(graph_pg.pool(), 4).await
 }
 
 /// Resolve checkpoint state: use explicit S3 key (looked up from DB) or
@@ -1033,7 +1033,7 @@ async fn run_persistent_state_checks(
 async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreId) -> Result<i64> {
     let mut tx = graph_pg.tx().await?;
     let mut ops = tx.with_graph(store_id);
-    ops.get_max_serial_id().await
+    todo!() //ops.get_max_serial_id().await
 }
 
 /// Returns the maximum serial_id across all nodes in layer 0 of an in-memory
