@@ -1672,13 +1672,7 @@ async fn init_graph_from_stores(
         graph_loader.load_graphs_from_checkpoint(both_eyes);
         return Ok(());
     }
-    tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
-
-    graph_loader
-        .load_graph_store(&graph_store, graph_db_parallelism)
-        .await?;
-
-    Ok(())
+    bail!("No S3 checkpoint found. Failed to load graph")
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function
