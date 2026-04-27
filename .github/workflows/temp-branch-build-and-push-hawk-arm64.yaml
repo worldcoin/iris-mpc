@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/recovery-update"
+      - "test/load-fix-arm64-build"
 
     paths-ignore:
       - "deploy/**"
