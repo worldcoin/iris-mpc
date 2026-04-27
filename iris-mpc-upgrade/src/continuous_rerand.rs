@@ -64,10 +64,17 @@ pub async fn run_continuous_rerand(
 
     loop {
         if is_cancelled(cancel) {
+            tracing::info!(
+                "continuous rerand exited cleanly: cancellation token fired at start of an epoch iteration"
+            );
             return Ok(());
         }
 
         if !check_and_handle_freeze(pool, cancel).await? {
+            tracing::info!(
+                "continuous rerand exited cleanly: cancellation or shutdown while handling a rerand freeze \
+                 at epoch loop start (includes waiting frozen for main server startup)"
+            );
             return Ok(());
         }
 
@@ -87,8 +94,16 @@ pub async fn run_continuous_rerand(
         )
         .await?;
 
-        let manifest =
-            get_or_create_manifest(s3, store, config, active_epoch, poll_interval).await?;
+        let Some(manifest) =
+            get_or_create_manifest(pool, cancel, s3, store, config, active_epoch, poll_interval)
+                .await?
+        else {
+            tracing::info!(
+                "continuous rerand exited cleanly: cancellation or shutdown while handling a rerand freeze \
+                 during manifest / max-id S3 coordination (worker observes freeze between polls)"
+            );
+            return Ok(());
+        };
         tracing::info!(
             "Epoch {} manifest: chunk_size={}, max_id_inclusive={}",
             active_epoch,
@@ -123,11 +138,17 @@ pub async fn run_continuous_rerand(
         let mut chunk_id: u32 = start_chunk_id;
         loop {
             if is_cancelled(cancel) {
+                tracing::info!(
+                    "continuous rerand exited cleanly: cancellation token fired inside chunk loop for this epoch"
+                );
                 return Ok(());
             }
 
             // Honor startup freeze requests between chunks.
             if !check_and_handle_freeze(pool, cancel).await? {
+                tracing::info!(
+                    "continuous rerand exited cleanly: cancellation or shutdown while handling a rerand freeze between chunks"
+                );
                 return Ok(());
             }
 
@@ -191,6 +212,10 @@ pub async fn run_continuous_rerand(
             }
 
             if is_cancelled(cancel) {
+                tracing::info!(
+                    "continuous rerand exited cleanly: cancellation token fired after staging uploads, \
+                     before all-parties staged barrier"
+                );
                 return Ok(());
             }
 
@@ -214,7 +239,13 @@ pub async fn run_continuous_rerand(
                 .await?
                 {
                     PollOutcome::Completed(()) => {}
-                    PollOutcome::Cancelled => return Ok(()),
+                    PollOutcome::Cancelled => {
+                        tracing::info!(
+                            "continuous rerand exited cleanly: cancellation or freeze/shutdown during \
+                             interruptible poll for all parties' staged markers"
+                        );
+                        return Ok(());
+                    }
                 }
                 set_all_confirmed(pool, active_epoch as i32, chunk_id as i32).await?;
                 tracing::info!(
@@ -225,6 +256,10 @@ pub async fn run_continuous_rerand(
             }
 
             if is_cancelled(cancel) {
+                tracing::info!(
+                    "continuous rerand exited cleanly: cancellation token fired after staged barrier, \
+                     before cross-party apply prep"
+                );
                 return Ok(());
             }
 
@@ -251,7 +286,13 @@ pub async fn run_continuous_rerand(
             .await?
             {
                 PollOutcome::Completed(ids) => ids,
-                PollOutcome::Cancelled => return Ok(()),
+                PollOutcome::Cancelled => {
+                    tracing::info!(
+                        "continuous rerand exited cleanly: cancellation or freeze/shutdown during \
+                         interruptible poll for cross-party version-map convergence"
+                    );
+                    return Ok(());
+                }
             };
 
             // 2. Apply under lock. The function acquires RERAND_MODIFY_LOCK +
@@ -307,6 +348,10 @@ pub async fn run_continuous_rerand(
         tracing::info!("Epoch {} completed, moving to next epoch", active_epoch);
 
         if is_cancelled(cancel) {
+            tracing::info!(
+                "continuous rerand exited cleanly: cancellation token fired after epoch completed, \
+                 before starting next epoch"
+            );
             return Ok(());
         }
 
@@ -366,15 +411,24 @@ where
 }
 
 async fn get_or_create_manifest(
+    pool: &PgPool,
+    cancel: Option<&CancellationToken>,
     s3: &S3Client,
     store: &Store,
     config: &RerandomizeContinuousConfig,
     epoch: u32,
     poll_interval: Duration,
-) -> Result<Manifest> {
+) -> Result<Option<Manifest>> {
     if s3_coordination::manifest_exists(s3, &config.s3_bucket, epoch).await? {
-        return s3_coordination::download_manifest(s3, &config.s3_bucket, epoch, poll_interval)
-            .await;
+        return s3_coordination::download_manifest_with_freeze(
+            pool,
+            cancel,
+            s3,
+            &config.s3_bucket,
+            epoch,
+            poll_interval,
+        )
+        .await;
     }
 
     let local_max = store.get_max_serial_id().await? as u64;
@@ -382,9 +436,18 @@ async fn get_or_create_manifest(
         .await?;
 
     if config.party_id == 0 {
-        let all_max_ids =
-            s3_coordination::download_all_max_ids(s3, &config.s3_bucket, epoch, poll_interval)
-                .await?;
+        let Some(all_max_ids) = s3_coordination::download_all_max_ids_with_freeze(
+            pool,
+            cancel,
+            s3,
+            &config.s3_bucket,
+            epoch,
+            poll_interval,
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
         let min_max = *all_max_ids.iter().min().unwrap();
         let max_id_inclusive = min_max.saturating_sub(config.safety_buffer_ids);
         if max_id_inclusive == 0 {
@@ -409,9 +472,17 @@ async fn get_or_create_manifest(
             max_id_inclusive,
             config.chunk_size
         );
-        Ok(manifest)
+        Ok(Some(manifest))
     } else {
-        s3_coordination::download_manifest(s3, &config.s3_bucket, epoch, poll_interval).await
+        s3_coordination::download_manifest_with_freeze(
+            pool,
+            cancel,
+            s3,
+            &config.s3_bucket,
+            epoch,
+            poll_interval,
+        )
+        .await
     }
 }
 

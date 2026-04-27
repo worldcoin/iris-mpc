@@ -2,12 +2,16 @@ use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
 use futures::future::try_join_all;
+use iris_mpc_store::rerand::check_and_handle_freeze;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use std::time::Duration;
 use tokio::time::{sleep, Instant};
+use tokio_util::sync::CancellationToken;
 
 const NUM_PARTIES: u8 = 3;
 const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const FREEZE_AWARE_SLEEP_SLICE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
@@ -129,6 +133,61 @@ pub async fn poll_until_marker_exists(
     }
 }
 
+/// Like [`poll_until_marker_exists`], but calls [`check_and_handle_freeze`] between
+/// polls so the rerand worker can acknowledge a startup freeze while waiting for
+/// peers (manifest, max-id, etc.).
+///
+/// Returns `Ok(None)` when the worker should shut down cleanly (cancellation while
+/// handling freeze); `Ok(Some(()))` when the marker exists.
+pub async fn poll_until_marker_exists_with_freeze(
+    pool: &PgPool,
+    cancel: Option<&CancellationToken>,
+    s3: &S3Client,
+    bucket: &str,
+    key: &str,
+    poll_interval: Duration,
+) -> Result<Option<()>> {
+    let deadline = Instant::now() + DEFAULT_POLL_TIMEOUT;
+    loop {
+        if !check_and_handle_freeze(pool, cancel).await? {
+            return Ok(None);
+        }
+        if marker_exists(s3, bucket, key).await? {
+            return Ok(Some(()));
+        }
+        if Instant::now() > deadline {
+            eyre::bail!(
+                "Timeout after {:?} waiting for S3 marker: {}",
+                DEFAULT_POLL_TIMEOUT,
+                key
+            );
+        }
+        tracing::debug!("Waiting for S3 marker (freeze-aware): {}", key);
+        if !sleep_with_freeze_checks(pool, cancel, poll_interval).await? {
+            return Ok(None);
+        }
+    }
+}
+
+async fn sleep_with_freeze_checks(
+    pool: &PgPool,
+    cancel: Option<&CancellationToken>,
+    duration: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + duration;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(true);
+        }
+
+        sleep(remaining.min(FREEZE_AWARE_SLEEP_SLICE)).await;
+        if !check_and_handle_freeze(pool, cancel).await? {
+            return Ok(false);
+        }
+    }
+}
+
 /// Polls until all three parties have uploaded a given marker suffix for an epoch.
 pub async fn poll_until_all_parties_marker(
     s3: &S3Client,
@@ -220,6 +279,35 @@ pub async fn download_all_max_ids(
         poll_until_marker_exists(s3, bucket, key, poll_interval).await?;
     }
 
+    download_max_id_values(s3, bucket, &keys).await
+}
+
+/// Same as [`download_all_max_ids`] but observes rerand freeze between polls.
+pub async fn download_all_max_ids_with_freeze(
+    pool: &PgPool,
+    cancel: Option<&CancellationToken>,
+    s3: &S3Client,
+    bucket: &str,
+    epoch: u32,
+    poll_interval: Duration,
+) -> Result<Option<[u64; 3]>> {
+    let keys: Vec<String> = (0..NUM_PARTIES)
+        .map(|party| format!("{}/max-id", epoch_party_prefix(epoch, party)))
+        .collect();
+
+    for key in &keys {
+        if poll_until_marker_exists_with_freeze(pool, cancel, s3, bucket, key, poll_interval)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(download_max_id_values(s3, bucket, &keys).await?))
+}
+
+async fn download_max_id_values(s3: &S3Client, bucket: &str, keys: &[String]) -> Result<[u64; 3]> {
     let all_bytes: Vec<Vec<u8>> =
         try_join_all(keys.iter().map(|key| download_marker(s3, bucket, key))).await?;
     let mut ids = [0u64; 3];
@@ -257,6 +345,27 @@ pub async fn download_manifest(
     let bytes = download_marker(s3, bucket, &key).await?;
     let manifest: Manifest = serde_json::from_slice(&bytes)?;
     Ok(manifest)
+}
+
+/// Same as [`download_manifest`] but observes rerand freeze between polls.
+pub async fn download_manifest_with_freeze(
+    pool: &PgPool,
+    cancel: Option<&CancellationToken>,
+    s3: &S3Client,
+    bucket: &str,
+    epoch: u32,
+    poll_interval: Duration,
+) -> Result<Option<Manifest>> {
+    let key = format!("{}/manifest.json", epoch_party_prefix(epoch, 0));
+    if poll_until_marker_exists_with_freeze(pool, cancel, s3, bucket, &key, poll_interval)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let bytes = download_marker(s3, bucket, &key).await?;
+    let manifest: Manifest = serde_json::from_slice(&bytes)?;
+    Ok(Some(manifest))
 }
 
 pub async fn manifest_exists(s3: &S3Client, bucket: &str, epoch: u32) -> Result<bool> {
