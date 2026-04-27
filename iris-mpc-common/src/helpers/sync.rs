@@ -405,9 +405,6 @@ mod tests {
 
     #[test]
     fn test_compare_modifications_local_party_outdated() {
-        let mod1_graph_mut = random_graph_mutation();
-        let mod3_graph_mut = random_graph_mutation();
-        let mod5_graph_mut = random_graph_mutation();
         let mod1_local = create_modification(
             1,
             Some(100),
@@ -415,7 +412,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(mod1_graph_mut.clone()),
+            Some(1),
         );
         let mod2_local = create_modification(
             2,
@@ -478,7 +475,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(mod1_graph_mut.clone()),
+            Some(1),
         );
         let mod2_other = create_modification(
             2,
@@ -496,7 +493,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(mod3_graph_mut.clone()),
+            Some(3),
         );
         let mod4_other = create_modification(
             4,
@@ -514,7 +511,7 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::Completed,
             true,
-            Some(mod5_graph_mut.clone()),
+            Some(5),
         );
         let mod6_other = create_modification(
             6,
@@ -563,9 +560,6 @@ mod tests {
 
     #[test]
     fn test_compare_modifications_local_party_up_to_date() {
-        let mod1_graph_mut = random_graph_mutation();
-        let mod3_graph_mut = random_graph_mutation();
-        let mod5_graph_mut = random_graph_mutation();
         // Create local modifications that are already up-to-date.
         let mod1_local = create_modification(
             1,
@@ -574,7 +568,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(mod1_graph_mut.clone()),
+            Some(1),
         );
         let mod2_local = create_modification(
             2,
@@ -592,7 +586,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(mod3_graph_mut.clone()),
+            Some(3),
         );
         let mod4_local = create_modification(
             4,
@@ -610,7 +604,7 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::Completed,
             true,
-            Some(mod5_graph_mut.clone()),
+            Some(5),
         );
         let mod6_local = create_modification(
             6,
@@ -638,7 +632,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(mod1_graph_mut.clone()),
+            Some(1),
         );
         let mod2_other = create_modification(
             2,
