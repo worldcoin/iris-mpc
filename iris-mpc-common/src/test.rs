@@ -197,6 +197,11 @@ pub enum TestCase {
     /// - Normal flow won't match anything in the database
     /// - But when the code is mirrored, it will match(mirrored version will be pre-inserted in the test db)
     FullFaceMirrorAttack,
+    /// Send an iris code crafted for full face mirror attack detection:
+    /// - Normal flow won't match anything in the database or batch
+    /// - Mirror flow won't match anything in the database, since it is not yet inserted
+    /// - Mirror flow should match an item in the batch.
+    MirrorAttackInBatch,
 }
 
 impl TestCase {
@@ -224,6 +229,7 @@ impl TestCase {
             TestCase::MatchAfterResetUpdate,
             TestCase::MatchAfterReauthSkipPersistence,
             TestCase::FullFaceMirrorAttack,
+            TestCase::MirrorAttackInBatch,
         ]
     }
 }
@@ -666,6 +672,9 @@ impl TestCaseGenerator {
         }
         if !self.reauth_skip_persistence_templates.is_empty() {
             options.push(TestCase::MatchAfterReauthSkipPersistence);
+        }
+        if !self.new_templates_in_batch.is_empty() {
+            options.push(TestCase::MirrorAttackInBatch);
         }
 
         options.retain(|x| self.enabled_test_cases.contains(x));
@@ -1116,6 +1125,31 @@ impl TestCaseGenerator {
                     );
                     self.skip_invalidate = true;
                     e2e_template
+                }
+                TestCase::MirrorAttackInBatch => {
+                    tracing::info!("Sending iris code crafted for mirror attack detection that should match in batch");
+                    // Get an existing template from the current batch
+                    let (internal_batch_idx, request_id, original_template) = self
+                        .new_templates_in_batch
+                        .choose(&mut self.rng)
+                        .expect("this is only called if we already have templates in batch");
+                    tracing::info!(
+                        "batch_idx used for the mirror attack in batch: {}",
+                        internal_batch_idx
+                    );
+
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult::builder()
+                            .with_full_face_mirror_attack(true)
+                            .build(),
+                    );
+
+                    E2ETemplate {
+                        // This is swapped on purpose due to the mirror attack flow
+                        left: original_template.right.mirrored(),
+                        right: original_template.left.mirrored(),
+                    }
                 }
             }
         };
