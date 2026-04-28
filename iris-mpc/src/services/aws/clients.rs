@@ -14,7 +14,7 @@ pub struct AwsClients {
     pub sqs_client: SQSClient,
     pub sns_client: SNSClient,
     pub s3_client: S3Client,
-    // used to obtain graph checkpoints. this buckt could be in a different region
+    // used to obtain graph checkpoints. this bucket could be in a different region
     pub checkpoint_s3_client: S3Client,
     pub secrets_manager_client: SecretsManagerClient,
 }

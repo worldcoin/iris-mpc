@@ -1,326 +1,243 @@
 mod data;
-mod s3_helpers;
+mod s3_client;
 
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client as S3Client;
-use bytes::Bytes;
+use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
+pub use data::*;
+use iris_mpc_common::config::Config;
+pub use s3_client::*;
+
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::IrisSerialId;
-use std::{fmt::Display, str::FromStr, time::Instant};
 
 use crate::{
-    execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
-    hnsw::{
-        graph::{
-            graph_store::{self, GraphPg},
-            layered_graph::GraphMem,
-        },
-        vector_store::Ref,
-        VectorStore,
-    },
+    execution::hawk_main::HawkOps, hawkers::aby3::aby3_store::Aby3Store,
+    hnsw::graph::graph_store::GraphPg,
 };
-pub use data::*;
-pub use s3_helpers::*;
 
-/// Creates an S3 graph checkpoint.
-pub async fn upload_genesis_checkpoint(
-    bucket: &str,
-    party_id: usize,
-    graph_mem: &BothEyes<GraphRef>,
-    s3_client: &S3Client,
-    last_indexed_iris_id: IrisSerialId,
-    last_indexed_modification_id: i64,
-    is_archival: bool,
-) -> Result<GraphCheckpointState> {
-    let start = Instant::now();
-    tracing::info!(
-        "Creating S3 graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}, is_archival={}",
-        last_indexed_iris_id,
-        last_indexed_modification_id,
-        is_archival,
-    );
-
-    let left_graph = graph_mem[LEFT].read().await;
-    let right_graph = graph_mem[RIGHT].read().await;
-    let data = serialize_both_eyes(&[&*left_graph, &*right_graph])?;
-    let data_len = data.len();
-    tracing::info!(
-        "Serialized graphs to {} bytes in {:?}",
-        data_len,
-        start.elapsed()
-    );
-
-    // Compute BLAKE3 hash before upload
-    let hash_start = Instant::now();
-    let blake3_hash = blake3::hash(&data).to_hex().to_string();
-    tracing::info!(
-        "Computed BLAKE3 hash: {} in {:?}",
-        blake3_hash,
-        hash_start.elapsed()
-    );
-
-    let s3_key = format!(
-        "genesis/{}/checkpoint_{}.bin",
-        party_id,
-        uuid::Uuid::new_v4()
-    );
-
-    upload_graph(s3_client, bucket, &s3_key, data).await?;
-
-    let checkpoint = GraphCheckpointState {
-        s3_key: s3_key.clone(),
-        last_indexed_iris_id,
-        last_indexed_modification_id,
-        blake3_hash,
-        is_archival,
-    };
-
-    tracing::info!(
-        "S3 graph checkpoint created successfully: s3_key={}, is_archival={}, duration={:?}",
-        s3_key,
-        is_archival,
-        start.elapsed()
-    );
-
-    metrics::histogram!("graph_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
-    metrics::gauge!("graph_checkpoint_size_bytes").set(data_len as f64);
-    metrics::gauge!("graph_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
-    metrics::gauge!("graph_checkpoint_last_modification_id")
-        .set(last_indexed_modification_id as f64);
-
-    Ok(checkpoint)
-}
-
-pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
-    s3_client: &S3Client,
-    bucket: &str,
-    state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<T>>> {
-    let start = Instant::now();
-
-    let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
-
-    metrics::histogram!("genesis_checkpoint_download_duration")
-        .record(start.elapsed().as_secs_f64());
-
-    // Verify BLAKE3 hash after download
-    let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();
-    if computed_hash != state.blake3_hash {
-        return Err(eyre!(
-            "BLAKE3 hash mismatch: expected {}, got {}",
-            state.blake3_hash,
-            computed_hash
-        ));
-    }
-    tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
-
-    let graphs = deserialize_both_eyes(&binary_graph)?;
-    Ok(graphs)
-}
-
-/// Gets the latest checkpoint from genesis_graph_checkpoint table.
-pub async fn get_latest_checkpoint_state<V: VectorStore>(
-    graph_store: &GraphPg<V>,
+pub async fn get_common_checkpoint(
+    config: &Config,
+    my_checkpoint_hashes: GraphCheckpointHashes,
+    my_checkpoints: Vec<GraphCheckpointState>,
 ) -> Result<Option<GraphCheckpointState>> {
-    tracing::info!("Retrieving latest graph checkpoint metadata from genesis_graph_checkpoint");
-
-    let row = graph_store.get_latest_genesis_graph_checkpoint().await?;
-    let metadata: Option<GraphCheckpointState> = row.map(|row| row.try_into()).transpose()?;
-
-    if let Some(m) = &metadata {
-        tracing::info!(
-            "Found existing checkpoint: s3_key={}, last_indexed_iris_id={}, is_archival={}",
-            m.s3_key,
-            m.last_indexed_iris_id,
-            m.is_archival,
-        );
-    } else {
-        tracing::info!("No existing checkpoint found");
+    let server_coord_config = config
+        .server_coordination
+        .as_ref()
+        .ok_or(eyre!("Missing server coordination config"))?;
+    let others_hashes = get_others_graph_hashes(server_coord_config).await?;
+    if others_hashes.len() != 2 {
+        bail!("invalid number of parties");
     }
-
-    Ok(metadata)
+    find_common_checkpoint(my_checkpoint_hashes, my_checkpoints, others_hashes)
 }
 
-/// stores checkpoint in genesis_graph_checkpoint table.
-pub async fn save_checkpoint_state<V: VectorStore>(
-    tx: graph_store::GraphTx<'_, V>,
-    state: &GraphCheckpointState,
-) -> Result<()> {
-    tracing::info!(
-        "Persisting graph checkpoint state: s3_key={}, last_indexed_iris_id={}, is_archival={}",
-        state.s3_key,
-        state.last_indexed_iris_id,
-        state.is_archival,
-    );
+/// subset logic for [`get_common_checkpoint`].
+/// Finds the first checkpoint whose hash appears in all parties'
+/// hash lists (mine + the X `others_hashes`).  Zero hashes are ignored
+/// because they represent empty slots in a [`GraphCheckpointHashes`] array.
+pub fn find_common_checkpoint(
+    my_checkpoint_hashes: GraphCheckpointHashes,
+    my_checkpoints: Vec<GraphCheckpointState>,
+    others_hashes: Vec<GraphCheckpointHashes>,
+) -> Result<Option<GraphCheckpointState>> {
+    // using a naive O(n^2) algorithm because the hash lists are length  10 and
+    // there are 3 parties, and this code is called infrequently.
 
-    let mut tx = tx.tx;
-    GraphPg::<V>::insert_genesis_graph_checkpoint(
-        &mut tx,
-        &state.s3_key,
-        i64::from(state.last_indexed_iris_id),
-        state.last_indexed_modification_id,
-        &state.blake3_hash,
-        state.is_archival,
-    )
-    .await
-    .map_err(|e| eyre!("Failed to persist checkpoint state: {:?}", e))?;
-    tx.commit().await?;
-    Ok(())
+    let default_hash: Blake3Hash = [0; 32];
+    for (idx, hash) in my_checkpoint_hashes.iter().enumerate() {
+        if *hash == default_hash {
+            continue;
+        }
+        // Check if this hash is in all of the others_hashes lists
+        let mut found_in_all = true;
+        for other_hashes in &others_hashes {
+            if !other_hashes.contains(hash) {
+                found_in_all = false;
+                break;
+            }
+        }
+        if found_in_all {
+            let r = my_checkpoints.get(idx).cloned();
+            if r.is_none() {
+                bail!("unreachable condition in get_common_checkpoint()");
+            }
+            return Ok(r);
+        }
+    }
+    Ok(None)
 }
 
-/// DANGER: requires that the 3 parties have
-/// reached consensus on a common checkpoint.
-/// if the parties have not reached agreement, then
-/// calling this function could make rollback impossible
-pub async fn cleanup_checkpoints<V: VectorStore>(
-    bucket: &str,
-    s3_client: &S3Client,
-    current_state: &GraphCheckpointState,
-    graph_store: &GraphPg<V>,
-    pruning_mode: PruningMode,
-) -> Result<()> {
-    tracing::info!(
-        "cleaning up old genesis graph checkpoints (mode: {})",
-        pruning_mode
-    );
-
-    if pruning_mode == PruningMode::None {
-        tracing::info!("pruning mode is 'none', skipping cleanup");
-        return Ok(());
+pub async fn get_most_recent_checkpoints(
+    graph_store: &GraphPg<Aby3Store<HawkOps>>,
+) -> Result<(Vec<GraphCheckpointState>, GraphCheckpointHashes)> {
+    let mut output_hashes: GraphCheckpointHashes = [[0; 32]; 10];
+    let db_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+    let mut valid_tuples = vec![];
+    for db_cp in db_checkpoints {
+        let genesis_cp_state: Result<GraphCheckpointState> = db_cp.try_into();
+        if let Ok(genesis_cp_state) = genesis_cp_state {
+            if let Ok(hash) = blake3::Hash::from_hex(genesis_cp_state.blake3_hash.as_bytes()) {
+                valid_tuples.push((genesis_cp_state, hash));
+            } else {
+                tracing::warn!("checkpoint hash failed to parse");
+            }
+        } else {
+            tracing::warn!("failed to convert GraphCheckpointRow to GraphCheckpointState");
+        }
     }
-
-    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    if !all_checkpoints
-        .iter()
-        .any(|x| x.s3_key == current_state.s3_key)
-    {
-        bail!("current checkpoint not found in the db");
-    }
-
-    for checkpoint in all_checkpoints
+    let (checkpoints, hashes): (Vec<GraphCheckpointState>, Vec<blake3::Hash>) =
+        valid_tuples.into_iter().unzip();
+    for (src, dest) in hashes
         .into_iter()
-        .filter(|x| x.s3_key != current_state.s3_key)
-        .filter(|x| match pruning_mode {
-            PruningMode::AllOlder => true,
-            PruningMode::OlderNonArchival => !x.is_archival,
-            PruningMode::None => unreachable!(),
-        })
+        .take(output_hashes.len())
+        .zip(output_hashes.iter_mut())
     {
-        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
-        graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
+        dest.copy_from_slice(src.as_bytes());
     }
-    Ok(())
+    Ok((checkpoints, output_hashes))
 }
 
-/// Verifies that the S3 client has read, write, and delete access to the
-/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
-/// deletes it. This catches misconfigured buckets/regions/IAM before any
-/// mutations occur.
-pub async fn verify_s3_checkpoint_access(
-    s3_client: &S3Client,
-    bucket: &str,
-    party_id: usize,
-) -> Result<()> {
-    let key = format!("genesis/{party_id}/_access_check");
-    let body = b"access_check";
+pub async fn get_others_graph_hashes(
+    config: &ServerCoordinationConfig,
+) -> Result<Vec<GraphCheckpointHashes>> {
+    tracing::info!("⚓️ ANCHOR: Syncing latest graph checkpoints");
 
-    // Write
-    s3_client
-        .put_object()
-        .bucket(bucket)
-        .key(&key)
-        .body(ByteStream::from_static(body))
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
+    let connected_and_ready =
+        try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ENDPOINT).await?;
 
-    // Read
-    let resp = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
-    let data = resp
-        .body
-        .collect()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
-    if data.into_bytes().as_ref() != body {
-        bail!("S3 checkpoint bucket read check returned unexpected content");
-    }
+    let response_texts_futs: Vec<_> = connected_and_ready
+        .into_iter()
+        .map(|resp| resp.json())
+        .collect();
+    let graph_checkpoints: Vec<GraphCheckpointHashes> =
+        futures::future::try_join_all(response_texts_futs).await?;
 
-    // Delete
-    if let Err(e) = s3_client
-        .delete_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-    {
-        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
-    }
-
-    Ok(())
-}
-
-/// serialize a graph for s3 upload
-fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    both_eyes: &BothEyes<&GraphMem<T>>,
-) -> Result<Bytes> {
-    let data = bincode::serialize(&both_eyes)?;
-    Ok(Bytes::from(data))
-}
-
-/// deserialize graph retrievevd from s3
-fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    data: &[u8],
-) -> Result<BothEyes<GraphMem<T>>> {
-    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
-    Ok(graphs)
+    Ok(graph_checkpoints)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
-    #[test]
-    fn test_blake3_hash_to_string() {
-        let bytes = b"ABCDEFGHIJKLMNOP";
-        let hash1 = blake3::hash(bytes);
-        let hash_str1 = hash1.to_hex().to_string();
+    // ── helpers ──────────────────────────────────────────────────────────────
 
-        // now go back
-        let hash2 = blake3::Hash::from_hex(hash_str1.as_bytes()).unwrap();
-        assert_eq!(hash1.as_bytes(), hash2.as_bytes());
+    /// Build a `Blake3Hash` where every byte is `b`.
+    fn h(b: u8) -> Blake3Hash {
+        [b; 32]
     }
 
-    #[test]
-    fn test_pruning_mode_from_str() {
-        use super::PruningMode;
-        use std::str::FromStr;
-
-        assert_eq!(PruningMode::from_str("none").unwrap(), PruningMode::None);
-        assert_eq!(
-            PruningMode::from_str("older-non-archival").unwrap(),
-            PruningMode::OlderNonArchival
-        );
-        assert_eq!(
-            PruningMode::from_str("all-older").unwrap(),
-            PruningMode::AllOlder
-        );
-        assert!(PruningMode::from_str("invalid").is_err());
+    /// Build a `GraphCheckpointHashes` ([Blake3Hash; 10]) from up to 3 hashes.
+    /// Remaining slots are filled with the zero hash (treated as "empty").
+    fn hashes(slots: &[Blake3Hash]) -> GraphCheckpointHashes {
+        assert!(slots.len() <= 3, "test helper: use at most 3 slots");
+        let mut arr: GraphCheckpointHashes = [[0u8; 32]; 10];
+        for (i, &slot) in slots.iter().enumerate() {
+            arr[i] = slot;
+        }
+        arr
     }
 
-    #[test]
-    fn test_pruning_mode_display() {
-        use super::PruningMode;
+    fn checkpoint(label: &str) -> GraphCheckpointState {
+        GraphCheckpointState {
+            s3_key: label.to_string(),
+            last_indexed_iris_id: 0,
+            last_indexed_modification_id: 0,
+            blake3_hash: label.to_string(),
+            is_archival: false,
+        }
+    }
 
-        assert_eq!(PruningMode::None.to_string(), "none");
-        assert_eq!(
-            PruningMode::OlderNonArchival.to_string(),
-            "older-non-archival"
-        );
-        assert_eq!(PruningMode::AllOlder.to_string(), "all-older");
+    // ── tests ─────────────────────────────────────────────────────────────────
+
+    /// All three parties share hash A → returns the corresponding checkpoint.
+    #[test]
+    fn all_three_agree_returns_checkpoint() {
+        let a = h(0x01);
+        let my_hashes = hashes(&[a]);
+        let my_cps = vec![checkpoint("cp_a")];
+        let others = vec![hashes(&[a]), hashes(&[a])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert_eq!(result.unwrap().s3_key, "cp_a");
+    }
+
+    /// Only my party and one other share hash A; the third has a different
+    /// hash → no common checkpoint among all three.
+    #[test]
+    fn only_two_parties_agree_returns_none() {
+        let a = h(0x01);
+        let b = h(0x02);
+        let my_hashes = hashes(&[a]);
+        let my_cps = vec![checkpoint("cp_a")];
+        let others = vec![hashes(&[a]), hashes(&[b])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert!(result.is_none());
+    }
+
+    /// All three parties have completely disjoint hashes → None.
+    #[test]
+    fn no_overlap_returns_none() {
+        let my_hashes = hashes(&[h(0x01)]);
+        let my_cps = vec![checkpoint("cp_a")];
+        let others = vec![hashes(&[h(0x02)]), hashes(&[h(0x03)])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert!(result.is_none());
+    }
+
+    /// Zero hashes are treated as empty slots and must not be counted as a
+    /// common checkpoint even when all three parties "share" them.
+    #[test]
+    fn zero_hashes_are_skipped() {
+        let zero = h(0x00);
+        let my_hashes = hashes(&[zero]);
+        let my_cps = vec![checkpoint("cp_zero")];
+        let others = vec![hashes(&[zero]), hashes(&[zero])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert!(result.is_none());
+    }
+
+    /// When multiple hashes are common, the one that appears *first* in my
+    /// list is returned (order is determined by my_checkpoint_hashes, not the
+    /// HashMap iteration order).
+    #[test]
+    fn first_matching_hash_in_my_list_wins() {
+        let a = h(0x01);
+        let b = h(0x02);
+        let my_hashes = hashes(&[a, b]);
+        let my_cps = vec![checkpoint("cp_a"), checkpoint("cp_b")];
+        let others = vec![hashes(&[a, b]), hashes(&[a, b])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert_eq!(result.unwrap().s3_key, "cp_a");
+    }
+
+    /// When the first hash in my list is not common but a later one is,
+    /// the later checkpoint is returned.
+    #[test]
+    fn second_hash_matches_when_first_does_not() {
+        let a = h(0x01);
+        let b = h(0x02);
+        // Only `b` is shared by all three parties.
+        let my_hashes = hashes(&[a, b]);
+        let my_cps = vec![checkpoint("cp_a"), checkpoint("cp_b")];
+        let others = vec![hashes(&[b]), hashes(&[b])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
+        assert_eq!(result.unwrap().s3_key, "cp_b");
+    }
+
+    /// If a hash is common but `my_checkpoints` does not contain a checkpoint
+    /// at that index, the function must return an error (the "unreachable"
+    /// guard).
+    #[test]
+    fn missing_checkpoint_for_matching_hash_returns_error() {
+        let a = h(0x01);
+        let my_hashes = hashes(&[a]);
+        let my_cps = vec![]; // intentionally empty — no checkpoint at index 0
+        let others = vec![hashes(&[a]), hashes(&[a])];
+
+        let result = find_common_checkpoint(my_hashes, my_cps, others);
+        assert!(result.is_err());
     }
 }

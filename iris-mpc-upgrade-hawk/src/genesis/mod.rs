@@ -1,3 +1,5 @@
+mod graph_checkpoint;
+
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
     start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
@@ -54,20 +56,14 @@ use tokio::{
     time::timeout,
 };
 
-mod graph_checkpoint;
-pub use graph_checkpoint::{
+pub use graph_checkpoint::{maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint};
+pub use iris_mpc_cpu::graph_checkpoint::{
     find_common_checkpoint, get_common_checkpoint, get_most_recent_checkpoints,
-    get_others_graph_hashes, maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint,
+    get_others_graph_hashes,
 };
 
 pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
-
-// types for the graph checkpoint sync
-pub type Blake3Hash = [u8; 32];
-pub type GraphCheckpointHashes = [Blake3Hash; 10];
-const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
-const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
@@ -1614,7 +1610,7 @@ async fn init_graph_from_stores(
 
     // Try to load graph from S3 checkpoint first
     if let Some(state) = checkpoint {
-        let both_eyes = download_genesis_checkpoint(s3_client, checkpoint_bucket, &state).await?;
+        let both_eyes = download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?;
         graph_loader.load_graphs_from_checkpoint(both_eyes);
         return Ok(());
     }

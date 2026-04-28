@@ -4,6 +4,12 @@ use iris_mpc_common::IrisSerialId;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
+// types for the graph checkpoint sync
+pub type Blake3Hash = [u8; 32];
+pub type GraphCheckpointHashes = [Blake3Hash; 10];
+pub const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
+pub const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
+
 /// Controls which older checkpoints are deleted during cleanup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PruningMode {

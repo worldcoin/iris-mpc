@@ -13,7 +13,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId, LEFT, RIGHT},
     graph_checkpoint::{
-        download_genesis_checkpoint, get_latest_checkpoint_state, GraphCheckpointState,
+        download_graph_checkpoint, get_latest_checkpoint_state, GraphCheckpointState,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::{
@@ -308,7 +308,7 @@ async fn main() -> Result<()> {
             checkpoint_state.s3_key
         );
         let graphs: BothEyes<GraphMem<VectorId>> =
-            download_genesis_checkpoint(&s3_client, bucket, &checkpoint_state).await?;
+            download_graph_checkpoint(&s3_client, bucket, &checkpoint_state).await?;
         rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
         // Check 0a: checkpoint metadata vs persistent_state genesis watermarks
