@@ -6,9 +6,7 @@ use aws_sdk_s3::Client as S3Client;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::execution::hawk_main::{BothEyes, GraphRef, HawkOps};
-use iris_mpc_cpu::genesis::genesis_checkpoint::{
-    upload_genesis_checkpoint, GenesisCheckpointState,
-};
+use iris_mpc_cpu::graph_checkpoint::{upload_genesis_checkpoint, GraphCheckpointState};
 use iris_mpc_cpu::genesis::state_accessor::set_last_indexed_iris_id;
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -23,8 +21,8 @@ use super::{
 pub async fn get_common_checkpoint(
     config: &Config,
     my_checkpoint_hashes: GraphCheckpointHashes,
-    my_checkpoints: Vec<GenesisCheckpointState>,
-) -> Result<Option<GenesisCheckpointState>> {
+    my_checkpoints: Vec<GraphCheckpointState>,
+) -> Result<Option<GraphCheckpointState>> {
     let server_coord_config = config
         .server_coordination
         .as_ref()
@@ -42,9 +40,9 @@ pub async fn get_common_checkpoint(
 /// because they represent empty slots in a [`GraphCheckpointHashes`] array.
 pub fn find_common_checkpoint(
     my_checkpoint_hashes: GraphCheckpointHashes,
-    my_checkpoints: Vec<GenesisCheckpointState>,
+    my_checkpoints: Vec<GraphCheckpointState>,
     others_hashes: Vec<GraphCheckpointHashes>,
-) -> Result<Option<GenesisCheckpointState>> {
+) -> Result<Option<GraphCheckpointState>> {
     // using a naive O(n^2) algorithm because the hash lists are length  10 and
     // there are 3 parties, and this code is called infrequently.
 
@@ -116,12 +114,12 @@ pub async fn upload_and_sync_genesis_checkpoint(
 
 pub async fn get_most_recent_checkpoints(
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
-) -> Result<(Vec<GenesisCheckpointState>, GraphCheckpointHashes)> {
+) -> Result<(Vec<GraphCheckpointState>, GraphCheckpointHashes)> {
     let mut output_hashes: GraphCheckpointHashes = [[0; 32]; 10];
     let db_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
     let mut valid_tuples = vec![];
     for db_cp in db_checkpoints {
-        let genesis_cp_state: Result<GenesisCheckpointState> = db_cp.try_into();
+        let genesis_cp_state: Result<GraphCheckpointState> = db_cp.try_into();
         if let Ok(genesis_cp_state) = genesis_cp_state {
             if let Ok(hash) = blake3::Hash::from_hex(genesis_cp_state.blake3_hash.as_bytes()) {
                 valid_tuples.push((genesis_cp_state, hash));
@@ -132,7 +130,7 @@ pub async fn get_most_recent_checkpoints(
             tracing::warn!("failed to convert GenesisCheckpointRow to GenesisCheckpointState");
         }
     }
-    let (checkpoints, hashes): (Vec<GenesisCheckpointState>, Vec<blake3::Hash>) =
+    let (checkpoints, hashes): (Vec<GraphCheckpointState>, Vec<blake3::Hash>) =
         valid_tuples.into_iter().unzip();
     for (src, dest) in hashes
         .into_iter()
@@ -145,7 +143,7 @@ pub async fn get_most_recent_checkpoints(
 }
 
 pub async fn maybe_rollback_iris_db(
-    graph_checkpoint: &GenesisCheckpointState,
+    graph_checkpoint: &GraphCheckpointState,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
     iris_store: &IrisStore,
     last_indexed_id: IrisSerialId,
@@ -215,8 +213,8 @@ mod tests {
         arr
     }
 
-    fn checkpoint(label: &str) -> GenesisCheckpointState {
-        GenesisCheckpointState {
+    fn checkpoint(label: &str) -> GraphCheckpointState {
+        GraphCheckpointState {
             s3_key: label.to_string(),
             last_indexed_iris_id: 0,
             last_indexed_modification_id: 0,

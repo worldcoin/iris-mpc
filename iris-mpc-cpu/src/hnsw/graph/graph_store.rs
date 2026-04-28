@@ -24,7 +24,7 @@ pub struct RowLinks {
 }
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
-pub struct GenesisGraphCheckpointRow {
+pub struct GraphCheckpointRow {
     pub id: i64,
     pub s3_key: String,
     pub last_indexed_iris_id: i64,
@@ -183,10 +183,8 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     /// Returns the most recent genesis graph checkpoint
-    pub async fn get_latest_genesis_graph_checkpoint(
-        &self,
-    ) -> Result<Option<GenesisGraphCheckpointRow>> {
-        let row = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+    pub async fn get_latest_genesis_graph_checkpoint(&self) -> Result<Option<GraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GraphCheckpointRow>(
             r#"
             SELECT
                 id,
@@ -210,8 +208,8 @@ impl<V: VectorStore> GraphPg<V> {
     pub async fn get_genesis_graph_checkpoint_by_key(
         &self,
         s3_key: &str,
-    ) -> Result<Option<GenesisGraphCheckpointRow>> {
-        let row = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+    ) -> Result<Option<GraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GraphCheckpointRow>(
             r#"
             SELECT
                 id,
@@ -232,8 +230,8 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     /// Returns genesis graph checkpoints in descending order
-    pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GenesisGraphCheckpointRow>> {
-        let rows = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+    pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GraphCheckpointRow>> {
+        let rows = sqlx::query_as::<_, GraphCheckpointRow>(
             r#"
             SELECT
                 id,
@@ -253,7 +251,7 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     pub async fn delete_genesis_checkpoint(&self, id: i64) -> Result<()> {
-        let _ = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+        let _ = sqlx::query_as::<_, GraphCheckpointRow>(
             r#"
             DELETE FROM genesis_graph_checkpoint WHERE id = $1
             "#,

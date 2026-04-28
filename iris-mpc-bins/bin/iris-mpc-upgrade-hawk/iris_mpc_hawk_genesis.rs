@@ -5,7 +5,7 @@ use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
 };
-use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
+use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]

@@ -14,6 +14,8 @@ pub struct AwsClients {
     pub sqs_client: SQSClient,
     pub sns_client: SNSClient,
     pub s3_client: S3Client,
+    // used to obtain graph checkpoints. this buckt could be in a different region
+    pub checkpoint_s3_client: S3Client,
     pub secrets_manager_client: SecretsManagerClient,
 }
 
@@ -36,10 +38,18 @@ impl AwsClients {
         let s3_client = create_s3_client(&shared_config, force_path_style);
         let secrets_manager_client = SecretsManagerClient::new(&shared_config);
 
+        let checkpoint_region = Region::new(config.graph_checkpoint_bucket_region.clone());
+        let checkpoint_sdk_config = aws_config::from_env()
+            .region(checkpoint_region)
+            .load()
+            .await;
+        let checkpoint_s3_client = create_s3_client(&checkpoint_sdk_config, force_path_style);
+
         Ok(Self {
             sqs_client,
             sns_client,
             s3_client,
+            checkpoint_s3_client,
             secrets_manager_client,
         })
     }
@@ -52,6 +62,7 @@ impl Clone for AwsClients {
             sqs_client: self.sqs_client.clone(),
             sns_client: self.sns_client.clone(),
             s3_client: self.s3_client.clone(),
+            checkpoint_s3_client: self.checkpoint_s3_client.clone(),
             secrets_manager_client: self.secrets_manager_client.clone(),
         }
     }

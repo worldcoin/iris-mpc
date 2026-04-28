@@ -14,13 +14,11 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId},
-    genesis::{
-        genesis_checkpoint::{download_genesis_checkpoint, get_latest_checkpoint_state},
-        state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
-    },
+    genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
+    graph_checkpoint::delete_graph,
+    graph_checkpoint::{download_genesis_checkpoint, get_latest_checkpoint_state},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
-    utils::s3_checkpoint::delete_graph,
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;

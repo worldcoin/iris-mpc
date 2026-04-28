@@ -1,7 +1,7 @@
 use super::Batch;
 use crate::{
     execution::hawk_main::{iris_worker::QueryId, BothEyes, VecRequests},
-    genesis::genesis_checkpoint::GenesisCheckpointState,
+    graph_checkpoint::GraphCheckpointState,
     hawkers::aby3::aby3_store::Aby3Query,
     protocol::shared_iris::ArcIris,
 };
@@ -111,7 +111,7 @@ pub enum JobResult {
         done_tx: sync::oneshot::Sender<()>,
     },
     S3Checkpoint {
-        checkpoint_state: GenesisCheckpointState,
+        checkpoint_state: GraphCheckpointState,
         done_tx: sync::oneshot::Sender<()>,
     },
     Sync {
@@ -155,7 +155,7 @@ impl JobResult {
     }
 
     pub fn new_s3_checkpoint(
-        checkpoint_state: GenesisCheckpointState,
+        checkpoint_state: GraphCheckpointState,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         Self::S3Checkpoint {

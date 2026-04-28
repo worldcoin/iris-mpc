@@ -7,7 +7,6 @@ use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
-    primitives::ByteStream,
     Client as S3Client,
 };
 use axum::{routing::get, Router};
@@ -20,14 +19,13 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
-pub use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
+pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
         iris_worker::LocalIrisWorkerPool, BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs,
         HawkOps, StoreId, LEFT, RIGHT,
     },
     genesis::{
-        genesis_checkpoint::*,
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
@@ -39,6 +37,7 @@ use iris_mpc_cpu::{
         BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
         JobResult,
     },
+    graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
 };
@@ -1168,59 +1167,6 @@ async fn get_hawk_actor(
     .await
 }
 
-/// Verifies that the S3 client has read, write, and delete access to the
-/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
-/// deletes it. This catches misconfigured buckets/regions/IAM before any
-/// mutations occur.
-async fn verify_s3_checkpoint_access(
-    s3_client: &S3Client,
-    bucket: &str,
-    party_id: usize,
-) -> Result<()> {
-    let key = format!("genesis/{party_id}/_access_check");
-    let body = b"access_check";
-
-    // Write
-    s3_client
-        .put_object()
-        .bucket(bucket)
-        .key(&key)
-        .body(ByteStream::from_static(body))
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
-
-    // Read
-    let resp = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
-    let data = resp
-        .body
-        .collect()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
-    if data.into_bytes().as_ref() != body {
-        bail!("S3 checkpoint bucket read check returned unexpected content");
-    }
-
-    // Delete
-    if let Err(e) = s3_client
-        .delete_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-    {
-        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
-    }
-
-    Ok(())
-}
-
 /// Checks whether a given key exists in an S3 bucket using a `HeadObject`
 /// request. Returns `true` if the key is present, `false` if it does not
 /// exist (HTTP 404 / `NoSuchKey`), or an error for any other failure.
@@ -1619,7 +1565,7 @@ async fn init_graph_from_stores(
     s3_client: &S3Client,
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
-    checkpoint: Option<GenesisCheckpointState>,
+    checkpoint: Option<GraphCheckpointState>,
 ) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Load the database");
 
