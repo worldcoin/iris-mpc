@@ -15,7 +15,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId},
     genesis::{
-        genesis_checkpoint::{download_genesis_checkpoint, get_latest_checkpoint_state},
+        genesis_checkpoint::{download_genesis_checkpoint_plaintext, get_latest_checkpoint_state},
         state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     },
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
@@ -115,12 +115,13 @@ impl MpcNodes {
             let checkpoint_state = get_latest_checkpoint_state(&node.cpu_stores.graph)
                 .await?
                 .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
-            let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> = download_genesis_checkpoint(
-                &aws_clients.s3_client,
-                &config.graph_checkpoint_bucket_name,
-                &checkpoint_state,
-            )
-            .await?;
+            let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> =
+                download_genesis_checkpoint_plaintext(
+                    &aws_clients.s3_client,
+                    &config.graph_checkpoint_bucket_name,
+                    &checkpoint_state,
+                )
+                .await?;
 
             assert_eq!(
                 s3_graphs[0], expected_graphs[0],

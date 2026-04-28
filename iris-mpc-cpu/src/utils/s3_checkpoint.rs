@@ -318,22 +318,6 @@ pub async fn delete_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Resu
     Ok(())
 }
 
-/// serialize a graph for s3 upload
-pub fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    both_eyes: &BothEyes<&GraphMem<T>>,
-) -> Result<Bytes> {
-    let data = bincode::serialize(&both_eyes)?;
-    Ok(Bytes::from(data))
-}
-
-/// deserialize graph retrievevd from s3
-pub fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    data: &[u8],
-) -> Result<BothEyes<GraphMem<T>>> {
-    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
-    Ok(graphs)
-}
-
 /// Simple PUT upload for small files (under 5MB).
 async fn upload_graph_simple(
     s3_client: &S3Client,
