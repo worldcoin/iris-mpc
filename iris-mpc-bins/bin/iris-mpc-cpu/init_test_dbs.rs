@@ -409,7 +409,7 @@ async fn main() -> Result<()> {
                     .await?;
 
                 counter += 1;
-                if counter % 1000 == 0 {
+                if counter.is_multiple_of(1000) {
                     tracing::info!("Processed {} plaintext entries for {} side", counter, side);
                 }
             }

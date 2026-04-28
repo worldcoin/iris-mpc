@@ -84,7 +84,7 @@ mod lift_u16_u32_signed_test {
     }
 
     fn real_result(mask_input: Vec<i16>) -> Vec<i32> {
-        mask_input.into_iter().map(|x| (x as i32)).collect()
+        mask_input.into_iter().map(|x| x as i32).collect()
     }
 
     fn open(
@@ -211,7 +211,7 @@ mod lift_u16_u32_signed_test {
         let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
         let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
 
-        const_assert!(INPUTS_PER_GPU_SIZE % (64) == 0);
+        const_assert!(INPUTS_PER_GPU_SIZE.is_multiple_of(64));
 
         let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
 

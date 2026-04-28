@@ -1264,8 +1264,8 @@ impl TestCaseGenerator {
             assert!(!full_face_mirror_attack_detected);
 
             // assert that we report correct matched indices upon reset_check requests
-            if expected_idx.is_some() {
-                assert_eq!(idx, expected_idx.unwrap());
+            if let Some(expected_idx) = expected_idx {
+                assert_eq!(idx, expected_idx);
             } else {
                 assert_eq!(idx, u32::MAX);
 

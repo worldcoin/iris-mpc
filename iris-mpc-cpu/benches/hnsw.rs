@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use aes_prng::AesRng;
 use ampc_actor_utils::protocol::{fhd_ops::cross_compare, ops::batch_signed_lift_vec};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
