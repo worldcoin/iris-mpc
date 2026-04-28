@@ -244,6 +244,7 @@ enum DatabaseRange {
     FullMaskOnly,
 }
 
+#[derive(Debug, Clone)]
 pub struct ExpectedResult {
     /// The returned index of the iris code in the database.
     /// It is None if the iris code is not in the database, and Some(idx) if
@@ -1271,6 +1272,12 @@ impl TestCaseGenerator {
             was_reauth_success,
             was_skip_persistence_match,
             full_face_mirror_attack_detected
+        );
+        tracing::info!(
+            "Expected results for this request_id: {:?}",
+            self.expected_results
+                .get(req_id)
+                .expect("request id not found")
         );
         let &ExpectedResult {
             db_index: expected_idx,
