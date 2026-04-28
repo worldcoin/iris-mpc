@@ -65,7 +65,7 @@ impl ChaChaCudaCorrRng {
     }
 
     pub fn advance_by_bytes(&mut self, bytes: u64) {
-        assert!(bytes % 64 == 0, "bytes must be a multiple of 64");
+        assert!(bytes.is_multiple_of(64), "bytes must be a multiple of 64");
         let num_ks_calls = bytes / 64; // we produce 16 u32s per kernel call
                                        // one call to KS produces 16 u32s
         self.chacha1.advance_counter(num_ks_calls);
