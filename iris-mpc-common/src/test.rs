@@ -374,6 +374,8 @@ pub struct TestCaseGenerator {
     /// skip invalidating requests in the current batch, since we expect
     /// them to be processed
     skip_invalidate: bool,
+    /// Do we already have a mirror of a template in the current batch?
+    have_batch_mirror: bool,
     /// duplicates in the current batch, used to test the batch
     /// deduplication mechanism
     batch_duplicates: HashMap<String, String>,
@@ -405,6 +407,7 @@ impl TestCaseGenerator {
             rng,
             new_templates_in_batch: Vec::new(),
             skip_invalidate: false,
+            have_batch_mirror: false,
             batch_duplicates: HashMap::new(),
             db_indices_used_in_current_batch: HashSet::new(),
             or_rule_matches: Vec::new(),
@@ -436,6 +439,7 @@ impl TestCaseGenerator {
         self.new_templates_in_batch.clear();
         self.db_indices_used_in_current_batch.clear();
         self.or_rule_matches.clear();
+        self.have_batch_mirror = false;
 
         for idx in 0..batch_size {
             let (request_id, e2e_template, or_rule_indices, skip_persistence, message_type) =
@@ -674,7 +678,7 @@ impl TestCaseGenerator {
         if !self.reauth_skip_persistence_templates.is_empty() {
             options.push(TestCase::MatchAfterReauthSkipPersistence);
         }
-        if !self.new_templates_in_batch.is_empty() {
+        if !self.new_templates_in_batch.is_empty() && !self.have_batch_mirror {
             options.push(TestCase::MirrorAttackInBatch);
         }
 
@@ -1142,9 +1146,11 @@ impl TestCaseGenerator {
                     self.expected_results.insert(
                         request_id.to_string(),
                         ExpectedResult::builder()
+                            .with_batch_match(true)
                             .with_full_face_mirror_attack(true)
                             .build(),
                     );
+                    self.have_batch_mirror = true;
 
                     E2ETemplate {
                         // This is swapped on purpose due to the mirror attack flow
