@@ -1130,7 +1130,7 @@ impl TestCaseGenerator {
                 TestCase::MirrorAttackInBatch => {
                     tracing::info!("Sending iris code crafted for mirror attack detection that should match in batch");
                     // Get an existing template from the current batch
-                    let (internal_batch_idx, request_id, original_template) = self
+                    let (internal_batch_idx, _, original_template) = self
                         .new_templates_in_batch
                         .choose(&mut self.rng)
                         .expect("this is only called if we already have templates in batch");
