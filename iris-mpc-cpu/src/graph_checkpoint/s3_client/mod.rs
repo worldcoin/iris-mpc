@@ -265,6 +265,33 @@ pub async fn verify_s3_checkpoint_access(
     Ok(())
 }
 
+/// Checks whether a given key exists in an S3 bucket using a `HeadObject`
+/// request. Returns `true` if the key is present, `false` if it does not
+/// exist (HTTP 404 / `NoSuchKey`), or an error for any other failure.
+///
+/// # Arguments
+///
+/// * `s3_client` - Authenticated S3 client.
+/// * `bucket`    - Name of the S3 bucket to query.
+/// * `key`       - Object key to check for existence.
+pub async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Result<bool> {
+    match s3_client.head_object().bucket(bucket).key(key).send().await {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            // `head_object` returns a 404 when the key does not exist.
+            // The SDK surfaces this as a `NotFound` service error.
+            if e.as_service_error()
+                .map(|se| se.is_not_found())
+                .unwrap_or(false)
+            {
+                Ok(false)
+            } else {
+                Err(eyre!("S3 head_object failed for s3://{bucket}/{key}: {e}"))
+            }
+        }
+    }
+}
+
 /// serialize a graph for s3 upload
 fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
     both_eyes: &BothEyes<&GraphMem<T>>,
