@@ -547,6 +547,11 @@ async fn load_database(
         now.elapsed()
     );
 
+    // The registries are snapshotted from `iris_store` at HawkActor construction
+    // (i.e. empty), but `IrisLoader` populates `iris_store` after the fact.
+    // Rebuild the registries so sessions see the loaded VectorIds.
+    hawk_actor.refresh_registries().await;
+
     Ok(())
 }
 

@@ -595,6 +595,37 @@ impl HawkActor {
         ];
     }
 
+    /// Assert that `registry` is a consistent metadata mirror of `iris_store`
+    /// for both eyes. Sessions read from `registry`, so any drift means
+    /// search loses visibility into stored vectors and fresh inserts
+    /// allocate VectorIds that collide with existing graph nodes.
+    ///
+    /// O(1) per side. Safe to call at quiescent points — between batches,
+    /// after `load_database`, after `apply_deletions`. NOT safe to call
+    /// mid-batch, as registry/iris_store are mutated in sequence and may
+    /// disagree briefly.
+    pub async fn assert_registry_consistency(&self) {
+        for side in [LEFT, RIGHT] {
+            let iris = self.iris_store[side].read().await;
+            let reg = self.registry[side].read().await;
+            assert_eq!(
+                reg.next_id, iris.next_id,
+                "registry/iris_store next_id mismatch on side {side}: \
+                 registry={} iris_store={} — call refresh_registries() after \
+                 any path that populates iris_store",
+                reg.next_id, iris.next_id,
+            );
+            assert_eq!(
+                reg.db_size(),
+                iris.db_size(),
+                "registry/iris_store db_size mismatch on side {side}: \
+                 registry={} iris_store={}",
+                reg.db_size(),
+                iris.db_size(),
+            );
+        }
+    }
+
     pub fn worker_pool(&self, store_id: StoreId) -> iris_worker::LocalIrisWorkerPool {
         self.worker_pools[store_id as usize].clone()
     }
@@ -1787,6 +1818,15 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
+        // Invariant: registry is a metadata mirror of iris_store. Anything
+        // that populates iris_store (load_database, genesis, fake_db) must
+        // also refresh the registry; sessions read from registry, not from
+        // iris_store, so drift means search can't see loaded vectors and
+        // fresh inserts allocate VectorIds that collide with the load.
+        // Verify before any session work begins, and again at the start of
+        // every batch (see `handle_job`).
+        hawk_actor.assert_registry_consistency().await;
+
         let mut sessions = hawk_actor.new_session_groups().await?;
 
         #[cfg(feature = "phase_trace")]
@@ -1841,6 +1881,12 @@ impl HawkHandle {
             "Processing a Hawk job ({} queries)",
             request.batch.request_ids.len()
         );
+
+        // Catch any registry/iris_store drift introduced by the previous
+        // batch (or any other path) before we run another batch on top of an
+        // inconsistent state. Runs between batches when no concurrent writes
+        // are in flight; cheap (O(1) per side, two read-locks).
+        hawk_actor.assert_registry_consistency().await;
 
         // Cache all queries in both worker pools. cache_queries handles the full
         // pipeline: NUMA realloc → mirror → preprocess → all_rotations.
@@ -2178,11 +2224,125 @@ mod tests {
     use futures::future::JoinAll;
     use iris_mpc_common::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use rand::SeedableRng;
     use std::{ops::Not, time::Duration};
     use tokio::time::sleep;
     use tracing_test::traced_test;
+
+    /// Regression guard for the load → registry wiring in `iris-mpc/src/server/mod.rs::load_database`.
+    ///
+    /// `IrisLoader::load_single_record_from_db` writes through the worker
+    /// pool's iris store, which is the same `Arc` as `HawkActor.iris_store`.
+    /// But `HawkActor.registry` is a separate snapshot taken from `iris_store`
+    /// at construction time (i.e. empty). Sessions read from `registry`, so
+    /// without an explicit `refresh_registries()` call after the load:
+    ///
+    /// - `registry.contains(v)` returns false for every loaded vector →
+    ///   search has no visibility into the loaded graph.
+    /// - `registry.next_id` stays at the construction default → fresh inserts
+    ///   allocate VectorIds that collide with the loaded ones, producing
+    ///   `Attempted to add graph edge which was already present` warnings and
+    ///   eventually `Update entry layer not present` panics.
+    ///
+    /// The test mimics what `load_iris_db` does and asserts both halves of
+    /// the contract: the registry is stale before refresh, and correctly
+    /// reflects the load afterwards.
+    #[tokio::test]
+    async fn test_iris_loader_requires_refresh_registries() -> Result<()> {
+        let addresses = vec![
+            "0.0.0.0:21340".to_string(),
+            "0.0.0.0:21341".to_string(),
+            "0.0.0.0:21342".to_string(),
+        ];
+        let args = HawkArgs {
+            party_index: 0,
+            addresses: addresses.clone(),
+            outbound_addrs: addresses,
+            request_parallelism: 4,
+            connection_parallelism: 2,
+            hnsw_param_ef_constr: 320,
+            hnsw_param_m: 256,
+            hnsw_param_ef_search: 256,
+            hnsw_param_ef_supermatch: 4000,
+            hnsw_param_ef_saturation_margin: 0,
+            hnsw_layer_density: None,
+            hnsw_fixed_layer_search_batch_size: None,
+            hnsw_prf_key: None,
+            numa: false,
+            disable_persistence: true,
+            hnsw_disable_memory_persistence: false,
+            tls: None,
+        };
+        let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
+
+        // Sanity: registry starts empty, next_id at the SharedIrises default of 1.
+        assert_eq!(hawk_actor.registry[LEFT].read().await.db_size(), 0);
+        assert_eq!(hawk_actor.registry[LEFT].read().await.next_id, 1);
+
+        // Mimic `load_iris_db`: write records via `IrisLoader` for sparse
+        // serial IDs. Use zero buffers — only metadata wiring is under test.
+        let zero_code = vec![0u16; IRIS_CODE_LENGTH];
+        let zero_mask = vec![0u16; MASK_CODE_LENGTH];
+        let serial_ids = [0u32, 1, 2, 5];
+        {
+            let (mut iris_loader, _graph_loader) = hawk_actor.as_iris_loader().await;
+            for (idx, sid) in serial_ids.iter().enumerate() {
+                iris_loader.load_single_record_from_db(
+                    idx,
+                    VectorId::from_serial_id(*sid),
+                    &zero_code,
+                    &zero_mask,
+                    &zero_code,
+                    &zero_mask,
+                );
+                iris_loader.increment_db_size(idx);
+            }
+            iris_loader.wait_completion().await?;
+        }
+
+        // Before `refresh_registries`: registry is the construction snapshot.
+        assert_eq!(
+            hawk_actor.registry[LEFT].read().await.db_size(),
+            0,
+            "registry must not see loaded vectors before refresh_registries"
+        );
+        assert_eq!(
+            hawk_actor.registry[LEFT].read().await.next_id,
+            1,
+            "registry next_id must not advance before refresh_registries — \
+             this is the bug that caused VectorId collisions on dev"
+        );
+
+        hawk_actor.refresh_registries().await;
+
+        // After `refresh_registries`: registry sees every loaded vector and
+        // `next_id` advances past the highest loaded serial.
+        for sid in serial_ids {
+            assert!(
+                hawk_actor.registry[LEFT]
+                    .read()
+                    .await
+                    .contains(&VectorId::from_serial_id(sid)),
+                "registry must contain loaded VectorId {sid} after refresh"
+            );
+            assert!(
+                hawk_actor.registry[RIGHT]
+                    .read()
+                    .await
+                    .contains(&VectorId::from_serial_id(sid)),
+                "right registry must contain loaded VectorId {sid} after refresh"
+            );
+        }
+        assert_eq!(
+            hawk_actor.registry[LEFT].read().await.next_id,
+            *serial_ids.last().unwrap() + 1,
+            "registry next_id must advance to (max loaded serial_id + 1)"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     #[traced_test]
