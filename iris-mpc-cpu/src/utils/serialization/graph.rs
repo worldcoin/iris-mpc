@@ -20,6 +20,8 @@ use crate::{
     },
 };
 
+pub const GRAPH_VERSION: i32 = 3;
+
 /* --------------------- Graph Serialization ------------------------ */
 
 #[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
@@ -93,6 +95,20 @@ impl Display for GraphFormat {
             GraphFormat::Raw => "Raw",
         };
         write!(f, "{}", s)
+    }
+}
+
+impl TryFrom<i32> for GraphFormat {
+    type Error = eyre::Error;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(GraphFormat::V0),
+            1 => Ok(GraphFormat::V1),
+            2 => Ok(GraphFormat::V2),
+            3 => Ok(GraphFormat::V3),
+            _ => Err(eyre::eyre!("unsupported graph format version: {}", value)),
+        }
     }
 }
 

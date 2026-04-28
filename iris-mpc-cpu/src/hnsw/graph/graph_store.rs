@@ -1,4 +1,6 @@
-use crate::{execution::hawk_main::StoreId, hnsw::VectorStore};
+use crate::{
+    execution::hawk_main::StoreId, hnsw::VectorStore, utils::serialization::graph::GRAPH_VERSION,
+};
 use eyre::{eyre, Result};
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use serde::{de::DeserializeOwned, Serialize};
@@ -160,15 +162,17 @@ impl<V: VectorStore> GraphPg<V> {
                 last_indexed_iris_id,
                 last_indexed_modification_id,
                 blake3_hash,
+                graph_version,
                 is_archival
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
         )
         .bind(s3_key)
         .bind(last_indexed_iris_id)
         .bind(last_indexed_modification_id)
         .bind(blake3_hash)
+        .bind(GRAPH_VERSION)
         .bind(is_archival)
         .execute(tx.deref_mut())
         .await?;
