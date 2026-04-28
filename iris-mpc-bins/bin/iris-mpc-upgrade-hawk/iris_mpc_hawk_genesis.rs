@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{

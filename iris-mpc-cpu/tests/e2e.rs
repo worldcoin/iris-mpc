@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use eyre::Result;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},

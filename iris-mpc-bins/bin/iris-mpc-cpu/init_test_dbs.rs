@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
