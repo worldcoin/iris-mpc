@@ -1254,18 +1254,15 @@ async fn get_service_clients(
         // S3 client for graph checkpoint operations (may be in a different region)
         let checkpoint_region_name = config.graph_checkpoint_bucket_region.clone();
         let checkpoint_region = Region::new(checkpoint_region_name.clone());
-        let checkpoint_sdk_config = aws_config::from_env()
-            .region(checkpoint_region)
-            .load()
-            .await;
 
         tracing::info!(
             "Checkpoint S3 client: region={}, endpoint={:?}",
             checkpoint_region_name,
-            checkpoint_sdk_config.endpoint_url(),
+            sdk_config.endpoint_url(),
         );
 
-        let checkpoint_s3_config = S3ConfigBuilder::from(&checkpoint_sdk_config)
+        let checkpoint_s3_config = S3ConfigBuilder::from(&sdk_config)
+            .region(checkpoint_region)
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();

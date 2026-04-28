@@ -251,13 +251,13 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     pub async fn delete_genesis_checkpoint(&self, id: i64) -> Result<()> {
-        let _ = sqlx::query_as::<_, GraphCheckpointRow>(
+        let _ = sqlx::query(
             r#"
             DELETE FROM genesis_graph_checkpoint WHERE id = $1
             "#,
         )
         .bind(id)
-        .fetch_optional(&self.pool)
+        .execute(&self.pool)
         .await
         .map_err(|e| eyre!("Failed to delete genesis checkpoint: {e}"))?;
 
