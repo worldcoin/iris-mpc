@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
@@ -409,7 +411,7 @@ async fn main() -> Result<()> {
                     .await?;
 
                 counter += 1;
-                if counter % 1000 == 0 {
+                if counter.is_multiple_of(1000) {
                     tracing::info!("Processed {} plaintext entries for {} side", counter, side);
                 }
             }

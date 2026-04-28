@@ -82,7 +82,7 @@ mod lift_test {
     }
 
     fn real_result_msb(mask_input: Vec<u16>) -> Vec<u32> {
-        mask_input.into_iter().map(|x| (x as u32)).collect()
+        mask_input.into_iter().map(|x| x as u32).collect()
     }
 
     fn open(
@@ -248,7 +248,7 @@ mod lift_test {
         let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
 
         const_assert!(
-            INPUTS_PER_GPU_SIZE % (2048) == 0,
+            INPUTS_PER_GPU_SIZE.is_multiple_of(2048),
             // Mod 16 for randomness, mod 64 for chunk size
         );
 

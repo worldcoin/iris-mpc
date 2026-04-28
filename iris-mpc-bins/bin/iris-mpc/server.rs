@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop, unused)]
+#![recursion_limit = "256"]
 
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;

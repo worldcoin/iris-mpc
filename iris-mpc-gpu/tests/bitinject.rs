@@ -218,7 +218,7 @@ mod bitinject_test {
         let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
 
         const_assert!(
-            INPUTS_PER_GPU_SIZE % (2048) == 0,
+            INPUTS_PER_GPU_SIZE.is_multiple_of(2048),
             // Mod 16 for randomness, mod 64 for chunk size
         );
 

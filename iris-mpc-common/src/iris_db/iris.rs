@@ -272,7 +272,7 @@ impl IrisCode {
     /// is (min(n, pattern_size) * 1/(2 * pattern_size)).
     pub fn random_rng_with_pattern<R: Rng>(rng: &mut R, pattern_size: usize) -> Self {
         assert!(pattern_size <= IrisCode::CODE_COLS);
-        assert!(IrisCode::CODE_COLS % pattern_size == 0);
+        assert!(IrisCode::CODE_COLS.is_multiple_of(pattern_size));
         const LEN: usize = IrisCode::CODE_COLS * 4;
         let mut code = IrisCode::random_rng(rng);
         for i in (0..Self::IRIS_CODE_SIZE).step_by(LEN) {
@@ -647,7 +647,7 @@ impl Iterator for Bits<'_> {
         if self.index >= IrisCodeArray::IRIS_CODE_SIZE {
             None
         } else {
-            if self.index % 64 == 0 {
+            if self.index.is_multiple_of(64) {
                 self.current = self.code.0[self.index / 64];
             }
             let res = self.current & 1 == 1;

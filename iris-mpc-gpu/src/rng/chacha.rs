@@ -42,7 +42,10 @@ impl ChachaCommon {
         fill_kernel: &CudaFunction,
     ) {
         let len = buf.len();
-        assert!(len % 16 == 0, "buffer length must be a multiple of 16");
+        assert!(
+            len.is_multiple_of(16),
+            "buffer length must be a multiple of 16"
+        );
         let num_ks_calls = len / 16; // we produce 16 u32s per kernel call
         let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
 
@@ -91,7 +94,7 @@ impl ChaChaCudaRng {
         let ptx = compile_ptx(ChachaCommon::CHACHA_PTX_SRC).unwrap();
 
         assert!(
-            buf_size_bytes % 64 == 0,
+            buf_size_bytes.is_multiple_of(64),
             "buf_size must be a multiple of 64 atm"
         );
 
@@ -181,7 +184,7 @@ impl ChaChaCudaRng {
     pub fn set_cuda_slice(&mut self, slice: CudaSlice<u32>) {
         assert!(self.rng_chunk.is_none());
         assert!(
-            slice.len() % 16 == 0,
+            slice.len().is_multiple_of(16),
             "slice length must be a multiple of 16"
         );
         self.rng_chunk = Some(slice);
