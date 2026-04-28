@@ -137,10 +137,12 @@ fn phase1_clean_epoch() {
 
         let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
         let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
+        assert_last_completed_epoch(&env.harness, None).await?;
 
-        let (h, t) = env.spawn_all();
-        wait_epoch_done(&env.harness, 0).await?;
-        stop_all(t, h).await;
+        let (h, _t) = env.spawn_all();
+        wait_epoch_done(&env.harness, 1).await?;
+        wait_all_jobs(h).await?;
+        assert_last_completed_epoch(&env.harness, Some(1)).await?;
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1, "Expected rerand_epoch >= 1, got {}", ep);
@@ -176,17 +178,17 @@ fn phase2_kill_and_resume() {
         let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
         let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
 
-        // Run epoch 0, let 2 chunks stage, then kill
+        // Run epoch 1, let 2 chunks stage, then kill
         let (h, t) = env.spawn_all();
-        wait_chunks_staged(&env.harness, 0, 2).await?;
+        wait_chunks_staged(&env.harness, 1, 2).await?;
         println!("[phase 2]   killing after 2 chunks staged");
         stop_all(t, h).await;
 
         // Restart -- should resume from where it left off
         println!("[phase 2]   restarting...");
-        let (h, t) = env.spawn_all();
-        wait_epoch_done(&env.harness, 0).await?;
-        stop_all(t, h).await;
+        let (h, _t) = env.spawn_all();
+        wait_epoch_done(&env.harness, 1).await?;
+        wait_all_jobs(h).await?;
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
@@ -228,8 +230,8 @@ fn phase3_concurrent_modifications() {
         let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
         println!("[phase 3] Concurrent modifications...");
 
-        let (h, t) = env.spawn_all();
-        wait_chunks_staged(&env.harness, 0, 1).await?;
+        let (h, _t) = env.spawn_all();
+        wait_chunks_staged(&env.harness, 1, 1).await?;
 
         // Bump version_id on a few rows (simulates a reauth)
         for &id in &modified_ids {
@@ -265,8 +267,8 @@ fn phase3_concurrent_modifications() {
         }
         println!("[phase 3]   bumped version_id on {:?}", modified_ids);
 
-        wait_epoch_done(&env.harness, 0).await?;
-        stop_all(t, h).await;
+        wait_epoch_done(&env.harness, 1).await?;
+        wait_all_jobs(h).await?;
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &modified_ids).await?;
         assert!(ep >= 1);
@@ -306,16 +308,16 @@ fn phase4_server_restart_during_rerand() {
         let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
         let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
 
-        let (h, t) = env.spawn_all();
-        wait_chunks_staged(&env.harness, 0, 1).await?;
+        let (h, _t) = env.spawn_all();
+        wait_chunks_staged(&env.harness, 1, 1).await?;
 
         for p in 0..NUM_PARTIES {
             let r = simulate_server_startup(&env.harness, p).await;
             println!("[phase 4]   party {} server startup: {:?}", p, r.is_ok());
         }
 
-        wait_epoch_done(&env.harness, 0).await?;
-        stop_all(t, h).await;
+        wait_epoch_done(&env.harness, 1).await?;
+        wait_all_jobs(h).await?;
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 1);
@@ -337,8 +339,8 @@ fn phase4_server_restart_during_rerand() {
 }
 
 // ============================================================================
-// Phase 6: Multiple Epochs -- let the system run continuously across multiple
-//           epochs, verify seamless transition and correct rerandomization
+// Phase 6: Multiple Epochs -- run multiple single-epoch jobs, verify epoch
+//           selection and correct rerandomization
 // ============================================================================
 
 #[test]
@@ -352,19 +354,20 @@ fn phase6_multiple_epochs() {
         let all_ids: Vec<i64> = (1..=DB_SIZE as i64).collect();
         let pre_shares = snapshot_raw_shares(&env.harness, &all_ids).await?;
 
-        let (h, t) = env.spawn_all();
+        let (h, _t) = env.spawn_all();
 
-        // Wait for epoch 0 to finish
-        wait_epoch_done(&env.harness, 0).await?;
-        println!("[phase 6]   epoch 0 completed");
-
-        // The continuous rerand servers should automatically move to epoch 1
+        // Wait for epoch 1 to finish
         wait_epoch_done(&env.harness, 1).await?;
+        wait_all_jobs(h).await?;
+        assert_last_completed_epoch(&env.harness, Some(1)).await?;
         println!("[phase 6]   epoch 1 completed");
 
-        // The inter-epoch delay (chunk_delay) gives the cancel token time to
-        // be observed before the next epoch's work begins.
-        stop_all(t, h).await;
+        // A second job invocation should process the next DB-selected epoch.
+        let (h, _t) = env.spawn_all();
+        wait_epoch_done(&env.harness, 2).await?;
+        wait_all_jobs(h).await?;
+        assert_last_completed_epoch(&env.harness, Some(2)).await?;
+        println!("[phase 6]   epoch 2 completed");
 
         let ep = assert_consistent_rerand_epoch(&env.harness, &[]).await?;
         assert!(ep >= 2, "Expected rerand_epoch >= 2, got {}", ep);
@@ -523,9 +526,9 @@ fn phase9_asymmetric_modification_consistency() {
         println!("[phase 9]   modified id={} on P0 only", target_id);
 
         // Run a full epoch across all 3 parties.
-        let (h, t) = env.spawn_all();
-        wait_epoch_done(&env.harness, 0).await?;
-        stop_all(t, h).await;
+        let (h, _t) = env.spawn_all();
+        wait_epoch_done(&env.harness, 1).await?;
+        wait_all_jobs(h).await?;
 
         // The modification fence should have detected the asymmetric
         // version_id and excluded id=20 from the apply on all parties.

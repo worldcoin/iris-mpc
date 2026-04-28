@@ -349,6 +349,36 @@ pub async fn get_current_epoch(pool: &PgPool) -> Result<Option<i32>> {
     Ok(row.0)
 }
 
+/// Returns the last epoch that this worker completed after the all-party
+/// completion barrier. `None` means no single-epoch job has completed yet.
+pub async fn get_last_completed_rerand_epoch(pool: &PgPool) -> Result<Option<i32>> {
+    let row: Option<(Option<i32>,)> =
+        sqlx::query_as("SELECT last_completed_epoch FROM rerand_control WHERE id = 1")
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|(epoch,)| epoch))
+}
+
+/// Records an epoch as completed without allowing stale concurrent writes to
+/// move the marker backwards.
+pub async fn set_last_completed_rerand_epoch(pool: &PgPool, epoch: i32) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO rerand_control (id, last_completed_epoch)
+        VALUES (1, $1)
+        ON CONFLICT (id) DO UPDATE SET
+            last_completed_epoch = GREATEST(
+                COALESCE(rerand_control.last_completed_epoch, EXCLUDED.last_completed_epoch),
+                EXCLUDED.last_completed_epoch
+            )
+        "#,
+    )
+    .bind(epoch)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Shared startup helpers (used by both HNSW and GPU servers)
 // ---------------------------------------------------------------------------

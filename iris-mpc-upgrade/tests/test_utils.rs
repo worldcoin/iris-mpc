@@ -9,7 +9,7 @@ use iris_mpc_common::{
 use iris_mpc_store::rerand as rerand_store;
 use iris_mpc_store::{Store, StoredIrisRef};
 use iris_mpc_upgrade::config::RerandomizeContinuousConfig;
-use iris_mpc_upgrade::continuous_rerand::run_continuous_rerand;
+use iris_mpc_upgrade::continuous_rerand::run_single_epoch_rerand;
 use iris_mpc_upgrade::rerandomization::reconstruct_shares;
 use rand::{rngs::StdRng, SeedableRng};
 use std::collections::HashMap;
@@ -162,7 +162,7 @@ impl TestEnv {
         let token = CancellationToken::new();
         let tc = token.clone();
         let h = tokio::spawn(async move {
-            run_continuous_rerand(&config, &s3, &sm, &store, Some(&tc)).await
+            run_single_epoch_rerand(&config, &s3, &sm, &store, Some(&tc)).await
         });
         (h, token)
     }
@@ -197,6 +197,28 @@ pub async fn stop_all(
     for h in handles {
         let _ = h.await;
     }
+}
+
+pub async fn wait_all_jobs(handles: Vec<tokio::task::JoinHandle<Result<()>>>) -> Result<()> {
+    for h in handles {
+        h.await??;
+    }
+    Ok(())
+}
+
+pub async fn assert_last_completed_epoch(
+    harness: &TestHarness,
+    expected: Option<i32>,
+) -> Result<()> {
+    for (party_id, party) in harness.parties.iter().enumerate() {
+        let actual = rerand_store::get_last_completed_rerand_epoch(&party.store.pool).await?;
+        assert_eq!(
+            actual, expected,
+            "Unexpected last_completed_epoch for party {}",
+            party_id
+        );
+    }
+    Ok(())
 }
 
 // ---- DB seeding ----

@@ -5,10 +5,10 @@ use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_store::rerand::{
     apply_confirmed_chunk, check_and_handle_freeze, delete_rerand_progress_for_old_epochs,
-    delete_staging_chunk, delete_staging_for_old_epochs, get_current_epoch,
+    delete_staging_chunk, delete_staging_for_old_epochs, get_last_completed_rerand_epoch,
     get_max_applied_chunk_for_epoch, get_rerand_progress, get_staging_version_map,
-    insert_staging_irises, set_all_confirmed, set_staging_written, staging_schema_name,
-    upsert_rerand_progress, StagingIrisEntry,
+    insert_staging_irises, set_all_confirmed, set_last_completed_rerand_epoch, set_staging_written,
+    staging_schema_name, upsert_rerand_progress, StagingIrisEntry,
 };
 use iris_mpc_store::Store;
 use sqlx::PgPool;
@@ -31,12 +31,12 @@ enum PollOutcome<T> {
     Cancelled,
 }
 
-/// Run the continuous rerandomization loop.
+/// Run one rerandomization epoch and exit.
 ///
-/// If `cancel` is provided, the loop checks for cancellation between chunk
+/// If `cancel` is provided, the job checks for cancellation between chunk
 /// stages and exits cleanly with `Ok(())` when cancelled. Pass `None` for
-/// production use where the loop runs until the process is killed.
-pub async fn run_continuous_rerand(
+/// production use where the Kubernetes job should run until one epoch is done.
+pub async fn run_single_epoch_rerand(
     config: &RerandomizeContinuousConfig,
     s3: &S3Client,
     sm: &SecretsManagerClient,
@@ -52,7 +52,7 @@ pub async fn run_continuous_rerand(
 
     if !config.rerand_enabled {
         eyre::bail!(
-            "RERAND_ENABLED is false — continuous rerand worker exiting. \
+            "RERAND_ENABLED is false — single-epoch rerand job exiting. \
              Set RERAND_ENABLED=true on the worker (and SMPC__RERAND_ENABLED=true on the server) to enable."
         );
     }
@@ -62,303 +62,336 @@ pub async fn run_continuous_rerand(
     let poll_interval = Duration::from_millis(config.s3_poll_interval_ms);
     let chunk_delay = Duration::from_secs(config.chunk_delay_secs);
 
+    if is_cancelled(cancel) {
+        tracing::info!(
+            "single-epoch rerand job exited cleanly: cancellation token fired before epoch selection"
+        );
+        return Ok(());
+    }
+
+    if !check_and_handle_freeze(pool, cancel).await? {
+        tracing::info!(
+            "single-epoch rerand job exited cleanly: cancellation or shutdown while handling a rerand freeze \
+             before epoch selection (includes waiting frozen for main server startup)"
+        );
+        return Ok(());
+    }
+
+    let active_epoch = get_last_completed_rerand_epoch(pool)
+        .await?
+        .map(|epoch| (epoch + 1) as u32)
+        .unwrap_or(1);
+    tracing::info!("Selected rerand epoch {} for this job", active_epoch);
+
+    let completed = process_epoch(
+        config,
+        s3,
+        sm,
+        store,
+        cancel,
+        pool,
+        &staging_schema,
+        poll_interval,
+        chunk_delay,
+        active_epoch,
+    )
+    .await?;
+
+    if !completed {
+        return Ok(());
+    }
+
+    set_last_completed_rerand_epoch(pool, active_epoch as i32).await?;
+    tracing::info!(
+        "Single-epoch rerand job completed epoch {} and recorded completion",
+        active_epoch
+    );
+
+    Ok(())
+}
+
+/// Backwards-compatible wrapper for callers that have not yet adopted the
+/// single-epoch name.
+pub async fn run_continuous_rerand(
+    config: &RerandomizeContinuousConfig,
+    s3: &S3Client,
+    sm: &SecretsManagerClient,
+    store: &Store,
+    cancel: Option<&CancellationToken>,
+) -> Result<()> {
+    run_single_epoch_rerand(config, s3, sm, store, cancel).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_epoch(
+    config: &RerandomizeContinuousConfig,
+    s3: &S3Client,
+    sm: &SecretsManagerClient,
+    store: &Store,
+    cancel: Option<&CancellationToken>,
+    pool: &PgPool,
+    staging_schema: &str,
+    poll_interval: Duration,
+    chunk_delay: Duration,
+    active_epoch: u32,
+) -> Result<bool> {
+    let shared_secret = epoch::derive_shared_secret(
+        sm,
+        s3,
+        &config.s3_bucket,
+        &config.env,
+        &config.service_name,
+        active_epoch,
+        config.party_id,
+        poll_interval,
+    )
+    .await?;
+
+    let Some(manifest) =
+        get_or_create_manifest(pool, cancel, s3, store, config, active_epoch, poll_interval)
+            .await?
+    else {
+        tracing::info!(
+            "single-epoch rerand job exited cleanly: cancellation or shutdown while handling a rerand freeze \
+             during manifest / max-id S3 coordination (worker observes freeze between polls)"
+        );
+        return Ok(false);
+    };
+    tracing::info!(
+        "Epoch {} manifest: chunk_size={}, max_id_inclusive={}",
+        active_epoch,
+        manifest.chunk_size,
+        manifest.max_id_inclusive
+    );
+
+    let cleaned = delete_staging_for_old_epochs(pool, staging_schema, active_epoch as i32).await?;
+    if cleaned > 0 {
+        tracing::info!(
+            "Epoch {}: cleaned {} orphaned staging rows from prior epochs",
+            active_epoch,
+            cleaned
+        );
+    }
+    let cleaned_progress = delete_rerand_progress_for_old_epochs(pool, active_epoch as i32).await?;
+    if cleaned_progress > 0 {
+        tracing::info!(
+            "Epoch {}: cleaned {} rerand_progress rows from prior epochs",
+            active_epoch,
+            cleaned_progress
+        );
+    }
+
+    let start_chunk_id = get_max_applied_chunk_for_epoch(pool, active_epoch as i32)
+        .await?
+        .map(|max_chunk| (max_chunk + 1) as u32)
+        .unwrap_or(0);
+
+    let mut chunk_id: u32 = start_chunk_id;
     loop {
         if is_cancelled(cancel) {
             tracing::info!(
-                "continuous rerand exited cleanly: cancellation token fired at start of an epoch iteration"
+                "single-epoch rerand job exited cleanly: cancellation token fired inside chunk loop for this epoch"
             );
-            return Ok(());
+            return Ok(false);
         }
 
+        // Honor startup freeze requests between chunks.
         if !check_and_handle_freeze(pool, cancel).await? {
             tracing::info!(
-                "continuous rerand exited cleanly: cancellation or shutdown while handling a rerand freeze \
-                 at epoch loop start (includes waiting frozen for main server startup)"
+                "single-epoch rerand job exited cleanly: cancellation or shutdown while handling a rerand freeze between chunks"
             );
-            return Ok(());
+            return Ok(false);
         }
 
-        let epoch_hint = get_current_epoch(pool).await?.unwrap_or(0) as u32;
-        let active_epoch = epoch::determine_active_epoch(s3, &config.s3_bucket, epoch_hint).await?;
-        tracing::info!("Active epoch: {}", active_epoch);
-
-        let shared_secret = epoch::derive_shared_secret(
-            sm,
-            s3,
-            &config.s3_bucket,
-            &config.env,
-            &config.service_name,
-            active_epoch,
-            config.party_id,
-            poll_interval,
-        )
-        .await?;
-
-        let Some(manifest) =
-            get_or_create_manifest(pool, cancel, s3, store, config, active_epoch, poll_interval)
-                .await?
-        else {
-            tracing::info!(
-                "continuous rerand exited cleanly: cancellation or shutdown while handling a rerand freeze \
-                 during manifest / max-id S3 coordination (worker observes freeze between polls)"
-            );
-            return Ok(());
-        };
-        tracing::info!(
-            "Epoch {} manifest: chunk_size={}, max_id_inclusive={}",
-            active_epoch,
-            manifest.chunk_size,
-            manifest.max_id_inclusive
-        );
-
-        let cleaned =
-            delete_staging_for_old_epochs(pool, &staging_schema, active_epoch as i32).await?;
-        if cleaned > 0 {
-            tracing::info!(
-                "Epoch {}: cleaned {} orphaned staging rows from prior epochs",
-                active_epoch,
-                cleaned
-            );
-        }
-        let cleaned_progress =
-            delete_rerand_progress_for_old_epochs(pool, active_epoch as i32).await?;
-        if cleaned_progress > 0 {
-            tracing::info!(
-                "Epoch {}: cleaned {} rerand_progress rows from prior epochs",
-                active_epoch,
-                cleaned_progress
-            );
+        if manifest.chunk_is_empty(chunk_id) {
+            break;
         }
 
-        let start_chunk_id = get_max_applied_chunk_for_epoch(pool, active_epoch as i32)
-            .await?
-            .map(|max_chunk| (max_chunk + 1) as u32)
-            .unwrap_or(0);
+        let progress = get_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
+        upsert_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
 
-        let mut chunk_id: u32 = start_chunk_id;
-        loop {
-            if is_cancelled(cancel) {
-                tracing::info!(
-                    "continuous rerand exited cleanly: cancellation token fired inside chunk loop for this epoch"
-                );
-                return Ok(());
-            }
-
-            // Honor startup freeze requests between chunks.
-            if !check_and_handle_freeze(pool, cancel).await? {
-                tracing::info!(
-                    "continuous rerand exited cleanly: cancellation or shutdown while handling a rerand freeze between chunks"
-                );
-                return Ok(());
-            }
-
-            if manifest.chunk_is_empty(chunk_id) {
-                break;
-            }
-
-            let progress = get_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
-            upsert_rerand_progress(pool, active_epoch as i32, chunk_id as i32).await?;
-
-            // --- Stage ---
-            if !progress.as_ref().is_some_and(|p| p.staging_written) {
-                process_chunk_staging(
-                    pool,
-                    store,
-                    &staging_schema,
-                    &shared_secret,
-                    config.party_id,
-                    active_epoch,
-                    chunk_id,
-                    &manifest,
-                )
-                .await?;
-                set_staging_written(pool, active_epoch as i32, chunk_id as i32).await?;
-            }
-
-            // Load the version map once; used for the hash upload below and
-            // for on-demand full-map upload if hashes diverge across parties.
-            let version_map = get_staging_version_map(
+        // --- Stage ---
+        if !progress.as_ref().is_some_and(|p| p.staging_written) {
+            process_chunk_staging(
                 pool,
-                &staging_schema,
-                active_epoch as i32,
-                chunk_id as i32,
+                store,
+                staging_schema,
+                &shared_secret,
+                config.party_id,
+                active_epoch,
+                chunk_id,
+                &manifest,
             )
             .await?;
+            set_staging_written(pool, active_epoch as i32, chunk_id as i32).await?;
+        }
 
-            // --- Upload version hash + staged marker (both idempotent) ---
-            if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
-                s3_coordination::upload_chunk_version_hash(
-                    s3,
-                    &config.s3_bucket,
-                    active_epoch,
-                    config.party_id,
-                    chunk_id,
-                    &version_map,
-                )
+        // Load the version map once; used for the hash upload below and
+        // for on-demand full-map upload if hashes diverge across parties.
+        let version_map =
+            get_staging_version_map(pool, staging_schema, active_epoch as i32, chunk_id as i32)
                 .await?;
-                s3_coordination::upload_chunk_staged(
-                    s3,
-                    &config.s3_bucket,
-                    active_epoch,
-                    config.party_id,
-                    chunk_id,
-                )
-                .await?;
-                tracing::info!(
-                    "Epoch {} chunk {}: version hash + staged marker uploaded",
-                    active_epoch,
-                    chunk_id
-                );
-            }
 
-            if is_cancelled(cancel) {
-                tracing::info!(
-                    "continuous rerand exited cleanly: cancellation token fired after staging uploads, \
-                     before all-parties staged barrier"
-                );
-                return Ok(());
-            }
+        // --- Upload version hash + staged marker (both idempotent) ---
+        if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
+            s3_coordination::upload_chunk_version_hash(
+                s3,
+                &config.s3_bucket,
+                active_epoch,
+                config.party_id,
+                chunk_id,
+                &version_map,
+            )
+            .await?;
+            s3_coordination::upload_chunk_staged(
+                s3,
+                &config.s3_bucket,
+                active_epoch,
+                config.party_id,
+                chunk_id,
+            )
+            .await?;
+            tracing::info!(
+                "Epoch {} chunk {}: version hash + staged marker uploaded",
+                active_epoch,
+                chunk_id
+            );
+        }
 
-            // --- Wait for all parties to confirm staging ---
-            if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
-                match run_interruptible_poll(
-                    pool,
-                    cancel,
-                    poll_interval,
-                    "chunk staged confirmation",
-                    || {
-                        s3_coordination::poll_chunk_staged_all(
-                            s3,
-                            &config.s3_bucket,
-                            active_epoch,
-                            chunk_id,
-                            poll_interval,
-                        )
-                    },
-                )
-                .await?
-                {
-                    PollOutcome::Completed(()) => {}
-                    PollOutcome::Cancelled => {
-                        tracing::info!(
-                            "continuous rerand exited cleanly: cancellation or freeze/shutdown during \
-                             interruptible poll for all parties' staged markers"
-                        );
-                        return Ok(());
-                    }
-                }
-                set_all_confirmed(pool, active_epoch as i32, chunk_id as i32).await?;
-                tracing::info!(
-                    "Epoch {} chunk {}: all parties confirmed",
-                    active_epoch,
-                    chunk_id
-                );
-            }
+        if is_cancelled(cancel) {
+            tracing::info!(
+                "single-epoch rerand job exited cleanly: cancellation token fired after staging uploads, \
+                 before all-parties staged barrier"
+            );
+            return Ok(false);
+        }
 
-            if is_cancelled(cancel) {
-                tracing::info!(
-                    "continuous rerand exited cleanly: cancellation token fired after staged barrier, \
-                     before cross-party apply prep"
-                );
-                return Ok(());
-            }
-
-            // --- Apply ---
-            // 1. Compute staging-time cross-party disagreements from version maps.
-            //    This is pure S3 reads — no DB lock held.
-            let staging_divergent = match run_interruptible_poll(
+        // --- Wait for all parties to confirm staging ---
+        if !progress.as_ref().is_some_and(|p| p.all_confirmed) {
+            match run_interruptible_poll(
                 pool,
                 cancel,
                 poll_interval,
-                "cross-party version-map convergence",
+                "chunk staged confirmation",
                 || {
-                    s3_coordination::compute_cross_party_divergent_ids(
+                    s3_coordination::poll_chunk_staged_all(
                         s3,
                         &config.s3_bucket,
                         active_epoch,
                         chunk_id,
-                        config.party_id,
-                        &version_map,
                         poll_interval,
                     )
                 },
             )
             .await?
             {
-                PollOutcome::Completed(ids) => ids,
+                PollOutcome::Completed(()) => {}
                 PollOutcome::Cancelled => {
                     tracing::info!(
-                        "continuous rerand exited cleanly: cancellation or freeze/shutdown during \
-                         interruptible poll for cross-party version-map convergence"
+                        "single-epoch rerand job exited cleanly: cancellation or freeze/shutdown during \
+                         interruptible poll for all parties' staged markers"
                     );
-                    return Ok(());
+                    return Ok(false);
                 }
-            };
-
-            // 2. Apply under lock. The function acquires RERAND_MODIFY_LOCK +
-            //    RERAND_APPLY_LOCK, deletes staging_divergent, applies via
-            //    version_id CAS, cleans up staging, and commits.
-            //    No S3 I/O happens while the lock is held.
-            let rows = apply_confirmed_chunk(
-                pool,
-                &staging_schema,
-                active_epoch as i32,
-                chunk_id as i32,
-                &staging_divergent,
-            )
-            .await?;
-
-            tracing::info!(
-                "Epoch {} chunk {}: applied to live DB ({} rows updated, {} staging-divergent skipped)",
-                active_epoch,
-                chunk_id,
-                rows,
-                staging_divergent.len(),
-            );
-
-            chunk_id += 1;
-
-            if chunk_delay > Duration::ZERO {
-                sleep(chunk_delay).await;
             }
-        }
-
-        if chunk_id == 0 {
-            let empty_epoch_sleep = chunk_delay.max(Duration::from_secs(30));
+            set_all_confirmed(pool, active_epoch as i32, chunk_id as i32).await?;
             tracing::info!(
-                "Epoch {} is empty (max_id_inclusive={}), sleeping {:.0}s to avoid spinning",
+                "Epoch {} chunk {}: all parties confirmed",
                 active_epoch,
-                manifest.max_id_inclusive,
-                empty_epoch_sleep.as_secs_f64(),
+                chunk_id
             );
-            sleep(empty_epoch_sleep).await;
         }
-
-        epoch::complete_epoch(
-            sm,
-            s3,
-            &config.s3_bucket,
-            &config.env,
-            &config.service_name,
-            active_epoch,
-            config.party_id,
-            poll_interval,
-        )
-        .await?;
-        tracing::info!("Epoch {} completed, moving to next epoch", active_epoch);
 
         if is_cancelled(cancel) {
             tracing::info!(
-                "continuous rerand exited cleanly: cancellation token fired after epoch completed, \
-                 before starting next epoch"
+                "single-epoch rerand job exited cleanly: cancellation token fired after staged barrier, \
+                 before cross-party apply prep"
             );
-            return Ok(());
+            return Ok(false);
         }
+
+        // --- Apply ---
+        // 1. Compute staging-time cross-party disagreements from version maps.
+        //    This is pure S3 reads — no DB lock held.
+        let staging_divergent = match run_interruptible_poll(
+            pool,
+            cancel,
+            poll_interval,
+            "cross-party version-map convergence",
+            || {
+                s3_coordination::compute_cross_party_divergent_ids(
+                    s3,
+                    &config.s3_bucket,
+                    active_epoch,
+                    chunk_id,
+                    config.party_id,
+                    &version_map,
+                    poll_interval,
+                )
+            },
+        )
+        .await?
+        {
+            PollOutcome::Completed(ids) => ids,
+            PollOutcome::Cancelled => {
+                tracing::info!(
+                    "single-epoch rerand job exited cleanly: cancellation or freeze/shutdown during \
+                     interruptible poll for cross-party version-map convergence"
+                );
+                return Ok(false);
+            }
+        };
+
+        // 2. Apply under lock. The function acquires RERAND_MODIFY_LOCK +
+        //    RERAND_APPLY_LOCK, deletes staging_divergent, applies via
+        //    version_id CAS, cleans up staging, and commits.
+        //    No S3 I/O happens while the lock is held.
+        let rows = apply_confirmed_chunk(
+            pool,
+            staging_schema,
+            active_epoch as i32,
+            chunk_id as i32,
+            &staging_divergent,
+        )
+        .await?;
+
+        tracing::info!(
+            "Epoch {} chunk {}: applied to live DB ({} rows updated, {} staging-divergent skipped)",
+            active_epoch,
+            chunk_id,
+            rows,
+            staging_divergent.len(),
+        );
+
+        chunk_id += 1;
 
         if chunk_delay > Duration::ZERO {
             sleep(chunk_delay).await;
         }
     }
+
+    if start_chunk_id == 0 && chunk_id == 0 {
+        tracing::info!(
+            "Epoch {} is empty (max_id_inclusive={}); completing empty epoch",
+            active_epoch,
+            manifest.max_id_inclusive,
+        );
+    }
+
+    epoch::complete_epoch(
+        sm,
+        s3,
+        &config.s3_bucket,
+        &config.env,
+        &config.service_name,
+        active_epoch,
+        config.party_id,
+        poll_interval,
+    )
+    .await?;
+    tracing::info!("Epoch {} completed", active_epoch);
+
+    Ok(true)
 }
 
 fn is_cancelled(cancel: Option<&CancellationToken>) -> bool {
@@ -520,7 +553,7 @@ async fn process_chunk_staging(
             right_code: cast_slice::<u16, u8>(&rc.coefs).to_vec(),
             right_mask: cast_slice::<u16, u8>(&rm.coefs).to_vec(),
             original_version_id: version_id,
-            rerand_epoch: (epoch + 1) as i32,
+            rerand_epoch: epoch as i32,
         });
 
         if batch.len() >= BATCH_SIZE {

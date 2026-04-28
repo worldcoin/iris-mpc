@@ -534,7 +534,7 @@ async fn rerandomize_check_main(config: ReRandomizeCheckConfig) -> Result<()> {
 
 async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Result<()> {
     tracing::info!(
-        "Starting continuous rerandomization for party {}",
+        "Starting single-epoch rerandomization job for party {}",
         config.party_id
     );
 
@@ -581,7 +581,7 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
         s3_bucket = %config.s3_bucket,
         party_id = config.party_id,
         environment = %config.env,
-        "Continuous rerand starting with config"
+        "Single-epoch rerand job starting with config"
     );
 
     let postgres_client =
@@ -600,7 +600,7 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
     });
     background_tasks.check_tasks();
 
-    continuous_rerand::run_continuous_rerand(
+    continuous_rerand::run_single_epoch_rerand(
         &config,
         &s3_client,
         &sm_client,
@@ -609,7 +609,7 @@ async fn rerandomize_continuous_main(config: RerandomizeContinuousConfig) -> Res
     )
     .await?;
 
-    tracing::info!("Continuous rerand shut down gracefully");
+    tracing::info!("Single-epoch rerand job shut down gracefully");
     background_tasks.abort_and_wait_for_finish().await;
     Ok(())
 }
