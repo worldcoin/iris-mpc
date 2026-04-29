@@ -107,7 +107,10 @@ pub async fn server_main(config: Config) -> Result<()> {
     // Start coordination server
     let extra_routes = Router::new().route(
         GRAPH_CHECKPOINT_ROUTE,
-        get(move || async move { serde_json::to_string(&hashes).unwrap() }),
+        get({
+            let hashes_json = serde_json::to_string(&hashes).unwrap();
+            move || async move { hashes_json }
+        }),
     );
 
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
@@ -127,11 +130,12 @@ pub async fn server_main(config: Config) -> Result<()> {
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    let graph_checkpoint = get_common_checkpoint(&config, hashes, graph_checkpoints).await?;
+    let graph_checkpoint =
+        get_common_checkpoint(&server_coord_config, hashes, graph_checkpoints).await?;
     tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
 
-    // stop if the checkpoint can not be found
     if let Some(cp) = graph_checkpoint.as_ref() {
+        // Stop if the checkpoint can not be found
         if !s3_key_exists(
             &aws_clients.checkpoint_s3_client,
             &config.graph_checkpoint_bucket_name,
@@ -145,11 +149,9 @@ pub async fn server_main(config: Config) -> Result<()> {
                 cp.s3_key
             );
         }
-    }
 
-    // Validate checkpoint vs Iris DB consistency
-    let db_count = iris_store.count_irises().await?;
-    if let Some(cp) = graph_checkpoint.as_ref() {
+        // Validate checkpoint vs Iris DB consistency
+        let db_count = iris_store.count_irises().await?;
         if cp.last_indexed_iris_id as usize != db_count {
             tracing::warn!(
                 "Graph checkpoint last_indexed_iris_id={} differs from iris_db count={}. Shadow mode may produce mismatches.",
@@ -588,17 +590,24 @@ async fn load_database(
         eyre::Result::<()>::Ok(())
     };
 
-    // Try to load graph from S3 checkpoint first
+    // Try to load graph from S3 checkpoint first, then fall back to
+    // Postgres graph representation for temporary legacy compatibility.
+    // TODO simplify this logic once graph DB tables are removed.
     let graph_load_future = async move {
         if let Some(state) = checkpoint {
+            tracing::info!(
+                "Loading graph from common S3 checkpoint, hash: {}",
+                state.blake3_hash
+            );
             let both_eyes = download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?;
             graph_loader.load_graphs_from_checkpoint(both_eyes);
-            return Ok(());
+            Ok(())
+        } else {
+            tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
+            graph_loader
+                .load_graph_store(graph_store, parallelism)
+                .await
         }
-        tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
-        graph_loader
-            .load_graph_store(graph_store, parallelism)
-            .await
     };
 
     let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
