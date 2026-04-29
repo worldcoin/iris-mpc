@@ -1,6 +1,7 @@
 use crate::services::aws::s3::create_s3_client;
 use crate::services::aws::sns::create_sns_client;
 use crate::services::aws::sqs::create_sqs_client;
+use aws_sdk_s3::config::Region as S3Region;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
@@ -14,6 +15,8 @@ pub struct AwsClients {
     pub sqs_client: SQSClient,
     pub sns_client: SNSClient,
     pub s3_client: S3Client,
+    // used to obtain graph checkpoints. this bucket could be in a different region
+    pub checkpoint_s3_client: S3Client,
     pub secrets_manager_client: SecretsManagerClient,
 }
 
@@ -33,13 +36,18 @@ impl AwsClients {
 
         let sns_client = create_sns_client(&shared_config, config.sns_retry_max_attempts);
         let sqs_client = create_sqs_client(&shared_config, config.sqs_long_poll_wait_time);
-        let s3_client = create_s3_client(&shared_config, force_path_style);
+        let s3_client = create_s3_client(&shared_config, force_path_style, None);
         let secrets_manager_client = SecretsManagerClient::new(&shared_config);
+
+        let checkpoint_region = S3Region::new(config.graph_checkpoint_bucket_region.clone());
+        let checkpoint_s3_client =
+            create_s3_client(&shared_config, force_path_style, Some(checkpoint_region));
 
         Ok(Self {
             sqs_client,
             sns_client,
             s3_client,
+            checkpoint_s3_client,
             secrets_manager_client,
         })
     }
@@ -52,6 +60,7 @@ impl Clone for AwsClients {
             sqs_client: self.sqs_client.clone(),
             sns_client: self.sns_client.clone(),
             s3_client: self.s3_client.clone(),
+            checkpoint_s3_client: self.checkpoint_s3_client.clone(),
             secrets_manager_client: self.secrets_manager_client.clone(),
         }
     }
