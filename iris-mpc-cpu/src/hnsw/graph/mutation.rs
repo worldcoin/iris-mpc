@@ -33,3 +33,14 @@ pub enum UpdateEntryPoint {
     /// Append a new entry point to the current list.
     Append { layer: usize },
 }
+
+impl<Vector: Ord> GraphMutation<Vector> {
+    /// Returns the current version of the GraphMutation format.
+    ///
+    /// This should be incremented whenever the GraphMutation enum or its variants
+    /// are modified in an incompatible way. Keeping this separate allows old
+    /// mutations to remain stored and handled appropriately during format upgrades.
+    pub fn get_version() -> i32 {
+        1
+    }
+}

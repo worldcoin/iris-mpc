@@ -103,7 +103,6 @@ pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
         bail!("unexpected graph version: {}", state.graph_version);
     }
 
-    let start = Instant::now();
     let binary_graph = download_and_hash(s3_client, bucket, state).await?;
 
     // todo: deserialize in a way that does not require holding 2 graphs in memory at once.

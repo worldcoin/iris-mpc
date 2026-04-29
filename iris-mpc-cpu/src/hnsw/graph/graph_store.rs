@@ -293,15 +293,17 @@ impl<V: VectorStore> GraphPg<V> {
             return Ok(Vec::new());
         }
 
+        let mutation_version = crate::hnsw::graph::mutation::GraphMutation::<i64>::get_version();
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_version)
-            SELECT $1, unnest($2::bytea[]), 1
+            SELECT $1, unnest($2::bytea[]), $3
             RETURNING id, modification_id, serialized_mutations, mutation_version
             "#,
         )
         .bind(modification_id_height)
         .bind(&serialized_mutations)
+        .bind(mutation_version)
         .fetch_all(tx.deref_mut())
         .await?;
 
