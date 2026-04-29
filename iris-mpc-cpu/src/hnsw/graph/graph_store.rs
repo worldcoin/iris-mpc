@@ -35,8 +35,6 @@ pub struct GraphCheckpointRow {
 }
 
 /// A row from the hawk_graph_mutations table.
-/// The serialized_mutations field contains a bincode-serialized BothEyes<GraphMutation<VectorId>>,
-/// storing graph mutations for both left and right eyes in a single row.
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
 pub struct GraphMutationRow {
     pub id: i64,
@@ -286,22 +284,18 @@ impl<V: VectorStore> GraphPg<V> {
     pub async fn insert_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        modification_id_height: i64,
-        serialized_mutations: &[Vec<u8>],
+        modification_id: i64,
+        serialized_mutations: &[u8],
     ) -> Result<Vec<GraphMutationRow>> {
-        if serialized_mutations.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let mutation_version = crate::hnsw::graph::mutation::GraphMutation::<i64>::get_version();
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_version)
-            SELECT $1, unnest($2::bytea[]), $3
+            VALUES ($1, $2, $3)
             RETURNING id, modification_id, serialized_mutations, mutation_version
             "#,
         )
-        .bind(modification_id_height)
+        .bind(modification_id)
         .bind(serialized_mutations)
         .bind(mutation_version)
         .fetch_all(tx.deref_mut())
