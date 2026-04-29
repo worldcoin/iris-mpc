@@ -597,10 +597,7 @@ async fn load_database(
         }
         tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
         graph_loader
-            .load_graph_store(
-                graph_store,
-                parallelism
-            )
+            .load_graph_store(graph_store, parallelism)
             .await
     };
 
