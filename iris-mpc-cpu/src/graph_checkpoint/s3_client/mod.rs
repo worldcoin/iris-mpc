@@ -17,7 +17,7 @@ use crate::{
         vector_store::Ref,
         VectorStore,
     },
-    utils::serialization::graph::GRAPH_VERSION,
+    utils::serialization::graph::{graph_format_to_i32, GraphFormat},
 };
 
 use iris_mpc_common::IrisSerialId;
@@ -75,7 +75,7 @@ pub async fn upload_graph_checkpoint(
         last_indexed_iris_id,
         last_indexed_modification_id,
         blake3_hash,
-        graph_version: GRAPH_VERSION,
+        graph_version: graph_format_to_i32(GraphFormat::Current),
         is_archival,
     };
 
@@ -100,23 +100,11 @@ pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem<T>>> {
-    let start = Instant::now();
-
-    let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
-
-    metrics::histogram!("genesis_checkpoint_download_duration")
-        .record(start.elapsed().as_secs_f64());
-
-    // Verify BLAKE3 hash after download
-    let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();
-    if computed_hash != state.blake3_hash {
-        return Err(eyre!(
-            "BLAKE3 hash mismatch: expected {}, got {}",
-            state.blake3_hash,
-            computed_hash
-        ));
+    if state.graph_version != graph_format_to_i32(GraphFormat::Current) {
+        bail!("unexpected graph version: {}", state.graph_version);
     }
 
+    let start = Instant::now();
     let binary_graph = download_and_hash(s3_client, bucket, state).await?;
 
     // todo: deserialize in a way that does not require holding 2 graphs in memory at once.
@@ -133,7 +121,7 @@ pub async fn download_genesis_checkpoint_plaintext(
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
-    if state.graph_version != GRAPH_VERSION {
+    if state.graph_version != graph_format_to_i32(GraphFormat::Current) {
         bail!("unexpected graph version: {}", state.graph_version);
     }
     let binary_graph = download_and_hash(s3_client, bucket, state).await?;

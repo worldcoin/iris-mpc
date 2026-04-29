@@ -35,14 +35,15 @@ pub struct GraphCheckpointRow {
 }
 
 /// A row from the hawk_graph_mutations table.
-/// The serialized_mutation field contains a bincode-serialized BothEyes<GraphMutation<VectorId>>,
+/// The serialized_mutations field contains a bincode-serialized BothEyes<GraphMutation<VectorId>>,
 /// storing graph mutations for both left and right eyes in a single row.
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
 pub struct GraphMutationRow {
     pub id: i64,
     pub modification_id: i64,
     /// Bincode-serialized BothEyes<Vec<GraphMutation<VectorId>>> (mutations for both eyes)
-    pub serialized_mutation: Vec<u8>,
+    pub serialized_mutations: Vec<u8>,
+    pub mutation_version: i32,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -294,9 +295,9 @@ impl<V: VectorStore> GraphPg<V> {
 
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutation)
-            SELECT $1, unnest($2::bytea[])
-            RETURNING id, modification_id, serialized_mutation
+            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_version)
+            SELECT $1, unnest($2::bytea[]), 1
+            RETURNING id, modification_id, serialized_mutations, mutation_version
             "#,
         )
         .bind(modification_id_height)
@@ -313,7 +314,7 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT id, modification_id, serialized_mutation
+            SELECT id, modification_id, serialized_mutations, mutation_version
             FROM hawk_graph_mutations
             WHERE $1::bigint IS NULL OR id <= $1
             ORDER BY id ASC

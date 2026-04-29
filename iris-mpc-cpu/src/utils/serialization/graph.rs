@@ -20,9 +20,22 @@ use crate::{
     },
 };
 
-pub const GRAPH_VERSION: i32 = 3;
-
 /* --------------------- Graph Serialization ------------------------ */
+
+/// Convert GraphFormat to its corresponding i32 value for storage.
+/// Current and V3 both map to 3.
+pub fn graph_format_to_i32(format: GraphFormat) -> i32 {
+    match format {
+        GraphFormat::Current | GraphFormat::V3 => 3,
+        GraphFormat::V2 => 2,
+        GraphFormat::V1 => 1,
+        GraphFormat::V0 => 0,
+        GraphFormat::Raw => {
+            // Raw format should not be used for storage, but we assign a sentinel value
+            -1
+        }
+    }
+}
 
 #[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
 pub enum GraphFormat {

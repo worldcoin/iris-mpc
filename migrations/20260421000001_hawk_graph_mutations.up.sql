@@ -4,5 +4,6 @@ CREATE TABLE IF NOT EXISTS hawk_graph_mutations (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     modification_id BIGINT NOT NULL,
     -- BothEyes<Vec<GraphMutation>>
-    serialized_mutations BYTEA NOT NULL
+    serialized_mutations BYTEA NOT NULL,
+    mutation_version INT NOT NULL DEFAULT 1
 );
