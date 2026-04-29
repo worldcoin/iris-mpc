@@ -58,6 +58,8 @@ pub struct GraphCheckpointState {
     pub last_indexed_modification_id: i64,
     /// BLAKE3 hash of the checkpoint data for integrity verification
     pub blake3_hash: String,
+    /// Corresponds to the GraphFormat enum
+    pub graph_version: i32,
     /// Whether this checkpoint is archival (i.e. should be retained by pruning).
     pub is_archival: bool,
 }
@@ -78,6 +80,7 @@ impl TryFrom<GraphCheckpointRow> for GraphCheckpointState {
             last_indexed_iris_id,
             last_indexed_modification_id: value.last_indexed_modification_id,
             blake3_hash: value.blake3_hash,
+            graph_version: value.graph_version,
             is_archival: value.is_archival,
         })
     }

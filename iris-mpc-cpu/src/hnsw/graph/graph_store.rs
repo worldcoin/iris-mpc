@@ -30,6 +30,7 @@ pub struct GraphCheckpointRow {
     pub last_indexed_iris_id: i64,
     pub last_indexed_modification_id: i64,
     pub blake3_hash: String,
+    pub graph_version: i32,
     pub is_archival: bool,
 }
 
@@ -158,6 +159,7 @@ impl<V: VectorStore> GraphPg<V> {
         last_indexed_modification_id: i64,
         blake3_hash: &str,
         is_archival: bool,
+        graph_version: i32,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -166,9 +168,10 @@ impl<V: VectorStore> GraphPg<V> {
                 last_indexed_iris_id,
                 last_indexed_modification_id,
                 blake3_hash,
-                is_archival
+                is_archival,
+                graph_version
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
         )
         .bind(s3_key)
@@ -176,6 +179,7 @@ impl<V: VectorStore> GraphPg<V> {
         .bind(last_indexed_modification_id)
         .bind(blake3_hash)
         .bind(is_archival)
+        .bind(graph_version)
         .execute(tx.deref_mut())
         .await?;
 
@@ -192,7 +196,8 @@ impl<V: VectorStore> GraphPg<V> {
                 last_indexed_iris_id,
                 last_indexed_modification_id,
                 blake3_hash,
-                is_archival
+                is_archival,
+                graph_version
             FROM genesis_graph_checkpoint
             ORDER BY id DESC
             LIMIT 1
@@ -217,7 +222,8 @@ impl<V: VectorStore> GraphPg<V> {
                 last_indexed_iris_id,
                 last_indexed_modification_id,
                 blake3_hash,
-                is_archival
+                is_archival,
+                graph_version
             FROM genesis_graph_checkpoint
             WHERE s3_key = $1
             "#,
@@ -239,7 +245,8 @@ impl<V: VectorStore> GraphPg<V> {
                 last_indexed_iris_id,
                 last_indexed_modification_id,
                 blake3_hash,
-                is_archival
+                is_archival,
+                graph_version
             FROM genesis_graph_checkpoint
             ORDER BY id DESC
             "#,

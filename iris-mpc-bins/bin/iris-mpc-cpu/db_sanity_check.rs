@@ -928,6 +928,7 @@ async fn load_checkpoint_state(
             })?,
             last_indexed_modification_id: row.last_indexed_modification_id,
             blake3_hash: row.blake3_hash,
+            graph_version: row.graph_version,
             is_archival: row.is_archival,
         })
     } else {
