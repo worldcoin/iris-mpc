@@ -3,20 +3,14 @@
 //! This module provides functionality for storing and loading graph checkpoints
 //! needed by genesis and hawk.
 
-use std::{fmt::Display, str::FromStr, sync::Arc, time::Duration};
-
 use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart},
     Client as S3Client,
 };
 use bytes::{Bytes, BytesMut};
 use eyre::{eyre, Result};
+use std::{sync::Arc, time::Duration};
 use tokio::{sync::Semaphore, task::JoinSet, time::sleep};
-
-use crate::{
-    execution::hawk_main::BothEyes,
-    hnsw::{graph::layered_graph::GraphMem, vector_store::Ref},
-};
 
 pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100 MB chunks
 pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 32;
@@ -316,22 +310,6 @@ pub async fn delete_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Resu
             e
         })?;
     Ok(())
-}
-
-/// serialize a graph for s3 upload
-pub fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    both_eyes: &BothEyes<&GraphMem<T>>,
-) -> Result<Bytes> {
-    let data = bincode::serialize(&both_eyes)?;
-    Ok(Bytes::from(data))
-}
-
-/// deserialize graph retrievevd from s3
-pub fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    data: &[u8],
-) -> Result<BothEyes<GraphMem<T>>> {
-    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
-    Ok(graphs)
 }
 
 /// Simple PUT upload for small files (under 5MB).

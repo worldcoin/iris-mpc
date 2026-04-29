@@ -1,98 +1,29 @@
-use std::{fmt::Display, str::FromStr, time::Instant};
+mod multipart;
 
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
+use bytes::Bytes;
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::IrisSerialId;
-use serde::{Deserialize, Serialize};
+use std::{fmt::Display, str::FromStr, time::Instant};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
     hnsw::{
         graph::{
-            graph_store::{self, GenesisGraphCheckpointRow, GraphPg},
+            graph_store::{self, GraphPg},
             layered_graph::GraphMem,
         },
         vector_store::Ref,
         VectorStore,
     },
-    utils::s3_checkpoint::*,
 };
 
-/// Controls which older checkpoints are deleted during cleanup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PruningMode {
-    /// Do not prune any checkpoints.
-    None,
-    /// Prune older checkpoints that are not marked archival (default).
-    OlderNonArchival,
-    /// Prune all older checkpoints regardless of archival flag.
-    AllOlder,
-}
-
-impl Display for PruningMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PruningMode::None => write!(f, "none"),
-            PruningMode::OlderNonArchival => write!(f, "older-non-archival"),
-            PruningMode::AllOlder => write!(f, "all-older"),
-        }
-    }
-}
-
-impl FromStr for PruningMode {
-    type Err = eyre::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(PruningMode::None),
-            "older-non-archival" => Ok(PruningMode::OlderNonArchival),
-            "all-older" => Ok(PruningMode::AllOlder),
-            _ => Err(eyre!(
-                "invalid pruning mode: '{}', expected one of: none, older-non-archival, all-older",
-                s
-            )),
-        }
-    }
-}
-
-/// Metadata stored in genesis_graph_checkpoint table for graph checkpoints
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenesisCheckpointState {
-    /// S3 key where the checkpoint is stored
-    pub s3_key: String,
-    /// Last iris serial ID included in this checkpoint
-    pub last_indexed_iris_id: IrisSerialId,
-    /// Last modification ID included in this checkpoint
-    pub last_indexed_modification_id: i64,
-    /// BLAKE3 hash of the checkpoint data for integrity verification
-    pub blake3_hash: String,
-    /// Whether this checkpoint is archival (i.e. should be retained by pruning).
-    pub is_archival: bool,
-}
-
-impl TryFrom<GenesisGraphCheckpointRow> for GenesisCheckpointState {
-    type Error = eyre::Error;
-    fn try_from(value: GenesisGraphCheckpointRow) -> Result<Self, Self::Error> {
-        let last_indexed_iris_id: IrisSerialId =
-            value.last_indexed_iris_id.try_into().map_err(|_| {
-                eyre!(
-                    "Invalid last_indexed_iris_id for checkpoint: {}",
-                    value.last_indexed_iris_id
-                )
-            })?;
-
-        Ok(Self {
-            s3_key: value.s3_key,
-            last_indexed_iris_id,
-            last_indexed_modification_id: value.last_indexed_modification_id,
-            blake3_hash: value.blake3_hash,
-            is_archival: value.is_archival,
-        })
-    }
-}
+use crate::graph_checkpoint::data::*;
+pub use multipart::*;
 
 /// Creates an S3 graph checkpoint.
-pub async fn upload_genesis_checkpoint(
+pub async fn upload_graph_checkpoint(
     bucket: &str,
     party_id: usize,
     graph_mem: &BothEyes<GraphRef>,
@@ -100,7 +31,7 @@ pub async fn upload_genesis_checkpoint(
     last_indexed_iris_id: IrisSerialId,
     last_indexed_modification_id: i64,
     is_archival: bool,
-) -> Result<GenesisCheckpointState> {
+) -> Result<GraphCheckpointState> {
     let start = Instant::now();
     tracing::info!(
         "Creating S3 graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}, is_archival={}",
@@ -136,7 +67,7 @@ pub async fn upload_genesis_checkpoint(
 
     upload_graph(s3_client, bucket, &s3_key, data).await?;
 
-    let checkpoint = GenesisCheckpointState {
+    let checkpoint = GraphCheckpointState {
         s3_key: s3_key.clone(),
         last_indexed_iris_id,
         last_indexed_modification_id,
@@ -151,19 +82,19 @@ pub async fn upload_genesis_checkpoint(
         start.elapsed()
     );
 
-    metrics::histogram!("genesis_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
-    metrics::gauge!("genesis_checkpoint_size_bytes").set(data_len as f64);
-    metrics::gauge!("genesis_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
-    metrics::gauge!("genesis_checkpoint_last_modification_id")
+    metrics::histogram!("graph_checkpoint_upload_duration").record(start.elapsed().as_secs_f64());
+    metrics::gauge!("graph_checkpoint_size_bytes").set(data_len as f64);
+    metrics::gauge!("graph_checkpoint_last_indexed_id").set(last_indexed_iris_id as f64);
+    metrics::gauge!("graph_checkpoint_last_modification_id")
         .set(last_indexed_modification_id as f64);
 
     Ok(checkpoint)
 }
 
-pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
+pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
     s3_client: &S3Client,
     bucket: &str,
-    state: &GenesisCheckpointState,
+    state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem<T>>> {
     let start = Instant::now();
 
@@ -190,11 +121,11 @@ pub async fn download_genesis_checkpoint<T: Ref + Display + FromStr + Ord>(
 /// Gets the latest checkpoint from genesis_graph_checkpoint table.
 pub async fn get_latest_checkpoint_state<V: VectorStore>(
     graph_store: &GraphPg<V>,
-) -> Result<Option<GenesisCheckpointState>> {
+) -> Result<Option<GraphCheckpointState>> {
     tracing::info!("Retrieving latest graph checkpoint metadata from genesis_graph_checkpoint");
 
     let row = graph_store.get_latest_genesis_graph_checkpoint().await?;
-    let metadata: Option<GenesisCheckpointState> = row.map(|row| row.try_into()).transpose()?;
+    let metadata: Option<GraphCheckpointState> = row.map(|row| row.try_into()).transpose()?;
 
     if let Some(m) = &metadata {
         tracing::info!(
@@ -213,7 +144,7 @@ pub async fn get_latest_checkpoint_state<V: VectorStore>(
 /// stores checkpoint in genesis_graph_checkpoint table.
 pub async fn save_checkpoint_state<V: VectorStore>(
     tx: graph_store::GraphTx<'_, V>,
-    state: &GenesisCheckpointState,
+    state: &GraphCheckpointState,
 ) -> Result<()> {
     tracing::info!(
         "Persisting graph checkpoint state: s3_key={}, last_indexed_iris_id={}, is_archival={}",
@@ -244,7 +175,7 @@ pub async fn save_checkpoint_state<V: VectorStore>(
 pub async fn cleanup_checkpoints<V: VectorStore>(
     bucket: &str,
     s3_client: &S3Client,
-    current_state: &GenesisCheckpointState,
+    current_state: &GraphCheckpointState,
     graph_store: &GraphPg<V>,
     pruning_mode: PruningMode,
 ) -> Result<()> {
@@ -279,6 +210,102 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
     }
     Ok(())
+}
+
+/// Verifies that the S3 client has read, write, and delete access to the
+/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
+/// deletes it. This catches misconfigured buckets/regions/IAM before any
+/// mutations occur.
+pub async fn verify_s3_checkpoint_access(
+    s3_client: &S3Client,
+    bucket: &str,
+    party_id: usize,
+) -> Result<()> {
+    let key = format!("genesis/{party_id}/_access_check");
+    let body = b"access_check";
+
+    // Write
+    s3_client
+        .put_object()
+        .bucket(bucket)
+        .key(&key)
+        .body(ByteStream::from_static(body))
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
+
+    // Read
+    let resp = s3_client
+        .get_object()
+        .bucket(bucket)
+        .key(&key)
+        .send()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
+    let data = resp
+        .body
+        .collect()
+        .await
+        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
+    if data.into_bytes().as_ref() != body {
+        bail!("S3 checkpoint bucket read check returned unexpected content");
+    }
+
+    // Delete
+    if let Err(e) = s3_client
+        .delete_object()
+        .bucket(bucket)
+        .key(&key)
+        .send()
+        .await
+    {
+        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
+    }
+
+    Ok(())
+}
+
+/// Checks whether a given key exists in an S3 bucket using a `HeadObject`
+/// request. Returns `true` if the key is present, `false` if it does not
+/// exist (HTTP 404 / `NoSuchKey`), or an error for any other failure.
+///
+/// # Arguments
+///
+/// * `s3_client` - Authenticated S3 client.
+/// * `bucket`    - Name of the S3 bucket to query.
+/// * `key`       - Object key to check for existence.
+pub async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Result<bool> {
+    match s3_client.head_object().bucket(bucket).key(key).send().await {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            // `head_object` returns a 404 when the key does not exist.
+            // The SDK surfaces this as a `NotFound` service error.
+            if e.as_service_error()
+                .map(|se| se.is_not_found())
+                .unwrap_or(false)
+            {
+                Ok(false)
+            } else {
+                Err(eyre!("S3 head_object failed for s3://{bucket}/{key}: {e}"))
+            }
+        }
+    }
+}
+
+/// serialize a graph for s3 upload
+fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
+    both_eyes: &BothEyes<&GraphMem<T>>,
+) -> Result<Bytes> {
+    let data = bincode::serialize(&both_eyes)?;
+    Ok(Bytes::from(data))
+}
+
+/// deserialize graph retrievevd from s3
+fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
+    data: &[u8],
+) -> Result<BothEyes<GraphMem<T>>> {
+    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
+    Ok(graphs)
 }
 
 #[cfg(test)]
