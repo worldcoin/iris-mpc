@@ -302,7 +302,7 @@ impl<V: VectorStore> GraphPg<V> {
             "#,
         )
         .bind(modification_id_height)
-        .bind(&serialized_mutations)
+        .bind(serialized_mutations)
         .bind(mutation_version)
         .fetch_all(tx.deref_mut())
         .await?;

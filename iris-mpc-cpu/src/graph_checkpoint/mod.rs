@@ -141,6 +141,7 @@ mod tests {
             last_indexed_iris_id: 0,
             last_indexed_modification_id: 0,
             blake3_hash: label.to_string(),
+            graph_version: 3,
             is_archival: false,
         }
     }
