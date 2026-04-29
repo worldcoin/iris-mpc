@@ -115,6 +115,8 @@ pub async fn get_others_graph_hashes(
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::serialization::graph::GraphFormat;
+
     use super::*;
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -141,7 +143,7 @@ mod tests {
             last_indexed_iris_id: 0,
             last_indexed_modification_id: 0,
             blake3_hash: label.to_string(),
-            graph_version: 3,
+            graph_version: GraphFormat::Current.version(),
             is_archival: false,
         }
     }

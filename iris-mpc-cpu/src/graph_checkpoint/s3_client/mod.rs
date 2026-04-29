@@ -74,7 +74,7 @@ pub async fn upload_graph_checkpoint(
         last_indexed_iris_id,
         last_indexed_modification_id,
         blake3_hash,
-        graph_version: GraphFormat::version(&GraphFormat::Current),
+        graph_version: GraphFormat::Current.version(),
         is_archival,
     };
 
@@ -99,7 +99,7 @@ pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem<T>>> {
-    if state.graph_version != GraphFormat::version(&GraphFormat::Current) {
+    if state.graph_version != GraphFormat::Current.version() {
         bail!("unexpected graph version: {}", state.graph_version);
     }
 
@@ -119,7 +119,7 @@ pub async fn download_genesis_checkpoint_plaintext(
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
-    if state.graph_version != GraphFormat::version(&GraphFormat::Current) {
+    if state.graph_version != GraphFormat::Current.version() {
         bail!("unexpected graph version: {}", state.graph_version);
     }
     let binary_graph = download_and_hash(s3_client, bucket, state).await?;

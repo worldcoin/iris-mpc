@@ -122,6 +122,7 @@ impl TryFrom<i32> for GraphFormat {
             1 => Ok(GraphFormat::V1),
             2 => Ok(GraphFormat::V2),
             3 => Ok(GraphFormat::V3),
+            -1 => Ok(GraphFormat::Raw),
             _ => Err(eyre::eyre!("unsupported graph format version: {}", value)),
         }
     }
