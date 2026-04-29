@@ -599,7 +599,7 @@ async fn load_database(
         graph_loader
             .load_graph_store(
                 graph_store,
-                config.cpu_database.as_ref().unwrap().load_parallelism,
+                parallelism
             )
             .await
     };
