@@ -22,21 +22,6 @@ use crate::{
 
 /* --------------------- Graph Serialization ------------------------ */
 
-/// Convert GraphFormat to its corresponding i32 value for storage.
-/// Current and V3 both map to 3.
-pub fn graph_format_to_i32(format: GraphFormat) -> i32 {
-    match format {
-        GraphFormat::Current | GraphFormat::V3 => 3,
-        GraphFormat::V2 => 2,
-        GraphFormat::V1 => 1,
-        GraphFormat::V0 => 0,
-        GraphFormat::Raw => {
-            // Raw format should not be used for storage, but we assign a sentinel value
-            -1
-        }
-    }
-}
-
 #[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
 pub enum GraphFormat {
     /// Designated current stable format for `GraphMem` serialization.
@@ -83,6 +68,23 @@ pub enum GraphFormat {
     /// This format type is provided for compatibility only -- please prefer use
     /// of stable serialization formats.
     Raw,
+}
+
+impl GraphFormat {
+    /// Convert GraphFormat to its corresponding i32 value for storage.
+    /// Current and V3 both map to 3.
+    pub fn version(&self) -> i32 {
+        match self {
+            GraphFormat::Current | GraphFormat::V3 => 3,
+            GraphFormat::V2 => 2,
+            GraphFormat::V1 => 1,
+            GraphFormat::V0 => 0,
+            GraphFormat::Raw => {
+                // Raw format should not be used for storage, but we assign a sentinel value
+                -1
+            }
+        }
+    }
 }
 
 /// Array of all concrete graph formats
