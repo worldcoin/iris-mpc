@@ -20,10 +20,9 @@ use crate::{
     utils::serialization::graph::{graph_format_to_i32, GraphFormat},
 };
 
-use iris_mpc_common::IrisSerialId;
 use crate::graph_checkpoint::data::*;
+use iris_mpc_common::IrisSerialId;
 pub use multipart::*;
-
 
 /// Creates an S3 graph checkpoint.
 pub async fn upload_graph_checkpoint(
