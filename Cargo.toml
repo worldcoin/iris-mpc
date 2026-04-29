@@ -93,8 +93,22 @@ ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev 
 # This improves performance and makes panic propagation more reliable.
 # bench gets its setting from release, and test from dev.
 [profile.release]
+incremental = true
 panic = 'abort'
 debug = 1
 
+[profile.release.package."*"]
+# Disable incremental for all dependencies (so sccache can cache them)
+incremental = false
+
 [profile.dev]
+incremental = true
 panic = 'abort'
+
+[profile.dev.package."*"]
+# Disable incremental for all dependencies (so sccache can cache them)
+incremental = false
+# Compile dependencies in release because we don't debug those anyway
+# and now sccache will not cache duplicate dependencies between debug
+# and release builds
+opt-level = 3
