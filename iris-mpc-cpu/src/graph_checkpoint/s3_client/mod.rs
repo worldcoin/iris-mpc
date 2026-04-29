@@ -317,22 +317,6 @@ pub async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Res
     }
 }
 
-/// serialize a graph for s3 upload
-fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    both_eyes: &BothEyes<&GraphMem<T>>,
-) -> Result<Bytes> {
-    let data = bincode::serialize(&both_eyes)?;
-    Ok(Bytes::from(data))
-}
-
-/// deserialize graph retrievevd from s3
-fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    data: &[u8],
-) -> Result<BothEyes<GraphMem<T>>> {
-    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
-    Ok(graphs)
-}
-
 async fn download_and_hash(
     s3_client: &S3Client,
     bucket: &str,

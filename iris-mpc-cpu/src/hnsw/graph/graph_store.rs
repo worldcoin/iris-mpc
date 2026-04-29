@@ -34,6 +34,17 @@ pub struct GraphCheckpointRow {
     pub is_archival: bool,
 }
 
+/// A row from the hawk_graph_mutations table.
+/// The serialized_mutation field contains a bincode-serialized BothEyes<GraphMutation<VectorId>>,
+/// storing graph mutations for both left and right eyes in a single row.
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
+pub struct GraphMutationRow {
+    pub id: i64,
+    pub modification_id: i64,
+    /// Bincode-serialized BothEyes<Vec<GraphMutation<VectorId>>> (mutations for both eyes)
+    pub serialized_mutation: Vec<u8>,
+}
+
 pub struct GraphPg<V: VectorStore> {
     pool: sqlx::PgPool,
     schema_name: String,
@@ -267,6 +278,77 @@ impl<V: VectorStore> GraphPg<V> {
         .execute(&self.pool)
         .await
         .map_err(|e| eyre!("Failed to delete genesis checkpoint: {e}"))?;
+
+        Ok(())
+    }
+
+    pub async fn insert_hawk_graph_mutations(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        modification_id_height: i64,
+        serialized_mutations: &[Vec<u8>],
+    ) -> Result<Vec<GraphMutationRow>> {
+        if serialized_mutations.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutation)
+            SELECT $1, unnest($2::bytea[])
+            RETURNING id, modification_id, serialized_mutation
+            "#,
+        )
+        .bind(modification_id_height)
+        .bind(&serialized_mutations)
+        .fetch_all(tx.deref_mut())
+        .await?;
+
+        Ok(rows.into_iter().collect())
+    }
+
+    pub async fn get_hawk_graph_mutations(
+        &self,
+        max_graph_mutation_id: Option<i64>,
+    ) -> Result<Vec<GraphMutationRow>> {
+        let rows = sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            SELECT id, modification_id, serialized_mutation
+            FROM hawk_graph_mutations
+            WHERE $1::bigint IS NULL OR id <= $1
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(max_graph_mutation_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().collect())
+    }
+
+    pub async fn delete_hawk_graph_mutations(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        max_mutation_id: Option<i64>,
+    ) -> Result<()> {
+        match max_mutation_id {
+            Some(max_mutation_id) => {
+                sqlx::query(
+                    r#"
+                    DELETE FROM hawk_graph_mutations
+                    WHERE id <= $1
+                    "#,
+                )
+                .bind(max_mutation_id)
+                .execute(tx.deref_mut())
+                .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM hawk_graph_mutations")
+                    .execute(tx.deref_mut())
+                    .await?;
+            }
+        }
 
         Ok(())
     }
