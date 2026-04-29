@@ -1,7 +1,16 @@
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
+use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
+use axum::routing::get;
+use axum::Router;
+use iris_mpc_cpu::graph_checkpoint::download_graph_checkpoint;
+use iris_mpc_cpu::graph_checkpoint::get_common_checkpoint;
+use iris_mpc_cpu::graph_checkpoint::get_most_recent_checkpoints;
+use iris_mpc_cpu::graph_checkpoint::s3_key_exists;
+use iris_mpc_cpu::graph_checkpoint::GraphCheckpointState;
+use iris_mpc_cpu::graph_checkpoint::GRAPH_CHECKPOINT_ROUTE;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -13,8 +22,8 @@ use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRI
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, set_node_ready, start_coordination_server, wait_for_others_ready,
-    wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
+    init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes,
+    wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
@@ -93,13 +102,21 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
+    let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store).await?;
+
     // Start coordination server
-    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+    let extra_routes = Router::new().route(
+        GRAPH_CHECKPOINT_ROUTE,
+        get(move || async move { serde_json::to_string(&hashes).unwrap() }),
+    );
+
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
+        Some(extra_routes),
     )
     .await;
     tracing::info!("Coordination server started");
@@ -109,6 +126,37 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
+
+    let graph_checkpoint = get_common_checkpoint(&config, hashes, graph_checkpoints).await?;
+    tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
+
+    // stop if the checkpoint can not be found
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        if !s3_key_exists(
+            &aws_clients.checkpoint_s3_client,
+            &config.graph_checkpoint_bucket_name,
+            &cp.s3_key,
+        )
+        .await?
+        {
+            bail!(
+                "s3 checkpoint not found on AWS: s3://{}/{}",
+                config.graph_checkpoint_bucket_name,
+                cp.s3_key
+            );
+        }
+    }
+
+    // Validate checkpoint vs Iris DB consistency
+    let db_count = iris_store.count_irises().await?;
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        if cp.last_indexed_iris_id as usize != db_count {
+            tracing::warn!(
+                "Graph checkpoint last_indexed_iris_id={} differs from iris_db count={}. Shadow mode may produce mismatches.",
+                cp.last_indexed_iris_id, db_count
+            );
+        }
+    }
 
     // Handle modifications sync
     if config.enable_modifications_sync {
@@ -160,8 +208,11 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     load_database(
         &config,
+        &aws_clients.checkpoint_s3_client,
+        &config.graph_checkpoint_bucket_name,
         &iris_store,
         &graph_store,
+        graph_checkpoint,
         &shutdown_handler,
         &mut hawk_actor,
     )
@@ -485,14 +536,17 @@ async fn init_hawk_actor(
 }
 
 /// Loads iris code shares & HNSW graph from Postgres and/or S3.
+#[allow(clippy::too_many_arguments)]
 async fn load_database(
     config: &Config,
+    s3_client: &Client,
+    checkpoint_bucket: &str,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
+    checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
-    // ANCHOR: Load the database
     tracing::info!("⚓️ ANCHOR: Load the database");
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
@@ -534,10 +588,21 @@ async fn load_database(
         eyre::Result::<()>::Ok(())
     };
 
-    let graph_load_future = graph_loader.load_graph_store(
-        graph_store,
-        config.cpu_database.as_ref().unwrap().load_parallelism,
-    );
+    // Try to load graph from S3 checkpoint first
+    let graph_load_future = async move {
+        if let Some(state) = checkpoint {
+            let both_eyes = download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?;
+            graph_loader.load_graphs_from_checkpoint(both_eyes);
+            return Ok(());
+        }
+        tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
+        graph_loader
+            .load_graph_store(
+                graph_store,
+                config.cpu_database.as_ref().unwrap().load_parallelism,
+            )
+            .await
+    };
 
     let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
     iris_result.expect("Failed to load iris DB");

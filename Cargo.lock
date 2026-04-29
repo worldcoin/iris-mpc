@@ -2871,6 +2871,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "axum 0.7.7",
  "base64",
  "bincode",
  "bytemuck",
