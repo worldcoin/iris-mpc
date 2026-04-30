@@ -90,17 +90,7 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
 
         // Unwrap Arc while inserting, then wrap again for the next batch
         let mut graph_temp = Arc::try_unwrap(graph).unwrap();
-        // No original IDs for fresh insertions (not updates)
-        let original_ids = vec![None; ids.len()];
-        insert::insert(
-            &mut store,
-            &mut graph_temp,
-            searcher,
-            plans,
-            &ids,
-            &original_ids,
-        )
-        .await?;
+        insert::insert(&mut store, &mut graph_temp, searcher, plans, &ids).await?;
         graph = Arc::new(graph_temp);
 
         if inserted_count.saturating_sub(reported_count) >= REPORTING_INTERVAL {
