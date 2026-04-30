@@ -163,6 +163,7 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_argumnets)]
     pub async fn insert_genesis_graph_checkpoint(
         tx: &mut Transaction<'_, Postgres>,
         s3_key: &str,

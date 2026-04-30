@@ -33,6 +33,7 @@ pub async fn upload_and_sync_genesis_checkpoint(
         s3_client,
         last_indexed_id,
         max_modification_indexed_id,
+        // genesis doesn't need graph_mutation_id, it can just replay irises from the GPU database.
         None,
         is_archival,
     )
