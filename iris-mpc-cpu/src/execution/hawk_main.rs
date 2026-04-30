@@ -329,9 +329,23 @@ pub struct HawkActor {
     /// remote sharded pool in the future.
     pub(crate) worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     /// Handles to the underlying iris worker threads, used by the startup
-    /// loader to populate the in-memory iris store directly. Tied to the
-    /// local single-node deployment; a future remote pool will load its
-    /// own shards from the DB and this field will be refactored.
+    /// loader to populate the in-memory iris store directly.
+    ///
+    /// **Invariant:** for each side, `loader_handles[side]` references the
+    /// same worker channels as the `LocalIrisWorkerPool` inside
+    /// `worker_pools[side]`, and both reference the same `iris_store`.
+    /// This is currently established by `HawkActor::new_inner` cloning a
+    /// single `workers_handle` into both fields. If you change construction
+    /// (e.g., to wire a `RemoteIrisWorkerPool` into `worker_pools`), you
+    /// must either (a) keep the local handles in `loader_handles` so the
+    /// startup loader still populates the live in-memory store the trait
+    /// pool reads from, or (b) replace `as_iris_loader` to drive the new
+    /// pool's loading protocol. Silently swapping `worker_pools` without
+    /// touching `loader_handles` will leave the loader writing to an
+    /// orphaned store.
+    ///
+    /// This field is local-deployment-only and will be refactored when the
+    /// remote sharded pool's loading protocol is designed.
     pub(crate) loader_handles: BothEyes<IrisPoolHandle>,
 
     /// Store for persisting detailed anonymized statistics.
@@ -1367,7 +1381,7 @@ impl HawkRequest {
     ///
     /// Each physical iris is cached once (deduplicated by QueryId).
     /// Cache all queries from this request into the given worker pools.
-    pub async fn cache_into(&self, worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>) -> Result<()> {
+    pub async fn cache_into<W: IrisWorkerPool>(&self, worker_pools: &BothEyes<W>) -> Result<()> {
         let to_cache = self.all_queries_for_cache();
         // Cache all irises in both worker pools (mirror queries cross eyes).
         futures::try_join!(
