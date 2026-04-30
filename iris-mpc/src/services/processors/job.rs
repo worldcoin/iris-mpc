@@ -46,6 +46,10 @@ pub async fn process_job_result(
         request_ids,
         request_types,
         metadata,
+        // `matches` and `matches_with_skip_persistence` are misleadingly named (see their
+        // doc comments in `iris-mpc-common/src/job.rs`). The consumer code below filters by
+        // `request_types[i] == UNIQUENESS_MESSAGE_TYPE` before using them, which is the only
+        // context in which their value is meaningful as "did the query match".
         matches,
         matches_with_skip_persistence,
         skip_persistence,

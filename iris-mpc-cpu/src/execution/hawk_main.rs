@@ -124,7 +124,7 @@ use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
-    RequestType, UniquenessRequest,
+    RequestType, UniquenessRequest, DECISION_FILTER,
 };
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -137,7 +137,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
     hash::{Hash, Hasher},
-    ops::Not,
     sync::Arc,
     time::Instant,
     vec,
@@ -1485,11 +1484,9 @@ impl HawkResult {
     /// Otherwise, return the index of some match.
     /// In cases with neither insertions nor matches, return the special u32::MAX.
     fn merged_results(&self) -> Vec<u32> {
-        let match_indices = self.select_indices(Filter {
-            eyes: Both,
-            orient: Both,
-            intra_batch: true,
-        });
+        // Wide filter: a single scalar per row, so include matches from any orientation
+        // and intra-batch peers. Cf. `MATCH_IDS_FILTER` (narrow, paired with mirror twin).
+        let match_indices = self.select_indices(DECISION_FILTER);
 
         match_indices
             .into_iter()
@@ -1546,22 +1543,28 @@ impl HawkResult {
     }
 
     fn matched_batch_request_ids(&self) -> Vec<Vec<String>> {
+        // Intra-batch peers across both orientations — paired with the serial-id
+        // match lists which are intra_batch=false. (See `MATCH_IDS_FILTER`.)
         let per_match = |id: &MatchId| match id {
             MatchId::IntraBatch(req_i) => Some(self.batch.request_ids[*req_i].clone()),
             _ => None,
         };
 
         self.match_results
-            .select(Filter {
-                eyes: Both,
-                orient: Both,
-                intra_batch: true,
-            })
+            .select(DECISION_FILTER)
             .iter()
             .map(|matches| matches.iter().filter_map(per_match).collect_vec())
             .collect_vec()
     }
 
+    /// Filter for the canonical `match_ids` field: Normal orientation, both eyes (AND), database
+    /// matches only.
+    ///
+    /// `intra_batch=false` is the convention shared by all serial-id match lists
+    /// (`match_ids`, `full_face_mirror_match_ids`, `partial_match_ids_*`,
+    /// `full_face_mirror_partial_match_ids_*`). Intra-batch peers don't have a stable serial id
+    /// to report and are surfaced via `matched_batch_request_ids` instead. The Mirror counterpart
+    /// uses `orient: Only(Mirror)` with the same `intra_batch=false`.
     const MATCH_IDS_FILTER: Filter = Filter {
         eyes: Both,
         orient: Only(Orientation::Normal),
@@ -1575,14 +1578,19 @@ impl HawkResult {
 
         let decisions = self.match_results.decisions();
 
-        let matches = decisions
+        // Compute the per-row decision flags using positive, decision-aligned names.
+        // The corresponding `ServerJobResult` fields (`matches`, `matches_with_skip_persistence`)
+        // are misleadingly named and store the negation — see their doc comments in
+        // `iris-mpc-common/src/job.rs`. Polarity is flipped exactly once at struct construction
+        // below.
+        let unique_insert = decisions
             .iter()
-            .map(|&d| matches!(d, UniqueInsert).not())
+            .map(|&d| matches!(d, UniqueInsert))
             .collect_vec();
 
-        let matches_with_skip_persistence = decisions
+        let unique_no_match = decisions
             .iter()
-            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
+            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped))
             .collect_vec();
 
         let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
@@ -1621,7 +1629,22 @@ impl HawkResult {
             intra_batch: false,
         });
 
-        let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
+        // "No normal match anywhere AND mirror match somewhere" — wide filter so an in-batch
+        // mirror peer also raises the flag, matching GPU semantics
+        // (`iris-mpc-gpu/src/server/actor.rs:1318-1334`). The narrow `match_ids` /
+        // `full_face_mirror_match_ids` lists only carry DB serial ids, so we'd miss the
+        // in-batch case if we derived the flag from them.
+        let any_match_normal = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Normal),
+            intra_batch: true,
+        });
+        let any_match_mirror = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Mirror),
+            intra_batch: true,
+        });
+        let full_face_mirror_attack_detected = izip!(&any_match_normal, &any_match_mirror)
             .map(|(normal, mirror)| normal.is_empty() && !mirror.is_empty())
             .collect_vec();
 
@@ -1636,10 +1659,10 @@ impl HawkResult {
             .collect_vec();
 
         tracing::info!(
-            "Reauths: {:?}, Matches: {:?}, Matches w/ skip persistence: {:?}",
+            "Reauths: {:?}, Unique insert: {:?}, Unique no-match (incl. skip): {:?}",
             successful_reauths,
-            matches,
-            matches_with_skip_persistence
+            unique_insert,
+            unique_no_match
         );
 
         let batch = self.batch;
@@ -1650,8 +1673,9 @@ impl HawkResult {
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
-            matches_with_skip_persistence,
-            matches,
+            // Field names are negated semantics — see job.rs.
+            matches: unique_insert.iter().map(|b| !b).collect_vec(),
+            matches_with_skip_persistence: unique_no_match.iter().map(|b| !b).collect_vec(),
             skip_persistence: batch.skip_persistence,
             match_ids,
 
@@ -1659,6 +1683,9 @@ impl HawkResult {
             partial_match_counters_left,
             partial_match_ids_right,
             partial_match_counters_right,
+            // HNSW does not populate per-rotation indices: matching is min-over-rotations
+            // (the candidate distance is the minimum across rotated queries), so a partial match
+            // is associated with a vector id rather than any specific rotation index.
             partial_match_rotation_indices_left: vec![vec![]; batch_size],
             partial_match_rotation_indices_right: vec![vec![]; batch_size],
 
