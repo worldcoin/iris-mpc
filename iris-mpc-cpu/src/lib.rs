@@ -12,6 +12,7 @@ pub mod hawkers;
 pub mod hnsw;
 pub mod protocol;
 pub mod py_bindings;
+pub mod strawman_worker;
 pub mod utils;
 
 pub use ampc_actor_utils::network;

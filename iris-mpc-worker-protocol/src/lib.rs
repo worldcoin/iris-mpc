@@ -128,10 +128,17 @@ pub enum WorkerRequest {
 
 /// Response from a worker to the leader.
 ///
-/// Variants 1:1 with `WorkerRequest`. Per-method failures are conveyed
-/// as `Err(message)` inside the variant; transport-level failures
-/// (worker crash, lost in transit) are surfaced by the workpool layer
-/// as `WorkpoolError::JobsLost`, not by this enum.
+/// First seven variants are 1:1 with `WorkerRequest`. Per-method failures
+/// are conveyed as `Err(message)` inside the variant.
+///
+/// `ProtocolError` is the variant-agnostic escape hatch: returned when the
+/// worker can't even decode the request (version mismatch, truncated bytes)
+/// and therefore doesn't know which response shape the leader expected. The
+/// leader treats it as a hard failure regardless of the original method.
+///
+/// Transport-level failures (worker crash, message lost in transit) are
+/// surfaced by the workpool layer as `WorkpoolError::JobsLost`, not by
+/// this enum.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerResponse {
     CacheQueries(Result<(), String>),
@@ -141,6 +148,7 @@ pub enum WorkerResponse {
     ComputePairwiseDistances(Result<Vec<u16>, String>),
     EvictQueries(Result<(), String>),
     DeleteIrises(Result<(), String>),
+    ProtocolError(String),
 }
 
 #[derive(Debug, Error)]
@@ -291,6 +299,13 @@ mod tests {
         let bytes = encode_response(&err).unwrap();
         match decode_response(&bytes).unwrap() {
             WorkerResponse::ComputeDotProducts(Err(msg)) => assert_eq!(msg, "missing query"),
+            other => panic!("wrong variant: {:?}", other),
+        }
+
+        let proto = WorkerResponse::ProtocolError("bad bytes".into());
+        let bytes = encode_response(&proto).unwrap();
+        match decode_response(&bytes).unwrap() {
+            WorkerResponse::ProtocolError(msg) => assert_eq!(msg, "bad bytes"),
             other => panic!("wrong variant: {:?}", other),
         }
     }

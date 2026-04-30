@@ -176,6 +176,10 @@ path = "bin/iris-mpc-cpu/graph_utils.rs"
 name = "db-sanity-check"
 path = "bin/iris-mpc-cpu/db_sanity_check.rs"
 
+[[bin]]
+name = "strawman-worker"
+path = "bin/iris-mpc-cpu/strawman_worker.rs"
+
 # ---------------------
 # binaries for iris-mpc-gpu
 # ---------------------

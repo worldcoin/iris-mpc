@@ -3041,6 +3041,7 @@ dependencies = [
  "futures",
  "iris-mpc-common",
  "iris-mpc-store",
+ "iris-mpc-worker-protocol",
  "itertools 0.13.0",
  "metrics",
  "num-traits",

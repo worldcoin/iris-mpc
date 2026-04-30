@@ -28,6 +28,7 @@ eyre.workspace = true
 futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
+iris-mpc-worker-protocol = { path = "../iris-mpc-worker-protocol" }
 itertools.workspace = true
 num-traits.workspace = true
 rand.workspace = true
