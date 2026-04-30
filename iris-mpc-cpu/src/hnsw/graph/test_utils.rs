@@ -5,12 +5,13 @@ use std::sync::Arc;
 use super::{graph_store::GraphPg, layered_graph::EntryPoint};
 use crate::{
     execution::hawk_main::StoreId,
+    graph_checkpoint::GraphCheckpointState,
     hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
     hnsw::GraphMem,
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use crate::{
-    execution::hawk_main::{BothEyes, LEFT},
+    execution::hawk_main::{BothEyes, LEFT, RIGHT},
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
@@ -21,22 +22,53 @@ use crate::{
                 run_diff,
             },
             neighborhood::Neighborhood,
+            GraphMutation,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
     },
 };
 use aes_prng::AesRng;
+use aws_sdk_s3::Client as S3Client;
 use clap::ValueEnum;
-use eyre::Result;
+use eyre::{eyre, Result};
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+
+/// Downloads a checkpoint from S3 and deserializes it to BothEyes<GraphMem<PlaintextVectorRef>>
+async fn download_genesis_checkpoint_plaintext(
+    s3_client: &S3Client,
+    bucket: &str,
+    state: &GraphCheckpointState,
+) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+    let response = s3_client
+        .get_object()
+        .bucket(bucket)
+        .key(&state.s3_key)
+        .send()
+        .await
+        .map_err(|e| eyre!("Failed to download checkpoint from S3: {e}"))?;
+
+    let body = response
+        .body
+        .collect()
+        .await
+        .map_err(|e| eyre!("Failed to read S3 response body: {e}"))?;
+
+    let checkpoint_data = body.into_bytes();
+    let deserialized: BothEyes<GraphMem<PlaintextVectorRef>> =
+        bincode::deserialize(&checkpoint_data)
+            .map_err(|e| eyre!("Failed to deserialize checkpoint: {e}"))?;
+
+    Ok(deserialized)
+}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum DiffMethod {
@@ -55,16 +87,31 @@ pub struct DbContext {
     /// Postgres store to persist data against
     pub store: Store,
     graph_pg: GraphPg<PlaintextStore>,
+    s3_client: S3Client,
+    bucket: String,
+    party_id: usize,
 }
 
 impl DbContext {
-    pub async fn new(url: &str, schema: &str) -> Self {
+    pub async fn new(
+        url: &str,
+        schema: &str,
+        s3_client: S3Client,
+        bucket: String,
+        party_id: usize,
+    ) -> Self {
         let client = PostgresClient::new(url, schema, AccessMode::ReadWrite)
             .await
             .unwrap();
         let store = Store::new(&client).await.unwrap();
         let graph_pg = GraphPg::new(&client).await.unwrap();
-        Self { store, graph_pg }
+        Self {
+            store,
+            graph_pg,
+            s3_client,
+            bucket,
+            party_id,
+        }
     }
 
     pub async fn persist_graph_db(
@@ -137,24 +184,43 @@ impl DbContext {
         Ok((start_serial_id, end_serial_id))
     }
 
-    /// loads a graph from database to memory
-    pub async fn load_graph_to_mem(
-        &self,
-        side: StoreId,
-    ) -> Result<GraphMem<PlaintextVectorRef>, eyre::Report> {
-        let mut graph_tx = self.graph_pg.tx().await?;
-        let mut graph_ops = graph_tx.with_graph(side);
-
-        //graph_ops.load_to_mem(self.graph_pg.pool(), 2).await
-        todo!("update to new design")
-    }
-
-    /// helper function to get a `BothEyes<GraphMem>`
+    /// Reconstruct the current graph state by:
+    ///   1. Downloading the latest checkpoint from S3
+    ///   2. Applying all hawk_graph_mutations written after that checkpoint
     pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
-        Ok([
-            self.load_graph_to_mem(StoreId::Left).await?,
-            self.load_graph_to_mem(StoreId::Right).await?,
-        ])
+        let checkpoint_row = self.graph_pg.get_latest_genesis_graph_checkpoint().await?;
+
+        let mut graph: BothEyes<GraphMem<PlaintextVectorRef>> = match checkpoint_row {
+            None => [GraphMem::new(), GraphMem::new()],
+            Some(ref row) => {
+                let state = GraphCheckpointState {
+                    s3_key: row.s3_key.clone(),
+                    last_indexed_iris_id: row.last_indexed_iris_id as u64,
+                    last_indexed_modification_id: row.last_indexed_modification_id,
+                    graph_mutation_id: row.graph_mutation_id,
+                    blake3_hash: row.blake3_hash.clone(),
+                    graph_version: row.graph_version,
+                    is_archival: row.is_archival,
+                };
+                download_genesis_checkpoint_plaintext(&self.s3_client, &self.bucket, &state).await?
+            }
+        };
+
+        // Replay mutations written after the checkpoint
+        let min_mutation_id = checkpoint_row.and_then(|r| r.graph_mutation_id);
+        let mutation_rows = self
+            .graph_pg
+            .get_hawk_graph_mutations_after(min_mutation_id)
+            .await?;
+
+        for row in mutation_rows {
+            let both_eyes: BothEyes<Vec<GraphMutation<VectorId>>> =
+                bincode::deserialize(&row.serialized_mutations)?;
+            graph[LEFT].insert_apply(both_eyes[LEFT].clone());
+            graph[RIGHT].insert_apply(both_eyes[RIGHT].clone());
+        }
+
+        Ok(graph)
     }
 
     /// loads a graph from database to memory and then writes it to a file

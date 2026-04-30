@@ -7,6 +7,8 @@ use iris_mpc_cpu::{
     hnsw::graph::test_utils::{DbContext, DiffMethod},
 };
 use std::path::PathBuf;
+use aws_sdk_s3::config::Region as S3Region;
+use aws_sdk_s3::Client as S3Client;
 
 #[derive(Parser)]
 #[command(name = "graph_mem_cli")]
@@ -24,6 +26,15 @@ struct Cli {
     /// Display the graph in the terminal
     #[arg(long)]
     dbg: bool,
+    /// S3 bucket for graph checkpoints
+    #[arg(long)]
+    s3_bucket: String,
+    /// Party ID (0, 1, or 2) — used as part of S3 key namespacing
+    #[arg(long)]
+    party_id: usize,
+    /// AWS region (defaults to env/instance metadata)
+    #[arg(long)]
+    aws_region: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -53,13 +64,21 @@ async fn main() -> Result<()> {
         schema,
         file,
         dbg,
+        s3_bucket,
+        party_id,
+        aws_region,
         command,
     } = Cli::parse();
-    let db_context = DbContext::new(&db_url, &schema).await;
+
+    let region_provider = S3Region::new(aws_region.unwrap_or_else(|| "eu-north-1".to_string()));
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let s3_client = S3Client::new(&shared_config);
+
+    let db_context = DbContext::new(&db_url, &schema, s3_client, s3_bucket, party_id).await;
 
     match command {
         Command::BackupGraph => {
-            todo!()
+            db_context.write_graph_to_file(&file, dbg).await?;
         }
         Command::LoadCheckpoint => {
             db_context.load_graph_from_file(&file, dbg).await?;

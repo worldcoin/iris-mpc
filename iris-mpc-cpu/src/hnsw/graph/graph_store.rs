@@ -388,6 +388,26 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(rows.into_iter().collect())
     }
 
+    pub async fn get_hawk_graph_mutations_after(
+        &self,
+        min_id: Option<i64>,
+    ) -> Result<Vec<GraphMutationRow>> {
+        let rows = sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            SELECT id, modification_id, serialized_mutations, mutation_version
+            FROM hawk_graph_mutations
+            WHERE $1::bigint IS NULL OR id > $1
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(min_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to fetch mutations after {min_id:?}: {e}"))?;
+
+        Ok(rows.into_iter().collect())
+    }
+
     pub async fn delete_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
