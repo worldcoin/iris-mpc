@@ -783,9 +783,7 @@ impl HawkActor {
 
                         // If updating an existing node, remove it first
                         if let Some(replace_id) = &plan.plan.replace_id {
-                            mutations.push(GraphMutation::RemoveNode {
-                                id: *replace_id,
-                            });
+                            mutations.push(GraphMutation::RemoveNode { id: *replace_id });
                         }
 
                         let inserted_vector = if let Some(id) = id {
