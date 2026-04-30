@@ -44,7 +44,10 @@ impl SessionGroups {
 
 fn split_in_four<T>(mut a: Vec<T>) -> [Vec<T>; 4] {
     let n = a.len();
-    assert!(n % 4 == 0, "Expected length to be divisible by 4, got {n}");
+    assert!(
+        n.is_multiple_of(4),
+        "Expected length to be divisible by 4, got {n}"
+    );
     let quarter = n / 4;
 
     let d = a.split_off(quarter * 3);

@@ -1,9 +1,11 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
 };
-use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
+use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -45,6 +47,23 @@ struct Args {
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
 /// creates a db snapshot within AWS RDS cluster.
 fn main() -> Result<()> {
+    // Override ptmalloc2's mmap threshold if set. This pins the dynamic
+    // threshold, preventing it from ratcheting up over time.
+    // Default glibc behavior: 128 KB initial, ratchets up to 32 MB.
+    #[cfg(target_os = "linux")]
+    if let Ok(val) = std::env::var("MALLOC_MMAP_THRESHOLD") {
+        if let Ok(bytes) = val.parse::<i32>() {
+            extern "C" {
+                fn mallopt(param: i32, value: i32) -> i32;
+            }
+            const M_MMAP_THRESHOLD: i32 = -3;
+            unsafe {
+                mallopt(M_MMAP_THRESHOLD, bytes);
+            }
+            println!("Set M_MMAP_THRESHOLD to {bytes}");
+        }
+    }
+
     // Set config.
     println!("Initialising config");
     dotenvy::dotenv().ok();
@@ -123,8 +142,7 @@ fn parse_args() -> Result<ExecutionArgs> {
     let batch_size_config = BatchSizeConfig::parse(batch_size_arg)?;
 
     // Arg: perform snapshot.
-    let perform_snapshot = if args.perform_snapshot.is_some() {
-        let perform_snapshot_arg = args.perform_snapshot.as_ref().unwrap();
+    let perform_snapshot = if let Some(perform_snapshot_arg) = args.perform_snapshot.as_ref() {
         perform_snapshot_arg.parse().map_err(|_| {
             eprintln!(
                 "Error: --perform-snapshot argument must be a valid boolean. Value: {}",

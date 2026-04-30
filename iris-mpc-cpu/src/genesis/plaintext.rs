@@ -31,7 +31,8 @@ use crate::{
         insert::{self, InsertPlanV},
         BothEyes, STORE_IDS,
     },
-    genesis::{BatchSize, BatchSizeConfig, PruningMode},
+    genesis::{BatchSize, BatchSizeConfig},
+    graph_checkpoint::PruningMode,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
