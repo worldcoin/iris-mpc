@@ -73,7 +73,9 @@ async fn strawman_cache_and_dot_product_roundtrip() {
         leader_id: leader_id.0.clone(),
         leader_address: leader_addr.clone(),
         party_id: PARTY_ID,
-        distance_mode: DistanceMode::Simple,
+        // Match HAWK_DISTANCE_MODE — the production HawkActor uses
+        // MinRotation, so the wire path needs to handle it.
+        distance_mode: DistanceMode::MinRotation,
         numa: false,
         shard_index: 0,
     };
@@ -163,10 +165,11 @@ async fn strawman_cache_and_dot_product_roundtrip() {
     match response {
         WorkerResponse::ComputeDotProducts(Ok(batches)) => {
             assert_eq!(batches.len(), 1);
-            // Simple mode packs (code_dist, mask_dist) per target — see
-            // `protocol::ops::pairwise_distance` — so 2 targets → 4 ring
-            // elements.
-            assert_eq!(batches[0].len(), 4);
+            // MinRotation mode packs `2 * HAWK_MIN_DIST_ROTATIONS` elements
+            // per target — code & mask shares for each rotation. With 2
+            // targets that's `2 * 11 * 2 = 44`. See
+            // `protocol::ops::rotation_aware_pairwise_distance_rowmajor`.
+            assert_eq!(batches[0].len(), 44);
         }
         other => panic!("expected ComputeDotProducts(Ok), got {other:?}"),
     }
