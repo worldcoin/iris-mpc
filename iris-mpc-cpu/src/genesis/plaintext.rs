@@ -263,17 +263,15 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                         query,
                         links: links_unstructured,
                         update_ep,
+                        replace_id: None,
                     };
 
-                    // No original IDs for fresh insertions (not updates)
-                    let original_ids = vec![None];
                     insert::insert(
                         store,
                         graph,
                         &searcher,
                         vec![Some(insert_plan)],
                         &vec![Some(vector_id)],
-                        &original_ids,
                     )
                     .await?;
                 }
@@ -370,6 +368,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     query,
                     links: links_unstructured,
                     update_ep,
+                    replace_id: None,
                 };
 
                 results.push(Some(insert_plan));
@@ -377,14 +376,12 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         }
 
         // Insert batch of insert plans using HawkActor insertion logic
-        // No original IDs for fresh insertions (not updates)
-        let original_ids: Vec<_> = vec![None; ids.len()];
         for (store, graph, plans) in izip!(
             [&mut left_store, &mut right_store],
             &mut state.dst_db.graphs,
             [left_insert_plans, right_insert_plans]
         ) {
-            insert::insert(store, graph, &searcher, plans, &ids, &original_ids).await?;
+            insert::insert(store, graph, &searcher, plans, &ids).await?;
         }
 
         // 3. Copy all irises to destination db

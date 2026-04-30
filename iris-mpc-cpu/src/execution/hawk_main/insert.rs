@@ -30,6 +30,7 @@ pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
     pub links: Vec<Vec<V::VectorRef>>,
     pub update_ep: UpdateEntryPoint,
+    pub replace_id: Option<V::VectorRef>,
 }
 
 // Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
@@ -40,6 +41,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
             query: self.query.clone(),
             links: self.links.clone(),
             update_ep: self.update_ep.clone(),
+            replace_id: self.replace_id.clone(),
         }
     }
 }
@@ -57,7 +59,6 @@ pub async fn insert<V: VectorStoreMut>(
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
     ids: &VecRequests<Option<V::VectorRef>>,
-    original_ids: &VecRequests<Option<V::VectorRef>>,
 ) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
     tracing::debug!("Inserting {} InsertPlans into store", plans.len());
 
@@ -71,12 +72,13 @@ pub async fn insert<V: VectorStoreMut>(
     // Track indices where we have actual plans to insert
     let mut update_idxs = vec![];
     let mut insert_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
-    for (idx, (plan, update_id, original_id)) in izip!(insert_plans, ids, original_ids).enumerate()
+    for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate()
     {
         if let Some(InsertPlanV {
             query,
             mut links,
             update_ep,
+            replace_id,
         }) = plan
         {
             update_idxs.push(idx);
@@ -99,9 +101,9 @@ pub async fn insert<V: VectorStoreMut>(
             };
 
             // If updating an existing node, remove it first to clean up all old backlinks
-            if let Some(original_id_ref) = original_id {
+            if let Some(rid) = replace_id {
                 insert_mutations.push(GraphMutation::RemoveNode {
-                    id: original_id_ref.clone(),
+                    id: rid.clone(),
                 });
             }
 
@@ -266,6 +268,7 @@ mod tests {
             query: Arc::new(IrisCode::default()),
             links: vec![Vec::new(); ins_layer],
             update_ep: ep_update,
+            replace_id: None,
         }
     }
 

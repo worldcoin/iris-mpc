@@ -762,9 +762,6 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        // Keep track of original IDs (pre-version-bump) for RemoveNode mutations
-        let original_ids: VecRequests<Option<VectorId>> = update_ids.clone();
-
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
@@ -780,15 +777,14 @@ impl HawkActor {
             return Ok(plans
                 .into_iter()
                 .zip(insertion_ids.iter())
-                .zip(original_ids.iter())
-                .map(|((plan, id), original_id)| {
-                    plan.map(|_| {
+                .map(|(plan, id)| {
+                    plan.map(|plan| {
                         let mut mutations = Vec::new();
 
                         // If updating an existing node, remove it first
-                        if let Some(original_id_val) = original_id {
+                        if let Some(replace_id) = &plan.plan.replace_id {
                             mutations.push(GraphMutation::RemoveNode {
-                                id: *original_id_val,
+                                id: *replace_id,
                             });
                         }
 
@@ -824,7 +820,6 @@ impl HawkActor {
             &self.searcher,
             plans,
             &insertion_ids,
-            &original_ids,
         )
         .await
     }
@@ -2123,7 +2118,7 @@ impl HawkHandle {
             );
 
             // Collect the HNSW insertion plans for all mutating decisions
-            let insert_plans = requests_order
+            let mut insert_plans = requests_order
                 .iter()
                 .map(|req_index| match req_index {
                     RequestIndex::UniqueReauthResetCheck(i) => match decisions[*i] {
@@ -2146,6 +2141,27 @@ impl HawkHandle {
                     RequestIndex::Deletion(_) => None,
                 })
                 .collect_vec();
+
+            // Set replace_id on plans for reauth updates and identity updates
+            for (idx, req_index) in requests_order.iter().enumerate() {
+                if let Some(plan) = &mut insert_plans[idx] {
+                    match req_index {
+                        RequestIndex::UniqueReauthResetCheck(i) => {
+                            if matches!(decisions[*i], ReauthUpdate(_)) {
+                                if let Some(update_id) = update_ids[idx] {
+                                    plan.plan.replace_id = Some(update_id);
+                                }
+                            }
+                        }
+                        RequestIndex::IdentityUpdate(_) => {
+                            if let Some(update_id) = update_ids[idx] {
+                                plan.plan.replace_id = Some(update_id);
+                            }
+                        }
+                        RequestIndex::Deletion(_) => {}
+                    }
+                }
+            }
 
             // Insert in memory, and return the plans to update the persistent database.
             let mut plans = hawk_actor
