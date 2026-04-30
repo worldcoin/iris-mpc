@@ -10,14 +10,14 @@ pub enum GraphMutation<Vector: Ord> {
     // Add bidirectional links.
     InsertNode {
         // List of layer, neighbors.
-        layers: Vec<(u32, Vec<Vector>)>,
+        layers: Vec<(usize, Vec<Vector>)>,
         update_ep: UpdateEntryPoint,
         id: Vector,
     },
     // Compact a neighborhood.
     Compact {
         to_remove: Vec<Vector>,
-        layer: u32,
+        layer: usize,
         id: Vector,
     },
 }
