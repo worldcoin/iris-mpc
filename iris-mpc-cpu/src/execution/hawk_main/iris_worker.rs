@@ -15,7 +15,7 @@ use ampc_actor_utils::fast_metrics::FastHistogram;
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
-use futures::future::try_join_all;
+use futures::future::{try_join_all, BoxFuture};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     vector_id::VectorId,
@@ -24,7 +24,6 @@ use itertools::{izip, Itertools};
 use std::{
     collections::HashMap,
     fmt::Debug,
-    future::Future,
     iter,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -570,7 +569,7 @@ pub const CENTER_ROTATION: usize = 15;
 /// - **fetch_irises**: pull iris data from the worker's store
 /// - **insert_irises**: persist cached iris into the worker's store
 /// - **evict_queries**: free cached query data
-pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
+pub trait IrisWorkerPool: Debug + Send + Sync {
     /// Cache query irises for subsequent computation.
     ///
     /// The worker performs the full preprocessing pipeline on each iris:
@@ -590,27 +589,23 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     // would let LocalIrisWorkerPool skip generating + NUMA-reallocating unused
     // variants. This is the main remaining performance gap vs the old design
     // (which only preprocessed the selected rotations).
-    fn cache_queries(
-        &self,
-        queries: Vec<(QueryId, ArcIris)>,
-    ) -> impl Future<Output = Result<()>> + Send;
+    fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>>;
 
     /// Compute dot products for batches of (query_spec, targets).
     ///
     /// Each `QuerySpec` selects a specific preprocessed rotation from the
     /// cache. Returns one `Vec<RingElement<u16>>` per batch.
-    fn compute_dot_products(
-        &self,
+    fn compute_dot_products<'a>(
+        &'a self,
         batches: Vec<(QuerySpec, Vec<VectorId>)>,
-    ) -> impl Future<Output = Result<Vec<Vec<RingElement<u16>>>>> + Send;
+    ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>>;
 
     /// Fetch iris data from the worker's store by vector ID.
     ///
     /// Returns one `ArcIris` per input ID in the same order.  Missing
     /// entries produce the store's default empty iris (which yields
     /// max-distance in dot products).
-    fn fetch_irises(&self, ids: Vec<VectorId>)
-        -> impl Future<Output = Result<Vec<ArcIris>>> + Send;
+    fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>>;
 
     /// Insert a cached iris into the worker's persistent store.
     ///
@@ -618,10 +613,8 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     /// by `QueryId` and inserts it at the given `VectorId`.
     ///
     /// Returns the store checksum after all inserts are applied.
-    fn insert_irises(
-        &self,
-        inserts: Vec<(QueryId, VectorId)>,
-    ) -> impl Future<Output = Result<u64>> + Send;
+    fn insert_irises<'a>(&'a self, inserts: Vec<(QueryId, VectorId)>)
+        -> BoxFuture<'a, Result<u64>>;
 
     /// Compute pairwise distances between pairs of cached queries.
     ///
@@ -632,32 +625,68 @@ pub trait IrisWorkerPool: Clone + Debug + Send + Sync {
     /// the second `QueryId` selects the **raw (original)** iris (only the
     /// query identity matters — rotation/mirrored are not applicable for the
     /// raw operand). This matches `trick_dot` (one preprocessed, one raw).
-    fn compute_pairwise_distances(
-        &self,
+    fn compute_pairwise_distances<'a>(
+        &'a self,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
-    ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send;
+    ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>>;
 
     /// Evict cached queries, freeing memory.
-    fn evict_queries(&self, query_ids: Vec<QueryId>) -> impl Future<Output = Result<()>> + Send;
+    fn evict_queries<'a>(&'a self, query_ids: Vec<QueryId>) -> BoxFuture<'a, Result<()>>;
 
     /// Delete irises by replacing them with party-specific dummy sentinels
     /// that produce max-distance in dot products. The party_id is a config
     /// field on the implementer.
-    fn delete_irises(&self, ids: Vec<VectorId>) -> impl Future<Output = Result<()>> + Send;
+    fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>>;
+}
+
+/// Blanket impl so any `Arc<T: IrisWorkerPool>` (including
+/// `Arc<dyn IrisWorkerPool>`) can be passed wherever an `impl IrisWorkerPool`
+/// or `&dyn IrisWorkerPool` is expected.
+impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
+    fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>> {
+        (**self).cache_queries(queries)
+    }
+    fn compute_dot_products<'a>(
+        &'a self,
+        batches: Vec<(QuerySpec, Vec<VectorId>)>,
+    ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>> {
+        (**self).compute_dot_products(batches)
+    }
+    fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
+        (**self).fetch_irises(ids)
+    }
+    fn insert_irises<'a>(
+        &'a self,
+        inserts: Vec<(QueryId, VectorId)>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        (**self).insert_irises(inserts)
+    }
+    fn compute_pairwise_distances<'a>(
+        &'a self,
+        pairs: Vec<Option<(QuerySpec, QueryId)>>,
+    ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>> {
+        (**self).compute_pairwise_distances(pairs)
+    }
+    fn evict_queries<'a>(&'a self, query_ids: Vec<QueryId>) -> BoxFuture<'a, Result<()>> {
+        (**self).evict_queries(query_ids)
+    }
+    fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>> {
+        (**self).delete_irises(ids)
+    }
 }
 
 /// Cache a single iris and return a query handle (center rotation, non-mirrored).
 /// Helper used by tests, benches, and example bins — production code paths
 /// manage the cache lifecycle explicitly via `cache_queries` / `evict_queries`.
-pub async fn cache_iris<W: IrisWorkerPool>(pool: &W, iris: ArcIris) -> Result<QuerySpec> {
+pub async fn cache_iris(pool: &dyn IrisWorkerPool, iris: ArcIris) -> Result<QuerySpec> {
     let qid = QueryId::new();
     pool.cache_queries(vec![(qid, iris)]).await?;
     Ok(QuerySpec::new(qid))
 }
 
 /// Cache multiple irises and return query handles in input order.
-pub async fn cache_irises<W: IrisWorkerPool>(
-    pool: &W,
+pub async fn cache_irises(
+    pool: &dyn IrisWorkerPool,
     irises: Vec<ArcIris>,
 ) -> Result<Vec<QuerySpec>> {
     let pairs: Vec<_> = irises
@@ -750,13 +779,10 @@ fn zip_rotations(
 }
 
 impl IrisWorkerPool for LocalIrisWorkerPool {
-    fn cache_queries(
-        &self,
-        queries: Vec<(QueryId, ArcIris)>,
-    ) -> impl Future<Output = Result<()>> + Send {
+    fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>> {
         let query_cache = self.query_cache.clone();
         let inner = self.inner.clone();
-        async move {
+        Box::pin(async move {
             let start = Instant::now();
             // Filter out already-cached queries.
             let new_queries: Vec<_> = {
@@ -838,17 +864,17 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             }
             metrics::histogram!("cache_queries_duration").record(start.elapsed().as_secs_f64());
             Ok(())
-        }
+        })
     }
 
-    fn compute_dot_products(
-        &self,
+    fn compute_dot_products<'a>(
+        &'a self,
         batches: Vec<(QuerySpec, Vec<VectorId>)>,
-    ) -> impl Future<Output = Result<Vec<Vec<RingElement<u16>>>>> + Send {
+    ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>> {
         let query_cache = self.query_cache.clone();
         let mut inner = self.inner.clone();
         let mode = self.mode;
-        async move {
+        Box::pin(async move {
             // Look up the correct preprocessed rotation for each batch
             let iris_batches: Vec<(ArcIris, Vec<VectorId>)> = {
                 let cache = query_cache.read().unwrap();
@@ -883,30 +909,27 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                         .await
                 }
             }
-        }
+        })
     }
 
-    fn fetch_irises(
-        &self,
-        ids: Vec<VectorId>,
-    ) -> impl Future<Output = Result<Vec<ArcIris>>> + Send {
+    fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
         let iris_store = self.iris_store.clone();
-        async move {
+        Box::pin(async move {
             let store = iris_store.data.read().await;
             Ok(ids
                 .iter()
                 .map(|id| store.get_vector_or_empty(id).clone())
                 .collect())
-        }
+        })
     }
 
-    fn insert_irises(
-        &self,
+    fn insert_irises<'a>(
+        &'a self,
         inserts: Vec<(QueryId, VectorId)>,
-    ) -> impl Future<Output = Result<u64>> + Send {
+    ) -> BoxFuture<'a, Result<u64>> {
         let query_cache = self.query_cache.clone();
         let iris_store = self.iris_store.clone();
-        async move {
+        Box::pin(async move {
             // Resolve query IDs to irises (release cache lock before await).
             let resolved: Vec<_> = {
                 let cache = query_cache.read().unwrap();
@@ -930,17 +953,17 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 store.insert(vector_id, iris);
             }
             Ok(store.set_hash.checksum())
-        }
+        })
     }
 
-    fn compute_pairwise_distances(
-        &self,
+    fn compute_pairwise_distances<'a>(
+        &'a self,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
-    ) -> impl Future<Output = Result<Vec<RingElement<u16>>>> + Send {
+    ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>> {
         let query_cache = self.query_cache.clone();
         let inner = self.inner.clone();
         let mode = self.mode;
-        async move {
+        Box::pin(async move {
             // Resolve pairs to ArcIris pairs.
             // First = preprocessed rotation, second = raw (original) iris.
             let iris_pairs: Vec<Option<(ArcIris, ArcIris)>> = {
@@ -979,31 +1002,31 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     inner.rotation_aware_pairwise_distances(iris_pairs).await
                 }
             }
-        }
+        })
     }
 
-    fn evict_queries(&self, query_ids: Vec<QueryId>) -> impl Future<Output = Result<()>> + Send {
+    fn evict_queries<'a>(&'a self, query_ids: Vec<QueryId>) -> BoxFuture<'a, Result<()>> {
         let query_cache = self.query_cache.clone();
-        async move {
+        Box::pin(async move {
             let mut cache = query_cache.write().unwrap();
             for qid in query_ids {
                 cache.remove(&qid);
             }
             Ok(())
-        }
+        })
     }
 
-    fn delete_irises(&self, ids: Vec<VectorId>) -> impl Future<Output = Result<()>> + Send {
+    fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>> {
         let iris_store = self.iris_store.clone();
         let party_id = self.party_id;
-        async move {
+        Box::pin(async move {
             let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
             let mut store = iris_store.data.write().await;
             for id in ids {
                 store.update(id, dummy.clone());
             }
             Ok(())
-        }
+        })
     }
 }
 

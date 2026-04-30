@@ -1,11 +1,9 @@
 use super::hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING};
 use crate::{
     execution::hawk_main::{
-        insert::insert,
-        iris_worker::{IrisWorkerPool, QueryId},
-        scheduler::parallelize,
-        search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkSession, LEFT, RIGHT, STORE_IDS,
+        insert::insert, iris_worker::QueryId, scheduler::parallelize,
+        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, LEFT, RIGHT,
+        STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };

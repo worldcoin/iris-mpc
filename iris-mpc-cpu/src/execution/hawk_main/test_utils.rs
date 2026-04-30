@@ -21,9 +21,8 @@ use crate::{
 };
 
 use super::{
-    iris_worker::{IrisWorkerPool, QueryId},
-    scheduler::parallelize,
-    HawkActor, HawkArgs, HawkRequest, VectorId, LEFT, RIGHT,
+    iris_worker::QueryId, scheduler::parallelize, HawkActor, HawkArgs, HawkRequest, VectorId, LEFT,
+    RIGHT,
 };
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
