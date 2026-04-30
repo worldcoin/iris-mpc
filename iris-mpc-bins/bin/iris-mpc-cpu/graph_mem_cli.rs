@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+use aws_sdk_s3::config::Region as S3Region;
+use aws_sdk_s3::Client as S3Client;
 use clap::{Parser, Subcommand, ValueEnum};
 use eyre::Result;
 use iris_mpc_cpu::{
@@ -7,8 +9,6 @@ use iris_mpc_cpu::{
     hnsw::graph::test_utils::{DbContext, DiffMethod},
 };
 use std::path::PathBuf;
-use aws_sdk_s3::config::Region as S3Region;
-use aws_sdk_s3::Client as S3Client;
 
 #[derive(Parser)]
 #[command(name = "graph_mem_cli")]

@@ -1,4 +1,4 @@
-use crate::{execution::hawk_main::StoreId, hnsw::VectorStore};
+use crate::hnsw::VectorStore;
 use eyre::{eyre, Result};
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use serde::{de::DeserializeOwned, Serialize};
@@ -443,10 +443,6 @@ pub struct GraphTx<'a, V> {
 }
 
 impl<'b, V: VectorStore> GraphTx<'b, V> {
-    pub fn with_graph<'a>(&'a mut self, graph_id: StoreId) -> GraphOps<'a, 'b, V> {
-        GraphOps { tx: self, graph_id }
-    }
-
     /// Insert a single graph mutation row into hawk_graph_mutations.
     /// Returns the generated mutation id.
     pub async fn insert_hawk_graph_mutations(
@@ -490,22 +486,6 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
         .await?;
 
         Ok(())
-    }
-}
-
-pub struct GraphOps<'a, 'b, V> {
-    tx: &'a mut GraphTx<'b, V>,
-    graph_id: StoreId,
-}
-
-// todo sw: perhaps delete these too
-impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
-    fn graph_id(&self) -> i16 {
-        self.graph_id as i16
-    }
-
-    fn tx(&mut self) -> &mut PgConnection {
-        self.tx.tx.deref_mut()
     }
 }
 

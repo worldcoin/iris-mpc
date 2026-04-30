@@ -2,14 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{graph_store::GraphPg, layered_graph::EntryPoint};
-use crate::{
-    execution::hawk_main::StoreId,
-    graph_checkpoint::GraphCheckpointState,
-    hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
-    hnsw::GraphMem,
-    protocol::shared_iris::GaloisRingSharedIris,
-};
+use super::graph_store::GraphPg;
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
     hawkers::plaintext_store::PlaintextVectorRef,
@@ -27,6 +20,12 @@ use crate::{
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
     },
+};
+use crate::{
+    graph_checkpoint::{upload_graph_checkpoint_plaintext, GraphCheckpointState},
+    hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
+    hnsw::GraphMem,
+    protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
 use aws_sdk_s3::Client as S3Client;
@@ -114,39 +113,42 @@ impl DbContext {
         }
     }
 
-    pub async fn persist_graph_db(
+    // todo: consider the persistent_state table (last indexed modification id) and the modifications table and the
+    // iris table. inserting everything as 0 and NULL can cause problems.
+    /// Upload a BothEyes graph to S3 and record it in genesis_graph_checkpoint.
+    pub async fn store_checkpoint(
         &self,
-        graph: GraphMem<PlaintextVectorRef>,
-        side: StoreId,
+        graph: &BothEyes<GraphMem<PlaintextVectorRef>>,
+        last_indexed_iris_id: i64,
+        last_indexed_modification_id: i64,
+        graph_mutation_id: Option<i64>,
+        is_archival: bool,
     ) -> Result<()> {
-        let mut graph_tx = self.graph_pg.tx().await?;
+        let state = upload_graph_checkpoint_plaintext(
+            &self.bucket,
+            self.party_id,
+            graph,
+            &self.s3_client,
+            last_indexed_iris_id as u32,
+            last_indexed_modification_id,
+            graph_mutation_id,
+            is_archival,
+        )
+        .await?;
 
-        let GraphMem {
-            entry_points: entry_point,
-            layers,
-        } = graph;
-
-        if let Some(EntryPoint { point, layer }) = entry_point.first().cloned() {
-            let mut graph_ops = graph_tx.with_graph(side);
-            graph_ops.set_entry_point(point, layer).await?;
-        }
-
-        for (lc, layer) in layers.into_iter().enumerate() {
-            for (idx, (pt, links)) in layer.links.into_iter().enumerate() {
-                {
-                    let mut graph_ops = graph_tx.with_graph(side);
-                    // graph_ops.set_links(pt, links, lc).await?;
-                    todo!("update to new design")
-                }
-
-                if (idx % 1000) == 999 {
-                    graph_tx.tx.commit().await?;
-                    graph_tx = self.graph_pg.tx().await?;
-                }
-            }
-        }
-
-        graph_tx.tx.commit().await?;
+        let mut tx = self.graph_pg.tx().await?;
+        GraphPg::<PlaintextStore>::insert_genesis_graph_checkpoint(
+            &mut tx.tx,
+            &state.s3_key,
+            state.last_indexed_iris_id as i64,
+            state.last_indexed_modification_id,
+            state.graph_mutation_id,
+            &state.blake3_hash,
+            is_archival,
+            state.graph_version,
+        )
+        .await?;
+        tx.tx.commit().await?;
 
         Ok(())
     }
@@ -195,7 +197,7 @@ impl DbContext {
             Some(ref row) => {
                 let state = GraphCheckpointState {
                     s3_key: row.s3_key.clone(),
-                    last_indexed_iris_id: row.last_indexed_iris_id as u64,
+                    last_indexed_iris_id: row.last_indexed_iris_id as u32,
                     last_indexed_modification_id: row.last_indexed_modification_id,
                     graph_mutation_id: row.graph_mutation_id,
                     blake3_hash: row.blake3_hash.clone(),
@@ -233,36 +235,14 @@ impl DbContext {
         serialize_graph(path, &graph).await
     }
 
-    /// loads a graph to memory from a file and then persists it to the database
+    /// Loads a graph from a file and uploads it to S3 as a checkpoint.
     pub async fn load_graph_from_file(&self, path: &Path, dbg: bool) -> Result<()> {
-        let loaded_graph = deserialize_graph(path).await?;
+        let graph = deserialize_graph(path).await?;
         if dbg {
             println!("loaded graph:");
-            println!("{:#?}", loaded_graph);
-        }
-        // this order corresponds to the LEFT and RIGHT constants in hawk main.
-        // this code assumes that the stored graph could be very large and that a
-        // clone could increase the program's runtime unnecessarily.
-        let [left, right] = loaded_graph;
-        self.persist_graph_db(left, StoreId::Left).await?;
-        self.persist_graph_db(right, StoreId::Right).await?;
-        Ok(())
-    }
-
-    /// loads a graph to memory from a file and then persists it to the database
-    pub async fn load_side_from_file(&self, path: &Path, side: usize, dbg: bool) -> Result<()> {
-        let graph = deserialize_side(path).await?;
-        if dbg {
-            println!("loaded graph for eye {side}:");
             println!("{:#?}", graph);
         }
-        let store_id = match side {
-            LEFT => StoreId::Left,
-            _ => StoreId::Right,
-        };
-
-        self.persist_graph_db(graph, store_id).await?;
-        Ok(())
+        self.store_checkpoint(&graph, 0, 0, None, false).await
     }
 
     /// loads the graph from database to memory, writes it to a file,
@@ -344,7 +324,7 @@ impl DbContext {
         Ok(())
     }
 
-    /// populates the database with a small graph. This is needed because
+    /// Populates S3 with a small test graph. This is needed because
     /// the test database is initially empty and some data is needed to
     /// test the backup and restore commands.
     /// The graph isn't actually random - the RNG uses the same seed.
@@ -376,37 +356,39 @@ impl DbContext {
             d
         };
 
-        let mut tx = self.graph_pg.tx().await?;
-        let mut graph_ops = tx.with_graph(StoreId::Left);
+        // Build the graph topology as mutations, then apply to an in-memory graph
+        let mut left_graph = GraphMem::<PlaintextVectorRef>::new();
 
-        let ep = graph_ops.get_entry_point().await?;
-        assert!(ep.is_none());
-
-        // set point[0] as the entry point
-        let ep2 = EntryPoint {
-            point: vectors[0],
-            layer: ep.map(|e| e.1).unwrap_or_default() + 1,
+        // Set entry point via InsertNode with SetUnique
+        let ep_mutation = GraphMutation::InsertNode {
+            id: vectors[0],
+            layers: vec![(0, vec![])],
+            update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 1 },
         };
-        graph_ops.set_entry_point(ep2.point, ep2.layer).await?;
+        left_graph.insert_apply(vec![ep_mutation]);
 
-        // create edges between vectors 1-3 and 4-6
-        // imagine vectors 1-3 as layer 1 and vectors 4-6 as layer 2
-        // then layers 1 and 2 are fully connected.
-        for i in 1..4 {
+        // Build links between vectors 1-3 and 4-6
+        for i in 1..4usize {
             let mut links = SortedNeighborhood::new();
-
-            for j in 4..7 {
+            for j in 4..7usize {
                 links
                     .insert_and_trim(&mut vector_store, vectors[j], distances[j], links.len() + 1)
                     .await?;
             }
-            let links = links.edge_ids();
-            //graph_ops.set_links(vectors[i], links.clone(), 0).await?;
-            todo!("update to new design");
+            let neighbors = links.edge_ids();
+            let mutation = GraphMutation::InsertNode {
+                id: vectors[i],
+                layers: vec![(0, neighbors)],
+                update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::False,
+            };
+            left_graph.insert_apply(vec![mutation]);
         }
 
-        tx.tx.commit().await?;
-        Ok(())
+        // Use same graph for both eyes (this is test data)
+        let right_graph = left_graph.clone();
+        let graph = [left_graph, right_graph];
+
+        self.store_checkpoint(&graph, 0, 0, None, false).await
     }
 }
 
@@ -422,11 +404,6 @@ async fn serialize_graph(
 }
 
 async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
-    let data = tokio::fs::read(path).await?;
-    Ok(bincode::deserialize(&data)?)
-}
-
-async fn deserialize_side(path: &Path) -> Result<GraphMem<PlaintextVectorRef>> {
     let data = tokio::fs::read(path).await?;
     Ok(bincode::deserialize(&data)?)
 }
