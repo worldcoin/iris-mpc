@@ -1761,7 +1761,7 @@ impl HawkMutation {
 
                     // Insert into hawk_graph_mutations and get the generated ID
                     let graph_mutation_id = graph_tx
-                        .insert_hawk_graph_mutation(modification.id, &serialized)
+                        .insert_hawk_graph_mutations(modification.id, &serialized)
                         .await?;
 
                     // Link modification to graph_mutation
