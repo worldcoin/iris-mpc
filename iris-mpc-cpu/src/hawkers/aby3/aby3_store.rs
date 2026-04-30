@@ -1,8 +1,6 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::{
-            cache_iris, IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec,
-        },
+        hawk_main::iris_worker::{cache_iris, IrisWorkerPool, QueryId, QuerySpec},
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -74,14 +72,13 @@ pub type VectorIdRegistryRef = SharedIrisesRef<()>;
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
-/// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`) and `W`
-/// (worker pool implementation). The default `W = LocalIrisWorkerPool` is the
-/// single-node implementation; future remote implementations will enable
-/// horizontal scaling.
+/// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`). The worker
+/// pool is type-erased as `Arc<dyn IrisWorkerPool>` so a single binary can
+/// hold either the local single-node pool or a remote sharded pool.
 ///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
-pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
+pub struct Aby3Store<D = FhdOps> {
     /// VectorId registry — tracks presence, versions, and checksums.
     /// Does **not** hold iris data; all iris reads go through `workers`.
     pub registry: VectorIdRegistryRef,
@@ -90,14 +87,14 @@ pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
     pub session: Session,
 
     /// Worker pool for CPU-bound distance computations.
-    pub workers: W,
+    pub workers: Arc<dyn IrisWorkerPool>,
 
     distance_fn: distance_fn::DistanceFn,
 
     _phantom: std::marker::PhantomData<D>,
 }
 
-impl<D: DistanceOps, W: IrisWorkerPool> Aby3Store<D, W>
+impl<D: DistanceOps> Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
@@ -105,7 +102,7 @@ where
     pub fn new(
         registry: VectorIdRegistryRef,
         session: Session,
-        workers: W,
+        workers: Arc<dyn IrisWorkerPool>,
         distance_mode: DistanceMode,
     ) -> Self {
         Self {
@@ -175,7 +172,7 @@ where
             .into_iter()
             .next()
             .ok_or_eyre("fetch_irises did not return expected iris or empty default")?;
-        cache_iris(&self.workers, iris).await
+        cache_iris(self.workers.as_ref(), iris).await
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
@@ -564,7 +561,7 @@ where
     }
 }
 
-impl<D: DistanceOps, W: IrisWorkerPool> VectorStore for Aby3Store<D, W>
+impl<D: DistanceOps> VectorStore for Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
@@ -719,7 +716,7 @@ where
     }
 }
 
-impl<D: DistanceOps, W: IrisWorkerPool> VectorStoreMut for Aby3Store<D, W>
+impl<D: DistanceOps> VectorStoreMut for Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
@@ -804,7 +801,7 @@ mod tests {
             let irises: Vec<ArcIris> = (0..database_size)
                 .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
-            let queries = cache_irises(&store.lock().await.workers, irises).await?;
+            let queries = cache_irises(store.lock().await.workers.as_ref(), irises).await?;
             let mut rng = rng.clone();
             let store = store.clone();
             jobs.spawn(async move {
@@ -1003,7 +1000,7 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for iris in player_irises.iter() {
-                let query = cache_iris(&store_lock.workers, iris.clone()).await?;
+                let query = cache_iris(store_lock.workers.as_ref(), iris.clone()).await?;
                 let vid = store_lock.insert(&query).await;
                 player_inserts.push(vid);
             }
@@ -1376,7 +1373,7 @@ mod tests {
                 .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
             let mut store_lock = store.lock().await;
-            let player_preps = cache_irises(&store_lock.workers, irises).await?;
+            let player_preps = cache_irises(store_lock.workers.as_ref(), irises).await?;
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
             for p in player_preps.iter() {
@@ -1572,7 +1569,7 @@ mod tests {
             let searcher = searcher.clone();
             jobs.spawn(async move {
                 let mut store = store.lock().await;
-                let queries = cache_irises(&store.workers, irises).await?;
+                let queries = cache_irises(store.workers.as_ref(), irises).await?;
                 let mut graph: GraphMem<VectorId> = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher

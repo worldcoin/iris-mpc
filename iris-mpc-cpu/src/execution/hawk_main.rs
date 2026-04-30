@@ -325,8 +325,28 @@ pub struct HawkActor {
     graph_store: BothEyes<GraphRef>,
     /// Shared worker pools with query caches (one per eye). Cloned into each
     /// `HawkSession` so all sessions for the same eye share the same cache.
-    /// Use `.inner()` to access the underlying `IrisPoolHandle`.
-    pub(crate) worker_pools: BothEyes<iris_worker::LocalIrisWorkerPool>,
+    /// Type-erased so a single binary can hold the local pool today and a
+    /// remote sharded pool in the future.
+    pub(crate) worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
+    /// Handles to the underlying iris worker threads, used by the startup
+    /// loader to populate the in-memory iris store directly.
+    ///
+    /// **Invariant:** for each side, `loader_handles[side]` references the
+    /// same worker channels as the `LocalIrisWorkerPool` inside
+    /// `worker_pools[side]`, and both reference the same `iris_store`.
+    /// This is currently established by `HawkActor::new_inner` cloning a
+    /// single `workers_handle` into both fields. If you change construction
+    /// (e.g., to wire a `RemoteIrisWorkerPool` into `worker_pools`), you
+    /// must either (a) keep the local handles in `loader_handles` so the
+    /// startup loader still populates the live in-memory store the trait
+    /// pool reads from, or (b) replace `as_iris_loader` to drive the new
+    /// pool's loading protocol. Silently swapping `worker_pools` without
+    /// touching `loader_handles` will leave the loader writing to an
+    /// orphaned store.
+    ///
+    /// This field is local-deployment-only and will be refactored when the
+    /// remote sharded pool's loading protocol is designed.
+    pub(crate) loader_handles: BothEyes<IrisPoolHandle>,
 
     /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
@@ -529,13 +549,13 @@ impl HawkActor {
         ];
         let workers_handle = [LEFT, RIGHT]
             .map(|side| iris_worker::init_workers(side, iris_store[side].clone(), args.numa));
-        let worker_pools = [LEFT, RIGHT].map(|side| {
-            iris_worker::LocalIrisWorkerPool::new(
+        let worker_pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
+            Arc::new(iris_worker::LocalIrisWorkerPool::new(
                 workers_handle[side].clone(),
                 iris_store[side].clone(),
                 HAWK_DISTANCE_MODE,
                 args.party_index,
-            )
+            )) as Arc<dyn IrisWorkerPool>
         });
 
         Ok(HawkActor {
@@ -551,6 +571,7 @@ impl HawkActor {
             party_id: args.party_index,
             error_ct: CancellationToken::new(),
             worker_pools,
+            loader_handles: workers_handle,
         })
     }
 
@@ -626,7 +647,7 @@ impl HawkActor {
         }
     }
 
-    pub fn worker_pool(&self, store_id: StoreId) -> iris_worker::LocalIrisWorkerPool {
+    pub fn worker_pool(&self, store_id: StoreId) -> Arc<dyn IrisWorkerPool> {
         self.worker_pools[store_id as usize].clone()
     }
 
@@ -1039,8 +1060,8 @@ impl HawkActor {
                 party_id: self.party_id,
                 db_size: &mut self.loader_db_size,
                 iris_pools: [
-                    self.worker_pools[LEFT].inner().clone(),
-                    self.worker_pools[RIGHT].inner().clone(),
+                    self.loader_handles[LEFT].clone(),
+                    self.loader_handles[RIGHT].clone(),
                 ],
             },
             GraphLoader([
@@ -1360,10 +1381,7 @@ impl HawkRequest {
     ///
     /// Each physical iris is cached once (deduplicated by QueryId).
     /// Cache all queries from this request into the given worker pools.
-    pub async fn cache_into(
-        &self,
-        worker_pools: &BothEyes<iris_worker::LocalIrisWorkerPool>,
-    ) -> Result<()> {
+    pub async fn cache_into<W: IrisWorkerPool>(&self, worker_pools: &BothEyes<W>) -> Result<()> {
         let to_cache = self.all_queries_for_cache();
         // Cache all irises in both worker pools (mirror queries cross eyes).
         futures::try_join!(

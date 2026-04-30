@@ -24,8 +24,8 @@ use iris_mpc_common::{
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
-        iris_worker::LocalIrisWorkerPool, BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs,
-        HawkOps, StoreId, LEFT, RIGHT,
+        iris_worker::IrisWorkerPool, BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps,
+        StoreId, LEFT, RIGHT,
     },
     genesis::{
         state_accessor::{
@@ -264,7 +264,7 @@ async fn exec_setup(
     RDSClient,
     Arc<BothEyes<Aby3SharedIrisesRef>>,
     BothEyes<VectorIdRegistryRef>,
-    BothEyes<LocalIrisWorkerPool>,
+    BothEyes<Arc<dyn IrisWorkerPool>>,
     Arc<BothEyes<GraphRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
@@ -726,7 +726,7 @@ async fn exec_indexation(
     ctx: &ExecutionContextInfo,
     s3_client: &S3Client,
     registries: &BothEyes<VectorIdRegistryRef>,
-    worker_pools: &BothEyes<LocalIrisWorkerPool>,
+    worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,

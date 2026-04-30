@@ -78,11 +78,11 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .zip(storages)
         .map(|(session, storage)| {
             let party_id = session.network_session.own_role.index();
-            let workers = LocalIrisWorkerPool::new_local(
+            let workers: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
                 storage.clone(),
                 plain_store.distance_mode,
                 party_id,
-            );
+            ));
             let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 registry,
@@ -102,8 +102,11 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .map(|session| {
             let party_id = session.network_session.own_role.index();
             let storage = Aby3Store::<FhdOps>::new_storage(None).to_arc();
-            let workers =
-                LocalIrisWorkerPool::new_local(storage.clone(), TEST_DISTANCE_MODE, party_id);
+            let workers: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
+                storage.clone(),
+                TEST_DISTANCE_MODE,
+                party_id,
+            ));
             let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 registry,
@@ -341,7 +344,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
         let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> =
             tokio::spawn(async move {
                 let mut store_lock = store.lock().await;
-                let queries = cache_irises(&store_lock.workers, irises).await?;
+                let queries = cache_irises(store_lock.workers.as_ref(), irises).await?;
                 let mut graph_store = GraphMem::new();
                 let searcher = HnswSearcher::new_with_test_parameters();
                 for query in queries.iter() {
