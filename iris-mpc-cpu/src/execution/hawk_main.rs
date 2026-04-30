@@ -762,6 +762,9 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
+        // Keep track of original IDs (pre-version-bump) for RemoveNode mutations
+        let original_ids: VecRequests<Option<VectorId>> = update_ids.clone();
+
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
@@ -777,8 +780,18 @@ impl HawkActor {
             return Ok(plans
                 .into_iter()
                 .zip(insertion_ids.iter())
-                .map(|(plan, id)| {
+                .zip(original_ids.iter())
+                .map(|((plan, id), original_id)| {
                     plan.map(|_| {
+                        let mut mutations = Vec::new();
+
+                        // If updating an existing node, remove it first
+                        if let Some(original_id_val) = original_id {
+                            mutations.push(GraphMutation::RemoveNode {
+                                id: *original_id_val,
+                            });
+                        }
+
                         let inserted_vector = if let Some(id) = id {
                             *id
                         } else {
@@ -786,11 +799,12 @@ impl HawkActor {
                             next_serial_id += 1;
                             vid
                         };
-                        vec![GraphMutation::InsertNode {
+                        mutations.push(GraphMutation::InsertNode {
                             id: inserted_vector,
                             layers: vec![],
                             update_ep: UpdateEntryPoint::False,
-                        }]
+                        });
+                        mutations
                     })
                 })
                 .collect_vec());
@@ -810,6 +824,7 @@ impl HawkActor {
             &self.searcher,
             plans,
             &insertion_ids,
+            &original_ids,
         )
         .await
     }

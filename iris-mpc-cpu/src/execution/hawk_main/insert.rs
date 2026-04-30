@@ -57,6 +57,7 @@ pub async fn insert<V: VectorStoreMut>(
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
     ids: &VecRequests<Option<V::VectorRef>>,
+    original_ids: &VecRequests<Option<V::VectorRef>>,
 ) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
     tracing::debug!("Inserting {} InsertPlans into store", plans.len());
 
@@ -70,7 +71,8 @@ pub async fn insert<V: VectorStoreMut>(
     // Track indices where we have actual plans to insert
     let mut update_idxs = vec![];
     let mut insert_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
-    for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate() {
+    for (idx, (plan, update_id, original_id)) in izip!(insert_plans, ids, original_ids).enumerate()
+    {
         if let Some(InsertPlanV {
             query,
             mut links,
@@ -95,6 +97,13 @@ pub async fn insert<V: VectorStoreMut>(
                     Some(id) => store.insert_at(id, &query).await?,
                 }
             };
+
+            // If updating an existing node, remove it first to clean up all old backlinks
+            if let Some(original_id_ref) = original_id {
+                insert_mutations.push(GraphMutation::RemoveNode {
+                    id: original_id_ref.clone(),
+                });
+            }
 
             // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
             let layers: Vec<(usize, Vec<V::VectorRef>)> = links
