@@ -2084,7 +2084,7 @@ impl HawkHandle {
         tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
 
         // Step 1: Get deleted vector IDs for RemoveNode mutations
-        let deleted_ids = request.deletion_ids(&hawk_actor.iris_store[LEFT].read().await);
+        let deleted_ids = request.deletion_ids(&*hawk_actor.iris_store[LEFT].read().await);
         tracing::info!("Deleted IDs: {:?}", deleted_ids);
 
         // Store plans for both sides using BothEyes structure
@@ -2211,7 +2211,7 @@ impl HawkHandle {
                 }
                 // Step 4: Wire up modification_key for deletions
                 RequestIndex::Deletion(i) => {
-                    let serial_id = deleted_ids[*i].serial_id();
+                    let serial_id = deleted_ids[i].serial_id();
                     Some(ModificationKey::RequestSerialId(serial_id))
                 }
             };
