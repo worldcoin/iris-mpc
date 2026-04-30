@@ -135,7 +135,8 @@ pub struct StoredModification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
-    pub graph_mutation: Option<Vec<u8>>,
+    /// References a row in hawk_graph_mutations which stores BothEyes<GraphMutation>
+    pub graph_mutation_id: Option<i64>,
 }
 
 impl From<StoredModification> for Modification {
@@ -148,7 +149,7 @@ impl From<StoredModification> for Modification {
             status: stored.status,
             persisted: stored.persisted,
             result_message_body: stored.result_message_body,
-            graph_mutation: stored.graph_mutation,
+            graph_mutation_id: stored.graph_mutation_id,
         }
     }
 }
@@ -494,7 +495,7 @@ WHERE id = $1;
                 status,
                 persisted,
                 result_message_body,
-                graph_mutation
+                graph_mutation_id
             "#,
         )
         .bind(serial_id)
@@ -527,7 +528,7 @@ WHERE id = $1;
                 status,
                 persisted,
                 result_message_body,
-                graph_mutation
+                graph_mutation_id
             FROM modifications
             ORDER BY id DESC
             LIMIT $1
@@ -578,7 +579,7 @@ WHERE id = $1;
                     status,
                     persisted,
                     result_message_body,
-                    graph_mutation
+                    graph_mutation_id
                 FROM modifications
                 WHERE id > $1
                   AND request_type = ANY($2)
@@ -633,10 +634,8 @@ WHERE id = $1;
             .map(|m| m.result_message_body.clone())
             .collect();
         let serial_ids: Vec<Option<i64>> = modifications.iter().map(|m| m.serial_id).collect();
-        let graph_mutations: Vec<Option<Vec<u8>>> = modifications
-            .iter()
-            .map(|m| m.graph_mutation.clone())
-            .collect();
+        let graph_mutation_ids: Vec<Option<i64>> =
+            modifications.iter().map(|m| m.graph_mutation_id).collect();
 
         for (id, status, persisted, serial_id) in izip!(&ids, &statuses, &persisted, &serial_ids) {
             tracing::info!(
@@ -655,7 +654,7 @@ WHERE id = $1;
                 persisted = data.persisted,
                 result_message_body = data.result_message_body,
                 serial_id = data.serial_id,
-                graph_mutation = data.graph_mutation
+                graph_mutation_id = data.graph_mutation_id
             FROM (
                 SELECT
                     unnest($1::bigint[])  as id,
@@ -663,7 +662,7 @@ WHERE id = $1;
                     unnest($3::bool[])    as persisted,
                     unnest($4::text[])    as result_message_body,
                     unnest($5::bigint[])  as serial_id,
-                    unnest($6::bytea[])   as graph_mutation
+                    unnest($6::bigint[])  as graph_mutation_id
             ) as data
             WHERE modifications.id = data.id
             "#,
@@ -673,7 +672,7 @@ WHERE id = $1;
         .bind(&persisted)
         .bind(&result_message_bodies)
         .bind(&serial_ids)
-        .bind(&graph_mutations)
+        .bind(&graph_mutation_ids)
         .execute(tx.deref_mut())
         .await?;
 
@@ -1302,7 +1301,7 @@ pub mod tests {
         expected_status: ModificationStatus,
         expected_persisted: bool,
         expected_result_body: Option<String>,
-        expected_graph_mut: Option<Vec<u8>>,
+        expected_graph_mutation_id: Option<i64>,
     ) {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
@@ -1311,7 +1310,7 @@ pub mod tests {
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
         assert_eq!(actual.result_message_body, expected_result_body);
-        assert_eq!(actual.graph_mutation, expected_graph_mut);
+        assert_eq!(actual.graph_mutation_id, expected_graph_mutation_id);
     }
 
     #[tokio::test]
@@ -1342,14 +1341,12 @@ pub mod tests {
                 Some("http://example.com/150"),
             )
             .await?;
-        let m1_graph_mut = vec![1u8, 2u8, 3u8, 4u8];
-        let m3_graph_mut = vec![3u8, 123u8, 34u8, 99u8];
         // Update the status & persisted fields for first four in a single transaction
         let mut tx = store.tx().await?;
-        m1.mark_completed(true, "m1", None, Some(m1_graph_mut.clone()));
-        m2.mark_completed(false, "m2", None, None);
-        m3.mark_completed(true, "m3", Some(101), Some(m3_graph_mut.clone()));
-        m4.mark_completed(false, "m4", None, None);
+        m1.mark_completed(true, "m1", None);
+        m2.mark_completed(false, "m2", None);
+        m3.mark_completed(true, "m3", Some(101));
+        m4.mark_completed(false, "m4", None);
 
         let modifications_to_update = vec![&m1, &m2, &m3, &m4];
         store
@@ -1392,7 +1389,7 @@ pub mod tests {
             ModificationStatus::Completed,
             true,
             Some("m3".to_string()),
-            Some(m3_graph_mut.clone()),
+            None, // graph_mutation_id not set in this test
         );
         assert_modification(
             &last_five[3],
@@ -1414,7 +1411,7 @@ pub mod tests {
             ModificationStatus::Completed,
             true,
             Some("m1".to_string()),
-            Some(m1_graph_mut.clone()),
+            None, // graph_mutation_id not set in this test
         );
 
         cleanup(&postgres_client, &schema_name).await?;
@@ -1442,7 +1439,7 @@ pub mod tests {
             .await?;
 
         // mark m1 as completed
-        m1.mark_completed(true, "m1", None, None);
+        m1.mark_completed(true, "m1", None);
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&m1]).await?;
         tx.commit().await?;
@@ -1580,9 +1577,9 @@ pub mod tests {
         let mut mod1 = mod1;
         let mut mod2 = mod2;
         let mut mod4 = mod4;
-        mod1.mark_completed(true, "result1", None, None);
-        mod2.mark_completed(true, "result2", None, None);
-        mod4.mark_completed(true, "result4", None, None);
+        mod1.mark_completed(true, "result1", None);
+        mod2.mark_completed(true, "result2", None);
+        mod4.mark_completed(true, "result4", None);
 
         let mut tx = store.tx().await?;
         store
@@ -1637,7 +1634,7 @@ pub mod tests {
 
         // Make mod6 persisted=true
         let mut mod6 = mod6;
-        mod6.mark_completed(true, "result6", None, None);
+        mod6.mark_completed(true, "result6", None);
 
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&mod6]).await?;
@@ -1733,12 +1730,12 @@ pub mod tests {
         let mut mod5 = mod5;
         let mut mod6 = mod6;
 
-        mod1.mark_completed(true, "result1", None, None);
-        mod2.mark_completed(true, "result2", None, None);
-        mod3.mark_completed(true, "result3", None, None);
-        mod4.mark_completed(true, "result4", None, None);
-        mod5.mark_completed(true, "result5", None, None);
-        mod6.mark_completed(true, "result6", None, None);
+        mod1.mark_completed(true, "result1", None);
+        mod2.mark_completed(true, "result2", None);
+        mod3.mark_completed(true, "result3", None);
+        mod4.mark_completed(true, "result4", None);
+        mod5.mark_completed(true, "result5", None);
+        mod6.mark_completed(true, "result6", None);
 
         let mut tx = store.tx().await?;
         store

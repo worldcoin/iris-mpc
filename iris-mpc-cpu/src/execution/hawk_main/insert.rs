@@ -1,5 +1,6 @@
 use crate::hnsw::{
-    searcher::{ConnectPlanV, LayerMode, UpdateEntryPoint},
+    graph::{GraphMutation, UpdateEntryPoint},
+    searcher::{ConnectPlanV, LayerMode},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
@@ -62,12 +63,13 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
-    let mut connect_plans = vec![None; insert_plans.len()];
+    let mut connect_plans: VecRequests<Option<ConnectPlanV<V>>> = vec![None; insert_plans.len()];
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
 
+    // Track indices where we have actual plans to insert
     let mut update_idxs = vec![];
-    let mut updates: Vec<(_, _, _)> = vec![];
+    let mut insert_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
     for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate() {
         if let Some(InsertPlanV {
             query,
@@ -94,15 +96,36 @@ pub async fn insert<V: VectorStoreMut>(
                 }
             };
 
-            updates.push((inserted.clone(), links, update_ep));
+            // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
+            let layers: Vec<(usize, Vec<V::VectorRef>)> = links
+                .into_iter()
+                .enumerate()
+                .map(|(layer, neighbors)| (layer, neighbors))
+                .collect();
+
+            insert_mutations.push(GraphMutation::InsertNode {
+                id: inserted.clone(),
+                layers,
+                update_ep,
+            });
             inserted_ids.push(inserted);
         }
     }
 
-    let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
-    for (cp_idx, plan) in izip!(update_idxs, plans) {
-        graph.insert_apply(plan.clone()).await;
-        connect_plans[cp_idx].replace(plan);
+    let grouped_mutations = searcher
+        .insert_prepare_batch(store, graph, insert_mutations)
+        .await?;
+
+    // Flatten all mutations for in-memory graph application
+    let all_mutations: Vec<GraphMutation<V::VectorRef>> = grouped_mutations
+        .iter()
+        .flat_map(|group| group.iter().cloned())
+        .collect();
+    graph.insert_apply(all_mutations);
+
+    // Store each group in its corresponding connect_plan at the tracked indices
+    for (cp_idx, mutations) in izip!(update_idxs.iter(), grouped_mutations) {
+        connect_plans[*cp_idx].replace(mutations);
     }
 
     Ok(connect_plans)

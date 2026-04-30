@@ -1584,13 +1584,7 @@ async fn init_graph_from_stores(
         graph_loader.load_graphs_from_checkpoint(both_eyes);
         return Ok(());
     }
-    tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
-
-    graph_loader
-        .load_graph_store(&graph_store, graph_db_parallelism)
-        .await?;
-
-    Ok(())
+    bail!("No S3 checkpoint found. Failed to load graph")
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function
@@ -1686,13 +1680,15 @@ async fn validate_consistency_of_stores(
 
     // ensure the graph store is consistent with the last persisted_indexed_id
     let mut tx = graph_store.tx().await.unwrap();
-    let last_indexed_id_in_graph_left = {
+    let last_indexed_id_in_graph_left: u32 = {
         let mut graph_left = tx.with_graph(StoreId::Left);
-        graph_left.get_max_serial_id().await? as u32
+        //graph_left.get_max_serial_id().await? as u32
+        todo!("update to new design")
     };
-    let last_indexed_id_in_graph_right = {
+    let last_indexed_id_in_graph_right: u32 = {
         let mut graph_right = tx.with_graph(StoreId::Right);
-        graph_right.get_max_serial_id().await? as u32
+        //graph_right.get_max_serial_id().await? as u32
+        todo!("update to new design")
     };
     if last_indexed_id_in_graph_left != last_indexed_id
         || last_indexed_id_in_graph_right != last_indexed_id
@@ -1704,6 +1700,7 @@ async fn validate_consistency_of_stores(
         tracing::error!("{}", msg);
         bail!(msg);
     }
+    todo!("update to new design");
 
     Ok(())
 }

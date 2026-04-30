@@ -511,7 +511,7 @@ mod tests {
         HAWK_BASE_ROTATIONS_MASK,
     };
     use crate::hawkers::aby3::aby3_store::Aby3Query;
-    use crate::hnsw::searcher::UpdateEntryPoint;
+    use crate::hnsw::graph::UpdateEntryPoint;
 
     use super::VectorId;
     use super::*;
