@@ -197,6 +197,11 @@ pub enum TestCase {
     /// - Normal flow won't match anything in the database
     /// - But when the code is mirrored, it will match(mirrored version will be pre-inserted in the test db)
     FullFaceMirrorAttack,
+    /// Send an iris code crafted for full face mirror attack detection:
+    /// - Normal flow won't match anything in the database or batch
+    /// - Mirror flow won't match anything in the database, since it is not yet inserted
+    /// - Mirror flow should match an item in the batch.
+    MirrorAttackInBatch,
 }
 
 impl TestCase {
@@ -224,6 +229,7 @@ impl TestCase {
             TestCase::MatchAfterResetUpdate,
             TestCase::MatchAfterReauthSkipPersistence,
             TestCase::FullFaceMirrorAttack,
+            TestCase::MirrorAttackInBatch,
         ]
     }
 }
@@ -238,6 +244,7 @@ enum DatabaseRange {
     FullMaskOnly,
 }
 
+#[derive(Debug, Clone)]
 pub struct ExpectedResult {
     /// The returned index of the iris code in the database.
     /// It is None if the iris code is not in the database, and Some(idx) if
@@ -367,6 +374,8 @@ pub struct TestCaseGenerator {
     /// skip invalidating requests in the current batch, since we expect
     /// them to be processed
     skip_invalidate: bool,
+    /// Do we already have a mirror of a template in the current batch?
+    have_batch_mirror: bool,
     /// duplicates in the current batch, used to test the batch
     /// deduplication mechanism
     batch_duplicates: HashMap<String, String>,
@@ -398,6 +407,7 @@ impl TestCaseGenerator {
             rng,
             new_templates_in_batch: Vec::new(),
             skip_invalidate: false,
+            have_batch_mirror: false,
             batch_duplicates: HashMap::new(),
             db_indices_used_in_current_batch: HashSet::new(),
             or_rule_matches: Vec::new(),
@@ -429,6 +439,7 @@ impl TestCaseGenerator {
         self.new_templates_in_batch.clear();
         self.db_indices_used_in_current_batch.clear();
         self.or_rule_matches.clear();
+        self.have_batch_mirror = false;
 
         for idx in 0..batch_size {
             let (request_id, e2e_template, or_rule_indices, skip_persistence, message_type) =
@@ -666,6 +677,9 @@ impl TestCaseGenerator {
         }
         if !self.reauth_skip_persistence_templates.is_empty() {
             options.push(TestCase::MatchAfterReauthSkipPersistence);
+        }
+        if !self.new_templates_in_batch.is_empty() && !self.have_batch_mirror {
+            options.push(TestCase::MirrorAttackInBatch);
         }
 
         options.retain(|x| self.enabled_test_cases.contains(x));
@@ -1117,6 +1131,33 @@ impl TestCaseGenerator {
                     self.skip_invalidate = true;
                     e2e_template
                 }
+                TestCase::MirrorAttackInBatch => {
+                    tracing::info!("Sending iris code crafted for mirror attack detection that should match in batch");
+                    // Get an existing template from the current batch
+                    let (internal_batch_idx, _, original_template) = self
+                        .new_templates_in_batch
+                        .choose(&mut self.rng)
+                        .expect("this is only called if we already have templates in batch");
+                    tracing::info!(
+                        "batch_idx used for the mirror attack in batch: {}",
+                        internal_batch_idx
+                    );
+
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult::builder()
+                            .with_batch_match(true)
+                            .with_full_face_mirror_attack(true)
+                            .build(),
+                    );
+                    self.have_batch_mirror = true;
+
+                    E2ETemplate {
+                        // This is swapped on purpose due to the mirror attack flow
+                        left: original_template.right.mirrored(),
+                        right: original_template.left.mirrored(),
+                    }
+                }
             }
         };
         (
@@ -1237,6 +1278,12 @@ impl TestCaseGenerator {
             was_reauth_success,
             was_skip_persistence_match,
             full_face_mirror_attack_detected
+        );
+        tracing::info!(
+            "Expected results for this request_id: {:?}",
+            self.expected_results
+                .get(req_id)
+                .expect("request id not found")
         );
         let &ExpectedResult {
             db_index: expected_idx,
