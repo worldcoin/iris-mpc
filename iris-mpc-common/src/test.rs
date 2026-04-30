@@ -38,11 +38,15 @@ const RIGHT: usize = 1;
 
 #[derive(Clone)]
 pub struct E2ETemplate {
-    left: IrisCode,
-    right: IrisCode,
+    pub left: IrisCode,
+    pub right: IrisCode,
 }
 impl E2ETemplate {
-    fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> E2ESharedTemplate {
+    pub fn new(left: IrisCode, right: IrisCode) -> Self {
+        Self { left, right }
+    }
+
+    pub fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> E2ESharedTemplate {
         let (
             left_shared_code,
             left_shared_mask,
@@ -1469,7 +1473,7 @@ impl TestCaseGenerator {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_batch(
+pub fn prepare_batch(
     batch: &mut BatchQuery,
     is_valid: bool,
     request_id: String,

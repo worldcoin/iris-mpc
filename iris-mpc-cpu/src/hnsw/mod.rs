@@ -15,5 +15,5 @@ pub mod sorting;
 pub mod vector_store;
 
 pub use graph::{layered_graph::GraphMem, neighborhood::SortedNeighborhood};
-pub use searcher::{HnswParams, HnswSearcher};
+pub use searcher::{HnswParams, HnswSearcher, LayerDistribution};
 pub use vector_store::VectorStore;
