@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
 
     match command {
         Command::BackupGraph => {
-            db_context.write_graph_to_file(&file, dbg).await?;
+            db_context.write_graph_to_file(&file, dbg, None).await?;
         }
         Command::LoadCheckpoint => {
             db_context.load_graph_from_file(&file, dbg).await?;
@@ -87,8 +87,10 @@ async fn main() -> Result<()> {
             db_context.verify_backup(&file, dbg).await?;
         }
         Command::RandomCheckpoint => {
-            db_context.store_random_graph().await?;
-            db_context.write_graph_to_file(&file, dbg).await?;
+            let graph = db_context.store_random_graph().await?;
+            db_context
+                .write_graph_to_file(&file, dbg, Some(&graph))
+                .await?;
         }
         Command::CompareToDb { diff_method } => {
             db_context.compare_to_db(&file, diff_method, dbg).await?;

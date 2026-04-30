@@ -434,6 +434,20 @@ impl<V: VectorStore> GraphPg<V> {
 
         Ok(())
     }
+
+    /// Returns the maximum mutation id from hawk_graph_mutations table, or None if empty.
+    pub async fn get_max_hawk_graph_mutation_id(&self) -> Result<Option<i64>> {
+        let row = sqlx::query(
+            r#"
+            SELECT MAX(id) as max_id
+            FROM hawk_graph_mutations
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.try_get("max_id")?)
+    }
 }
 
 pub struct GraphTx<'a, V> {

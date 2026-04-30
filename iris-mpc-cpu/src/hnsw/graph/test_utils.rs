@@ -5,6 +5,10 @@ use std::sync::Arc;
 use super::graph_store::GraphPg;
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
+    genesis::state_accessor::{
+        STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID, STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
+    },
+    graph_checkpoint::download_genesis_checkpoint_plaintext,
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
@@ -40,34 +44,6 @@ use rand::SeedableRng;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-
-/// Downloads a checkpoint from S3 and deserializes it to BothEyes<GraphMem<PlaintextVectorRef>>
-async fn download_genesis_checkpoint_plaintext(
-    s3_client: &S3Client,
-    bucket: &str,
-    state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
-    let response = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(&state.s3_key)
-        .send()
-        .await
-        .map_err(|e| eyre!("Failed to download checkpoint from S3: {e}"))?;
-
-    let body = response
-        .body
-        .collect()
-        .await
-        .map_err(|e| eyre!("Failed to read S3 response body: {e}"))?;
-
-    let checkpoint_data = body.into_bytes();
-    let deserialized: BothEyes<GraphMem<PlaintextVectorRef>> =
-        bincode::deserialize(&checkpoint_data)
-            .map_err(|e| eyre!("Failed to deserialize checkpoint: {e}"))?;
-
-    Ok(deserialized)
-}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum DiffMethod {
@@ -129,7 +105,7 @@ impl DbContext {
             self.party_id,
             graph,
             &self.s3_client,
-            last_indexed_iris_id as u32,
+            u32::try_from(last_indexed_iris_id)?,
             last_indexed_modification_id,
             graph_mutation_id,
             is_archival,
@@ -226,8 +202,18 @@ impl DbContext {
     }
 
     /// loads a graph from database to memory and then writes it to a file
-    pub async fn write_graph_to_file(&self, path: &Path, dbg: bool) -> Result<()> {
-        let graph = self.get_both_eyes().await?;
+    /// if graph_mem is provided, it is used instead of fetching from the database
+    pub async fn write_graph_to_file(
+        &self,
+        path: &Path,
+        dbg: bool,
+        graph_mem: Option<&BothEyes<GraphMem<PlaintextVectorRef>>>,
+    ) -> Result<()> {
+        let graph = if let Some(g) = graph_mem {
+            g.clone()
+        } else {
+            self.get_both_eyes().await?
+        };
         if dbg {
             println!("storing graph:");
             println!("{:#?}", graph);
@@ -242,7 +228,25 @@ impl DbContext {
             println!("loaded graph:");
             println!("{:#?}", graph);
         }
-        self.store_checkpoint(&graph, 0, 0, None, false).await
+        let graph_mutation_id = self.graph_pg.get_max_hawk_graph_mutation_id().await?;
+        let last_indexed_iris_id: i64 = self
+            .graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
+            .await?
+            .unwrap_or(0);
+        let last_indexed_modification_id: i64 = self
+            .graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
+            .await?
+            .unwrap_or(0);
+        self.store_checkpoint(
+            &graph,
+            last_indexed_iris_id,
+            last_indexed_modification_id,
+            graph_mutation_id,
+            false,
+        )
+        .await
     }
 
     /// loads the graph from database to memory, writes it to a file,
@@ -254,7 +258,8 @@ impl DbContext {
             println!("storing graph:");
             println!("{:#?}", stored_graph);
         }
-        serialize_graph(path, &stored_graph).await?;
+        self.write_graph_to_file(path, dbg, Some(&stored_graph))
+            .await?;
 
         let data = tokio::fs::read(path).await?;
         let loaded_graph: BothEyes<GraphMem<PlaintextVectorRef>> = bincode::deserialize(&data)?;
@@ -324,11 +329,11 @@ impl DbContext {
         Ok(())
     }
 
-    /// Populates S3 with a small test graph. This is needed because
+    /// Populates S3 with a small test graph and returns it. This is needed because
     /// the test database is initially empty and some data is needed to
     /// test the backup and restore commands.
     /// The graph isn't actually random - the RNG uses the same seed.
-    pub async fn store_random_graph(&self) -> Result<()> {
+    pub async fn store_random_graph(&self) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
         const NUM_RANDOM_IRIS_CODES: usize = 10;
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let mut vector_store = PlaintextStore::<FhdOps>::new();
@@ -388,7 +393,27 @@ impl DbContext {
         let right_graph = left_graph.clone();
         let graph = [left_graph, right_graph];
 
-        self.store_checkpoint(&graph, 0, 0, None, false).await
+        let last_indexed_iris_id: i64 = self
+            .graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
+            .await?
+            .unwrap_or(0);
+        let last_indexed_modification_id: i64 = self
+            .graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
+            .await?
+            .unwrap_or(0);
+        let graph_mutation_id = self.graph_pg.get_max_hawk_graph_mutation_id().await?;
+
+        self.store_checkpoint(
+            &graph,
+            last_indexed_iris_id,
+            last_indexed_modification_id,
+            graph_mutation_id,
+            false,
+        )
+        .await?;
+        Ok(graph)
     }
 }
 
