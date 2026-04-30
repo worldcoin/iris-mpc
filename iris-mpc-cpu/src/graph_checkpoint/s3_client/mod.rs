@@ -25,7 +25,7 @@ use iris_mpc_common::IrisSerialId;
 pub use multipart::*;
 
 /// Creates an S3 graph checkpoint.
-#[allow(clippy::too_many_argumnets)]
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_graph_checkpoint(
     bucket: &str,
     party_id: usize,
