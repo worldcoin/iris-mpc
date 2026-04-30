@@ -299,7 +299,7 @@ enum Expectation {
 }
 
 impl Expectation {
-    /// Source pointer printed in failure messages, to orient debugging.
+    /// Source file printed in failure messages, to orient debugging.
     fn diagnosis(&self) -> &'static str {
         use Expectation::*;
         match self {
@@ -372,7 +372,7 @@ fn apply_rotation(code: &IrisCode, rotation: isize) -> IrisCode {
 /// Rotation+mirror variant of (x_left, x_right). For `mirror=true` the eyes
 /// swap sides AND each is mirrored — the canonical full-face-mirror-attack
 /// construction, matching Mirror-orientation search expectations.
-fn build_mirror_variant_pair(
+fn build_iris_pair(
     x_left: &IrisCode,
     x_right: &IrisCode,
     rotation: isize,
@@ -397,7 +397,7 @@ fn uniqueness_variant(
     purpose: String,
     expect: Expectation,
 ) -> Variant {
-    let (l, r) = build_mirror_variant_pair(x_left, x_right, rotation, mirror);
+    let (l, r) = build_iris_pair(x_left, x_right, rotation, mirror);
     Variant {
         rotation,
         mirror,
@@ -418,7 +418,7 @@ fn reauth_variant(
     target_index: u32,
     purpose: String,
 ) -> Variant {
-    let (l, r) = build_mirror_variant_pair(x_left, x_right, rotation, mirror);
+    let (l, r) = build_iris_pair(x_left, x_right, rotation, mirror);
     Variant {
         rotation,
         mirror,
