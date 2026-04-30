@@ -2068,6 +2068,10 @@ impl HawkHandle {
 
         tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
 
+        // Step 1: Get deleted vector IDs for RemoveNode mutations
+        let deleted_ids = request.deletion_ids(&hawk_actor.iris_store[LEFT].read().await);
+        tracing::info!("Deleted IDs: {:?}", deleted_ids);
+
         // Store plans for both sides using BothEyes structure
         let mut plans_both_sides: Vec<BothEyes<Option<ConnectPlan>>> =
             vec![[None, None]; requests_order.len()];
@@ -2123,15 +2127,37 @@ impl HawkHandle {
                             .then(|| search_results[*i].center().clone()),
                     },
                     RequestIndex::IdentityUpdate(i) => Some(reset_results[*i].center().clone()),
-                    // Deletions were handled earlier in handle_job
+                    // Deletions will be handled separately below
                     RequestIndex::Deletion(_) => None,
                 })
                 .collect_vec();
 
             // Insert in memory, and return the plans to update the persistent database.
-            let plans = hawk_actor
+            let mut plans = hawk_actor
                 .insert(sessions, insert_plans, &update_ids)
                 .await?;
+
+            // Step 2: Generate RemoveNode ConnectPlans for deletions
+            // Apply deletion mutations directly to the in-memory graph
+            for (idx, req_index) in requests_order.iter().enumerate() {
+                if let RequestIndex::Deletion(i) = req_index {
+                    let vector_id = deleted_ids[*i];
+                    let removal_plan = vec![GraphMutation::RemoveNode { id: vector_id }];
+
+                    // Store the removal plan for persistence
+                    plans[idx].replace(removal_plan.clone());
+
+                    // Step 3: Apply deletion mutation to the in-memory graph immediately
+                    let mut graph = hawk_actor.graph_store[*side as usize].write().await;
+                    graph.insert_apply(removal_plan);
+
+                    tracing::debug!(
+                        "Generated RemoveNode mutation for deletion {} (vector_id: {:?})",
+                        i,
+                        vector_id
+                    );
+                }
+            }
 
             // Store plans for this side
             for (plan, both_sides) in izip!(plans, &mut plans_both_sides) {
@@ -2159,13 +2185,20 @@ impl HawkHandle {
                 }
                 RequestIndex::IdentityUpdate(i) => {
                     // This is a reset update mutation.
+                    // Note: A missing vector_id here means the target was not found, which is a
+                    // legitimate "no graph change" case (e.g., recovery update on non-existent identity).
+                    // The null graph_mutation_id is intentional in this case.
                     if let Some(&vector_id) = identity_updates.vector_ids.get(i) {
                         Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                     } else {
                         None
                     }
                 }
-                RequestIndex::Deletion(_) => None,
+                // Step 4: Wire up modification_key for deletions
+                RequestIndex::Deletion(i) => {
+                    let serial_id = deleted_ids[*i].serial_id();
+                    Some(ModificationKey::RequestSerialId(serial_id))
+                }
             };
 
             mutations.push(SingleHawkMutation {
