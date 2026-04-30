@@ -56,10 +56,26 @@ pub struct GraphCheckpointState {
     pub last_indexed_iris_id: IrisSerialId,
     /// Last modification ID included in this checkpoint
     pub last_indexed_modification_id: i64,
+    /// Last graph mutation ID included in this checkpoint (optional)
+    pub graph_mutation_id: Option<i64>,
     /// BLAKE3 hash of the checkpoint data for integrity verification
     pub blake3_hash: String,
+    /// Corresponds to the GraphFormat enum
+    pub graph_version: i32,
     /// Whether this checkpoint is archival (i.e. should be retained by pruning).
     pub is_archival: bool,
+}
+
+impl GraphCheckpointState {
+    /// Returns the graph_mutation_id, or an error if it is None.
+    pub fn graph_mutation_id(&self) -> eyre::Result<i64> {
+        self.graph_mutation_id.ok_or_else(|| {
+            eyre!(
+                "graph_mutation_id is not set for checkpoint: {}",
+                self.s3_key
+            )
+        })
+    }
 }
 
 impl TryFrom<GraphCheckpointRow> for GraphCheckpointState {
@@ -77,7 +93,9 @@ impl TryFrom<GraphCheckpointRow> for GraphCheckpointState {
             s3_key: value.s3_key,
             last_indexed_iris_id,
             last_indexed_modification_id: value.last_indexed_modification_id,
+            graph_mutation_id: value.graph_mutation_id,
             blake3_hash: value.blake3_hash,
+            graph_version: value.graph_version,
             is_archival: value.is_archival,
         })
     }
