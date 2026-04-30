@@ -32,6 +32,7 @@ pub async fn upload_graph_checkpoint(
     s3_client: &S3Client,
     last_indexed_iris_id: IrisSerialId,
     last_indexed_modification_id: i64,
+    graph_mutation_id: Option<i64>,
     is_archival: bool,
 ) -> Result<GraphCheckpointState> {
     let start = Instant::now();
@@ -73,6 +74,7 @@ pub async fn upload_graph_checkpoint(
         s3_key: s3_key.clone(),
         last_indexed_iris_id,
         last_indexed_modification_id,
+        graph_mutation_id,
         blake3_hash,
         graph_version: GraphFormat::Current.version(),
         is_archival,
@@ -169,6 +171,7 @@ pub async fn save_checkpoint_state<V: VectorStore>(
         &state.s3_key,
         i64::from(state.last_indexed_iris_id),
         state.last_indexed_modification_id,
+        state.graph_mutation_id,
         &state.blake3_hash,
         state.is_archival,
         state.graph_version,

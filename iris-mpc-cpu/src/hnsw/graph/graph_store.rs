@@ -29,6 +29,7 @@ pub struct GraphCheckpointRow {
     pub s3_key: String,
     pub last_indexed_iris_id: i64,
     pub last_indexed_modification_id: i64,
+    pub graph_mutation_id: Option<i64>,
     pub blake3_hash: String,
     pub graph_version: i32,
     pub is_archival: bool,
@@ -167,6 +168,7 @@ impl<V: VectorStore> GraphPg<V> {
         s3_key: &str,
         last_indexed_iris_id: i64,
         last_indexed_modification_id: i64,
+        graph_mutation_id: Option<i64>,
         blake3_hash: &str,
         is_archival: bool,
         graph_version: i32,
@@ -177,16 +179,18 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
+                graph_mutation_id,
                 blake3_hash,
                 is_archival,
                 graph_version
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(s3_key)
         .bind(last_indexed_iris_id)
         .bind(last_indexed_modification_id)
+        .bind(graph_mutation_id)
         .bind(blake3_hash)
         .bind(is_archival)
         .bind(graph_version)
@@ -205,6 +209,7 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
+                graph_mutation_id,
                 blake3_hash,
                 is_archival,
                 graph_version
@@ -231,6 +236,7 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
+                graph_mutation_id,
                 blake3_hash,
                 is_archival,
                 graph_version
@@ -254,6 +260,7 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
+                graph_mutation_id,
                 blake3_hash,
                 is_archival,
                 graph_version

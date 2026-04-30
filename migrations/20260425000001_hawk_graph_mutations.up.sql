@@ -3,9 +3,13 @@
 -- - hawk_graph_mutations
 -- - add_graph_mutation_id
 
--- Add graph_version column to genesis_graph_checkpoint
+-- Add graph_version column and graph_mutation_id column to genesis_graph_checkpoint
 ALTER TABLE genesis_graph_checkpoint
-    ADD COLUMN graph_version INT NOT NULL DEFAULT 3;
+    ADD COLUMN graph_version INT NOT NULL DEFAULT 3,
+    -- this can be null if the run is from Genesis
+    -- this column is needed because the modifications_sync process will delete modifications,
+    -- at which point they would not be available to retrieve the corresponding mutation id.
+    ADD COLUMN graph_mutation_id BIGINT;
 
 -- Create graph_mutations table to serve as a diff based write ahead log.
 -- modification_id may point to a row that has been applied and is deleted.

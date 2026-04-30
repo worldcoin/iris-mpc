@@ -927,6 +927,7 @@ async fn load_checkpoint_state(
                 eyre::eyre!("Invalid last_indexed_iris_id: {}", row.last_indexed_iris_id)
             })?,
             last_indexed_modification_id: row.last_indexed_modification_id,
+            graph_mutation_id: row.graph_mutation_id,
             blake3_hash: row.blake3_hash,
             graph_version: row.graph_version,
             is_archival: row.is_archival,
