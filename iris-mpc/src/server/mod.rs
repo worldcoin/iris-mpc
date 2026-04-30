@@ -11,6 +11,7 @@ use iris_mpc_cpu::graph_checkpoint::get_most_recent_checkpoints;
 use iris_mpc_cpu::graph_checkpoint::s3_key_exists;
 use iris_mpc_cpu::graph_checkpoint::GraphCheckpointState;
 use iris_mpc_cpu::graph_checkpoint::GRAPH_CHECKPOINT_ROUTE;
+use iris_mpc_cpu::hnsw::GraphMem;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -165,7 +166,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         sync_modifications(
             &config,
             &iris_store,
-            Some(&graph_store),
             &aws_clients,
             &shares_encryption_key_pair,
             sync_result.clone(),

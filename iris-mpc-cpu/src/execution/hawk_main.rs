@@ -85,8 +85,8 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::graph_store,
-        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint},
+        graph::{graph_store, GraphMutation, UpdateEntryPoint},
+        searcher::{LayerDistribution, NeighborhoodMode},
         GraphMem, HnswSearcher, VectorStore,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -119,7 +119,10 @@ use iris_mpc_common::{
     },
     vector_id::VectorId,
 };
-use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
+use iris_mpc_common::{
+    helpers::sync::{Modification, ModificationKey},
+    job::RequestIndex,
+};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
@@ -465,14 +468,14 @@ pub struct HawkInsertPlan {
     pub classified: ClassifiedMatches,
 }
 
-/// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
+/// A list of graph mutations to apply to connect a new node into the HNSW graph.
 ///
 /// A `ConnectPlan` is the final output of the insertion preparation phase (`HnswSearcher::insert_prepare_batch`).
 /// Unlike `InsertPlanV`, which specifies the *desired* neighbors for the new node, `ConnectPlan`
 /// represents the full set of atomic graph updates required. This includes not only the new
 /// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
-pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
+pub type ConnectPlan = Vec<GraphMutation<VectorId>>;
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -783,11 +786,11 @@ impl HawkActor {
                             next_serial_id += 1;
                             vid
                         };
-                        crate::hnsw::searcher::ConnectPlan {
-                            inserted_vector,
-                            updates: BTreeMap::new(),
+                        vec![GraphMutation::InsertNode {
+                            id: inserted_vector,
+                            layers: vec![],
                             update_ep: UpdateEntryPoint::False,
-                        }
+                        }]
                     })
                 })
                 .collect_vec());
@@ -1140,20 +1143,14 @@ impl<'a> GraphLoader<'a> {
         let now = Instant::now();
 
         // Spawn two independent transactions and load each graph in parallel.
-        let (graph_left, graph_right) = join!(
+        let (graph_left, graph_right): (Result<GraphMem<VectorId>>, Result<GraphMem<VectorId>>) = join!(
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx
-                    .with_graph(StoreId::Left)
-                    .load_to_mem(graph_store.pool(), parallelism)
-                    .await
+                todo!("update to new design")
             },
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx
-                    .with_graph(StoreId::Right)
-                    .load_to_mem(graph_store.pool(), parallelism)
-                    .await
+                todo!("update to new design")
             }
         );
         let graph_left = graph_left.expect("Could not load left graph");
@@ -1513,7 +1510,12 @@ impl HawkResult {
                 mutation.plans[LEFT]
                     .as_ref()
                     .or(mutation.plans[RIGHT].as_ref())
-                    .map(|plan| plan.inserted_vector)
+                    .and_then(|plan| {
+                        plan.iter().find_map(|m| match m {
+                            GraphMutation::InsertNode { id, .. } => Some(id.clone()),
+                            _ => None,
+                        })
+                    })
             })
     }
 
@@ -1733,51 +1735,44 @@ impl HawkMutation {
             .find(|mutation| mutation.request_index == Some(req_index))
     }
 
-    pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
+    /// Persist graph mutations to the database.
+    ///
+    /// For each SingleHawkMutation:
+    /// 1. Serializes the mutation plans and inserts into hawk_graph_mutations table
+    /// 2. Links the modification to the graph_mutation via graph_mutation_id
+    /// 3. Updates last_indexed_modification_id in persistent_state
+    pub async fn persist(
+        self,
+        graph_tx: &mut GraphTx<'_>,
+        modifications: &mut HashMap<ModificationKey, Modification>,
+    ) -> Result<()> {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
-        // Group updates by side: side -> (key -> neighbors)
-        // Key: (serial_id, version_id, layer)
-        let mut updates_by_side: BothEyes<BTreeMap<(i64, i16, i16), Vec<_>>> = Default::default();
+
+        // for persistent_state
+        let max_modification_id: Option<i64> = modifications.values().map(|x| x.id).max();
 
         for mutation in self.0 {
-            for (side, updates_map, plan_opt) in
-                izip!(STORE_IDS, updates_by_side.iter_mut(), mutation.plans)
-            {
-                if let Some(plan) = plan_opt {
-                    let mut graph = graph_tx.with_graph(side);
-                    // Updating entry points sequentially is fine in practice
-                    match plan.update_ep {
-                        UpdateEntryPoint::False => {}
-                        UpdateEntryPoint::SetUnique { layer } => {
-                            graph.set_entry_point(plan.inserted_vector, layer).await?;
-                        }
-                        UpdateEntryPoint::Append { layer } => {
-                            graph.add_entry_point(plan.inserted_vector, layer).await?;
-                        }
-                    }
+            // Insert graph mutation into hawk_graph_mutations and link to modification
+            if let Some(ref modification_key) = mutation.modification_key {
+                if let Some(modification) = modifications.get_mut(modification_key) {
+                    // Serialize the plans (BothEyes<Option<ConnectPlan>>)
+                    let serialized = bincode::serialize(&mutation.plans)
+                        .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
 
-                    // Buffer link updates by side
-                    for ((inserted_vector, lc), neighbors) in plan.updates {
-                        let key = (
-                            inserted_vector.serial_id() as i64,
-                            inserted_vector.version_id(),
-                            lc as i16,
-                        );
-                        // Deduplicate: If multiple updates for the same node exist, the last one wins
-                        updates_map.insert(key, neighbors);
-                    }
+                    // Insert into hawk_graph_mutations and get the generated ID
+                    let graph_mutation_id = graph_tx
+                        .insert_hawk_graph_mutation(modification.id, &serialized)
+                        .await?;
+
+                    // Link modification to graph_mutation
+                    modification.graph_mutation_id = Some(graph_mutation_id);
                 }
             }
         }
 
-        // Execute one batch per side
-        for (side, batch_updates) in izip!(STORE_IDS, updates_by_side) {
-            if !batch_updates.is_empty() {
-                graph_tx
-                    .with_graph(side)
-                    .batch_set_links(batch_updates)
-                    .await?;
-            }
+        // Update last_indexed_modification_id in persistent_state
+        if let Some(max_id) = max_modification_id {
+            graph_tx.set_last_indexed_modification_id(max_id).await?;
         }
 
         Ok(())
@@ -2579,10 +2574,7 @@ mod tests {
 #[cfg(feature = "db_dependent")]
 mod tests_db {
     use super::*;
-    use crate::hnsw::{
-        graph::graph_store::test_utils::TestGraphPg,
-        searcher::{build_layer_updates, UpdateEntryPoint},
-    };
+    use crate::hnsw::{graph::graph_store::test_utils::TestGraphPg, graph::UpdateEntryPoint};
 
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
@@ -2595,19 +2587,16 @@ mod tests_db {
             vectors
                 .iter()
                 .enumerate()
-                .map(|(i, vector)| ConnectPlan {
-                    inserted_vector: *vector,
-                    updates: build_layer_updates(
-                        *vector,
-                        vec![vectors[side]],
-                        vec![vec![*vector]],
-                        0,
-                    ),
-                    update_ep: if i == side {
-                        UpdateEntryPoint::SetUnique { layer: 0 }
-                    } else {
-                        UpdateEntryPoint::False
-                    },
+                .map(|(i, vector)| {
+                    vec![GraphMutation::InsertNode {
+                        id: *vector,
+                        layers: vec![(0, vec![vectors[side]])],
+                        update_ep: if i == side {
+                            UpdateEntryPoint::SetUnique { layer: 0 }
+                        } else {
+                            UpdateEntryPoint::False
+                        },
+                    }]
                 })
                 .map(Some)
                 .collect_vec()
@@ -2685,15 +2674,15 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::{build_layer_updates, UpdateEntryPoint};
+    use crate::hnsw::graph::UpdateEntryPoint;
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        ConnectPlan {
-            inserted_vector: vector_id,
-            updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
+        vec![GraphMutation::InsertNode {
+            id: vector_id,
+            layers: vec![(0, vec![vector_id])],
             update_ep: UpdateEntryPoint::False,
-        }
+        }]
     }
 
     #[test]
