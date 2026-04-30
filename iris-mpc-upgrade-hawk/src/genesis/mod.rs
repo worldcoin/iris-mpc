@@ -1,3 +1,5 @@
+mod graph_checkpoint;
+
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
     start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
@@ -7,7 +9,6 @@ use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
-    primitives::ByteStream,
     Client as S3Client,
 };
 use axum::{routing::get, Router};
@@ -20,14 +21,13 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
-pub use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
+pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
         iris_worker::LocalIrisWorkerPool, BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs,
         HawkOps, StoreId, LEFT, RIGHT,
     },
     genesis::{
-        genesis_checkpoint::*,
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
@@ -39,6 +39,7 @@ use iris_mpc_cpu::{
         BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
         JobResult,
     },
+    graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
 };
@@ -55,20 +56,14 @@ use tokio::{
     time::timeout,
 };
 
-mod graph_checkpoint;
-pub use graph_checkpoint::{
+pub use graph_checkpoint::{maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint};
+pub use iris_mpc_cpu::graph_checkpoint::{
     find_common_checkpoint, get_common_checkpoint, get_most_recent_checkpoints,
-    get_others_graph_hashes, maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint,
+    get_others_graph_hashes,
 };
 
 pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
-
-// types for the graph checkpoint sync
-pub type Blake3Hash = [u8; 32];
-pub type GraphCheckpointHashes = [Blake3Hash; 10];
-const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
-const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
@@ -1168,86 +1163,6 @@ async fn get_hawk_actor(
     .await
 }
 
-/// Verifies that the S3 client has read, write, and delete access to the
-/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
-/// deletes it. This catches misconfigured buckets/regions/IAM before any
-/// mutations occur.
-async fn verify_s3_checkpoint_access(
-    s3_client: &S3Client,
-    bucket: &str,
-    party_id: usize,
-) -> Result<()> {
-    let key = format!("genesis/{party_id}/_access_check");
-    let body = b"access_check";
-
-    // Write
-    s3_client
-        .put_object()
-        .bucket(bucket)
-        .key(&key)
-        .body(ByteStream::from_static(body))
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
-
-    // Read
-    let resp = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
-    let data = resp
-        .body
-        .collect()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
-    if data.into_bytes().as_ref() != body {
-        bail!("S3 checkpoint bucket read check returned unexpected content");
-    }
-
-    // Delete
-    if let Err(e) = s3_client
-        .delete_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-    {
-        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
-    }
-
-    Ok(())
-}
-
-/// Checks whether a given key exists in an S3 bucket using a `HeadObject`
-/// request. Returns `true` if the key is present, `false` if it does not
-/// exist (HTTP 404 / `NoSuchKey`), or an error for any other failure.
-///
-/// # Arguments
-///
-/// * `s3_client` - Authenticated S3 client.
-/// * `bucket`    - Name of the S3 bucket to query.
-/// * `key`       - Object key to check for existence.
-async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Result<bool> {
-    match s3_client.head_object().bucket(bucket).key(key).send().await {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            // `head_object` returns a 404 when the key does not exist.
-            // The SDK surfaces this as a `NotFound` service error.
-            if e.as_service_error()
-                .map(|se| se.is_not_found())
-                .unwrap_or(false)
-            {
-                Ok(false)
-            } else {
-                Err(eyre!("S3 head_object failed for s3://{bucket}/{key}: {e}"))
-            }
-        }
-    }
-}
-
 /// Returns service clients used downstream.
 ///
 /// # Arguments
@@ -1312,18 +1227,15 @@ async fn get_service_clients(
         // S3 client for graph checkpoint operations (may be in a different region)
         let checkpoint_region_name = config.graph_checkpoint_bucket_region.clone();
         let checkpoint_region = Region::new(checkpoint_region_name.clone());
-        let checkpoint_sdk_config = aws_config::from_env()
-            .region(checkpoint_region)
-            .load()
-            .await;
 
         tracing::info!(
             "Checkpoint S3 client: region={}, endpoint={:?}",
             checkpoint_region_name,
-            checkpoint_sdk_config.endpoint_url(),
+            sdk_config.endpoint_url(),
         );
 
-        let checkpoint_s3_config = S3ConfigBuilder::from(&checkpoint_sdk_config)
+        let checkpoint_s3_config = S3ConfigBuilder::from(&sdk_config)
+            .region(checkpoint_region)
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();
@@ -1619,7 +1531,7 @@ async fn init_graph_from_stores(
     s3_client: &S3Client,
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
-    checkpoint: Option<GenesisCheckpointState>,
+    checkpoint: Option<GraphCheckpointState>,
 ) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Load the database");
 
@@ -1668,7 +1580,7 @@ async fn init_graph_from_stores(
 
     // Try to load graph from S3 checkpoint first
     if let Some(state) = checkpoint {
-        let both_eyes = download_genesis_checkpoint(s3_client, checkpoint_bucket, &state).await?;
+        let both_eyes = download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?;
         graph_loader.load_graphs_from_checkpoint(both_eyes);
         return Ok(());
     }

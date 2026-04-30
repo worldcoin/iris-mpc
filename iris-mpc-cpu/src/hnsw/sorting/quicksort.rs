@@ -186,11 +186,19 @@ impl PartialQuickSort {
 /// for processing which must be at least as large as `list`, and `sorted_len`
 /// gives the number of elements at the start of `list` which are known to be
 /// in sorted order already.
+///
+/// If `truncate_k` is `Some(k)`, recursive subsorts whose interval starts at
+/// index `>= k` are discarded.  This makes the result a partial sort where
+/// only the first `k` elements end up in fully sorted order; elements at
+/// positions `>= k` are left unsorted.  Useful when the caller intends to
+/// truncate the list to length `k` immediately afterwards.  This is an
+/// intermediate behaviour between full quicksort and quickselect.
 pub async fn apply_quicksort<V: VectorStore>(
     store: &mut V,
     list: &mut [(V::VectorRef, V::DistanceRef)],
     buffer: &mut [(V::VectorRef, V::DistanceRef)],
     sorted_len: usize,
+    truncate_k: Option<usize>,
 ) -> Result<()> {
     let len = list.len();
     if len == 0 {
@@ -217,6 +225,11 @@ pub async fn apply_quicksort<V: VectorStore>(
         unsorted_len: len - sorted_len,
     };
     if top_level_sort.is_finished() {
+        return Ok(());
+    }
+
+    // Discard the whole sort if every index would be truncated away (k == 0).
+    if matches!(truncate_k, Some(k) if top_level_sort.left >= k) {
         return Ok(());
     }
 
@@ -269,11 +282,23 @@ pub async fn apply_quicksort<V: VectorStore>(
         }
         list.clone_from_slice(buffer);
 
-        // Update with new recursive sorts
-        sorts.extend(new_sorts.into_iter().map(|sort| LocalSort {
-            sort,
-            cmp_results_range: None,
-        }));
+        // Update with new recursive sorts.  When `truncate_k` is set, drop any
+        // subsort whose interval begins at or past the truncation index; its
+        // elements will be discarded by the caller anyway.  Existing sorts in
+        // `sorts` retain their `left` field through `step()`, so they don't
+        // need re-filtering here.
+        sorts.extend(
+            new_sorts
+                .into_iter()
+                .filter(|sort| match truncate_k {
+                    Some(k) => sort.left < k,
+                    None => true,
+                })
+                .map(|sort| LocalSort {
+                    sort,
+                    cmp_results_range: None,
+                }),
+        );
 
         // Remove all finished parts
         sorts.retain(|s| !s.sort.is_finished());
@@ -285,10 +310,14 @@ pub async fn apply_quicksort<V: VectorStore>(
 /// Apply partial quicksort to a list of `PartialOrd` elements which has
 /// sorted prefix of length `sorted_len`, by recursive application.
 ///
+/// `truncate_k` matches the behaviour of [`apply_quicksort`]: when `Some(k)`,
+/// recursive subsorts beginning at index `>= k` are skipped.
+///
 /// Function is meant primarily for testing use.
 pub fn apply_quicksort_recursive<T: PartialOrd + Clone>(
     list: &mut [T],
     sorted_len: usize,
+    truncate_k: Option<usize>,
 ) -> Result<()> {
     let mut buffer: Vec<_> = list.into();
     let initial_sort = PartialQuickSort {
@@ -301,7 +330,11 @@ pub fn apply_quicksort_recursive<T: PartialOrd + Clone>(
         list: &mut [T],
         buffer: &mut [T],
         mut sort: PartialQuickSort,
+        truncate_k: Option<usize>,
     ) -> Result<()> {
+        if matches!(truncate_k, Some(k) if sort.left >= k) {
+            return Ok(());
+        }
         if !sort.is_finished() {
             let (left, right) = (sort.left, sort.right());
 
@@ -315,14 +348,14 @@ pub fn apply_quicksort_recursive<T: PartialOrd + Clone>(
             let next_sort = sort.step(&cmp_results, list, buffer)?;
             list[left..right].clone_from_slice(&buffer[left..right]);
 
-            apply_quicksort_recursive_interior(list, buffer, sort)?;
-            apply_quicksort_recursive_interior(list, buffer, next_sort)?;
+            apply_quicksort_recursive_interior(list, buffer, sort, truncate_k)?;
+            apply_quicksort_recursive_interior(list, buffer, next_sort, truncate_k)?;
         }
 
         Ok(())
     }
 
-    apply_quicksort_recursive_interior(list, &mut buffer, initial_sort)
+    apply_quicksort_recursive_interior(list, &mut buffer, initial_sort, truncate_k)
 }
 
 #[cfg(test)]
@@ -456,11 +489,61 @@ mod tests {
                 let mut vals2 = vals1.clone();
 
                 vals1.get_mut(0..sorted_length).unwrap().sort();
-                apply_quicksort_recursive(&mut vals1, sorted_length)?;
+                apply_quicksort_recursive(&mut vals1, sorted_length, None)?;
 
                 vals2.sort();
 
                 assert_eq!(vals1, vals2);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_qs_partial_sort_random() -> Result<()> {
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..10 {
+            let sorted_length = rng.gen_range(32..128);
+            let unsorted_length = rng.gen_range(128..512);
+            let length = sorted_length + unsorted_length;
+
+            for _ in 0..5 {
+                let base: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
+                let mut fully_sorted = base.clone();
+                fully_sorted.sort();
+
+                // Cover boundary cases (0, full length) plus several mid points.
+                let ks = [
+                    0,
+                    1,
+                    sorted_length,
+                    sorted_length + 1,
+                    length / 2,
+                    length - 1,
+                    length,
+                ];
+                for &k in &ks {
+                    let mut partial = base.clone();
+                    partial.get_mut(0..sorted_length).unwrap().sort();
+                    apply_quicksort_recursive(&mut partial, sorted_length, Some(k))?;
+
+                    // The first `k` elements must match the fully sorted prefix.
+                    assert_eq!(
+                        &partial[..k],
+                        &fully_sorted[..k],
+                        "partial sort failed for k={}, sorted_length={}, length={}",
+                        k,
+                        sorted_length,
+                        length
+                    );
+
+                    // The full multiset must still equal the original (sort is a permutation).
+                    let mut partial_sorted = partial.clone();
+                    partial_sorted.sort();
+                    assert_eq!(partial_sorted, fully_sorted);
+                }
             }
         }
 
