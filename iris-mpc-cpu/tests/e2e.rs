@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use eyre::Result;
 use iris_mpc_common::{
     helpers::smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},

@@ -150,8 +150,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         self.layers
             .iter()
             .enumerate()
-            .filter(|(_lc, layer)| !layer.links.is_empty())
-            .next_back()
+            .rfind(|(_lc, layer)| !layer.links.is_empty())
             .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (x.clone(), lc)))
     }
 
@@ -387,7 +386,7 @@ where
         S: Serializer,
     {
         let mut entries: Vec<_> = self.links.iter().collect();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries.sort_by_key(|(left, _)| *left);
 
         let mut map = serializer.serialize_map(Some(entries.len()))?;
         for (key, value) in entries {
@@ -574,8 +573,8 @@ mod tests {
         async fn vectors_as_queries(
             &mut self,
             vectors: Vec<Self::VectorRef>,
-        ) -> Vec<Self::QueryRef> {
-            vectors
+        ) -> Result<Vec<Self::QueryRef>> {
+            Ok(vectors)
         }
 
         async fn eval_distance(

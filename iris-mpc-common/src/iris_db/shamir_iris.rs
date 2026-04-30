@@ -48,7 +48,7 @@ impl ShamirIris {
             let (code_shares, mask_shares) = Self::share_bit(c_bit, m_bit, rng);
             for (res, (code, mask)) in result
                 .iter_mut()
-                .zip(code_shares.into_iter().zip(mask_shares.into_iter()))
+                .zip(code_shares.into_iter().zip(mask_shares))
             {
                 res.code[bitindex] = code;
                 res.mask[bitindex] = mask;
