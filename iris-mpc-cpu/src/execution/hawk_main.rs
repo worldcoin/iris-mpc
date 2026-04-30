@@ -1629,7 +1629,22 @@ impl HawkResult {
             intra_batch: false,
         });
 
-        let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
+        // "No normal match anywhere AND mirror match somewhere" — wide filter so an in-batch
+        // mirror peer also raises the flag, matching GPU semantics
+        // (`iris-mpc-gpu/src/server/actor.rs:1318-1334`). The narrow `match_ids` /
+        // `full_face_mirror_match_ids` lists only carry DB serial ids, so we'd miss the
+        // in-batch case if we derived the flag from them.
+        let any_match_normal = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Normal),
+            intra_batch: true,
+        });
+        let any_match_mirror = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Mirror),
+            intra_batch: true,
+        });
+        let full_face_mirror_attack_detected = izip!(&any_match_normal, &any_match_mirror)
             .map(|(normal, mirror)| normal.is_empty() && !mirror.is_empty())
             .collect_vec();
 

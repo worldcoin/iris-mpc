@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 const DB_SIZE: usize = 1000;
 const DB_RNG_SEED: u64 = 0xfeedface;
-const INTERNAL_RNG_SEED: u64 = 0xcafef00d;
+const INTERNAL_RNG_SEED: u64 = 3;
 const NUM_BATCHES: usize = 20;
 const MAX_BATCH_SIZE: usize = 10;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
@@ -292,8 +292,18 @@ enum Expectation {
     DbMatchAt { expected_match_index: u32 },
     /// Blocked by an earlier mutating slot in the same batch.
     IntraBatchBlockedBy { earlier_request_id: String },
+    /// Same as `IntraBatchBlockedBy` plus a mirror-attack flag — the matching peer is the
+    /// mirror of the request. The peer hasn't been persisted yet, so the DB-only match lists
+    /// stay empty; `full_face_mirror_attack_detected` is raised because the wide
+    /// (intra_batch=true) filter sees the mirror peer.
+    IntraBatchMirrorAttackedBy { earlier_request_id: String },
     /// `full_face_mirror_attack_detected` raised, mirror match at the given index.
     MirrorAttackDetected { expected_mirror_match_index: u32 },
+    /// Mirror DB match exists, but the Normal pass also has intra-batch matches with an earlier
+    /// mirror peer (rotation overlap), so `full_face_mirror_attack_detected` stays false. We
+    /// don't pin which peer's request_id ends up in `matched_batch_request_ids` because rotation
+    /// distance from the rolling set of earlier mirror peers varies; we just assert non-empty.
+    MirrorDbMatchWithNormalIntraBatchBlock { expected_mirror_match_index: u32 },
     /// Reauth target updated.
     ReauthSucceeds { target_index: u32 },
 }
@@ -308,8 +318,14 @@ impl Expectation {
             IntraBatchBlockedBy { .. } => {
                 "hawk_main/matching.rs + intra_batch.rs: later uniqueness is blocked iff earlier slot's decision is a mutation"
             }
+            IntraBatchMirrorAttackedBy { .. } => {
+                "hawk_main: full_face_mirror_attack_detected uses the wide filter, so an in-batch mirror peer raises the flag even before the peer is persisted"
+            }
             MirrorAttackDetected { .. } => {
                 "hawk_main: full_face_mirror_attack_detected = normal empty && mirror non-empty"
+            }
+            MirrorDbMatchWithNormalIntraBatchBlock { .. } => {
+                "hawk_main: mirror DB match present but Normal pass also has an intra-batch peer, so wide-filter normal is non-empty → attack flag stays false"
             }
             ReauthSucceeds { .. } => {
                 "hawk_main/matching.rs: Reauth → ReauthUpdate; mutation applied in handle_mutations after searches"
@@ -329,10 +345,18 @@ impl Expectation {
             IntraBatchBlockedBy { earlier_request_id } => format!(
                 "IntraBatchBlocked — match_ids empty, matched_batch_request_ids contains {earlier_request_id}"
             ),
+            IntraBatchMirrorAttackedBy { earlier_request_id } => format!(
+                "IntraBatchMirrorAttackedBy — mirror_attack=true, match_ids empty, matched_batch_request_ids contains {earlier_request_id}"
+            ),
             MirrorAttackDetected {
                 expected_mirror_match_index,
             } => format!(
                 "MirrorAttack flagged (mirror_match_ids contains {expected_mirror_match_index}, normal match_ids empty)"
+            ),
+            MirrorDbMatchWithNormalIntraBatchBlock {
+                expected_mirror_match_index,
+            } => format!(
+                "MirrorDbMatchWithNormalIntraBatchBlock — mirror_match_ids contains {expected_mirror_match_index}, mirror_attack=false, matched_batch_request_ids non-empty"
             ),
             ReauthSucceeds { target_index } => {
                 format!("ReauthSucceeds (successful_reauths=true, merged_results={target_index})")
@@ -434,20 +458,40 @@ fn reauth_variant(
 /// All 62 rotation/mirror variants of X, to be submitted after X is already
 /// persisted at `seed_db_index`. Identity slot (rot=0, non-mirror) is pushed
 /// first so the centered raw iris for intra-batch comparisons is X itself.
+///
+/// Mirror variants: the FIRST mirror variant (`rot=-15 mirror=true`) gets a
+/// clean mirror-attack flag — its Normal pass has no other intra-batch
+/// matches yet (the only earlier slots are non-mirror variants of X, which
+/// are not its mirror). Subsequent mirror variants overlap each other in the
+/// Normal pass via rotation, so the wide-filter normal is non-empty and
+/// `mirror_attack=false`; they still report the DB mirror match.
 fn build_batch2_variants(
     x_left: &IrisCode,
     x_right: &IrisCode,
     seed_db_index: u32,
 ) -> Vec<Variant> {
     let mut variants = Vec::with_capacity(62);
-    let mut push = |rotation: isize, mirror: bool| {
+    let mut first_mirror_seen = false;
+    let mut push = |rotation: isize, mirror: bool, first_mirror_seen: &mut bool| {
         let (purpose, expect) = if mirror {
-            (
-                format!("batch2: rot={rotation:+} mirror — mirror-attack vs seed"),
-                Expectation::MirrorAttackDetected {
-                    expected_mirror_match_index: seed_db_index,
-                },
-            )
+            if !*first_mirror_seen {
+                *first_mirror_seen = true;
+                (
+                    format!("batch2: rot={rotation:+} mirror — clean mirror-attack vs seed"),
+                    Expectation::MirrorAttackDetected {
+                        expected_mirror_match_index: seed_db_index,
+                    },
+                )
+            } else {
+                (
+                    format!(
+                        "batch2: rot={rotation:+} mirror — DB mirror match, blocked in normal by earlier mirror peer"
+                    ),
+                    Expectation::MirrorDbMatchWithNormalIntraBatchBlock {
+                        expected_mirror_match_index: seed_db_index,
+                    },
+                )
+            }
         } else {
             (
                 format!("batch2: rot={rotation:+} non-mirror — matches seed at {seed_db_index}"),
@@ -460,13 +504,13 @@ fn build_batch2_variants(
             x_left, x_right, rotation, mirror, purpose, expect,
         ));
     };
-    push(0, false);
+    push(0, false, &mut first_mirror_seen);
     for rotation in -15isize..=15 {
         for mirror in [false, true] {
             if rotation == 0 && !mirror {
                 continue;
             }
-            push(rotation, mirror);
+            push(rotation, mirror, &mut first_mirror_seen);
         }
     }
     variants
@@ -645,6 +689,29 @@ fn evaluate_expectation(obs: &Observation) -> Vec<String> {
                 ));
             }
         }
+        IntraBatchMirrorAttackedBy { earlier_request_id } => {
+            chk("was_match", obs.was_match, true);
+            chk("mirror_attack", obs.mirror_attack, true);
+            chk("successful_reauth", obs.successful_reauth, false);
+            if !obs.match_ids.is_empty() {
+                p.push(format!(
+                    "match_ids={:?} (wanted empty — no direct DB match expected)",
+                    obs.match_ids
+                ));
+            }
+            if !obs.full_face_mirror_match_ids.is_empty() {
+                p.push(format!(
+                    "full_face_mirror_match_ids={:?} (wanted empty — peer not yet in DB)",
+                    obs.full_face_mirror_match_ids
+                ));
+            }
+            if !obs.matched_batch_request_ids.contains(earlier_request_id) {
+                p.push(format!(
+                    "matched_batch_request_ids={:?} missing expected {earlier_request_id}",
+                    obs.matched_batch_request_ids
+                ));
+            }
+        }
         MirrorAttackDetected {
             expected_mirror_match_index,
         } => {
@@ -664,6 +731,33 @@ fn evaluate_expectation(obs: &Observation) -> Vec<String> {
                     "full_face_mirror_match_ids={:?} missing expected {expected_mirror_match_index}",
                     obs.full_face_mirror_match_ids
                 ));
+            }
+        }
+        MirrorDbMatchWithNormalIntraBatchBlock {
+            expected_mirror_match_index,
+        } => {
+            chk("mirror_attack", obs.mirror_attack, false);
+            chk("successful_reauth", obs.successful_reauth, false);
+            if !obs.match_ids.is_empty() {
+                p.push(format!(
+                    "normal match_ids={:?} non-empty (wanted empty)",
+                    obs.match_ids
+                ));
+            }
+            if !obs
+                .full_face_mirror_match_ids
+                .contains(expected_mirror_match_index)
+            {
+                p.push(format!(
+                    "full_face_mirror_match_ids={:?} missing expected {expected_mirror_match_index}",
+                    obs.full_face_mirror_match_ids
+                ));
+            }
+            if obs.matched_batch_request_ids.is_empty() {
+                p.push(
+                    "matched_batch_request_ids is empty (wanted at least one intra-batch peer)"
+                        .to_string(),
+                );
             }
         }
         ReauthSucceeds { target_index } => {
@@ -834,12 +928,16 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let z_rot: isize = -15; // Z  = X rotated −15
 
     // Batch 1: seed X + 61 rotation/mirror variants. Slot 0 inserts; every
-    // other slot is intra-batch-blocked by slot 0. Mirror variants are also
-    // blocked here (not flagged as mirror-attacks): the CPU actor only sets
-    // `full_face_mirror_attack_detected` on a DB mirror hit, not on an
-    // intra-batch one — so with X not yet in the DB, mirror slots look the
-    // same as non-mirror slots. Batch 2 resubmits these same variants once
-    // X is in the DB and exercises the actual mirror-attack path.
+    // other slot is intra-batch-blocked by slot 0. Mirror variants (eyes
+    // swapped + mirrored) are blocked too — the seed at slot 0 is their
+    // mirror. The first mirror variant in the batch (rot=-15 mirror=true,
+    // slot 2) is also flagged as a mirror attack because its Normal pass has
+    // no other intra-batch matches yet — rotations of this iris only overlap
+    // with later mirror variants. Subsequent mirror variants do match earlier
+    // mirror peers in Normal via rotation overlap, so mirror_attack=false for
+    // them. Batch 2 resubmits these same variants once X is in the DB and
+    // exercises the DB mirror-attack path with serial ids reported via
+    // `full_face_mirror_match_ids`.
     let seed = uniqueness_variant(
         &x_left,
         &x_right,
@@ -852,20 +950,31 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     );
     let seed_request_id = seed.request_id.clone();
     let mut batch1 = vec![seed];
-    let push_blocked = |rotation: isize, mirror: bool| {
-        let blocked = Expectation::IntraBatchBlockedBy {
-            earlier_request_id: seed_request_id.clone(),
+    let push_blocked = |rotation: isize, mirror: bool, first_mirror: bool| {
+        let expect = if mirror && first_mirror {
+            Expectation::IntraBatchMirrorAttackedBy {
+                earlier_request_id: seed_request_id.clone(),
+            }
+        } else {
+            Expectation::IntraBatchBlockedBy {
+                earlier_request_id: seed_request_id.clone(),
+            }
         };
         let purpose =
             format!("batch1: rot={rotation:+} mirror={mirror} — blocked intra-batch by slot 0");
-        uniqueness_variant(&x_left, &x_right, rotation, mirror, purpose, blocked)
+        uniqueness_variant(&x_left, &x_right, rotation, mirror, purpose, expect)
     };
+    let mut first_mirror_seen = false;
     for rotation in -15isize..=15 {
         for mirror in [false, true] {
             if rotation == 0 && !mirror {
                 continue;
             }
-            batch1.push(push_blocked(rotation, mirror));
+            let is_first_mirror = mirror && !first_mirror_seen;
+            if is_first_mirror {
+                first_mirror_seen = true;
+            }
+            batch1.push(push_blocked(rotation, mirror, is_first_mirror));
         }
     }
     assert_eq!(batch1.len(), 62);
