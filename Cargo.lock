@@ -3041,6 +3041,7 @@ dependencies = [
  "futures",
  "iris-mpc-common",
  "iris-mpc-store",
+ "iris-mpc-worker-protocol",
  "itertools 0.13.0",
  "metrics",
  "num-traits",
@@ -3233,6 +3234,16 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "iris-mpc-worker-protocol"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "iris-mpc-common",
+ "serde",
+ "thiserror 1.0.65",
 ]
 
 [[package]]

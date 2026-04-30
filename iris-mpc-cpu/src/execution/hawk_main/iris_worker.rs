@@ -11,15 +11,17 @@ use crate::{
     },
     shares::RingElement,
 };
-use ampc_actor_utils::fast_metrics::FastHistogram;
+use ampc_actor_utils::{fast_metrics::FastHistogram, network::workpool::leader::LeaderHandle};
+use bytes::Bytes;
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
-use eyre::Result;
+use eyre::{eyre, Result};
 use futures::future::{try_join_all, BoxFuture};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     vector_id::VectorId,
 };
+use iris_mpc_worker_protocol as wire;
 use itertools::{izip, Itertools};
 use std::{
     collections::HashMap,
@@ -1045,4 +1047,332 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     );
 
     cpu_ids.into_iter().map(|id| CoreId { id }).collect()
+}
+
+// ---------------------------------------------------------------------------
+// RemoteIrisWorkerPool — drives a fleet of remote workers via the
+// ampc-actor-utils workpool `LeaderHandle`. Wire types come from
+// `iris-mpc-worker-protocol`. The strawman worker (and, eventually, the
+// production worker binary) sit on the other end of these calls.
+//
+// **v1 scope: single-shard only.** `num_shards == 1` is enforced at
+// construction. Once the sharding-key hash is settled with the worker
+// author, scatter-gather routing of `VectorId`s and per-shard checksum
+// combination land in a follow-up. Until then, broadcast and
+// scatter-gather collapse to "send to the one worker we have."
+// ---------------------------------------------------------------------------
+
+/// Distance computations farmed out to remote workers over TCP.
+pub struct RemoteIrisWorkerPool {
+    leader: Arc<LeaderHandle>,
+    /// Number of worker shards. v1 enforces == 1.
+    num_shards: usize,
+    /// Drives `delete_irises`'s dummy iris choice and is forwarded to
+    /// workers via construction config (not on the wire).
+    party_id: usize,
+}
+
+impl Debug for RemoteIrisWorkerPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteIrisWorkerPool")
+            .field("num_shards", &self.num_shards)
+            .field("party_id", &self.party_id)
+            .finish()
+    }
+}
+
+impl RemoteIrisWorkerPool {
+    /// Wrap a connected `LeaderHandle` as an `IrisWorkerPool`.
+    ///
+    /// The caller is responsible for calling
+    /// `LeaderHandle::wait_for_all_connections` *before* wrapping in `Arc`,
+    /// since that method requires `&mut`. After this returns, the pool is
+    /// ready to dispatch.
+    pub fn new(leader: Arc<LeaderHandle>, num_shards: usize, party_id: usize) -> Self {
+        assert_eq!(
+            num_shards, 1,
+            "RemoteIrisWorkerPool currently requires num_shards == 1; \
+             multi-shard routing lands in a follow-up PR"
+        );
+        Self {
+            leader,
+            num_shards,
+            party_id,
+        }
+    }
+
+    pub fn party_id(&self) -> usize {
+        self.party_id
+    }
+
+    pub fn num_shards(&self) -> usize {
+        self.num_shards
+    }
+}
+
+/// Broadcast `req` to every worker, decode each response with `extract`,
+/// and fail loudly on any worker error / protocol error / wrong variant.
+async fn broadcast_each<F, T>(
+    leader: &LeaderHandle,
+    req: wire::WorkerRequest,
+    method_name: &'static str,
+    mut extract: F,
+) -> Result<Vec<T>>
+where
+    F: FnMut(wire::WorkerResponse) -> Result<T>,
+{
+    let bytes = wire::encode_request(&req).map_err(|e| eyre!("encode {method_name}: {e}"))?;
+    let job = leader
+        .broadcast(Bytes::from(bytes))
+        .await
+        .map_err(|e| eyre!("broadcast {method_name}: {e:?}"))?;
+    let responses = job
+        .await
+        .map_err(|e| eyre!("workpool {method_name}: {e:?}"))?;
+    let mut out = Vec::with_capacity(responses.len());
+    for rsp in responses {
+        let payload = rsp
+            .payload
+            .map_err(|e| eyre!("worker {method_name}: {e:?}"))?;
+        let response = wire::decode_response(&payload.to_bytes())
+            .map_err(|e| eyre!("decode {method_name}: {e}"))?;
+        if let wire::WorkerResponse::ProtocolError(msg) = &response {
+            return Err(eyre!("{method_name} protocol error: {msg}"));
+        }
+        out.push(extract(response)?);
+    }
+    Ok(out)
+}
+
+fn share_to_arc_iris(s: wire::IrisShare) -> ArcIris {
+    Arc::new(GaloisRingSharedIris {
+        code: s.code,
+        mask: s.mask,
+    })
+}
+
+fn arc_iris_to_share(arc: &ArcIris) -> wire::IrisShare {
+    wire::IrisShare {
+        code: arc.code.clone(),
+        mask: arc.mask.clone(),
+    }
+}
+
+fn qid_to_wire(q: QueryId) -> wire::QueryId {
+    wire::QueryId(q.0)
+}
+
+fn spec_to_wire(s: QuerySpec) -> wire::QuerySpec {
+    let rotation =
+        u8::try_from(s.rotation).expect("rotation index fits in u8 (max 30 in the codebase)");
+    wire::QuerySpec {
+        query_id: qid_to_wire(s.query_id),
+        rotation,
+        mirrored: s.mirrored,
+    }
+}
+
+fn wrap_u16_vec(v: Vec<u16>) -> Vec<RingElement<u16>> {
+    v.into_iter().map(RingElement).collect()
+}
+
+impl IrisWorkerPool for RemoteIrisWorkerPool {
+    fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let wire_queries = queries
+                .into_iter()
+                .map(|(qid, iris)| (qid_to_wire(qid), arc_iris_to_share(&iris)))
+                .collect();
+            let req = wire::WorkerRequest::CacheQueries {
+                queries: wire_queries,
+            };
+            broadcast_each(
+                &self.leader,
+                req,
+                "cache_queries",
+                |response| match response {
+                    wire::WorkerResponse::CacheQueries(Ok(())) => Ok(()),
+                    wire::WorkerResponse::CacheQueries(Err(msg)) => {
+                        Err(eyre!("cache_queries: {msg}"))
+                    }
+                    other => Err(eyre!("cache_queries: unexpected variant {other:?}")),
+                },
+            )
+            .await?;
+            Ok(())
+        })
+    }
+
+    fn compute_dot_products<'a>(
+        &'a self,
+        batches: Vec<(QuerySpec, Vec<VectorId>)>,
+    ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>> {
+        Box::pin(async move {
+            // Single-shard v1: all batches go to the one worker as-is.
+            // Multi-shard v2 will partition each batch's `VectorId`s by
+            // shard and reassemble per-target outputs back into input
+            // order; the hash function is part of the worker-author
+            // contract.
+            let wire_batches = batches
+                .into_iter()
+                .map(|(spec, vids)| (spec_to_wire(spec), vids))
+                .collect();
+            let req = wire::WorkerRequest::ComputeDotProducts {
+                batches: wire_batches,
+            };
+            let mut all =
+                broadcast_each(
+                    &self.leader,
+                    req,
+                    "compute_dot_products",
+                    |response| match response {
+                        wire::WorkerResponse::ComputeDotProducts(Ok(batches)) => Ok(batches),
+                        wire::WorkerResponse::ComputeDotProducts(Err(msg)) => {
+                            Err(eyre!("compute_dot_products: {msg}"))
+                        }
+                        other => Err(eyre!("compute_dot_products: unexpected variant {other:?}")),
+                    },
+                )
+                .await?;
+            // v1: one worker → one set of batches. Take it directly.
+            let batches = all
+                .pop()
+                .ok_or_else(|| eyre!("compute_dot_products: no responses"))?;
+            Ok(batches.into_iter().map(wrap_u16_vec).collect())
+        })
+    }
+
+    fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
+        Box::pin(async move {
+            let req = wire::WorkerRequest::FetchIrises { ids };
+            let mut all =
+                broadcast_each(
+                    &self.leader,
+                    req,
+                    "fetch_irises",
+                    |response| match response {
+                        wire::WorkerResponse::FetchIrises(Ok(irises)) => Ok(irises),
+                        wire::WorkerResponse::FetchIrises(Err(msg)) => {
+                            Err(eyre!("fetch_irises: {msg}"))
+                        }
+                        other => Err(eyre!("fetch_irises: unexpected variant {other:?}")),
+                    },
+                )
+                .await?;
+            let irises = all
+                .pop()
+                .ok_or_else(|| eyre!("fetch_irises: no responses"))?;
+            Ok(irises.into_iter().map(share_to_arc_iris).collect())
+        })
+    }
+
+    fn insert_irises<'a>(
+        &'a self,
+        inserts: Vec<(QueryId, VectorId)>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let wire_inserts = inserts
+                .into_iter()
+                .map(|(qid, vid)| (qid_to_wire(qid), vid))
+                .collect();
+            let req = wire::WorkerRequest::InsertIrises {
+                inserts: wire_inserts,
+            };
+            let mut all =
+                broadcast_each(
+                    &self.leader,
+                    req,
+                    "insert_irises",
+                    |response| match response {
+                        wire::WorkerResponse::InsertIrises(Ok(checksum)) => Ok(checksum),
+                        wire::WorkerResponse::InsertIrises(Err(msg)) => {
+                            Err(eyre!("insert_irises: {msg}"))
+                        }
+                        other => Err(eyre!("insert_irises: unexpected variant {other:?}")),
+                    },
+                )
+                .await?;
+            // v1: single shard → single checksum.
+            // v2 with multi-shard will need to combine per-shard
+            // `set_hash` checksums; combining policy is TBD and depends
+            // on the SetHash algebra (XOR if it's order-independent).
+            all.pop()
+                .ok_or_else(|| eyre!("insert_irises: no responses"))
+        })
+    }
+
+    fn compute_pairwise_distances<'a>(
+        &'a self,
+        pairs: Vec<Option<(QuerySpec, QueryId)>>,
+    ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>> {
+        Box::pin(async move {
+            let wire_pairs = pairs
+                .into_iter()
+                .map(|p| p.map(|(spec, qid)| (spec_to_wire(spec), qid_to_wire(qid))))
+                .collect();
+            let req = wire::WorkerRequest::ComputePairwiseDistances { pairs: wire_pairs };
+            let mut all = broadcast_each(
+                &self.leader,
+                req,
+                "compute_pairwise_distances",
+                |response| match response {
+                    wire::WorkerResponse::ComputePairwiseDistances(Ok(values)) => Ok(values),
+                    wire::WorkerResponse::ComputePairwiseDistances(Err(msg)) => {
+                        Err(eyre!("compute_pairwise_distances: {msg}"))
+                    }
+                    other => Err(eyre!(
+                        "compute_pairwise_distances: unexpected variant {other:?}"
+                    )),
+                },
+            )
+            .await?;
+            let values = all
+                .pop()
+                .ok_or_else(|| eyre!("compute_pairwise_distances: no responses"))?;
+            Ok(wrap_u16_vec(values))
+        })
+    }
+
+    fn evict_queries<'a>(&'a self, query_ids: Vec<QueryId>) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let wire_ids = query_ids.into_iter().map(qid_to_wire).collect();
+            let req = wire::WorkerRequest::EvictQueries {
+                query_ids: wire_ids,
+            };
+            broadcast_each(
+                &self.leader,
+                req,
+                "evict_queries",
+                |response| match response {
+                    wire::WorkerResponse::EvictQueries(Ok(())) => Ok(()),
+                    wire::WorkerResponse::EvictQueries(Err(msg)) => {
+                        Err(eyre!("evict_queries: {msg}"))
+                    }
+                    other => Err(eyre!("evict_queries: unexpected variant {other:?}")),
+                },
+            )
+            .await?;
+            Ok(())
+        })
+    }
+
+    fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let req = wire::WorkerRequest::DeleteIrises { ids };
+            broadcast_each(
+                &self.leader,
+                req,
+                "delete_irises",
+                |response| match response {
+                    wire::WorkerResponse::DeleteIrises(Ok(())) => Ok(()),
+                    wire::WorkerResponse::DeleteIrises(Err(msg)) => {
+                        Err(eyre!("delete_irises: {msg}"))
+                    }
+                    other => Err(eyre!("delete_irises: unexpected variant {other:?}")),
+                },
+            )
+            .await?;
+            Ok(())
+        })
+    }
 }

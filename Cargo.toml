@@ -10,6 +10,7 @@ members = [
     "iris-mpc-upgrade",
     "iris-mpc-upgrade-hawk",
     "iris-mpc-utils",
+    "iris-mpc-worker-protocol",
 ]
  default-members = [
     "iris-mpc",
@@ -21,6 +22,7 @@ members = [
     "iris-mpc-upgrade",
     "iris-mpc-upgrade-hawk",
     "iris-mpc-utils",
+    "iris-mpc-worker-protocol",
 ]
 resolver = "2"
 
