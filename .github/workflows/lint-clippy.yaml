@@ -68,4 +68,4 @@ jobs:
 
       - name: Clippy
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: cargo clippy --all-targets --all-features -- -D warnings --no-deps
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings --no-deps
