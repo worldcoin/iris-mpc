@@ -75,7 +75,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     runtime
         .sessions
         .into_iter()
-        .zip(storages.into_iter())
+        .zip(storages)
         .map(|(session, storage)| {
             let party_id = session.network_session.own_role.index();
             let workers = LocalIrisWorkerPool::new_local(

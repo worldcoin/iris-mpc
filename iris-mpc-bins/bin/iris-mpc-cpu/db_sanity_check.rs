@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
@@ -10,8 +12,8 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId, LEFT, RIGHT},
-    genesis::genesis_checkpoint::{
-        download_genesis_checkpoint, get_latest_checkpoint_state, GenesisCheckpointState,
+    graph_checkpoint::{
+        download_graph_checkpoint, get_latest_checkpoint_state, GraphCheckpointState,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::{
@@ -306,7 +308,7 @@ async fn main() -> Result<()> {
             checkpoint_state.s3_key
         );
         let graphs: BothEyes<GraphMem<VectorId>> =
-            download_genesis_checkpoint(&s3_client, bucket, &checkpoint_state).await?;
+            download_graph_checkpoint(&s3_client, bucket, &checkpoint_state).await?;
         rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
         // Check 0a: checkpoint metadata vs persistent_state genesis watermarks
@@ -906,7 +908,7 @@ async fn load_checkpoint_state(
     explicit_key: Option<&str>,
     bucket: &str,
     rpt: &mut Report,
-) -> Result<GenesisCheckpointState> {
+) -> Result<GraphCheckpointState> {
     if let Some(key) = explicit_key {
         rpt!(
             rpt,
@@ -919,7 +921,7 @@ async fn load_checkpoint_state(
             .get_genesis_graph_checkpoint_by_key(key)
             .await?
             .ok_or_else(|| eyre::eyre!("No checkpoint row found in DB for S3 key: {}", key))?;
-        Ok(GenesisCheckpointState {
+        Ok(GraphCheckpointState {
             s3_key: row.s3_key,
             last_indexed_iris_id: row.last_indexed_iris_id.try_into().map_err(|_| {
                 eyre::eyre!("Invalid last_indexed_iris_id: {}", row.last_indexed_iris_id)
