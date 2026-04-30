@@ -19,7 +19,6 @@ use ampc_server_utils::{
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
-use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
@@ -32,12 +31,15 @@ use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
+    DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
+};
 use iris_mpc_cpu::execution::hawk_main::{
-    GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps, ServerJobResult,
+    load_graphs_from_pg, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps, ServerJobResult,
+    HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
@@ -144,7 +146,8 @@ pub async fn server_main(config: Config) -> Result<()> {
         return Ok(());
     }
 
-    let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
+    let mut hawk_actor =
+        init_hawk_actor(&config, &iris_store, &graph_store, &shutdown_handler).await?;
 
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
@@ -157,15 +160,6 @@ pub async fn server_main(config: Config) -> Result<()> {
                 "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
             );
     }
-
-    load_database(
-        &config,
-        &iris_store,
-        &graph_store,
-        &shutdown_handler,
-        &mut hawk_actor,
-    )
-    .await?;
 
     background_tasks.check_tasks();
 
@@ -428,12 +422,8 @@ async fn sync_sqs_queues(
     Ok(())
 }
 
-/// Initialize main Hawk actor process for handling query batches using HNSW
-/// approximate k-nearest neighbors graph search.
-async fn init_hawk_actor(
-    config: &Config,
-    shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<HawkActor> {
+/// Build `HawkArgs` from server config.
+fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String>)> {
     let server_coord_config = config.server_coordination.clone().unwrap();
 
     let node_inbound_addresses: Vec<String> = server_coord_config
@@ -470,89 +460,90 @@ async fn init_hawk_actor(
         numa: config.hawk_numa,
     };
 
-    tracing::info!(
-       "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outbound addresses: {:?}",
-        hawk_args.party_index,
-        node_inbound_addresses,
-        node_outbound_addresses
-    );
-
-    HawkActor::from_cli(
-        &hawk_args,
-        shutdown_handler.get_network_cancellation_token(),
-    )
-    .await
+    Ok((hawk_args, node_inbound_addresses, node_outbound_addresses))
 }
 
-/// Loads iris code shares & HNSW graph from Postgres and/or S3.
-async fn load_database(
+/// Initialize the Hawk actor: build the iris-loading initializer per config,
+/// run the iris and graph loads in parallel, then construct the actor with
+/// the populated workers and graph in place. After this returns, the actor
+/// is ready to serve queries — no separate `load_database` step.
+async fn init_hawk_actor(
     config: &Config,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
     shutdown_handler: &Arc<ShutdownHandler>,
-    hawk_actor: &mut HawkActor,
-) -> Result<()> {
-    // ANCHOR: Load the database
-    tracing::info!("⚓️ ANCHOR: Load the database");
-    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
-
-    // TODO: not needed?
-    if config.fake_db_size > 0 {
-        iris_loader.fake_db(config.fake_db_size);
-        iris_loader.wait_completion().await?;
-        return Ok(());
-    }
-
-    let parallelism = config
-        .cpu_database
-        .as_ref()
-        .ok_or(eyre!("Missing database config"))?
-        .load_parallelism;
+) -> Result<HawkActor> {
+    let (hawk_args, inbound, outbound) = build_hawk_args(config)?;
 
     tracing::info!(
-        "Initialize iris db: Loading from DB (parallelism: {})",
-        parallelism
+        "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outbound addresses: {:?}",
+        hawk_args.party_index,
+        inbound,
+        outbound,
     );
-    let download_shutdown_handler = Arc::clone(shutdown_handler);
+    tracing::info!("⚓️ ANCHOR: Load the database");
 
-    let store_len = iris_store.count_irises().await?;
-
-    let now = Instant::now();
-
-    let iris_load_future = async move {
-        load_iris_db(
-            &mut iris_loader,
-            iris_store,
-            store_len,
+    // Pick the iris-loading mode based on config. `fake_db_size > 0` is a
+    // benchmark / dev-loop knob that fills the store with sentinel irises
+    // and skips the graph load entirely; otherwise we run `load_iris_db`
+    // against the configured PG (and S3, when enabled).
+    let initializer: Box<dyn WorkerPoolInitializer> = if config.fake_db_size > 0 {
+        Box::new(LocalWorkerPoolInitializer::new_fake_db(
+            hawk_args.party_index,
+            HAWK_DISTANCE_MODE,
+            hawk_args.numa,
+            config.fake_db_size,
+        ))
+    } else {
+        let parallelism = config
+            .cpu_database
+            .as_ref()
+            .ok_or_else(|| eyre!("Missing database config"))?
+            .load_parallelism;
+        let store_len = iris_store.count_irises().await?;
+        tracing::info!(
+            "Initialize iris db: Loading from DB (parallelism: {})",
             parallelism,
-            None,
-            config,
-            download_shutdown_handler,
-        )
-        .await?;
-        iris_loader.wait_completion().await?;
-        eyre::Result::<()>::Ok(())
+        );
+        Box::new(LocalWorkerPoolInitializer::new_load_from_db(
+            hawk_args.party_index,
+            HAWK_DISTANCE_MODE,
+            hawk_args.numa,
+            DbLoadParams {
+                store: iris_store.clone(),
+                config: Arc::new(config.clone()),
+                max_serial_id: store_len,
+                parallelism,
+                s3_max_serial_id: None,
+                shutdown_handler: Arc::clone(shutdown_handler),
+            },
+        ))
     };
 
-    let graph_load_future = graph_loader.load_graph_store(
-        graph_store,
-        config.cpu_database.as_ref().unwrap().load_parallelism,
-    );
+    let now = Instant::now();
+    let ct = shutdown_handler.get_network_cancellation_token();
 
-    let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
-    iris_result.expect("Failed to load iris DB");
-    graph_result.expect("Failed to load graph DB");
+    if config.fake_db_size > 0 {
+        // Skip graph load — preserves the legacy `fake_db` shortcut.
+        return HawkActor::from_cli_with_initializer(&hawk_args, ct, initializer).await;
+    }
+
+    let graph_parallelism = config
+        .cpu_database
+        .as_ref()
+        .ok_or_else(|| eyre!("Missing database config"))?
+        .load_parallelism;
+
+    let (initialized, graph) = tokio::try_join!(
+        initializer.initialize(),
+        load_graphs_from_pg(graph_store, graph_parallelism),
+    )?;
     tracing::info!(
         "Loaded both iris and graph DBs into memory in {:?}",
         now.elapsed()
     );
 
-    // The registries are snapshotted from `iris_store` at HawkActor construction
-    // (i.e. empty), but `IrisLoader` populates `iris_store` after the fact.
-    // Rebuild the registries so sessions see the loaded VectorIds.
-    hawk_actor.refresh_registries().await;
-
-    Ok(())
+    HawkActor::from_initialized_workers(&hawk_args, ct, initialized, graph).await
 }
 
 /// Spawns thread responsible for communicating back results from batch query processing.

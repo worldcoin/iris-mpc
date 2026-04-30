@@ -24,8 +24,8 @@ use iris_mpc_common::{
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
-        iris_worker::IrisWorkerPool, BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps,
-        StoreId, LEFT, RIGHT,
+        iris_worker::IrisWorkerPool, worker_pool_initializer::DbLoadParams, BothEyes, GraphRef,
+        GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
     },
     genesis::{
         state_accessor::{
@@ -43,7 +43,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -1535,8 +1535,6 @@ async fn init_graph_from_stores(
 ) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Load the database");
 
-    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
-
     let iris_db_parallelism = config
         .database
         .as_ref()
@@ -1563,20 +1561,23 @@ async fn init_graph_from_stores(
     let store_len = iris_store.count_irises().await?;
     let max_index = std::cmp::min(max_indexation_id, store_len);
 
-    // Load iris data from database
-    load_iris_db(
-        &mut iris_loader,
-        iris_store,
-        max_index,
-        iris_db_parallelism,
-        Some(max_index),
-        config,
-        shutdown_handler,
-    )
-    .await
-    .expect("Failed to load DB");
+    // Load iris data into the actor's existing local worker pool. Iris
+    // loading must happen here (not at actor construction) because
+    // `sync_peers` and the optional iris-DB rollback above run against
+    // the empty actor first.
+    hawk_actor
+        .load_iris_db_in_place(DbLoadParams {
+            store: iris_store.clone(),
+            config: Arc::new(config.clone()),
+            max_serial_id: max_index,
+            parallelism: iris_db_parallelism,
+            s3_max_serial_id: Some(max_index),
+            shutdown_handler,
+        })
+        .await
+        .expect("Failed to load DB");
 
-    iris_loader.wait_completion().await?;
+    let graph_loader = hawk_actor.as_graph_loader().await;
 
     // Try to load graph from S3 checkpoint first
     if let Some(state) = checkpoint {
