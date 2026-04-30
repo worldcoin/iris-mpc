@@ -277,8 +277,8 @@ async fn e2e_test_async() -> Result<()> {
 // after each batch, collects all violations, and panics once with a
 // self-contained report.
 //
-//   Batch 1: seed X + 30 non-mirror rotations → slot 0 UniqueInsert; rotations intra-batch-blocked
-//   Batch 2: 62 rotation/mirror variants      → DbMatchAt / MirrorAttack (X now in DB)
+//   Batch 1: seed X + 61 rotation/mirror variants → slot 0 UniqueInsert; every other slot intra-batch-blocked (mirror variants too — see note below)
+//   Batch 2: same 62 variants resubmitted        → DbMatchAt / MirrorAttack (X now in DB; this is where the mirror flag actually fires)
 //   Batch 3: [X' reauth, Y=X+30, Z=X-15]       → reauth OK; Y blocked intra-batch; Z matches original X (reauth not yet applied)
 //   Batch 4: [Y=X+30, Z=X-15] (post-reauth)    → Y matches X' in DB; Z is out of rotation window → UniqueInsert
 //   Batch 5: [delete(seed_idx), uniqueness(X')] → deletion acts before search; X' re-enrolls at fresh serial
@@ -833,8 +833,13 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let y_rot: isize = 30; // Y  = X rotated +30
     let z_rot: isize = -15; // Z  = X rotated −15
 
-    // Batch 1: seed X + its 30 non-zero rotations. Slot 0 inserts; each
-    // rotation intra-batch-matches slot 0's centered X and is blocked.
+    // Batch 1: seed X + 61 rotation/mirror variants. Slot 0 inserts; every
+    // other slot is intra-batch-blocked by slot 0. Mirror variants are also
+    // blocked here (not flagged as mirror-attacks): the CPU actor only sets
+    // `full_face_mirror_attack_detected` on a DB mirror hit, not on an
+    // intra-batch one — so with X not yet in the DB, mirror slots look the
+    // same as non-mirror slots. Batch 2 resubmits these same variants once
+    // X is in the DB and exercises the actual mirror-attack path.
     let seed = uniqueness_variant(
         &x_left,
         &x_right,
@@ -847,24 +852,25 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     );
     let seed_request_id = seed.request_id.clone();
     let mut batch1 = vec![seed];
-    for rot in -15isize..=15 {
-        if rot == 0 {
-            continue;
+    let push_blocked = |rotation: isize, mirror: bool| {
+        let blocked = Expectation::IntraBatchBlockedBy {
+            earlier_request_id: seed_request_id.clone(),
+        };
+        let purpose =
+            format!("batch1: rot={rotation:+} mirror={mirror} — blocked intra-batch by slot 0");
+        uniqueness_variant(&x_left, &x_right, rotation, mirror, purpose, blocked)
+    };
+    for rotation in -15isize..=15 {
+        for mirror in [false, true] {
+            if rotation == 0 && !mirror {
+                continue;
+            }
+            batch1.push(push_blocked(rotation, mirror));
         }
-        batch1.push(uniqueness_variant(
-            &x_left,
-            &x_right,
-            rot,
-            false,
-            format!("batch1: rot={rot:+} non-mirror — blocked intra-batch by slot 0"),
-            Expectation::IntraBatchBlockedBy {
-                earlier_request_id: seed_request_id.clone(),
-            },
-        ));
     }
-    assert_eq!(batch1.len(), 31);
+    assert_eq!(batch1.len(), 62);
     let obs = submit_and_check(
-        "batch1 (seed + 30 rotations)",
+        "batch1 (seed + 61 rotation/mirror variants)",
         &batch1,
         &[],
         &mut h0,
