@@ -390,7 +390,8 @@ async fn exec_setup(
         bail!("Shutdown")
     }
 
-    let graph_checkpoint = get_common_checkpoint(config, hashes, graph_checkpoints).await?;
+    let graph_checkpoint =
+        get_common_checkpoint(server_coord_config, hashes, graph_checkpoints).await?;
     tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
 
     // don't roll anything back if the checkpoint can not be found

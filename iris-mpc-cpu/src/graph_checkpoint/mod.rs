@@ -3,10 +3,9 @@ mod s3_client;
 
 use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
 pub use data::*;
-use iris_mpc_common::config::Config;
 pub use s3_client::*;
 
-use eyre::{bail, eyre, Result};
+use eyre::{bail, Result};
 
 use crate::{
     execution::hawk_main::HawkOps, hawkers::aby3::aby3_store::Aby3Store,
@@ -14,14 +13,10 @@ use crate::{
 };
 
 pub async fn get_common_checkpoint(
-    config: &Config,
+    server_coord_config: &ServerCoordinationConfig,
     my_checkpoint_hashes: GraphCheckpointHashes,
     my_checkpoints: Vec<GraphCheckpointState>,
 ) -> Result<Option<GraphCheckpointState>> {
-    let server_coord_config = config
-        .server_coordination
-        .as_ref()
-        .ok_or(eyre!("Missing server coordination config"))?;
     let others_hashes = get_others_graph_hashes(server_coord_config).await?;
     if others_hashes.len() != 2 {
         bail!("invalid number of parties");
