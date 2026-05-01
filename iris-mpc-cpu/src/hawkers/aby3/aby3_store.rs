@@ -402,14 +402,6 @@ where
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
 
-        // Debug logging: Print inputs to compare between MPC and plaintext runs
-        tracing::warn!("MPC compact_neighborhood_batch inputs:");
-        tracing::warn!("  base_nodes: {:?}", base_nodes);
-        tracing::warn!("  neighborhoods:");
-        for n in neighborhoods {
-            tracing::warn!("{:?}", n);
-        }
-
         let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await?;
         let cached_qids: Vec<QueryId> = base_node_queries.iter().map(|q| q.query_id).collect();
         let batches: Vec<(Aby3Query, Vec<VectorId>)> =

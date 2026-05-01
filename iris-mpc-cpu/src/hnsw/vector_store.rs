@@ -203,14 +203,6 @@ pub trait VectorStore: Debug {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
 
-        // Debug logging: Print inputs to compare between MPC and plaintext runs
-        tracing::warn!("Plaintext compact_neighborhood_batch inputs:");
-        tracing::warn!("  base_nodes: {:?}", base_nodes);
-        tracing::warn!("  neighborhoods:");
-        for n in neighborhoods {
-            tracing::warn!("{:?}", n);
-        }
-
         // TODO could improve this to do a properly batched quickselect
         let mut results = Vec::with_capacity(base_nodes.len());
         for (base_node, neighborhood, max_size) in
@@ -220,11 +212,6 @@ pub trait VectorStore: Debug {
                 self.compact_neighborhood(base_node, neighborhood, *max_size)
                     .await?,
             );
-        }
-
-        tracing::warn!("Plaintext compact_neighborhood_batch outputs:");
-        for compacted in &results {
-            tracing::warn!("{:?}", compacted);
         }
 
         Ok(results)
