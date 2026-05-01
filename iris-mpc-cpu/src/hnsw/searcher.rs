@@ -1611,21 +1611,30 @@ impl HnswSearcher {
 
         // Map from inserted vector ids to their mutation index, so we can
         // resolve neighbors that are also being inserted in this same batch.
+        // Pre-populate the full map before processing neighborhoods so that
+        // later-batch nodes are visible when processing earlier nodes' neighbors.
         let mut insert_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
+        for (idx, mutation) in mutations.iter().enumerate() {
+            if let GraphMutation::InsertNode { id, .. } = mutation {
+                insert_idxs.insert(id.clone(), idx);
+            }
+        }
 
         // Process each InsertNode mutation to track neighborhoods
-        for (idx, mutation) in mutations.iter().enumerate() {
+        for mutation in mutations.iter() {
             if let GraphMutation::InsertNode { id, layers, .. } = mutation {
-                insert_idxs.insert(id.clone(), idx);
-
                 for (layer, neighbors) in layers.iter() {
-                    // Record neighborhood of new node
-                    final_nbhds.insert((id.clone(), *layer), neighbors.clone());
+                    // Record neighborhood of new node. Use entry() to avoid clobbering
+                    // backlinks accumulated from earlier mutations in this batch.
+                    final_nbhds
+                        .entry((id.clone(), *layer))
+                        .or_insert_with(|| neighbors.clone());
 
                     // Track updates to existing nodes' neighborhoods
                     for nb in neighbors.iter() {
                         let nb_nbhd = if let Some(ins_idx) = insert_idxs.get(nb) {
-                            // Neighbor is from current batch
+                            // Neighbor is from current batch. insert_idxs is only
+                            // populated from InsertNode mutations, so this must match.
                             if let GraphMutation::InsertNode {
                                 layers: nb_layers, ..
                             } = &mutations[*ins_idx]
@@ -1636,11 +1645,12 @@ impl HnswSearcher {
                                     .map(|(_, n)| n.clone())
                                     .unwrap_or_default()
                             } else {
-                                Vec::new()
+                                unreachable!("insert_idxs only indexes InsertNode mutations")
                             }
                         } else {
                             // Existing node in graph
-                            let links = graph.get_links(nb, *layer).await.to_vec();
+                            let mut links = graph.get_links(nb, *layer).await.to_vec();
+                            links.sort();
                             store.only_valid_vectors(links).await
                         };
 
