@@ -226,7 +226,6 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     to_remove,
                 } => {
                     self.layers[layer].compact_node(id, to_remove);
-                    let resulting_links = self.layers[layer].get_links(id).unwrap_or(&[]);
                 }
             }
         }

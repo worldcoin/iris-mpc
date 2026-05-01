@@ -1690,10 +1690,22 @@ impl HnswSearcher {
                     })
                     .multiunzip();
 
+            // Debug logging: Print inputs to compare between MPC and plaintext runs
+            tracing::warn!("compact_neighborhood_batch inputs:");
+            tracing::warn!("  base_nodes: {:?}", base_nodes);
+            tracing::warn!("  neighborhoods:");
+            for n in &neighborhoods {
+                tracing::warn!("{:?}", n);
+            }
+
             let compacted_nbhds = store
                 .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
                 .await?;
 
+            tracing::warn!("compact_neighborhood_batch outputs:");
+            for compacted in &compacted_nbhds {
+                tracing::warn!("{:?}", compacted);
+            }
             // Create Compact mutations for each compacted neighborhood
             for (id, layer, original_nbhd, compacted_nbhd) in
                 izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
