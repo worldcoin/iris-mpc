@@ -41,7 +41,7 @@ use std::{
     sync::Arc,
     vec,
 };
-use tracing::instrument;
+use tracing::{info, instrument};
 
 mod distance_fn;
 mod distance_ops;
@@ -400,6 +400,14 @@ where
     ) -> Result<Vec<Vec<Aby3VectorRef>>> {
         if base_nodes.len() != neighborhoods.len() || base_nodes.len() != max_sizes.len() {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
+        }
+
+        // Debug logging: Print inputs to compare between MPC and plaintext runs
+        info!("MPC compact_neighborhood_batch inputs:");
+        info!("  base_nodes: {:?}", base_nodes);
+        info!("  neighborhoods:");
+        for n in neighborhoods {
+            info!("{:?}", n);
         }
 
         let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await?;

@@ -6,6 +6,7 @@ use std::{
     hash::Hash,
     str::FromStr,
 };
+use tracing::info;
 
 use crate::hnsw::sorting::quickselect::run_quickselect_with_store;
 
@@ -200,6 +201,14 @@ pub trait VectorStore: Debug {
     ) -> Result<Vec<Vec<Self::VectorRef>>> {
         if base_nodes.len() != neighborhoods.len() || base_nodes.len() != max_sizes.len() {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
+        }
+
+        // Debug logging: Print inputs to compare between MPC and plaintext runs
+        info!("Plaintext compact_neighborhood_batch inputs:");
+        info!("  base_nodes: {:?}", base_nodes);
+        info!("  neighborhoods:");
+        for n in neighborhoods {
+            info!("{:?}", n);
         }
 
         // TODO could improve this to do a properly batched quickselect
