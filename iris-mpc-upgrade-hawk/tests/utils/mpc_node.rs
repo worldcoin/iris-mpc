@@ -13,7 +13,7 @@ use iris_mpc_common::{
     IrisSerialId, IrisVectorId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, StoreId},
+    execution::hawk_main::BothEyes,
     genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     graph_checkpoint::{delete_graph, download_graph_checkpoint, get_latest_checkpoint_state},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},

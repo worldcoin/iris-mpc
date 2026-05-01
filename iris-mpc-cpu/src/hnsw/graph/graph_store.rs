@@ -1,8 +1,8 @@
 use crate::hnsw::VectorStore;
 use eyre::{eyre, Result};
-use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
+use iris_mpc_common::postgres::PostgresClient;
 use serde::{de::DeserializeOwned, Serialize};
-use sqlx::{types::Json, PgConnection, Postgres, Row, Transaction};
+use sqlx::{types::Json, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut};
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
@@ -452,6 +452,7 @@ impl<V: VectorStore> GraphPg<V> {
 
 pub struct GraphTx<'a, V> {
     pub tx: Transaction<'a, Postgres>,
+    #[allow(dead_code)]
     schema_name: String,
     phantom: PhantomData<V>,
 }

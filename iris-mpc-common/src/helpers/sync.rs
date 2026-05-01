@@ -354,11 +354,6 @@ mod tests {
             smpc_response::{IdentityDeletionResult, ReAuthResult},
         },
     };
-    use rand::random;
-
-    fn random_graph_mutation() -> Vec<u8> {
-        random::<[u8; 16]>().to_vec()
-    }
 
     // Helper function to create a Modification.
     fn create_modification(

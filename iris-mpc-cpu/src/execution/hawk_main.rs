@@ -145,10 +145,7 @@ use std::{
     time::Instant,
     vec,
 };
-use tokio::{
-    join,
-    sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
-};
+use tokio::sync::{mpsc, oneshot, RwLock, RwLockWriteGuard};
 use tokio_util::sync::CancellationToken;
 
 /// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
@@ -1143,37 +1140,6 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
-    pub async fn load_graph_store(
-        self,
-        graph_store: &GraphStore,
-        parallelism: usize,
-    ) -> Result<()> {
-        let now = Instant::now();
-
-        // Spawn two independent transactions and load each graph in parallel.
-        let (graph_left, graph_right): (Result<GraphMem<VectorId>>, Result<GraphMem<VectorId>>) = join!(
-            async {
-                let mut graph_tx = graph_store.tx().await?;
-                todo!("update to new design")
-            },
-            async {
-                let mut graph_tx = graph_store.tx().await?;
-                todo!("update to new design")
-            }
-        );
-        let graph_left = graph_left.expect("Could not load left graph");
-        let graph_right = graph_right.expect("Could not load right graph");
-
-        let GraphLoader(mut graphs) = self;
-        *graphs[LEFT] = graph_left;
-        *graphs[RIGHT] = graph_right;
-        tracing::info!(
-            "GraphLoader: Loaded left and right graphs in {:?}",
-            now.elapsed()
-        );
-        Ok(())
-    }
-
     pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
         let [left, right] = graphs;
         let GraphLoader(mut dest_graphs) = self;
