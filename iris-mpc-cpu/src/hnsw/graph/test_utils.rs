@@ -368,7 +368,7 @@ impl DbContext {
         let ep_mutation = GraphMutation::InsertNode {
             id: vectors[0],
             layers: vec![(0, vec![])],
-            update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 1 },
+            update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 0 },
         };
         left_graph.insert_apply(vec![ep_mutation]);
 
