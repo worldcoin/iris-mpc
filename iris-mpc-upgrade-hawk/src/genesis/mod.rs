@@ -432,15 +432,8 @@ async fn exec_setup(
         .unwrap_or(last_indexed_id);
 
     // Bail if stores are inconsistent.
-    validate_consistency_of_stores(
-        config,
-        &iris_store,
-        graph_store_arc.clone(),
-        args.max_indexation_id,
-        last_indexed_id,
-        graph_checkpoint.is_some(),
-    )
-    .await?;
+    validate_consistency_of_stores(config, &iris_store, args.max_indexation_id, last_indexed_id)
+        .await?;
     tracing::info!("Store consistency checks OK");
 
     // Initialise HNSW graph from previously indexed.
@@ -1636,10 +1629,8 @@ fn validate_config(config: &Config) -> Result<()> {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
-    checkpoint_available: bool,
 ) -> Result<()> {
     // Bail if last indexed id exceeds max indexation id
     if last_indexed_id > max_indexation_id {
@@ -1673,35 +1664,5 @@ async fn validate_consistency_of_stores(
         tracing::error!("{}", msg);
         bail!(msg);
     }
-
-    // if there is a checkpoint, skip graph store validation (already validated in exec_setup).
-    if checkpoint_available {
-        return Ok(());
-    }
-
-    // ensure the graph store is consistent with the last persisted_indexed_id
-    let mut tx = graph_store.tx().await.unwrap();
-    let last_indexed_id_in_graph_left: u32 = {
-        let mut graph_left = tx.with_graph(StoreId::Left);
-        //graph_left.get_max_serial_id().await? as u32
-        todo!("update to new design")
-    };
-    let last_indexed_id_in_graph_right: u32 = {
-        let mut graph_right = tx.with_graph(StoreId::Right);
-        //graph_right.get_max_serial_id().await? as u32
-        todo!("update to new design")
-    };
-    if last_indexed_id_in_graph_left != last_indexed_id
-        || last_indexed_id_in_graph_right != last_indexed_id
-    {
-        let msg = format!(
-            "Last indexed id in graph store does not match last indexed id: left={} :: right={} :: expected={}",
-            last_indexed_id_in_graph_left, last_indexed_id_in_graph_right, last_indexed_id
-        );
-        tracing::error!("{}", msg);
-        bail!(msg);
-    }
-    todo!("update to new design");
-
     Ok(())
 }

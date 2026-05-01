@@ -340,18 +340,6 @@ impl MpcNode {
 
             let mut graph_tx = stores.graph.tx().await?;
 
-            // clear graphs
-            graph_tx
-                .with_graph(StoreId::Left)
-                .clear_tables()
-                .await
-                .expect("Could not clear left graph");
-            graph_tx
-                .with_graph(StoreId::Right)
-                .clear_tables()
-                .await
-                .expect("Could not clear right graph");
-
             let mut tx = graph_tx.tx;
 
             // clear modifications tables
@@ -361,8 +349,11 @@ impl MpcNode {
             unset_last_indexed_iris_id(&mut tx).await?;
             unset_last_indexed_modification_id(&mut tx).await?;
 
-            // clear genesis graph checkpoint table
+            // clear genesis graph checkpoint table and the WAL
             sqlx::query("DELETE FROM genesis_graph_checkpoint")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM hawk_graph_mutations")
                 .execute(&mut *tx)
                 .await?;
 

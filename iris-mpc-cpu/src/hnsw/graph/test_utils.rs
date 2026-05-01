@@ -42,8 +42,6 @@ use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
 use std::path::Path;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum DiffMethod {
