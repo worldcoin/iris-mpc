@@ -1632,7 +1632,7 @@ impl HnswSearcher {
 
                     // Track updates to existing nodes' neighborhoods
                     for nb in neighbors.iter() {
-                        let mut nb_nbhd = if let Some(ins_idx) = insert_idxs.get(nb) {
+                        let nb_nbhd = if let Some(ins_idx) = insert_idxs.get(nb) {
                             // Neighbor is from current batch. insert_idxs is only
                             // populated from InsertNode mutations, so this must match.
                             if let GraphMutation::InsertNode {
@@ -1652,8 +1652,6 @@ impl HnswSearcher {
                             let links = graph.get_links(nb, *layer).await.to_vec();
                             store.only_valid_vectors(links).await
                         };
-
-                        nb_nbhd.sort();
 
                         // Get or initialize the tracked neighborhood for this existing node
                         let tracked_nbhd = final_nbhds

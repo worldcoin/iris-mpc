@@ -226,6 +226,17 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     to_remove,
                 } => {
                     self.layers[layer].compact_node(id, to_remove);
+                    let resulting_links = self.layers[layer].get_links(id).unwrap_or(&[]);
+                    let resulting_str = resulting_links
+                        .iter()
+                        .map(|link| link.to_string())
+                        .join(", ");
+                    tracing::warn!(
+                        "MPC Compaction result for node {} at layer {}: [{}]",
+                        id,
+                        layer,
+                        resulting_str
+                    );
                 }
             }
         }

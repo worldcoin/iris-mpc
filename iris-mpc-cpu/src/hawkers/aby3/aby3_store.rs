@@ -403,11 +403,11 @@ where
         }
 
         // Debug logging: Print inputs to compare between MPC and plaintext runs
-        info!("MPC compact_neighborhood_batch inputs:");
-        info!("  base_nodes: {:?}", base_nodes);
-        info!("  neighborhoods:");
+        tracing::warn!("MPC compact_neighborhood_batch inputs:");
+        tracing::warn!("  base_nodes: {:?}", base_nodes);
+        tracing::warn!("  neighborhoods:");
         for n in neighborhoods {
-            info!("{:?}", n);
+            tracing::warn!("{:?}", n);
         }
 
         let base_node_queries = self.vectors_as_queries(base_nodes.to_vec()).await?;

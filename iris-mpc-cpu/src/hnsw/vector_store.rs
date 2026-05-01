@@ -204,11 +204,11 @@ pub trait VectorStore: Debug {
         }
 
         // Debug logging: Print inputs to compare between MPC and plaintext runs
-        info!("Plaintext compact_neighborhood_batch inputs:");
-        info!("  base_nodes: {:?}", base_nodes);
-        info!("  neighborhoods:");
+        tracing::warn!("Plaintext compact_neighborhood_batch inputs:");
+        tracing::warn!("  base_nodes: {:?}", base_nodes);
+        tracing::warn!("  neighborhoods:");
         for n in neighborhoods {
-            info!("{:?}", n);
+            tracing::warn!("{:?}", n);
         }
 
         // TODO could improve this to do a properly batched quickselect
@@ -220,6 +220,11 @@ pub trait VectorStore: Debug {
                 self.compact_neighborhood(base_node, neighborhood, *max_size)
                     .await?,
             );
+        }
+
+        tracing::warn!("Plaintext compact_neighborhood_batch outputs:");
+        for compacted in &results {
+            tracing::warn!("{:?}", compacted);
         }
 
         Ok(results)
