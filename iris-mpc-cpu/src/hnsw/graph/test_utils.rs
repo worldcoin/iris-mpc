@@ -34,7 +34,7 @@ use crate::{
 use aes_prng::AesRng;
 use aws_sdk_s3::Client as S3Client;
 use clap::ValueEnum;
-use eyre::{eyre, Result};
+use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::vector_id::VectorId;
@@ -129,6 +129,32 @@ impl DbContext {
         Ok(())
     }
 
+    /// Create a checkpoint from a graph in memory: get required metadata and upload to S3 and update databases.
+    pub async fn make_checkpoint_from_graph(
+        &self,
+        graph: &BothEyes<GraphMem<PlaintextVectorRef>>,
+    ) -> Result<()> {
+        let graph_mutation_id = self.graph_pg.get_max_hawk_graph_mutation_id().await?;
+        let last_indexed_iris_id: i64 = self
+            .graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
+            .await?
+            .unwrap_or(0);
+        let last_indexed_modification_id: i64 = self
+            .graph_pg
+            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
+            .await?
+            .unwrap_or(0);
+        self.store_checkpoint(
+            graph,
+            last_indexed_iris_id,
+            last_indexed_modification_id,
+            graph_mutation_id,
+            false,
+        )
+        .await
+    }
+
     /// Extends iris shares table by inserting irises following the current
     /// maximum serial id.
     ///
@@ -201,28 +227,8 @@ impl DbContext {
         Ok(graph)
     }
 
-    /// loads a graph from database to memory and then writes it to a file
-    /// if graph_mem is provided, it is used instead of fetching from the database
-    pub async fn write_graph_to_file(
-        &self,
-        path: &Path,
-        dbg: bool,
-        graph_mem: Option<&BothEyes<GraphMem<PlaintextVectorRef>>>,
-    ) -> Result<()> {
-        let graph = if let Some(g) = graph_mem {
-            g.clone()
-        } else {
-            self.get_both_eyes().await?
-        };
-        if dbg {
-            println!("storing graph:");
-            println!("{:#?}", graph);
-        }
-        serialize_graph(path, &graph).await
-    }
-
     /// Loads a graph from a file and uploads it to S3 as a checkpoint.
-    pub async fn load_graph_from_file(&self, path: &Path, dbg: bool) -> Result<()> {
+    pub async fn make_new_checkpoint(&self, path: &Path, dbg: bool) -> Result<()> {
         let graph = deserialize_graph(path).await?;
         if dbg {
             println!("loaded graph:");
@@ -258,9 +264,6 @@ impl DbContext {
             println!("storing graph:");
             println!("{:#?}", stored_graph);
         }
-        self.write_graph_to_file(path, dbg, Some(&stored_graph))
-            .await?;
-
         let data = tokio::fs::read(path).await?;
         let loaded_graph: BothEyes<GraphMem<PlaintextVectorRef>> = bincode::deserialize(&data)?;
         if dbg {
@@ -393,39 +396,9 @@ impl DbContext {
         let right_graph = left_graph.clone();
         let graph = [left_graph, right_graph];
 
-        let last_indexed_iris_id: i64 = self
-            .graph_pg
-            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
-            .await?
-            .unwrap_or(0);
-        let last_indexed_modification_id: i64 = self
-            .graph_pg
-            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
-            .await?
-            .unwrap_or(0);
-        let graph_mutation_id = self.graph_pg.get_max_hawk_graph_mutation_id().await?;
-
-        self.store_checkpoint(
-            &graph,
-            last_indexed_iris_id,
-            last_indexed_modification_id,
-            graph_mutation_id,
-            false,
-        )
-        .await?;
+        self.make_checkpoint_from_graph(&graph).await?;
         Ok(graph)
     }
-}
-
-async fn serialize_graph(
-    path: &Path,
-    value: &BothEyes<GraphMem<PlaintextVectorRef>>,
-) -> Result<()> {
-    let serialized = bincode::serialize(value)?;
-    let mut file = File::create(path).await?;
-    file.write_all(&serialized).await?;
-    file.flush().await?;
-    Ok(())
 }
 
 async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
