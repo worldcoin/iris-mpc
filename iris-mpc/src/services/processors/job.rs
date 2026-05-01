@@ -19,7 +19,6 @@ use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
-use sqlx::{Postgres, Transaction};
 use std::{collections::HashMap, time::Instant};
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages

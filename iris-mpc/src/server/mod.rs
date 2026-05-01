@@ -5,13 +5,10 @@ use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use axum::routing::get;
 use axum::Router;
-use iris_mpc_cpu::graph_checkpoint::download_graph_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_common_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_most_recent_checkpoints;
-use iris_mpc_cpu::graph_checkpoint::s3_key_exists;
-use iris_mpc_cpu::graph_checkpoint::GraphCheckpointState;
-use iris_mpc_cpu::graph_checkpoint::GRAPH_CHECKPOINT_ROUTE;
-use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_cpu::graph_checkpoint::{
+    download_graph_checkpoint, get_common_checkpoint, get_most_recent_checkpoints, s3_key_exists,
+    GraphCheckpointState, GRAPH_CHECKPOINT_ROUTE,
+};
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,

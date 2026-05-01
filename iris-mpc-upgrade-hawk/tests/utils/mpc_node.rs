@@ -338,8 +338,7 @@ impl MpcNode {
             // delete irises
             stores.iris.delete_irises_after_id(0).await?;
 
-            let mut graph_tx = stores.graph.tx().await?;
-
+            let graph_tx = stores.graph.tx().await?;
             let mut tx = graph_tx.tx;
 
             // clear modifications tables
