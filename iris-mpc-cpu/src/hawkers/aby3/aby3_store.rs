@@ -41,7 +41,7 @@ use std::{
     sync::Arc,
     vec,
 };
-use tracing::{info, instrument};
+use tracing::instrument;
 
 mod distance_fn;
 mod distance_ops;
@@ -784,6 +784,7 @@ mod tests {
     use itertools::{izip, Itertools};
     use rand::SeedableRng;
     use tokio::task::JoinSet;
+    use tracing::{info_span, Instrument};
     use tracing_test::traced_test;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1548,6 +1549,7 @@ mod tests {
 
         let mut plaintext_store = PlaintextStore::<FhdOps>::new();
         let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        let plaintext_span = info_span!("plaintext_insert");
         for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
             let query = Arc::new(iris.clone());
             searcher
@@ -1557,12 +1559,13 @@ mod tests {
                     &query,
                     layer,
                 )
+                .instrument(plaintext_span.clone())
                 .await?;
         }
 
         let stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         let mut jobs = JoinSet::new();
-        for store in stores.into_iter() {
+        for (idx, store) in stores.into_iter().enumerate() {
             let role = get_owner_index(&store).await?;
             let irises: Vec<ArcIris> = shared_irises
                 .iter()
@@ -1571,12 +1574,14 @@ mod tests {
             let layers = insertion_layers.clone();
             let searcher = searcher.clone();
             jobs.spawn(async move {
+                let mpc_span = info_span!("mpc_insert", id = idx);
                 let mut store = store.lock().await;
                 let queries = cache_irises(&store.workers, irises).await?;
                 let mut graph: GraphMem<VectorId> = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher
                         .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
+                        .instrument(mpc_span.clone())
                         .await?;
                 }
                 Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
