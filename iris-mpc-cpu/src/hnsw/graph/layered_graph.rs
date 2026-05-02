@@ -289,7 +289,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         // Fold entry points in an order-agnostic way: each EntryPoint is hashed
         // individually with a fixed key so a re-ordered `entry_points` Vec still
         // yields the same checksum across parties.
-        set_hash.toggle_unordered_set("entry_points", self.entry_points.iter());
+        set_hash.add_unordered_set("entry_points", self.entry_points.iter());
         for (lc, layer) in self.layers.iter().enumerate() {
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
@@ -491,10 +491,10 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
             if let Some(neighbor_links) = self.links.get_mut(neighbor) {
                 if !neighbor_links.contains(&id) {
                     self.set_hash
-                        .toggle_unordered_set(neighbor, neighbor_links.iter());
+                        .remove_unordered_set(neighbor, neighbor_links.iter());
                     neighbor_links.push(id.clone());
                     self.set_hash
-                        .toggle_unordered_set(neighbor, neighbor_links.iter());
+                        .add_unordered_set(neighbor, neighbor_links.iter());
                 }
             }
         }
@@ -505,16 +505,16 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         // Remove the node's links and get its neighbors
         if let Some(neighbors) = self.links.remove(id) {
             // Update set_hash for removed node
-            self.set_hash.toggle_unordered_set(id, neighbors.iter());
+            self.set_hash.remove_unordered_set(id, neighbors.iter());
 
             // Remove the node from all neighbors' neighborhoods (bidirectional cleanup)
             for neighbor in neighbors {
                 if let Some(neighbor_links) = self.links.get_mut(&neighbor) {
                     self.set_hash
-                        .toggle_unordered_set(&neighbor, neighbor_links.iter());
+                        .remove_unordered_set(&neighbor, neighbor_links.iter());
                     neighbor_links.retain(|x| x != id);
                     self.set_hash
-                        .toggle_unordered_set(&neighbor, neighbor_links.iter());
+                        .add_unordered_set(&neighbor, neighbor_links.iter());
                 }
             }
         }
@@ -535,11 +535,11 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
 
         // Remove neighbors from node's links
         if let Some(node_links) = self.links.get_mut(id) {
-            self.set_hash.toggle_unordered_set(id, node_links.iter());
+            self.set_hash.remove_unordered_set(id, node_links.iter());
             for neighbor in &neighbors_to_remove {
                 node_links.retain(|x| x != neighbor);
             }
-            self.set_hash.toggle_unordered_set(id, node_links.iter());
+            self.set_hash.add_unordered_set(id, node_links.iter());
         }
     }
 
@@ -547,14 +547,14 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         use std::collections::hash_map::Entry;
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
-                self.set_hash.toggle_unordered_set(e.key(), e.get().iter());
+                self.set_hash.remove_unordered_set(e.key(), e.get().iter());
                 let existing = e.get_mut();
                 existing.clear();
                 existing.extend(links);
-                self.set_hash.toggle_unordered_set(e.key(), e.get().iter());
+                self.set_hash.add_unordered_set(e.key(), e.get().iter());
             }
             Entry::Vacant(e) => {
-                self.set_hash.toggle_unordered_set(e.key(), links.iter());
+                self.set_hash.add_unordered_set(e.key(), links.iter());
                 e.insert(links);
             }
         }

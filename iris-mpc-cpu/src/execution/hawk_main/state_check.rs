@@ -27,30 +27,52 @@ pub struct SetHash {
 }
 
 impl SetHash {
-    /// Toggle a single value into the accumulator via XOR. Because XOR is its
-    /// own inverse, two calls with the same value cancel out, which makes the
-    /// accumulator order-agnostic across the entire stream of toggles.
-    pub fn add_unordered(&mut self, value: impl Hash) {
-        self.accumulator ^= Self::hash(value);
-    }
-
-    /// Inverse of [`add_unordered`]. Implemented as XOR (same operation as
-    /// `add_unordered`); the separate name exists for readability at call
-    /// sites where the intent is "remove a previously added element."
-    pub fn remove(&mut self, value: impl Hash) {
-        self.accumulator ^= Self::hash(value);
-    }
-
-    /// Toggle a `(key, set-of-items)` pair into the accumulator without any
-    /// dependence on the iteration order of `items`. Each `(key, item)` pair
-    /// is hashed and XORed individually, and a one-shot key marker is folded
-    /// in so that an empty `items` collection is still distinguishable from
-    /// the key being absent altogether.
+    /// Fold a single value into the accumulator via wrapping addition.
+    /// Addition is commutative and associative, so the accumulator is
+    /// order-agnostic over the stream of `add_unordered` / `remove` calls.
     ///
-    /// Calling this twice with the same `(key, items)` arguments cancels out
-    /// (XOR is involutive), so the same method serves as both "add" and
-    /// "remove" — mirroring [`add_unordered`] / [`remove`].
-    pub fn toggle_unordered_set<K, I, T>(&mut self, key: K, items: I)
+    /// Unlike XOR, wrapping addition preserves multiset semantics: adding
+    /// the same value twice does **not** cancel out, so duplicate-element
+    /// bugs surface as a mismatch instead of being silently masked.
+    pub fn add_unordered(&mut self, value: impl Hash) {
+        self.accumulator = self.accumulator.wrapping_add(Self::hash(value));
+    }
+
+    /// Inverse of [`add_unordered`]. Subtracts the value's hash from the
+    /// accumulator using wrapping subtraction, so a balanced add+remove
+    /// pair returns the accumulator to its prior state exactly.
+    pub fn remove(&mut self, value: impl Hash) {
+        self.accumulator = self.accumulator.wrapping_sub(Self::hash(value));
+    }
+
+    /// Add a `(key, set-of-items)` pair to the accumulator without any
+    /// dependence on the iteration order of `items`. Each `(key, item)` pair
+    /// is hashed and folded in individually via wrapping addition, and a
+    /// one-shot key marker is added so that an empty `items` collection is
+    /// still distinguishable from the key being absent altogether.
+    pub fn add_unordered_set<K, I, T>(&mut self, key: K, items: I)
+    where
+        K: Hash,
+        I: IntoIterator<Item = T>,
+        T: Hash,
+    {
+        self.fold_unordered_set(key, items, u64::wrapping_add);
+    }
+
+    /// Inverse of [`add_unordered_set`]: removes a `(key, set-of-items)`
+    /// pair previously added, using wrapping subtraction. Must be called
+    /// with the same `(key, items)` content that was added, otherwise the
+    /// accumulator drifts.
+    pub fn remove_unordered_set<K, I, T>(&mut self, key: K, items: I)
+    where
+        K: Hash,
+        I: IntoIterator<Item = T>,
+        T: Hash,
+    {
+        self.fold_unordered_set(key, items, u64::wrapping_sub);
+    }
+
+    fn fold_unordered_set<K, I, T>(&mut self, key: K, items: I, op: fn(u64, u64) -> u64)
     where
         K: Hash,
         I: IntoIterator<Item = T>,
@@ -62,9 +84,12 @@ impl SetHash {
         // Key-existence marker: ensures an empty `items` still mutates the
         // accumulator. Use a tagged tuple so it can never collide with a
         // legitimate (key_hash, item) per-element contribution below.
-        self.accumulator ^= Self::hash(("set_hash::key_marker", key_hash));
+        self.accumulator = op(
+            self.accumulator,
+            Self::hash(("set_hash::key_marker", key_hash)),
+        );
         for item in items {
-            self.accumulator ^= Self::hash((key_hash, item));
+            self.accumulator = op(self.accumulator, Self::hash((key_hash, item)));
         }
     }
 
