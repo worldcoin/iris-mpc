@@ -27,12 +27,45 @@ pub struct SetHash {
 }
 
 impl SetHash {
+    /// Toggle a single value into the accumulator via XOR. Because XOR is its
+    /// own inverse, two calls with the same value cancel out, which makes the
+    /// accumulator order-agnostic across the entire stream of toggles.
     pub fn add_unordered(&mut self, value: impl Hash) {
-        self.accumulator = self.accumulator.wrapping_add(Self::hash(value));
+        self.accumulator ^= Self::hash(value);
     }
 
+    /// Inverse of [`add_unordered`]. Implemented as XOR (same operation as
+    /// `add_unordered`); the separate name exists for readability at call
+    /// sites where the intent is "remove a previously added element."
     pub fn remove(&mut self, value: impl Hash) {
-        self.accumulator = self.accumulator.wrapping_sub(Self::hash(value));
+        self.accumulator ^= Self::hash(value);
+    }
+
+    /// Toggle a `(key, set-of-items)` pair into the accumulator without any
+    /// dependence on the iteration order of `items`. Each `(key, item)` pair
+    /// is hashed and XORed individually, and a one-shot key marker is folded
+    /// in so that an empty `items` collection is still distinguishable from
+    /// the key being absent altogether.
+    ///
+    /// Calling this twice with the same `(key, items)` arguments cancels out
+    /// (XOR is involutive), so the same method serves as both "add" and
+    /// "remove" — mirroring [`add_unordered`] / [`remove`].
+    pub fn toggle_unordered_set<K, I, T>(&mut self, key: K, items: I)
+    where
+        K: Hash,
+        I: IntoIterator<Item = T>,
+        T: Hash,
+    {
+        // Hash the key once so we don't pay for re-hashing it per element,
+        // and so per-element hashes can fold in a fixed-size key fingerprint.
+        let key_hash = Self::hash(&key);
+        // Key-existence marker: ensures an empty `items` still mutates the
+        // accumulator. Use a tagged tuple so it can never collide with a
+        // legitimate (key_hash, item) per-element contribution below.
+        self.accumulator ^= Self::hash(("set_hash::key_marker", key_hash));
+        for item in items {
+            self.accumulator ^= Self::hash((key_hash, item));
+        }
     }
 
     pub fn checksum(&self) -> u64 {

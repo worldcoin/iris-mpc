@@ -1672,14 +1672,24 @@ mod tests {
                     role, layer_idx
                 );
 
-                // Compare set hashes
-                let mpc_hash = format!("{:?}", mpc_layer);
-                let pt_hash = format!("{:?}", pt_layer);
+                // Compare order-agnostic SetHash checksums. Note: we cannot
+                // use `format!("{:?}", layer)` here, because that prints the
+                // underlying `HashMap` in non-deterministic iteration order
+                // and would produce false-positive mismatches even when the
+                // two layers are bit-for-bit equivalent.
+                let mpc_hash = mpc_layer.checksum();
+                let pt_hash = pt_layer.checksum();
                 if mpc_hash != pt_hash {
-                    println!("[Role {} Layer {}] Hash mismatch detected", role, layer_idx);
+                    println!(
+                        "[Role {} Layer {}] Hash mismatch detected (MPC: {:#x}, Plaintext: {:#x})",
+                        role, layer_idx, mpc_hash, pt_hash
+                    );
                     panic!("[Role {} Layer {}] Layer hashes differ", role, layer_idx);
                 }
-                println!("[Role {} Layer {}] Hashes match", role, layer_idx);
+                println!(
+                    "[Role {} Layer {}] Hashes match ({:#x})",
+                    role, layer_idx, mpc_hash
+                );
             }
 
             // Compare entry points

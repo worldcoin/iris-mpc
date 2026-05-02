@@ -286,7 +286,10 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
     pub fn checksum(&self) -> u64 {
         let mut set_hash = SetHash::default();
-        set_hash.add_unordered(&self.entry_points);
+        // Fold entry points in an order-agnostic way: each EntryPoint is hashed
+        // individually with a fixed key so a re-ordered `entry_points` Vec still
+        // yields the same checksum across parties.
+        set_hash.toggle_unordered_set("entry_points", self.entry_points.iter());
         for (lc, layer) in self.layers.iter().enumerate() {
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
@@ -470,6 +473,13 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.links.get(from).map(|v| v.as_slice())
     }
 
+    /// Order-agnostic checksum of this layer's link map. Two layers with the
+    /// same `(node, set-of-neighbors)` content produce the same checksum even
+    /// if their `HashMap` iteration order or internal `Vec` ordering differ.
+    pub fn checksum(&self) -> u64 {
+        self.set_hash.checksum()
+    }
+
     /// Insert a node with bidirectional links to its neighbors.
     /// Sets the node's links and adds backlinks from each neighbor to this node.
     pub fn insert_node(&mut self, id: V, neighbors: Vec<V>) {
@@ -480,9 +490,11 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         for neighbor in &neighbors {
             if let Some(neighbor_links) = self.links.get_mut(neighbor) {
                 if !neighbor_links.contains(&id) {
-                    self.set_hash.remove((neighbor, neighbor_links.as_slice()));
+                    self.set_hash
+                        .toggle_unordered_set(neighbor, neighbor_links.iter());
                     neighbor_links.push(id.clone());
-                    self.set_hash.add_unordered((neighbor, neighbor_links));
+                    self.set_hash
+                        .toggle_unordered_set(neighbor, neighbor_links.iter());
                 }
             }
         }
@@ -493,14 +505,16 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         // Remove the node's links and get its neighbors
         if let Some(neighbors) = self.links.remove(id) {
             // Update set_hash for removed node
-            self.set_hash.remove((id, &neighbors));
+            self.set_hash.toggle_unordered_set(id, neighbors.iter());
 
             // Remove the node from all neighbors' neighborhoods (bidirectional cleanup)
             for neighbor in neighbors {
                 if let Some(neighbor_links) = self.links.get_mut(&neighbor) {
-                    self.set_hash.remove((&neighbor, neighbor_links.as_slice()));
+                    self.set_hash
+                        .toggle_unordered_set(&neighbor, neighbor_links.iter());
                     neighbor_links.retain(|x| x != id);
-                    self.set_hash.add_unordered((&neighbor, neighbor_links));
+                    self.set_hash
+                        .toggle_unordered_set(&neighbor, neighbor_links.iter());
                 }
             }
         }
@@ -521,11 +535,11 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
 
         // Remove neighbors from node's links
         if let Some(node_links) = self.links.get_mut(id) {
-            self.set_hash.remove((id, node_links.as_slice()));
+            self.set_hash.toggle_unordered_set(id, node_links.iter());
             for neighbor in &neighbors_to_remove {
                 node_links.retain(|x| x != neighbor);
             }
-            self.set_hash.add_unordered((id, node_links));
+            self.set_hash.toggle_unordered_set(id, node_links.iter());
         }
     }
 
@@ -533,14 +547,14 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         use std::collections::hash_map::Entry;
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
-                self.set_hash.remove((e.key(), e.get()));
+                self.set_hash.toggle_unordered_set(e.key(), e.get().iter());
                 let existing = e.get_mut();
                 existing.clear();
                 existing.extend(links);
-                self.set_hash.add_unordered((e.key(), e.get()));
+                self.set_hash.toggle_unordered_set(e.key(), e.get().iter());
             }
             Entry::Vacant(e) => {
-                self.set_hash.add_unordered((e.key(), &links));
+                self.set_hash.toggle_unordered_set(e.key(), links.iter());
                 e.insert(links);
             }
         }
