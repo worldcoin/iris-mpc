@@ -1587,87 +1587,132 @@ impl HnswSearcher {
         graph: &mut GraphMem<V::VectorRef>,
         mut mutations: Vec<GraphMutation<V::VectorRef>>,
     ) -> Result<Vec<Vec<GraphMutation<V::VectorRef>>>> {
-        if mutations.is_empty() {
+        // Convert mutation layers into per-layer link lists for batch updates.
+        let mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)> =
+            Vec::with_capacity(mutations.len());
+        for mutation in mutations.iter_mut() {
+            match mutation {
+                GraphMutation::InsertNode {
+                    id,
+                    layers,
+                    update_ep,
+                } => {
+                    layers.sort_by_key(|(layer, _)| *layer);
+
+                    let links = if layers.is_empty() {
+                        Vec::new()
+                    } else {
+                        let max_layer = layers
+                            .last()
+                            .map(|(layer, _)| *layer)
+                            .unwrap_or(0);
+                        let mut links = vec![Vec::new(); max_layer + 1];
+                        for (layer, neighbors) in layers.iter_mut() {
+                            neighbors.sort();
+                            links[*layer] = neighbors.clone();
+                        }
+                        links
+                    };
+
+                    updates.push((id.clone(), links, update_ep.clone()));
+                }
+                _ => bail!("insert_prepare_batch expects only InsertNode mutations"),
+            }
+        }
+        if updates.is_empty() {
             return Ok(Vec::new());
         }
 
-        let num_inserts = mutations.len();
-
-        // Sort all neighborhoods by index within each InsertNode mutation
-        for mutation in mutations.iter_mut() {
-            if let GraphMutation::InsertNode { layers, .. } = mutation {
-                for (_, neighbors) in layers.iter_mut() {
-                    neighbors.sort();
-                }
+        // Sort all neighborhoods by index
+        for (_, links, _) in updates.iter_mut() {
+            for l in links.iter_mut() {
+                l.sort();
             }
         }
 
-        // Track final neighborhood sizes to detect compaction needs
-        // Map (vector_id, layer) -> current neighborhood
+        // Map from vector ids to update indices
+        let mut query_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
+
+        // Map `(vector_id, layer) -> Vec<query_id>` recording the query ids
+        // which are to be inserted into neighborhoods of nodes, and in what
+        // order.  Note input `vector_id` can be a `query_id` if the
+        // neighborhood of a subsequent query has been extended to include a
+        // previous query in the batch.  `BTreeMap` is used for deterministic
+        // iteration order.
+        let mut nbhd_updates: BTreeMap<
+            (<V as VectorStore>::VectorRef, usize),
+            Vec<<V as VectorStore>::VectorRef>,
+        > = BTreeMap::new();
+
+        // Final updated neighborhood associated with each modified `(vector_id, layer)`
         let mut final_nbhds: BTreeMap<
             (<V as VectorStore>::VectorRef, usize),
             Vec<<V as VectorStore>::VectorRef>,
         > = BTreeMap::new();
 
-        // Map from inserted vector ids to their mutation index, so we can
-        // resolve neighbors that are also being inserted in this same batch.
-        // Pre-populate the full map before processing neighborhoods so that
-        // later-batch nodes are visible when processing earlier nodes' neighbors.
-        let mut insert_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
-        for (idx, mutation) in mutations.iter().enumerate() {
-            if let GraphMutation::InsertNode { id, .. } = mutation {
-                insert_idxs.insert(id.clone(), idx);
-            }
-        }
+        for (idx, (vec, links, _update_ep)) in updates.iter().enumerate() {
+            // Record index of associated vector id
+            query_idxs.insert(vec.clone(), idx);
 
-        // Process each InsertNode mutation to track neighborhoods
-        for mutation in mutations.iter() {
-            if let GraphMutation::InsertNode { id, layers, .. } = mutation {
-                for (layer, neighbors) in layers.iter() {
-                    // Record neighborhood of new node. Use entry() to avoid clobbering
-                    // backlinks accumulated from earlier mutations in this batch.
-                    final_nbhds
-                        .entry((id.clone(), *layer))
-                        .or_insert_with(|| neighbors.clone());
+            for (layer, neighbors) in links.iter().enumerate() {
+                // Record neighborhood of new node as potential final neighborhood.
+                // (May be overwritten later if updated during batch.)
+                final_nbhds.insert((vec.clone(), layer), neighbors.clone());
 
-                    // Track updates to existing nodes' neighborhoods
-                    for nb in neighbors.iter() {
-                        let nb_nbhd = if let Some(ins_idx) = insert_idxs.get(nb) {
-                            // Neighbor is from current batch. insert_idxs is only
-                            // populated from InsertNode mutations, so this must match.
-                            if let GraphMutation::InsertNode {
-                                layers: nb_layers, ..
-                            } = &mutations[*ins_idx]
-                            {
-                                nb_layers
-                                    .iter()
-                                    .find(|(l, _)| *l == *layer)
-                                    .map(|(_, n)| n.clone())
-                                    .unwrap_or_default()
-                            } else {
-                                unreachable!("insert_idxs only indexes InsertNode mutations")
-                            }
-                        } else {
-                            // Existing node in graph
-                            let links = graph.get_links(nb, *layer).await.to_vec();
-                            store.only_valid_vectors(links).await
-                        };
-
-                        // Get or initialize the tracked neighborhood for this existing node
-                        let tracked_nbhd = final_nbhds
-                            .entry((nb.clone(), *layer))
-                            .or_insert_with(|| nb_nbhd);
-
-                        // Add the new node to the existing node's neighborhood
-                        if let Err(i) = tracked_nbhd.binary_search(id) {
-                            tracked_nbhd.insert(i, id.clone());
-                        }
-                    }
+                // Record connections to existing nodes, organized by existing node
+                for nb in neighbors.iter() {
+                    nbhd_updates
+                        .entry((nb.clone(), layer))
+                        .or_default()
+                        .push(vec.clone());
                 }
             }
         }
 
-        // Check for neighborhoods that need compaction
+        for ((nb, layer), query_ids) in nbhd_updates {
+            // Identify the graph neighborhood of `nb` in layer `layer` prior to
+            // any updates in the batch
+            let mut nb_nbhd = if let Some(idx) = query_idxs.get(&nb) {
+                // `nb`` is a query id from the current batch
+                let update_entry = updates
+                    .get(*idx)
+                    .ok_or_eyre("Could not find associated update entry")?;
+                let nbhd = update_entry
+                    .1
+                    .get(layer)
+                    .ok_or_eyre("Update entry layer not present")?;
+                nbhd.clone()
+            } else {
+                let links = graph.get_links(&nb, layer).await.to_vec();
+                store.only_valid_vectors(links).await
+            };
+
+            // For each individual update, in order, extend the neighborhood and
+            // add as update in the corresopnding connect plan
+            for query_id in query_ids {
+                // Insert `query_id` into the existing index-sorted neighborhood.
+                // A duplicate here means the freshly allocated `query_id` already
+                // appears in `nb`'s neighborhood — i.e. the registry handed out a
+                // VectorId that the graph already knows about. That's a hard
+                // invariant violation (see refresh_registries() in load paths)
+                // and silently continuing leaves the graph in an inconsistent
+                // state, so fail the batch.
+                match nb_nbhd.binary_search(&query_id) {
+                    Err(i) => nb_nbhd.insert(i, query_id),
+                    Ok(_) => bail!(
+                        "Attempted to add graph edge which was already present: \
+                         {nb:?} -> {query_id:?} (layer {layer}) — registry/graph drift"
+                    ),
+                }
+
+            }
+
+            final_nbhds.insert((nb, layer), nb_nbhd);
+        }
+
+        // Initial updates without compaction are complete.  Now see if any
+        // modified neighborhoods are too large.
+
         let needs_compaction: BTreeMap<_, _> = final_nbhds
             .into_iter()
             .filter(|((_nb, layer), nb_nbhd)| nb_nbhd.len() > self.params.get_M_limit(*layer))
@@ -1679,9 +1724,9 @@ impl HnswSearcher {
             needs_compaction.len()
         );
 
-        // Generate Compact mutations for oversized neighborhoods
         let mut compacts = Vec::new();
         if !needs_compaction.is_empty() {
+            // Apply batch compaction
             let (base_nodes, neighborhoods, max_sizes, layers): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
                 needs_compaction
                     .into_iter()
@@ -1689,24 +1734,10 @@ impl HnswSearcher {
                         (nb, nb_nbhd, self.params.get_M_max(layer), layer)
                     })
                     .multiunzip();
-
-            // Debug logging: Print inputs to compare between MPC and plaintext runs
-            tracing::warn!("compact_neighborhood_batch inputs:");
-            tracing::warn!("  base_nodes: {:?}", base_nodes);
-            tracing::warn!("  neighborhoods:");
-            for n in &neighborhoods {
-                tracing::warn!("{:?}", n);
-            }
-
             let compacted_nbhds = store
                 .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
                 .await?;
 
-            tracing::warn!("compact_neighborhood_batch outputs:");
-            for compacted in &compacted_nbhds {
-                tracing::warn!("{:?}", compacted);
-            }
-            // Create Compact mutations for each compacted neighborhood
             for (id, layer, original_nbhd, compacted_nbhd) in
                 izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
             {
@@ -1733,8 +1764,10 @@ impl HnswSearcher {
             mutations.into_iter().map(|m| vec![m]).collect();
 
         // Append all compacts to the last InsertNode's group
-        if !compacts.is_empty() && !output.is_empty() {
-            output[num_inserts - 1].extend(compacts);
+        if !compacts.is_empty() {
+            if let Some(last) = output.last_mut() {
+                last.extend(compacts);
+            }
         }
 
         Ok(output)
