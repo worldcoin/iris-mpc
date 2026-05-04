@@ -26,9 +26,10 @@ RUN cargo install cargo-build-deps \
     && cargo install cargo-edit --version 0.13.6 --locked
 
 FROM --platform=linux/amd64 build-image as build-app
+ARG CARGO_FEATURES=""
 WORKDIR /src/gpu-iris-mpc
 COPY . .
-RUN cargo build -p iris-mpc-bins --release --target x86_64-unknown-linux-gnu --bin nccl --bin iris-mpc-gpu --bin client --bin key-manager --bin reshare-server --bin reshare-client
+RUN cargo build -p iris-mpc-bins --release --target x86_64-unknown-linux-gnu ${CARGO_FEATURES:+--features ${CARGO_FEATURES}} --bin nccl --bin iris-mpc-gpu --bin client --bin key-manager --bin reshare-server --bin reshare-client
 
 FROM --platform=linux/amd64 public.ecr.aws/deep-learning-containers/base:12.8.0-gpu-py312-cu128-ubuntu22.04-ec2-v1.17
 ENV DEBIAN_FRONTEND=noninteractive
