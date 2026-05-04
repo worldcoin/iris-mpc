@@ -1431,6 +1431,27 @@ impl ServerActor {
             })
             .collect::<Vec<_>>();
 
+        // In the normal pass of a mirror-detection-enabled batch, fold the
+        // mirror pass's intra-batch peer ids into the per-request lists so the
+        // combined result reports peers from both orientations. Matches the
+        // CPU semantics where matched_batch_request_ids covers `orient: Both`.
+        let matched_batch_request_ids = if let Some(mirror_results) = previous_results.as_ref() {
+            matched_batch_request_ids
+                .into_iter()
+                .zip(mirror_results.matched_batch_request_ids.iter())
+                .map(|(mut normal_ids, mirror_ids)| {
+                    for id in mirror_ids {
+                        if !normal_ids.contains(id) {
+                            normal_ids.push(id.clone());
+                        }
+                    }
+                    normal_ids
+                })
+                .collect::<Vec<_>>()
+        } else {
+            matched_batch_request_ids
+        };
+
         let match_ids_filtered = match_ids
             .into_iter()
             .map(|ids| {

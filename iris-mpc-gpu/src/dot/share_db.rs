@@ -74,11 +74,11 @@ pub fn gemm(
 ) {
     // https://docs.nvidia.com/cuda/cublas/#cublasgemmex:
     // "CUBLAS_COMPUTE_32I and CUBLAS_COMPUTE_32I_PEDANTIC compute types are only supported with A, B being 4-byte aligned and lda, ldb being multiples of 4."
-    assert!(m % 4 == 0, "m must be a multiple of 4");
+    assert!(m.is_multiple_of(4), "m must be a multiple of 4");
     // We don't enforce the following, since we use it for n=1 and emperial testing
-    // shows that it works. assert!(n % 4 == 0, "n must be a multiple of 4");
-    assert!(a % 4 == 0, "a must be aligned to 4 bytes");
-    assert!(b % 4 == 0, "b must be aligned to 4 bytes");
+    // shows that it works. assert!(n.is_multiple_of(4), "n must be a multiple of 4");
+    assert!(a.is_multiple_of(4), "a must be aligned to 4 bytes");
+    assert!(b.is_multiple_of(4), "b must be aligned to 4 bytes");
     unsafe {
         let status = gemm_ex(
             *handle.handle(),
@@ -387,7 +387,7 @@ impl ShareDB {
 
     #[allow(clippy::type_complexity)]
     pub fn load_full_db(&self, db: &mut SlicedProcessedDatabase, db_entries: &[u16]) -> Vec<usize> {
-        assert!(db_entries.len() % self.code_length == 0);
+        assert!(db_entries.len().is_multiple_of(self.code_length));
 
         let code_length = self.code_length;
         let n_shards = self.device_manager.device_count();

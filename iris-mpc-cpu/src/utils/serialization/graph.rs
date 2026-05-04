@@ -70,6 +70,23 @@ pub enum GraphFormat {
     Raw,
 }
 
+impl GraphFormat {
+    /// Convert GraphFormat to its corresponding i32 value for storage.
+    /// Current and V3 both map to 3.
+    pub fn version(&self) -> i32 {
+        match self {
+            GraphFormat::Current | GraphFormat::V3 => 3,
+            GraphFormat::V2 => 2,
+            GraphFormat::V1 => 1,
+            GraphFormat::V0 => 0,
+            GraphFormat::Raw => {
+                // Raw format should not be used for storage, but we assign a sentinel value
+                -1
+            }
+        }
+    }
+}
+
 /// Array of all concrete graph formats
 pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 5] = [
     GraphFormat::V3,
@@ -93,6 +110,21 @@ impl Display for GraphFormat {
             GraphFormat::Raw => "Raw",
         };
         write!(f, "{}", s)
+    }
+}
+
+impl TryFrom<i32> for GraphFormat {
+    type Error = eyre::Error;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(GraphFormat::V0),
+            1 => Ok(GraphFormat::V1),
+            2 => Ok(GraphFormat::V2),
+            3 => Ok(GraphFormat::V3),
+            -1 => Ok(GraphFormat::Raw),
+            _ => Err(eyre::eyre!("unsupported graph format version: {}", value)),
+        }
     }
 }
 

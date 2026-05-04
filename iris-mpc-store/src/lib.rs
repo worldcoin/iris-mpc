@@ -448,15 +448,23 @@ WHERE id = $1;
         Ok(())
     }
 
-    pub async fn rollback(&self, db_len: usize) -> Result<()> {
+    pub async fn delete_irises_after_id(&self, last_indexed_id: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-
-        sqlx::query("DELETE FROM irises WHERE id > $1")
-            .bind(db_len as i64)
-            .execute(&mut *tx)
+        self.delete_irises_after_id_tx(&mut tx, last_indexed_id)
             .await?;
-
         tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_irises_after_id_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        last_indexed_id: usize,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM irises WHERE id > $1")
+            .bind(last_indexed_id as i64)
+            .execute(tx.deref_mut())
+            .await?;
         Ok(())
     }
 
@@ -729,7 +737,7 @@ WHERE id = $1;
         if clear_db_before_init {
             tracing::info!("Cleaning up the db before initializing irises");
             // Cleaning up the db before inserting newly generated irises
-            self.rollback(0).await?;
+            self.delete_irises_after_id(0).await?;
         }
 
         let mut tx = self.tx().await?;
@@ -1050,7 +1058,7 @@ pub mod tests {
         let mut tx = store.tx().await?;
         store.insert_irises(&mut tx, &irises).await?;
         tx.commit().await?;
-        store.rollback(5).await?;
+        store.delete_irises_after_id(5).await?;
 
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 5);

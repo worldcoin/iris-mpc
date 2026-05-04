@@ -24,12 +24,25 @@ pub struct RowLinks {
 }
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
-pub struct GenesisGraphCheckpointRow {
+pub struct GraphCheckpointRow {
     pub id: i64,
     pub s3_key: String,
     pub last_indexed_iris_id: i64,
     pub last_indexed_modification_id: i64,
+    pub graph_mutation_id: Option<i64>,
     pub blake3_hash: String,
+    pub graph_version: i32,
+    pub is_archival: bool,
+}
+
+/// A row from the hawk_graph_mutations table.
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
+pub struct GraphMutationRow {
+    pub id: i64,
+    pub modification_id: i64,
+    /// Bincode-serialized BothEyes<Vec<GraphMutation<VectorId>>> (mutations for both eyes)
+    pub serialized_mutations: Vec<u8>,
+    pub mutation_version: i32,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -150,12 +163,16 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_genesis_graph_checkpoint(
         tx: &mut Transaction<'_, Postgres>,
         s3_key: &str,
         last_indexed_iris_id: i64,
         last_indexed_modification_id: i64,
+        graph_mutation_id: Option<i64>,
         blake3_hash: &str,
+        is_archival: bool,
+        graph_version: i32,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -163,15 +180,21 @@ impl<V: VectorStore> GraphPg<V> {
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
-                blake3_hash
+                graph_mutation_id,
+                blake3_hash,
+                is_archival,
+                graph_version
             )
-            VALUES ($1, $2, $3, $4)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(s3_key)
         .bind(last_indexed_iris_id)
         .bind(last_indexed_modification_id)
+        .bind(graph_mutation_id)
         .bind(blake3_hash)
+        .bind(is_archival)
+        .bind(graph_version)
         .execute(tx.deref_mut())
         .await?;
 
@@ -179,17 +202,18 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     /// Returns the most recent genesis graph checkpoint
-    pub async fn get_latest_genesis_graph_checkpoint(
-        &self,
-    ) -> Result<Option<GenesisGraphCheckpointRow>> {
-        let row = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+    pub async fn get_latest_genesis_graph_checkpoint(&self) -> Result<Option<GraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GraphCheckpointRow>(
             r#"
             SELECT
                 id,
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
-                blake3_hash
+                graph_mutation_id,
+                blake3_hash,
+                is_archival,
+                graph_version
             FROM genesis_graph_checkpoint
             ORDER BY id DESC
             LIMIT 1
@@ -201,17 +225,48 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(row)
     }
 
-    /// Returns all genesis graph checkpoints
-    pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GenesisGraphCheckpointRow>> {
-        let rows = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+    /// Returns a genesis graph checkpoint by its S3 key.
+    pub async fn get_genesis_graph_checkpoint_by_key(
+        &self,
+        s3_key: &str,
+    ) -> Result<Option<GraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GraphCheckpointRow>(
             r#"
             SELECT
                 id,
                 s3_key,
                 last_indexed_iris_id,
                 last_indexed_modification_id,
-                blake3_hash
+                graph_mutation_id,
+                blake3_hash,
+                is_archival,
+                graph_version
             FROM genesis_graph_checkpoint
+            WHERE s3_key = $1
+            "#,
+        )
+        .bind(s3_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    /// Returns genesis graph checkpoints in descending order
+    pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GraphCheckpointRow>> {
+        let rows = sqlx::query_as::<_, GraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                graph_mutation_id,
+                blake3_hash,
+                is_archival,
+                graph_version
+            FROM genesis_graph_checkpoint
+            ORDER BY id DESC
             "#,
         )
         .fetch_all(&self.pool)
@@ -221,15 +276,84 @@ impl<V: VectorStore> GraphPg<V> {
     }
 
     pub async fn delete_genesis_checkpoint(&self, id: i64) -> Result<()> {
-        let _ = sqlx::query_as::<_, GenesisGraphCheckpointRow>(
+        let _ = sqlx::query(
             r#"
             DELETE FROM genesis_graph_checkpoint WHERE id = $1
             "#,
         )
         .bind(id)
-        .fetch_optional(&self.pool)
+        .execute(&self.pool)
         .await
         .map_err(|e| eyre!("Failed to delete genesis checkpoint: {e}"))?;
+
+        Ok(())
+    }
+
+    pub async fn insert_hawk_graph_mutations(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        modification_id: i64,
+        serialized_mutations: &[u8],
+    ) -> Result<Vec<GraphMutationRow>> {
+        let mutation_version = crate::hnsw::graph::mutation::GraphMutation::<i64>::get_version();
+        let rows = sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_version)
+            VALUES ($1, $2, $3)
+            RETURNING id, modification_id, serialized_mutations, mutation_version
+            "#,
+        )
+        .bind(modification_id)
+        .bind(serialized_mutations)
+        .bind(mutation_version)
+        .fetch_all(tx.deref_mut())
+        .await?;
+
+        Ok(rows.into_iter().collect())
+    }
+
+    pub async fn get_hawk_graph_mutations(
+        &self,
+        max_graph_mutation_id: Option<i64>,
+    ) -> Result<Vec<GraphMutationRow>> {
+        let rows = sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            SELECT id, modification_id, serialized_mutations, mutation_version
+            FROM hawk_graph_mutations
+            WHERE $1::bigint IS NULL OR id <= $1
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(max_graph_mutation_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().collect())
+    }
+
+    pub async fn delete_hawk_graph_mutations(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        max_mutation_id: Option<i64>,
+    ) -> Result<()> {
+        match max_mutation_id {
+            Some(max_mutation_id) => {
+                sqlx::query(
+                    r#"
+                    DELETE FROM hawk_graph_mutations
+                    WHERE id <= $1
+                    "#,
+                )
+                .bind(max_mutation_id)
+                .execute(tx.deref_mut())
+                .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM hawk_graph_mutations")
+                    .execute(tx.deref_mut())
+                    .await?;
+            }
+        }
 
         Ok(())
     }

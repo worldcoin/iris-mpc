@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use iris_mpc_cpu::{
     hawkers::{
-        aby3::aby3_store::{DistanceFn, DistanceOps, FhdOps, NhdOps},
+        aby3::aby3_store::{DistanceMode, DistanceOps, FhdOps, NhdOps},
         build_plaintext::plaintext_parallel_batch_insert,
         plaintext_store::SharedPlaintextStore,
     },
@@ -48,7 +48,7 @@ struct CliConfig {
     searcher: SearcherConfig,
 
     /// Distance function for comparison of iris codes.
-    distance_fn: DistanceFn,
+    distance_fn: DistanceMode,
 
     /// Selects the distance operations type (Fhd or Nhd). Defaults to Fhd.
     #[serde(default)]
@@ -117,7 +117,7 @@ impl Checkpoints {
 async fn build_graph<D: DistanceOps>(
     irises: Vec<(IrisVectorId, IrisCode)>,
     graph_spec: Option<LoadGraphConfig>,
-    distance_fn: DistanceFn,
+    distance_fn: DistanceMode,
     searcher: &HnswSearcher,
     prf_seed: &[u8; 16],
     output: OutputGraphConfig,
@@ -161,7 +161,7 @@ async fn build_graph<D: DistanceOps>(
     // insert irises which are already represented in the graph
     tracing::info!("Initializing vector store");
     let mut store = SharedPlaintextStore::<D>::new();
-    store.distance_fn = distance_fn;
+    store.distance_mode = distance_fn;
     for (id, iris) in irises[0..(graph_max_id as usize)].iter() {
         let _id = store.insert_at(id, &Arc::new(iris.clone())).await?;
     }

@@ -191,15 +191,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
-name = "ansiterm"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ab587f5395da16dd2e6939adf53dede583221b320cadfb94e02b5b7b9bf24cc"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "anstream"
 version = "0.6.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2880,6 +2871,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "axum 0.7.7",
  "base64",
  "bincode",
  "bytemuck",
@@ -2907,8 +2899,10 @@ name = "iris-mpc-bins"
 version = "0.1.0"
 dependencies = [
  "aes-prng",
+ "ampc-actor-utils",
  "ampc-anon-stats",
  "ampc-server-utils",
+ "async-trait",
  "async_from",
  "aws-config",
  "aws-sdk-kms",
@@ -2923,6 +2917,7 @@ dependencies = [
  "chrono",
  "clap",
  "clap_builder",
+ "config",
  "csv",
  "cudarc",
  "data-encoding",
@@ -3026,7 +3021,6 @@ dependencies = [
  "ampc-anon-stats",
  "ampc-secret-sharing",
  "ampc-server-utils",
- "ansiterm",
  "async-channel",
  "async-trait",
  "aws-sdk-s3",
@@ -3180,8 +3174,11 @@ dependencies = [
  "aws-config",
  "aws-sdk-rds",
  "aws-sdk-s3",
+ "axum 0.7.7",
+ "blake3",
  "chrono",
  "eyre",
+ "futures",
  "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",
@@ -4929,7 +4926,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.10",
+ "rustls-webpki 0.103.13",
  "subtle",
  "zeroize",
 ]
@@ -4977,9 +4974,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",

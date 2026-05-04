@@ -9,7 +9,9 @@ use crate::{
         scheduler::{collect_results, parallelize},
         InsertPlanV, StoreId,
     },
-    hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef},
+    hawkers::aby3::aby3_store::{
+        Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, DistanceOps,
+    },
     hnsw::{
         graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
         searcher::{NeighborhoodMode, UpdateEntryPoint},
@@ -165,7 +167,7 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
         let graph_store = session.graph_store.clone().read_owned().await;
 
         for task in batch.tasks {
-            let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
+            let query = search_queries[batch.i_eye][task.i_request][task.i_rotation];
             let result = if task.is_central {
                 // search_to_insert for centers
                 let query_uuid = search_ids
@@ -222,7 +224,10 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
 ///   larger `ef` to get a more complete picture.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_and_extend(
-    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    edges: &[(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )],
     query: &Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
@@ -279,7 +284,10 @@ async fn classify_and_extend(
 /// Batch-classify edges at both the match threshold and the anon stats threshold.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_edges(
-    edges: &[(Aby3VectorRef, Aby3DistanceRef)],
+    edges: &[(
+        Aby3VectorRef,
+        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
+    )],
     aby3_store: &mut Aby3Store<HawkOps>,
     ef: usize,
     saturation_margin: usize,
@@ -500,6 +508,7 @@ mod tests {
 
         let batch_size = 3;
         let request = make_request(batch_size, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
         let search_queries = &request.queries(Orientation::Normal);
         let search_params = SearchParams::new(
             actor.searcher(),

@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod execution;
 pub mod genesis;
+pub mod graph_checkpoint;
 pub mod hawkers;
 pub mod hnsw;
 pub mod protocol;

@@ -2,10 +2,10 @@ use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
+    galois_engine::degree4::preprocess_iris_message_shares,
     helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
     iris_db::db::IrisDB,
-    job::{BatchMetadata, BatchQuery},
-    ROTATIONS,
+    job::{BatchMetadata, BatchQuery, IrisQueryBatchEntries},
 };
 use itertools::Itertools;
 use rand::SeedableRng;
@@ -21,8 +21,9 @@ use crate::{
 };
 
 use super::{
-    scheduler::parallelize, tests::batch_of_party, HawkActor, HawkArgs, HawkRequest, VectorId,
-    LEFT, RIGHT,
+    iris_worker::{IrisWorkerPool, QueryId},
+    scheduler::parallelize,
+    HawkActor, HawkArgs, HawkRequest, VectorId, LEFT, RIGHT,
 };
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
@@ -56,14 +57,24 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
     let db_size = 5;
     let shares = make_iris_share(db_size, actor.party_id);
 
-    let mut iris_stores = [
-        actor.iris_store[LEFT].write().await,
-        actor.iris_store[RIGHT].write().await,
-    ];
     for (share, _mirror) in shares {
-        iris_stores[LEFT].append(Arc::new(share.clone()));
-        // TODO: Different share.
-        iris_stores[RIGHT].append(Arc::new(share.clone()));
+        let iris = Arc::new(share);
+        for side in [LEFT, RIGHT] {
+            let qid = QueryId::new();
+            actor.worker_pools[side]
+                .cache_queries(vec![(qid, iris.clone())])
+                .await?;
+            let vector_id = {
+                let mut reg = actor.registry[side].write().await;
+                let id = reg.allocate_next_id();
+                reg.insert(id, ());
+                id
+            };
+            actor.worker_pools[side]
+                .insert_irises(vec![(qid, vector_id)])
+                .await?;
+            actor.worker_pools[side].evict_queries(vec![qid]).await?;
+        }
     }
     Ok(())
 }
@@ -111,21 +122,93 @@ pub fn make_request_intra_match(batch_size: usize, party_id: usize) -> HawkReque
     let our_batch = make_batch(batch_size);
     let mut my_batch = batch_of_party(&our_batch, &shares);
 
-    // Copy the iris of the first into the last request.
-    let len = my_batch.left_iris_interpolated_requests.code.len();
+    // Copy the original iris of the first request into the last request.
+    // In the new design, the worker pool caches from `left/right_iris_requests`
+    // (the originals), so we modify those to create the intra-batch duplicate.
+    let n = my_batch.left_iris_requests.code.len();
     for x in [
-        &mut my_batch.left_iris_interpolated_requests,
-        &mut my_batch.right_iris_interpolated_requests,
+        &mut my_batch.left_iris_requests,
+        &mut my_batch.right_iris_requests,
     ] {
-        // Whichever rotation of the last request <-- center from the first request.
-        x.code[len - 1 - ROTATIONS / 2] = x.code[ROTATIONS / 2].clone();
-        x.mask[len - 1 - ROTATIONS / 2] = x.mask[ROTATIONS / 2].clone();
+        x.code[n - 1] = x.code[0].clone();
+        x.mask[n - 1] = x.mask[0].clone();
     }
 
     HawkRequest::from(my_batch)
 }
 
-fn make_batch(batch_size: usize) -> BatchQuery {
+/// Create a batch for mirror intra-batch testing with different left/right eyes.
+///
+/// Request 2 is a mirror attack of request 0: its left eye is mirror(request_0.right)
+/// and its right eye is mirror(request_0.left). With the correct "b" operand
+/// (same-eye raw iris from Normal queries), mirror detection should find a match.
+/// With the buggy "b" operand (wrong eye from Mirror queries), it won't.
+pub fn make_request_intra_match_mirror(batch_size: usize, party_id: usize) -> HawkRequest {
+    let iris_rng = &mut AesRng::seed_from_u64(1337);
+
+    let db = IrisDB::new_random_rng(batch_size * 2, iris_rng);
+    // Use first batch_size irises for left eye, next batch_size for right eye.
+    let mut left_shares: Vec<_> = db.db[..batch_size]
+        .iter()
+        .map(|iris| {
+            (
+                GaloisRingSharedIris::generate_shares_locally(iris_rng, iris.clone())[party_id]
+                    .clone(),
+                GaloisRingSharedIris::generate_mirrored_shares_locally(iris_rng, iris.clone())
+                    [party_id]
+                    .clone(),
+            )
+        })
+        .collect();
+    let mut right_shares: Vec<_> = db.db[batch_size..]
+        .iter()
+        .map(|iris| {
+            (
+                GaloisRingSharedIris::generate_shares_locally(iris_rng, iris.clone())[party_id]
+                    .clone(),
+                GaloisRingSharedIris::generate_mirrored_shares_locally(iris_rng, iris.clone())
+                    [party_id]
+                    .clone(),
+            )
+        })
+        .collect();
+
+    // Request 2 is a mirror attack of request 0:
+    //   request_2.left = mirror(request_0.right)
+    //   request_2.right = mirror(request_0.left)
+    // Each entry is (normal_shares, mirrored_shares) for the same iris. Swapping
+    // the tuple is equivalent to mirroring: (shares(x), shares(mirror(x))) becomes
+    // (shares(mirror(x)), shares(x)). Apply at the shares level so all downstream
+    // derivations (rotated, interpolated, mirrored-interpolated) stay consistent.
+    let n = left_shares.len();
+    let (right_normal_0, right_mirrored_0) = right_shares[0].clone();
+    let (left_normal_0, left_mirrored_0) = left_shares[0].clone();
+    left_shares[n - 1] = (right_mirrored_0, right_normal_0);
+    right_shares[n - 1] = (left_mirrored_0, left_normal_0);
+
+    let our_batch = make_batch(batch_size);
+
+    let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
+        receive_batch_shares(&left_shares);
+    let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
+        receive_batch_shares(&right_shares);
+
+    let my_batch = BatchQuery {
+        left_iris_requests,
+        right_iris_requests,
+        left_iris_rotated_requests,
+        right_iris_rotated_requests,
+        left_iris_interpolated_requests,
+        right_iris_interpolated_requests,
+        left_mirrored_iris_interpolated_requests,
+        right_mirrored_iris_interpolated_requests,
+        ..our_batch
+    };
+
+    HawkRequest::from(my_batch)
+}
+
+pub fn make_batch(batch_size: usize) -> BatchQuery {
     let mut batch = BatchQuery {
         luc_lookback_records: 2,
         ..BatchQuery::default()
@@ -143,12 +226,66 @@ fn make_batch(batch_size: usize) -> BatchQuery {
     batch
 }
 
+pub fn receive_batch_shares(
+    shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+) -> [IrisQueryBatchEntries; 4] {
+    let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
+    for (share, mirrored_share) in shares_with_mirror.iter().cloned() {
+        let one = preprocess_iris_message_shares(
+            share.code,
+            share.mask,
+            mirrored_share.code,
+            mirrored_share.mask,
+        )
+        .unwrap();
+        out[0].code.push(one.code);
+        out[0].mask.push(one.mask);
+        out[1].code.extend(one.code_rotated);
+        out[1].mask.extend(one.mask_rotated);
+        out[2].code.extend(one.code_interpolated.clone());
+        out[2].mask.extend(one.mask_interpolated.clone());
+        out[3].code.extend(one.code_mirrored);
+        out[3].mask.extend(one.mask_mirrored);
+    }
+    out
+}
+
+pub fn batch_of_party(
+    batch: &BatchQuery,
+    shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+) -> BatchQuery {
+    let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
+        receive_batch_shares(shares_with_mirror);
+    let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
+        receive_batch_shares(shares_with_mirror);
+
+    BatchQuery {
+        left_iris_requests,
+        right_iris_requests,
+        left_iris_rotated_requests,
+        right_iris_rotated_requests,
+        left_iris_interpolated_requests,
+        right_iris_interpolated_requests,
+        left_mirrored_iris_interpolated_requests,
+        right_mirrored_iris_interpolated_requests,
+        ..batch.clone()
+    }
+}
+
 // TODO: Simplify and optimize share generation.
-fn make_iris_share(
+pub fn make_iris_share(
     batch_size: usize,
     party_id: usize,
 ) -> Vec<(GaloisRingSharedIris, GaloisRingSharedIris)> {
-    let iris_rng = &mut AesRng::seed_from_u64(1337);
+    make_iris_share_with_seed(batch_size, party_id, 1337)
+}
+
+pub fn make_iris_share_with_seed(
+    batch_size: usize,
+    party_id: usize,
+    seed: u64,
+) -> Vec<(GaloisRingSharedIris, GaloisRingSharedIris)> {
+    let iris_rng = &mut AesRng::seed_from_u64(seed);
 
     // Generate: iris_id -> share
     IrisDB::new_random_rng(batch_size, iris_rng)

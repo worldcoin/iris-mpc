@@ -1,9 +1,11 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
 };
-use iris_mpc_cpu::genesis::{log_error, log_info, BatchSizeConfig};
+use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -15,8 +17,8 @@ struct Args {
     /// Batch size configuration (required).
     ///
     /// Format:
-    ///   - static:<size>                           (e.g., "static:100")
-    ///   - dynamic:cap=<cap>,error_rate=<rate>     (e.g., "dynamic:cap=500,error_rate=128")
+    ///   - `static:<size>`                           (e.g., `"static:100"`)
+    ///   - `dynamic:cap=<cap>,error_rate=<rate>`     (e.g., `"dynamic:cap=500,error_rate=128"`)
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
 
@@ -31,11 +33,37 @@ struct Args {
     /// Number of irises to index between checkpoints.
     #[clap(long("checkpoint-frequency"))]
     checkpoint_frequency: Option<String>,
+
+    /// Pruning mode for old checkpoints after loading a common checkpoint.
+    ///
+    /// Accepted values:
+    ///   - none                 — do not prune any checkpoints
+    ///   - older-non-archival   — prune older non-archival checkpoints (default)
+    ///   - all-older            — prune all older checkpoints
+    #[clap(long("pruning-mode"))]
+    pruning_mode: Option<String>,
 }
 
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
 /// creates a db snapshot within AWS RDS cluster.
 fn main() -> Result<()> {
+    // Override ptmalloc2's mmap threshold if set. This pins the dynamic
+    // threshold, preventing it from ratcheting up over time.
+    // Default glibc behavior: 128 KB initial, ratchets up to 32 MB.
+    #[cfg(target_os = "linux")]
+    if let Ok(val) = std::env::var("MALLOC_MMAP_THRESHOLD") {
+        if let Ok(bytes) = val.parse::<i32>() {
+            extern "C" {
+                fn mallopt(param: i32, value: i32) -> i32;
+            }
+            const M_MMAP_THRESHOLD: i32 = -3;
+            unsafe {
+                mallopt(M_MMAP_THRESHOLD, bytes);
+            }
+            println!("Set M_MMAP_THRESHOLD to {bytes}");
+        }
+    }
+
     // Set config.
     println!("Initialising config");
     dotenvy::dotenv().ok();
@@ -72,11 +100,11 @@ fn main() -> Result<()> {
         // Invoke main.
         match exec(args, config).await {
             Ok(_) => {
-                log_info("Server", "Exited normally".to_string());
+                tracing::info!("Exited normally");
                 Ok(())
             }
             Err(err) => {
-                log_error("Server", format!("Server exited with error: {:?}", err));
+                tracing::error!("Server exited with error: {:?}", err);
                 Err(err)
             }
         }
@@ -114,8 +142,7 @@ fn parse_args() -> Result<ExecutionArgs> {
     let batch_size_config = BatchSizeConfig::parse(batch_size_arg)?;
 
     // Arg: perform snapshot.
-    let perform_snapshot = if args.perform_snapshot.is_some() {
-        let perform_snapshot_arg = args.perform_snapshot.as_ref().unwrap();
+    let perform_snapshot = if let Some(perform_snapshot_arg) = args.perform_snapshot.as_ref() {
         perform_snapshot_arg.parse().map_err(|_| {
             eprintln!(
                 "Error: --perform-snapshot argument must be a valid boolean. Value: {}",
@@ -165,10 +192,21 @@ fn parse_args() -> Result<ExecutionArgs> {
         )
     })?;
 
+    // Arg: pruning mode (optional, defaults to OlderNonArchival).
+    let pruning_mode = if let Some(mode_str) = args.pruning_mode.as_ref() {
+        mode_str.parse::<PruningMode>().map_err(|e| {
+            eprintln!("Error: --pruning-mode argument invalid: {}", e);
+            e
+        })?
+    } else {
+        PruningMode::OlderNonArchival
+    };
+
     Ok(ExecutionArgs {
         batch_size_config,
         max_indexation_id,
         perform_snapshot,
         checkpoint_frequency,
+        pruning_mode,
     })
 }

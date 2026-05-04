@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_cpu::execution::hawk_main::{hawk_main, HawkArgs};

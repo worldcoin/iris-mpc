@@ -1,6 +1,5 @@
 mod batch_generator;
 mod batch_size_config;
-pub mod genesis_checkpoint;
 mod hawk_handle;
 mod hawk_job;
 pub mod plaintext;
@@ -16,8 +15,4 @@ pub use state_accessor::{
     get_iris_deletions, get_last_indexed_iris_id, get_last_indexed_modification_id,
     set_last_indexed_iris_id, set_last_indexed_modification_id,
 };
-pub use utils::logger;
-pub use utils::{
-    errors::IndexationError,
-    logger::{log_error, log_info, log_warn},
-};
+pub use utils::errors::IndexationError;

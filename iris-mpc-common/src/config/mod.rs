@@ -106,7 +106,7 @@ pub struct Config {
     #[serde(default)]
     pub return_partial_results: bool,
 
-    #[serde(default)]
+    #[serde(default = "default_disable_persistence")]
     pub disable_persistence: bool,
 
     #[serde(default)]
@@ -431,6 +431,12 @@ fn default_service_ports() -> Vec<String> {
     vec!["4000".to_string(); 3]
 }
 
+fn default_disable_persistence() -> bool {
+    // temporarily defaulting to true while iris-mpc-hawk changes over to using
+    // a graph checkpoint + write ahead log
+    true
+}
+
 fn default_max_deletions_per_batch() -> usize {
     100
 }
@@ -498,7 +504,7 @@ fn default_graph_checkpoint_bucket_name() -> String {
 }
 
 fn default_graph_checkpoint_bucket_region() -> String {
-    "eu-north-1".to_string()
+    "eu-central-1".to_string()
 }
 
 impl Config {
