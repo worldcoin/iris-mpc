@@ -1,14 +1,14 @@
 mod multipart;
+use std::{fmt::Display, io::Cursor, str::FromStr, time::Instant};
 
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::IrisSerialId;
-use std::{fmt::Display, str::FromStr, time::Instant};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
+    hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
             graph_store::{self, GraphPg},
@@ -17,12 +17,15 @@ use crate::{
         vector_store::Ref,
         VectorStore,
     },
+    utils::serialization::graph::GraphFormat,
 };
 
 use crate::graph_checkpoint::data::*;
+use iris_mpc_common::IrisSerialId;
 pub use multipart::*;
 
 /// Creates an S3 graph checkpoint.
+#[allow(clippy::too_many_arguments)]
 pub async fn upload_graph_checkpoint(
     bucket: &str,
     party_id: usize,
@@ -30,6 +33,7 @@ pub async fn upload_graph_checkpoint(
     s3_client: &S3Client,
     last_indexed_iris_id: IrisSerialId,
     last_indexed_modification_id: i64,
+    graph_mutation_id: Option<i64>,
     is_archival: bool,
 ) -> Result<GraphCheckpointState> {
     let start = Instant::now();
@@ -42,7 +46,7 @@ pub async fn upload_graph_checkpoint(
 
     let left_graph = graph_mem[LEFT].read().await;
     let right_graph = graph_mem[RIGHT].read().await;
-    let data = serialize_both_eyes(&[&*left_graph, &*right_graph])?;
+    let data = Bytes::from(bincode::serialize(&[&*left_graph, &*right_graph])?);
     let data_len = data.len();
     tracing::info!(
         "Serialized graphs to {} bytes in {:?}",
@@ -71,7 +75,9 @@ pub async fn upload_graph_checkpoint(
         s3_key: s3_key.clone(),
         last_indexed_iris_id,
         last_indexed_modification_id,
+        graph_mutation_id,
         blake3_hash,
+        graph_version: GraphFormat::Current.version(),
         is_archival,
     };
 
@@ -96,25 +102,32 @@ pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem<T>>> {
-    let start = Instant::now();
-
-    let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
-
-    metrics::histogram!("genesis_checkpoint_download_duration")
-        .record(start.elapsed().as_secs_f64());
-
-    // Verify BLAKE3 hash after download
-    let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();
-    if computed_hash != state.blake3_hash {
-        return Err(eyre!(
-            "BLAKE3 hash mismatch: expected {}, got {}",
-            state.blake3_hash,
-            computed_hash
-        ));
+    if state.graph_version != GraphFormat::Current.version() {
+        bail!("unexpected graph version: {}", state.graph_version);
     }
-    tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
 
-    let graphs = deserialize_both_eyes(&binary_graph)?;
+    let binary_graph = download_and_hash(s3_client, bucket, state).await?;
+
+    // todo: deserialize in a way that does not require holding 2 graphs in memory at once.
+    // currently binary_graph and graphs make two graphs in RAM at once
+    let mut cursor = Cursor::new(&binary_graph);
+    let graphs: BothEyes<GraphMem<_>> = bincode::deserialize_from(&mut cursor)?;
+    Ok(graphs)
+}
+
+// this is used for the genesis integration tests.
+// it does not convert between graph types
+pub async fn download_genesis_checkpoint_plaintext(
+    s3_client: &S3Client,
+    bucket: &str,
+    state: &GraphCheckpointState,
+) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+    if state.graph_version != GraphFormat::Current.version() {
+        bail!("unexpected graph version: {}", state.graph_version);
+    }
+    let binary_graph = download_and_hash(s3_client, bucket, state).await?;
+    let mut cursor = Cursor::new(&binary_graph);
+    let graphs: BothEyes<GraphMem<_>> = bincode::deserialize_from(&mut cursor)?;
     Ok(graphs)
 }
 
@@ -159,8 +172,10 @@ pub async fn save_checkpoint_state<V: VectorStore>(
         &state.s3_key,
         i64::from(state.last_indexed_iris_id),
         state.last_indexed_modification_id,
+        state.graph_mutation_id,
         &state.blake3_hash,
         state.is_archival,
+        state.graph_version,
     )
     .await
     .map_err(|e| eyre!("Failed to persist checkpoint state: {:?}", e))?;
@@ -292,20 +307,29 @@ pub async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Res
     }
 }
 
-/// serialize a graph for s3 upload
-fn serialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    both_eyes: &BothEyes<&GraphMem<T>>,
+async fn download_and_hash(
+    s3_client: &S3Client,
+    bucket: &str,
+    state: &GraphCheckpointState,
 ) -> Result<Bytes> {
-    let data = bincode::serialize(&both_eyes)?;
-    Ok(Bytes::from(data))
-}
+    let start = Instant::now();
 
-/// deserialize graph retrievevd from s3
-fn deserialize_both_eyes<T: Ref + Display + FromStr + Ord>(
-    data: &[u8],
-) -> Result<BothEyes<GraphMem<T>>> {
-    let graphs: BothEyes<GraphMem<T>> = bincode::deserialize(data)?;
-    Ok(graphs)
+    let binary_graph = download_graph(s3_client, bucket, &state.s3_key).await?;
+
+    metrics::histogram!("genesis_checkpoint_download_duration")
+        .record(start.elapsed().as_secs_f64());
+
+    // Verify BLAKE3 hash after download
+    let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();
+    if computed_hash != state.blake3_hash {
+        return Err(eyre!(
+            "BLAKE3 hash mismatch: expected {}, got {}",
+            state.blake3_hash,
+            computed_hash
+        ));
+    }
+    tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
+    Ok(binary_graph)
 }
 
 #[cfg(test)]

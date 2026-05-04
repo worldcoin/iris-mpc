@@ -62,4 +62,4 @@ jobs:
 
       - name: Run Rustfmt
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
