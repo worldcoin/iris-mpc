@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:b177c89d7bca88e1bfba8ff17aef3e6d4c3c9429"
+image: "ghcr.io/worldcoin/anon-stats-server:v0.31.8@sha256:bd69a164e4d2d52abcb48814aa8208da2b78b70be3fab806a9b9d87e7a77b68c"
 
 environment: stage
 replicaCount: 1
