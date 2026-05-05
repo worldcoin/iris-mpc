@@ -1,4 +1,3 @@
-use super::logger;
 use eyre::Result;
 use std::{
     fmt::{self, Debug},
@@ -10,22 +9,26 @@ use std::{
 pub trait TestRun {
     /// Executes test workflow.
     async fn run(&mut self, ctx: TestRunContextInfo) -> Result<()> {
-        ctx.log_info(format!("Phase 1.1: Setup (EXECUTION ENV = {:?})", ctx.env()).as_str());
+        tracing::info!(
+            "{}: Phase 1.1: Setup (EXECUTION ENV = {:?})",
+            ctx,
+            ctx.env()
+        );
         self.setup(&ctx).await?;
 
-        ctx.log_info("Phase 1.2: Setup Assertion");
+        tracing::info!("{}: Phase 1.2: Setup Assertion", ctx);
         self.setup_assert().await?;
 
-        ctx.log_info("Phase 2.1: Execution");
+        tracing::info!("{}: Phase 2.1: Execution", ctx);
         self.exec().await?;
 
-        ctx.log_info("Phase 2.2: Execution Assertion");
+        tracing::info!("{}: Phase 2.2: Execution Assertion", ctx);
         self.exec_assert().await?;
 
-        ctx.log_info("Phase 3.1: Teardown");
+        tracing::info!("{}: Phase 3.1: Teardown", ctx);
         self.teardown().await?;
 
-        ctx.log_info("Phase 3.2: Teardown Assertion");
+        tracing::info!("{}: Phase 3.2: Teardown Assertion", ctx);
         self.teardown_assert().await?;
 
         Ok(())
@@ -101,14 +104,6 @@ impl TestRunContextInfo {
 impl fmt::Display for TestRunContextInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}-{:02}", self.kind(), self.idx())
-    }
-}
-
-/// Methods.
-impl TestRunContextInfo {
-    /// Logs an informational message.
-    pub fn log_info(&self, msg: &str) {
-        logger::log_info(format!("{}", self).as_str(), msg);
     }
 }
 

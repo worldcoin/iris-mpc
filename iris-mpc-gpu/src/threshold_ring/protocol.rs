@@ -469,7 +469,7 @@ impl Circuits {
         comms: Vec<Arc<NcclComm>>,
     ) -> Self {
         // For the transpose, inputs should be multiple of 64 bits
-        assert!(input_size % 64 == 0);
+        assert!(input_size.is_multiple_of(64));
         // Chunk size is the number of u64 elements per bit in the binary circuits
         let chunk_size = input_size / 64;
         assert!(alloc_size >= chunk_size);
@@ -2525,7 +2525,7 @@ impl Circuits {
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
         for chunk in code_dots.iter().chain(mask_dots.iter()) {
-            assert!(chunk.len() % 64 == 0);
+            assert!(chunk.len().is_multiple_of(64));
         }
 
         let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
@@ -2562,7 +2562,7 @@ impl Circuits {
         assert_eq!(self.n_devices, code_dots.len());
         assert_eq!(self.n_devices, mask_dots.len());
         for chunk in code_dots.iter().chain(mask_dots.iter()) {
-            assert!(chunk.len() % 64 == 0);
+            assert!(chunk.len().is_multiple_of(64));
         }
 
         let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);

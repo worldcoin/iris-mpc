@@ -37,8 +37,10 @@ impl<I: Clone> SharedIrises<I> {
         let next_id = points_map.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
 
         let mut points = vec![None; next_id as usize];
+        let mut set_hash = SetHash::default();
         for (v, iris) in points_map.into_iter() {
             points[v.serial_id() as usize] = Some((v.version_id(), iris));
+            set_hash.add_unordered(v);
         }
 
         SharedIrises {
@@ -46,7 +48,7 @@ impl<I: Clone> SharedIrises<I> {
             size,
             next_id,
             empty_iris,
-            set_hash: SetHash::default(),
+            set_hash,
         }
     }
 
@@ -110,6 +112,16 @@ impl<I: Clone> SharedIrises<I> {
         VectorId::from_serial_id(self.next_id)
     }
 
+    /// Allocate the next VectorId without inserting any data.
+    ///
+    /// Used when the actual iris insertion is delegated to the worker pool
+    /// via `IrisWorkerPool::insert_irises`.
+    pub fn allocate_next_id(&mut self) -> VectorId {
+        let id = self.next_id();
+        self.next_id += 1;
+        id
+    }
+
     pub fn reserve(&mut self, additional: usize) {
         self.points.reserve(additional);
     }
@@ -161,6 +173,25 @@ impl<I: Clone> SharedIrises<I> {
         }
     }
 
+    /// Create a metadata-only registry from this store.
+    ///
+    /// Preserves all VectorId presence, version, and checksum data but
+    /// strips the per-entry iris payload.  Used by `Aby3Store` which
+    /// accesses iris data exclusively through the worker pool trait.
+    pub fn to_registry(&self) -> SharedIrises<()> {
+        SharedIrises {
+            points: self
+                .points
+                .iter()
+                .map(|opt| opt.as_ref().map(|(v, _)| (*v, ())))
+                .collect(),
+            size: self.size,
+            next_id: self.next_id,
+            empty_iris: (),
+            set_hash: self.set_hash.clone(),
+        }
+    }
+
     pub fn last_vector_ids(&self, n: usize) -> Vec<VectorId> {
         (1..self.next_id)
             .rev()
@@ -184,6 +215,25 @@ impl<I: Clone> SharedIrises<I> {
                 }
             })
             .collect_vec()
+    }
+
+    /// Build prefix sums of per-entry [`SetHash`] values over the serial-ID
+    /// array.
+    ///
+    /// Returns a vec of length `points.len() + 1` where `result[i]` is the
+    /// cumulative hash of all entries with serial_id < i.  The hash of any
+    /// range `[lo, hi)` is `result[hi].wrapping_sub(result[lo])`.
+    pub(crate) fn prefix_sums(&self) -> Vec<u64> {
+        let mut sums = Vec::with_capacity(self.points.len() + 1);
+        let mut acc = 0u64;
+        sums.push(acc);
+        for (serial_id, opt) in self.points.iter().enumerate() {
+            if let Some((version, _)) = opt {
+                acc = acc.wrapping_add(SetHash::hash(VectorId::new(serial_id as u32, *version)));
+            }
+            sums.push(acc);
+        }
+        sums
     }
 }
 

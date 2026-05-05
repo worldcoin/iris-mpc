@@ -181,13 +181,16 @@ hnsw-smpc-0:
     - name: SMPC__ANON_STATS_DATABASE__DB_SCHEMA_NAME
       value: "anon_stats_hnsw_0"
 
-    - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
+    - name: SMPC__ENABLE_REAUTH
       value: "false"
 
-    - name: SMPC__HAWK_SERVER_RESETS_ENABLED
+    - name: SMPC__ENABLE_RESET
       value: "false"
 
-    - name: SMPC__HAWK_SERVER_DELETIONS_ENABLED
+    - name: SMPC__ENABLE_DELETION
+      value: "true"
+
+    - name: SMPC__ENABLE_RECOVERY
       value: "true"
 
     - name: SMPC__LUC_ENABLED

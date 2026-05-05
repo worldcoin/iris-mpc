@@ -52,7 +52,7 @@ async fn simulate_genesis(
     let genesis_input = init_plaintext_irises_db(pairs);
 
     let genesis_config = GenesisConfig {
-        hnsw_M: config.hnsw_param_M,
+        hnsw_m: config.hnsw_param_m,
         hnsw_ef_constr: config.hnsw_param_ef_constr,
         hnsw_ef_search: config.hnsw_param_ef_search,
         hawk_prf_key: config.hawk_prf_key,
@@ -146,7 +146,7 @@ pub fn apply_modifications(
 /// from a full server `Config` struct.
 pub fn init_plaintext_config(config: &Config) -> GenesisConfig {
     GenesisConfig {
-        hnsw_M: config.hnsw_param_M,
+        hnsw_m: config.hnsw_param_m,
         hnsw_ef_constr: config.hnsw_param_ef_constr,
         hnsw_ef_search: config.hnsw_param_ef_search,
         hawk_prf_key: config.hawk_prf_key,

@@ -1,22 +1,18 @@
 use super::Batch;
 use crate::{
-    execution::hawk_main::{
-        iris_worker::IrisPoolHandle, BothEyes, HawkMutation, VecRequests, LEFT, RIGHT,
-    },
+    execution::hawk_main::{iris_worker::QueryId, BothEyes, VecRequests},
+    graph_checkpoint::GraphCheckpointState,
     hawkers::aby3::aby3_store::Aby3Query,
+    protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
-use futures::future::try_join_all;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
 use std::{
     fmt,
     sync::{atomic::AtomicU8, Arc},
 };
 
-use tokio::{
-    join,
-    sync::{self, oneshot},
-};
+use tokio::sync::{self, oneshot};
 
 // constants for managing the persistence synchronization logic
 pub const SYNC_RUNNING: u8 = 0;
@@ -53,6 +49,9 @@ pub enum JobRequest {
 
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
+
+        /// Irises to cache in worker pools before search, per eye [LEFT, RIGHT].
+        irises_to_cache: BothEyes<Vec<(QueryId, ArcIris)>>,
     },
     Modification {
         /// Modification entry for processing.
@@ -74,51 +73,12 @@ impl JobRequest {
             vector_ids: batch.vector_ids.clone(),
             queries: Arc::new([batch.left_queries.clone(), batch.right_queries.clone()]),
             vector_ids_to_persist: batch.vector_ids_to_persist.clone(),
+            irises_to_cache: batch.irises_to_cache.clone(),
         }
     }
 
     pub fn new_modification(modification: Modification) -> Self {
         Self::Modification { modification }
-    }
-
-    pub async fn numa_realloc(
-        queries: Aby3BatchQueryRef,
-        workers: BothEyes<IrisPoolHandle>,
-    ) -> Aby3BatchQueryRef {
-        let (left, right) = join!(
-            Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
-            Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT]),
-        );
-        Arc::new([left, right])
-    }
-
-    async fn numa_realloc_side(
-        requests: &VecRequests<Aby3Query>,
-        worker: &IrisPoolHandle,
-    ) -> VecRequests<Aby3Query> {
-        // Iterate over all the irises.
-        let all_irises_iter = requests
-            .iter()
-            .flat_map(|query| [&query.iris, &query.iris_proc]);
-
-        // Go realloc the irises in parallel.
-        let tasks = all_irises_iter.map(|iris| worker.numa_realloc(iris.clone()).unwrap());
-
-        // Iterate over the results in the same order.
-        let mut new_irises_iter = try_join_all(tasks).await.unwrap().into_iter();
-
-        // Rebuild the same structure with the new irises.
-        let new_requests = requests
-            .iter()
-            .map(|_old_query| {
-                let iris = new_irises_iter.next().unwrap();
-                let iris_proc = new_irises_iter.next().unwrap();
-                Aby3Query { iris, iris_proc }
-            })
-            .collect::<Vec<_>>();
-
-        assert!(new_irises_iter.next().is_none());
-        new_requests
     }
 }
 
@@ -128,9 +88,6 @@ pub enum JobResult {
     BatchIndexation {
         /// Unique sequential job identifier.
         batch_id: usize,
-
-        /// Connect plans for updating HNSW graph in DB.
-        connect_plans: HawkMutation,
 
         /// Set of Iris identifiers being indexed.
         vector_ids: Vec<IrisVectorId>,
@@ -151,8 +108,10 @@ pub enum JobResult {
         /// Vector id for persistence.
         vector_id_to_persist: IrisVectorId,
 
-        /// Connect plans for updating HNSW graph in DB.
-        connect_plans: HawkMutation,
+        done_tx: sync::oneshot::Sender<()>,
+    },
+    S3Checkpoint {
+        checkpoint_state: GraphCheckpointState,
         done_tx: sync::oneshot::Sender<()>,
     },
     Sync {
@@ -167,7 +126,6 @@ impl JobResult {
     pub(crate) fn new_batch_result(
         batch_id: usize,
         vector_ids: Vec<IrisVectorId>,
-        connect_plans: HawkMutation,
         vector_ids_to_persist: Vec<IrisVectorId>,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
@@ -175,7 +133,6 @@ impl JobResult {
         let last_serial_id = vector_ids_to_persist.last().unwrap().serial_id();
 
         Self::BatchIndexation {
-            connect_plans,
             batch_id,
             vector_ids,
             vector_ids_to_persist,
@@ -187,14 +144,22 @@ impl JobResult {
 
     pub(crate) fn new_modification_result(
         modification_id: i64,
-        connect_plans: HawkMutation,
         vector_id_to_persist: IrisVectorId,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         Self::Modification {
             modification_id,
-            connect_plans,
             vector_id_to_persist,
+            done_tx,
+        }
+    }
+
+    pub fn new_s3_checkpoint(
+        checkpoint_state: GraphCheckpointState,
+        done_tx: sync::oneshot::Sender<()>,
+    ) -> Self {
+        Self::S3Checkpoint {
+            checkpoint_state,
             done_tx,
         }
     }
@@ -227,6 +192,16 @@ impl fmt::Display for JobResult {
             }
             JobResult::Sync { mismatched } => {
                 write!(f, "mismatched={}", mismatched)
+            }
+            JobResult::S3Checkpoint {
+                checkpoint_state, ..
+            } => {
+                write!(
+                    f,
+                    "iris-id={}, modification-id={}",
+                    checkpoint_state.last_indexed_iris_id,
+                    checkpoint_state.last_indexed_modification_id
+                )
             }
         }
     }

@@ -1,20 +1,18 @@
 use std::sync::Arc;
 
-use crate::{
-    join_runners,
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-        modifications::{
-            self, ModificationInput,
-            ModificationType::{Reauth, ResetUpdate, Uniqueness},
-        },
-        mpc_node::{DbAssertions, MpcNode, MpcNodes},
-        plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
+use crate::join_runners;
+use crate::run_genesis;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+    modifications::{
+        ModificationInput,
+        ModificationType::{Reauth, ResetUpdate, Uniqueness},
     },
+    mpc_node::{DbAssertions, MpcNode, MpcNodes},
+    plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
 
 const MODIFICATIONS_START: [ModificationInput; 4] = [
@@ -65,15 +63,9 @@ impl TestRun for Test {
         join_runners!(join_set);
 
         // Execute initial genesis run
-        let genesis_args = DEFAULT_GENESIS_ARGS;
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config;
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::new(batch_size_config, 50, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 50;
+        run_genesis!(self, args);
 
         // Persist initial modifications, and insert additional modifications
         let mut join_set = JoinSet::new();
@@ -85,14 +77,9 @@ impl TestRun for Test {
         }
         join_runners!(join_set);
 
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let batch_size_config = genesis_args.batch_size_config;
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::new(batch_size_config, 100, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 100;
+        run_genesis!(self, args);
 
         Ok(())
     }
@@ -123,15 +110,6 @@ impl TestRun for Test {
             .await
             .expect("Stage 2 of plaintext genesis execution failed");
 
-        // Number of modifications on already-indexed irises which are processed by genesis delta
-        let num_updating_modifications = modifications::modifications_extension_updates(
-            &MODIFICATIONS_START,
-            &MODIFICATIONS_END,
-        )
-        .into_iter()
-        .filter(|serial_id| *serial_id <= 50)
-        .count();
-
         // Assert databases
         let gpu_asserts = DbAssertions::new()
             .assert_num_irises(MAX_INDEXATION_ID)
@@ -142,14 +120,13 @@ impl TestRun for Test {
             .assert_vector_ids(plaintext_genesis::get_vector_ids(&expected.dst_db.irises))
             .assert_num_modifications(0)
             .assert_last_indexed_iris_id(100)
-            .assert_last_indexed_modification_id(8)
-            .assert_hnsw_layer_0_size(
-                MAX_INDEXATION_ID + num_updating_modifications - DELETIONS.len(),
-            )
-            .assert_hnsw_graphs(expected.dst_db.graphs);
+            .assert_last_indexed_modification_id(8);
 
         let nodes = MpcNodes::new(&self.configs).await;
         nodes.apply_assertions(gpu_asserts, cpu_asserts).await;
+        nodes
+            .assert_s3_checkpoint_graphs(&self.configs, &expected.dst_db.graphs)
+            .await?;
 
         Ok(())
     }
@@ -161,5 +138,10 @@ impl TestRun for Test {
 
     async fn setup_assert(&mut self) -> Result<()> {
         genesis_runner::base_genesis_e2e_init_assertions(&self.configs, DELETIONS.len()).await
+    }
+
+    async fn teardown(&mut self) -> Result<()> {
+        let nodes = MpcNodes::new(&self.configs).await;
+        nodes.cleanup_s3_checkpoints(&self.configs).await
     }
 }

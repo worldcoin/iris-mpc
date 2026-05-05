@@ -32,6 +32,7 @@ use crate::{
         BothEyes, STORE_IDS,
     },
     genesis::{BatchSize, BatchSizeConfig},
+    graph_checkpoint::PruningMode,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
@@ -94,9 +95,8 @@ pub struct PersistentState {
 
 /// Logical configuration parameters of genesis `Config` struct.
 #[derive(Debug, Default, Clone, Copy)]
-#[allow(non_snake_case)]
 pub struct GenesisConfig {
-    pub hnsw_M: usize,
+    pub hnsw_m: usize,
 
     pub hnsw_ef_constr: usize,
 
@@ -106,11 +106,16 @@ pub struct GenesisConfig {
 }
 
 /// Logical CLI arguments for genesis process.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct GenesisArgs {
     pub max_indexation_id: IrisSerialId,
 
     pub batch_size_config: BatchSizeConfig,
+
+    pub checkpoint_frequency: usize,
+
+    // Controls which older checkpoints are pruned after loading a common checkpoint.
+    pub pruning_mode: PruningMode,
 }
 
 impl Default for GenesisArgs {
@@ -118,6 +123,8 @@ impl Default for GenesisArgs {
         Self {
             max_indexation_id: 0,
             batch_size_config: BatchSizeConfig::Static { size: 1 },
+            checkpoint_frequency: 100_000,
+            pruning_mode: PruningMode::OlderNonArchival,
         }
     }
 }
@@ -145,7 +152,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     let batch_size = match &state.args.batch_size_config {
         BatchSizeConfig::Static { size } => *size,
         BatchSizeConfig::Dynamic { cap, error_rate } => {
-            let dynamic_size = BatchSize::get_dynamic_size(id, *error_rate, state.config.hnsw_M);
+            let dynamic_size = BatchSize::get_dynamic_size(id, *error_rate, state.config.hnsw_m);
             dynamic_size.min(*cap)
         }
     };
@@ -170,7 +177,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     let searcher = HnswSearcher::new_linear_scan(
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
-        state.config.hnsw_M,
+        state.config.hnsw_m,
         1, // should match the constant LINEAR_SCAN_MAX_GRAPH_LAYER
     );
 
@@ -419,7 +426,7 @@ mod tests {
                 },
             },
             config: GenesisConfig {
-                hnsw_M: 256,
+                hnsw_m: 256,
                 hnsw_ef_constr: 320,
                 hnsw_ef_search: 320,
                 hawk_prf_key: Some(0),
@@ -430,6 +437,7 @@ mod tests {
                     cap: 1000,
                     error_rate: 128,
                 },
+                ..Default::default()
             },
             s3_deletions: Vec::new(),
         }

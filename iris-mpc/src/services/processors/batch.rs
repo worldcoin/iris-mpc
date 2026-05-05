@@ -439,7 +439,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RECOVERY_CHECK_MESSAGE_TYPE,
-                    self.config.hawk_server_recovery_enabled,
+                    self.config.enable_recovery,
                 )
                 .await
             }
@@ -448,7 +448,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RESET_CHECK_MESSAGE_TYPE,
-                    self.config.hawk_server_resets_enabled,
+                    self.config.enable_reset,
                 )
                 .await
             }
@@ -457,7 +457,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RECOVERY_UPDATE_MESSAGE_TYPE,
-                    self.config.hawk_server_recovery_enabled,
+                    self.config.enable_recovery,
                 )
                 .await
             }
@@ -466,7 +466,7 @@ impl<'a> BatchProcessor<'a> {
                     &message,
                     batch_metadata,
                     RESET_UPDATE_MESSAGE_TYPE,
-                    self.config.hawk_server_resets_enabled,
+                    self.config.enable_reset,
                 )
                 .await
             }
@@ -492,7 +492,7 @@ impl<'a> BatchProcessor<'a> {
                 ReceiveRequestError::json_parse_error("Identity deletion request", e)
             })?;
 
-        if self.config.hawk_server_deletions_enabled {
+        if self.config.enable_deletion {
             // Skip the request if serial ID already exists in current batch modifications
             if self
                 .batch_query
@@ -531,7 +531,7 @@ impl<'a> BatchProcessor<'a> {
                 IDENTITY_DELETION_MESSAGE_TYPE,
                 None,
             )
-            .await;
+            .await?;
             self.batch_query.modifications.insert(
                 RequestSerialId(identity_deletion_request.serial_id),
                 modification,
@@ -582,11 +582,25 @@ impl<'a> BatchProcessor<'a> {
             UNIQUENESS_MESSAGE_TYPE,
             Some(uniqueness_request.s3_key.as_str()),
         )
-        .await;
+        .await?;
         self.batch_query.modifications.insert(
             RequestId(uniqueness_request.signup_id.clone()),
             modification,
         );
+
+        if let Some(enable_mirror_attacks) =
+            uniqueness_request.full_face_mirror_attacks_detection_enabled
+        {
+            if enable_mirror_attacks != self.batch_query.full_face_mirror_attacks_detection_enabled
+            {
+                self.batch_query.full_face_mirror_attacks_detection_enabled = enable_mirror_attacks;
+                tracing::info!(
+                    "Setting mirror attack to {} for batch due to request from {}",
+                    enable_mirror_attacks,
+                    uniqueness_request.signup_id
+                );
+            }
+        }
 
         let or_rule_indices = self.update_luc_config_if_needed(&uniqueness_request);
 
@@ -624,7 +638,7 @@ impl<'a> BatchProcessor<'a> {
 
         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-        if !self.config.hawk_server_reauths_enabled {
+        if !self.config.enable_reauth {
             tracing::warn!("Reauth is disabled");
             let error_result = ReAuthResult::new_error_result(
                 reauth_request.reauth_id,
@@ -710,7 +724,7 @@ impl<'a> BatchProcessor<'a> {
             REAUTH_MESSAGE_TYPE,
             Some(reauth_request.s3_key.as_str()),
         )
-        .await;
+        .await?;
         self.batch_query
             .modifications
             .insert(RequestSerialId(reauth_request.serial_id), modification);
@@ -798,7 +812,7 @@ impl<'a> BatchProcessor<'a> {
             request_type,
             Some(identity_match_check_request.s3_key.as_str()),
         )
-        .await;
+        .await?;
         self.batch_query.modifications.insert(
             RequestId(identity_match_check_request.request_id.clone()),
             modification,
@@ -912,6 +926,8 @@ impl<'a> BatchProcessor<'a> {
             bucket_name,
             identity_update_request.s3_key.clone(),
         )?;
+        // Preserve the old GPU-local behavior: skip only this identity update if share
+        // fetching/parsing fails, and keep receiving the rest of the batch.
         let (left_shares, right_shares) = match task_handle.await {
             Ok(result) => match result {
                 Ok(shares) => shares,
@@ -921,12 +937,24 @@ impl<'a> BatchProcessor<'a> {
                         request_type,
                         e
                     );
-                    return Err(ReceiveRequestError::FailedToProcessIrisShares(e));
+                    metrics::counter!(
+                        "request.skipped",
+                        "type" => request_type.to_string(),
+                        "reason" => "failed_to_process_iris_shares"
+                    )
+                    .increment(1);
+                    return Ok(());
                 }
             },
             Err(e) => {
                 tracing::error!("Failed to join task handle for {}: {:?}", request_type, e);
-                return Err(ReceiveRequestError::FailedToJoinHandle(e));
+                metrics::counter!(
+                    "request.skipped",
+                    "type" => request_type.to_string(),
+                    "reason" => "failed_to_join_handle"
+                )
+                .increment(1);
+                return Ok(());
             }
         };
 
@@ -937,7 +965,7 @@ impl<'a> BatchProcessor<'a> {
             request_type,
             Some(identity_update_request.s3_key.as_ref()),
         )
-        .await;
+        .await?;
 
         self.batch_query.modifications.insert(
             RequestSerialId(identity_update_request.serial_id),
@@ -1158,15 +1186,16 @@ async fn persist_modification(
     serial_id: Option<i64>,
     request_type: &str,
     s3_url: Option<&str>,
-) -> Modification {
+) -> Result<Modification, ReceiveRequestError> {
     if disable_persistence {
         tracing::debug!("Persistence is disabled, skipping modification persistence");
-        return Modification::default();
+        return Ok(Modification::default());
     }
-    iris_store
+    let modification = iris_store
         .insert_modification(serial_id, request_type, s3_url)
         .await
-        .expect("Failed to insert modification into store")
+        .map_err(ReceiveRequestError::from)?;
+    Ok(modification)
 }
 
 pub async fn get_own_batch_sync_state(

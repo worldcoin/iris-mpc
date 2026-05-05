@@ -16,6 +16,25 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 pub const MATCH_THRESHOLD_RATIO: f64 = 0.345;
+pub const ANON_STATS_THRESHOLD_RATIO: f64 = 0.375;
+
+/// Which distance threshold to apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Threshold {
+    /// Standard match threshold (0.345).
+    Match,
+    /// Higher threshold used for anonymous statistics (0.375).
+    AnonStats,
+}
+
+impl Threshold {
+    pub fn ratio(self) -> f64 {
+        match self {
+            Threshold::Match => MATCH_THRESHOLD_RATIO,
+            Threshold::AnonStats => ANON_STATS_THRESHOLD_RATIO,
+        }
+    }
+}
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -253,7 +272,7 @@ impl IrisCode {
     /// is (min(n, pattern_size) * 1/(2 * pattern_size)).
     pub fn random_rng_with_pattern<R: Rng>(rng: &mut R, pattern_size: usize) -> Self {
         assert!(pattern_size <= IrisCode::CODE_COLS);
-        assert!(IrisCode::CODE_COLS % pattern_size == 0);
+        assert!(IrisCode::CODE_COLS.is_multiple_of(pattern_size));
         const LEN: usize = IrisCode::CODE_COLS * 4;
         let mut code = IrisCode::random_rng(rng);
         for i in (0..Self::IRIS_CODE_SIZE).step_by(LEN) {
@@ -465,7 +484,7 @@ impl IrisCode {
         min_distance
     }
 
-    fn get_nhd_nmr(hd: u16, md: u16) -> i64 {
+    pub fn get_nhd_nmr(hd: u16, md: u16) -> i64 {
         md as i64 * (20_i64 * hd as i64 - 9 * md as i64) + 147456_i64 * hd as i64
     }
 
@@ -628,7 +647,7 @@ impl Iterator for Bits<'_> {
         if self.index >= IrisCodeArray::IRIS_CODE_SIZE {
             None
         } else {
-            if self.index % 64 == 0 {
+            if self.index.is_multiple_of(64) {
                 self.current = self.code.0[self.index / 64];
             }
             let res = self.current & 1 == 1;

@@ -31,7 +31,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::session::Session,
-    network::tcp::{build_network_handle, NetworkHandleArgs},
+    network::mpc::{build_network_handle, NetworkHandleArgs},
 };
 use sodiumoxide::hex;
 use std::collections::HashSet;
@@ -397,7 +397,13 @@ impl AnonStatsProcessor {
             JobKind::Gpu1DRecovery | JobKind::Hnsw1DRecovery => {
                 self.config.min_1d_job_size_recovery
             }
-            JobKind::Gpu1D | JobKind::Hnsw1D => self.config.min_1d_job_size,
+            JobKind::Gpu1D | JobKind::Hnsw1D => {
+                if origin.orientation == AnonStatsOrientation::Mirror {
+                    self.config.min_1d_job_size_mirror
+                } else {
+                    self.config.min_1d_job_size
+                }
+            }
             _ => panic!("Invalid job kind for 1D job"),
         };
 
@@ -588,7 +594,13 @@ impl AnonStatsProcessor {
             JobKind::Gpu2DRecovery | JobKind::Hnsw2DRecovery => {
                 self.config.min_2d_job_size_recovery
             }
-            JobKind::Gpu2D | JobKind::Hnsw2D => self.config.min_2d_job_size,
+            JobKind::Gpu2D | JobKind::Hnsw2D => {
+                if origin.orientation == AnonStatsOrientation::Mirror {
+                    self.config.min_2d_job_size_mirror
+                } else {
+                    self.config.min_2d_job_size
+                }
+            }
             _ => panic!("Invalid job kind for 2D job"),
         };
 
@@ -1053,7 +1065,7 @@ async fn main() -> Result<()> {
     }
 
     shutdown_handler.wait_for_shutdown().await;
-    shutdown_handler.wait_for_pending_batches_completion().await;
+    let _ = shutdown_handler.wait_for_pending_batches_completion().await;
     ct.cancel();
     background_tasks.abort_and_wait_for_finish().await;
 

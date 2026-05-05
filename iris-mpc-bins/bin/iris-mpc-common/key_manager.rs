@@ -343,6 +343,7 @@ mod test {
     }
 
     #[test]
+    #[ignore = "requires ./data/iris_codes.json fixture"]
     fn test_encode_and_decode_shares() {
         let (server_public_key, server_private_key) = generate_key_pairs(Seed([0u8; 32]));
 

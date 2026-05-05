@@ -461,7 +461,14 @@ impl E2EClient {
                     assert!(expected_result_option.is_some());
                     let expected_result = expected_result_option.unwrap();
 
-                    if expected_result.is_none() {
+                    if let Some(expected_result) = expected_result {
+                        // Existing entry
+                        assert!(result.is_match);
+                        assert!(result.matched_serial_ids.is_some());
+                        let matched_ids = result.matched_serial_ids.unwrap();
+                        assert_eq!(matched_ids.len(), 1);
+                        assert_eq!(expected_result, matched_ids[0]);
+                    } else {
                         // New insertion
                         assert!(!result.is_match);
                         let request = {
@@ -472,13 +479,6 @@ impl E2EClient {
                             let mut tmp = responses.lock().await;
                             tmp.insert(result.serial_id.unwrap(), request);
                         }
-                    } else {
-                        // Existing entry
-                        assert!(result.is_match);
-                        assert!(result.matched_serial_ids.is_some());
-                        let matched_ids = result.matched_serial_ids.unwrap();
-                        assert_eq!(matched_ids.len(), 1);
-                        assert_eq!(expected_result.unwrap(), matched_ids[0]);
                     }
 
                     sqs_client
@@ -550,8 +550,6 @@ impl E2EClient {
         };
 
         let request_message = UniquenessRequest {
-            // TODO: in future use the batch size from the request
-            batch_size: Some(1),
             signup_id: party_shares.signup_id.clone(),
             s3_key: bucket_key,
             or_rule_serial_ids: None,

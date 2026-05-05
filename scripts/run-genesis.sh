@@ -15,8 +15,18 @@ if [ -z "${GENESIS_BATCH_SIZE}" ]; then
     exit 1
 fi
 
+if [ -z "${GENESIS_CHECKPOINT_FREQUENCY}" ]; then
+    echo "Error: GENESIS_CHECKPOINT_FREQUENCY environment variable is not set" >&2
+    exit 1
+fi
+
+
 echo "Starting genesis with max height: ${GENESIS_MAX_HEIGHT}, batch size: ${GENESIS_BATCH_SIZE}"
-/bin/iris-mpc-hawk-genesis --max-height=${GENESIS_MAX_HEIGHT} --batch-size=${GENESIS_BATCH_SIZE} --perform-snapshot=false
+/bin/iris-mpc-hawk-genesis \
+    --max-height=${GENESIS_MAX_HEIGHT} \
+    --batch-size=${GENESIS_BATCH_SIZE} \
+    --perform-snapshot=false \
+    --checkpoint-frequency=${GENESIS_CHECKPOINT_FREQUENCY}
 genesis_exit_code=$?
 
 # Check if genesis exited due to a shutdown signal

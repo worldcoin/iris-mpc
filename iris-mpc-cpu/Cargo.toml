@@ -9,17 +9,17 @@ repository.workspace = true
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
-ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-trait = "~0.1"
 aws-sdk-s3.workspace = true
-blake3 = "1"
+base64.workspace = true
+blake3.workspace = true
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
 cached = "0.56.0"
 clap.workspace = true
-core_affinity = "0.8.3"
+core_affinity.workspace = true
 crossbeam = "0.8.4"
 csv = "*"
 delegate = "0.13.5"
@@ -59,6 +59,7 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
 ] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
+uuid.workspace = true
 backon = { version = "1.4.0", default-features = false, features = [
     "tokio-sleep",
 ] }
@@ -79,6 +80,7 @@ num_cpus = "1.16.0"
 db_dependent = []
 networking_metrics = []
 chacha_prf = []
+phase_trace = []
 
 [[bench]]
 name = "hnsw"

@@ -1,12 +1,8 @@
-use crate::utils::logger;
 use aws_sdk_s3::{primitives::ByteStream as S3_ByteStream, Client as S3_Client};
 use eyre::{eyre, Result};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc_common::{config::Config, IrisSerialId};
 use serde::Serialize;
-
-/// Component name for logging purposes.
-const COMPONENT: &str = "SystemState-Aws";
 
 /// Uploads to an AWS S3 bucket a set of serial identifiers marked as deleted.
 pub async fn upload_iris_deletions(
@@ -17,13 +13,10 @@ pub async fn upload_iris_deletions(
     // Set bucket/key based on environment.
     let s3_bucket = get_s3_bucket_for_iris_deletions(environment);
     let s3_key = get_s3_key_for_iris_deletions(environment);
-    logger::log_info(
-        COMPONENT,
-        format!(
-            "Inserting deleted serial ids into S3 bucket: {}, key: {}",
-            s3_bucket, s3_key
-        )
-        .as_str(),
+    tracing::info!(
+        "Inserting deleted serial ids into S3 bucket: {}, key: {}",
+        s3_bucket,
+        s3_key
     );
 
     // Set body of payload to be persisted.
@@ -43,7 +36,7 @@ pub async fn upload_iris_deletions(
         .send()
         .await
         .map_err(|err| {
-            logger::log_error(COMPONENT, format!("Failed to upload file to S3: {}", err));
+            tracing::error!("Failed to upload file to S3: {}", err);
             eyre!("Failed to upload Iris deletions to S3")
         })?;
 

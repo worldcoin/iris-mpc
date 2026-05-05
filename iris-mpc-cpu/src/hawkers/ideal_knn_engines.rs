@@ -14,7 +14,7 @@ use rayon::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::hawkers::aby3::aby3_store::{DistanceFn, DistanceOps, FhdOps, NhdOps};
+use crate::hawkers::aby3::aby3_store::{DistanceMode, DistanceOps, FhdOps, NhdOps};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct KNNResult<V> {
@@ -69,10 +69,10 @@ pub enum EngineChoice {
 }
 
 impl EngineChoice {
-    pub fn distance_fn(&self) -> DistanceFn {
+    pub fn distance_mode(&self) -> DistanceMode {
         match self {
-            EngineChoice::NaiveFHD | EngineChoice::NaiveNHD => DistanceFn::Simple,
-            EngineChoice::NaiveMinFHD | EngineChoice::NaiveMinNHD => DistanceFn::MinRotation,
+            EngineChoice::NaiveFHD | EngineChoice::NaiveNHD => DistanceMode::Simple,
+            EngineChoice::NaiveMinFHD | EngineChoice::NaiveMinNHD => DistanceMode::MinRotation,
         }
     }
 }
@@ -90,13 +90,13 @@ impl Engine {
         next_id: IrisSerialId,
     ) -> Self {
         assert!(k < irises.len());
-        let distance_fn = which.distance_fn();
+        let distance_mode = which.distance_mode();
         match which {
             EngineChoice::NaiveFHD | EngineChoice::NaiveMinFHD => {
-                Self::Fhd(NaiveKNN::init(irises, k, next_id, distance_fn))
+                Self::Fhd(NaiveKNN::init(irises, k, next_id, distance_mode))
             }
             EngineChoice::NaiveNHD | EngineChoice::NaiveMinNHD => {
-                Self::Nhd(NaiveKNN::init(irises, k, next_id, distance_fn))
+                Self::Nhd(NaiveKNN::init(irises, k, next_id, distance_mode))
             }
         }
     }
@@ -121,7 +121,7 @@ pub struct NaiveKNN<D: DistanceOps> {
     irises: Vec<IrisCode>,
     k: usize,
     next_id: IrisSerialId,
-    distance_fn: DistanceFn,
+    distance_mode: DistanceMode,
     pool: ThreadPool,
     _phantom: PhantomData<D>,
 }
@@ -131,13 +131,13 @@ impl<D: DistanceOps> NaiveKNN<D> {
         irises: Vec<IrisCode>,
         k: usize,
         next_id: IrisSerialId,
-        distance_fn: DistanceFn,
+        distance_mode: DistanceMode,
     ) -> Self {
         NaiveKNN {
             irises,
             k,
             next_id,
-            distance_fn,
+            distance_mode,
             pool: ThreadPoolBuilder::new().build().unwrap(),
             _phantom: PhantomData,
         }
@@ -161,7 +161,7 @@ impl<D: DistanceOps> NaiveKNN<D> {
                         .flat_map(|(j, other_iris)| {
                             (i != j + 1).then_some((
                                 j + 1,
-                                D::plaintext_distance(current_iris, other_iris, self.distance_fn),
+                                D::plaintext_distance(current_iris, other_iris, self.distance_mode),
                             ))
                         })
                         .collect::<Vec<_>>();

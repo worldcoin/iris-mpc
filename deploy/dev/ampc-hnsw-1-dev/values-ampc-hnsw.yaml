@@ -11,6 +11,9 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
+  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
+    value: "16"
+
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
@@ -63,6 +66,9 @@ env:
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1800"
 
+  - name: SMPC__HNSW_FIXED_LAYER_SEARCH_BATCH_SIZE
+    value: "8000"
+
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "96"
 
@@ -75,13 +81,13 @@ env:
   - name: SMPC__DISABLE_PERSISTENCE
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
+  - name: SMPC__ENABLE_REAUTH
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_RESETS_ENABLED
+  - name: SMPC__ENABLE_RESET
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_DELETIONS_ENABLED
+  - name: SMPC__ENABLE_DELETION
     value: "true"
 
   - name: SMPC__LUC_ENABLED
