@@ -331,6 +331,27 @@ mod tests {
         assert_eq!(decoded_or_panic(&encoded), vec![u32::MAX]);
     }
 
+    #[test]
+    fn round_trip_consecutive() {
+        let ids: Vec<u32> = (0..10).collect();
+        let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
+        assert_eq!(encoded.decode().expect("decode"), ids);
+    }
+
+    #[test]
+    fn round_trip_handcrafted_small() {
+        let ids = vec![0u32, 1, 5, 100, 1000];
+        let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
+        assert_eq!(encoded.decode().expect("decode"), ids);
+    }
+
+    #[test]
+    fn round_trip_widely_spaced() {
+        let ids = vec![0u32, 1_000, 1_000_000, 100_000_000, u32::MAX - 1];
+        let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
+        assert_eq!(encoded.decode().expect("decode"), ids);
+    }
+
     fn decoded_or_panic(e: &EncodedNeighborhood) -> Vec<u32> {
         e.decode().expect("decode succeeded")
     }
