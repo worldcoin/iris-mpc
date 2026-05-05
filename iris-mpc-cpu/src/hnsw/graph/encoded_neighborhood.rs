@@ -11,6 +11,7 @@ pub struct EncodedNeighborhood {
     bytes: Box<[u8]>,
 }
 
+/// Errors returned by [`EncodedNeighborhood::encode`].
 #[derive(Debug, Error)]
 pub enum EncodeError {
     #[error("input ids not sorted strictly ascending at position {0}")]
@@ -19,6 +20,7 @@ pub enum EncodeError {
     TooLarge(usize),
 }
 
+/// Errors returned by [`EncodedNeighborhood::decode`].
 #[derive(Debug, Error)]
 pub enum DecodeError {
     #[error("encoded blob too short: header truncated, have {0} bytes")]
@@ -39,7 +41,7 @@ impl EncodedNeighborhood {
             return Err(EncodeError::TooLarge(ids.len()));
         }
         let k = ids.len() as u16;
-        let b: u8 = 0;
+        let b = 0u8;
         let mut out = Vec::with_capacity(HEADER_LEN);
         out.extend_from_slice(&k.to_le_bytes());
         out.push(b);
@@ -67,7 +69,7 @@ impl EncodedNeighborhood {
             return Err(DecodeError::InvalidParameter(b));
         }
         if k == 0 {
-            return Ok(Vec::new());
+            return Ok(vec![]);
         }
         // Body decoding lands in a later task.
         unimplemented!("body decode not implemented yet for k > 0")
@@ -82,7 +84,7 @@ mod tests {
     fn empty_round_trip() {
         let encoded = EncodedNeighborhood::encode(&[]).expect("encode empty");
         let decoded = encoded.decode().expect("decode empty");
-        assert_eq!(decoded, Vec::<u32>::new());
+        assert!(decoded.is_empty());
         assert_eq!(encoded.as_bytes().len(), HEADER_LEN);
     }
 }
