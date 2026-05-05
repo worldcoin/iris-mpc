@@ -231,15 +231,12 @@ impl<'a> BitReader<'a> {
 
 fn compute_b(ids: &[u32]) -> u8 {
     debug_assert!(!ids.is_empty());
-    let mean_gap: u32 = if ids.len() == 1 {
-        ids[0].max(1)
-    } else {
-        // Strict-ascending guarantees `last >= first + (k-1)`, so the division yields >= 1.
-        let span = ids[ids.len() - 1] - ids[0];
-        let denom = (ids.len() as u32) - 1;
-        (span / denom).max(1)
-    };
-    // floor(log2(mean_gap)) for mean_gap >= 1.
+    let k = ids.len() as u32;
+    // Average gap over all k gaps (including g[0] = ids[0]).
+    // Sum of gaps = ids[k-1] - (k - 1), so mean ≈ ids[k-1] / k.
+    // Using ids[k-1] / k (not the exact `(ids[k-1] - (k-1)) / k`) is fine: the
+    // overestimate is at most 1, which can't shift `b` by more than one bit.
+    let mean_gap = (ids[ids.len() - 1] / k).max(1);
     let b = 31u8.saturating_sub(mean_gap.leading_zeros() as u8);
     b.min(31)
 }
@@ -350,6 +347,31 @@ mod tests {
         let ids = vec![0u32, 1_000, 1_000_000, 100_000_000, u32::MAX - 1];
         let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
         assert_eq!(encoded.decode().expect("decode"), ids);
+    }
+
+    #[test]
+    fn round_trip_max_k() {
+        // Sample a strictly-increasing sequence at MAX_K length.
+        // Evenly spaced across u32 to exercise a typical mean_gap.
+        let k = MAX_K;
+        let step = (u32::MAX as u64 / k as u64) as u32;
+        let mut ids: Vec<u32> = (0..k).map(|i| (i as u32).saturating_mul(step)).collect();
+        // Ensure strict monotonicity (saturating multiply can collide near u32::MAX).
+        for i in 1..ids.len() {
+            if ids[i] <= ids[i - 1] {
+                ids[i] = ids[i - 1] + 1;
+            }
+        }
+        let encoded = EncodedNeighborhood::encode(&ids).expect("encode max_k");
+        assert_eq!(encoded.decode().expect("decode max_k"), ids);
+    }
+
+    #[test]
+    fn round_trip_high_universe() {
+        // IDs clustered near u32::MAX.
+        let ids: Vec<u32> = (0..450u32).map(|i| u32::MAX - 449 + i).collect();
+        let encoded = EncodedNeighborhood::encode(&ids).expect("encode high");
+        assert_eq!(encoded.decode().expect("decode high"), ids);
     }
 
     fn decoded_or_panic(e: &EncodedNeighborhood) -> Vec<u32> {
