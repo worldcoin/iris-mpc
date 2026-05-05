@@ -197,12 +197,26 @@ impl Step1 {
 
         for id in &self.anti_join[LEFT] {
             if let Some(right) = missing_is_match[RIGHT].get(id) {
+                tracing::warn!(
+                    vector_id = ?id,
+                    found_in = "left_eye_only",
+                    left_match = true,
+                    right_match = *right,
+                    "Vector found in left eye anti_join"
+                );
                 step2.full_join.push((*id, [true, *right]));
             }
         }
 
         for id in &self.anti_join[RIGHT] {
             if let Some(left) = missing_is_match[LEFT].get(id) {
+                tracing::warn!(
+                    vector_id = ?id,
+                    found_in = "right_eye_only",
+                    left_match = *left,
+                    right_match = true,
+                    "Vector found in right eye anti_join"
+                );
                 step2.full_join.push((*id, [*left, true]));
             }
         }
@@ -296,6 +310,12 @@ impl BatchStep3 {
                             }
                         }
                     });
+                    tracing::info!(
+                        request_type = ?request.normal.request_type,
+                        is_match = is_match,
+                        search_matches = ?request.select(filter).collect::<Vec<_>>(),
+                        "Decision input for request"
+                    );
                     if is_match {
                         NoMutation
                     } else if skip_persistence {
@@ -355,6 +375,16 @@ impl Step2 {
         let search = self
             .full_join
             .iter()
+            .inspect(|(id, [l, r])| {
+                if *l != *r {
+                    tracing::warn!(
+                        vector_id = ?id,
+                        left_match = *l,
+                        right_match = *r,
+                        "One-eye match being filtered out by search_rule"
+                    );
+                }
+            })
             .filter(move |(_, [l, r])| filter.search_rule(*l, *r))
             .map(|(id, _)| MatchId::Search(*id));
 

@@ -151,6 +151,12 @@ pub async fn search<const ROTMASK: u32>(
 
     let results = schedule.organize_results(collect_results(rx).await?)?;
 
+    tracing::info!(
+        total_requests = n_requests,
+        total_rotations = ROTMASK.count_ones(),
+        "Search phase completed"
+    );
+
     Ok(results)
 }
 

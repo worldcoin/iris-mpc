@@ -1783,7 +1783,8 @@ impl JobSubmissionHandle for HawkHandle {
             sent?;
             let result = rx.await??;
             Ok(result.job_result())
-        }.instrument(span)
+        }
+        .instrument(span)
     }
 }
 
@@ -1816,7 +1817,7 @@ impl HawkHandle {
             let mut batch_count: u32 = 0;
             while let Some(job) = rx.recv().await {
                 let parent_span3 = parent_span2.clone();
-                batch_count += 1; 
+                batch_count += 1;
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
                 let job_result = tokio::select! {
@@ -2120,6 +2121,12 @@ impl HawkHandle {
             // Set replace_id on plans for reauth updates and identity updates
             for (idx, req_index) in requests_order.iter().enumerate() {
                 if let Some(plan) = &mut insert_plans[idx] {
+                    tracing::info!(
+                        idx = idx,
+                        is_mutation = true,
+                        has_plan = true,
+                        "Creating insert plan"
+                    );
                     match req_index {
                         RequestIndex::UniqueReauthResetCheck(i) => {
                             if matches!(decisions[*i], ReauthUpdate(_)) {
