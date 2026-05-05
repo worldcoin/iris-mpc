@@ -466,6 +466,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn encoded_size_matches_model() {
+        use rand::{Rng, SeedableRng};
+        use rand_chacha::ChaCha8Rng;
+
+        let k: usize = 450;
+        let cases: &[(u32, u8)] = &[
+            (1_000_000, 11),   // log2(1M/450) ~= 11
+            (10_000_000, 14),  // log2(10M/450) ~= 14
+            (100_000_000, 17), // log2(100M/450) ~= 17
+            (u32::MAX, 23),    // log2(2^32/450) ~= 23
+        ];
+
+        for &(universe, expected_b) in cases {
+            let mut rng = ChaCha8Rng::seed_from_u64(0xCAFE_F00D ^ universe as u64);
+            let mut set = std::collections::BTreeSet::new();
+            while set.len() < k {
+                set.insert(rng.gen_range(0..universe));
+            }
+            let ids: Vec<u32> = set.into_iter().collect();
+
+            let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
+            let actual_b = encoded.as_bytes()[2];
+            assert!(
+                actual_b.abs_diff(expected_b) <= 1,
+                "universe={universe}: expected_b={expected_b}, got {actual_b}",
+            );
+
+            let model_bytes = (k * (actual_b as usize + 2)).div_ceil(8) + HEADER_LEN;
+            let actual_bytes = encoded.as_bytes().len();
+            let lower = (model_bytes as f64 * 0.90) as usize;
+            let upper = (model_bytes as f64 * 1.10) as usize;
+            assert!(
+                (lower..=upper).contains(&actual_bytes),
+                "universe={universe}: actual={actual_bytes}, model={model_bytes}, b={actual_b}",
+            );
+
+            // Round-trip sanity check.
+            assert_eq!(encoded.decode().expect("decode"), ids);
+        }
+    }
+
     fn decoded_or_panic(e: &EncodedNeighborhood) -> Vec<u32> {
         e.decode().expect("decode succeeded")
     }
