@@ -10,7 +10,7 @@ use futures::future::JoinAll;
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
-use tracing::instrument;
+use tracing::{instrument, Instrument, Span};
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn is_match_batch(
@@ -68,9 +68,12 @@ async fn per_side(
     assert!(chunks.len() <= n_sessions);
 
     // Process the chunks in parallel (CPU and IO).
+    let parent_span = Span::current();
     let results = izip!(chunks, sessions)
-        .map(|(chunk, session)| per_session(chunk, session.clone()))
-        .map(tokio::spawn)
+        .map(|(chunk, session)| {
+            let span = parent_span.clone();
+            tokio::spawn(per_session(chunk, session.clone()).instrument(span))
+        })
         .collect::<JoinAll<_>>()
         .await;
 

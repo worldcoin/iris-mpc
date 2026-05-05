@@ -21,7 +21,9 @@ use iris_mpc_cpu::{
 use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
+use tracing::{info_span, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_test::traced_test;
 use uuid::Uuid;
 
 const DB_SIZE: usize = 1000;
@@ -519,9 +521,21 @@ async fn submit_variants_batch(
 
     let [b0, b1, b2] = batches;
     let (f0, f1, f2) = tokio::join!(
-        h0.submit_batch_query(b0),
-        h1.submit_batch_query(b1),
-        h2.submit_batch_query(b2),
+        {
+            let idx = 0;
+            let span = info_span!("mpc_node", idx = idx);
+            h0.submit_batch_query(b0).instrument(span)
+        },
+        {
+            let idx = 1;
+            let span = info_span!("mpc_node", idx = idx);
+            h1.submit_batch_query(b1).instrument(span)
+        },
+        {
+            let idx = 2;
+            let span = info_span!("mpc_node", idx = idx);
+            h2.submit_batch_query(b2).instrument(span)
+        }
     );
     let res0 = f0.await?;
     let res1 = f1.await?;

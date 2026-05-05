@@ -147,7 +147,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot, RwLock, RwLockWriteGuard};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span};
+use tracing::{info_span, Instrument, Span};
 
 /// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
 pub type HawkOps = FhdOps;
@@ -1795,6 +1795,9 @@ impl HawkHandle {
         // fresh inserts allocate VectorIds that collide with the load.
         // Verify before any session work begins, and again at the start of
         // every batch (see `handle_job`).
+        let parent_span = info_span!("mpc_node", idx = hawk_actor.args.party_index);
+        let parent_span2 = parent_span.clone();
+
         hawk_actor.assert_registry_consistency().await;
 
         let mut sessions = hawk_actor.new_session_groups().await?;
@@ -1806,17 +1809,17 @@ impl HawkHandle {
         HawkSession::state_check(sessions.for_state_check()).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
-        let parent_span = Span::current();
 
         // ---- Request Handler ----
         tokio::spawn(async move {
             let mut batch_count: u32 = 0;
             while let Some(job) = rx.recv().await {
-                batch_count += 1;
+                let parent_span3 = parent_span2.clone();
+                batch_count += 1; 
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
                 let job_result = tokio::select! {
-                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count) => r,
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count.clone()).instrument(parent_span3)=> r,
                     _ = error_ct.cancelled() => Err(eyre!("networking error")),
                 };
 
@@ -1933,11 +1936,12 @@ impl HawkHandle {
         };
 
         // Search for both orientations
+        let span = Span::current();
         let (search_normal, search_mirror, match_result) = {
             let start = Instant::now();
             let ((search_normal, matches_normal), (search_mirror, matches_mirror)) = try_join!(
-                do_search(Orientation::Normal),
-                do_search(Orientation::Mirror),
+                do_search(Orientation::Normal).instrument(span.clone()),
+                do_search(Orientation::Mirror).instrument(span.clone()),
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
@@ -1983,6 +1987,7 @@ impl HawkHandle {
             identity_updates,
             &request,
         )
+        .instrument(span)
         .await?;
 
         // Evict cached queries now that the batch is fully processed.
@@ -2459,12 +2464,20 @@ mod tests {
             );
         }
 
-        let all_results =
-            parallelize(izip!(&irises, handles.clone()).map(|(shares, mut handle)| {
+        let all_results = parallelize(izip!(0..handles.len(), &irises, handles.clone()).map(
+            |(idx, shares, mut handle)| {
+                let span = info_span!("mpc_node", idx = idx);
                 let batch = batch_of_party(&batch_0, shares);
-                async move { handle.submit_batch_query(batch).await.await }
-            }))
-            .await?;
+                async move {
+                    handle
+                        .submit_batch_query(batch)
+                        .instrument(span)
+                        .await
+                        .await
+                }
+            },
+        ))
+        .await?;
 
         let result = assert_all_equal(all_results);
 

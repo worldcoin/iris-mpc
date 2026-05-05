@@ -29,6 +29,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Range,
 };
+use tracing::{info_span, Instrument};
 use uuid::Uuid;
 
 const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 345 / 1000; // 0.345 * 12800
@@ -1394,9 +1395,21 @@ impl TestCaseGenerator {
 
             // send batches to servers
             let (res0_fut, res1_fut, res2_fut) = tokio::join!(
-                handle0.submit_batch_query(batch0),
-                handle1.submit_batch_query(batch1),
-                handle2.submit_batch_query(batch2)
+                {
+                    let idx = 0;
+                    let span = info_span!("mpc_node", idx = idx);
+                    handle0.submit_batch_query(batch0).instrument(span)
+                },
+                {
+                    let idx = 1;
+                    let span = info_span!("mpc_node", idx = idx);
+                    handle1.submit_batch_query(batch1).instrument(span)
+                },
+                {
+                    let idx = 2;
+                    let span = info_span!("mpc_node", idx = idx);
+                    handle2.submit_batch_query(batch2).instrument(span)
+                }
             );
 
             let res0 = res0_fut.await?;
