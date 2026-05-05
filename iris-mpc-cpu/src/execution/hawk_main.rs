@@ -147,6 +147,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot, RwLock, RwLockWriteGuard};
 use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, Span};
 
 /// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
 pub type HawkOps = FhdOps;
@@ -1805,6 +1806,7 @@ impl HawkHandle {
         HawkSession::state_check(sessions.for_state_check()).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
+        let parent_span = Span::current();
 
         // ---- Request Handler ----
         tokio::spawn(async move {
@@ -1834,7 +1836,7 @@ impl HawkHandle {
             while let Some(job) = rx.recv().await {
                 let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
             }
-        });
+        }.instrument(parent_span));
 
         Ok(Self { job_queue: tx })
     }
@@ -1883,8 +1885,11 @@ impl HawkHandle {
                 // The "b" (raw) operand always uses Normal queries to get the
                 // same-eye iris, even when comparing in Mirror orientation.
                 let raw_queries = request.queries(Orientation::Normal);
+                let span = Span::current();
                 tokio::spawn(async move {
-                    intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await
+                    intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries)
+                        .instrument(span)
+                        .await
                 })
             };
 
@@ -2252,6 +2257,7 @@ mod tests {
     use rand::SeedableRng;
     use std::{ops::Not, time::Duration};
     use tokio::time::sleep;
+    use tracing::{info_span, Instrument};
     use tracing_test::traced_test;
 
     /// Regression guard for the load → registry wiring in `iris-mpc/src/server/mod.rs::load_database`.
@@ -2396,8 +2402,11 @@ mod tests {
         let addresses = get_free_local_addresses(N_PARTIES).await?;
 
         let handles = (0..N_PARTIES)
-            .map(|i| go(addresses.clone(), i))
-            .map(tokio::spawn)
+            .map(|i| {
+                let span = info_span!("mpc_node", idx = i);
+                let future = go(addresses.clone(), i);
+                tokio::spawn(async move { future.instrument(span).await })
+            })
             .collect::<JoinAll<_>>()
             .await
             .into_iter()

@@ -520,20 +520,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    /// Remove specific neighbors from a node's neighborhood bidirectionally.
-    /// Removes the specified neighbors from this node's links and removes this node
-    /// from those neighbors' links.
     pub fn compact_node(&mut self, id: &V, neighbors_to_remove: Vec<V>) {
-        // Remove node from each neighbor's links
-        // for neighbor in &neighbors_to_remove {
-        //     if let Some(neighbor_links) = self.links.get_mut(neighbor) {
-        //         self.set_hash.remove((neighbor, neighbor_links.as_slice()));
-        //         neighbor_links.retain(|x| x != id);
-        //         self.set_hash.add_unordered((neighbor, neighbor_links));
-        //     }
-        // }
-
-        // Remove neighbors from node's links
         if let Some(node_links) = self.links.get_mut(id) {
             self.set_hash.remove_unordered_set(id, node_links.iter());
             for neighbor in &neighbors_to_remove {

@@ -6,7 +6,6 @@ use std::{
     hash::Hash,
     str::FromStr,
 };
-use tracing::info;
 
 use crate::hnsw::sorting::quickselect::run_quickselect_with_store;
 

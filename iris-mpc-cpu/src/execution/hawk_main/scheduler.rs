@@ -4,6 +4,7 @@ use futures::future::JoinAll;
 use itertools::Itertools;
 use std::{collections::HashMap, future::Future};
 use tokio::{sync::mpsc::UnboundedReceiver, task::JoinError};
+use tracing::{Instrument, Span};
 
 const N_EYES: usize = 2;
 
@@ -157,8 +158,12 @@ where
     F: Future<Output = Result<T>> + Send + 'static,
     F::Output: Send + 'static,
 {
+    let parent_span = Span::current();
     tasks
-        .map(tokio::spawn)
+        .map(|task| {
+            let span = parent_span.clone();
+            tokio::spawn(async move { task.instrument(span).await })
+        })
         .collect::<JoinAll<_>>()
         .await
         .into_iter()
