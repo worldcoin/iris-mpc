@@ -374,6 +374,64 @@ mod tests {
         assert_eq!(encoded.decode().expect("decode high"), ids);
     }
 
+    #[test]
+    fn decode_truncated_header() {
+        for len in 0..HEADER_LEN {
+            let bytes: Box<[u8]> = vec![0u8; len].into_boxed_slice();
+            let e = EncodedNeighborhood::from_bytes(bytes);
+            match e.decode() {
+                Err(DecodeError::TruncatedHeader(n)) => assert_eq!(n, len),
+                other => panic!("expected TruncatedHeader({len}), got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decode_invalid_b() {
+        // k=0 so body is empty; b=32 is illegal.
+        let bytes: Box<[u8]> = vec![0u8, 0u8, 32u8].into_boxed_slice();
+        let e = EncodedNeighborhood::from_bytes(bytes);
+        match e.decode() {
+            Err(DecodeError::InvalidParameter(32)) => {}
+            other => panic!("expected InvalidParameter(32), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_truncated_body() {
+        let ids = vec![0u32, 100, 200, 300];
+        let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
+        let full = encoded.as_bytes();
+        // Truncate every prefix that is longer than the header but shorter than the full body.
+        for cut in HEADER_LEN..full.len() {
+            let bytes: Box<[u8]> = full[..cut].to_vec().into_boxed_slice();
+            let e = EncodedNeighborhood::from_bytes(bytes);
+            match e.decode() {
+                Err(DecodeError::TruncatedBody(_))
+                | Err(DecodeError::QuotientOverflow(_))
+                | Err(DecodeError::IdOverflow(_))
+                | Err(DecodeError::TruncatedHeader(_)) => {}
+                Ok(decoded) => panic!("decoded a truncated blob ok: cut={cut}, got {decoded:?}"),
+                Err(other) => panic!("unexpected error at cut={cut}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decode_garbage_does_not_panic() {
+        use rand::{Rng, SeedableRng};
+        use rand_chacha::ChaCha8Rng;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(0xDEAD_BEEF);
+        for _ in 0..200 {
+            let len = rng.gen_range(0..64);
+            let bytes: Vec<u8> = (0..len).map(|_| rng.gen()).collect();
+            let e = EncodedNeighborhood::from_bytes(bytes.into_boxed_slice());
+            // We only require that decode does not panic. Either Ok or any DecodeError is acceptable.
+            let _ = e.decode();
+        }
+    }
+
     fn decoded_or_panic(e: &EncodedNeighborhood) -> Vec<u32> {
         e.decode().expect("decode succeeded")
     }
