@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-database-exporter:v0.31.8@sha256:fd14a8270fd78f285b45f30df551f7be49a42b2f9cd928b5536b35977dfc14ea"
+image: "ghcr.io/worldcoin/iris-mpc-database-exporter:v0.31.3@sha256:b3ccb2c94258abb5c3f8cc7d2466ea085c22f81d9d7af8209f580e6e18ddb263"
 
 replicaCount: 0
 
