@@ -36,6 +36,7 @@ pub enum DecodeError {
 }
 
 impl EncodedNeighborhood {
+    /// Encode a sorted-ascending, strictly-increasing slice of u32 IDs.
     pub fn encode(ids: &[u32]) -> Result<Self, EncodeError> {
         if ids.len() > MAX_K {
             return Err(EncodeError::TooLarge(ids.len()));
@@ -79,14 +80,18 @@ impl EncodedNeighborhood {
         })
     }
 
+    /// Wrap an already-encoded byte blob (e.g. loaded from storage) without
+    /// validating its contents; validation happens on `decode`.
     pub fn from_bytes(bytes: Box<[u8]>) -> Self {
         Self { bytes }
     }
 
+    /// Return the underlying encoded bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
+    /// Decode back to a sorted-ascending `Vec<u32>` of neighbor IDs.
     pub fn decode(&self) -> Result<Vec<u32>, DecodeError> {
         if self.bytes.len() < HEADER_LEN {
             return Err(DecodeError::TruncatedHeader(self.bytes.len()));
@@ -129,15 +134,6 @@ struct BitWriter {
 }
 
 impl BitWriter {
-    #[allow(dead_code)]
-    fn new() -> Self {
-        Self {
-            bytes: Vec::new(),
-            buf: 0,
-            nbits: 0,
-        }
-    }
-
     fn with_capacity(cap_bytes: usize) -> Self {
         Self {
             bytes: Vec::with_capacity(cap_bytes),
@@ -252,6 +248,7 @@ fn rice_encode(writer: &mut BitWriter, value: u32, b: u8) {
 }
 
 fn rice_decode(reader: &mut BitReader<'_>, b: u8, gap_idx: usize) -> Result<u32, DecodeError> {
+    debug_assert!(b <= 31, "rice parameter b must be 0..=31");
     let q = reader
         .read_unary()
         .ok_or(DecodeError::TruncatedBody(gap_idx))?;
@@ -267,11 +264,6 @@ fn rice_decode(reader: &mut BitReader<'_>, b: u8, gap_idx: usize) -> Result<u32,
             .read_bits(b)
             .ok_or(DecodeError::TruncatedBody(gap_idx))?
     };
-    if b == 32 {
-        // Defense-in-depth: `compute_b` clamps to 31, but if a future change
-        // ever loosens that, keep the shift well-defined.
-        return Ok(r);
-    }
     Ok((q << b) | r)
 }
 
