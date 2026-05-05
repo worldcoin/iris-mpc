@@ -1777,12 +1777,13 @@ impl JobSubmissionHandle for HawkHandle {
         // Wait for the job to be sent for backpressure.
         let sent = self.job_queue.send(job).await;
 
+        let span = Span::current();
         async move {
             // In a second Future, wait for the result.
             sent?;
             let result = rx.await??;
             Ok(result.job_result())
-        }
+        }.instrument(span)
     }
 }
 
