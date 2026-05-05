@@ -432,6 +432,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn random_round_trip_many_seeds() {
+        use rand::{Rng, SeedableRng};
+        use rand_chacha::ChaCha8Rng;
+
+        for seed in 0..32u64 {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            // Vary k across a useful range, including small and near-MAX_K cases.
+            let k = match seed % 4 {
+                0 => rng.gen_range(0..16),
+                1 => rng.gen_range(16..1024),
+                2 => rng.gen_range(1024..16_384),
+                _ => 65_535,
+            };
+            // Vary the universe to exercise different `b` values.
+            let universe: u32 = match seed % 3 {
+                0 => 1_000_000,
+                1 => 100_000_000,
+                _ => u32::MAX,
+            };
+
+            // Sample k unique values, sort, deduplicate.
+            let mut set = std::collections::BTreeSet::new();
+            while set.len() < k {
+                set.insert(rng.gen_range(0..universe));
+            }
+            let ids: Vec<u32> = set.into_iter().collect();
+
+            let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
+            let decoded = encoded.decode().expect("decode");
+            assert_eq!(decoded, ids, "seed={seed} k={k} universe={universe}");
+        }
+    }
+
     fn decoded_or_panic(e: &EncodedNeighborhood) -> Vec<u32> {
         e.decode().expect("decode succeeded")
     }
