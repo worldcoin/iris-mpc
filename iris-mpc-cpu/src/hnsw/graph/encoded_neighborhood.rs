@@ -258,7 +258,9 @@ fn rice_decode(reader: &mut BitReader<'_>, b: u8, gap_idx: usize) -> Result<u32,
     let q = reader
         .read_unary()
         .ok_or(DecodeError::TruncatedBody(gap_idx))?;
-    if (q as u64) + (b as u64) > 32 {
+    // `q << b` must fit in u32: the bit-width of `q` plus `b` cannot exceed 32.
+    let bits_in_q = 32u8.saturating_sub(q.leading_zeros() as u8);
+    if bits_in_q + b > 32 {
         return Err(DecodeError::QuotientOverflow(gap_idx));
     }
     let r = if b == 0 {
