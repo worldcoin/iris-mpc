@@ -50,9 +50,6 @@ env:
   - name: SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM
     value: "8"
 
-  - name: SMPC__DISABLE_PERSISTENCE
-    value: "false"
-
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
