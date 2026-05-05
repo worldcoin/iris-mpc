@@ -2320,6 +2320,80 @@ mod tests {
         Ok(())
     }
 
+    /// `LocalInitMode::FakeDb` populates worker pools through the channel-based
+    /// insert path (`IrisPoolHandle::insert` + `wait_completion`). This guards
+    /// the contract that, after the initializer drains the worker channels,
+    /// the registry built from the resulting iris stores already reflects
+    /// every inserted `VectorId` — without any post-construction
+    /// `refresh_registries`. Complements `test_seeded_initializer_populates_registry`,
+    /// which only exercises the bypass-the-channels seeded path.
+    #[tokio::test]
+    async fn test_fake_db_initializer_populates_registry() -> Result<()> {
+        use worker_pool_initializer::{LocalWorkerPoolInitializer, WorkerPoolInitializer};
+
+        let addresses = vec![
+            "0.0.0.0:21350".to_string(),
+            "0.0.0.0:21351".to_string(),
+            "0.0.0.0:21352".to_string(),
+        ];
+        let args = HawkArgs {
+            party_index: 0,
+            addresses: addresses.clone(),
+            outbound_addrs: addresses,
+            request_parallelism: 4,
+            connection_parallelism: 2,
+            hnsw_param_ef_constr: 320,
+            hnsw_param_m: 256,
+            hnsw_param_ef_search: 256,
+            hnsw_param_ef_supermatch: 4000,
+            hnsw_param_ef_saturation_margin: 0,
+            hnsw_layer_density: None,
+            hnsw_fixed_layer_search_batch_size: None,
+            hnsw_prf_key: None,
+            numa: false,
+            disable_persistence: true,
+            hnsw_disable_memory_persistence: false,
+            tls: None,
+        };
+
+        const N: usize = 8;
+        let initializer: Box<dyn WorkerPoolInitializer> =
+            Box::new(LocalWorkerPoolInitializer::new_fake_db(
+                args.party_index,
+                HAWK_DISTANCE_MODE,
+                args.numa,
+                N,
+            ));
+
+        let hawk_actor =
+            HawkActor::from_cli_with_initializer(&args, CancellationToken::new(), initializer)
+                .await?;
+
+        for sid in 0..N as u32 {
+            assert!(
+                hawk_actor.registry[LEFT]
+                    .read()
+                    .await
+                    .contains(&VectorId::from_serial_id(sid)),
+                "left registry must contain fake-db VectorId {sid} after construction"
+            );
+            assert!(
+                hawk_actor.registry[RIGHT]
+                    .read()
+                    .await
+                    .contains(&VectorId::from_serial_id(sid)),
+                "right registry must contain fake-db VectorId {sid} after construction"
+            );
+        }
+        assert_eq!(
+            hawk_actor.registry[LEFT].read().await.next_id,
+            N as u32,
+            "registry next_id must reflect (max inserted serial_id + 1)"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     #[traced_test]
     async fn test_hawk_main() -> Result<()> {

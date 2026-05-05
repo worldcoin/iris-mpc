@@ -3,8 +3,6 @@
 //! narrow (compute only); loading is a one-shot bootstrap step that does
 //! not appear on the wire.
 //!
-//! See `.claude/plans/worker-pool-initializer.md` for design context.
-//!
 //! # Concrete impls
 //! - [`LocalWorkerPoolInitializer`] — builds in-process worker pools and
 //!   either pre-seeds them, fills with `fake_db`, or runs `load_iris_db`.
