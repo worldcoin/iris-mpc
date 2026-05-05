@@ -3,18 +3,15 @@ use serde::{Deserialize, Serialize};
 /// Represents a diff to apply to an existing graph.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutation<Vector: Ord> {
-    // Removes the node's links from the graph and updates all its neighbors' neighborhoods
     RemoveNode {
         id: Vector,
     },
-    // Add bidirectional links.
     InsertNode {
         // List of layer, neighbors.
         layers: Vec<(usize, Vec<Vector>)>,
         update_ep: UpdateEntryPoint,
         id: Vector,
     },
-    // Compact a neighborhood.
     Compact {
         to_remove: Vec<Vector>,
         layer: usize,

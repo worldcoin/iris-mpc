@@ -129,6 +129,15 @@ pub async fn insert<V: VectorStoreMut>(
         .iter()
         .flat_map(|group| group.iter().cloned())
         .collect();
+
+    tracing::info!(
+        mutation_count = all_mutations.len(),
+        insert_mutations = all_mutations
+            .iter()
+            .filter(|m| matches!(m, GraphMutation::InsertNode { .. }))
+            .count(),
+        "Applying mutations to graph"
+    );
     graph.insert_apply(all_mutations);
 
     // Store each group in its corresponding connect_plan at the tracked indices

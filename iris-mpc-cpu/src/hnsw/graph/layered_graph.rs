@@ -194,6 +194,11 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     // Handle entry point update
                     match update_ep {
                         UpdateEntryPoint::SetUnique { layer } => {
+                            tracing::info!(
+                                vector_id = ?id,
+                                layer = layer,
+                                "Setting unique entry point"
+                            );
                             // Ensure we have enough layers
                             if self.layers.len() < layer + 1 {
                                 self.layers.resize(layer + 1, Layer::new());

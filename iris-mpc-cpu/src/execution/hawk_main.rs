@@ -2146,6 +2146,12 @@ impl HawkHandle {
             }
 
             // Insert in memory, and return the plans to update the persistent database.
+            tracing::info!(
+                side = ?side,
+                insert_plans_count = insert_plans.len(),
+                non_none_plans = insert_plans.iter().filter(|p| p.is_some()).count(),
+                "About to call insert for eye"
+            );
             let mut plans = hawk_actor
                 .insert(sessions, insert_plans, &update_ids)
                 .await?;
