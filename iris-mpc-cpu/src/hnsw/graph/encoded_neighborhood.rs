@@ -40,6 +40,11 @@ impl EncodedNeighborhood {
         if ids.len() > MAX_K {
             return Err(EncodeError::TooLarge(ids.len()));
         }
+        for i in 1..ids.len() {
+            if ids[i] <= ids[i - 1] {
+                return Err(EncodeError::NotSorted(i));
+            }
+        }
         let k = ids.len() as u16;
         let b = 0u8;
         let mut out = Vec::with_capacity(HEADER_LEN);
@@ -86,5 +91,27 @@ mod tests {
         let decoded = encoded.decode().expect("decode empty");
         assert!(decoded.is_empty());
         assert_eq!(encoded.as_bytes().len(), HEADER_LEN);
+    }
+
+    #[test]
+    fn rejects_unsorted() {
+        let err = EncodedNeighborhood::encode(&[5, 3]).unwrap_err();
+        assert!(matches!(err, EncodeError::NotSorted(1)), "got {:?}", err);
+    }
+
+    #[test]
+    fn rejects_duplicates() {
+        let err = EncodedNeighborhood::encode(&[5, 5]).unwrap_err();
+        assert!(matches!(err, EncodeError::NotSorted(1)), "got {:?}", err);
+    }
+
+    #[test]
+    fn rejects_too_large() {
+        let oversized: Vec<u32> = (0..(MAX_K as u32 + 1)).collect();
+        let err = EncodedNeighborhood::encode(&oversized).unwrap_err();
+        match err {
+            EncodeError::TooLarge(n) => assert_eq!(n, MAX_K + 1),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
