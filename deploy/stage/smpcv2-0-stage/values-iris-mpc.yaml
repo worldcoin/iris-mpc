@@ -179,7 +179,7 @@ env:
     value: "true"
 
   - name: MALLOC_CONF
-    value: "prof:true,prof_active:true,lg_prof_sample:19"
+    value: "stats_print:true,prof:true,prof_active:true,lg_prof_sample:19,background_thread:true,metadata_thp:auto,"
 
   - name: JEMALLOC_PROFILE_DUMP_INTERVAL_SECS
     value: "300"
