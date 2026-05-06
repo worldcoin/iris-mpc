@@ -188,7 +188,7 @@ impl IrisDiffSearch {
 
 impl HawkSession {
     /// Returns true if there is a mismatch in shutdown states between nodes.
-    pub async fn sync_peers(
+    pub async fn sync_state(
         shutdown_flag: bool,
         sync_status: Arc<AtomicU8>,
         sessions: &BothEyes<Vec<HawkSession>>,
