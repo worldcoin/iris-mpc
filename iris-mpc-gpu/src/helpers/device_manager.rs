@@ -22,8 +22,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
-pub const NCCL_START_RETRIES: usize = 5;
+/// Default sleep between NCCL communicator init retries when no explicit
+/// override is supplied. Production callers should pass the value coming from
+/// `Config::nccl_start_wait_time_secs` instead of relying on this default.
+pub const DEFAULT_NCCL_START_WAIT_TIME: Duration = Duration::from_secs(5);
+
+/// Default number of NCCL communicator init retries when no explicit override
+/// is supplied. Production callers should pass the value coming from
+/// `Config::nccl_start_retries` instead of relying on this default.
+pub const DEFAULT_NCCL_START_RETRIES: usize = 5;
 
 #[derive(Debug)]
 pub struct DeviceManager {
@@ -319,21 +326,29 @@ impl DeviceManager {
         &self,
         peer_id: usize,
         ids: &[Id],
+        nccl_start_retries: usize,
+        nccl_start_wait_time: Duration,
     ) -> Result<Vec<Arc<NcclComm>>> {
         let n_devices = self.devices.len();
         let mut comms = Vec::with_capacity(n_devices);
+
+        tracing::info!(
+            "Instantiating NCCL network with {} retries and {:?} wait between retries",
+            nccl_start_retries,
+            nccl_start_wait_time
+        );
 
         for i in 0..n_devices {
             self.devices[i].bind_to_thread().unwrap();
 
             let mut connected = false;
-            for _ in 0..NCCL_START_RETRIES {
+            for _ in 0..nccl_start_retries {
                 if let Ok(c) = NcclComm::from_rank(self.devices[i].clone(), peer_id, 3, ids[i]) {
                     comms.push(Arc::new(c));
                     connected = true;
                     break;
                 }
-                sleep(NCCL_START_WAIT_TIME);
+                sleep(nccl_start_wait_time);
             }
 
             if !connected {

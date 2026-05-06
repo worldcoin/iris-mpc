@@ -6,7 +6,12 @@ mod bitinject_test {
     };
     use eyre::Result;
     use iris_mpc_gpu::{
-        helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
+        helpers::{
+            device_manager::{
+                DeviceManager, DEFAULT_NCCL_START_RETRIES, DEFAULT_NCCL_START_WAIT_TIME,
+            },
+            dtoh_on_stream_sync, htod_on_stream_sync,
+        },
         threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
     };
     use itertools::izip;
@@ -253,7 +258,12 @@ mod bitinject_test {
 
         let task0 = tokio::task::spawn_blocking(move || {
             let comms0 = device_manager0
-                .instantiate_network_from_ids(0, &ids0)
+                .instantiate_network_from_ids(
+                    0,
+                    &ids0,
+                    DEFAULT_NCCL_START_RETRIES,
+                    DEFAULT_NCCL_START_WAIT_TIME,
+                )
                 .unwrap();
 
             let party = Circuits::new(
@@ -270,7 +280,12 @@ mod bitinject_test {
 
         let task1 = tokio::task::spawn_blocking(move || {
             let comms1 = device_manager1
-                .instantiate_network_from_ids(1, &ids1)
+                .instantiate_network_from_ids(
+                    1,
+                    &ids1,
+                    DEFAULT_NCCL_START_RETRIES,
+                    DEFAULT_NCCL_START_WAIT_TIME,
+                )
                 .unwrap();
 
             let party = Circuits::new(
@@ -287,7 +302,12 @@ mod bitinject_test {
 
         let task2 = tokio::task::spawn_blocking(move || {
             let comms2 = device_manager2
-                .instantiate_network_from_ids(2, &ids2)
+                .instantiate_network_from_ids(
+                    2,
+                    &ids2,
+                    DEFAULT_NCCL_START_RETRIES,
+                    DEFAULT_NCCL_START_WAIT_TIME,
+                )
                 .unwrap();
 
             let party = Circuits::new(

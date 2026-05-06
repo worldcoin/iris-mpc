@@ -398,6 +398,8 @@ async fn server_main(config: Config) -> Result<()> {
             config.full_scan_side,
             config.full_scan_side_switching_enabled,
             anon_stats_writer_for_actor,
+            config.nccl_start_retries,
+            Duration::from_secs(config.nccl_start_wait_time_secs),
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");

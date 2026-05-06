@@ -62,7 +62,7 @@ use std::{
     convert::TryFrom,
     fmt, mem,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
@@ -254,6 +254,8 @@ impl ServerActor {
         full_scan_side: Eye,
         full_scan_side_switching_enabled: bool,
         anon_stats_writer: Option<(AnonStatsStore, Handle)>,
+        nccl_start_retries: usize,
+        nccl_start_wait_time: Duration,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
@@ -272,6 +274,8 @@ impl ServerActor {
             full_scan_side,
             full_scan_side_switching_enabled,
             anon_stats_writer,
+            nccl_start_retries,
+            nccl_start_wait_time,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -290,10 +294,17 @@ impl ServerActor {
         full_scan_side: Eye,
         full_scan_side_switching_enabled: bool,
         anon_stats_writer: Option<(AnonStatsStore, Handle)>,
+        nccl_start_retries: usize,
+        nccl_start_wait_time: Duration,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
-        let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
+        let comms = device_manager.instantiate_network_from_ids(
+            party_id,
+            &ids,
+            nccl_start_retries,
+            nccl_start_wait_time,
+        )?;
         Self::new_with_device_manager_and_comms(
             party_id,
             chacha_seeds,

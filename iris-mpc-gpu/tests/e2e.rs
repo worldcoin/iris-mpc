@@ -10,7 +10,12 @@ mod e2e_test {
         helpers::inmemory_store::InMemoryStore,
         test::{generate_full_test_db, load_test_db, TestCaseGenerator},
     };
-    use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
+    use iris_mpc_gpu::{
+        helpers::device_manager::{
+            DeviceManager, DEFAULT_NCCL_START_RETRIES, DEFAULT_NCCL_START_WAIT_TIME,
+        },
+        server::ServerActor,
+    };
     use rand::random;
     use std::{env, sync::Arc};
     use tokio::runtime::Handle;
@@ -142,7 +147,12 @@ mod e2e_test {
 
         let actor0_task = tokio::task::spawn_blocking(move || {
             let comms0 = device_manager0
-                .instantiate_network_from_ids(0, &ids0)
+                .instantiate_network_from_ids(
+                    0,
+                    &ids0,
+                    DEFAULT_NCCL_START_RETRIES,
+                    DEFAULT_NCCL_START_WAIT_TIME,
+                )
                 .unwrap();
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 0,
@@ -176,7 +186,12 @@ mod e2e_test {
         });
         let actor1_task = tokio::task::spawn_blocking(move || {
             let comms1 = device_manager1
-                .instantiate_network_from_ids(1, &ids1)
+                .instantiate_network_from_ids(
+                    1,
+                    &ids1,
+                    DEFAULT_NCCL_START_RETRIES,
+                    DEFAULT_NCCL_START_WAIT_TIME,
+                )
                 .unwrap();
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 1,
@@ -210,7 +225,12 @@ mod e2e_test {
         });
         let actor2_task = tokio::task::spawn_blocking(move || {
             let comms2 = device_manager2
-                .instantiate_network_from_ids(2, &ids2)
+                .instantiate_network_from_ids(
+                    2,
+                    &ids2,
+                    DEFAULT_NCCL_START_RETRIES,
+                    DEFAULT_NCCL_START_WAIT_TIME,
+                )
                 .unwrap();
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 2,

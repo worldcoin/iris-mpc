@@ -311,6 +311,25 @@ pub struct Config {
 
     #[serde(default = "default_graph_checkpoint_bucket_region")]
     pub graph_checkpoint_bucket_region: String,
+
+    /// Number of times to retry establishing NCCL communicators per GPU device
+    /// during startup before giving up. Each retry includes NCCL's own internal
+    /// socket retry loop (~50s) plus `nccl_start_wait_time_secs` of sleep, so
+    /// the total cold-start budget is roughly
+    /// `nccl_start_retries * (~50s + nccl_start_wait_time_secs)`.
+    ///
+    /// This is part of `CommonConfig` and MUST be the same across all nodes;
+    /// the startup config-hash check will fail otherwise.
+    #[serde(default = "default_nccl_start_retries")]
+    pub nccl_start_retries: usize,
+
+    /// Sleep between NCCL communicator retries, in seconds. See
+    /// `nccl_start_retries` for how this contributes to the overall budget.
+    ///
+    /// This is part of `CommonConfig` and MUST be the same across all nodes;
+    /// the startup config-hash check will fail otherwise.
+    #[serde(default = "default_nccl_start_wait_time_secs")]
+    pub nccl_start_wait_time_secs: u64,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -507,6 +526,14 @@ fn default_graph_checkpoint_bucket_region() -> String {
     "eu-central-1".to_string()
 }
 
+fn default_nccl_start_retries() -> usize {
+    5
+}
+
+fn default_nccl_start_wait_time_secs() -> u64 {
+    5
+}
+
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
@@ -693,6 +720,8 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
+    nccl_start_retries: usize,
+    nccl_start_wait_time_secs: u64,
 }
 
 impl CommonConfig {
@@ -793,6 +822,8 @@ impl From<Config> for CommonConfig {
             sns_retry_max_attempts: _,
             graph_checkpoint_bucket_name: _,
             graph_checkpoint_bucket_region: _,
+            nccl_start_retries,
+            nccl_start_wait_time_secs,
         } = value;
 
         assert!(
@@ -850,6 +881,8 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            nccl_start_retries,
+            nccl_start_wait_time_secs,
         }
     }
 }
