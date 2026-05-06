@@ -44,12 +44,12 @@ mod tests {
     }
 
     #[test]
-    fn test_reauth_request_accepts_camel_case_skip_persistence() {
+    fn test_reauth_request_accepts_snake_case_skip_persistence() {
         let request: ReAuthRequest = serde_json::from_value(json!({
             "reauth_id": "test-reauth-id",
             "s3_key": "test-s3-key",
             "serial_id": 42,
-            "skipPersistence": true,
+            "skip_persistence": true,
             "use_or_rule": false,
         }))
         .unwrap();
