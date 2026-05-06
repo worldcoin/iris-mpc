@@ -31,11 +31,6 @@ pub struct InitializedWorkers {
     pub pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     /// Metadata-only registries with `next_id` and `set_hash` populated.
     pub registries: BothEyes<VectorIdRegistryRef>,
-    /// Per-eye `set_hash` reported by each pool after load. For remote
-    /// pools this is an aggregate across shards. Compared against the
-    /// registry-side checksum to catch a loader that dropped rows.
-    pub post_load_checksums: BothEyes<u64>,
-    pub db_size: usize,
 }
 
 /// One-shot setup for the per-eye worker pools.
@@ -254,12 +249,14 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             }
         }
 
-        Ok(InitializedWorkers {
-            pools,
-            registries,
-            post_load_checksums,
+        tracing::info!(
+            "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
+            post_load_checksums[LEFT],
+            post_load_checksums[RIGHT],
             db_size,
-        })
+        );
+
+        Ok(InitializedWorkers { pools, registries })
     }
 }
 

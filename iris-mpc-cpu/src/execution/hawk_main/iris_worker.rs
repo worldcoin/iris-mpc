@@ -757,12 +757,6 @@ impl LocalIrisWorkerPool {
         let pool = init_workers(0, iris_store.clone(), true);
         Self::new(pool, iris_store, mode, party_id)
     }
-
-    /// Access the underlying `IrisPoolHandle` for operations not on the trait
-    /// (e.g., `numa_realloc`, `reserve`, `wait_completion`).
-    pub fn inner(&self) -> &IrisPoolHandle {
-        &self.inner
-    }
 }
 
 /// Build 31 `ArcIris` rotations from code and mask rotation vecs.

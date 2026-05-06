@@ -535,19 +535,7 @@ impl HawkActorPrelude {
             Arc::new(searcher_)
         };
 
-        let worker_pool_initializer::InitializedWorkers {
-            pools,
-            registries,
-            post_load_checksums,
-            db_size,
-        } = initialized;
-
-        tracing::info!(
-            "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
-            post_load_checksums[LEFT],
-            post_load_checksums[RIGHT],
-            db_size,
-        );
+        let worker_pool_initializer::InitializedWorkers { pools, registries } = initialized;
 
         let graph_store = graph.map(GraphMem::to_arc);
 
@@ -1115,13 +1103,6 @@ impl<'a> GraphLoader<'a> {
         *graphs[LEFT] = graph_left;
         *graphs[RIGHT] = graph_right;
         Ok(())
-    }
-
-    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
-        let [left, right] = graphs;
-        let GraphLoader(mut dest_graphs) = self;
-        *dest_graphs[LEFT] = left;
-        *dest_graphs[RIGHT] = right;
     }
 }
 
