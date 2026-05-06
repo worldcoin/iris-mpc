@@ -497,8 +497,6 @@ async fn exec_setup(
         // return Ok(());
     }
 
-    // Registries (built during the iris load) and worker pools, both
-    // passed to the indexation phase.
     let registries = hawk_actor.registries();
     let worker_pools = [
         hawk_actor.worker_pool(StoreId::Left),
@@ -1106,8 +1104,8 @@ pub async fn exec_use_backup_as_source(
     Ok(())
 }
 
-/// Build a `HawkActorPrelude` (networking only). Finalized into a full
-/// `HawkActor` later via `init_graph_from_stores`.
+/// Build a `HawkActorPrelude` (networking only). `init_graph_from_stores`
+/// finalizes it into a `HawkActor`.
 async fn build_hawk_prelude(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,

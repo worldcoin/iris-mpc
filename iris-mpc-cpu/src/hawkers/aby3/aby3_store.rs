@@ -73,8 +73,8 @@ pub type VectorIdRegistryRef = SharedIrisesRef<()>;
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
 /// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`). The worker
-/// pool is type-erased as `Arc<dyn IrisWorkerPool>` so a single binary can
-/// hold either the local single-node pool or a remote sharded pool.
+/// pool is `Arc<dyn IrisWorkerPool>` so the local and remote sharded pools
+/// share one type.
 ///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]

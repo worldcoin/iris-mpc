@@ -587,8 +587,7 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     //     of 62 used
     // A signature like `cache_queries(queries, rotation_mask: u32, mirror: bool)`
     // would let LocalIrisWorkerPool skip generating + NUMA-reallocating unused
-    // variants. This is the main remaining performance gap vs the old design
-    // (which only preprocessed the selected rotations).
+    // variants.
     fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>>;
 
     /// Compute dot products for batches of (query_spec, targets).

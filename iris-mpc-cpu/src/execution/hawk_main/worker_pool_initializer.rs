@@ -1,7 +1,7 @@
 //! Setup-time construction of per-eye worker pools and the metadata-only
 //! `VectorIdRegistry`. Registries are derived from the load source
-//! (PG id+version scan, seed map, or known size) so the actor never
-//! needs to read the iris store.
+//! (PG id+version scan, seed map, or known size) — independent of
+//! the worker pool's iris store.
 
 use crate::execution::hawk_main::iris_worker::{
     init_workers, IrisPoolHandle, IrisWorkerPool, LocalIrisWorkerPool,
@@ -26,9 +26,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::try_join;
 
-/// Output of `WorkerPoolInitializer::initialize`. All iris reads go
-/// through `pools` via the [`IrisWorkerPool`] trait — no iris stores or
-/// pool-specific handles are exposed.
+/// Output of `WorkerPoolInitializer::initialize`.
 pub struct InitializedWorkers {
     pub pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     /// Metadata-only registries with `next_id` and `set_hash` populated.
@@ -157,10 +155,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
 
         let mut db_size: usize = 0;
 
-        // INVARIANT: each eye gets its own `Arc<RwLock>` even when both
-        // start from identical (id, version) sets. `Aby3Store::insert`
-        // allocates `next_id` per eye, so a shared Arc would burn two
-        // ids per logical insert.
+        // INVARIANT: each eye gets its own `Arc<RwLock>`. `Aby3Store::insert`
+        // allocates `next_id` per eye, so sharing one Arc would advance
+        // both eyes' ids on every insert.
         let registries: BothEyes<VectorIdRegistryRef> = match mode {
             LocalInitMode::Empty => [
                 SharedIrises::<()>::default().to_arc(),
@@ -257,8 +254,6 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             }
         }
 
-        // `workers_handle` lives on inside each `LocalIrisWorkerPool`
-        // via its own clone; the local stays unused from here.
         Ok(InitializedWorkers {
             pools,
             registries,
@@ -269,10 +264,8 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
 }
 
 /// Build a registry template from a `(serial_id, version_id)` index-only
-/// scan of PG (no iris bytes).
-///
-/// Returns the inner `SharedIrises<()>` so the caller wraps each eye in
-/// its own `Arc<RwLock>` — see the `INVARIANT` in `initialize`.
+/// scan of PG (no iris bytes). Returns the inner `SharedIrises<()>`;
+/// caller wraps each eye in its own `Arc<RwLock>`.
 pub async fn build_registry_from_db(
     store: &Store,
     max_serial_id: usize,
@@ -286,7 +279,6 @@ pub async fn build_registry_from_db(
 }
 
 /// Build a registry template for serial ids in `range`, all version 0.
-/// Returned as `SharedIrises<()>`; see `build_registry_from_db`.
 fn build_registry_from_serial_range(range: std::ops::Range<u32>) -> SharedIrises<()> {
     let mut points: HashMap<VectorId, ()> = HashMap::with_capacity(range.len());
     for serial in range {

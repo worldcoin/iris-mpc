@@ -292,8 +292,8 @@ pub struct HawkArgs {
 ///
 /// # Responsibilities
 /// - **State Management:** Holds in-memory HNSW graphs (`graph_store`) and the
-///   metadata-only `VectorId` registries. Iris data is owned by the worker
-///   pool and accessed exclusively through the [`IrisWorkerPool`] trait.
+///   metadata-only `VectorId` registries. Iris data lives in the worker pool
+///   and is accessed through the [`IrisWorkerPool`] trait.
 /// - **Session Management:** Creates and manages `HawkSession`s, which provide the
 ///   cryptographic context for MPC operations.
 /// - **Request Handling:** Processes `HawkRequest` batches.
@@ -322,7 +322,6 @@ pub struct HawkActor {
     graph_store: BothEyes<GraphRef>,
     /// Per-eye worker pools with query caches. Cloned into each
     /// `HawkSession` so all sessions for one eye share a cache.
-    /// Type-erased to accommodate local or remote sharded impls.
     pub(crate) worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
 
     /// Store for persisting detailed anonymized statistics.
@@ -414,8 +413,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 /// (which manages secret-shared data and cryptographic primitives) and the HNSW graph.
 /// Multiple sessions can be created to parallelize operations across a batch of requests.
 ///
-/// All sessions operate on the same shared `graph_store` held by the `HawkActor` and access iris
-/// data through the `HawkActor`'s worker pool trait object.
+/// All sessions share the `HawkActor`'s `graph_store` and `worker_pools`.
 /// All sessions keep a copy of the HNSW PRF key (mostly used for generating insertion layers).
 #[derive(Clone)]
 pub struct HawkSession {
@@ -472,13 +470,11 @@ pub struct HawkInsertPlan {
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
 pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
 
-/// Partial actor holding only the network handle, for MPC peer
-/// communication that must happen before iris data is loaded (e.g.
-/// genesis runs `sync_peers` + iris-DB rollback to decide the final
-/// `max_serial_id`).
-///
-/// `finalize` consumes the prelude, initializer output, and graph to
-/// produce a fully-loaded `HawkActor`.
+/// Partial actor with only the network handle. Lets MPC peer
+/// communication run before iris data is loaded — genesis needs
+/// `sync_peers` to complete before iris-DB rollback fixes
+/// `max_serial_id`. `finalize` consumes the prelude with an
+/// initializer's output and a graph to produce a `HawkActor`.
 pub struct HawkActorPrelude {
     args: HawkArgs,
     networking: Box<dyn NetworkHandle>,
@@ -503,15 +499,14 @@ impl HawkActorPrelude {
         })
     }
 
-    /// Pre-load barrier. Genesis calls this before iris-DB rollback
-    /// finalizes `max_serial_id`.
+    /// Sync with peer parties. Genesis calls this before iris-DB rollback
+    /// fixes `max_serial_id`.
     pub async fn sync_peers(&mut self) -> Result<()> {
         self.networking.sync_peers().await
     }
 
-    /// Consume the prelude into a fully-loaded `HawkActor`.
-    /// `initialized` and `graph` must both be ready; no loading happens
-    /// here.
+    /// Consume the prelude into a `HawkActor`. No loading happens here —
+    /// `initialized` and `graph` must already be ready.
     pub async fn finalize(
         self,
         initialized: worker_pool_initializer::InitializedWorkers,
@@ -607,8 +602,8 @@ impl HawkActor {
     }
 
     /// Run an initializer, then build the actor with an empty graph.
-    /// Test/dev path. Production drives prelude + initializer + graph
-    /// load in parallel directly.
+    /// Test/dev path; production builds prelude, initializer, and graph
+    /// in parallel via `HawkActorPrelude::finalize` directly.
     pub async fn from_cli_with_initializer(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
@@ -1054,9 +1049,8 @@ impl HawkActor {
         Ok(())
     }
 
-    /// Borrow the in-memory graph stores to populate them post-construction.
-    /// Used by paths that build the actor first (with the iris load already
-    /// done by the initializer) and then load the graph from PG/S3.
+    /// Borrow the in-memory graph stores for population from PG or an S3
+    /// checkpoint.
     pub async fn as_graph_loader(&mut self) -> GraphLoader<'_> {
         GraphLoader([
             self.graph_store[0].write().await,
@@ -1076,9 +1070,9 @@ pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
 
 pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
-/// Free helper for callers that need to load both eyes' graphs from PG
-/// before a `HawkActor` exists — used to overlap iris loading (via
-/// `WorkerPoolInitializer::initialize`) with graph loading at startup.
+/// Load both eyes' graphs from PG in parallel. Returns the in-memory
+/// graphs so callers can overlap this with the iris load before
+/// constructing a `HawkActor`.
 pub async fn load_graphs_from_pg(
     graph_store: &GraphStore,
     parallelism: usize,
@@ -2245,8 +2239,7 @@ mod tests {
     }
 
     /// `FakeDb` initializer: post-construction registry reflects every
-    /// `VectorId` that went through the channel-based insert path.
-    /// Complements the `Seeded` test which bypasses the channels.
+    /// `VectorId` that went through the worker-pool insert path.
     #[tokio::test]
     async fn test_fake_db_initializer_populates_registry() -> Result<()> {
         use worker_pool_initializer::{LocalWorkerPoolInitializer, WorkerPoolInitializer};
