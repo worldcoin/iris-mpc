@@ -63,5 +63,6 @@ jobs:
           build-args: |
             ARCHITECTURE=x86_64
             CARGO_FEATURES=jemalloc
+            PROFILE=profiling
           cache-from: type=gha
           cache-to: type=gha,mode=max
