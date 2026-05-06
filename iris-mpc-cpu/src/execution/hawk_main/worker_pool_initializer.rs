@@ -57,9 +57,6 @@ pub enum LocalInitMode {
     Seeded(BothEyes<Aby3SharedIrises>),
     /// Run `load_iris_db` against empty stores.
     LoadFromDb(DbLoadParams),
-    /// Fill each store with `n` copies of the party's default iris.
-    /// Backs the production `fake_db_size > 0` path.
-    FakeDb(usize),
 }
 
 pub struct LocalWorkerPoolInitializer {
@@ -104,20 +101,6 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::LoadFromDb(params),
-        }
-    }
-
-    pub fn new_fake_db(
-        party_id: usize,
-        distance_mode: DistanceMode,
-        numa: bool,
-        size: usize,
-    ) -> Self {
-        Self {
-            party_id,
-            distance_mode,
-            numa,
-            mode: LocalInitMode::FakeDb(size),
         }
     }
 }
@@ -202,22 +185,6 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 db_size = adapter.db_size;
                 [template.clone().to_arc(), template.to_arc()]
             }
-            LocalInitMode::FakeDb(size) => {
-                let dummy = Arc::new(GaloisRingSharedIris::default_for_party(party_id));
-                for side in [LEFT, RIGHT] {
-                    for i in 0..size {
-                        workers_handle[side]
-                            .insert(VectorId::from_serial_id(i as u32), dummy.clone())?;
-                    }
-                }
-                try_join!(
-                    workers_handle[LEFT].wait_completion(),
-                    workers_handle[RIGHT].wait_completion(),
-                )?;
-                db_size = size;
-                let template = build_registry_from_serial_range(0..size as u32);
-                [template.clone().to_arc(), template.to_arc()]
-            }
         };
 
         let pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
@@ -275,15 +242,6 @@ pub async fn build_registry_from_db(
     Ok(SharedIrises::<()>::new(points, ()))
 }
 
-/// Build a registry template for serial ids in `range`, all version 0.
-fn build_registry_from_serial_range(range: std::ops::Range<u32>) -> SharedIrises<()> {
-    let mut points: HashMap<VectorId, ()> = HashMap::with_capacity(range.len());
-    for serial in range {
-        points.insert(VectorId::from_serial_id(serial), ());
-    }
-    SharedIrises::<()>::new(points, ())
-}
-
 /// `InMemoryStore` adapter that fans a single PG read into both eyes'
 /// worker pools.
 struct FanoutLoader {
@@ -330,14 +288,9 @@ impl InMemoryStore for FanoutLoader {
         self.db_size
     }
 
-    fn fake_db(&mut self, size: usize) {
-        self.db_size = size;
-        let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
-        for side in &self.iris_pools {
-            for i in 0..size {
-                side.insert(VectorId::from_serial_id(i as u32), iris.clone())
-                    .unwrap();
-            }
-        }
+    fn fake_db(&mut self, _size: usize) {
+        unreachable!(
+            "FanoutLoader is only used for LoadFromDb; load_iris_db never invokes fake_db"
+        );
     }
 }

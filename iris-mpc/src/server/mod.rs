@@ -49,7 +49,6 @@ use iris_mpc_cpu::execution::hawk_main::{
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
@@ -546,26 +545,24 @@ async fn init_hawk_actor(
     );
     tracing::info!("⚓️ ANCHOR: Load the database");
 
-    // `fake_db_size > 0` is a benchmark/dev knob: fill the store with
-    // sentinel irises, skip the graph load. Otherwise load from PG.
-    let initializer: Box<dyn WorkerPoolInitializer> = if config.fake_db_size > 0 {
-        Box::new(LocalWorkerPoolInitializer::new_fake_db(
-            hawk_args.party_index,
-            HAWK_DISTANCE_MODE,
-            hawk_args.numa,
-            config.fake_db_size,
-        ))
-    } else {
-        let parallelism = config
-            .cpu_database
-            .as_ref()
-            .ok_or_else(|| eyre!("Missing database config"))?
-            .load_parallelism;
-        let store_len = iris_store.count_irises().await?;
-        tracing::info!(
-            "Initialize iris db: Loading from DB (parallelism: {})",
-            parallelism,
+    if config.fake_db_size > 0 {
+        bail!(
+            "fake_db_size is no longer supported in Hawk main; \
+             set SMPC__FAKE_DB_SIZE=0"
         );
+    }
+
+    let parallelism = config
+        .cpu_database
+        .as_ref()
+        .ok_or_else(|| eyre!("Missing database config"))?
+        .load_parallelism;
+    let store_len = iris_store.count_irises().await?;
+    tracing::info!(
+        "Initialize iris db: Loading from DB (parallelism: {})",
+        parallelism,
+    );
+    let initializer: Box<dyn WorkerPoolInitializer> =
         Box::new(LocalWorkerPoolInitializer::new_load_from_db(
             hawk_args.party_index,
             HAWK_DISTANCE_MODE,
@@ -578,20 +575,13 @@ async fn init_hawk_actor(
                 s3_max_serial_id: None,
                 shutdown_handler: Arc::clone(shutdown_handler),
             },
-        ))
-    };
+        ));
 
     let now = Instant::now();
     let ct = shutdown_handler.get_network_cancellation_token();
 
     // Network handle built up-front; iris and graph load in parallel.
     let prelude = HawkActorPrelude::new(&hawk_args, ct).await?;
-
-    if config.fake_db_size > 0 {
-        let initialized = initializer.initialize().await?;
-        let graph = [(); 2].map(|_| GraphMem::new());
-        return prelude.finalize(initialized, graph).await;
-    }
 
     let graph_parallelism = config
         .cpu_database
