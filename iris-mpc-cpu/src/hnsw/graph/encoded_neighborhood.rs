@@ -329,6 +329,8 @@ fn rice_decode(reader: &mut BitReader<'_>, b: u8, gap_idx: usize) -> Result<u32,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
 
     #[test]
     fn module_doc_example_bytes() {
@@ -471,9 +473,6 @@ mod tests {
 
     #[test]
     fn decode_garbage_does_not_panic() {
-        use rand::{Rng, SeedableRng};
-        use rand_chacha::ChaCha8Rng;
-
         let mut rng = ChaCha8Rng::seed_from_u64(0xDEAD_BEEF);
         for _ in 0..200 {
             let len = rng.gen_range(0..64);
@@ -486,9 +485,6 @@ mod tests {
 
     #[test]
     fn random_round_trip_many_seeds() {
-        use rand::{Rng, SeedableRng};
-        use rand_chacha::ChaCha8Rng;
-
         for seed in 0..32u64 {
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
             // Vary k across a useful range, including small and near-MAX_K cases.
@@ -520,9 +516,6 @@ mod tests {
 
     #[test]
     fn encoded_size_matches_model() {
-        use rand::{Rng, SeedableRng};
-        use rand_chacha::ChaCha8Rng;
-
         let k: usize = 450;
         let cases: &[(u32, u8)] = &[
             (1_000_000, 11),   // log2(1M/450) ~= 11
