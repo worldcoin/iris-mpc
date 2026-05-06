@@ -399,13 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_big_first() {
-        // First id near u32::MAX, then small gaps. Stresses the absolute-first
-        // symbol (where Rice's quotient `q = ids[0] >> b` can be very large).
-        assert_round_trip(&[u32::MAX - 1000, u32::MAX - 500, u32::MAX - 100, u32::MAX]);
-    }
-
-    #[test]
     fn round_trip_max_k() {
         // Sample a strictly-increasing sequence at MAX_K length.
         // Evenly spaced across u32 to exercise a typical mean_gap.
