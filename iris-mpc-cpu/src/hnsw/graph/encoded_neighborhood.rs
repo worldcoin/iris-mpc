@@ -238,45 +238,58 @@ impl BitWriter {
     }
 }
 
-/// MSB-first bit reader over a byte slice. Tracks position in bits.
+/// MSB-first bit reader over a byte slice. Maintains a `u64` accumulator that
+/// is refilled from the source slice 8 bits at a time, so individual reads
+/// only touch memory when the accumulator runs low.
 struct BitReader<'a> {
     bytes: &'a [u8],
-    /// Bit offset from the start of `bytes` (MSB of byte 0 is bit 0).
-    pos: usize,
+    /// Pending bits, MSB-aligned: the most-significant `nvalid` bits are
+    /// valid, lower bits are zero.
+    buf: u64,
+    /// Number of valid bits in `buf`. Always in `0..=64`.
+    nvalid: u8,
+    /// Index of the next byte in `bytes` to load into `buf`.
+    next_byte: usize,
 }
 
 impl<'a> BitReader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self {
+            bytes,
+            buf: 0,
+            nvalid: 0,
+            next_byte: 0,
+        }
     }
 
-    fn total_bits(&self) -> usize {
-        self.bytes.len() * 8
+    /// Top up `buf` from the source slice 8 bits at a time. Stops when there
+    /// is no room for another whole byte (`nvalid > 56`) or the slice is
+    /// exhausted.
+    #[inline]
+    fn refill(&mut self) {
+        while self.nvalid <= 56 && self.next_byte < self.bytes.len() {
+            self.buf |= (self.bytes[self.next_byte] as u64) << (56 - self.nvalid);
+            self.nvalid += 8;
+            self.next_byte += 1;
+        }
     }
 
     fn read_bits(&mut self, n: u8) -> Option<u32> {
         debug_assert!(n <= 32);
-        if self.pos + n as usize > self.total_bits() {
-            return None;
-        }
         if n == 0 {
             return Some(0);
         }
-        // Load up to 5 bytes (worst case `bit_offset + n = 7 + 32 = 39` bits)
-        // into a u64, then extract the n target bits in one shift+mask.
-        let byte_idx = self.pos / 8;
-        let bit_offset = (self.pos % 8) as u32;
-        let bytes_to_read = (bit_offset + n as u32).div_ceil(8) as usize;
-        let mut acc: u64 = 0;
-        for i in 0..bytes_to_read {
-            acc = (acc << 8) | self.bytes[byte_idx + i] as u64;
+        if self.nvalid < n {
+            self.refill();
+            if self.nvalid < n {
+                return None;
+            }
         }
-        // Bits we want sit at positions [bit_offset, bit_offset + n) from the
-        // MSB of the loaded window of `bytes_to_read * 8` bits.
-        let shift = (bytes_to_read * 8) as u32 - bit_offset - n as u32;
-        let mask = (1u64 << n) - 1;
-        self.pos += n as usize;
-        Some(((acc >> shift) & mask) as u32)
+        // Take the top n bits, shift them to the LSB, then drop them from buf.
+        let out = (self.buf >> (64 - n)) as u32;
+        self.buf <<= n;
+        self.nvalid -= n;
+        Some(out)
     }
 
     /// Read a unary-coded zero count terminated by a `1` bit. Returns `None`
@@ -285,38 +298,31 @@ impl<'a> BitReader<'a> {
     /// Callers map a returned count `> u32::MAX` to `QuotientOverflow` (see
     /// `rice_decode`).
     fn read_unary(&mut self) -> Option<u64> {
-        if self.pos >= self.total_bits() {
-            return None;
-        }
-        let mut byte_idx = self.pos / 8;
-        let bit_offset = self.pos % 8;
-
-        // Shift the starting byte so the bit at `self.pos` lands at the MSB;
-        // `leading_zeros` then directly counts the zero run before the
-        // terminator. Bits below `self.pos` shift out and don't affect the
-        // count.
-        let first = self.bytes[byte_idx] << bit_offset;
-        if first != 0 {
-            let lz = first.leading_zeros() as u64;
-            self.pos += lz as usize + 1;
-            return Some(lz);
-        }
-
-        // Whole tail of the starting byte was zero; scan subsequent bytes.
-        let mut zeros: u64 = (8 - bit_offset) as u64;
-        byte_idx += 1;
-        while byte_idx < self.bytes.len() {
-            let b = self.bytes[byte_idx];
-            if b != 0 {
-                let lz = b.leading_zeros() as u64;
+        let mut zeros: u64 = 0;
+        loop {
+            if self.nvalid == 0 {
+                self.refill();
+                if self.nvalid == 0 {
+                    return None;
+                }
+            }
+            let lz = self.buf.leading_zeros() as u64;
+            if lz < self.nvalid as u64 {
+                // Terminator landed inside the valid window: `lz` zero bits
+                // followed by the `1`. Consume both.
                 zeros += lz;
-                self.pos = byte_idx * 8 + lz as usize + 1;
+                let consumed = (lz + 1) as u32;
+                // `consumed` can be 64 (terminator was the last valid bit),
+                // which a plain `<<` can't express on `u64`; saturate to 0.
+                self.buf = self.buf.checked_shl(consumed).unwrap_or(0);
+                self.nvalid -= consumed as u8;
                 return Some(zeros);
             }
-            zeros += 8;
-            byte_idx += 1;
+            // All `nvalid` bits in the window are zero; absorb and refill.
+            zeros += self.nvalid as u64;
+            self.buf = 0;
+            self.nvalid = 0;
         }
-        None
     }
 }
 
