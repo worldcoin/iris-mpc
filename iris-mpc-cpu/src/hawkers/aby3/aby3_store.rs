@@ -1559,6 +1559,7 @@ mod tests {
                     &query,
                     layer,
                 )
+                .instrument(plaintext_span.clone())
                 .await?;
         }
 

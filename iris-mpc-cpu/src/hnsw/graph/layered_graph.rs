@@ -7,7 +7,8 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        searcher::{ConnectPlan, LayerMode, UpdateEntryPoint},
+        graph::{GraphMutation, UpdateEntryPoint},
+        searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
     },
@@ -169,27 +170,77 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
     }
 
-    /// Applies a `ConnectPlan` to finalize an insertion.
+    /// Applies a list of graph mutations to the in-memory graph.
     ///
     /// This updates the graph's entry points set and connects the new vector to its
-    /// neighbors as specified in the plan.
-    pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
-        // If required, set vector as new entry point
-        match plan.update_ep {
-            UpdateEntryPoint::False => {}
-            UpdateEntryPoint::SetUnique { layer } => {
-                self.set_unique_entry_point(plan.inserted_vector.clone(), layer)
-                    .await;
-            }
-            UpdateEntryPoint::Append { layer } => {
-                self.add_entry_point(plan.inserted_vector.clone(), layer)
-                    .await;
-            }
-        }
+    /// neighbors as specified in the mutations.
+    pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
+        tracing::info!(mutation_count = plan.len(), "Applying graph mutations");
+        for mutation in plan {
+            tracing::info!("{:?}", mutation);
+            match mutation {
+                GraphMutation::RemoveNode { ref id } => {
+                    // Remove node from all layers where it exists
+                    for layer in &mut self.layers {
+                        layer.remove_node(id);
+                    }
+                    // Remove from entry points if present
+                    self.entry_points.retain(|ep| &ep.point != id);
+                }
+                GraphMutation::ReplaceNode { ref id } => {
+                    // Remove node from all layers where it exists
+                    for layer in &mut self.layers {
+                        layer.remove_node(id);
+                    }
+                }
+                GraphMutation::InsertNode {
+                    id,
+                    layers,
+                    update_ep,
+                } => {
+                    // Handle entry point update
+                    match update_ep {
+                        UpdateEntryPoint::SetUnique { layer } => {
+                            tracing::info!(
+                                vector_id = ?id,
+                                layer = layer,
+                                "Setting unique entry point"
+                            );
+                            // Ensure we have enough layers
+                            if self.layers.len() < layer + 1 {
+                                self.layers.resize(layer + 1, Layer::new());
+                            }
+                            self.entry_points = vec![EntryPoint {
+                                point: id.clone(),
+                                layer,
+                            }];
+                        }
+                        UpdateEntryPoint::Append { layer } => {
+                            self.entry_points.push(EntryPoint {
+                                point: id.clone(),
+                                layer,
+                            });
+                        }
+                        UpdateEntryPoint::False => {}
+                    }
 
-        // Connect the new vector to its neighbors in each layer.
-        for ((v, lc), new_nb) in plan.updates {
-            self.set_links(v, new_nb, lc).await;
+                    // Insert node into each specified layer
+                    for (layer_idx, neighbors) in layers {
+                        // Ensure we have enough layers
+                        if self.layers.len() < layer_idx + 1 {
+                            self.layers.resize(layer_idx + 1, Layer::new());
+                        }
+                        self.layers[layer_idx].insert_node(id.clone(), neighbors);
+                    }
+                }
+                GraphMutation::Compact {
+                    ref id,
+                    layer,
+                    to_remove,
+                } => {
+                    self.layers[layer].compact_node(id, to_remove);
+                }
+            }
         }
     }
 
@@ -248,7 +299,10 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
     pub fn checksum(&self) -> u64 {
         let mut set_hash = SetHash::default();
-        set_hash.add_unordered(&self.entry_points);
+        // Fold entry points in an order-agnostic way: each EntryPoint is hashed
+        // individually with a fixed key so a re-ordered `entry_points` Vec still
+        // yields the same checksum across parties.
+        set_hash.add_unordered_set("entry_points", self.entry_points.iter());
         for (lc, layer) in self.layers.iter().enumerate() {
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
@@ -432,18 +486,80 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.links.get(from).map(|v| v.as_slice())
     }
 
+    /// Order-agnostic checksum of this layer's link map. Two layers with the
+    /// same `(node, set-of-neighbors)` content produce the same checksum even
+    /// if their `HashMap` iteration order or internal `Vec` ordering differ.
+    pub fn checksum(&self) -> u64 {
+        self.set_hash.checksum()
+    }
+
+    /// Insert a node with bidirectional links to its neighbors.
+    /// Sets the node's links and adds backlinks from each neighbor to this node.
+    pub fn insert_node(&mut self, id: V, neighbors: Vec<V>) {
+        // Set the node's links
+        self.set_links(id.clone(), neighbors.clone());
+
+        // Add the node to each neighbor's neighborhood (bidirectional backlinks)
+        for neighbor in &neighbors {
+            if let Some(neighbor_links) = self.links.get_mut(neighbor) {
+                if !neighbor_links.contains(&id) {
+                    self.set_hash
+                        .remove_unordered_set(neighbor, neighbor_links.iter());
+                    neighbor_links.push(id.clone());
+                    self.set_hash
+                        .add_unordered_set(neighbor, neighbor_links.iter());
+                }
+            }
+        }
+    }
+
+    /// Remove a node from the graph and clean up all backlinks from its neighbors.
+    pub fn remove_node(&mut self, id: &V) {
+        // Remove the node's links and get its neighbors
+        if let Some(neighbors) = self.links.remove(id) {
+            // Update set_hash for removed node
+            self.set_hash.remove_unordered_set(id, neighbors.iter());
+
+            // Remove the node from all neighbors' neighborhoods (bidirectional cleanup)
+            // note that if this node did compaction then some old neighbors could still have links
+            // to this deleted node. that is ok. it is also ok if the following code block is deleted.
+            // this is just an opportunistic low-cost cleanup.
+            for neighbor in neighbors {
+                if let Some(neighbor_links) = self.links.get_mut(&neighbor) {
+                    self.set_hash
+                        .remove_unordered_set(&neighbor, neighbor_links.iter());
+                    neighbor_links.retain(|x| x != id);
+                    self.set_hash
+                        .add_unordered_set(&neighbor, neighbor_links.iter());
+                }
+            }
+        }
+    }
+
+    pub fn compact_node(&mut self, id: &V, neighbors_to_remove: Vec<V>) {
+        if let Some(node_links) = self.links.get_mut(id) {
+            self.set_hash.remove_unordered_set(id, node_links.iter());
+            for neighbor in &neighbors_to_remove {
+                // this is a uni-directional pruning. it is incorrect to prune the neighbors links
+                // when doing compaction.
+                node_links.retain(|x| x != neighbor);
+            }
+            self.set_hash.add_unordered_set(id, node_links.iter());
+        }
+    }
+
     pub fn set_links(&mut self, from: V, links: Vec<V>) {
         use std::collections::hash_map::Entry;
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
-                self.set_hash.remove((e.key(), e.get()));
+                self.set_hash.remove_unordered_set(e.key(), e.get().iter());
                 let existing = e.get_mut();
                 existing.clear();
                 existing.extend(links);
-                self.set_hash.add_unordered((e.key(), e.get()));
+                self.set_hash.add_unordered_set(e.key(), e.get().iter());
             }
             Entry::Vacant(e) => {
-                self.set_hash.add_unordered((e.key(), &links));
+                self.set_hash.add_unordered_set(e.key(), links.iter());
                 e.insert(links);
             }
         }
