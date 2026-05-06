@@ -29,6 +29,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Range,
 };
+use tracing::{info_span, Instrument};
 use uuid::Uuid;
 
 const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 345 / 1000; // 0.345 * 12800
@@ -1338,6 +1339,10 @@ impl TestCaseGenerator {
             return;
         }
 
+        // Compute bounds for idx validation
+        let initial_db_len = self.initial_db_state.initial_db_len() as u32;
+        let max_valid_idx = initial_db_len + self.inserted_responses.len() as u32;
+
         if let Some(expected_idx) = expected_idx {
             assert!(!full_face_mirror_attack_detected);
             assert!(
@@ -1349,6 +1354,15 @@ impl TestCaseGenerator {
                 assert_eq!(
                     expected_idx, idx,
                     "expected matched index to be as expected"
+                );
+                // Bounds check: matched idx must be within valid DB range
+                assert!(
+                    idx < max_valid_idx,
+                    "matched idx {} exceeds max valid idx {} (initial_db_len={}, insertions={})",
+                    idx,
+                    max_valid_idx,
+                    initial_db_len,
+                    self.inserted_responses.len()
                 );
             } else {
                 assert!(
@@ -1366,8 +1380,34 @@ impl TestCaseGenerator {
                 assert!(was_match);
             } else {
                 assert!(!was_match);
-                let request = requests.get(req_id).unwrap().clone();
-                self.inserted_responses.insert(idx, request);
+                // idx == u32::MAX means no insertion happened (NON_MATCH_ID sentinel)
+                // This can happen for invalidated requests
+                if idx != u32::MAX {
+                    // Check if another party already processed this insertion
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        self.inserted_responses.entry(idx)
+                    {
+                        // First party processing this insertion
+                        // Bounds check: new insertion idx must be >= initial_db_len
+                        if idx < initial_db_len {
+                            tracing::warn!("new insertion idx {} < initial_db_len {} (insertions should be after initial DB)",
+                                idx,
+                                initial_db_len
+                            );
+                        }
+                        let request = requests.get(req_id).unwrap().clone();
+                        e.insert(request);
+                    } else {
+                        // Already validated by party 0; just verify consistency
+                        let stored = self.inserted_responses.get(&idx).unwrap();
+                        let current = requests.get(req_id).unwrap();
+                        assert_eq!(
+                            stored.left.code, current.left.code,
+                            "inconsistent insertion data across parties for idx {}",
+                            idx
+                        );
+                    }
+                }
             }
         }
     }

@@ -157,8 +157,12 @@ where
     F: Future<Output = Result<T>> + Send + 'static,
     F::Output: Send + 'static,
 {
+    let parent_span = Span::current();
     tasks
-        .map(tokio::spawn)
+        .map(|task| {
+            let span = parent_span.clone();
+            tokio::spawn(async move { task.instrument(span).await })
+        })
         .collect::<JoinAll<_>>()
         .await
         .into_iter()
