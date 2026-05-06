@@ -367,43 +367,40 @@ mod tests {
     }
 
     #[test]
-    fn single_element_round_trip_zero() {
-        let encoded = EncodedNeighborhood::encode(&[0]).expect("encode");
-        let decoded = encoded.decode().expect("decode");
-        assert_eq!(decoded, vec![0u32]);
+    fn round_trip_single_zero() {
+        assert_round_trip(&[0]);
     }
 
     #[test]
-    fn single_element_round_trip_small() {
-        let encoded = EncodedNeighborhood::encode(&[42]).expect("encode");
-        assert_eq!(decoded_or_panic(&encoded), vec![42u32]);
+    fn round_trip_single_small() {
+        assert_round_trip(&[42]);
     }
 
     #[test]
-    fn single_element_round_trip_max() {
-        let encoded = EncodedNeighborhood::encode(&[u32::MAX]).expect("encode");
-        assert_eq!(decoded_or_panic(&encoded), vec![u32::MAX]);
+    fn round_trip_single_max() {
+        assert_round_trip(&[u32::MAX]);
     }
 
     #[test]
     fn round_trip_consecutive() {
-        let ids: Vec<u32> = (0..10).collect();
-        let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
-        assert_eq!(encoded.decode().expect("decode"), ids);
+        assert_round_trip(&(0..10).collect::<Vec<_>>());
     }
 
     #[test]
     fn round_trip_handcrafted_small() {
-        let ids = vec![0u32, 1, 5, 100, 1000];
-        let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
-        assert_eq!(encoded.decode().expect("decode"), ids);
+        assert_round_trip(&[0, 1, 5, 100, 1000]);
     }
 
     #[test]
     fn round_trip_widely_spaced() {
-        let ids = vec![0u32, 1_000, 1_000_000, 100_000_000, u32::MAX - 1];
-        let encoded = EncodedNeighborhood::encode(&ids).expect("encode");
-        assert_eq!(encoded.decode().expect("decode"), ids);
+        assert_round_trip(&[0, 1_000, 1_000_000, 100_000_000, u32::MAX - 1]);
+    }
+
+    #[test]
+    fn round_trip_big_first() {
+        // First id near u32::MAX, then small gaps. Stresses the absolute-first
+        // symbol (where Rice's quotient `q = ids[0] >> b` can be very large).
+        assert_round_trip(&[u32::MAX - 1000, u32::MAX - 500, u32::MAX - 100, u32::MAX]);
     }
 
     #[test]
@@ -419,16 +416,14 @@ mod tests {
                 ids[i] = ids[i - 1] + 1;
             }
         }
-        let encoded = EncodedNeighborhood::encode(&ids).expect("encode max_k");
-        assert_eq!(encoded.decode().expect("decode max_k"), ids);
+        assert_round_trip(&ids);
     }
 
     #[test]
     fn round_trip_high_universe() {
         // IDs clustered near u32::MAX.
         let ids: Vec<u32> = (0..450u32).map(|i| u32::MAX - 449 + i).collect();
-        let encoded = EncodedNeighborhood::encode(&ids).expect("encode high");
-        assert_eq!(encoded.decode().expect("decode high"), ids);
+        assert_round_trip(&ids);
     }
 
     #[test]
@@ -561,11 +556,12 @@ mod tests {
             );
 
             // Round-trip sanity check.
-            assert_eq!(encoded.decode().expect("decode"), ids);
+            assert_round_trip(&ids);
         }
     }
 
-    fn decoded_or_panic(e: &EncodedNeighborhood) -> Vec<u32> {
-        e.decode().expect("decode succeeded")
+    fn assert_round_trip(ids: &[u32]) {
+        let encoded = EncodedNeighborhood::encode(ids).expect("encode");
+        assert_eq!(encoded.decode().expect("decode"), ids);
     }
 }
