@@ -1,3 +1,50 @@
+//! Compact at-rest encoding for HNSW graph neighborhoods.
+//!
+//! A neighborhood is a sorted, strictly-increasing slice of `u32` IDs. We
+//! delta-encode it (`ids[0]` kept as an absolute value, then each later id as
+//! `ids[i] - ids[i-1] - 1`) and Rice-code the resulting `k` values into a
+//! packed bitstream. Decoding reverses this: read the header, Rice-decode `k`
+//! symbols, then prefix-sum them back into ids.
+//!
+//! # Wire format
+//!
+//! ```text
+//! +-------------+-----+-----------------------------+
+//! | k (u16 LE)  | b   | Rice-coded body, MSB-first  |
+//! +-------------+-----+-----------------------------+
+//!  bytes 0..2    2     3..
+//! ```
+//!
+//! Each Rice-coded value `v` is written as `q = v >> b` zero bits, a `1`
+//! terminator, then the low `b` bits of `v`. The Rice parameter `b` (which is
+//! a power-of-two Golomb divisor) is the same for every symbol in a blob and
+//! is chosen as described below. The body is zero-padded on the right to a
+//! whole number of bytes.
+//!
+//! # Choosing `b`
+//!
+//! For values drawn from a geometric distribution with mean `μ`, the
+//! bit-optimal Rice parameter is `b ≈ floor(log2(μ · ln 2))`. We approximate
+//! this as `floor(log2(μ))` (about half a bit too high on average — at most
+//! one extra bit per symbol), where `μ` is the exact mean of the `k` Rice-coded
+//! values: `(ids[k-1] - (k-1)) / k`. See `compute_b` for the implementation.
+//!
+//! # Example
+//!
+//! Encoding `[0, 5, 9]`:
+//!
+//! - Delta stream: `0` (= `ids[0]`), `4` (= 5-0-1), `3` (= 9-5-1).
+//! - `compute_b`: mean = `(9 - 2)/3 = 2`, so `b = floor(log2(2)) = 1`.
+//! - Per symbol, splitting `v` into quotient (unary) | terminator | low `b` bits:
+//!     - `0` → `1 | 0`              (2 bits)
+//!     - `4` → `00 | 1 | 0`         (4 bits)
+//!     - `3` → `0 | 1 | 1`          (3 bits)
+//! - Body bitstream `100010011` packs MSB-first (with 7 bits of zero padding)
+//!   into `[0x89, 0x80]`.
+//! - Full blob: `[0x03, 0x00, 0x01, 0x89, 0x80]` — 5 bytes for 3 ids.
+//!
+//! See `module_doc_example_bytes` for the test that pins these bytes.
+
 use thiserror::Error;
 
 /// Maximum supported neighborhood size. Limited by the 16-bit `k` field in the header.
@@ -275,6 +322,14 @@ fn rice_decode(reader: &mut BitReader<'_>, b: u8, gap_idx: usize) -> Result<u32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_doc_example_bytes() {
+        let encoded = EncodedNeighborhood::encode(&[0u32, 5, 9]).unwrap();
+        let actual: Vec<u8> = encoded.as_bytes().to_vec();
+        eprintln!("BYTES = {actual:02x?}");
+        assert_eq!(actual, vec![0x03, 0x00, 0x01, 0x89, 0x80]);
+    }
 
     #[test]
     fn rejects_empty() {
