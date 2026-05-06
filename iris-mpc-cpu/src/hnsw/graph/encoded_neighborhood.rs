@@ -102,14 +102,15 @@ impl EncodedNeighborhood {
         let k = ids.len() as u16;
         let b = compute_b(ids);
 
-        // Per-symbol body cost is `b + 1 + q` bits with `E[q] ≈ 1` for an optimal `b`
-        // (geometric tail), so budgeting `b + 4` gives ~2 bits of slack per symbol.
-        // A reallocation needs `Σ q_i > 3k`, a `√(2k)`-sigma tail — negligible for
-        // any realistic `k`. Empirically (criterion bench across slack ∈ {2,3,4,6,8,16}
-        // and k ∈ {10, 450, 2000, 65535}), enlarging the slack does not change encode
+        // Body capacity (header lives in a separate Vec). Per-symbol body cost is
+        // `b + 1 + q` bits with `E[q] ≈ 1` for an optimal `b` (geometric tail), so
+        // budgeting `b + 4` gives ~2 bits of slack per symbol. A reallocation needs
+        // `Σ q_i > 3k`, a `√(2k)`-sigma tail — negligible for any realistic `k`.
+        // Empirically (criterion bench across slack ∈ {2,3,4,6,8,16} and k ∈
+        // {10, 450, 2000, 65535}), enlarging the slack does not change encode
         // timing within noise, so `+ 4` is not undersized.
-        let cap = HEADER_LEN + (ids.len() * (b as usize + 4)).div_ceil(8);
-        let mut writer = BitWriter::with_capacity(cap);
+        let body_cap = (ids.len() * (b as usize + 4)).div_ceil(8);
+        let mut writer = BitWriter::with_capacity(body_cap);
 
         let mut header = Vec::with_capacity(HEADER_LEN);
         header.extend_from_slice(&k.to_le_bytes());
@@ -262,15 +263,20 @@ impl<'a> BitReader<'a> {
         Some(out)
     }
 
-    fn read_unary(&mut self) -> Option<u32> {
-        let mut zeros: u32 = 0;
+    /// Read a unary-coded zero count terminated by a `1` bit. Returns `None`
+    /// on truncation (buffer exhausted before the terminator). Counts in `u64`
+    /// so that `read_bits` truncation is the only `None` case — even a fully
+    /// zero buffer of `isize::MAX` bytes can't overflow `u64`. Callers map a
+    /// returned count `> u32::MAX` to `QuotientOverflow` (see `rice_decode`).
+    fn read_unary(&mut self) -> Option<u64> {
+        let mut zeros: u64 = 0;
         loop {
             let bit = self.read_bits(1)?;
             if bit == 1 {
                 // `1` terminates the unary prefix; consumed but not part of the value.
                 return Some(zeros);
             }
-            zeros = zeros.checked_add(1)?;
+            zeros += 1;
         }
     }
 }
@@ -308,9 +314,10 @@ fn rice_encode(writer: &mut BitWriter, value: u32, b: u8) {
 
 fn rice_decode(reader: &mut BitReader<'_>, b: u8, gap_idx: usize) -> Result<u32, DecodeError> {
     debug_assert!(b <= 31, "rice parameter b must be 0..=31");
-    let q = reader
+    let q_raw = reader
         .read_unary()
         .ok_or(DecodeError::TruncatedBody(gap_idx))?;
+    let q = u32::try_from(q_raw).map_err(|_| DecodeError::QuotientOverflow(gap_idx))?;
     // `q << b` must fit in u32: the bit-width of `q` plus `b` cannot exceed 32.
     let bits_in_q = 32u8.saturating_sub(q.leading_zeros() as u8);
     if bits_in_q + b > 32 {

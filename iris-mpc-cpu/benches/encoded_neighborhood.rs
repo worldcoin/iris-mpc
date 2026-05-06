@@ -20,7 +20,7 @@ fn bench_encode_at_k450(c: &mut Criterion) {
         ("n=1M", 1_000_000),
         ("n=10M", 10_000_000),
         ("n=100M", 100_000_000),
-        ("n=2^32", u32::MAX as u64),
+        ("n=2^32-1", u32::MAX as u64),
     ];
     for &(label, universe) in universes {
         let ids = sample_sorted_ids(0xA5A5_0000 ^ universe, 450, universe);
@@ -41,7 +41,7 @@ fn bench_decode_at_k450(c: &mut Criterion) {
         ("n=1M", 1_000_000),
         ("n=10M", 10_000_000),
         ("n=100M", 100_000_000),
-        ("n=2^32", u32::MAX as u64),
+        ("n=2^32-1", u32::MAX as u64),
     ];
     for &(label, universe) in universes {
         let ids = sample_sorted_ids(0xA5A5_0000 ^ universe, 450, universe);
