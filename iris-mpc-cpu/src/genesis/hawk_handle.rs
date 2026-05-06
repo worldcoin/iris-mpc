@@ -72,7 +72,10 @@ impl Handle {
             }) = rx.recv().await
             {
                 let job_result = Self::handle_job(&mut actor, &sessions, request).await;
-                let health = if matches!(job_result, Ok((_, JobResult::SyncPeers))) {
+                let health = if matches!(
+                    job_result,
+                    Ok((_, JobResult::SyncPeers)) | Ok((_, JobResult::SyncState { .. }))
+                ) {
                     Ok(())
                 } else {
                     do_health_check(&mut actor, &mut sessions, job_result.is_err()).await
