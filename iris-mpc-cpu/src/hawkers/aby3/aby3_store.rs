@@ -784,6 +784,7 @@ mod tests {
     use itertools::{izip, Itertools};
     use rand::SeedableRng;
     use tokio::task::JoinSet;
+    use tracing::{info_span, Instrument};
     use tracing_test::traced_test;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1548,6 +1549,7 @@ mod tests {
 
         let mut plaintext_store = PlaintextStore::<FhdOps>::new();
         let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        let plaintext_span = info_span!("plaintext_insert");
         for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
             let query = Arc::new(iris.clone());
             searcher
@@ -1562,7 +1564,7 @@ mod tests {
 
         let stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         let mut jobs = JoinSet::new();
-        for store in stores.into_iter() {
+        for (idx, store) in stores.into_iter().enumerate() {
             let role = get_owner_index(&store).await?;
             let irises: Vec<ArcIris> = shared_irises
                 .iter()
@@ -1571,12 +1573,14 @@ mod tests {
             let layers = insertion_layers.clone();
             let searcher = searcher.clone();
             jobs.spawn(async move {
+                let mpc_span = info_span!("mpc_insert", id = idx);
                 let mut store = store.lock().await;
                 let queries = cache_irises(&store.workers, irises).await?;
                 let mut graph: GraphMem<VectorId> = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher
                         .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
+                        .instrument(mpc_span.clone())
                         .await?;
                 }
                 Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
@@ -1591,10 +1595,109 @@ mod tests {
 
         for (role, mpc_graph) in mpc_graphs.into_iter().enumerate() {
             let mpc_graph = mpc_graph.unwrap_or_else(|| panic!("party {role} did not finish"));
-            assert_eq!(
-                mpc_graph, plaintext_graph,
-                "MPC graph for party {role} differs from plaintext graph",
+
+            // Manual graph comparison
+            let num_layers_mpc = mpc_graph.layers.len();
+            let num_layers_pt = plaintext_graph.layers.len();
+            println!(
+                "[Role {}] Layers count - MPC: {}, Plaintext: {}",
+                role, num_layers_mpc, num_layers_pt
             );
+            if num_layers_mpc != num_layers_pt {
+                panic!(
+                    "[Role {}] Layer count mismatch: {} vs {}",
+                    role, num_layers_mpc, num_layers_pt
+                );
+            }
+
+            // Compare each layer
+            for (layer_idx, (mpc_layer, pt_layer)) in mpc_graph
+                .layers
+                .iter()
+                .zip(plaintext_graph.layers.iter())
+                .enumerate()
+            {
+                // Check if layers contain the same elements
+                let mpc_keys: std::collections::BTreeSet<_> = mpc_layer.links.keys().collect();
+                let pt_keys: std::collections::BTreeSet<_> = pt_layer.links.keys().collect();
+
+                if mpc_keys != pt_keys {
+                    println!(
+                        "[Role {} Layer {}] Element mismatch detected",
+                        role, layer_idx
+                    );
+                    panic!("[Role {} Layer {}] Layer elements differ: MPC has {} elements, plaintext has {} elements",
+                           role, layer_idx, mpc_keys.len(), pt_keys.len());
+                }
+                println!(
+                    "[Role {} Layer {}] Elements match - {} nodes",
+                    role,
+                    layer_idx,
+                    mpc_keys.len()
+                );
+
+                // Compare ordering by checking neighbors for each node
+                for node_id in mpc_keys.iter() {
+                    let mpc_neighbors = mpc_layer
+                        .links
+                        .get(node_id)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
+                    let pt_neighbors = pt_layer
+                        .links
+                        .get(node_id)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
+
+                    if mpc_neighbors != pt_neighbors {
+                        println!(
+                            "[Role {} Layer {}] Ordering mismatch for node {}",
+                            role, layer_idx, node_id
+                        );
+                        println!(
+                            "[Role {} Layer {}] Node {} MPC neighbors: {:?}",
+                            role, layer_idx, node_id, mpc_neighbors
+                        );
+                        println!(
+                            "[Role {} Layer {}] Node {} Plaintext neighbors: {:?}",
+                            role, layer_idx, node_id, pt_neighbors
+                        );
+                        panic!("[Role {} Layer {}] Neighbor list differs for node {}: MPC has {} neighbors, plaintext has {} neighbors",
+                               role, layer_idx, node_id, mpc_neighbors.len(), pt_neighbors.len());
+                    }
+                }
+                println!(
+                    "[Role {} Layer {}] Ordering matches for all nodes",
+                    role, layer_idx
+                );
+
+                // Compare order-agnostic SetHash checksums. Note: we cannot
+                // use `format!("{:?}", layer)` here, because that prints the
+                // underlying `HashMap` in non-deterministic iteration order
+                // and would produce false-positive mismatches even when the
+                // two layers are bit-for-bit equivalent.
+                let mpc_hash = mpc_layer.checksum();
+                let pt_hash = pt_layer.checksum();
+                if mpc_hash != pt_hash {
+                    println!(
+                        "[Role {} Layer {}] Hash mismatch detected (MPC: {:#x}, Plaintext: {:#x})",
+                        role, layer_idx, mpc_hash, pt_hash
+                    );
+                    panic!("[Role {} Layer {}] Layer hashes differ", role, layer_idx);
+                }
+                println!(
+                    "[Role {} Layer {}] Hashes match ({:#x})",
+                    role, layer_idx, mpc_hash
+                );
+            }
+
+            // Compare entry points
+            if mpc_graph.entry_points != plaintext_graph.entry_points {
+                println!("[Role {}] Entry points mismatch", role);
+                panic!("[Role {}] Entry points differ", role);
+            }
+            println!("[Role {}] Entry points match", role);
+            println!("[Role {}] All graph comparisons passed", role);
         }
 
         // If either assert fails the parameters no longer exercise the
