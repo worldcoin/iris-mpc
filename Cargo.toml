@@ -95,5 +95,10 @@ ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev 
 panic = 'abort'
 debug = 1
 
+[profile.profiling]
+inherits = "release" # Start with release optimizations
+debug = true         # Add full symbols
+strip = "none"       # Don't strip them
+
 [profile.dev]
 panic = 'abort'

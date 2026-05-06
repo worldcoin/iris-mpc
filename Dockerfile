@@ -27,20 +27,25 @@ RUN cargo install cargo-build-deps \
 
 FROM --platform=linux/amd64 build-image as build-app
 ARG CARGO_FEATURES=""
+ARG PROFILE="release"
 WORKDIR /src/gpu-iris-mpc
 COPY . .
-RUN cargo build -p iris-mpc-bins --release --target x86_64-unknown-linux-gnu ${CARGO_FEATURES:+--features ${CARGO_FEATURES}} --bin nccl --bin iris-mpc-gpu --bin client --bin key-manager --bin reshare-server --bin reshare-client
+RUN cargo build --profile ${PROFILE} -p iris-mpc-bins --target x86_64-unknown-linux-gnu ${CARGO_FEATURES:+--features ${CARGO_FEATURES}} --bin nccl --bin iris-mpc-gpu --bin client --bin key-manager --bin reshare-server --bin reshare-client
 
+# Copy the binaries to the final image
 FROM --platform=linux/amd64 public.ecr.aws/deep-learning-containers/base:12.8.0-gpu-py312-cu128-ubuntu22.04-ec2-v1.17
 ENV DEBIAN_FRONTEND=noninteractive
 
+# `ARG` does not carry across stages; re-declare so `$PROFILE` expands in COPY paths.
+ARG PROFILE="release"
+
 # Include client, server and key-manager, upgrade-client and upgrade-server binaries
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/nccl /bin/nccl
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/iris-mpc-gpu /bin/iris-mpc-gpu
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/client /bin/client
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/key-manager /bin/key-manager
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-server
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-client /bin/reshare-client
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/$PROFILE/nccl /bin/nccl
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/$PROFILE/iris-mpc-gpu /bin/iris-mpc-gpu
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/$PROFILE/client /bin/client
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/$PROFILE/key-manager /bin/key-manager
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/$PROFILE/reshare-server /bin/reshare-server
+COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/$PROFILE/reshare-client /bin/reshare-client
 
 USER 65534
 ENTRYPOINT ["/bin/iris-mpc-gpu"]

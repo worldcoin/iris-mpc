@@ -178,6 +178,21 @@ env:
   - name: SMPC__ENABLE_DEBUG_TIMING
     value: "true"
 
+  - name: MALLOC_CONF
+    value: "stats_print:true,prof:true,prof_active:true,lg_prof_sample:19,background_thread:true,metadata_thp:auto,"
+
+  - name: JEMALLOC_PROFILE_DUMP_INTERVAL_SECS
+    value: "300"
+
+  - name: JEMALLOC_PROFILE_S3_BUCKET
+    value: "wf-smpcv2-stage-sns-buffer"
+
+  - name: JEMALLOC_PROFILE_S3_PREFIX
+    value: "gpu/jemalloc"
+
+  - name: SMPC__PPROF_RUN_ID
+    value: "pop-3786-stage-0-20260505"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
