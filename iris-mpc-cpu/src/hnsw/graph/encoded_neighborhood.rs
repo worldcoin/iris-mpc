@@ -221,16 +221,25 @@ impl<'a> BitReader<'a> {
     }
 }
 
+/// Pick the Rice parameter `b` used by [`rice_encode`] / [`rice_decode`].
+///
+/// Rice coding is the power-of-two case of Golomb coding: a value `v` is split
+/// into `q = v >> b` (written in unary) and the low `b` bits (written raw), so
+/// each symbol costs `q + 1 + b` bits. For values drawn from a geometric
+/// distribution with mean `μ`, the bit-optimal choice is
+/// `b ≈ floor(log2(μ · ln 2))`, which we approximate here as `floor(log2(μ))`
+/// (about half a bit too high on average — at most one extra bit per symbol).
+///
+/// `μ` is the mean of the `k` values actually Rice-coded by [`encode`]: the
+/// absolute first id plus the `(k-1)` inter-element gaps `ids[i] - ids[i-1] - 1`,
+/// which sum to `ids[k-1] - (k-1)`.
 fn compute_b(ids: &[u32]) -> u8 {
     debug_assert!(!ids.is_empty());
     let k = ids.len() as u32;
-    // Average gap over all k gaps (including g[0] = ids[0]).
-    // Sum of gaps = ids[k-1] - (k - 1), so mean ≈ ids[k-1] / k.
-    // Using ids[k-1] / k (not the exact `(ids[k-1] - (k-1)) / k`) is fine: the
-    // overestimate is at most 1, which can't shift `b` by more than one bit.
-    let mean_gap = (ids[ids.len() - 1] / k).max(1);
-    let b = 31u8.saturating_sub(mean_gap.leading_zeros() as u8);
-    b.min(31)
+    // `ids[k-1] >= k-1` for any strictly-increasing u32 slice, so this never underflows.
+    let mean_gap = ((ids[ids.len() - 1] - (k - 1)) / k).max(1);
+    // floor(log2(mean_gap)) for mean_gap >= 1; result is always in [0, 31].
+    31u8.saturating_sub(mean_gap.leading_zeros() as u8)
 }
 
 fn rice_encode(writer: &mut BitWriter, value: u32, b: u8) {
