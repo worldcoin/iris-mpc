@@ -522,11 +522,10 @@ fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String
     Ok((hawk_args, node_inbound_addresses, node_outbound_addresses))
 }
 
-/// Initialize the Hawk actor: build the iris-loading initializer per config,
-/// run the iris and graph loads in parallel (graph from S3 checkpoint when
-/// available, otherwise from Postgres), then construct the actor with the
-/// populated workers and graph in place. After this returns, the actor is
-/// ready to serve queries — no separate `load_database` step.
+/// Build the iris-loading initializer per config, run the iris and
+/// graph loads in parallel (graph from S3 checkpoint when present,
+/// else from PG), then finalize a `HawkActorPrelude` into a fully-loaded
+/// `HawkActor`.
 #[allow(clippy::too_many_arguments)]
 async fn init_hawk_actor(
     config: &Config,
@@ -547,10 +546,8 @@ async fn init_hawk_actor(
     );
     tracing::info!("⚓️ ANCHOR: Load the database");
 
-    // Pick the iris-loading mode based on config. `fake_db_size > 0` is a
-    // benchmark / dev-loop knob that fills the store with sentinel irises
-    // and skips the graph load entirely; otherwise we run `load_iris_db`
-    // against the configured PG (and S3, when enabled).
+    // `fake_db_size > 0` is a benchmark/dev knob: fill the store with
+    // sentinel irises, skip the graph load. Otherwise load from PG.
     let initializer: Box<dyn WorkerPoolInitializer> = if config.fake_db_size > 0 {
         Box::new(LocalWorkerPoolInitializer::new_fake_db(
             hawk_args.party_index,
@@ -587,14 +584,10 @@ async fn init_hawk_actor(
     let now = Instant::now();
     let ct = shutdown_handler.get_network_cancellation_token();
 
-    // Build the prelude up-front so networking is ready in parallel with
-    // iris/graph loading. Production hawk-main has no pre-load peer
-    // communication today, but the shape matches genesis (and future
-    // hawk-main negotiation) so both share one construction path.
+    // Network handle built up-front; iris and graph load in parallel.
     let prelude = HawkActorPrelude::new(&hawk_args, ct).await?;
 
     if config.fake_db_size > 0 {
-        // Skip graph load — preserves the legacy `fake_db` shortcut.
         let initialized = initializer.initialize().await?;
         let graph = [(); 2].map(|_| GraphMem::new());
         return prelude.finalize(initialized, graph).await;

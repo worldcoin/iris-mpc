@@ -211,10 +211,8 @@ impl Store {
         .fetch(&self.pool)
     }
 
-    /// Stream `(serial_id, version_id)` pairs for `1..=max_serial_id` without
-    /// reading the iris code/mask blobs. Used to build the in-memory
-    /// VectorId registry independently of the worker pool, so the actor
-    /// does not need direct access to the iris store.
+    /// Stream `(serial_id, version_id)` pairs for `1..=max_serial_id`.
+    /// Index-only — no iris code/mask blobs.
     pub fn stream_iris_ids(
         &self,
         max_serial_id: usize,

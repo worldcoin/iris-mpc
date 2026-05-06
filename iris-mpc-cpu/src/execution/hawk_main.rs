@@ -313,18 +313,16 @@ pub struct HawkActor {
     /// See `get_or_init_prf_key`.
     prf_key: Option<Arc<[u8; 16]>>,
     // ---- Core State ----
-    /// Metadata-only VectorId registries (one per eye). Tracks presence,
-    /// versions, and checksums without iris data. Passed to `Aby3Store`
-    /// sessions. Kept in sync with the worker pool's iris data inline on
-    /// every insert/delete (see `Aby3Store::insert` / `apply_deletions`),
-    /// so there is no separate "refresh" step.
+    /// Metadata-only VectorId registries (one per eye): presence,
+    /// versions, checksums; no iris data. Updated inline with the
+    /// worker pool on every insert/delete (see `Aby3Store::insert` /
+    /// `apply_deletions`).
     registry: BothEyes<VectorIdRegistryRef>,
     /// In-memory HNSW graphs for both left and right eyes.
     graph_store: BothEyes<GraphRef>,
-    /// Shared worker pools with query caches (one per eye). Cloned into each
-    /// `HawkSession` so all sessions for the same eye share the same cache.
-    /// Type-erased so a single binary can hold the local pool today and a
-    /// remote sharded pool in the future.
+    /// Per-eye worker pools with query caches. Cloned into each
+    /// `HawkSession` so all sessions for one eye share a cache.
+    /// Type-erased to accommodate local or remote sharded impls.
     pub(crate) worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
 
     /// Store for persisting detailed anonymized statistics.
@@ -474,25 +472,20 @@ pub struct HawkInsertPlan {
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
 pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
 
-/// Partial actor that holds only the network handle, used to run any
-/// MPC peer communication that must happen before iris data is in
-/// memory (genesis: `sync_peers` + iris-DB rollback decide the final
-/// `max_serial_id`; future hawk-main negotiation may exchange counts or
-/// checksums in the same window).
+/// Partial actor holding only the network handle, for MPC peer
+/// communication that must happen before iris data is loaded (e.g.
+/// genesis runs `sync_peers` + iris-DB rollback to decide the final
+/// `max_serial_id`).
 ///
-/// `finalize` consumes the prelude, the initializer output, and the
-/// graph, and produces the full `HawkActor`. This is the only path that
-/// constructs a `HawkActor` outside test convenience constructors —
-/// production and genesis share it, so iris loading is always done
-/// before the actor exists and there is no post-construction load step.
+/// `finalize` consumes the prelude, initializer output, and graph to
+/// produce a fully-loaded `HawkActor`.
 pub struct HawkActorPrelude {
     args: HawkArgs,
     networking: Box<dyn NetworkHandle>,
 }
 
 impl HawkActorPrelude {
-    /// Build the network handle from `args` and prepare for any
-    /// pre-load peer communication. Cheap (TCP listener setup).
+    /// Build the network handle. Cheap — just TCP listener setup.
     pub async fn new(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
         let network_args = NetworkHandleArgs {
             party_index: args.party_index,
@@ -510,19 +503,15 @@ impl HawkActorPrelude {
         })
     }
 
-    /// Pre-load barrier — used by genesis before deciding the final
-    /// `max_serial_id` (post-rollback). Hawk main has no equivalent
-    /// today, but if/when it grows iris-count negotiation it goes
-    /// through this same pre-load window.
+    /// Pre-load barrier. Genesis calls this before iris-DB rollback
+    /// finalizes `max_serial_id`.
     pub async fn sync_peers(&mut self) -> Result<()> {
         self.networking.sync_peers().await
     }
 
-    /// Consume the prelude and produce the full actor. The initializer
-    /// must already have populated worker pools and produced registries;
-    /// the graph must already be loaded. Iris loading does **not** happen
-    /// here — by design, the actor is only ever observed in the
-    /// fully-loaded state.
+    /// Consume the prelude into a fully-loaded `HawkActor`.
+    /// `initialized` and `graph` must both be ready; no loading happens
+    /// here.
     pub async fn finalize(
         self,
         initialized: worker_pool_initializer::InitializedWorkers,
@@ -595,9 +584,8 @@ impl HawkActor {
         Self::from_cli_with_initializer(args, shutdown_ct, initializer).await
     }
 
-    /// Test/seeded constructor. Builds a `Seeded` initializer from the given
-    /// iris stores so call sites that pre-populate stores still work without
-    /// touching DB or fake-db plumbing.
+    /// Test convenience: build the actor from caller-provided iris
+    /// stores and graph (no DB or fake-db plumbing).
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
@@ -618,10 +606,9 @@ impl HawkActor {
         prelude.finalize(initialized, graph).await
     }
 
-    /// Drive an initializer to completion (loading iris data into worker
-    /// pools), then build the actor with an empty graph. Test/dev path.
-    /// Production callers that want iris and graph loading to overlap
-    /// drive the prelude + initializer + graph load directly.
+    /// Run an initializer, then build the actor with an empty graph.
+    /// Test/dev path. Production drives prelude + initializer + graph
+    /// load in parallel directly.
     pub async fn from_cli_with_initializer(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
@@ -2179,13 +2166,8 @@ mod tests {
     use tokio::time::sleep;
     use tracing_test::traced_test;
 
-    /// Construction-time invariant: when the actor is built with a `Seeded`
-    /// initializer (or from any path that hands the stores to the constructor
-    /// already populated), the registries reflect the loaded vectors without
-    /// any post-hoc `refresh_registries` call. This replaces the older
-    /// regression guard for the post-load `refresh_registries` requirement,
-    /// which became impossible to violate once iris loading moved into the
-    /// initializer.
+    /// `Seeded` initializer: the post-construction registry contains
+    /// every seeded `VectorId`, with `next_id = max(serial) + 1`.
     #[tokio::test]
     async fn test_seeded_initializer_populates_registry() -> Result<()> {
         use crate::hawkers::aby3::aby3_store::Aby3Store;
@@ -2237,8 +2219,6 @@ mod tests {
         )
         .await?;
 
-        // No explicit `refresh_registries` call — registry must already match
-        // the seeded stores after construction.
         for sid in serial_ids {
             assert!(
                 hawk_actor.registry[LEFT]
@@ -2264,13 +2244,9 @@ mod tests {
         Ok(())
     }
 
-    /// `LocalInitMode::FakeDb` populates worker pools through the channel-based
-    /// insert path (`IrisPoolHandle::insert` + `wait_completion`). This guards
-    /// the contract that, after the initializer drains the worker channels,
-    /// the registry built from the resulting iris stores already reflects
-    /// every inserted `VectorId` — without any post-construction
-    /// `refresh_registries`. Complements `test_seeded_initializer_populates_registry`,
-    /// which only exercises the bypass-the-channels seeded path.
+    /// `FakeDb` initializer: post-construction registry reflects every
+    /// `VectorId` that went through the channel-based insert path.
+    /// Complements the `Seeded` test which bypasses the channels.
     #[tokio::test]
     async fn test_fake_db_initializer_populates_registry() -> Result<()> {
         use worker_pool_initializer::{LocalWorkerPoolInitializer, WorkerPoolInitializer};

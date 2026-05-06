@@ -413,9 +413,8 @@ async fn exec_setup(
         }
     }
 
-    // Build the prelude — networking only — so we can run sync_peers
-    // and the iris-DB rollback before deciding the final `max_serial_id`
-    // and starting the iris/graph load.
+    // Networking only: sync_peers + rollback must run before the iris
+    // load decides `max_serial_id`.
     let mut hawk_prelude = build_hawk_prelude(config, &shutdown_handler).await?;
     hawk_prelude.sync_peers().await?;
 
@@ -448,8 +447,7 @@ async fn exec_setup(
     .await?;
     tracing::info!("Store consistency checks OK");
 
-    // Initialise the actor: load iris and graph in parallel, finalize
-    // the prelude into a fully-loaded `HawkActor`.
+    // Iris and graph load in parallel, then finalize the prelude.
     let hawk_actor = init_graph_from_stores(
         config,
         &config.graph_checkpoint_bucket_name,
@@ -500,8 +498,7 @@ async fn exec_setup(
     }
 
     // Registries (built during the iris load) and worker pools, both
-    // exposed for the indexation phase. Iris data is reached only via
-    // the worker pool trait — no direct iris-store access from genesis.
+    // passed to the indexation phase.
     let registries = hawk_actor.registries();
     let worker_pools = [
         hawk_actor.worker_pool(StoreId::Left),
@@ -1109,13 +1106,8 @@ pub async fn exec_use_backup_as_source(
     Ok(())
 }
 
-/// Build a Hawk prelude — networking only, no iris/graph data — for the
-/// pre-load peer communication phase. The full `HawkActor` is finalized
-/// later via `init_graph_from_stores` once the iris/graph load completes.
-///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
+/// Build a `HawkActorPrelude` (networking only). Finalized into a full
+/// `HawkActor` later via `init_graph_from_stores`.
 async fn build_hawk_prelude(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -1152,7 +1144,7 @@ async fn build_hawk_prelude(
     };
 
     tracing::info!(
-        "Initializing Hawk prelude with args: party_index: {}, addresses: {:?}",
+        "Initializing Hawk prelude (party_index: {}, addresses: {:?})",
         hawk_args.party_index,
         node_addresses
     );
@@ -1345,8 +1337,6 @@ async fn get_results_thread(
                     ..
                 } => {
                     tracing::info!("Job Results :: Received: batch-id={batch_id}");
-                    // get iris shares to persist via the worker pool trait
-                    // (works for local and future remote pools alike).
                     let start = Instant::now();
 
                     let (left_data, right_data) = tokio::try_join!(
@@ -1500,21 +1490,10 @@ async fn get_sync_result(
     Ok(result)
 }
 
-/// Initialize the genesis HawkActor: load iris data into a fresh worker
-/// pool and load the graph (from S3 checkpoint if present, else PG) in
-/// parallel, then finalize the prelude into a fully-loaded actor.
-///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
-/// * `checkpoint_bucket` - S3 bucket name for graph checkpoints.
-/// * `iris_store` - Iris PostgreSQL store provider.
-/// * `graph_store` - Graph PostgreSQL store provider.
-/// * `hawk_prelude` - Prelude (network handle) produced before sync_peers.
-/// * `s3_client` - AWS S3 client for checkpoint loading.
-/// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
-/// * `max_indexation_id` - Maximum index to load (inclusive).
-/// * `checkpoint` - Optional checkpoint state to load from S3 instead of PostgreSQL.
+/// Load iris data and the graph (from S3 checkpoint if present, else
+/// PG) in parallel, then finalize the prelude into a fully-loaded
+/// `HawkActor`. `max_indexation_id` is the inclusive upper bound for
+/// the iris load.
 #[allow(clippy::too_many_arguments)]
 async fn init_graph_from_stores(
     config: &Config,
