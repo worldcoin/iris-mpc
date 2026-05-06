@@ -93,7 +93,8 @@ ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev 
 # bench gets its setting from release, and test from dev.
 [profile.release]
 panic = 'abort'
-debug = 1
+debug = 2
+strip = "none"
 
 [profile.dev]
 panic = 'abort'
