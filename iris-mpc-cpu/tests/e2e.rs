@@ -89,6 +89,23 @@ async fn create_graph_from_plain_dbs(
         .generate_graph(&mut rng, DB_SIZE, searcher)
         .await?;
 
+    let left_graph_max_id = left_graph
+        .layers
+        .iter()
+        .map(|x| x.links.keys().max())
+        .flatten()
+        .max()
+        .map(|x| x.serial_id().clone() as usize);
+    let right_graph_max_id = right_graph
+        .layers
+        .iter()
+        .map(|x| x.links.keys().max())
+        .flatten()
+        .max()
+        .map(|x| x.serial_id().clone() as usize);
+    assert_eq!(Some(DB_SIZE), left_graph_max_id);
+    assert_eq!(Some(DB_SIZE), right_graph_max_id);
+
     let left_mpc_graph: GraphMem<Aby3VectorRef> = left_graph;
     let right_mpc_graph: GraphMem<Aby3VectorRef> = right_graph;
 
@@ -241,6 +258,9 @@ async fn e2e_test_async() -> Result<()> {
     let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED, false);
     let db_left = test_db.plain_dbs(0);
     let db_right = test_db.plain_dbs(1);
+
+    assert_eq!(DB_SIZE, db_left.len());
+    assert_eq!(DB_SIZE, db_right.len());
 
     let addresses = ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"]
         .into_iter()
