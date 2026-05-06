@@ -1339,6 +1339,10 @@ impl TestCaseGenerator {
             return;
         }
 
+        // Compute bounds for idx validation
+        let initial_db_len = self.initial_db_state.initial_db_len() as u32;
+        let max_valid_idx = initial_db_len + self.inserted_responses.len() as u32;
+
         if let Some(expected_idx) = expected_idx {
             assert!(!full_face_mirror_attack_detected);
             assert!(
@@ -1350,6 +1354,15 @@ impl TestCaseGenerator {
                 assert_eq!(
                     expected_idx, idx,
                     "expected matched index to be as expected"
+                );
+                // Bounds check: matched idx must be within valid DB range
+                assert!(
+                    idx < max_valid_idx,
+                    "matched idx {} exceeds max valid idx {} (initial_db_len={}, insertions={})",
+                    idx,
+                    max_valid_idx,
+                    initial_db_len,
+                    self.inserted_responses.len()
                 );
             } else {
                 assert!(
@@ -1367,6 +1380,15 @@ impl TestCaseGenerator {
                 assert!(was_match);
             } else {
                 assert!(!was_match);
+                // Bounds check: new insertion idx must be the next available slot
+                assert_eq!(
+                    idx, max_valid_idx,
+                    "new insertion idx {} != expected next idx {} (initial_db_len={}, insertions={})",
+                    idx,
+                    max_valid_idx,
+                    initial_db_len,
+                    self.inserted_responses.len()
+                );
                 let request = requests.get(req_id).unwrap().clone();
                 self.inserted_responses.insert(idx, request);
             }
@@ -1420,6 +1442,20 @@ impl TestCaseGenerator {
             for req in requests.keys() {
                 resp_counters.insert(req, 0);
             }
+
+            // Count expected insertions for this batch
+            let expected_insertions_this_batch = requests
+                .keys()
+                .filter_map(|req_id| self.expected_results.get(req_id))
+                .filter(|r| {
+                    r.db_index.is_none()
+                        && !r.is_skip_persistence_request
+                        && !r.is_reset_check
+                        && !r.is_full_face_mirror_attack
+                        && r.is_reauth_successful.is_none()
+                })
+                .count();
+            let inserted_before = self.inserted_responses.len();
 
             let results = [&res0, &res1, &res2];
             for res in results.iter() {
@@ -1480,6 +1516,14 @@ impl TestCaseGenerator {
             for (&id, &count) in resp_counters.iter() {
                 assert_eq!(count, 3, "Received {} responses for {}", count, id);
             }
+
+            // Verify that actual insertions match expected insertions
+            let actual_insertions = self.inserted_responses.len() - inserted_before;
+            assert_eq!(
+                actual_insertions, expected_insertions_this_batch,
+                "Expected {} insertions this batch, but got {}",
+                expected_insertions_this_batch, actual_insertions
+            );
         }
         Ok(())
     }
