@@ -102,6 +102,12 @@ impl EncodedNeighborhood {
         let k = ids.len() as u16;
         let b = compute_b(ids);
 
+        // Per-symbol body cost is `b + 1 + q` bits with `E[q] ≈ 1` for an optimal `b`
+        // (geometric tail), so budgeting `b + 4` gives ~2 bits of slack per symbol.
+        // A reallocation needs `Σ q_i > 3k`, a `√(2k)`-sigma tail — negligible for
+        // any realistic `k`. Empirically (criterion bench across slack ∈ {2,3,4,6,8,16}
+        // and k ∈ {10, 450, 2000, 65535}), enlarging the slack does not change encode
+        // timing within noise, so `+ 4` is not undersized.
         let cap = HEADER_LEN + (ids.len() * (b as usize + 4)).div_ceil(8);
         let mut writer = BitWriter::with_capacity(cap);
 
