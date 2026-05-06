@@ -180,7 +180,7 @@ impl fmt::Display for JobResult {
             } => {
                 write!(
                     f,
-                    "batch-id={}, batch-size={}, range=({:?}..{:?})",
+                    "JobResult::BatchIndexation: batch-id={}, batch-size={}, range=({:?}..{:?})",
                     batch_id,
                     vector_ids.len(),
                     first_serial_id,
@@ -190,20 +190,24 @@ impl fmt::Display for JobResult {
             JobResult::Modification {
                 modification_id, ..
             } => {
-                write!(f, "modification-id={}", modification_id)
+                write!(
+                    f,
+                    "JobResult::Modification: modification-id={}",
+                    modification_id
+                )
             }
             JobResult::SyncState { mismatched } => {
-                write!(f, "mismatched={}", mismatched)
+                write!(f, "JobResult::SyncState: mismatched={}", mismatched)
             }
             JobResult::SyncPeers => {
-                write!(f, "")
+                write!(f, "JobResult::SyncPeers")
             }
             JobResult::S3Checkpoint {
                 checkpoint_state, ..
             } => {
                 write!(
                     f,
-                    "iris-id={}, modification-id={}",
+                    "JobResult::S3Checkpoint: iris-id={}, modification-id={}",
                     checkpoint_state.last_indexed_iris_id,
                     checkpoint_state.last_indexed_modification_id
                 )

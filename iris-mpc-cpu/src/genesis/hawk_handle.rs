@@ -72,6 +72,8 @@ impl Handle {
             }) = rx.recv().await
             {
                 let job_result = Self::handle_job(&mut actor, &sessions, request).await;
+                // SyncPeers and SyncState do not modify the inner state. As long as they didn't fail
+                // it is safe to skip the health check
                 let health = if matches!(
                     job_result,
                     Ok((_, JobResult::SyncPeers)) | Ok((_, JobResult::SyncState { .. }))
