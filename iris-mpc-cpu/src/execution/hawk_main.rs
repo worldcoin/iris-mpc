@@ -766,6 +766,12 @@ impl HawkActor {
             .map(|id_option| id_option.map(|original_id| original_id.next_version()))
             .collect_vec();
 
+        tracing::info!(
+            ?update_ids,
+            ?insertion_ids,
+            "Version increment: update_ids -> insertion_ids"
+        );
+
         if self.args.hnsw_disable_memory_persistence {
             tracing::debug!("In-memory persistence disabled, skipping HNSW insert");
             // Compute would-be VectorIds without mutating the store or graph,
@@ -781,7 +787,8 @@ impl HawkActor {
 
                         // If updating an existing node, remove it first
                         if let Some(replace_id) = &plan.plan.replace_id {
-                            mutations.push(GraphMutation::RemoveNode { id: *replace_id });
+                            tracing::info!("replacing node id {:?}", replace_id);
+                            mutations.push(GraphMutation::ReplaceNode { id: *replace_id });
                         }
 
                         let inserted_vector = if let Some(id) = id {
@@ -1797,7 +1804,7 @@ impl HawkHandle {
         // fresh inserts allocate VectorIds that collide with the load.
         // Verify before any session work begins, and again at the start of
         // every batch (see `handle_job`).
-        let parent_span = info_span!("mpc_node", idx = hawk_actor.args.party_index);
+        let parent_span = Span::current();
         let parent_span2 = parent_span.clone();
 
         hawk_actor.assert_registry_consistency().await;

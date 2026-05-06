@@ -177,6 +177,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     pub fn insert_apply(&mut self, plan: ConnectPlan<V>) {
         tracing::info!(mutation_count = plan.len(), "Applying graph mutations");
         for mutation in plan {
+            tracing::info!("{:?}", mutation);
             match mutation {
                 GraphMutation::RemoveNode { ref id } => {
                     // Remove node from all layers where it exists
@@ -185,6 +186,12 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     }
                     // Remove from entry points if present
                     self.entry_points.retain(|ep| &ep.point != id);
+                }
+                GraphMutation::ReplaceNode { ref id } => {
+                    // Remove node from all layers where it exists
+                    for layer in &mut self.layers {
+                        layer.remove_node(id);
+                    }
                 }
                 GraphMutation::InsertNode {
                     id,
@@ -514,7 +521,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
             self.set_hash.remove_unordered_set(id, neighbors.iter());
 
             // Remove the node from all neighbors' neighborhoods (bidirectional cleanup)
-            for neighbor in neighbors {
+            /* for neighbor in neighbors {
                 if let Some(neighbor_links) = self.links.get_mut(&neighbor) {
                     self.set_hash
                         .remove_unordered_set(&neighbor, neighbor_links.iter());
@@ -522,7 +529,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
                     self.set_hash
                         .add_unordered_set(&neighbor, neighbor_links.iter());
                 }
-            }
+            }*/
         }
     }
 

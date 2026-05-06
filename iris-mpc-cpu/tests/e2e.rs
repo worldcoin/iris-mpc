@@ -141,6 +141,7 @@ async fn start_hawk_node(
     left_db: &IrisDB,
     right_db: &IrisDB,
 ) -> Result<HawkHandle> {
+    let span = info_span!("mpc_node", idx = args.party_index);
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
     // Bootstrap graph must match the actor's runtime searcher
@@ -154,12 +155,15 @@ async fn start_hawk_node(
     searcher.layer_distribution = LayerDistribution::new_geometric_from_M(HNSW_LAYER_DENSITY);
 
     let (graph, iris_store) =
-        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &searcher).await?;
+        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &searcher)
+            .instrument(span.clone())
+            .await?;
     let hawk_actor =
         HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
+            .instrument(span.clone())
             .await?;
 
-    let handle = HawkHandle::new(hawk_actor).await?;
+    let handle = HawkHandle::new(hawk_actor).instrument(span).await?;
 
     Ok(handle)
 }
