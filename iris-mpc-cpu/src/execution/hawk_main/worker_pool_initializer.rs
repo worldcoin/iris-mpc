@@ -193,6 +193,11 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         // Per-eye registries derived from the same source as the iris
         // load (seed map / known size / DB id+version scan). Built
         // alongside the iris load and never read back from the pool.
+        //
+        // Both eyes start from identical (id, version) sets but must
+        // hold **independent** `Arc<RwLock>` instances — runtime inserts
+        // allocate per-eye via `Aby3Store::insert`, and a shared Arc
+        // would burn two `next_id`s per logical insert.
         let registries: BothEyes<VectorIdRegistryRef> = match mode {
             LocalInitMode::Empty => [
                 SharedIrises::<()>::default().to_arc(),
@@ -220,7 +225,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 // parallel. The id+version scan is index-only on PG and
                 // produces the registry + expected checksum without
                 // reading the code/mask blobs.
-                let (_, registry) = try_join!(
+                let (_, template) = try_join!(
                     async {
                         load_iris_db(
                             &mut adapter,
@@ -242,9 +247,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     workers_handle[RIGHT].wait_completion(),
                 )?;
                 db_size = adapter.db_size;
-                // Both eyes load identical (id, version) sets, so a
-                // single registry is shared across them.
-                [registry.clone(), registry]
+                [template.clone().to_arc(), template.to_arc()]
             }
             LocalInitMode::FakeDb(size) => {
                 let dummy = Arc::new(GaloisRingSharedIris::default_for_party(party_id));
@@ -259,8 +262,8 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     workers_handle[RIGHT].wait_completion(),
                 )?;
                 db_size = size;
-                let registry = build_registry_from_serial_range(0..size as u32);
-                [registry.clone(), registry]
+                let template = build_registry_from_serial_range(0..size as u32);
+                [template.clone().to_arc(), template.to_arc()]
             }
         };
 
@@ -307,28 +310,35 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
 }
 
 /// Stream `(serial_id, version_id)` from PG and build a metadata-only
-/// registry plus its `SetHash` checksum. Reads no iris bytes — uses the
-/// `stream_iris_ids` index-only query.
+/// registry template (with `next_id` and `set_hash` populated). Reads
+/// no iris bytes — uses the `stream_iris_ids` index-only query.
+///
+/// Returns the inner `SharedIrises<()>` rather than an `Arc<RwLock>`
+/// because callers want **independent** per-eye `Arc<RwLock>` instances
+/// — runtime inserts allocate `next_id` per eye, and a shared Arc would
+/// have one logical insert burn two ids.
 pub async fn build_registry_from_db(
     store: &Store,
     max_serial_id: usize,
-) -> Result<VectorIdRegistryRef> {
+) -> Result<SharedIrises<()>> {
     let mut points: HashMap<VectorId, ()> = HashMap::with_capacity(max_serial_id);
     let mut stream = store.stream_iris_ids(max_serial_id);
     while let Some((id, version_id)) = stream.try_next().await? {
         points.insert(VectorId::new(id as u32, version_id), ());
     }
-    Ok(SharedIrises::<()>::new(points, ()).to_arc())
+    Ok(SharedIrises::<()>::new(points, ()))
 }
 
-/// Build a registry covering serial ids in `range`, all with version 0.
-/// Used by `FakeDb` initializers and equivalent shortcut paths.
-fn build_registry_from_serial_range(range: std::ops::Range<u32>) -> VectorIdRegistryRef {
+/// Build a registry template covering serial ids in `range`, all with
+/// version 0. Used by `FakeDb` initializers and equivalent shortcut
+/// paths. Returned as `SharedIrises<()>` so callers can wrap each eye
+/// in its own `Arc<RwLock>` — see `build_registry_from_db`.
+fn build_registry_from_serial_range(range: std::ops::Range<u32>) -> SharedIrises<()> {
     let mut points: HashMap<VectorId, ()> = HashMap::with_capacity(range.len());
     for serial in range {
         points.insert(VectorId::from_serial_id(serial), ());
     }
-    SharedIrises::<()>::new(points, ()).to_arc()
+    SharedIrises::<()>::new(points, ())
 }
 
 /// `InMemoryStore` adapter that fans a single PG read into both eyes'
