@@ -144,6 +144,14 @@ async fn create_graph_from_plain_dbs(
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
+    tracing::info!(
+        "Creating iris stores: left_shared_irises.len()={}, right_shared_irises.len()={}, \
+         left max_serial_id={:?}, right max_serial_id={:?}",
+        left_shared_irises.len(),
+        right_shared_irises.len(),
+        left_shared_irises.keys().map(|v| v.serial_id()).max(),
+        right_shared_irises.keys().map(|v| v.serial_id()).max(),
+    );
     let left_iris_store = Aby3Store::<FhdOps>::new_storage(Some(left_shared_irises));
     let right_iris_store = Aby3Store::<FhdOps>::new_storage(Some(right_shared_irises));
 
@@ -175,11 +183,25 @@ async fn start_hawk_node(
         create_graph_from_plain_dbs(args.party_index, left_db, right_db, &searcher)
             .instrument(span.clone())
             .await?;
-    let hawk_actor =
+
+    // Verify iris_store has correct size before creating HawkActor
+    assert_eq!(
+        iris_store[0].db_size(), DB_SIZE,
+        "Left iris_store size mismatch: expected {}, got {}",
+        DB_SIZE, iris_store[0].db_size()
+    );
+    assert_eq!(
+        iris_store[1].db_size(), DB_SIZE,
+        "Right iris_store size mismatch: expected {}, got {}",
+        DB_SIZE, iris_store[1].db_size()
+    );
+
+    let mut hawk_actor =
         HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
             .instrument(span.clone())
             .await?;
 
+    hawk_actor.refresh_registries().await;
     let handle = HawkHandle::new(hawk_actor).instrument(span).await?;
 
     Ok(handle)
