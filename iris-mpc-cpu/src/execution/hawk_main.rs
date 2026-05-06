@@ -1828,8 +1828,8 @@ impl HawkHandle {
         // fresh inserts allocate VectorIds that collide with the load.
         // Verify before any session work begins, and again at the start of
         // every batch (see `handle_job`).
-        let parent_span = Span::current();
-        let parent_span2 = parent_span.clone();
+        let request_handler_span = Span::current();
+        let job_handler_span = request_handler_span.clone();
 
         hawk_actor.assert_registry_consistency().await;
 
@@ -1847,12 +1847,12 @@ impl HawkHandle {
         tokio::spawn(async move {
             let mut batch_count: u32 = 0;
             while let Some(job) = rx.recv().await {
-                let parent_span3 = parent_span2.clone();
                 batch_count += 1;
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
+                let span = job_handler_span.clone();
                 let job_result = tokio::select! {
-                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count).instrument(parent_span3)=> r,
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count).instrument(span)=> r,
                     _ = error_ct.cancelled() => Err(eyre!("networking error")),
                 };
 
@@ -1872,7 +1872,7 @@ impl HawkHandle {
             while let Some(job) = rx.recv().await {
                 let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
             }
-        }.instrument(parent_span));
+        }.instrument(request_handler_span));
 
         Ok(Self { job_queue: tx })
     }
@@ -1921,11 +1921,8 @@ impl HawkHandle {
                 // The "b" (raw) operand always uses Normal queries to get the
                 // same-eye iris, even when comparing in Mirror orientation.
                 let raw_queries = request.queries(Orientation::Normal);
-                let span = Span::current();
-                tokio::spawn(async move {
-                    intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries)
-                        .instrument(span)
-                        .await
+                scheduler::spawn_with_span(async move {
+                    Ok(intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await)
                 })
             };
 
@@ -1962,7 +1959,7 @@ impl HawkHandle {
                     is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
                         .await?;
 
-                step1.step2(&missing_is_match, intra_results.await??)
+                step1.step2(&missing_is_match, intra_results.await???)
             };
 
             Ok((search_results, match_result))
@@ -2389,7 +2386,7 @@ mod tests {
             .map(|i| {
                 let span = info_span!("mpc_node", idx = i);
                 let future = go(addresses.clone(), i);
-                tokio::spawn(async move { future.instrument(span).await })
+                tokio::spawn(future.instrument(span))
             })
             .collect::<JoinAll<_>>()
             .await
