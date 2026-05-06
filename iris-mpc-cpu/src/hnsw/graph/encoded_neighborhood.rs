@@ -267,6 +267,7 @@ impl<'a> BitReader<'a> {
         loop {
             let bit = self.read_bits(1)?;
             if bit == 1 {
+                // `1` terminates the unary prefix; consumed but not part of the value.
                 return Some(zeros);
             }
             zeros = zeros.checked_add(1)?;
