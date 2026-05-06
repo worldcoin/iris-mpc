@@ -521,7 +521,10 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
             self.set_hash.remove_unordered_set(id, neighbors.iter());
 
             // Remove the node from all neighbors' neighborhoods (bidirectional cleanup)
-            /* for neighbor in neighbors {
+            // note that if this node did compaction then some old neighbors could still have links
+            // to this deleted node. that is ok. it is also ok if the following code block is deleted.
+            // this is just an opportunistic low-cost cleanup.
+            for neighbor in neighbors {
                 if let Some(neighbor_links) = self.links.get_mut(&neighbor) {
                     self.set_hash
                         .remove_unordered_set(&neighbor, neighbor_links.iter());
@@ -529,7 +532,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
                     self.set_hash
                         .add_unordered_set(&neighbor, neighbor_links.iter());
                 }
-            }*/
+            }
         }
     }
 
@@ -537,6 +540,8 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         if let Some(node_links) = self.links.get_mut(id) {
             self.set_hash.remove_unordered_set(id, node_links.iter());
             for neighbor in &neighbors_to_remove {
+                // this is a uni-directional pruning. it is incorrect to prune the neighbors links
+                // when doing compaction.
                 node_links.retain(|x| x != neighbor);
             }
             self.set_hash.add_unordered_set(id, node_links.iter());
