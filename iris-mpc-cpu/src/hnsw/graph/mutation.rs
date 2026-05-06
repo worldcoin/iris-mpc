@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupedMutations<V: Ord>(pub Vec<GraphMutation<V>>);
+
 /// Represents a diff to apply to an existing graph.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutation<Vector: Ord> {

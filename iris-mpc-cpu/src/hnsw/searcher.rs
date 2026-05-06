@@ -9,7 +9,9 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::{neighborhood::Neighborhood, GraphMutation, UpdateEntryPoint},
+    graph::{
+        mutation::GroupedMutations, neighborhood::Neighborhood, GraphMutation, UpdateEntryPoint,
+    },
     metrics::ops_counter::Operation,
     VectorStore,
 };
@@ -290,7 +292,7 @@ pub struct HnswSearcher {
 
 /// A list of graph mutations representing state updates for insertion of new nodes
 /// into the HNSW graph.
-pub type ConnectPlan<Vector> = Vec<GraphMutation<Vector>>;
+pub type ConnectPlan<Vector> = GroupedMutations<Vector>;
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
 
 /// Represents a graph update of a single node's neighborhood in a graph, given
@@ -1587,7 +1589,7 @@ impl HnswSearcher {
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
         mut mutations: Vec<GraphMutation<V::VectorRef>>,
-    ) -> Result<Vec<Vec<GraphMutation<V::VectorRef>>>> {
+    ) -> Result<Vec<GroupedMutations<V::VectorRef>>> {
         // Extract InsertNode data, building sorted link vectors
         let mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)> =
             Vec::with_capacity(mutations.len());
