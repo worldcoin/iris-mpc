@@ -136,6 +136,7 @@ pub struct ReAuthRequest {
     pub reauth_id: String,
     pub s3_key: String,
     pub serial_id: u32,
+    #[serde(alias = "skipPersistence")]
     pub skip_persistence: Option<bool>,
     pub use_or_rule: bool,
 }

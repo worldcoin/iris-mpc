@@ -7,7 +7,7 @@ mod tests {
         sha256::sha256_as_hex_string,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share, IrisCodeSharesJSON,
-            UniquenessRequest,
+            ReAuthRequest, UniquenessRequest,
         },
     };
     use serde_json::json;
@@ -41,6 +41,20 @@ mod tests {
             left_mask_code_shares: STANDARD.encode("left_iris_mask_mock"),
             right_mask_code_shares: STANDARD.encode("right_iris_mask_mock"),
         }
+    }
+
+    #[test]
+    fn test_reauth_request_accepts_camel_case_skip_persistence() {
+        let request: ReAuthRequest = serde_json::from_value(json!({
+            "reauth_id": "test-reauth-id",
+            "s3_key": "test-s3-key",
+            "serial_id": 42,
+            "skipPersistence": true,
+            "use_or_rule": false,
+        }))
+        .unwrap();
+
+        assert_eq!(request.skip_persistence, Some(true));
     }
 
     #[tokio::test]
