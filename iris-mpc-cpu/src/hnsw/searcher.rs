@@ -1547,11 +1547,7 @@ impl HnswSearcher {
         update_ep: UpdateEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
         // Convert links to layers format
-        let layers: Vec<(usize, Vec<V::VectorRef>)> = links
-            .into_iter()
-            .enumerate()
-            .map(|(layer, neighbors)| (layer, neighbors))
-            .collect();
+        let layers: Vec<(usize, Vec<V::VectorRef>)> = links.into_iter().enumerate().collect();
 
         let mutations = vec![Some(GroupedMutations(vec![GraphMutation::InsertNode {
             id: inserted_vector,
@@ -1579,6 +1575,7 @@ impl HnswSearcher {
     /// TODO: finalize batched operation of compaction to minimize latency.
     ///
     /// This function call does *not* update `graph`.
+    #[allow(clippy::type_complexity)]
     pub async fn insert_prepare_batch<V: VectorStore>(
         &self,
         store: &mut V,

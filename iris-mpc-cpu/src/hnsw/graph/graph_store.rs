@@ -561,20 +561,8 @@ pub mod test_utils {
 #[cfg(test)]
 #[cfg(feature = "db_dependent")]
 mod tests {
-    use std::sync::Arc;
-
     use super::{test_utils::TestGraphPg, *};
-    use crate::{
-        hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
-        hnsw::{
-            graph::{layered_graph::EntryPoint, neighborhood::Neighborhood},
-            vector_store::VectorStoreMut,
-            GraphMem, HnswSearcher, SortedNeighborhood,
-        },
-    };
-    use aes_prng::AesRng;
-    use iris_mpc_common::iris_db::db::IrisDB;
-    use rand::SeedableRng;
+    use crate::hawkers::plaintext_store::PlaintextStore;
     use tokio;
 
     #[tokio::test]

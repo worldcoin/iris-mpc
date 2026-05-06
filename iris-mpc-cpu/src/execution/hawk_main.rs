@@ -147,7 +147,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot, RwLock, RwLockWriteGuard};
 use tokio_util::sync::CancellationToken;
-use tracing::{info_span, Instrument, Span};
+use tracing::{Instrument, Span};
 
 /// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
 pub type HawkOps = FhdOps;
@@ -1494,7 +1494,7 @@ impl HawkResult {
                     .or(mutation.plans[RIGHT].as_ref())
                     .and_then(|plan| {
                         plan.0.iter().find_map(|m| match m {
-                            GraphMutation::InsertNode { id, .. } => Some(id.clone()),
+                            GraphMutation::InsertNode { id, .. } => Some(*id),
                             _ => None,
                         })
                     })
@@ -1828,7 +1828,7 @@ impl HawkHandle {
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
                 let job_result = tokio::select! {
-                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count.clone()).instrument(parent_span3)=> r,
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count).instrument(parent_span3)=> r,
                     _ = error_ct.cancelled() => Err(eyre!("networking error")),
                 };
 

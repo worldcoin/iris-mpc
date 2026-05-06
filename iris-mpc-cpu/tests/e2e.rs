@@ -23,7 +23,6 @@ use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 use tracing::{info_span, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tracing_test::traced_test;
 use uuid::Uuid;
 
 const DB_SIZE: usize = 1000;
@@ -92,17 +91,15 @@ async fn create_graph_from_plain_dbs(
     let left_graph_max_id = left_graph
         .layers
         .iter()
-        .map(|x| x.links.keys().max())
-        .flatten()
+        .filter_map(|x| x.links.keys().max())
         .max()
-        .map(|x| x.serial_id().clone() as usize);
+        .map(|x| x.serial_id() as usize);
     let right_graph_max_id = right_graph
         .layers
         .iter()
-        .map(|x| x.links.keys().max())
-        .flatten()
+        .filter_map(|x| x.links.keys().max())
         .max()
-        .map(|x| x.serial_id().clone() as usize);
+        .map(|x| x.serial_id() as usize);
     assert_eq!(Some(DB_SIZE), left_graph_max_id);
     assert_eq!(Some(DB_SIZE), right_graph_max_id);
 

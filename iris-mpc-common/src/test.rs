@@ -1384,16 +1384,9 @@ impl TestCaseGenerator {
                 // This can happen for invalidated requests
                 if idx != u32::MAX {
                     // Check if another party already processed this insertion
-                    if self.inserted_responses.contains_key(&idx) {
-                        // Already validated by party 0; just verify consistency
-                        let stored = self.inserted_responses.get(&idx).unwrap();
-                        let current = requests.get(req_id).unwrap();
-                        assert_eq!(
-                            stored.left.code, current.left.code,
-                            "inconsistent insertion data across parties for idx {}",
-                            idx
-                        );
-                    } else {
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        self.inserted_responses.entry(idx)
+                    {
                         // First party processing this insertion
                         // Bounds check: new insertion idx must be >= initial_db_len
                         if idx < initial_db_len {
@@ -1409,7 +1402,16 @@ impl TestCaseGenerator {
                         //     initial_db_len
                         // );
                         let request = requests.get(req_id).unwrap().clone();
-                        self.inserted_responses.insert(idx, request);
+                        e.insert(request);
+                    } else {
+                        // Already validated by party 0; just verify consistency
+                        let stored = self.inserted_responses.get(&idx).unwrap();
+                        let current = requests.get(req_id).unwrap();
+                        assert_eq!(
+                            stored.left.code, current.left.code,
+                            "inconsistent insertion data across parties for idx {}",
+                            idx
+                        );
                     }
                 }
             }
