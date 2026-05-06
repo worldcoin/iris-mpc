@@ -44,11 +44,12 @@ use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    load_graphs_from_pg, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps, ServerJobResult,
-    HAWK_DISTANCE_MODE,
+    load_graphs_from_pg, GraphStore, HawkActor, HawkActorPrelude, HawkArgs, HawkHandle, HawkOps,
+    ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
+use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
@@ -586,9 +587,17 @@ async fn init_hawk_actor(
     let now = Instant::now();
     let ct = shutdown_handler.get_network_cancellation_token();
 
+    // Build the prelude up-front so networking is ready in parallel with
+    // iris/graph loading. Production hawk-main has no pre-load peer
+    // communication today, but the shape matches genesis (and future
+    // hawk-main negotiation) so both share one construction path.
+    let prelude = HawkActorPrelude::new(&hawk_args, ct).await?;
+
     if config.fake_db_size > 0 {
         // Skip graph load — preserves the legacy `fake_db` shortcut.
-        return HawkActor::from_cli_with_initializer(&hawk_args, ct, initializer).await;
+        let initialized = initializer.initialize().await?;
+        let graph = [(); 2].map(|_| GraphMem::new());
+        return prelude.finalize(initialized, graph).await;
     }
 
     let graph_parallelism = config
@@ -619,7 +628,7 @@ async fn init_hawk_actor(
         now.elapsed()
     );
 
-    HawkActor::from_initialized_workers(&hawk_args, ct, initialized, graph).await
+    prelude.finalize(initialized, graph).await
 }
 
 /// Spawns thread responsible for communicating back results from batch query processing.

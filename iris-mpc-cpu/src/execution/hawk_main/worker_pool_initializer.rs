@@ -3,6 +3,13 @@
 //! narrow (compute only); loading is a one-shot bootstrap step that does
 //! not appear on the wire.
 //!
+//! The initializer also produces the metadata-only `VectorIdRegistry` that
+//! sessions read from. Registries are derived from the same source as the
+//! iris-data load (PG id+version scan for `LoadFromDb`, the seed map for
+//! `Seeded`, the known size for `FakeDb`), never by reading back from the
+//! iris store. This keeps `HawkActor` decoupled from iris storage — the
+//! actor only needs the registry, the worker pool trait, and the graph.
+//!
 //! # Concrete impls
 //! - [`LocalWorkerPoolInitializer`] — builds in-process worker pools and
 //!   either pre-seeds them, fills with `fake_db`, or runs `load_iris_db`.
@@ -12,43 +19,48 @@ use crate::execution::hawk_main::iris_worker::{
 };
 use crate::execution::hawk_main::{BothEyes, HawkOps, LEFT, RIGHT};
 use crate::hawkers::aby3::aby3_store::{
-    Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, DistanceMode,
+    Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, DistanceMode, VectorIdRegistryRef,
 };
 use crate::hawkers::shared_irises::SharedIrises;
 use crate::protocol::shared_iris::GaloisRingSharedIris;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
-use eyre::Result;
+use eyre::{eyre, Result};
+use futures::TryStreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use itertools::izip;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::try_join;
 
 /// Result of `WorkerPoolInitializer::initialize`. Contains ready-to-serve
-/// worker pools (one per eye), the underlying iris stores (so the actor
-/// can build registries / expose snapshots), and per-eye load checksums.
+/// worker pools (one per eye), the metadata-only registries the actor
+/// hands to sessions, and per-eye load checksums.
+///
+/// Notably **does not** expose the underlying iris stores or any
+/// pool-specific handles: all iris reads must go through the
+/// [`IrisWorkerPool`] trait. Local and remote pool impls share the
+/// same external surface, and the actor that consumes this struct does
+/// not need to know which one it has.
 pub struct InitializedWorkers {
     pub pools: BothEyes<Arc<dyn IrisWorkerPool>>,
-    /// Iris stores backing each pool. The actor uses these to build the
-    /// registry and to read iris snapshots; for `RemoteIrisWorkerPool`
-    /// they are not the canonical store (the worker holds that).
-    pub iris_stores: BothEyes<Aby3SharedIrisesRef>,
-    /// `set_hash` checksum per eye after load. Logged by the actor for
-    /// ops cross-check; future work may compare against an expected value.
+    /// Metadata-only registries reflecting the loaded VectorId set, with
+    /// `next_id` and `set_hash` already populated. Sessions read from
+    /// these; the actor never needs to derive them from an iris store.
+    pub registries: BothEyes<VectorIdRegistryRef>,
+    /// `set_hash` checksum reported by each pool after load. For local
+    /// pools this is the in-process `SharedIrises::set_hash`; for a
+    /// future remote pool it would be an aggregate across shards.
+    /// Compared against `registries[side].set_hash` to catch a loader
+    /// that silently dropped rows.
     pub post_load_checksums: BothEyes<u64>,
-    /// Total irises loaded across both eyes' loaders. Mirrors what
-    /// `IrisLoader::increment_db_size` accumulated under the old API.
+    /// Total irises loaded. Mirrors what `IrisLoader::increment_db_size`
+    /// accumulated under the old API.
     pub db_size: usize,
-    /// Local worker handles, retained for paths that load iris data after
-    /// actor construction (genesis: iris load runs after `sync_peers` and
-    /// optional DB rollback). `None` for remote pools — those load via
-    /// their own bootstrap protocol on the wire and don't accept
-    /// post-construction loads.
-    pub local_pool_handles: Option<BothEyes<IrisPoolHandle>>,
 }
 
 /// One-shot setup for the per-eye worker pools.
@@ -178,8 +190,18 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
 
         let mut db_size: usize = 0;
 
-        match mode {
-            LocalInitMode::Empty | LocalInitMode::Seeded(_) => {}
+        // Per-eye registries derived from the same source as the iris
+        // load (seed map / known size / DB id+version scan). Built
+        // alongside the iris load and never read back from the pool.
+        let registries: BothEyes<VectorIdRegistryRef> = match mode {
+            LocalInitMode::Empty => [
+                SharedIrises::<()>::default().to_arc(),
+                SharedIrises::<()>::default().to_arc(),
+            ],
+            LocalInitMode::Seeded(ref seeds) => [
+                seeds[LEFT].to_registry().to_arc(),
+                seeds[RIGHT].to_registry().to_arc(),
+            ],
             LocalInitMode::LoadFromDb(params) => {
                 let DbLoadParams {
                     store,
@@ -194,16 +216,25 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     iris_pools: workers_handle.clone(),
                     db_size: 0,
                 };
-                load_iris_db(
-                    &mut adapter,
-                    &store,
-                    max_serial_id,
-                    parallelism,
-                    s3_max_serial_id,
-                    &config,
-                    shutdown_handler,
-                )
-                .await?;
+                // Run the full iris load and the id+version scan in
+                // parallel. The id+version scan is index-only on PG and
+                // produces the registry + expected checksum without
+                // reading the code/mask blobs.
+                let (_, registry) = try_join!(
+                    async {
+                        load_iris_db(
+                            &mut adapter,
+                            &store,
+                            max_serial_id,
+                            parallelism,
+                            s3_max_serial_id,
+                            &config,
+                            shutdown_handler,
+                        )
+                        .await
+                    },
+                    build_registry_from_db(&store, max_serial_id),
+                )?;
                 // Drain the worker channels so every fire-and-forget
                 // `Insert` lands in the store before we read `set_hash`.
                 try_join!(
@@ -211,6 +242,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     workers_handle[RIGHT].wait_completion(),
                 )?;
                 db_size = adapter.db_size;
+                // Both eyes load identical (id, version) sets, so a
+                // single registry is shared across them.
+                [registry.clone(), registry]
             }
             LocalInitMode::FakeDb(size) => {
                 let dummy = Arc::new(GaloisRingSharedIris::default_for_party(party_id));
@@ -225,8 +259,10 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     workers_handle[RIGHT].wait_completion(),
                 )?;
                 db_size = size;
+                let registry = build_registry_from_serial_range(0..size as u32);
+                [registry.clone(), registry]
             }
-        }
+        };
 
         let pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
             Arc::new(LocalIrisWorkerPool::new(
@@ -242,55 +278,57 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             iris_stores[RIGHT].data.read().await.set_hash.checksum(),
         ];
 
+        // Cross-check: registry-derived checksum (from the load source)
+        // must match the pool's reported `set_hash` checksum (from the
+        // loaded data). A mismatch means the loader silently dropped or
+        // duplicated rows relative to what the registry-side scan saw.
+        for side in [LEFT, RIGHT] {
+            let expected = registries[side].data.read().await.set_hash.checksum();
+            let got = post_load_checksums[side];
+            if expected != got {
+                return Err(eyre!(
+                    "worker pool checksum mismatch on side {side}: \
+                     registry expected {expected:#x}, pool reported {got:#x} \
+                     — loader dropped or duplicated rows vs the registry scan"
+                ));
+            }
+        }
+
+        // `workers_handle` is kept alive only via `pools` from here on:
+        // each `LocalIrisWorkerPool` owns its own `IrisPoolHandle` clone.
+        // Nothing outside the pool needs it.
         Ok(InitializedWorkers {
             pools,
-            iris_stores,
+            registries,
             post_load_checksums,
             db_size,
-            local_pool_handles: Some(workers_handle),
         })
     }
 }
 
-/// Run `load_iris_db` against an already-constructed pair of local worker
-/// handles, fanning each PG record into both eyes. Used by genesis, where
-/// iris loading must happen after the actor has been built (so `sync_peers`
-/// and a possible iris-DB rollback can run first).
-///
-/// Returns the number of records loaded.
-pub async fn load_iris_db_through_pools(
-    party_id: usize,
-    iris_pools: BothEyes<IrisPoolHandle>,
-    params: DbLoadParams,
-) -> Result<usize> {
-    let DbLoadParams {
-        store,
-        config,
-        max_serial_id,
-        parallelism,
-        s3_max_serial_id,
-        shutdown_handler,
-    } = params;
-    let mut adapter = FanoutLoader {
-        party_id,
-        iris_pools: iris_pools.clone(),
-        db_size: 0,
-    };
-    load_iris_db(
-        &mut adapter,
-        &store,
-        max_serial_id,
-        parallelism,
-        s3_max_serial_id,
-        &config,
-        shutdown_handler,
-    )
-    .await?;
-    try_join!(
-        iris_pools[LEFT].wait_completion(),
-        iris_pools[RIGHT].wait_completion(),
-    )?;
-    Ok(adapter.db_size)
+/// Stream `(serial_id, version_id)` from PG and build a metadata-only
+/// registry plus its `SetHash` checksum. Reads no iris bytes — uses the
+/// `stream_iris_ids` index-only query.
+pub async fn build_registry_from_db(
+    store: &Store,
+    max_serial_id: usize,
+) -> Result<VectorIdRegistryRef> {
+    let mut points: HashMap<VectorId, ()> = HashMap::with_capacity(max_serial_id);
+    let mut stream = store.stream_iris_ids(max_serial_id);
+    while let Some((id, version_id)) = stream.try_next().await? {
+        points.insert(VectorId::new(id as u32, version_id), ());
+    }
+    Ok(SharedIrises::<()>::new(points, ()).to_arc())
+}
+
+/// Build a registry covering serial ids in `range`, all with version 0.
+/// Used by `FakeDb` initializers and equivalent shortcut paths.
+fn build_registry_from_serial_range(range: std::ops::Range<u32>) -> VectorIdRegistryRef {
+    let mut points: HashMap<VectorId, ()> = HashMap::with_capacity(range.len());
+    for serial in range {
+        points.insert(VectorId::from_serial_id(serial), ());
+    }
+    SharedIrises::<()>::new(points, ()).to_arc()
 }
 
 /// `InMemoryStore` adapter that fans a single PG read into both eyes'

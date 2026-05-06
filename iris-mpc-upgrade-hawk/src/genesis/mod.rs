@@ -24,8 +24,12 @@ use iris_mpc_common::{
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
-        iris_worker::IrisWorkerPool, worker_pool_initializer::DbLoadParams, BothEyes, GraphRef,
-        GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
+        iris_worker::IrisWorkerPool,
+        worker_pool_initializer::{
+            DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
+        },
+        BothEyes, GraphRef, GraphStore, HawkActor, HawkActorPrelude, HawkArgs, HawkOps, StoreId,
+        LEFT, RIGHT,
     },
     genesis::{
         state_accessor::{
@@ -40,7 +44,7 @@ use iris_mpc_cpu::{
         JobResult,
     },
     graph_checkpoint::*,
-    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store, VectorIdRegistryRef},
+    hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
@@ -169,7 +173,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         mut task_monitor_bg,
         checkpoint_s3_client,
         aws_rds_client,
-        _imem_iris_stores,
         registries,
         worker_pools,
         imem_graph_stores,
@@ -262,7 +265,6 @@ async fn exec_setup(
     TaskMonitor,
     S3Client,
     RDSClient,
-    Arc<BothEyes<Aby3SharedIrisesRef>>,
     BothEyes<VectorIdRegistryRef>,
     BothEyes<Arc<dyn IrisWorkerPool>>,
     Arc<BothEyes<GraphRef>>,
@@ -411,8 +413,11 @@ async fn exec_setup(
         }
     }
 
-    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
-    hawk_actor.sync_peers().await?;
+    // Build the prelude — networking only — so we can run sync_peers
+    // and the iris-DB rollback before deciding the final `max_serial_id`
+    // and starting the iris/graph load.
+    let mut hawk_prelude = build_hawk_prelude(config, &shutdown_handler).await?;
+    hawk_prelude.sync_peers().await?;
 
     if let Some(cp) = graph_checkpoint.as_ref() {
         maybe_rollback_iris_db(
@@ -443,21 +448,20 @@ async fn exec_setup(
     .await?;
     tracing::info!("Store consistency checks OK");
 
-    // Initialise HNSW graph from previously indexed.
-    init_graph_from_stores(
+    // Initialise the actor: load iris and graph in parallel, finalize
+    // the prelude into a fully-loaded `HawkActor`.
+    let hawk_actor = init_graph_from_stores(
         config,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
         graph_store_arc.clone(),
-        &mut hawk_actor,
+        hawk_prelude,
         &checkpoint_s3_client,
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
         graph_checkpoint.clone(),
     )
     .await?;
-    // Refresh HawkActor's internal registries now that iris_store is populated.
-    hawk_actor.refresh_registries().await;
     task_monitor_bg.check_tasks();
     tracing::info!("HNSW graph initialised from store");
 
@@ -495,13 +499,9 @@ async fn exec_setup(
         // return Ok(());
     }
 
-    // Set in memory Iris stores (still needed for DB persistence thread).
-    let imem_iris_stores = Arc::new([
-        hawk_actor.iris_store(StoreId::Left),
-        hawk_actor.iris_store(StoreId::Right),
-    ]);
-
-    // Registries were already refreshed above; extract them for exec_indexation.
+    // Registries (built during the iris load) and worker pools, both
+    // exposed for the indexation phase. Iris data is reached only via
+    // the worker pool trait — no direct iris-store access from genesis.
     let registries = hawk_actor.registries();
     let worker_pools = [
         hawk_actor.worker_pool(StoreId::Left),
@@ -520,7 +520,7 @@ async fn exec_setup(
 
     // Set thread for persisting indexing results to DB.
     let tx_results = get_results_thread(
-        Arc::clone(&imem_iris_stores),
+        worker_pools.clone(),
         hnsw_iris_store.clone(),
         graph_store_arc.clone(),
         &mut task_monitor_bg,
@@ -543,7 +543,6 @@ async fn exec_setup(
         task_monitor_bg,
         checkpoint_s3_client,
         aws_rds_client,
-        imem_iris_stores,
         registries,
         worker_pools,
         imem_graph_stores,
@@ -1110,16 +1109,17 @@ pub async fn exec_use_backup_as_source(
     Ok(())
 }
 
-/// Factory function to return a configured Hawk actor that manages HNSW graph construction & search.
+/// Build a Hawk prelude — networking only, no iris/graph data — for the
+/// pre-load peer communication phase. The full `HawkActor` is finalized
+/// later via `init_graph_from_stores` once the iris/graph load completes.
 ///
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-///
-async fn get_hawk_actor(
+async fn build_hawk_prelude(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<HawkActor> {
+) -> Result<HawkActorPrelude> {
     let server_coord_config = config
         .server_coordination
         .as_ref()
@@ -1152,12 +1152,12 @@ async fn get_hawk_actor(
     };
 
     tracing::info!(
-        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+        "Initializing Hawk prelude with args: party_index: {}, addresses: {:?}",
         hawk_args.party_index,
         node_addresses
     );
 
-    HawkActor::from_cli(
+    HawkActorPrelude::new(
         &hawk_args,
         shutdown_handler.get_network_cancellation_token(),
     )
@@ -1323,7 +1323,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
-    imem_iris_stores: Arc<BothEyes<Aby3SharedIrisesRef>>,
+    worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     hnsw_iris_store: IrisStore,
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     task_monitor: &mut TaskMonitor,
@@ -1331,7 +1331,6 @@ async fn get_results_thread(
 ) -> Result<Sender<JobResult>> {
     let (tx, mut rx) = mpsc::channel::<JobResult>(PERSIST_DELAY);
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
-    let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
     let graph_store_bg = Arc::clone(&graph_store);
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some(result) = rx.recv().await {
@@ -1346,16 +1345,14 @@ async fn get_results_thread(
                     ..
                 } => {
                     tracing::info!("Job Results :: Received: batch-id={batch_id}");
-                    // get iris shares to persist
+                    // get iris shares to persist via the worker pool trait
+                    // (works for local and future remote pools alike).
                     let start = Instant::now();
-                    let left_store = &imem_iris_stores_bg[LEFT];
-                    let right_store = &imem_iris_stores_bg[RIGHT];
 
-                    // Parallelize fetching left and right iris data using tokio::join!
-                    let (left_data, right_data) = tokio::join!(
-                        left_store.get_vectors_or_empty(vector_ids_to_persist.iter()),
-                        right_store.get_vectors_or_empty(vector_ids_to_persist.iter())
-                    );
+                    let (left_data, right_data) = tokio::try_join!(
+                        worker_pools[LEFT].fetch_irises(vector_ids_to_persist.clone()),
+                        worker_pools[RIGHT].fetch_irises(vector_ids_to_persist.clone()),
+                    )?;
 
                     let codes_and_masks: Vec<StoredIrisRef> = vector_ids_to_persist
                             .iter()
@@ -1407,16 +1404,12 @@ async fn get_results_thread(
                         "Job Results :: Received: modification-id={modification_id} for serial-id={}",
                         vector_id_to_persist.serial_id()
                     );
-                    // get iris shares to persist
-                    let left_store = &imem_iris_stores_bg[LEFT];
-                    let right_store = &imem_iris_stores_bg[RIGHT];
-
-                    let left_iris = left_store
-                        .get_vector_or_empty(&vector_id_to_persist)
-                        .await;
-                    let right_iris = right_store
-                        .get_vector_or_empty(&vector_id_to_persist)
-                        .await;
+                    let (left_irises, right_irises) = tokio::try_join!(
+                        worker_pools[LEFT].fetch_irises(vec![vector_id_to_persist]),
+                        worker_pools[RIGHT].fetch_irises(vec![vector_id_to_persist]),
+                    )?;
+                    let left_iris = &left_irises[0];
+                    let right_iris = &right_irises[0];
 
                     let mut graph_tx = graph_store_bg.tx().await?;
                     let iris_data =StoredIrisRef {
@@ -1507,8 +1500,9 @@ async fn get_sync_result(
     Ok(result)
 }
 
-/// Initializes HNSW graph from data previously persisted to a store.
-/// First attempts to load from S3 checkpoint if available, falls back to PostgreSQL.
+/// Initialize the genesis HawkActor: load iris data into a fresh worker
+/// pool and load the graph (from S3 checkpoint if present, else PG) in
+/// parallel, then finalize the prelude into a fully-loaded actor.
 ///
 /// # Arguments
 ///
@@ -1516,24 +1510,23 @@ async fn get_sync_result(
 /// * `checkpoint_bucket` - S3 bucket name for graph checkpoints.
 /// * `iris_store` - Iris PostgreSQL store provider.
 /// * `graph_store` - Graph PostgreSQL store provider.
-/// * `hawk_actor` - Hawk actor managing graph access & indexation.
+/// * `hawk_prelude` - Prelude (network handle) produced before sync_peers.
 /// * `s3_client` - AWS S3 client for checkpoint loading.
 /// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
 /// * `max_indexation_id` - Maximum index to load (inclusive).
 /// * `checkpoint` - Optional checkpoint state to load from S3 instead of PostgreSQL.
-///
 #[allow(clippy::too_many_arguments)]
 async fn init_graph_from_stores(
     config: &Config,
     checkpoint_bucket: &str,
     iris_store: &IrisStore,
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
-    hawk_actor: &mut HawkActor,
+    hawk_prelude: HawkActorPrelude,
     s3_client: &S3Client,
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
     checkpoint: Option<GraphCheckpointState>,
-) -> Result<()> {
+) -> Result<HawkActor> {
     tracing::info!("⚓️ ANCHOR: Load the database");
 
     let iris_db_parallelism = config
@@ -1556,43 +1549,44 @@ async fn init_graph_from_stores(
         graph_db_parallelism
     );
 
-    // -------------------------------------------------------------------
-    // Get total number of irises and apply max_index limit if specified
-    // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
     let max_index = std::cmp::min(max_indexation_id, store_len);
 
-    // Load iris data into the actor's existing local worker pool. Iris
-    // loading must happen here (not at actor construction) because
-    // `sync_peers` and the optional iris-DB rollback above run against
-    // the empty actor first.
-    hawk_actor
-        .load_iris_db_in_place(DbLoadParams {
-            store: iris_store.clone(),
-            config: Arc::new(config.clone()),
-            max_serial_id: max_index,
-            parallelism: iris_db_parallelism,
-            s3_max_serial_id: Some(max_index),
-            shutdown_handler,
-        })
-        .await
-        .expect("Failed to load DB");
+    let initializer: Box<dyn WorkerPoolInitializer> =
+        Box::new(LocalWorkerPoolInitializer::new_load_from_db(
+            config.party_id,
+            iris_mpc_cpu::execution::hawk_main::HAWK_DISTANCE_MODE,
+            config.hawk_numa,
+            DbLoadParams {
+                store: iris_store.clone(),
+                config: Arc::new(config.clone()),
+                max_serial_id: max_index,
+                parallelism: iris_db_parallelism,
+                s3_max_serial_id: Some(max_index),
+                shutdown_handler,
+            },
+        ));
 
-    let graph_loader = hawk_actor.as_graph_loader().await;
+    let graph_load_future = async {
+        if let Some(state) = checkpoint {
+            tracing::info!(
+                "Loading graph from S3 checkpoint, hash: {}",
+                state.blake3_hash
+            );
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
+        } else {
+            tracing::info!("No S3 checkpoint found, loading graph from PostgreSQL");
+            iris_mpc_cpu::execution::hawk_main::load_graphs_from_pg(
+                &graph_store,
+                graph_db_parallelism,
+            )
+            .await
+        }
+    };
 
-    // Try to load graph from S3 checkpoint first
-    if let Some(state) = checkpoint {
-        let both_eyes = download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?;
-        graph_loader.load_graphs_from_checkpoint(both_eyes);
-        return Ok(());
-    }
-    tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
+    let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
 
-    graph_loader
-        .load_graph_store(&graph_store, graph_db_parallelism)
-        .await?;
-
-    Ok(())
+    hawk_prelude.finalize(initialized, graph).await
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function

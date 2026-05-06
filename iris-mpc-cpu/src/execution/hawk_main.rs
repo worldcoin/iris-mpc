@@ -71,7 +71,7 @@ use crate::{
     execution::{
         hawk_main::{
             insert::InsertPlanV,
-            iris_worker::{IrisPoolHandle, IrisWorkerPool},
+            iris_worker::IrisWorkerPool,
             rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
@@ -79,8 +79,8 @@ use crate::{
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
-            Aby3VectorRef, DistanceMode, DistanceOps, FhdOps, VectorIdRegistryRef,
+            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3Store, Aby3VectorRef, DistanceMode,
+            DistanceOps, FhdOps, VectorIdRegistryRef,
         },
         shared_irises::SharedIrises,
     },
@@ -291,8 +291,9 @@ pub struct HawkArgs {
 /// the entire state of the MPC node.
 ///
 /// # Responsibilities
-/// - **State Management:** Holds in-memory HNSW graphs (`graph_store`) and the underlying
-///   shared iris data (`iris_store`).
+/// - **State Management:** Holds in-memory HNSW graphs (`graph_store`) and the
+///   metadata-only `VectorId` registries. Iris data is owned by the worker
+///   pool and accessed exclusively through the [`IrisWorkerPool`] trait.
 /// - **Session Management:** Creates and manages `HawkSession`s, which provide the
 ///   cryptographic context for MPC operations.
 /// - **Request Handling:** Processes `HawkRequest` batches.
@@ -312,12 +313,11 @@ pub struct HawkActor {
     /// See `get_or_init_prf_key`.
     prf_key: Option<Arc<[u8; 16]>>,
     // ---- Core State ----
-    /// In-memory storage for the secret-shared iris codes for both left and right eyes.
-    /// Used by workers for distance computation and by external mutation paths (deletions).
-    iris_store: BothEyes<Aby3SharedIrisesRef>,
-    /// Metadata-only VectorId registries (one per eye).
-    /// Tracks presence, versions, and checksums without iris data.
-    /// Passed to `Aby3Store` sessions; kept in sync with `iris_store`.
+    /// Metadata-only VectorId registries (one per eye). Tracks presence,
+    /// versions, and checksums without iris data. Passed to `Aby3Store`
+    /// sessions. Kept in sync with the worker pool's iris data inline on
+    /// every insert/delete (see `Aby3Store::insert` / `apply_deletions`),
+    /// so there is no separate "refresh" step.
     registry: BothEyes<VectorIdRegistryRef>,
     /// In-memory HNSW graphs for both left and right eyes.
     graph_store: BothEyes<GraphRef>,
@@ -326,12 +326,6 @@ pub struct HawkActor {
     /// Type-erased so a single binary can hold the local pool today and a
     /// remote sharded pool in the future.
     pub(crate) worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
-    /// Local worker handles, retained for paths that load iris data after
-    /// actor construction (genesis: iris load runs after `sync_peers` and
-    /// a possible iris-DB rollback). `None` when the actor is built with a
-    /// non-local pool — those load through their own bootstrap protocol on
-    /// the wire and don't accept post-construction loads.
-    pub(crate) loader_handles: Option<BothEyes<IrisPoolHandle>>,
 
     /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
@@ -422,7 +416,8 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 /// (which manages secret-shared data and cryptographic primitives) and the HNSW graph.
 /// Multiple sessions can be created to parallelize operations across a batch of requests.
 ///
-/// All sessions operate on the same shared `graph_store` and `iris_store` held by the `HawkActor`.
+/// All sessions operate on the same shared `graph_store` held by the `HawkActor` and access iris
+/// data through the `HawkActor`'s worker pool trait object.
 /// All sessions keep a copy of the HNSW PRF key (mostly used for generating insertion layers).
 #[derive(Clone)]
 pub struct HawkSession {
@@ -479,6 +474,114 @@ pub struct HawkInsertPlan {
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
 pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
 
+/// Partial actor that holds only the network handle, used to run any
+/// MPC peer communication that must happen before iris data is in
+/// memory (genesis: `sync_peers` + iris-DB rollback decide the final
+/// `max_serial_id`; future hawk-main negotiation may exchange counts or
+/// checksums in the same window).
+///
+/// `finalize` consumes the prelude, the initializer output, and the
+/// graph, and produces the full `HawkActor`. This is the only path that
+/// constructs a `HawkActor` outside test convenience constructors —
+/// production and genesis share it, so iris loading is always done
+/// before the actor exists and there is no post-construction load step.
+pub struct HawkActorPrelude {
+    args: HawkArgs,
+    networking: Box<dyn NetworkHandle>,
+}
+
+impl HawkActorPrelude {
+    /// Build the network handle from `args` and prepare for any
+    /// pre-load peer communication. Cheap (TCP listener setup).
+    pub async fn new(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
+        let network_args = NetworkHandleArgs {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+            tls: args.tls.clone(),
+        };
+        let networking = build_network_handle(network_args, shutdown_ct).await?;
+        Ok(Self {
+            args: args.clone(),
+            networking,
+        })
+    }
+
+    /// Pre-load barrier — used by genesis before deciding the final
+    /// `max_serial_id` (post-rollback). Hawk main has no equivalent
+    /// today, but if/when it grows iris-count negotiation it goes
+    /// through this same pre-load window.
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        self.networking.sync_peers().await
+    }
+
+    /// Consume the prelude and produce the full actor. The initializer
+    /// must already have populated worker pools and produced registries;
+    /// the graph must already be loaded. Iris loading does **not** happen
+    /// here — by design, the actor is only ever observed in the
+    /// fully-loaded state.
+    pub async fn finalize(
+        self,
+        initialized: worker_pool_initializer::InitializedWorkers,
+        graph: BothEyes<GraphMem<Aby3VectorRef>>,
+    ) -> Result<HawkActor> {
+        let HawkActorPrelude { args, networking } = self;
+        let party_id = args.party_index;
+
+        let searcher = {
+            let mut searcher_ = HnswSearcher::new_linear_scan(
+                args.hnsw_param_ef_constr,
+                args.hnsw_param_ef_search,
+                args.hnsw_param_m,
+                LINEAR_SCAN_MAX_GRAPH_LAYER,
+            );
+
+            if let Some(layer_density) = args.hnsw_layer_density {
+                searcher_.layer_distribution =
+                    LayerDistribution::new_geometric_from_M(layer_density);
+            } else {
+                // default geometric distribution uses layer_density value of `M`
+            }
+
+            searcher_.fixed_layer_search_batch_size = args.hnsw_fixed_layer_search_batch_size;
+
+            Arc::new(searcher_)
+        };
+
+        let worker_pool_initializer::InitializedWorkers {
+            pools,
+            registries,
+            post_load_checksums,
+            db_size,
+        } = initialized;
+
+        tracing::info!(
+            "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
+            post_load_checksums[LEFT],
+            post_load_checksums[RIGHT],
+            db_size,
+        );
+
+        let graph_store = graph.map(GraphMem::to_arc);
+
+        Ok(HawkActor {
+            args,
+            searcher,
+            prf_key: None,
+            registry: registries,
+            graph_store,
+            anon_stats_store: None,
+            networking,
+            party_id,
+            error_ct: CancellationToken::new(),
+            worker_pools: pools,
+        })
+    }
+}
+
 impl HawkActor {
     /// Empty-store, empty-graph constructor. Test convenience.
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -510,124 +613,24 @@ impl HawkActor {
                 iris_store,
             ),
         );
+        let prelude = HawkActorPrelude::new(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
-        Self::from_initialized_workers(args, shutdown_ct, initialized, graph).await
+        prelude.finalize(initialized, graph).await
     }
 
     /// Drive an initializer to completion (loading iris data into worker
-    /// pools), then build the actor with an empty graph. Production paths
-    /// that need to load the graph too should call
-    /// `from_initialized_workers` directly so they can run iris and graph
-    /// loads in parallel.
+    /// pools), then build the actor with an empty graph. Test/dev path.
+    /// Production callers that want iris and graph loading to overlap
+    /// drive the prelude + initializer + graph load directly.
     pub async fn from_cli_with_initializer(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
         initializer: Box<dyn worker_pool_initializer::WorkerPoolInitializer>,
     ) -> Result<Self> {
+        let prelude = HawkActorPrelude::new(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
         let graph = [(); 2].map(|_| GraphMem::new());
-        Self::from_initialized_workers(args, shutdown_ct, initialized, graph).await
-    }
-
-    /// Primary constructor: build the actor from already-prepared worker
-    /// pools and a pre-loaded graph. Callers that want iris and graph
-    /// loading to overlap run them in parallel and feed the results here.
-    pub async fn from_initialized_workers(
-        args: &HawkArgs,
-        shutdown_ct: CancellationToken,
-        initialized: worker_pool_initializer::InitializedWorkers,
-        graph: BothEyes<GraphMem<Aby3VectorRef>>,
-    ) -> Result<Self> {
-        let searcher = {
-            let mut searcher_ = HnswSearcher::new_linear_scan(
-                args.hnsw_param_ef_constr,
-                args.hnsw_param_ef_search,
-                args.hnsw_param_m,
-                LINEAR_SCAN_MAX_GRAPH_LAYER,
-            );
-
-            if let Some(layer_density) = args.hnsw_layer_density {
-                searcher_.layer_distribution =
-                    LayerDistribution::new_geometric_from_M(layer_density);
-            } else {
-                // default geometric distribution uses layer_density value of `M`
-            }
-
-            searcher_.fixed_layer_search_batch_size = args.hnsw_fixed_layer_search_batch_size;
-
-            Arc::new(searcher_)
-        };
-
-        let network_args = NetworkHandleArgs {
-            party_index: args.party_index,
-            addresses: args.addresses.clone(),
-            outbound_addresses: args.outbound_addrs.clone(),
-            connection_parallelism: args.connection_parallelism,
-            request_parallelism: args.request_parallelism,
-            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
-            tls: args.tls.clone(),
-        };
-        let networking = build_network_handle(network_args, shutdown_ct).await?;
-
-        let worker_pool_initializer::InitializedWorkers {
-            pools,
-            iris_stores,
-            post_load_checksums,
-            db_size,
-            local_pool_handles,
-        } = initialized;
-
-        tracing::info!(
-            "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
-            post_load_checksums[LEFT],
-            post_load_checksums[RIGHT],
-            db_size,
-        );
-
-        let graph_store = graph.map(GraphMem::to_arc);
-        let registry = [
-            iris_stores[LEFT].read().await.to_registry().to_arc(),
-            iris_stores[RIGHT].read().await.to_registry().to_arc(),
-        ];
-
-        Ok(HawkActor {
-            args: args.clone(),
-            searcher,
-            prf_key: None,
-            iris_store: iris_stores,
-            registry,
-            graph_store,
-            anon_stats_store: None,
-            networking,
-            party_id: args.party_index,
-            error_ct: CancellationToken::new(),
-            worker_pools: pools,
-            loader_handles: local_pool_handles,
-        })
-    }
-
-    /// Run `load_iris_db` against the actor's local worker pool, populating
-    /// the iris store in-place. Used by genesis, where iris loading must
-    /// happen after `sync_peers` and an optional DB rollback (so the data
-    /// must enter the running actor's pool, not a fresh one). After this
-    /// completes, callers should call `refresh_registries()` so sessions
-    /// see the loaded VectorIds.
-    ///
-    /// Errors when the actor was built with a non-local pool — remote
-    /// pools load through their own bootstrap protocol at construction
-    /// time and don't accept post-hoc loads.
-    pub async fn load_iris_db_in_place(
-        &mut self,
-        params: worker_pool_initializer::DbLoadParams,
-    ) -> Result<usize> {
-        let handles = self.loader_handles.as_ref().ok_or_else(|| {
-            eyre!(
-                "load_iris_db_in_place: actor's worker pool is not local; \
-                 use a `LoadFromDb` initializer at construction instead"
-            )
-        })?;
-        worker_pool_initializer::load_iris_db_through_pools(self.party_id, handles.clone(), params)
-            .await
+        prelude.finalize(initialized, graph).await
     }
 
     pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
@@ -650,56 +653,12 @@ impl HawkActor {
         self.searcher.clone()
     }
 
-    pub fn iris_store(&self, store_id: StoreId) -> Aby3SharedIrisesRef {
-        self.iris_store[store_id as usize].clone()
-    }
-
     pub fn registry(&self, store_id: StoreId) -> VectorIdRegistryRef {
         self.registry[store_id as usize].clone()
     }
 
     pub fn registries(&self) -> BothEyes<VectorIdRegistryRef> {
         self.registry.clone()
-    }
-
-    /// Re-derive registries from iris_store. Call after external data
-    /// loading (e.g. genesis) that populates iris_store directly.
-    pub async fn refresh_registries(&mut self) {
-        self.registry = [
-            self.iris_store[LEFT].read().await.to_registry().to_arc(),
-            self.iris_store[RIGHT].read().await.to_registry().to_arc(),
-        ];
-    }
-
-    /// Assert that `registry` is a consistent metadata mirror of `iris_store`
-    /// for both eyes. Sessions read from `registry`, so any drift means
-    /// search loses visibility into stored vectors and fresh inserts
-    /// allocate VectorIds that collide with existing graph nodes.
-    ///
-    /// O(1) per side. Safe to call at quiescent points — between batches,
-    /// after `load_database`, after `apply_deletions`. NOT safe to call
-    /// mid-batch, as registry/iris_store are mutated in sequence and may
-    /// disagree briefly.
-    pub async fn assert_registry_consistency(&self) {
-        for side in [LEFT, RIGHT] {
-            let iris = self.iris_store[side].read().await;
-            let reg = self.registry[side].read().await;
-            assert_eq!(
-                reg.next_id, iris.next_id,
-                "registry/iris_store next_id mismatch on side {side}: \
-                 registry={} iris_store={} — call refresh_registries() after \
-                 any path that populates iris_store",
-                reg.next_id, iris.next_id,
-            );
-            assert_eq!(
-                reg.db_size(),
-                iris.db_size(),
-                "registry/iris_store db_size mismatch on side {side}: \
-                 registry={} iris_store={}",
-                reg.db_size(),
-                iris.db_size(),
-            );
-        }
     }
 
     pub fn worker_pool(&self, store_id: StoreId) -> Arc<dyn IrisWorkerPool> {
@@ -1823,15 +1782,6 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
-        // Invariant: registry is a metadata mirror of iris_store. Anything
-        // that populates iris_store (load_database, genesis, fake_db) must
-        // also refresh the registry; sessions read from registry, not from
-        // iris_store, so drift means search can't see loaded vectors and
-        // fresh inserts allocate VectorIds that collide with the load.
-        // Verify before any session work begins, and again at the start of
-        // every batch (see `handle_job`).
-        hawk_actor.assert_registry_consistency().await;
-
         let mut sessions = hawk_actor.new_session_groups().await?;
 
         #[cfg(feature = "phase_trace")]
@@ -1886,12 +1836,6 @@ impl HawkHandle {
             "Processing a Hawk job ({} queries)",
             request.batch.request_ids.len()
         );
-
-        // Catch any registry/iris_store drift introduced by the previous
-        // batch (or any other path) before we run another batch on top of an
-        // inconsistent state. Runs between batches when no concurrent writes
-        // are in flight; cheap (O(1) per side, two read-locks).
-        hawk_actor.assert_registry_consistency().await;
 
         // Cache all queries in both worker pools. cache_queries handles the full
         // pipeline: NUMA realloc → mirror → preprocess → all_rotations.
