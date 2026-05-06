@@ -8,7 +8,7 @@ use crate::{
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
         graph::{GraphMutation, UpdateEntryPoint},
-        searcher::{ConnectPlan, LayerMode},
+        searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
     },
@@ -170,11 +170,11 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
     }
 
-    /// Applies a `ConnectPlan` (list of graph mutations) to finalize an insertion.
+    /// Applies a list of graph mutations to the in-memory graph.
     ///
     /// This updates the graph's entry points set and connects the new vector to its
-    /// neighbors as specified in the plan.
-    pub fn insert_apply(&mut self, plan: ConnectPlan<V>) {
+    /// neighbors as specified in the mutations.
+    pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
         tracing::info!(mutation_count = plan.len(), "Applying graph mutations");
         for mutation in plan {
             tracing::info!("{:?}", mutation);

@@ -186,14 +186,18 @@ async fn start_hawk_node(
 
     // Verify iris_store has correct size before creating HawkActor
     assert_eq!(
-        iris_store[0].db_size(), DB_SIZE,
+        iris_store[0].db_size(),
+        DB_SIZE,
         "Left iris_store size mismatch: expected {}, got {}",
-        DB_SIZE, iris_store[0].db_size()
+        DB_SIZE,
+        iris_store[0].db_size()
     );
     assert_eq!(
-        iris_store[1].db_size(), DB_SIZE,
+        iris_store[1].db_size(),
+        DB_SIZE,
         "Right iris_store size mismatch: expected {}, got {}",
-        DB_SIZE, iris_store[1].db_size()
+        DB_SIZE,
+        iris_store[1].db_size()
     );
 
     let mut hawk_actor =

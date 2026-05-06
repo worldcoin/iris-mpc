@@ -85,7 +85,7 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::{graph_store, GraphMutation, UpdateEntryPoint},
+        graph::{graph_store, GraphMutation, GroupedMutations, UpdateEntryPoint},
         searcher::{LayerDistribution, NeighborhoodMode},
         GraphMem, HnswSearcher, VectorStore,
     },
@@ -473,7 +473,7 @@ pub struct HawkInsertPlan {
 /// represents the full set of atomic graph updates required. This includes not only the new
 /// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
-pub type ConnectPlan = Vec<GraphMutation<VectorId>>;
+pub type ConnectPlan = GroupedMutations<VectorId>;
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
@@ -803,7 +803,7 @@ impl HawkActor {
                             layers: vec![],
                             update_ep: UpdateEntryPoint::False,
                         });
-                        mutations
+                        GroupedMutations(mutations)
                     })
                 })
                 .collect_vec());
@@ -1493,7 +1493,7 @@ impl HawkResult {
                     .as_ref()
                     .or(mutation.plans[RIGHT].as_ref())
                     .and_then(|plan| {
-                        plan.iter().find_map(|m| match m {
+                        plan.0.iter().find_map(|m| match m {
                             GraphMutation::InsertNode { id, .. } => Some(id.clone()),
                             _ => None,
                         })
@@ -2168,14 +2168,14 @@ impl HawkHandle {
             for (idx, req_index) in requests_order.iter().enumerate() {
                 if let RequestIndex::Deletion(i) = req_index {
                     let vector_id = deleted_ids[*i];
-                    let removal_plan = vec![GraphMutation::RemoveNode { id: vector_id }];
+                    let removal_mutations = vec![GraphMutation::RemoveNode { id: vector_id }];
 
                     // Store the removal plan for persistence
-                    plans[idx].replace(removal_plan.clone());
+                    plans[idx] = Some(GroupedMutations(removal_mutations.clone()));
 
-                    // Step 3: Apply deletion mutation to the in-memory graph immediately
+                    // Apply deletion mutation to the in-memory graph immediately
                     let mut graph = hawk_actor.graph_store[*side as usize].write().await;
-                    graph.insert_apply(removal_plan);
+                    graph.insert_apply(removal_mutations);
 
                     tracing::debug!(
                         "Generated RemoveNode mutation for deletion {} (vector_id: {:?})",
@@ -2648,11 +2648,11 @@ mod hawk_mutation_tests {
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        vec![GraphMutation::InsertNode {
+        GroupedMutations(vec![GraphMutation::InsertNode {
             id: vector_id,
             layers: vec![(0, vec![vector_id])],
             update_ep: UpdateEntryPoint::False,
-        }]
+        }])
     }
 
     #[test]
