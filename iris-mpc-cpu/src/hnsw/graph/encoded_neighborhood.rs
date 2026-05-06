@@ -14,6 +14,8 @@ pub struct EncodedNeighborhood {
 /// Errors returned by [`EncodedNeighborhood::encode`].
 #[derive(Debug, Error)]
 pub enum EncodeError {
+    #[error("input ids are empty")]
+    Empty,
     #[error("input ids not sorted strictly ascending at position {0}")]
     NotSorted(usize),
     #[error("neighborhood size {0} exceeds maximum {MAX_K}")]
@@ -38,6 +40,9 @@ pub enum DecodeError {
 impl EncodedNeighborhood {
     /// Encode a sorted-ascending, strictly-increasing slice of u32 IDs.
     pub fn encode(ids: &[u32]) -> Result<Self, EncodeError> {
+        if ids.is_empty() {
+            return Err(EncodeError::Empty);
+        }
         if ids.len() > MAX_K {
             return Err(EncodeError::TooLarge(ids.len()));
         }
@@ -48,15 +53,6 @@ impl EncodedNeighborhood {
         }
 
         let k = ids.len() as u16;
-        if ids.is_empty() {
-            let mut out = Vec::with_capacity(HEADER_LEN);
-            out.extend_from_slice(&k.to_le_bytes());
-            out.push(0);
-            return Ok(Self {
-                bytes: out.into_boxed_slice(),
-            });
-        }
-
         let b = compute_b(ids);
 
         let cap = HEADER_LEN + (ids.len() * (b as usize + 4)).div_ceil(8);
@@ -272,11 +268,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_round_trip() {
-        let encoded = EncodedNeighborhood::encode(&[]).expect("encode empty");
-        let decoded = encoded.decode().expect("decode empty");
-        assert!(decoded.is_empty());
-        assert_eq!(encoded.as_bytes().len(), HEADER_LEN);
+    fn rejects_empty() {
+        let err = EncodedNeighborhood::encode(&[]).unwrap_err();
+        assert!(matches!(err, EncodeError::Empty), "got {:?}", err);
     }
 
     #[test]
@@ -433,7 +427,7 @@ mod tests {
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
             // Vary k across a useful range, including small and near-MAX_K cases.
             let k = match seed % 4 {
-                0 => rng.gen_range(0..16),
+                0 => rng.gen_range(1..16),
                 1 => rng.gen_range(16..1024),
                 2 => rng.gen_range(1024..16_384),
                 _ => 65_535,
