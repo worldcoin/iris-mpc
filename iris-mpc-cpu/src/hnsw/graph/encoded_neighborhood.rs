@@ -177,9 +177,12 @@ impl EncodedNeighborhood {
 /// MSB-first bit writer that flushes whole bytes to an internal `Vec<u8>`.
 struct BitWriter {
     bytes: Vec<u8>,
-    /// Buffer holding up-to-7 not-yet-flushed bits in its most-significant positions.
-    buf: u8,
-    /// Number of valid bits in `buf` (0..8).
+    /// Pending bits, MSB-aligned in `buf`: the most-significant `nbits` bits
+    /// are valid, lower bits are zero. Sized as `u64` so a single `write_bits`
+    /// call (up to 32 new bits, with up to 7 already buffered) always fits
+    /// without needing to split the write.
+    buf: u64,
+    /// Number of valid bits in `buf`. Always in 0..8 between calls.
     nbits: u8,
 }
 
@@ -195,15 +198,18 @@ impl BitWriter {
     /// Write the low `n` bits of `value` MSB-first. `n` must be 0..=32.
     fn write_bits(&mut self, value: u32, n: u8) {
         debug_assert!(n <= 32);
-        for i in (0..n).rev() {
-            let bit = ((value >> i) & 1) as u8;
-            self.buf = (self.buf << 1) | bit;
-            self.nbits += 1;
-            if self.nbits == 8 {
-                self.bytes.push(self.buf);
-                self.buf = 0;
-                self.nbits = 0;
-            }
+        // Insert the new bits into `buf` in one shot, then flush whole bytes.
+        // Pre-condition: `nbits` is in 0..8, `n` <= 32, so `nbits + n` <= 39
+        // and the shift `64 - nbits - n` is always in 25..=64.
+        if n > 0 {
+            let v = (value as u64) & ((1u64 << n) - 1);
+            self.buf |= v << (64 - self.nbits - n);
+            self.nbits += n;
+        }
+        while self.nbits >= 8 {
+            self.bytes.push((self.buf >> 56) as u8);
+            self.buf <<= 8;
+            self.nbits -= 8;
         }
     }
 
@@ -224,9 +230,9 @@ impl BitWriter {
 
     fn finish(mut self) -> Vec<u8> {
         if self.nbits > 0 {
-            let pad = 8 - self.nbits;
-            self.buf <<= pad;
-            self.bytes.push(self.buf);
+            // Bits are MSB-aligned in `buf` and unused low bits are already
+            // zero, so the top byte is the correctly zero-padded final byte.
+            self.bytes.push((self.buf >> 56) as u8);
         }
         self.bytes
     }
@@ -253,31 +259,64 @@ impl<'a> BitReader<'a> {
         if self.pos + n as usize > self.total_bits() {
             return None;
         }
-        let mut out: u32 = 0;
-        for _ in 0..n {
-            let byte = self.bytes[self.pos / 8];
-            let bit = (byte >> (7 - (self.pos % 8))) & 1;
-            out = (out << 1) | bit as u32;
-            self.pos += 1;
+        if n == 0 {
+            return Some(0);
         }
-        Some(out)
+        // Load up to 5 bytes (worst case `bit_offset + n = 7 + 32 = 39` bits)
+        // into a u64, then extract the n target bits in one shift+mask.
+        let byte_idx = self.pos / 8;
+        let bit_offset = (self.pos % 8) as u32;
+        let bytes_to_read = (bit_offset + n as u32).div_ceil(8) as usize;
+        let mut acc: u64 = 0;
+        for i in 0..bytes_to_read {
+            acc = (acc << 8) | self.bytes[byte_idx + i] as u64;
+        }
+        // Bits we want sit at positions [bit_offset, bit_offset + n) from the
+        // MSB of the loaded window of `bytes_to_read * 8` bits.
+        let shift = (bytes_to_read * 8) as u32 - bit_offset - n as u32;
+        let mask = (1u64 << n) - 1;
+        self.pos += n as usize;
+        Some(((acc >> shift) & mask) as u32)
     }
 
     /// Read a unary-coded zero count terminated by a `1` bit. Returns `None`
     /// on truncation (buffer exhausted before the terminator). Counts in `u64`
-    /// so that `read_bits` truncation is the only `None` case — even a fully
-    /// zero buffer of `isize::MAX` bytes can't overflow `u64`. Callers map a
-    /// returned count `> u32::MAX` to `QuotientOverflow` (see `rice_decode`).
+    /// so that even a fully zero buffer of `isize::MAX` bytes can't overflow.
+    /// Callers map a returned count `> u32::MAX` to `QuotientOverflow` (see
+    /// `rice_decode`).
     fn read_unary(&mut self) -> Option<u64> {
-        let mut zeros: u64 = 0;
-        loop {
-            let bit = self.read_bits(1)?;
-            if bit == 1 {
-                // `1` terminates the unary prefix; consumed but not part of the value.
+        if self.pos >= self.total_bits() {
+            return None;
+        }
+        let mut byte_idx = self.pos / 8;
+        let bit_offset = self.pos % 8;
+
+        // Shift the starting byte so the bit at `self.pos` lands at the MSB;
+        // `leading_zeros` then directly counts the zero run before the
+        // terminator. Bits below `self.pos` shift out and don't affect the
+        // count.
+        let first = self.bytes[byte_idx] << bit_offset;
+        if first != 0 {
+            let lz = first.leading_zeros() as u64;
+            self.pos += lz as usize + 1;
+            return Some(lz);
+        }
+
+        // Whole tail of the starting byte was zero; scan subsequent bytes.
+        let mut zeros: u64 = (8 - bit_offset) as u64;
+        byte_idx += 1;
+        while byte_idx < self.bytes.len() {
+            let b = self.bytes[byte_idx];
+            if b != 0 {
+                let lz = b.leading_zeros() as u64;
+                zeros += lz;
+                self.pos = byte_idx * 8 + lz as usize + 1;
                 return Some(zeros);
             }
-            zeros += 1;
+            zeros += 8;
+            byte_idx += 1;
         }
+        None
     }
 }
 
