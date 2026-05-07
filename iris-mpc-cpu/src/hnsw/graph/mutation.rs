@@ -9,9 +9,9 @@ pub enum GraphMutation<Vector: Ord> {
     RemoveNode {
         id: Vector,
     },
-    // delete the old entries in the graph without removing from thee entrypoints
     ReplaceNode {
-        id: Vector,
+        new_id: Vector,
+        old_id: Vector,
     },
     InsertNode {
         // List of layer, neighbors.
@@ -30,7 +30,11 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RemoveNode { id } => f.debug_struct("RemoveNode").field("id", id).finish(),
-            Self::ReplaceNode { id } => f.debug_struct("ReplaceNode").field("id", id).finish(),
+            Self::ReplaceNode { new_id, old_id } => f
+                .debug_struct("ReplaceNode")
+                .field("new_id", new_id)
+                .field("old_id", old_id)
+                .finish(),
             Self::InsertNode {
                 layers: _,
                 update_ep,
@@ -46,7 +50,6 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
                 id,
             } => f
                 .debug_struct("Compact")
-                // .field("to_remove", to_remove)
                 .field("layer", layer)
                 .field("id", id)
                 .finish(),

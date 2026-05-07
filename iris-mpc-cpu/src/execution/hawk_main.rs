@@ -779,10 +779,6 @@ impl HawkActor {
                     plan.map(|plan| {
                         let mut mutations = Vec::new();
 
-                        if let Some(replace_id) = &plan.plan.replace_id {
-                            mutations.push(GraphMutation::ReplaceNode { id: *replace_id });
-                        }
-
                         let inserted_vector = if let Some(id) = id {
                             *id
                         } else {
@@ -795,6 +791,12 @@ impl HawkActor {
                             layers: vec![],
                             update_ep: UpdateEntryPoint::False,
                         });
+                        if let Some(replace_id) = &plan.plan.replace_id {
+                            mutations.push(GraphMutation::ReplaceNode {
+                                new_id: inserted_vector,
+                                old_id: *replace_id,
+                            });
+                        }
                         GroupedMutations(mutations)
                     })
                 })
