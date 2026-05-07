@@ -177,9 +177,12 @@ impl EncodedNeighborhood {
 /// MSB-first bit writer that flushes whole bytes to an internal `Vec<u8>`.
 struct BitWriter {
     bytes: Vec<u8>,
-    /// Buffer holding up-to-7 not-yet-flushed bits in its most-significant positions.
-    buf: u8,
-    /// Number of valid bits in `buf` (0..8).
+    /// Pending bits, MSB-aligned in `buf`: the most-significant `nbits` bits
+    /// are valid, lower bits are zero. Sized as `u64` so a single `write_bits`
+    /// call (up to 32 new bits, with up to 7 already buffered) always fits
+    /// without needing to split the write.
+    buf: u64,
+    /// Number of valid bits in `buf`. Always in 0..8 between calls.
     nbits: u8,
 }
 
@@ -195,15 +198,18 @@ impl BitWriter {
     /// Write the low `n` bits of `value` MSB-first. `n` must be 0..=32.
     fn write_bits(&mut self, value: u32, n: u8) {
         debug_assert!(n <= 32);
-        for i in (0..n).rev() {
-            let bit = ((value >> i) & 1) as u8;
-            self.buf = (self.buf << 1) | bit;
-            self.nbits += 1;
-            if self.nbits == 8 {
-                self.bytes.push(self.buf);
-                self.buf = 0;
-                self.nbits = 0;
-            }
+        // Insert the new bits into `buf` in one shot, then flush whole bytes.
+        // Pre-condition: `nbits` is in 0..8, `n` <= 32, so `nbits + n` <= 39
+        // and the shift `64 - nbits - n` is always in 25..=63.
+        if n > 0 {
+            let v = (value as u64) & ((1u64 << n) - 1);
+            self.buf |= v << (64 - self.nbits - n);
+            self.nbits += n;
+        }
+        while self.nbits >= 8 {
+            self.bytes.push((self.buf >> 56) as u8);
+            self.buf <<= 8;
+            self.nbits -= 8;
         }
     }
 
@@ -224,59 +230,98 @@ impl BitWriter {
 
     fn finish(mut self) -> Vec<u8> {
         if self.nbits > 0 {
-            let pad = 8 - self.nbits;
-            self.buf <<= pad;
-            self.bytes.push(self.buf);
+            // Bits are MSB-aligned in `buf` and unused low bits are already
+            // zero, so the top byte is the correctly zero-padded final byte.
+            self.bytes.push((self.buf >> 56) as u8);
         }
         self.bytes
     }
 }
 
-/// MSB-first bit reader over a byte slice. Tracks position in bits.
+/// MSB-first bit reader over a byte slice. Maintains a `u64` accumulator that
+/// is refilled from the source slice 8 bits at a time, so individual reads
+/// only touch memory when the accumulator runs low.
 struct BitReader<'a> {
     bytes: &'a [u8],
-    /// Bit offset from the start of `bytes` (MSB of byte 0 is bit 0).
-    pos: usize,
+    /// Pending bits, MSB-aligned: the most-significant `nvalid` bits are
+    /// valid, lower bits are zero.
+    buf: u64,
+    /// Number of valid bits in `buf`. Always in `0..=64`.
+    nvalid: u8,
+    /// Index of the next byte in `bytes` to load into `buf`.
+    next_byte: usize,
 }
 
 impl<'a> BitReader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self {
+            bytes,
+            buf: 0,
+            nvalid: 0,
+            next_byte: 0,
+        }
     }
 
-    fn total_bits(&self) -> usize {
-        self.bytes.len() * 8
+    /// Top up `buf` from the source slice 8 bits at a time. Stops when there
+    /// is no room for another whole byte (`nvalid > 56`) or the slice is
+    /// exhausted.
+    #[inline]
+    fn refill(&mut self) {
+        while self.nvalid <= 56 && self.next_byte < self.bytes.len() {
+            self.buf |= (self.bytes[self.next_byte] as u64) << (56 - self.nvalid);
+            self.nvalid += 8;
+            self.next_byte += 1;
+        }
     }
 
     fn read_bits(&mut self, n: u8) -> Option<u32> {
         debug_assert!(n <= 32);
-        if self.pos + n as usize > self.total_bits() {
-            return None;
+        if n == 0 {
+            return Some(0);
         }
-        let mut out: u32 = 0;
-        for _ in 0..n {
-            let byte = self.bytes[self.pos / 8];
-            let bit = (byte >> (7 - (self.pos % 8))) & 1;
-            out = (out << 1) | bit as u32;
-            self.pos += 1;
+        if self.nvalid < n {
+            self.refill();
+            if self.nvalid < n {
+                return None;
+            }
         }
+        // Take the top n bits, shift them to the LSB, then drop them from buf.
+        let out = (self.buf >> (64 - n)) as u32;
+        self.buf <<= n;
+        self.nvalid -= n;
         Some(out)
     }
 
     /// Read a unary-coded zero count terminated by a `1` bit. Returns `None`
     /// on truncation (buffer exhausted before the terminator). Counts in `u64`
-    /// so that `read_bits` truncation is the only `None` case — even a fully
-    /// zero buffer of `isize::MAX` bytes can't overflow `u64`. Callers map a
-    /// returned count `> u32::MAX` to `QuotientOverflow` (see `rice_decode`).
+    /// so that even a fully zero buffer of `isize::MAX` bytes can't overflow.
+    /// Callers map a returned count `> u32::MAX` to `QuotientOverflow` (see
+    /// `rice_decode`).
     fn read_unary(&mut self) -> Option<u64> {
         let mut zeros: u64 = 0;
         loop {
-            let bit = self.read_bits(1)?;
-            if bit == 1 {
-                // `1` terminates the unary prefix; consumed but not part of the value.
+            if self.nvalid == 0 {
+                self.refill();
+                if self.nvalid == 0 {
+                    return None;
+                }
+            }
+            let lz = self.buf.leading_zeros() as u64;
+            if lz < self.nvalid as u64 {
+                // Terminator landed inside the valid window: `lz` zero bits
+                // followed by the `1`. Consume both.
+                zeros += lz;
+                let consumed = (lz + 1) as u32;
+                // `consumed` can be 64 (terminator was the last valid bit),
+                // which a plain `<<` can't express on `u64`; saturate to 0.
+                self.buf = self.buf.checked_shl(consumed).unwrap_or(0);
+                self.nvalid -= consumed as u8;
                 return Some(zeros);
             }
-            zeros += 1;
+            // All `nvalid` bits in the window are zero; absorb and refill.
+            zeros += self.nvalid as u64;
+            self.buf = 0;
+            self.nvalid = 0;
         }
     }
 }
