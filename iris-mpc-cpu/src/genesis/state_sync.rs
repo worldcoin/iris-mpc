@@ -129,7 +129,7 @@ mod tests {
                 status: "status_1".to_string(),
                 persisted: false,
                 result_message_body: None,
-                graph_mutation: None,
+                graph_mutation_id: None,
             };
             let mod_2 = Modification {
                 id: 2,
@@ -139,7 +139,7 @@ mod tests {
                 status: "status_2".to_string(),
                 persisted: false,
                 result_message_body: None,
-                graph_mutation: None,
+                graph_mutation_id: None,
             };
             Self::new(
                 BatchSizeConfig::Static { size: 64 },
@@ -160,7 +160,7 @@ mod tests {
                 status: "status_1".to_string(),
                 persisted: false,
                 result_message_body: Some("meow".to_string()),
-                graph_mutation: None,
+                graph_mutation_id: None,
             };
             Self::new(
                 BatchSizeConfig::Static { size: 64 },
@@ -182,7 +182,7 @@ mod tests {
                 status: "status_1".to_string(),
                 persisted: false,
                 result_message_body: Some("hello".to_string()),
-                graph_mutation: None,
+                graph_mutation_id: None,
             };
             Self::new(
                 BatchSizeConfig::Static { size: 64 },
