@@ -13,7 +13,7 @@ use iris_mpc_common::{
     IrisSerialId, IrisVectorId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, StoreId},
+    execution::hawk_main::BothEyes,
     genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     graph_checkpoint::{delete_graph, download_graph_checkpoint, get_latest_checkpoint_state},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
@@ -338,20 +338,7 @@ impl MpcNode {
             // delete irises
             stores.iris.delete_irises_after_id(0).await?;
 
-            let mut graph_tx = stores.graph.tx().await?;
-
-            // clear graphs
-            graph_tx
-                .with_graph(StoreId::Left)
-                .clear_tables()
-                .await
-                .expect("Could not clear left graph");
-            graph_tx
-                .with_graph(StoreId::Right)
-                .clear_tables()
-                .await
-                .expect("Could not clear right graph");
-
+            let graph_tx = stores.graph.tx().await?;
             let mut tx = graph_tx.tx;
 
             // clear modifications tables
@@ -361,8 +348,11 @@ impl MpcNode {
             unset_last_indexed_iris_id(&mut tx).await?;
             unset_last_indexed_modification_id(&mut tx).await?;
 
-            // clear genesis graph checkpoint table
+            // clear genesis graph checkpoint table and the WAL
             sqlx::query("DELETE FROM genesis_graph_checkpoint")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM hawk_graph_mutations")
                 .execute(&mut *tx)
                 .await?;
 
