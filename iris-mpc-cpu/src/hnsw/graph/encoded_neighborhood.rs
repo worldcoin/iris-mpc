@@ -61,8 +61,6 @@ pub struct EncodedNeighborhood {
 /// Errors returned by [`EncodedNeighborhood::encode`].
 #[derive(Debug, Error)]
 pub enum EncodeError {
-    #[error("input ids are empty")]
-    Empty,
     #[error("input ids not sorted strictly ascending at position {0}")]
     NotSorted(usize),
     #[error("neighborhood size {0} exceeds maximum {MAX_K}")]
@@ -87,9 +85,6 @@ pub enum DecodeError {
 impl EncodedNeighborhood {
     /// Encode a sorted-ascending, strictly-increasing slice of u32 IDs.
     pub fn encode(ids: &[u32]) -> Result<Self, EncodeError> {
-        if ids.is_empty() {
-            return Err(EncodeError::Empty);
-        }
         if ids.len() > MAX_K {
             return Err(EncodeError::TooLarge(ids.len()));
         }
@@ -100,7 +95,17 @@ impl EncodedNeighborhood {
         }
 
         let k = ids.len() as u16;
-        let b = compute_b(ids);
+        let b = if ids.is_empty() { 0 } else { compute_b(ids) };
+
+        let mut header = Vec::with_capacity(HEADER_LEN);
+        header.extend_from_slice(&k.to_le_bytes());
+        header.push(b);
+
+        if ids.is_empty() {
+            return Ok(Self {
+                bytes: header.into_boxed_slice(),
+            });
+        }
 
         // Body capacity (header lives in a separate Vec). Per-symbol body cost is
         // `b + 1 + q` bits with `E[q] ≈ 1` for an optimal `b` (geometric tail), so
@@ -111,10 +116,6 @@ impl EncodedNeighborhood {
         // timing within noise, so `+ 4` is not undersized.
         let body_cap = (ids.len() * (b as usize + 4)).div_ceil(8);
         let mut writer = BitWriter::with_capacity(body_cap);
-
-        let mut header = Vec::with_capacity(HEADER_LEN);
-        header.extend_from_slice(&k.to_le_bytes());
-        header.push(b);
 
         rice_encode(&mut writer, ids[0], b);
         for i in 1..ids.len() {
@@ -352,8 +353,7 @@ fn rice_encode(writer: &mut BitWriter, value: u32, b: u8) {
     writer.write_zeros(q);
     writer.write_one();
     if b > 0 {
-        let mask = (1u32 << b) - 1;
-        writer.write_bits(value & mask, b);
+        writer.write_bits(value, b);
     }
 }
 
@@ -393,9 +393,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty() {
-        let err = EncodedNeighborhood::encode(&[]).unwrap_err();
-        assert!(matches!(err, EncodeError::Empty), "got {:?}", err);
+    fn round_trip_empty() {
+        let encoded = EncodedNeighborhood::encode(&[]).expect("encode");
+        assert_eq!(encoded.as_bytes(), &[0u8, 0u8, 0u8]);
+        assert_eq!(encoded.decode().expect("decode"), Vec::<u32>::new());
     }
 
     #[test]
