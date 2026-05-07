@@ -3,7 +3,6 @@ use crate::services::aws::clients::AwsClients;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::Client as SNSClient;
-use bincode;
 use eyre::{eyre, Report};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
@@ -15,15 +14,17 @@ use iris_mpc_common::helpers::smpc_request::{
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sync::{Modification, SyncResult};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
-use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation, SingleHawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+// Graph mutations are already in the WAL (hawk_graph_mutations table) from when
+// they were originally committed. The modifications table just references them
+// via graph_mutation_id. Actual mutation application to GraphMem happens during
+// startup delta replay (checkpoint load → WAL replay), not here.
 pub async fn sync_modifications(
     config: &Config,
     store: &Store,
-    graph_store: Option<&GraphStore>,
     aws_clients: &AwsClients,
     shares_encryption_key_pair: &SharesEncryptionKeyPairs,
     sync_result: SyncResult,
@@ -60,7 +61,6 @@ pub async fn sync_modifications(
     store.delete_modifications(&mut iris_tx, &to_delete).await?;
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
-    let mut graph_mutations = Vec::new();
 
     // Persist changes into iris and graph tables
     for modification in &to_update {
@@ -121,30 +121,9 @@ pub async fn sync_modifications(
         store
             .insert_irises_overriding(&mut iris_tx, &[iris_ref])
             .await?;
-
-        if let Some(serialized) = &modification.graph_mutation {
-            let single_mutation: SingleHawkMutation =
-                bincode::deserialize::<SingleHawkMutation>(serialized)
-                    .expect("Failed to deserialize SingleHawkMutation");
-            graph_mutations.push(single_mutation.clone());
-        }
     }
 
-    if let Some(graph_store) = graph_store {
-        let mut graph_tx = graph_store.tx_wrap(iris_tx);
-        if !graph_mutations.is_empty() {
-            tracing::info!("Applying {} graph mutations", graph_mutations.len());
-            let hawk_mutation = HawkMutation(graph_mutations);
-            hawk_mutation.persist(&mut graph_tx).await?;
-        } else {
-            tracing::info!("No graph mutations to apply");
-        }
-        graph_tx.tx.commit().await?;
-    } else {
-        tracing::warn!("Graph store is not available, skipping graph mutations");
-        iris_tx.commit().await?;
-    }
-
+    iris_tx.commit().await?;
     Ok(())
 }
 
